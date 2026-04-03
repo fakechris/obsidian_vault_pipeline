@@ -47,6 +47,9 @@ def _load_env_files():
 
 _LOADED_ENV = _load_env_files()
 
+# 确定 VAULT_DIR（优先使用当前工作目录）
+VAULT_DIR = Path.cwd()
+
 # Import litellm
 try:
     import litellm
