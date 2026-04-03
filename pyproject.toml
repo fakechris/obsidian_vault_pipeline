@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "openclaw-pipeline"
+name = "obsidian-vault-pipeline"
 version = "1.0.0"
 description = "全自动Obsidian知识管理Pipeline - 生产级知识管理流水线"
 readme = "README.md"
@@ -65,15 +65,15 @@ Repository = "https://github.com/fakechris/obsidian_vault_pipeline"
 Issues = "https://github.com/fakechris/obsidian_vault_pipeline/issues"
 
 [project.scripts]
-openclaw = "openclaw_pipeline.unified_pipeline_enhanced:main"
-openclaw-pipeline = "openclaw_pipeline.unified_pipeline_enhanced:main"
-openclaw-article = "openclaw_pipeline.auto_article_processor:main"
-openclaw-github = "openclaw_pipeline.auto_github_processor:main"
-openclaw-paper = "openclaw_pipeline.auto_paper_processor:main"
-openclaw-evergreen = "openclaw_pipeline.auto_evergreen_extractor:main"
-openclaw-moc = "openclaw_pipeline.auto_moc_updater:main"
-openclaw-quality = "openclaw_pipeline.batch_quality_checker:main"
-openclaw-clippings = "openclaw_pipeline.clippings_processor:main"
+ovp = "openclaw_pipeline.unified_pipeline_enhanced:main"
+ovp-pipeline = "openclaw_pipeline.unified_pipeline_enhanced:main"
+ovp-article = "openclaw_pipeline.auto_article_processor:main"
+ovp-github = "openclaw_pipeline.auto_github_processor:main"
+ovp-paper = "openclaw_pipeline.auto_paper_processor:main"
+ovp-evergreen = "openclaw_pipeline.auto_evergreen_extractor:main"
+ovp-moc = "openclaw_pipeline.auto_moc_updater:main"
+ovp-quality = "openclaw_pipeline.batch_quality_checker:main"
+ovp-clippings = "openclaw_pipeline.clippings_processor:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]
