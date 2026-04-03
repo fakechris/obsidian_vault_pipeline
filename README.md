@@ -445,3 +445,5 @@ python3 60-Logs/scripts/unified_pipeline_enhanced.py --init  # 交互式配置
 pip install -r requirements.txt
 python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
 ```
+
+**想看看效果？** 查看 [openclaw-showcase 样板项目](https://github.com/fakechris/openclaw-showcase)，了解完整的知识库结构。
