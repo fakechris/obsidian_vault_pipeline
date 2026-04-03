@@ -109,196 +109,6 @@ python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
 
 ---
 
-## 🔧 特殊内容处理（高价值）
-
-### 1. GitHub 项目 13 节深度解读
-
-**专用脚本**: `60-Logs/scripts/auto_github_processor.py`
-
-**特殊之处**：
-- 自动获取 README 和 stars 数
-- 生成 **13 节结构化深度解读**（非普通文章的 6 维度）
-- 包含 ASCII 架构图和能力置信度表格
-- 自动输出到 `20-Areas/Tools/Topics/YYYY-MM/`
-
-**使用方式**：
-```bash
-# 单个项目
-python3 60-Logs/scripts/auto_github_processor.py \
-  --single https://github.com/tw93/kaku
-
-# 批量处理（urls.txt 每行一个 GitHub URL）
-python3 60-Logs/scripts/auto_github_processor.py \
-  --input github_urls.txt
-
-# 预览模式
-python3 60-Logs/scripts/auto_github_processor.py \
-  --single https://github.com/microsoft/terminal --dry-run
-```
-
-**输出示例**：
-```markdown
----
-title: "Kaku - 跨平台悬浮视频播放器"
-github: "https://github.com/tw93/kaku"
-owner: "tw93"
-repo: "kaku"
-date: "2026-04-02"
-type: github-project
-tags: [tool, video-player, electron]
-stars: 2847
----
-
-# 一句话概述
-Kaku 是一个基于 Electron 的跨平台悬浮视频播放器...
-
-# 项目定位
-在视频播放器生态中的位置...
-
-# 核心能力
-| 能力 | 说明 | 证据来源 | 置信度 |
-|------|------|----------|--------|
-| 悬浮播放 | 置顶窗口播放 | README | 5/5 |
-| 跨平台 | Win/Mac/Linux | package.json | 5/5 |
-...
-
-# 技术架构
-```
-┌─────────────┐
-│  UI Layer   │  (React + Electron)
-├─────────────┤
-│  Player Core│  (Video.js)
-├─────────────┤
-│  Platform   │  (Electron Main)
-└─────────────┘
-```
-...
-```
-
-**与普通文章的区别**：
-| 维度 | 普通文章 | GitHub项目 |
-|------|----------|-----------|
-| 结构 | 6维度 | 13节 |
-| 输入 | 文本内容 | GitHub API + README |
-| 输出位置 | 20-Areas/AI-Research/Topics/ | 20-Areas/Tools/Topics/ |
-| 特殊字段 | 无 | stars, owner, repo |
-| 架构图 | 可选 | 必须（ASCII） |
-| 置信度 | 无 | 5分制表格 |
-
----
-
-### 2. 学术论文深层解读
-
-**专用脚本**: `60-Logs/scripts/auto_paper_processor.py`
-
-**特殊之处**：
-- 支持 arXiv 自动获取（标题、摘要、作者）
-- 支持本地 PDF 文本提取
-- **10 节学术结构**（方法复现指南是核心）
-- 保留 LaTeX 公式和技术术语英文
-- 自动输出到 `20-Areas/AI-Research/Papers/`
-
-**使用方式**：
-```bash
-# arXiv 论文
-python3 60-Logs/scripts/auto_paper_processor.py \
-  --arxiv https://arxiv.org/abs/2401.12345
-
-# 本地 PDF
-python3 60-Logs/scripts/auto_paper_processor.py \
-  --pdf ~/Downloads/paper.pdf \
-  --title "Attention Is All You Need" \
-  --authors "Vaswani et al."
-
-# 批量处理
-python3 60-Logs/scripts/auto_paper_processor.py \
-  --input papers.txt
-```
-
-**输出示例**：
-```markdown
----
-title: "Attention Is All You Need"
-source: "https://arxiv.org/abs/1706.03762"
-authors: ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", ...]
-date: "2026-04-02"
-type: paper-analysis
-arxiv_id: "1706.03762"
----
-
-# 一句话核心贡献
-提出了 Transformer 架构，完全基于注意力机制...
-
-# 方法详解 ⭐
-## 核心架构
-```
-Input → [Embedding + Positional Encoding]
-      → [Encoder × N] → [Decoder × N]
-      → [Linear + Softmax] → Output
-```
-
-## 关键创新：Multi-Head Attention
-$$Attention(Q,K,V) = softmax(\frac{QK^T}{\sqrt{d_k}})V$$
-
-# 方法复现指南 ⭐
-## 伪代码
-```python
-# 1. 准备数据
-src = embed(input) + positional_encode(input)
-
-# 2. 编码器
-for layer in encoder_layers:
-    src = layer.norm(src + layer.self_attn(src))
-    src = layer.norm(src + layer.ffn(src))
-
-# 3. 解码器（带mask）
-...
-```
-
-## 超参数
-- d_model: 512
-- n_layers: 6
-- n_heads: 8
-- d_k = d_v = 64
-
-## 实现难点
-1. 位置编码的sin/cos交替...
-2. 解码器的look-ahead mask...
-
-# 核心洞察
-1. 注意力可以并行，比RNN快10倍
-2. 长距离依赖直接建模...
-...
-
-# 关联研究
-- [[RNN]] - 被取代的架构
-- [[BERT]] - 基于Transformer的预训练
-- [[GPT]] - 仅使用Decoder的变体
-```
-
-**与普通文章的区别**：
-| 维度 | 普通文章 | 学术论文 |
-|------|----------|----------|
-| 结构 | 6维度 | 10节（学术向） |
-| 输入 | URL/文本 | arXiv API / PDF |
-| 输出位置 | Topics/ | Papers/ |
-| 公式保留 | 无 | LaTeX |
-| 术语处理 | 中英混合 | 保留英文 |
-| 复现指南 | 无 | 详细（含伪代码） |
-| 引用格式 | 无 | [作者, 年份] |
-
----
-
-### 3. 三种处理流程对比
-
-| 内容类型 | 脚本 | 输出结构 | 特殊能力 | 适用场景 |
-|----------|------|----------|----------|----------|
-| **普通文章** | `auto_article_processor.py` | 6维度 | 自动分类 | 博客、新闻、教程 |
-| **GitHub项目** | `auto_github_processor.py` | 13节 | README解析+架构图 | 开源工具、框架 |
-| **学术论文** | `auto_paper_processor.py` | 10节 | arXiv API+方法复现 | 研究论文、技术报告 |
-
----
-
 ## 📖 使用指南
 
 ### 日常使用方法
@@ -589,6 +399,196 @@ cat 60-Logs/pipeline.jsonl | jq 'select(.event_type | contains("error"))'
 **总分≥18为合格**（平均3+）
 
 不合格文件自动生成修复建议报告。
+
+---
+
+## 🔧 特殊内容处理（高价值）
+
+### 1. GitHub 项目 13 节深度解读
+
+**专用脚本**: `60-Logs/scripts/auto_github_processor.py`
+
+**特殊之处**：
+- 自动获取 README 和 stars 数
+- 生成 **13 节结构化深度解读**（非普通文章的 6 维度）
+- 包含 ASCII 架构图和能力置信度表格
+- 自动输出到 `20-Areas/Tools/Topics/YYYY-MM/`
+
+**使用方式**：
+```bash
+# 单个项目
+python3 60-Logs/scripts/auto_github_processor.py \
+  --single https://github.com/tw93/kaku
+
+# 批量处理（urls.txt 每行一个 GitHub URL）
+python3 60-Logs/scripts/auto_github_processor.py \
+  --input github_urls.txt
+
+# 预览模式
+python3 60-Logs/scripts/auto_github_processor.py \
+  --single https://github.com/microsoft/terminal --dry-run
+```
+
+**输出示例**：
+```markdown
+---
+title: "Kaku - 跨平台悬浮视频播放器"
+github: "https://github.com/tw93/kaku"
+owner: "tw93"
+repo: "kaku"
+date: "2026-04-02"
+type: github-project
+tags: [tool, video-player, electron]
+stars: 2847
+---
+
+# 一句话概述
+Kaku 是一个基于 Electron 的跨平台悬浮视频播放器...
+
+# 项目定位
+在视频播放器生态中的位置...
+
+# 核心能力
+| 能力 | 说明 | 证据来源 | 置信度 |
+|------|------|----------|--------|
+| 悬浮播放 | 置顶窗口播放 | README | 5/5 |
+| 跨平台 | Win/Mac/Linux | package.json | 5/5 |
+...
+
+# 技术架构
+```
+┌─────────────┐
+│  UI Layer   │  (React + Electron)
+├─────────────┤
+│  Player Core│  (Video.js)
+├─────────────┤
+│  Platform   │  (Electron Main)
+└─────────────┘
+```
+...
+```
+
+**与普通文章的区别**：
+| 维度 | 普通文章 | GitHub项目 |
+|------|----------|-----------|
+| 结构 | 6维度 | 13节 |
+| 输入 | 文本内容 | GitHub API + README |
+| 输出位置 | 20-Areas/AI-Research/Topics/ | 20-Areas/Tools/Topics/ |
+| 特殊字段 | 无 | stars, owner, repo |
+| 架构图 | 可选 | 必须（ASCII） |
+| 置信度 | 无 | 5分制表格 |
+
+---
+
+### 2. 学术论文深层解读
+
+**专用脚本**: `60-Logs/scripts/auto_paper_processor.py`
+
+**特殊之处**：
+- 支持 arXiv 自动获取（标题、摘要、作者）
+- 支持本地 PDF 文本提取
+- **10 节学术结构**（方法复现指南是核心）
+- 保留 LaTeX 公式和技术术语英文
+- 自动输出到 `20-Areas/AI-Research/Papers/`
+
+**使用方式**：
+```bash
+# arXiv 论文
+python3 60-Logs/scripts/auto_paper_processor.py \
+  --arxiv https://arxiv.org/abs/2401.12345
+
+# 本地 PDF
+python3 60-Logs/scripts/auto_paper_processor.py \
+  --pdf ~/Downloads/paper.pdf \
+  --title "Attention Is All You Need" \
+  --authors "Vaswani et al."
+
+# 批量处理
+python3 60-Logs/scripts/auto_paper_processor.py \
+  --input papers.txt
+```
+
+**输出示例**：
+```markdown
+---
+title: "Attention Is All You Need"
+source: "https://arxiv.org/abs/1706.03762"
+authors: ["Ashish Vaswani", "Noam Shazeer", "Niki Parmar", ...]
+date: "2026-04-02"
+type: paper-analysis
+arxiv_id: "1706.03762"
+---
+
+# 一句话核心贡献
+提出了 Transformer 架构，完全基于注意力机制...
+
+# 方法详解 ⭐
+## 核心架构
+```
+Input → [Embedding + Positional Encoding]
+      → [Encoder × N] → [Decoder × N]
+      → [Linear + Softmax] → Output
+```
+
+## 关键创新：Multi-Head Attention
+$$Attention(Q,K,V) = softmax(\frac{QK^T}{\sqrt{d_k}})V$$
+
+# 方法复现指南 ⭐
+## 伪代码
+```python
+# 1. 准备数据
+src = embed(input) + positional_encode(input)
+
+# 2. 编码器
+for layer in encoder_layers:
+    src = layer.norm(src + layer.self_attn(src))
+    src = layer.norm(src + layer.ffn(src))
+
+# 3. 解码器（带mask）
+...
+```
+
+## 超参数
+- d_model: 512
+- n_layers: 6
+- n_heads: 8
+- d_k = d_v = 64
+
+## 实现难点
+1. 位置编码的sin/cos交替...
+2. 解码器的look-ahead mask...
+
+# 核心洞察
+1. 注意力可以并行，比RNN快10倍
+2. 长距离依赖直接建模...
+...
+
+# 关联研究
+- [[RNN]] - 被取代的架构
+- [[BERT]] - 基于Transformer的预训练
+- [[GPT]] - 仅使用Decoder的变体
+```
+
+**与普通文章的区别**：
+| 维度 | 普通文章 | 学术论文 |
+|------|----------|----------|
+| 结构 | 6维度 | 10节（学术向） |
+| 输入 | URL/文本 | arXiv API / PDF |
+| 输出位置 | Topics/ | Papers/ |
+| 公式保留 | 无 | LaTeX |
+| 术语处理 | 中英混合 | 保留英文 |
+| 复现指南 | 无 | 详细（含伪代码） |
+| 引用格式 | 无 | [作者, 年份] |
+
+---
+
+### 3. 三种处理流程对比
+
+| 内容类型 | 脚本 | 输出结构 | 特殊能力 | 适用场景 |
+|----------|------|----------|----------|----------|
+| **普通文章** | `auto_article_processor.py` | 6维度 | 自动分类 | 博客、新闻、教程 |
+| **GitHub项目** | `auto_github_processor.py` | 13节 | README解析+架构图 | 开源工具、框架 |
+| **学术论文** | `auto_paper_processor.py` | 10节 | arXiv API+方法复现 | 研究论文、技术报告 |
 
 ---
 
