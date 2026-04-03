@@ -1,4 +1,5 @@
 ---
+
 title: "Obsidian Vault Pipeline"
 description: "全自动知识管理流水线"
 date: 2026-04-03
@@ -17,16 +18,37 @@ type: meta
 
 输入 → 解读 → 质检 → 提炼 → 索引 → 可审计的全自动工作流
 
-[30秒开始](#30秒快速开始) • [核心特性](#核心特性) • [架构详解](#架构详解) • [使用指南](#使用指南) • [质量门禁](#质量门禁)
+[📺 查看效果](#查看效果) • [🚀 快速开始](#30秒快速开始) • [📖 使用指南](#使用指南) • [🔧 功能特性](#核心特性)
 
 </div>
 
 ---
 
-## 30秒快速开始
+## 查看效果
+
+**想看看 Pipeline 的最终效果？**
+
+👉 **[obsidian_vault_showcase](https://github.com/fakechris/obsidian_vault_showcase)** - 完整效果展示
+
+这个 showcase 包含：
+- 🌳 **8 个 Evergreen 原子笔记** - AI Agent、Agent Architecture 等核心概念
+- 📚 **76 篇深度解读** - GitHub 项目分析、技术文章解读
+- 🗺️ **3 个 MOC 知识地图** - AI、工具、编程领域导航
+- 🔗 **完整的双向链接网络** - 概念之间的关联关系
+
+**使用方式：**
+1. **只看效果** → 直接在 GitHub 上浏览
+2. **下载体验** → Clone 到本地用 Obsidian 打开
+3. **在此基础上开发** → 修改内容，连接你自己的 API Key 继续生成
+
+---
+
+## 30秒快速开始（模板项目）
+
+想要从空白开始建立自己的系统？使用本模板：
 
 ```bash
-# 1. 克隆并进入目录
+# 1. 克隆模板项目
 git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
 cd my-vault
 
@@ -437,13 +459,59 @@ MIT License - 详见 [LICENSE](LICENSE)
 
 ---
 
-**开始使用：**
+## 选择指南
+
+### 方式一：直接体验完整效果（推荐）
+
+想直接看到最终效果，并在此基础上开发？
+
 ```bash
-git clone https://github.com/fakechris/obsidian_vault_pipeline.git
-cd obsidian_vault_pipeline
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --init  # 交互式配置
-pip install -r requirements.txt
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
+# 克隆 showcase（包含完整数据）
+git clone https://github.com/fakechris/obsidian_vault_showcase.git my-showcase
+cd my-showcase
+
+# 用 Obsidian 打开即可体验完整的知识库
 ```
 
-**想看看效果？** 查看 [openclaw-showcase 样板项目](https://github.com/fakechris/openclaw-showcase)，了解完整的知识库结构。
+✅ 已有 76 篇深度解读和 8 个 Evergreen 概念
+✅ 可直接体验双向链接和 Graph View
+✅ 修改后可以连接你自己的 API Key 继续生成
+
+---
+
+### 方式二：从模板开始（自定义）
+
+想从空白开始，完全自定义？
+
+```bash
+# 克隆模板项目（空白结构）
+git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
+cd my-vault
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --init
+```
+
+✅ 空白模板，从零开始
+✅ 完整 Pipeline 流程
+✅ 完全自定义内容
+
+---
+
+### 方式对比
+
+| 方式 | 适合 | 内容 | 上手难度 |
+|------|------|------|----------|
+| **Showcase** | 想先看效果 | 76篇解读+8个Evergreen | ⭐ 开箱即用 |
+| **Template** | 想自己搭建 | 空白+完整Pipeline | ⭐⭐ 需要配置 |
+
+---
+
+## 相关仓库
+
+| 仓库 | 用途 | 链接 |
+|------|------|------|
+| **obsidian_vault_showcase** | 完整效果展示 | [GitHub](https://github.com/fakechris/obsidian_vault_showcase) |
+| **obsidian_vault_pipeline** | 模板项目（本仓库） | [GitHub](https://github.com/fakechris/obsidian_vault_pipeline) |
+
+---
+
+*版本: 1.0 | 最后更新: 2026-04-03*
