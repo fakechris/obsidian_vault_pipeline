@@ -18,9 +18,46 @@ type: meta
 
 输入 → 解读 → 质检 → 提炼 → 索引 → 可审计的全自动工作流
 
-[📦 PyPI安装](#pip安装) • [📺 查看效果](#查看效果) • [🚀 快速开始](#30秒快速开始) • [📖 使用指南](#使用指南)
+[📦 PyPI安装](#pip安装) • [🤖 Claude Code Skill](#claude-code-skill) • [📺 查看效果](#查看效果) • [🚀 快速开始](#30秒快速开始) • [📖 使用指南](#使用指南) • [🇬🇧 English](README_EN.md)
 
 </div>
+
+---
+
+## Claude Code Skill
+
+本项目包含 **Claude Code Skill**，支持自然语言触发 Pipeline 操作。
+
+### 使用方法
+
+```bash
+# 克隆仓库后，Claude Code 自动加载 skill
+git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
+cd my-vault
+claude  # 启动 Claude Code，skill 自动生效
+```
+
+### 触发关键词
+
+| 你说 | Claude 执行 |
+|------|------------|
+| "运行 WIGS 流程" | `./60-Logs/scripts/check-consistency.sh` |
+| "整理 Obsidian Vault" | `ovp --full` |
+| "处理文章" | `ovp-article --process-inbox` |
+| "提取 Evergreen" | `ovp-evergreen --recent 7` |
+| "更新 MOC" | `ovp-moc --scan` |
+| "质量检查" | `ovp-quality --recent 7` |
+| "检查一致性" | `./60-Logs/scripts/check-consistency.sh` |
+
+### 手动安装 Skill
+
+```bash
+# 方式一：从 GitHub 直接安装
+claude skill add https://github.com/fakechris/obsidian_vault_pipeline
+
+# 方式二：下载 .skill 文件
+claude skill add ./obsidian-vault-pipeline.skill
+```
 
 ---
 
