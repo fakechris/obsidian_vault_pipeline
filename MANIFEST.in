@@ -1,0 +1,11 @@
+include README.md
+include LICENSE
+include requirements.txt
+include .env.example
+recursive-include 90-Templates *.md
+recursive-include src/openclaw_pipeline *.py
+graft .claude
+prune .git
+prune __pycache__
+prune *.pyc
+prune .pytest_cache
