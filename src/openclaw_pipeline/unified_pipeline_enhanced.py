@@ -831,7 +831,7 @@ def main():
             print(f"  API Key: {key}...")
             print(f"  API Base: {os.environ.get('AUTO_VAULT_API_BASE', 'N/A')}")
         else:
-            print("\n✗ 环境未就绪，请运行: python3 unified_pipeline_enhanced.py --init")
+            print("\n✗ 环境未就绪，请运行: ovp --init")
         return 0 if ok else 1
 
     # 检查环境（运行前）
@@ -842,7 +842,7 @@ def main():
         print("="*60)
         for issue in issues:
             print(f"  ✗ {issue}")
-        print("\n请先运行: python3 unified_pipeline_enhanced.py --init")
+        print("\n请先运行: ovp --init")
         return 1
 
     # 初始化
