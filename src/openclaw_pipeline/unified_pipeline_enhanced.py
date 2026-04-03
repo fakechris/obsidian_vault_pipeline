@@ -48,19 +48,39 @@ ENV_FILE_ALT = SCRIPTS_DIR / "auto_vault" / ".env"
 ENV_EXAMPLE = VAULT_DIR / ".env.example"
 
 
-def _load_env() -> bool:
-    """加载 .env 文件，返回是否成功"""
+def _load_env(vault_dir: Path | None = None) -> bool:
+    """加载 .env 文件，返回是否成功
+
+    尝试顺序:
+    1. 指定的 vault_dir
+    2. 当前工作目录
+    3. 脚本所在目录的 vault 结构
+    4. auto_vault 子目录
+    """
     try:
         from dotenv import load_dotenv
+
         # 尝试多个位置
-        for env_path in [ENV_FILE, ENV_FILE_ALT]:
+        env_paths = []
+        if vault_dir:
+            env_paths.append(vault_dir / ".env")
+        env_paths.append(Path.cwd() / ".env")  # 当前工作目录
+        env_paths.append(ENV_FILE)  # 脚本相对路径
+        env_paths.append(ENV_FILE_ALT)  # auto_vault 子目录
+
+        for env_path in env_paths:
             if env_path.exists():
                 load_dotenv(dotenv_path=env_path, override=True)
                 return True
         return False
     except ImportError:
         # dotenv 未安装，检查文件是否存在
-        return ENV_FILE.exists() or ENV_FILE_ALT.exists()
+        return any([
+            (vault_dir / ".env").exists() if vault_dir else False,
+            (Path.cwd() / ".env").exists(),
+            ENV_FILE.exists(),
+            ENV_FILE_ALT.exists()
+        ])
 
 
 def _check_api_key() -> tuple[bool, str]:
@@ -174,12 +194,12 @@ AUTO_VAULT_MODEL={model}
     return 0
 
 
-def check_environment() -> tuple[bool, list[str]]:
+def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
     """检查环境配置，返回(是否就绪, 问题列表)"""
     issues = []
 
-    # 加载环境变量
-    _load_env()
+    # 加载环境变量（尝试多个位置）
+    _load_env(vault_dir)
 
     # 检查 API Key
     key_ok, key_msg = _check_api_key()
@@ -197,11 +217,22 @@ def check_environment() -> tuple[bool, list[str]]:
         except ImportError:
             issues.append(f"Module {module}: NOT FOUND (pip install {module})")
 
-    # 检查 .env 文件
-    if ENV_FILE.exists():
-        issues.append(f".env file: Found at {ENV_FILE}")
-    elif ENV_FILE_ALT.exists():
-        issues.append(f".env file: Found at {ENV_FILE_ALT}")
+    # 检查 .env 文件（多个位置）
+    env_paths = []
+    if vault_dir:
+        env_paths.append(vault_dir / ".env")
+    env_paths.append(Path.cwd() / ".env")
+    env_paths.append(ENV_FILE)
+    env_paths.append(ENV_FILE_ALT)
+
+    found_env = None
+    for env_path in env_paths:
+        if env_path.exists():
+            found_env = env_path
+            break
+
+    if found_env:
+        issues.append(f".env file: Found at {found_env}")
     else:
         issues.append(f".env file: NOT FOUND")
 
@@ -822,7 +853,7 @@ def main():
         print("\n" + "="*60)
         print("环境检查")
         print("="*60)
-        ok, issues = check_environment()
+        ok, issues = check_environment(args.vault_dir)
         for issue in issues:
             print(f"  {'✓' if 'OK' in issue or 'Found' in issue else '✗'} {issue}")
         if ok:
@@ -835,7 +866,7 @@ def main():
         return 0 if ok else 1
 
     # 检查环境（运行前）
-    ok, issues = check_environment()
+    ok, issues = check_environment(args.vault_dir)
     if not ok:
         print("\n" + "="*60)
         print("环境错误")
