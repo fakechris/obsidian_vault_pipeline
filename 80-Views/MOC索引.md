@@ -3,7 +3,6 @@ title: "🗺️ MOC 索引"
 description: "所有知识地图的索引"
 type: view
 tags: [view, moc, index]
-auto-generated: false
 ---
 
 # 🗺️ MOC 索引
@@ -32,13 +31,15 @@ auto-generated: false
 
 ---
 
-## 更新 MOC
+## 更新方法
 
 ```bash
 # 扫描所有 MOC 并更新
 python3 60-Logs/scripts/auto_moc_updater.py --scan
 ```
 
+或手动编辑相关 MOC 文件。
+
 ---
 
-*模板版本: 1.0*
+*手动维护 | 建议每月整理*

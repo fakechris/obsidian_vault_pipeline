@@ -221,7 +221,6 @@ PIPELINE_STEPS = [
     "quality",      # 4. 质量检查
     "evergreen",    # 5. 提取Evergreen
     "moc",          # 6. 更新MOC
-    "views",        # 7. 生成视图
 ]
 
 
@@ -404,12 +403,6 @@ class EnhancedPipeline:
             results["produced"] = 1  # 标记为执行了
             results["updated"] = True
 
-        elif step == "views":
-            # 视图生成没有直接产出，标记为成功
-            results["produced"] = 1
-            results["generated"] = True
-            results["note"] = "Views updated successfully"
-
         elif step == "quality":
             # 质量检查没有产出，标记为成功
             results["produced"] = 1
@@ -456,9 +449,6 @@ class EnhancedPipeline:
 
         elif step == "moc":
             return 120  # 2分钟
-
-        elif step == "views":
-            return 60  # 1分钟
 
         return 1800  # 默认30分钟
 
@@ -671,33 +661,6 @@ class EnhancedPipeline:
 
         return result
 
-    def step_views(self, dry_run: bool = False) -> dict:
-        """执行视图生成步骤"""
-        print("\n" + "="*60)
-        print("STEP 7: Generating Views")
-        print("="*60)
-
-        if dry_run:
-            print("  [dry-run] Would generate views for:")
-            print("    - 最近新增")
-            print("    - Evergreen索引")
-            return {"success": True, "dry_run": True}
-
-        cmd = [
-            sys.executable,
-            str(self.scripts_dir / "generate_views.py"),
-            "--type", "all"
-        ]
-
-        result = self.run_command(cmd, "views")
-
-        if result["success"]:
-            print("✓ Views generated successfully")
-        else:
-            print(f"✗ Views generation failed: {result.get('error', 'Unknown error')}")
-
-        return result
-
     def run_pipeline(
         self,
         steps: list[str] | None = None,
@@ -746,8 +709,6 @@ class EnhancedPipeline:
                 cmd_result = self.step_evergreen(7, dry_run)
             elif step == "moc":
                 cmd_result = self.step_moc(dry_run)
-            elif step == "views":
-                cmd_result = self.step_views(dry_run)
             else:
                 cmd_result = {"success": False, "error": f"Unknown step: {step}"}
 
