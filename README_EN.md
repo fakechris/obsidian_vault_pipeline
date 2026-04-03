@@ -18,65 +18,52 @@ type: meta
 
 Input → Interpret → Quality Check → Refine → Index → Fully auditable workflow
 
-[📦 PyPI Install](#pip-install) • [🤖 Claude Code Skill](#claude-code-skill) • [📺 View Demo](#view-demo) • [🚀 Quick Start](#quick-start) • [📖 User Guide](#user-guide) • [🇨🇳 中文](README.md)
+[🇨🇳 中文](README.md)
 
 </div>
 
 ---
 
-## Claude Code Skill
+## What is this?
 
-This project includes a **Claude Code Skill** that supports natural language triggering of Pipeline operations.
+Obsidian Vault Pipeline is a **production-grade automated knowledge management system** that transforms fragmented information (bookmarks, articles, notes) into structured evergreen knowledge.
 
-### Usage
+**Core Workflow:**
 
-```bash
-# After cloning the repository, Claude Code automatically loads the skill
-git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
-cd my-vault
-claude  # Start Claude Code, skill activates automatically
+```
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+│  Input   │───▶│ Interpret│───▶│  Quality │───▶│ Refine   │───▶│  Index   │
+└──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘
+  Bookmarks/      LLM 6-dimension  Auto-scoring   Evergreen       Auto-MOC
+  Articles        deep analysis    1-5 points     atomic notes    backlinks
+  Auto-fetch
 ```
 
-### Trigger Phrases
-
-| You Say | Claude Executes |
-|---------|-----------------|
-| "run WIGS workflow" | `./60-Logs/scripts/check-consistency.sh` |
-| "organize Obsidian Vault" | `ovp --full` |
-| "process articles" | `ovp-article --process-inbox` |
-| "extract Evergreen" | `ovp-evergreen --recent 7` |
-| "update MOC" | `ovp-moc --scan` |
-| "quality check" | `ovp-quality --recent 7` |
-| "check consistency" | `./60-Logs/scripts/check-consistency.sh` |
-
-### Manual Skill Installation
-
-```bash
-# Method 1: Install directly from GitHub
-claude skill add https://github.com/fakechris/obsidian_vault_pipeline
-
-# Method 2: Download .skill file
-claude skill add ./obsidian-vault-pipeline.skill
-```
+**In one sentence:** Automatically fetch your reading content, AI generates in-depth interpretations, extracts core concepts, and builds a navigable knowledge network.
 
 ---
 
-## Two Projects, Two Choices
+## Core Features
 
-| Project | Purpose | Best For |
-|---------|---------|----------|
-| [**obsidian_vault_showcase**](https://github.com/fakechris/obsidian_vault_showcase) | **Demo version with sample data** | Viewing results first, or building on existing content |
-| **obsidian_vault_pipeline** | **Pure code template (this project)** | Starting from scratch, understanding Pipeline implementation |
+### 5 Automated Maintenance Systems
 
-### How to Choose?
+| System | Capability | Automation |
+|--------|------------|------------|
+| **Quality Gate** | Pre-commit mandatory checks (lines/placeholders/frontmatter) | 100% |
+| **WIGS Integrity** | 5-layer consistency check + auto-repair | 95% |
+| **Backlink Maintenance** | Auto-detect broken links, update MOC | 95% |
+| **Evergreen Extraction** | LLM auto-extract core concepts | 90% |
+| **Runtime Audit** | JSONL structured logs + transaction tracking | 100% |
 
-| Your Need | Recommended | Reason |
-|-----------|-------------|--------|
-| Want to see results before committing | [obsidian_vault_showcase](https://github.com/fakechris/obsidian_vault_showcase) | 76 real interpretations to browse |
-| Want out-of-the-box experience | [obsidian_vault_showcase](https://github.com/fakechris/obsidian_vault_showcase) | Clone and open in Obsidian |
-| Want complete customization | **This project** | Clean template, no demo data |
-| Want to understand implementation | **This project** | Cleaner code structure |
-| Want to build on existing content | [obsidian_vault_showcase](https://github.com/fakechris/obsidian_vault_showcase) | Content + full scripts |
+### 6-Dimension Quality Model
+
+Every interpretation includes:
+1. **One-sentence definition** - Clear core concept statement
+2. **Detailed explanation** - Complete What/Why/How
+3. **Key details** - ≥3 technical points
+4. **Architecture diagram** - ASCII visualization
+5. **Actionable advice** - ≥2 practical recommendations
+6. **Related knowledge** - [[Bidirectional links]]
 
 ---
 
@@ -99,115 +86,125 @@ This showcase contains:
 
 ---
 
-## pip Install
+## Two Ways to Use
+
+| Method | Recommended For | Difficulty |
+|--------|-----------------|------------|
+| **[obsidian_vault_showcase](https://github.com/fakechris/obsidian_vault_showcase)** | Want to see results first, or build on existing content | ⭐ Out-of-the-box |
+| **[obsidian_vault_pipeline](https://github.com/fakechris/obsidian_vault_pipeline)** (this project) | Want to start from scratch, fully customize | ⭐⭐ Requires setup |
+
+---
+
+## pip Install (Recommended)
 
 ```bash
 pip install obsidian-vault-pipeline
 ```
 
 Available commands after installation:
-- `ovp --init` - Initialize configuration
-- `ovp --full` - Run full Pipeline
-- `ovp-article` - Article processor
-- `ovp-github` - GitHub project processor
-- `ovp-evergreen` - Evergreen extractor
-- `ovp-moc` - MOC updater
-- `ovp-quality` - Quality checker
+
+| Command | Function |
+|---------|----------|
+| `ovp --init` | Initialize configuration (interactive wizard) |
+| `ovp --check` | Check environment configuration |
+| `ovp --full` | Run full Pipeline |
+| `ovp-article --process-inbox` | Process articles in 50-Inbox/01-Raw/ |
+| `ovp-evergreen --recent 7` | Extract Evergreen notes from last 7 days |
+| `ovp-moc --scan` | Scan and update MOC index |
+| `ovp-quality --recent 7` | Quality check |
 
 ---
 
-## Quick Start (Template Project)
-
-Want to build your own system from scratch? Use this template:
+## 30-Second Quick Start
 
 ```bash
-# 1. Clone the template project
-git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
-cd my-vault
+# 1. Install
+pip install obsidian-vault-pipeline
 
-# 2. Initialize configuration (interactive wizard)
+# 2. Create vault directory and enter
+mkdir my-vault && cd my-vault
+
+# 3. Initialize configuration (wizard)
 ovp --init
-# Enter your API Key when prompted
 
-# 3. Install dependencies (if using local scripts)
-pip install -r requirements.txt
+# 4. Place articles in 50-Inbox/01-Raw/
+mkdir -p 50-Inbox/01-Raw
+echo "# Test Article\n\nContent..." > 50-Inbox/01-Raw/test.md
 
-# 4. Run full pipeline
+# 5. Run Pipeline
 ovp --full
 ```
 
-**Result:** Automatically fetch bookmarks, generate interpretations, extract Evergreen notes, update index, all auditable.
+**Result:** Auto-generate interpretations to `20-Areas/`, extract Evergreen to `10-Knowledge/`, update MOC index.
 
-### New Feature: Smart Initialization & Environment Check
+---
+
+## Claude Code Skill (Optional)
+
+This project includes a **Claude Code Skill** that supports natural language triggering of Pipeline operations.
+
+**Usage:**
 
 ```bash
-# Interactive initialization (one-click config)
-ovp --init
-
-# Environment check (verify configuration)
-ovp --check
+# After cloning the repository, Claude Code automatically loads the skill
+git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
+cd my-vault
+claude  # Start Claude Code, skill activates automatically
 ```
 
-**Features:**
-- No manual `.env` editing needed, wizard-style configuration
-- Auto-detect API Key, Python dependencies, directory structure
-- Support for MiniMax / Anthropic / OpenAI providers
-- Clear error messages and fix guidance when not configured
+**Trigger Phrases:**
+
+| You Say | Claude Executes |
+|---------|-----------------|
+| "run WIGS workflow" | `./60-Logs/scripts/check-consistency.sh` |
+| "organize Obsidian Vault" | `ovp --full` |
+| "process articles" | `ovp-article --process-inbox` |
+| "extract Evergreen" | `ovp-evergreen --recent 7` |
+| "update MOC" | `ovp-moc --scan` |
+| "quality check" | `ovp-quality --recent 7` |
 
 ---
 
-## Core Features
+## Directory Structure (PARA Method)
 
-### 5 Automated Maintenance Systems
-
-| System | Capability | Automation |
-|--------|------------|------------|
-| **Quality Gate** | Pre-commit mandatory checks (lines/placeholders/frontmatter) | 100% |
-| **WIGS Integrity** | 5-layer consistency check + auto-repair | 95% |
-| **Backlink Maintenance** | Auto-detect broken links, update MOC | 95% |
-| **Evergreen Extraction** | LLM auto-extract core concepts | 90% |
-| **Runtime Audit** | JSONL structured logs + transaction tracking | 100% |
-
-### Template System (90-Templates/)
-
-5 professional templates included:
-
-| Template | Purpose | Output Location |
-|----------|---------|-----------------|
-| **Article Interpretation** | 6-dimension analysis | 20-Areas/ |
-| **Evergreen Notes** | Atomic knowledge template | 10-Knowledge/Evergreen/ |
-| **Project Notes** | PARA project management | 30-Projects/ |
-| **MOC Maps** | Knowledge navigation template | 10-Knowledge/Atlas/ |
-| **Daily Logs** | Log recording template | 60-Logs/Daily/ |
-
-### View Directory (80-Views/)
-
-Manually maintained data view indexes:
-
-| View | Content | Maintenance |
-|------|---------|-------------|
-| **Recently Added** | This week/month new content summary | Manual update |
-| **Evergreen Index** | Central index of all concept notes | Manual organization |
-| **MOC Index** | Knowledge map navigation | Manual maintenance |
-
-| Feature | Description | Benefit |
-|---------|-------------|---------|
-| **Dynamic Timeout** | Auto-calculate timeout based on article length (1000 chars = 10s, 60-300s adaptive) | Avoid fixed timeout misjudgment |
-| **Output Detection** | Judge success based on actual file output, not exit code | Correct identification even on timeout |
-| **Auto Loading** | Auto-load `.env`, no manual export needed | Simplified workflow |
-| **Transaction Recovery** | Resume from interruption point | Improved reliability |
-
-### 3 Interpretation Modes
-
-| Content Type | Script | Output | Special Capabilities |
-|--------------|--------|--------|---------------------|
-| Articles | `auto_article_processor.py` | 6-dimension analysis | Auto-categorization |
-| GitHub Projects | `auto_github_processor.py` | 13-section deep interpretation | README parsing + ASCII architecture |
-| Academic Papers | `auto_paper_processor.py` | 10-section academic structure | arXiv API + reproduction guide |
+```
+my-vault/
+├── 00-Polaris/
+│   ├── README.md              # Top of Mind (manual weekly update)
+│   └── Home.md                # [Entry navigation] Obsidian homepage
+├── 10-Knowledge/
+│   ├── Evergreen/             # [Auto] LLM-extracted atomic notes
+│   └── Atlas/
+│       ├── MOC-Index.md       # [Auto] Global MOC index
+│       ├── MOC-AI-Research.md # [Auto] AI research field map
+│       ├── MOC-Tools.md       # [Auto] Tools field map
+│       ├── MOC-Investing.md   # [Auto] Investing field map
+│       └── MOC-Programming.md # [Auto] Programming field map
+├── 20-Areas/                  # [Auto+Manual] Interpretation output
+│   ├── AI-Research/Topics/    # YYYY-MM/ subdirectories
+│   ├── Tools/
+│   ├── Investing/
+│   └── Programming/
+├── 30-Projects/               # [Manual] Projects with deadlines
+├── 40-Resources/              # [Manual] Reference library
+├── 50-Inbox/
+│   ├── 01-Raw/               # [Auto] Raw articles
+│   └── Processing-Queue.md   # [Manual] Processing queue
+├── 60-Logs/
+│   ├── scripts/               # [Direct use] Core scripts
+│   ├── pipeline.jsonl        # [Auto] Unified structured logs
+│   └── transactions/         # [Auto] Transaction states
+├── 70-Archive/                # [Manual] Archived completed projects
+├── 80-Views/                  # [Auto] Data views
+├── 90-Templates/              # [Built-in] Template library
+└── .claude/
+    ├── skills/                # [Built-in] Claude Code Skill
+    └── precommit-check.sh     # Pre-commit check script
+```
 
 ---
 
-## User Guide
+## Detailed User Guide
 
 ### First Time Setup
 
@@ -253,6 +250,109 @@ ovp-evergreen --recent 7
 # Step 6: Update MOC index
 ovp-moc --scan
 ```
+
+### Special Content Processing
+
+```bash
+# GitHub project deep interpretation
+ovp-github --single https://github.com/tw93/kaku
+
+# arXiv paper interpretation
+ovp-paper --arxiv https://arxiv.org/abs/2401.12345
+```
+
+---
+
+## Quality Gate
+
+### Pre-commit Mandatory Checks
+
+```bash
+./.claude/precommit-check.sh
+```
+
+**Check contents:**
+- ✅ File lines ≥ 150 (configurable)
+- ✅ No forbidden placeholders (CN/EN)
+- ✅ Correct frontmatter format
+- ✅ Single commit ≤ 10 files
+
+---
+
+## WIGS Integrity Check
+
+**Workflow Integrity Guarantee System** - 5-layer check architecture ensuring data processing integrity.
+
+```bash
+# Run 5-layer consistency check
+./60-Logs/scripts/check-consistency.sh
+
+# Preview repair plan
+./60-Logs/scripts/repair.sh --dry-run
+
+# Auto-repair low-risk issues
+./60-Logs/scripts/repair.sh --auto
+```
+
+| Layer | Check Content | Auto-repair |
+|-------|---------------|-------------|
+| **L1** | Incomplete transactions | ❌ Manual confirmation |
+| **L2** | Orphan Evergreen / broken links | ⚠️ Partial auto |
+| **L3** | Ingestion consistency | ✅ Auto (duplicate files) |
+| **L4** | Areas integrity / Git commit | ❌ Manual |
+| **L5** | Archive layer | ❌ Manual |
+
+---
+
+## Configuration Reference
+
+### .env Configuration Template
+
+```bash
+# LLM API (Required)
+AUTO_VAULT_API_KEY=your_key_here
+AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
+AUTO_VAULT_MODEL=minimax/MiniMax-M2.5
+
+# Pinboard (Optional)
+PINBOARD_TOKEN=username:token
+
+# Proxy (Optional)
+HTTP_PROXY=http://127.0.0.1:7897
+```
+
+### Cost Estimation
+
+| Provider | Cost | Chinese Support | Recommended For |
+|----------|------|-----------------|-----------------|
+| **MiniMax** | ¥0.01/1K tokens | Excellent | Daily batch |
+| **Anthropic** | $0.03/1K tokens | Good | High-quality deep |
+| **OpenAI** | $0.01-0.03/1K tokens | Good | Alternative |
+
+- Process 10 articles: ~¥1-3 RMB
+- Process 100 GitHub projects: ~¥10-30 RMB
+
+---
+
+## Manual Maintenance Checklist
+
+| Frequency | Task | Command/File |
+|-----------|------|--------------|
+| Daily | Run Pipeline | `ovp --full` |
+| Daily | Check system status | `./60-Logs/scripts/check-consistency.sh` |
+| Weekly | Update Top of Mind | Edit `00-Polaris/README.md` |
+| Weekly | Review quality reports | View `60-Logs/quality-reports/*.md` |
+| Monthly | Archive old files | `obsidian move` to `70-Archive/` |
+
+---
+
+## Related Repositories
+
+| Repository | Purpose | Link |
+|------------|---------|------|
+| **obsidian_vault_showcase** | Complete demo (with sample data) | [GitHub](https://github.com/fakechris/obsidian_vault_showcase) |
+| **obsidian_vault_pipeline** | Template project (this repo) | [GitHub](https://github.com/fakechris/obsidian_vault_pipeline) |
+| **PyPI** | pip install package | [PyPI](https://pypi.org/project/obsidian-vault-pipeline/) |
 
 ---
 
