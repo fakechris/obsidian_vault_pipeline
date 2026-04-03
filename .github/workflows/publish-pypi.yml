@@ -14,8 +14,6 @@ jobs:
     environment:
       name: pypi
       url: https://pypi.org/p/obsidian-vault-pipeline
-    permissions:
-      id-token: write
 
     steps:
     - name: Checkout code
@@ -40,6 +38,7 @@ jobs:
         ls -la dist/
 
     - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        skip-existing: true
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+      run: twine upload dist/* --skip-existing
