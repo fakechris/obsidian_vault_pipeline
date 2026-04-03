@@ -29,6 +29,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+# 自动加载 .env 文件
+VAULT_DIR = Path(__file__).parent.parent.parent
+ENV_FILE = VAULT_DIR / ".env"
+if ENV_FILE.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=ENV_FILE, override=True)
+    except ImportError:
+        pass  # dotenv 未安装，跳过
+
 # Import litellm for LLM calls
 sys.path.insert(0, str(Path(__file__).parent / "auto_vault"))
 try:
@@ -37,7 +47,6 @@ except ImportError:
     litellm = None
 
 # ========== 配置 ==========
-VAULT_DIR = Path(__file__).parent.parent.parent
 CLIPPINGS_DIR = VAULT_DIR / "Clippings"
 RAW_DIR = VAULT_DIR / "50-Inbox" / "01-Raw"
 PROCESSED_DIR = VAULT_DIR / "50-Inbox" / "03-Processed"

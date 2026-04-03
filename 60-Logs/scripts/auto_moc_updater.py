@@ -26,8 +26,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# ========== 配置 ==========
+# 自动加载 .env 文件
 VAULT_DIR = Path(__file__).parent.parent.parent
+ENV_FILE = VAULT_DIR / ".env"
+if ENV_FILE.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=ENV_FILE, override=True)
+    except ImportError:
+        pass  # dotenv 未安装，跳过
+
+# ========== 配置 ==========
 AREAS_DIR = VAULT_DIR / "20-Areas"
 ATLAS_DIR = VAULT_DIR / "10-Knowledge" / "Atlas"
 LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"

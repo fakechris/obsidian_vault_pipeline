@@ -28,6 +28,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+# 自动加载 .env 文件
+VAULT_DIR = Path(__file__).parent.parent.parent
+ENV_FILE = VAULT_DIR / ".env"
+if ENV_FILE.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=ENV_FILE, override=True)
+    except ImportError:
+        pass  # dotenv 未安装，跳过
+
 # Import litellm
 sys.path.insert(0, str(Path(__file__).parent / "auto_vault"))
 try:
@@ -38,7 +48,6 @@ except ImportError:
     print("Warning: litellm not available, LLM calls will fail")
 
 # ========== 配置 ==========
-VAULT_DIR = Path(__file__).parent.parent.parent
 RAW_DIR = VAULT_DIR / "50-Inbox" / "01-Raw"
 PROCESSED_DIR = VAULT_DIR / "50-Inbox" / "03-Processed"
 OUTPUT_DIRS = {

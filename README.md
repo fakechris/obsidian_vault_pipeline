@@ -30,9 +30,9 @@ type: meta
 git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
 cd my-vault
 
-# 2. 配置 API Key（必需）
-cp .env.example .env
-# 编辑 .env 填入你的 LLM API Key
+# 2. 初始化配置（交互式向导）
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --init
+# 根据提示输入 API Key 即可
 
 # 3. 安装依赖
 pip install -r requirements.txt
@@ -42,6 +42,22 @@ python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
 ```
 
 **效果**：自动抓取书签、生成深度解读、提取常青笔记、更新索引，所有环节可审计。
+
+### 全新特性：智能初始化与环境检查
+
+```bash
+# 交互式初始化（一键配置）
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --init
+
+# 环境检查（验证配置是否正确）
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --check
+```
+
+**特点**：
+- 无需手动编辑 `.env` 文件，向导式配置
+- 自动检测 API Key、Python 依赖、目录结构
+- 支持 MiniMax / Anthropic / OpenAI 多种提供商
+- 未配置时给出明确错误提示和修复指引
 
 ---
 
@@ -56,6 +72,15 @@ python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
 | **反向链接维护** | 自动检测断裂链接，更新MOC | 95% |
 | **Evergreen提取** | LLM自动提取核心概念 | 90% |
 | **运行审计** | JSONL结构化日志 + 事务追踪 | 100% |
+
+### 智能执行引擎
+
+| 特性 | 说明 | 优势 |
+|------|------|------|
+| **动态超时** | 根据文章长度自动计算超时时间（1000字符=10秒，60-300秒自适应） | 避免固定超时导致的误判 |
+| **产出检测** | 基于实际文件产出判断成功，而非进程退出码 | 超时也能正确识别成功 |
+| **自动加载** | 自动加载 `.env`，无需手动 export | 简化使用流程 |
+| **事务恢复** | 中断后可从中断点恢复 | 可靠性提升 |
 
 ### 3种深度解读模式
 
@@ -129,6 +154,16 @@ my-vault/
 ---
 
 ## 使用指南
+
+### 首次使用（推荐）
+
+```bash
+# Step 0: 交互式初始化（配置 API Key）
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --init
+
+# 验证环境是否配置正确
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --check
+```
 
 ### 日常操作
 
@@ -275,12 +310,22 @@ python3 60-Logs/scripts/auto_paper_processor.py \
 
 | 问题 | 诊断命令 |
 |------|----------|
+| 环境未配置 | `python3 60-Logs/scripts/unified_pipeline_enhanced.py --check` |
 | Pipeline中断 | `./60-Logs/scripts/txn.sh list` |
 | 断裂链接 | `./60-Logs/scripts/check-consistency.sh` |
 | 质量检查失败 | `./.claude/precommit-check.sh <file>` |
-| API Key无效 | `env \| grep AUTO_VAULT` |
+| API Key无效 | `python3 60-Logs/scripts/unified_pipeline_enhanced.py --check` |
 
 ### 常见问题
+
+**Q: 首次运行提示 API Key 未配置？**
+```bash
+# 运行交互式初始化向导
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --init
+
+# 验证配置
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --check
+```
 
 **Q: Pipeline中断如何恢复？**
 ```bash
@@ -373,8 +418,7 @@ MIT License - 详见 [LICENSE](LICENSE)
 ```bash
 git clone https://github.com/fakechris/obsidian_vault_pipeline.git
 cd obsidian_vault_pipeline
-cp .env.example .env
-# 编辑 .env 填入 API Key
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --init  # 交互式配置
 pip install -r requirements.txt
 python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
 ```

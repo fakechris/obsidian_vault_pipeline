@@ -31,6 +31,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+# 自动加载 .env 文件
+VAULT_DIR = Path(__file__).parent.parent.parent
+ENV_FILE = VAULT_DIR / ".env"
+if ENV_FILE.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=ENV_FILE, override=True)
+    except ImportError:
+        pass  # dotenv 未安装，跳过
+
 try:
     import litellm
 except ImportError:
@@ -39,7 +49,6 @@ except ImportError:
 
 
 # ========== 配置 ==========
-VAULT_DIR = Path(__file__).parent.parent.parent
 OUTPUT_DIR = VAULT_DIR / "20-Areas" / "AI-Research" / "Papers"
 LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
 
