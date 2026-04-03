@@ -1,0 +1,37 @@
+# 自动化工作流配置
+name: Daily Knowledge Pipeline
+on:
+  schedule:
+    - cron: '0 9 * * *'  # 每天上午9点
+  workflow_dispatch:      # 支持手动触发
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Pipeline
+        env:
+          PINBOARD_TOKEN: ${{ secrets.PINBOARD_TOKEN }}
+          AUTO_VAULT_API_KEY: ${{ secrets.AUTO_VAULT_API_KEY }}
+          AUTO_VAULT_API_BASE: ${{ secrets.AUTO_VAULT_API_BASE }}
+        run: |
+          python3 60-Logs/scripts/unified_pipeline_enhanced.py --full --batch-size 10
+
+      - name: Commit changes
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git add -A
+          git diff --quiet && git diff --staged --quiet || git commit -m "auto: daily pipeline run"
+          git push

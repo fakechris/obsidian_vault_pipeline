@@ -1,0 +1,56 @@
+# Obsidian
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+.obsidian/graph.json
+.obsidian/plugins/*/
+!.obsidian/plugins/*/data.json
+.trash/
+
+# Private data
+.env
+.personal/
+.private/
+*_private.md
+*_personal.md
+
+# API Keys and Secrets
+*.key
+*.secret
+*_token*
+*_api_key*
+
+# Pipeline logs with personal data
+60-Logs/pipeline.jsonl
+60-Logs/transactions/*.json
+60-Logs/quality-reports/*.md
+60-Logs/pipeline-reports/*.md
+50-Inbox/.manifest.json
+50-Inbox/.pinboard_state.json
+
+# System files
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Node (if any)
+node_modules/
+
+# Large files
+*.mp4
+*.mov
+*.avi
+*.zip
+*.tar.gz

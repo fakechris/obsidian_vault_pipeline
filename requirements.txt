@@ -1,0 +1,6 @@
+# Pipeline依赖
+litellm>=1.0.0
+requests>=2.28.0
+
+# 可选增强
+python-dotenv>=1.0.0
