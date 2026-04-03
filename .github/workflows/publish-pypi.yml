@@ -13,9 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/openclaw-pipeline
+      url: https://pypi.org/p/obsidian-vault-pipeline
     permissions:
-      id-token: write  # Required for trusted publishing
+      id-token: write
 
     steps:
     - name: Checkout code
