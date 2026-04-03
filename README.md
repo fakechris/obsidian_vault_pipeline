@@ -1,4 +1,4 @@
-# PARA + Zettelkasten Obsidian Vault Pipeline
+# Obsidian Vault Pipeline - 全自动知识管理流水线
 
 <div align="center">
 
@@ -6,351 +6,487 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Obsidian](https://img.shields.io/badge/Obsidian-Plugin-7C3AED?logo=obsidian)](https://obsidian.md)
 
-**中文** | [English](#english-documentation)
+**一套基于 LLM 的全自动化 Obsidian 知识管理流水线**
 
-全自动知识管理 Pipeline，支持 Pinboard + Obsidian Web Clipper 双输入源
+[核心特性](#核心特性) • [快速开始](#快速开始) • [配置详解](#配置详解) • [使用指南](#使用指南) • [自动化原理](#自动化原理)
 
 </div>
 
 ---
 
+## 🎯 核心特性
+
+### 全自动知识处理流水线
+
+```
+输入源 → 深度解读 → 质量质检 → 知识提炼 → 索引更新 → 日志记录
+   ↓         ↓           ↓           ↓           ↓           ↓
+Pinboard   LLM 6维度    自动评分   Evergreen   自动MOC    JSONL
+Clippings   分析        1-5分      原子笔记    反向链接    结构化日志
+```
+
+### 四大自动维护系统
+
+| 系统 | 功能 | 自动化程度 | 价值 |
+|------|------|-----------|------|
+| **反向链接维护** | 自动检测断裂链接，更新MOC索引 | 95% | 知识图谱永不断裂 |
+| **Evergreen维护** | LLM自动提取核心概念，创建原子笔记 | 90% | 知识复利增长 |
+| **MOC维护** | 自动扫描新文件，更新知识地图 | 95% | 导航永远最新 |
+| **运行质检** | 每步操作JSONL记录，可追溯可审计 | 100% | 完全透明可控 |
+
+---
+
 ## 🚀 快速开始
 
-### 1. 克隆仓库
+### 第一步：克隆并进入目录
 
 ```bash
 git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
 cd my-vault
 ```
 
-### 2. 配置环境
+### 第二步：配置 API Keys（关键步骤）
 
 ```bash
-# 复制环境变量模板
+# 复制模板
 cp .env.example .env
 
-# 编辑 .env 填入你的 API 密钥
-nano .env
+# 编辑配置文件
+nano .env  # 或 vim .env
 ```
 
-### 3. 安装依赖
+**`.env` 文件配置示例：**
+
+```bash
+# ================================
+# 必需：LLM API（深度解读生成）
+# ================================
+
+# 选项1：MiniMax（推荐，成本低，中文好）
+AUTO_VAULT_API_KEY=your_minimax_key_here
+AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
+AUTO_VAULT_MODEL=minimax/MiniMax-M2.5
+
+# 选项2：Anthropic Claude（质量最高）
+# AUTO_VAULT_API_KEY=sk-ant-api-xxxxx
+# AUTO_VAULT_API_BASE=https://api.anthropic.com
+# AUTO_VAULT_MODEL=anthropic/claude-3-5-sonnet-20241022
+
+# 选项3：OpenAI（备选）
+# AUTO_VAULT_API_KEY=sk-xxxxx
+# AUTO_VAULT_API_BASE=https://api.openai.com/v1
+
+# ================================
+# 可选：Pinboard（自动书签导入）
+# ================================
+# 从 https://pinboard.in/settings/password 获取
+PINBOARD_TOKEN=your_username:your_api_token
+
+# ================================
+# 可选：代理配置
+# ================================
+HTTP_PROXY=http://127.0.0.1:7897
+```
+
+**获取 API Key：**
+
+- **MiniMax**: 访问 https://api.minimaxi.com 注册获取
+- **Anthropic**: 访问 https://console.anthropic.com 获取
+- **Pinboard**: 访问 https://pinboard.in/settings/password
+
+### 第三步：安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. 运行 Pipeline
+### 第四步：运行完整流水线
 
 ```bash
-# 处理最近 7 天的内容（Pinboard + Clippings）
+# 处理最近7天（Pinboard + Clippings + 全流程）
 python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
 ```
 
 ---
 
-## 📚 目录结构
+## 📖 使用指南
 
-```
-📁 00-Polaris/               # 北极星层 - 当前关注重点
-   └── README.md            # Top of Mind
-📁 10-Knowledge/             # 知识层
-   ├── Atlas/              # 知识地图 (MOC)
-   ├── Evergreen/          # 常青笔记（原子化概念）
-   ├── Literature/         # 文献笔记
-   └── Sources/            # 原文存储
-📁 20-Areas/                 # 责任领域
-   ├── AI-Research/       # AI 研究
-   ├── Tools/             # 工具评测
-   ├── Investing/          # 投资思考
-   └── Programming/        # 编程技术
-📁 30-Projects/              # 活跃项目
-📁 40-Resources/             # 资源
-📁 50-Inbox/                 # 收集箱（三层捕获）
-   ├── 00-Capture/        # 快速捕获
-   ├── 01-Raw/           # 原始文章
-   ├── 02-Processing/    # 待处理
-   └── 03-Processed/     # 已处理
-📁 60-Logs/                  # 日志和自动化脚本
-   └── scripts/          # 8 个核心脚本
-📁 70-Archive/               # 归档
-```
-
----
-
-## 🤖 自动化 Pipeline
-
-### 6 步完整流程
+### 日常使用方法
 
 ```bash
-# 完整 Pipeline（推荐）
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
-```
+# 1. 每日自动处理（添加到 crontab）
+0 9 * * * cd /path/to/my-vault && python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
 
-| 步骤 | 脚本 | 功能 | 说明 |
-|------|------|------|------|
-| 1 | `pinboard-processor.py` | 获取 Pinboard 书签 | 按天查询，自动去重 |
-| 2 | `clippings_processor.py` | 处理 Obsidian Web Clipper | 清理文件名，obsidian move 迁移 |
-| 3 | `auto_article_processor.py` | 生成深度解读 | LLM 6 维度分析 |
-| 4 | `batch_quality_checker.py` | 质量检查 | 自动评分（1-5 分）|
-| 5 | `auto_evergreen_extractor.py` | 提取 Evergreen | 原子化概念笔记 |
-| 6 | `auto_moc_updater.py` | 更新 MOC | 自动索引新文件 |
-
-### 常用命令
-
-```bash
-# 处理最近 N 天（Pinboard + 完整流程）
+# 2. 处理最近30天（批量历史处理）
 python3 60-Logs/scripts/unified_pipeline_enhanced.py --pinboard-days 30
 
-# 处理历史日期范围
+# 3. 处理指定日期范围（如2026年2月）
 python3 60-Logs/scripts/unified_pipeline_enhanced.py \
   --pinboard-history 2026-02-01 2026-02-28
 
-# 仅处理 Clippings
-python3 60-Logs/scripts/unified_pipeline.py --step clippings
+# 4. 仅处理本地 Clippings（无 Pinboard）
+python3 60-Logs/scripts/unified_pipeline.py --full
 
-# 仅更新 MOC 索引
+# 5. 仅更新 MOC 索引（快速维护）
 python3 60-Logs/scripts/unified_pipeline.py --step moc
 
-# 预览模式（不实际执行）
+# 6. 预览模式（不实际执行，查看会处理什么）
 python3 60-Logs/scripts/unified_pipeline_enhanced.py --full --dry-run
 ```
 
----
+### 单步调试使用
 
-## 🎯 核心方法论
+```bash
+# Step 1: 仅获取 Pinboard 书签
+python3 60-Logs/scripts/unified_pipeline_enhanced.py --step pinboard --pinboard-days 7
 
-### PARA 方法
+# Step 2: 仅处理 Clippings 迁移
+python3 60-Logs/scripts/unified_pipeline.py --step clippings
 
-| 层级 | 用途 | 示例 |
-|------|------|------|
-| **Projects** | 有明确目标和时间 | "完成 AI Agent 调研" |
-| **Areas** | 持续维护的领域 | AI 研究、工具评测 |
-| **Resources** | 参考资料 | 模板、代码片段 |
-| **Archive** | 归档 | 已完成项目 |
+# Step 3: 仅生成深度解读
+python3 60-Logs/scripts/unified_pipeline.py --step articles
 
-### 三层笔记架构
+# Step 4: 仅质量检查
+python3 60-Logs/scripts/batch_quality_checker.py --all
 
-1. **Session Memory (00-Polaris)**
-   - Top of Mind：当前关注重点
-   - 每周回顾更新
+# Step 5: 仅提取 Evergreen
+python3 60-Logs/scripts/auto_evergreen_extractor.py --recent 7
 
-2. **Knowledge Graph (10-Knowledge + 20-Areas)**
-   - Evergreen：原子化永久笔记
-   - Literature：文献笔记
-   - Atlas：知识地图
-
-3. **Ingestion Pipeline (50-Inbox)**
-   - 快速捕获 → 原始文章 → 待处理 → 已处理
+# Step 6: 仅更新 MOC
+python3 60-Logs/scripts/auto_moc_updater.py --scan
+```
 
 ---
 
-## 📝 深度解读标准
+## ⚙️ 配置详解
 
-### 6 维度质量模型
+### 目录结构说明
 
-每篇深度解读必须包含：
-
-```markdown
-# 一句话定义
-[核心概念的精准概括]
-
-# 详细解释
-## 是什么？
-## 为什么重要？
-## 如何工作？
-
-# 重要细节
-## 细节 1
-## 细节 2
-## 细节 3
-
-# 架构图 / 流程图
 ```
-[ASCII 图表]
+my-vault/
+├── 00-Polaris/               # 【手动维护】当前关注重点
+│   └── README.md            # Top of Mind - 每周回顾更新
+├── 10-Knowledge/
+│   ├── Evergreen/            # 【自动维护】常青笔记（LLM自动提取）
+│   └── Atlas/               # 【自动维护】MOC索引（脚本自动更新）
+├── 20-Areas/                 # 【自动+手动】深度解读输出
+│   └── AI-Research/Topics/   # YYYY-MM/ 子目录
+├── 50-Inbox/
+│   ├── 01-Raw/             # 【自动填充】原始文章
+│   └── Processing-Queue.md # 【建议手动】待处理队列跟踪
+└── 60-Logs/
+    ├── scripts/              # 【直接使用】8个核心脚本
+    ├── pipeline.jsonl       # 【自动生成】统一结构化日志
+    └── transactions/         # 【自动生成】事务状态记录
 ```
 
-# 行动建议
-1. 建议 1
-2. 建议 2
+### API 配置对比
 
-# 关联知识
-- [[Related Concept]]
-```
+| 提供商 | 注册地址 | 成本 | 中文支持 | 推荐场景 |
+|--------|----------|------|----------|----------|
+| **MiniMax** | api.minimaxi.com | ¥0.01/1K tokens | 优秀 | 日常批量处理 |
+| **Anthropic** | console.anthropic.com | $0.03/1K tokens | 良好 | 高质量深度解读 |
+| **OpenAI** | platform.openai.com | $0.01-0.03/1K tokens | 良好 | 备选方案 |
 
-### 质量评分
-
-| 维度 | 权重 | 合格标准 |
-|------|------|---------|
-| 一句话定义 | 1-5 分 | 有 |
-| 详细解释 | 1-5 分 | 完整 |
-| 重要细节 | 1-5 分 | ≥3 个 |
-| 架构图 | 1-5 分 | 有（如适用）|
-| 行动建议 | 1-5 分 | ≥2 条 |
-| 关联知识 | 1-5 分 | 有 [[wikilink]] |
-
-**总分 ≥ 18**（平均 3+）为合格
+**成本估算：**
+- 处理10篇文章（每篇5000 tokens）：约 ¥1-3 元
+- 处理100篇GitHub项目（13节深度解读）：约 ¥10-30 元
 
 ---
 
-## 🛡️ WIGS 原则
+## 🤖 自动化原理详解
 
-**W**orkflow **I**ntegrity **G**uarantee **S**ystem
+### 1. 反向链接维护（WIGS核心）
 
-### 核心规则
+**问题：** 传统 `mv` 命令会断裂 Obsidian 的 `[[wikilink]]`
 
-1. **强制使用 `obsidian move`**
-   ```bash
-   # ✅ 正确
-   obsidian move file="source.md" to="dest/"
+**解决方案：**
+```bash
+# ✅ Pipeline强制使用 obsidian move
+obsidian move file="source.md" to="dest/"
+# 自动更新所有反向链接
 
-   # ❌ 错误 - 会破坏 wiki-links
-   mv source.md dest/
+# ❌ 传统方式（Pipeline禁止）
+mv source.md dest/  # 会破坏链接
+```
+
+**自动化流程：**
+1. 文件名清理（移除特殊字符 `"'《》` 等）
+2. obsidian CLI 迁移（自动维护链接）
+3. MOC 自动更新（重新索引）
+
+**质量保证：**
+- 一致性检查脚本 `check-consistency.sh` 每日扫描断裂链接
+- 发现孤儿笔记自动报告
+
+### 2. Evergreen 自动维护
+
+**传统方式：**
+- 手动阅读 → 理解 → 提炼 → 创建笔记 → 添加链接（耗时30分钟/篇）
+
+**Pipeline自动化：**
+```bash
+# LLM自动执行（耗时30秒/篇，成本¥0.1）
+python3 60-Logs/scripts/auto_evergreen_extractor.py --recent 7
+```
+
+**提取流程：**
+1. 读取深度解读文件
+2. LLM识别核心概念（3-5个）
+3. 生成原子化笔记：
+   ```markdown
+   ---
+   title: "AI-Agent-Memory-Architecture"
+   type: evergreen
+   ---
+   > 一句话定义：AI Agent使用分层记忆架构...
+   ## 详细解释...
+   ## 关联概念：[[LLM]] [[Context-Window]]
+   ```
+4. 自动添加到 `10-Knowledge/Evergreen/`
+5. 更新 Atlas MOC
+
+**幂等保证：**
+- 检查同名笔记是否存在
+- 存在则跳过，避免重复
+
+### 3. MOC 自动维护
+
+**自动化流程：**
+```bash
+python3 60-Logs/scripts/auto_moc_updater.py --scan
+```
+
+**执行逻辑：**
+1. 扫描4个Areas：
+   - `20-Areas/AI-Research/Topics/YYYY-MM/`
+   - `20-Areas/Tools/Topics/YYYY-MM/`
+   - `20-Areas/Investing/Topics/YYYY-MM/`
+   - `20-Areas/Programming/Topics/YYYY-MM/`
+
+2. 检测未索引文件：
+   - 检查文件名是否出现在对应 MOC.md
+   - 检查 `[[filename]]` 是否存在
+
+3. 自动添加索引：
+   ```markdown
+   ## 2026-04
+   - [[2026-04-02_Article_深度解读]]
+   - [[2026-04-03_Another_深度解读]]
    ```
 
-2. **显式状态文件**
-   - 使用 `Processing-Queue.md`（版本控制）
-   - 不使用 `.hidden_state.json`（易丢失）
+4. Atlas全局索引：
+   - 更新 `10-Knowledge/Atlas/MOC-Index.md`
+   - 添加新 Evergreen 链接
 
-3. **事务完整性**
-   - 每个 Pipeline 创建事务
-   - 中断后可恢复
+**月度自动分组：**
+- 新文件自动归入 `## YYYY-MM` 章节
+- 历史文件保持不动
 
-4. **幂等处理**
-   - 自动跳过已处理文件
-   - 可安全重跑
+### 4. 运行记录质检（100%透明）
 
----
+**统一日志系统：**
 
-## ⚙️ 环境配置
-
-### 必需配置
-
-```bash
-# .env 文件
-PINBOARD_TOKEN=your_username:your_api_token
-AUTO_VAULT_API_KEY=your_llm_api_key
-AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
-```
-
-### API 提供商选择
-
-| 提供商 | 成本 | 质量 | 配置 |
-|--------|------|------|------|
-| MiniMax | 低 | 高 | `api.minimaxi.com/anthropic` |
-| Anthropic | 中 | 最高 | `api.anthropic.com` |
-| OpenAI | 中 | 高 | `api.openai.com/v1` |
-
----
-
-## 📊 日志与监控
-
-### 统一日志
-
-位置：`60-Logs/pipeline.jsonl`
+位置：`60-Logs/pipeline.jsonl`（结构化JSON Lines）
 
 ```json
-{
-  "timestamp": "2026-04-02T12:00:00",
-  "session_id": "20260402-120000-abc123",
-  "event_type": "pipeline_completed",
-  "results": {...}
-}
+{"timestamp":"2026-04-02T09:00:00","session_id":"abc123","event_type":"pipeline_started","txn_id":"txn-20260402-090000"}
+{"timestamp":"2026-04-02T09:00:05","session_id":"abc123","event_type":"pinboard_fetched","count":15,"github":8,"articles":4,"websites":3}
+{"timestamp":"2026-04-02T09:00:30","session_id":"abc123","event_type":"clippings_migrated","count":3,"files":["file1.md","file2.md"]}
+{"timestamp":"2026-04-02T09:02:00","session_id":"abc123","event_type":"article_processed","file":"article.md","classification":"ai","tokens":1534,"model":"minimax/MiniMax-M2.5"}
+{"timestamp":"2026-04-02T09:05:00","session_id":"abc123","event_type":"quality_checked","file":"article.md","score":26,"qualified":true}
+{"timestamp":"2026-04-02T09:10:00","session_id":"abc123","event_type":"evergreen_created","concept":"AI-Agent-Memory","path":"10-Knowledge/Evergreen/AI-Agent-Memory.md"}
+{"timestamp":"2026-04-02T09:15:00","session_id":"abc123","event_type":"moc_updated","area":"AI-Research","files_added":2}
+{"timestamp":"2026-04-02T09:15:30","session_id":"abc123","event_type":"pipeline_completed","duration_s":930,"total_cost_¥":2.5}
 ```
 
-### 事务管理
+**事务管理系统：**
 
 ```bash
-# 列出未完成事务
+# 查看最近事务
 ./60-Logs/scripts/txn.sh list
 
-# 查看事务详情
-./60-Logs/scripts/txn.sh show <txn-id>
+# 输出示例：
+# Incomplete transactions:
+#   • txn-20260402-090000-abc123 | enhanced-pipeline | Process last 7 days | started: 2026-04-02T09:00:00
+
+# 查看详细状态
+./60-Logs/scripts/txn.sh show txn-20260402-090000-abc123
+
+# 输出示例（JSON格式）：
+# {
+#   "id": "txn-20260402-090000-abc123",
+#   "type": "enhanced-pipeline",
+#   "status": "completed",
+#   "steps": {
+#     "pinboard": {"status": "completed", "output": "15 bookmarks"},
+#     "articles": {"status": "completed", "output": "8 interpretations"},
+#     ...
+#   }
+# }
 ```
 
-### 一致性检查
+**质检报告：**
 
-```bash
-# 5 层架构检查
-./60-Logs/scripts/check-consistency.sh
-
-# 自动修复
-./60-Logs/scripts/repair.sh --auto
-```
-
----
-
-## 🔄 GitHub Actions
-
-`.github/workflows/daily-pipeline.yml`：
-
-```yaml
-# 每天上午 9 点自动运行
-schedule:
-  - cron: '0 9 * * *'
-```
-
-配置 Secrets：
-- `PINBOARD_TOKEN`
-- `AUTO_VAULT_API_KEY`
-- `AUTO_VAULT_API_BASE`
-
----
-
-## 🛠️ 开发指南
-
-### 添加新脚本
-
-1. 放入 `60-Logs/scripts/`
-2. 遵循 WIGS 原则
-3. 使用 `PipelineLogger` 记录日志
-4. 集成到 `unified_pipeline_enhanced.py`
-
-### Skill 开发
+每次运行自动生成：`60-Logs/pipeline-reports/pipeline-report-YYYYMMDD-HHMMSS.md`
 
 ```markdown
-# skills/your-skill.md
-
-## 触发条件
-当用户说...时触发
+# Pipeline执行报告
+生成时间: 2026-04-02T09:15:30
+事务ID: txn-20260402-090000-abc123
 
 ## 执行步骤
-1. 步骤 1
-2. 步骤 2
+| 步骤 | 状态 | 详情 |
+|------|------|------|
+| pinboard | ✅ 成功 | 15 bookmarks |
+| clippings | ✅ 成功 | 3 files |
+| articles | ✅ 成功 | 8 interpretations |
+| quality | ✅ 成功 | 7/8 qualified |
+| evergreen | ✅ 成功 | 12 concepts |
+| moc | ✅ 成功 | 8 files indexed |
 
-## 示例
-用户: "..."
-→ 执行...
+## 总体状态
+**全部成功**
+完成步骤: 6/6
+总成本: ¥2.5
+总耗时: 930s
+```
+
+**审计追溯：**
+```bash
+# 查询某天的处理记录
+cat 60-Logs/pipeline.jsonl | jq 'select(.timestamp | startswith("2026-04-02"))'
+
+# 统计本月成本
+cat 60-Logs/pipeline.jsonl | jq -s '[.[] | select(.event_type=="pipeline_completed").duration_s] | add'
+
+# 查找失败记录
+cat 60-Logs/pipeline.jsonl | jq 'select(.event_type | contains("error"))'
 ```
 
 ---
 
-## ❓ 常见问题
+## 📊 质量保证机制
 
-### Q: 没有 Pinboard 账号怎么办？
-A: 可以仅使用 Clippings 功能：
+### 5层一致性检查
+
 ```bash
-python3 60-Logs/scripts/unified_pipeline.py --full
+# 运行完整检查
+./60-Logs/scripts/check-consistency.sh
 ```
 
-### Q: 如何跳过某个步骤？
-A: 使用 `--from-step`：
+| 层级 | 检查内容 | 自动修复 |
+|------|----------|----------|
+| L1 | 未完成事务 | 可恢复 |
+| L2 | 孤儿Evergreen/断裂链接 | 报告提示 |
+| L3 | Ingestion一致性 | 部分自动 |
+| L4 | Areas完整性/Git提交 | 需手动 |
+| L5 | Archive层 | 需手动 |
+
+### 6维度质量评分
+
+自动质检标准：
+
+| 维度 | 权重 | 合格标准 | 检查方式 |
+|------|------|----------|----------|
+| 一句话定义 | 5分 | 存在且清晰 | LLM评估 |
+| 详细解释 | 5分 | What/Why/How完整 | LLM评估 |
+| 重要细节 | 5分 | ≥3个技术点 | LLM统计 |
+| 架构图 | 5分 | 有ASCII图 | LLM检测 |
+| 行动建议 | 5分 | ≥2条可落地 | LLM评估 |
+| 关联知识 | 5分 | 有[[wikilink]] | 正则匹配 |
+
+**总分≥18为合格**（平均3+）
+
+不合格文件自动生成修复建议报告。
+
+---
+
+## 🔧 故障排查
+
+### 常见问题
+
+**Q: API Key 无效？**
 ```bash
+# 检查环境变量
+env | grep AUTO_VAULT
+
+# 重新加载 .env
+source .env
+```
+
+**Q: obsidian move 命令找不到？**
+```bash
+# 安装 Obsidian CLI
+npm install -g obsidian-cli
+
+# 或手动下载
+# https://github.com/obsidianmd/obsidian-api
+```
+
+**Q: Pipeline 中断如何恢复？**
+```bash
+# 查看未完成事务
+./60-Logs/scripts/txn.sh list
+
+# 从中断步骤恢复（例如从 articles 开始）
 python3 60-Logs/scripts/unified_pipeline_enhanced.py --from-step articles
 ```
 
-### Q: 质量检查不合格怎么办？
-A: 查看报告：
+**Q: 如何查看处理历史？**
 ```bash
-cat 60-Logs/quality-reports/quality-report-*.md
-```
-然后手动补充缺失维度。
+# 最近10条日志
+cat 60-Logs/pipeline.jsonl | tail -10
 
-### Q: 如何备份？
-A: 定期 git commit + push：
-```bash
-git add -A
-git commit -m "backup: $(date)"
-git push
+# 查找特定文件的处理记录
+cat 60-Logs/pipeline.jsonl | grep "filename"
+```
+
+---
+
+## 📝 手动维护清单
+
+尽管 Pipeline 自动化程度达95%，以下仍需手动维护：
+
+| 频率 | 任务 | 命令/文件 |
+|------|------|----------|
+| 每日 | 运行 Pipeline | `python3 60-Logs/scripts/unified_pipeline_enhanced.py --full` |
+| 每周 | 更新 Top of Mind | 编辑 `00-Polaris/README.md` |
+| 每周 | 审查质检报告 | 查看 `60-Logs/quality-reports/*.md` |
+| 每月 | 归档旧文件 | 使用 `obsidian move` 移动到 `70-Archive/` |
+| 每季 | 优化 Evergreen 链接 | 手动添加跨领域关联 |
+
+---
+
+## 🎓 进阶使用
+
+### GitHub Actions 自动运行
+
+已配置 `.github/workflows/daily-pipeline.yml`：
+
+```yaml
+name: Daily Knowledge Pipeline
+on:
+  schedule:
+    - cron: '0 9 * * *'  # 每天上午9点
+  workflow_dispatch:       # 支持手动触发
+```
+
+配置 Secrets：
+1. 仓库 Settings → Secrets and variables → Actions
+2. 添加 `PINBOARD_TOKEN`
+3. 添加 `AUTO_VAULT_API_KEY`
+4. 添加 `AUTO_VAULT_API_BASE`
+
+### 自定义 Pipeline
+
+编辑 `60-Logs/scripts/unified_pipeline_enhanced.py`：
+
+```python
+# 修改默认参数
+PINBOARD_DAYS = 7  # 改为14天
+BATCH_SIZE = 10  # 改为5
+EVERGREEN_RECENT_DAYS = 7  # 改为14
 ```
 
 ---
@@ -361,363 +497,12 @@ MIT License - 详见 [LICENSE](LICENSE)
 
 ---
 
-<div id="english-documentation"></div>
-
-# English Documentation
-
-<div align="center">
-
-**English** | [中文](#中文文档)
-
-Fully Automated Knowledge Management Pipeline for Obsidian
-
-</div>
-
----
-
-## 🚀 Quick Start
-
-### 1. Clone Repository
-
+**开始使用：**
 ```bash
-git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
-cd my-vault
-```
-
-### 2. Configure Environment
-
-```bash
-# Copy environment template
+git clone https://github.com/fakechris/obsidian_vault_pipeline.git
+cd obsidian_vault_pipeline
 cp .env.example .env
-
-# Edit .env with your API keys
-nano .env
-```
-
-### 3. Install Dependencies
-
-```bash
+# 编辑 .env 填入 API Key
 pip install -r requirements.txt
-```
-
-### 4. Run Pipeline
-
-```bash
-# Process last 7 days (Pinboard + Clippings)
 python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
 ```
-
----
-
-## 📚 Directory Structure
-
-```
-📁 00-Polaris/               # Session Memory - Current focus
-📁 10-Knowledge/             # Knowledge Layer
-   ├── Atlas/              # Maps of Content (MOC)
-   ├── Evergreen/          # Atomic permanent notes
-   ├── Literature/         # Literature notes
-   └── Sources/            # Raw sources
-📁 20-Areas/                 # Areas of Responsibility
-   ├── AI-Research/       # AI research
-   ├── Tools/             # Tool reviews
-   ├── Investing/          # Investment thoughts
-   └── Programming/        # Programming
-📁 30-Projects/              # Active projects
-📁 40-Resources/             # Resources
-📁 50-Inbox/                 # Inbox (3-layer capture)
-📁 60-Logs/                  # Logs & automation scripts
-📁 70-Archive/               # Archive
-```
-
----
-
-## 🤖 Automation Pipeline
-
-### 6-Step Complete Workflow
-
-```bash
-# Full pipeline (recommended)
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
-```
-
-| Step | Script | Function | Description |
-|------|------|------|------|
-| 1 | `pinboard-processor.py` | Fetch Pinboard bookmarks | Day-by-day query, auto-dedup |
-| 2 | `clippings_processor.py` | Process Obsidian Web Clipper | Sanitize names, obsidian move |
-| 3 | `auto_article_processor.py` | Generate deep interpretation | LLM 6-dimension analysis |
-| 4 | `batch_quality_checker.py` | Quality check | Auto scoring (1-5) |
-| 5 | `auto_evergreen_extractor.py` | Extract Evergreen notes | Atomic concept notes |
-| 6 | `auto_moc_updater.py` | Update MOC | Auto-index new files |
-
-### Common Commands
-
-```bash
-# Process last N days (Pinboard + full pipeline)
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --pinboard-days 30
-
-# Process historical date range
-python3 60-Logs/scripts/unified_pipeline_enhanced.py \
-  --pinboard-history 2026-02-01 2026-02-28
-
-# Process only Clippings
-python3 60-Logs/scripts/unified_pipeline.py --step clippings
-
-# Update MOC only
-python3 60-Logs/scripts/unified_pipeline.py --step moc
-
-# Dry run (preview without execution)
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --full --dry-run
-```
-
----
-
-## 🎯 Core Methodology
-
-### PARA Method
-
-| Layer | Purpose | Example |
-|------|------|------|
-| **Projects** | Clear goals & deadlines | "Complete AI Agent research" |
-| **Areas** | Ongoing responsibilities | AI research, Tool reviews |
-| **Resources** | Reference materials | Templates, code snippets |
-| **Archive** | Archive | Completed projects |
-
-### Three-Layer Note Architecture
-
-1. **Session Memory (00-Polaris)**
-   - Top of Mind: Current focus
-   - Weekly review updates
-
-2. **Knowledge Graph (10-Knowledge + 20-Areas)**
-   - Evergreen: Atomic permanent notes
-   - Literature: Literature notes
-   - Atlas: Maps of Content
-
-3. **Ingestion Pipeline (50-Inbox)**
-   - Quick capture → Raw articles → Processing → Processed
-
----
-
-## 📝 Deep Interpretation Standard
-
-### 6-Dimension Quality Model
-
-Every deep interpretation must contain:
-
-```markdown
-# One-sentence Definition
-[Precise summary of core concept]
-
-# Detailed Explanation
-## What is it?
-## Why does it matter?
-## How does it work?
-
-# Important Details
-## Detail 1
-## Detail 2
-## Detail 3
-
-# Architecture / Flow Chart
-```
-[ASCII diagram]
-```
-
-# Action Recommendations
-1. Recommendation 1
-2. Recommendation 2
-
-# Related Knowledge
-- [[Related Concept]]
-```
-
-### Quality Scoring
-
-| Dimension | Weight | Pass Criteria |
-|------|------|---------|
-| One-sentence definition | 1-5 | Present |
-| Detailed explanation | 1-5 | Complete |
-| Important details | 1-5 | ≥3 items |
-| Architecture diagram | 1-5 | Present (if applicable) |
-| Action recommendations | 1-5 | ≥2 items |
-| Related knowledge | 1-5 | Has [[wikilink]] |
-
-**Total ≥ 18** (avg 3+) is passing
-
----
-
-## 🛡️ WIGS Principles
-
-**W**orkflow **I**ntegrity **G**uarantee **S**ystem
-
-### Core Rules
-
-1. **Mandatory `obsidian move`**
-   ```bash
-   # ✅ Correct
-   obsidian move file="source.md" to="dest/"
-
-   # ❌ Wrong - breaks wiki-links
-   mv source.md dest/
-   ```
-
-2. **Explicit State Files**
-   - Use `Processing-Queue.md` (version controlled)
-   - Don't use `.hidden_state.json` (easily lost)
-
-3. **Transaction Integrity**
-   - Each pipeline creates a transaction
-   - Recoverable after interruption
-
-4. **Idempotent Processing**
-   - Auto-skip processed files
-   - Safe to re-run
-
----
-
-## ⚙️ Environment Configuration
-
-### Required
-
-```bash
-# .env file
-PINBOARD_TOKEN=your_username:your_api_token
-AUTO_VAULT_API_KEY=your_llm_api_key
-AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
-```
-
-### API Provider Options
-
-| Provider | Cost | Quality | Config |
-|--------|------|------|------|
-| MiniMax | Low | High | `api.minimaxi.com/anthropic` |
-| Anthropic | Medium | Highest | `api.anthropic.com` |
-| OpenAI | Medium | High | `api.openai.com/v1` |
-
----
-
-## 📊 Logging & Monitoring
-
-### Unified Logs
-
-Location: `60-Logs/pipeline.jsonl`
-
-```json
-{
-  "timestamp": "2026-04-02T12:00:00",
-  "session_id": "20260402-120000-abc123",
-  "event_type": "pipeline_completed",
-  "results": {...}
-}
-```
-
-### Transaction Management
-
-```bash
-# List incomplete transactions
-./60-Logs/scripts/txn.sh list
-
-# Show transaction details
-./60-Logs/scripts/txn.sh show <txn-id>
-```
-
-### Consistency Check
-
-```bash
-# 5-layer architecture check
-./60-Logs/scripts/check-consistency.sh
-
-# Auto repair
-./60-Logs/scripts/repair.sh --auto
-```
-
----
-
-## 🔄 GitHub Actions
-
-`.github/workflows/daily-pipeline.yml`:
-
-```yaml
-# Auto-run daily at 9 AM
-schedule:
-  - cron: '0 9 * * *'
-```
-
-Configure Secrets:
-- `PINBOARD_TOKEN`
-- `AUTO_VAULT_API_KEY`
-- `AUTO_VAULT_API_BASE`
-
----
-
-## 🛠️ Development Guide
-
-### Adding New Scripts
-
-1. Place in `60-Logs/scripts/`
-2. Follow WIGS principles
-3. Use `PipelineLogger` for logging
-4. Integrate into `unified_pipeline_enhanced.py`
-
-### Skill Development
-
-```markdown
-# skills/your-skill.md
-
-## Trigger Conditions
-Trigger when user says...
-
-## Execution Steps
-1. Step 1
-2. Step 2
-
-## Examples
-User: "..."
-→ Execute...
-```
-
----
-
-## ❓ FAQ
-
-### Q: Don't have Pinboard account?
-A: Use Clippings only:
-```bash
-python3 60-Logs/scripts/unified_pipeline.py --full
-```
-
-### Q: How to skip a step?
-A: Use `--from-step`:
-```bash
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --from-step articles
-```
-
-### Q: Quality check failed?
-A: Check report:
-```bash
-cat 60-Logs/quality-reports/quality-report-*.md
-```
-Then manually add missing dimensions.
-
-### Q: How to backup?
-A: Regular git commit + push:
-```bash
-git add -A
-git commit -m "backup: $(date)"
-git push
-```
-
----
-
-## 📜 License
-
-MIT License - See [LICENSE](LICENSE)
-
----
-
-## 🙏 Acknowledgments
-
-- PARA Method: [Tiago Forte](https://fortelabs.com)
-- Zettelkasten: [Niklas Luhmann](https://en.wikipedia.org/wiki/Zettelkasten)
-- Obsidian: [Dynalist](https://obsidian.md)
