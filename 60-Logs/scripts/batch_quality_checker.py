@@ -344,11 +344,40 @@ def main():
     parser.add_argument("--api-base", help="API Base URL")
     parser.add_argument("--max-workers", type=int, default=3, help="并行 workers")
     parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
+    parser.add_argument("--dry-run", action="store_true", help="预览模式（只显示要检查的文件）")
     args = parser.parse_args()
 
     # 初始化
     logger = PipelineLogger(LOG_FILE)
     checker = BatchQualityChecker(args.vault_dir, logger)
+
+    # 处理 --dry-run 模式：只列出要检查的文件
+    if args.dry_run:
+        print("\n" + "="*60)
+        print("QUALITY CHECK (DRY RUN)")
+        print("="*60)
+        print("预览模式：只列出要检查的文件，不执行实际检查\n")
+
+        files_to_check = []
+        if args.dir and args.dir.exists():
+            files_to_check = list(args.dir.glob("*.md"))
+            print(f"📁 目录: {args.dir}")
+        elif args.file and args.file.exists():
+            files_to_check = [args.file]
+            print(f"📄 文件: {args.file}")
+        elif args.all:
+            areas = ["AI-Research", "Tools", "Investing", "Programming"]
+            for area in areas:
+                area_dir = args.vault_dir / "20-Areas" / area / "Topics" / datetime.now().strftime("%Y-%m")
+                if area_dir.exists():
+                    area_files = list(area_dir.glob("*.md"))
+                    files_to_check.extend(area_files)
+                    if area_files:
+                        print(f"📁 {area}: {len(area_files)} files")
+
+        print(f"\n共计: {len(files_to_check)} 个文件待检查")
+        print("="*60)
+        return 0
 
     try:
         checker.init_llm(api_key=args.api_key, api_base=args.api_base)
