@@ -97,16 +97,13 @@ check_layer2_orphan_evergreen() {
 
     local evergreen_dir="${VAULT_DIR}/10-Knowledge/Evergreen"
 
-    # 【FIXED】移除了不存在的 Tools MOC.md 和 Investing MOC.md 引用
-    # 只保留确实存在的 MOC 文件
+    # 【FIXED】更新为新的 Atlas MOC 路径
     local moc_files=(
-        "${VAULT_DIR}/20-Areas/AI-Research/MOC.md"
-        "${VAULT_DIR}/20-Areas/AI-Research/Topics/AI MOC.md"
-        "${VAULT_DIR}/20-Areas/Tools/MOC.md"
-        "${VAULT_DIR}/20-Areas/Programming/MOC.md"
-        "${VAULT_DIR}/20-Areas/Programming/Topics/编程 MOC.md"
-        "${VAULT_DIR}/20-Areas/Investing/MOC.md"
         "${VAULT_DIR}/10-Knowledge/Atlas/MOC-Index.md"
+        "${VAULT_DIR}/10-Knowledge/Atlas/MOC-AI-Research.md"
+        "${VAULT_DIR}/10-Knowledge/Atlas/MOC-Tools.md"
+        "${VAULT_DIR}/10-Knowledge/Atlas/MOC-Investing.md"
+        "${VAULT_DIR}/10-Knowledge/Atlas/MOC-Programming.md"
     )
 
     if [[ ! -d "$evergreen_dir" ]]; then

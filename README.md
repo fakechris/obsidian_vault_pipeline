@@ -1,3 +1,10 @@
+---
+title: "Obsidian Vault Pipeline"
+description: "全自动知识管理流水线"
+date: 2026-04-03
+type: meta
+---
+
 # Obsidian Vault Pipeline - 全自动知识管理流水线
 
 <div align="center">
@@ -25,14 +32,28 @@ Pinboard   LLM 6维度    自动评分   Evergreen   自动MOC    JSONL
 Clippings   分析        1-5分      原子笔记    反向链接    结构化日志
 ```
 
-### 四大自动维护系统
+### 五大自动维护系统
 
 | 系统 | 功能 | 自动化程度 | 价值 |
 |------|------|-----------|------|
+| **质量门禁** | 提交前自动检查行数/占位符/frontmatter | 100% | 确保内容质量 |
 | **反向链接维护** | 自动检测断裂链接，更新MOC索引 | 95% | 知识图谱永不断裂 |
 | **Evergreen维护** | LLM自动提取核心概念，创建原子笔记 | 90% | 知识复利增长 |
 | **MOC维护** | 自动扫描新文件，更新知识地图 | 95% | 导航永远最新 |
 | **运行质检** | 每步操作JSONL记录，可追溯可审计 | 100% | 完全透明可控 |
+
+### 成熟度对标
+
+本项目对标生产级 Obsidian Vault 管理方案，在以下方面达到同等或更高成熟度：
+
+| 特性 | 本方案 | 备注 |
+|------|--------|------|
+| **质量门禁系统** | ✅ `.claude/precommit-check.sh` + `QUALITY_STANDARDS.md` | 提交前强制检查 |
+| **Claude Code 集成** | ✅ `.claude/settings.local.json` | 完整权限配置 |
+| **导航系统** | ✅ `Home.md` + `10-Knowledge/Atlas/` | 完整 MOC 体系 |
+| **完整性检查** | ✅ `check-consistency.sh` + `repair.sh` | 5层检查+自动修复 |
+| **事务管理** | ✅ `txn.sh` | 完整状态追踪 |
+| **GitHub Actions** | ✅ `.github/workflows/` | 自动化CI/CD |
 
 ---
 
@@ -86,6 +107,11 @@ PINBOARD_TOKEN=your_username:your_api_token
 # 可选：代理配置
 # ================================
 HTTP_PROXY=http://127.0.0.1:7897
+
+# ================================
+# Vault配置 (通常自动检测)
+# ================================
+# WIGS_VAULT_DIR=/path/to/your/vault
 ```
 
 **获取 API Key：**
@@ -165,22 +191,46 @@ python3 60-Logs/scripts/auto_moc_updater.py --scan
 ```
 my-vault/
 ├── 00-Polaris/               # 【手动维护】当前关注重点
-│   └── README.md            # Top of Mind - 每周回顾更新
+│   ├── README.md            # Top of Mind - 每周回顾更新
+│   └── Home.md              # 【入口导航】Obsidian首页
 ├── 10-Knowledge/
 │   ├── Evergreen/            # 【自动维护】常青笔记（LLM自动提取）
-│   └── Atlas/               # 【自动维护】MOC索引（脚本自动更新）
+│   └── Atlas/               # 【自动维护】MOC知识地图
+│       ├── MOC-Index.md     # 全局索引
+│       ├── MOC-AI-Research.md
+│       ├── MOC-Tools.md
+│       ├── MOC-Investing.md
+│       └── MOC-Programming.md
 ├── 20-Areas/                 # 【自动+手动】深度解读输出
 │   └── AI-Research/Topics/   # YYYY-MM/ 子目录
 ├── 50-Inbox/
 │   ├── 01-Raw/             # 【自动填充】原始文章
 │   └── Processing-Queue.md # 【建议手动】待处理队列跟踪
-└── 60-Logs/
-    ├── scripts/              # 【直接使用】8个核心脚本
-    ├── pipeline.jsonl       # 【自动生成】统一结构化日志
-    └── transactions/         # 【自动生成】事务状态记录
-```
+├── 60-Logs/
+│   ├── scripts/              # 【直接使用】8个核心脚本
+│   ├── pipeline.jsonl       # 【自动生成】统一结构化日志
+│   └── transactions/         # 【自动生成】事务状态记录
+└── .claude/                  # 【配置】Claude Code集成
+    ├── QUALITY_STANDARDS.md # 内容质量标准
+    ├── precommit-check.sh   # 提交前检查脚本
+    └── settings.local.json  # 权限配置
 
-### API 配置对比
+### Obsidian 入口导航
+
+在 Obsidian 中打开 Vault 后，建议将 `00-Polaris/Home.md` 设置为默认首页：
+
+**Home.md 提供：**
+- 📚 完整 PARA 层级导航
+- 🔄 日常工作流快捷入口
+- 📊 系统状态检查链接
+- 🔗 所有 MOC 知识地图入口
+- 🆘 故障排查快速链接
+
+**设置默认页面：**
+1. 安装 Homepage 插件（可选）
+2. 或手动打开 `[[00-Polaris/Home|Home]]`
+
+```
 
 | 提供商 | 注册地址 | 成本 | 中文支持 | 推荐场景 |
 |--------|----------|------|----------|----------|
@@ -592,6 +642,102 @@ for layer in encoder_layers:
 
 ---
 
+## 🛡️ 质量门禁与一致性检查
+
+### 提交前质量检查
+
+**每次提交前必须运行：**
+
+```bash
+# 检查所有暂存文件
+./.claude/precommit-check.sh
+
+# 只检查行数
+./.claude/precommit-check.sh --lines-only
+
+# 只检查占位符
+./.claude/precommit-check.sh --placeholders
+
+# 设置最低行数（默认150）
+./.claude/precommit-check.sh --min-lines 200
+```
+
+**检查内容：**
+- ✅ 文件行数 ≥ 最低要求（默认150行）
+- ✅ 无禁止的占位符文本（中英文）
+- ✅ Frontmatter 格式正确
+- ✅ 单次提交 ≤ 10 个文件
+
+### WIGS 一致性检查系统
+
+**Workflow Integrity Guarantee System** - 保证数据处理流程的完整性
+
+```bash
+# 运行5层一致性检查
+./60-Logs/scripts/check-consistency.sh
+
+# 预览修复方案（不执行）
+./60-Logs/scripts/repair.sh --dry-run
+
+# 自动修复低风险问题
+./60-Logs/scripts/repair.sh --auto
+
+# 交互式修复（推荐）
+./60-Logs/scripts/repair.sh
+```
+
+**5层检查架构：**
+
+| 层级 | 检查内容 | 自动修复 |
+|------|----------|----------|
+| **L1** | 未完成事务 | ❌ 需手动确认 |
+| **L2** | 孤儿Evergreen/断裂链接 | ⚠️ 部分自动 |
+| **L3** | Ingestion一致性 | ✅ 自动（重复文件） |
+| **L4** | Areas完整性/Git提交 | ❌ 需手动 |
+| **L5** | Archive层 | ❌ 需手动 |
+
+### 事务管理系统
+
+跟踪所有 Pipeline 执行的事务：
+
+```bash
+# 查看未完成事务
+./60-Logs/scripts/txn.sh list
+
+# 查看事务详情
+./60-Logs/scripts/txn.sh show txn-20260403-120000-abc123
+
+# 创建新事务（Pipeline自动调用）
+./60-Logs/scripts/txn.sh start pipeline "处理最近7天"
+
+# 更新事务步骤
+./60-Logs/scripts/txn.sh step txn-xxx articles completed "8 interpretations"
+
+# 完成事务
+./60-Logs/scripts/txn.sh complete txn-xxx
+```
+
+### 质量评分系统
+
+**6维度自动评分**（总分30分，≥18分合格）：
+
+| 维度 | 权重 | 合格标准 |
+|------|------|----------|
+| 一句话定义 | 5分 | 存在且清晰 |
+| 详细解释 | 5分 | What/Why/How完整 |
+| 重要细节 | 5分 | ≥3个技术点 |
+| 架构图 | 5分 | 有ASCII图 |
+| 行动建议 | 5分 | ≥2条可落地 |
+| 关联知识 | 5分 | 有[[wikilink]] |
+
+```bash
+# 批量质量检查
+python3 60-Logs/scripts/batch_quality_checker.py --recent 7
+python3 60-Logs/scripts/batch_quality_checker.py --all
+```
+
+---
+
 ## 🔧 故障排查
 
 ### 常见问题
@@ -632,6 +778,41 @@ cat 60-Logs/pipeline.jsonl | tail -10
 cat 60-Logs/pipeline.jsonl | grep "filename"
 ```
 
+**Q: 如何检查断裂链接？**
+```bash
+# 运行一致性检查
+./60-Logs/scripts/check-consistency.sh
+
+# 查看具体断裂的链接
+./60-Logs/scripts/check-consistency.sh --verbose
+```
+
+**Q: 提交前质量检查失败怎么办？**
+```bash
+# 检查具体文件问题
+./.claude/precommit-check.sh path/to/file.md
+
+# 查看质量标准
+cat .claude/QUALITY_STANDARDS.md
+
+# 常见修复：
+# 1. 文件行数不足 → 增加详细内容
+# 2. 占位符文本 → 替换为实际内容
+# 3. 缺少 frontmatter → 添加 YAML frontmatter
+```
+
+**Q: 如何修复检测到的问题？**
+```bash
+# 预览修复方案
+./60-Logs/scripts/repair.sh --dry-run
+
+# 交互式修复
+./60-Logs/scripts/repair.sh
+
+# 自动修复低风险问题
+./60-Logs/scripts/repair.sh --auto
+```
+
 ---
 
 ## 📝 手动维护清单
@@ -641,6 +822,7 @@ cat 60-Logs/pipeline.jsonl | grep "filename"
 | 频率 | 任务 | 命令/文件 |
 |------|------|----------|
 | 每日 | 运行 Pipeline | `python3 60-Logs/scripts/unified_pipeline_enhanced.py --full` |
+| 每日 | 检查系统状态 | `./60-Logs/scripts/check-consistency.sh` |
 | 每周 | 更新 Top of Mind | 编辑 `00-Polaris/README.md` |
 | 每周 | 审查质检报告 | 查看 `60-Logs/quality-reports/*.md` |
 | 每月 | 归档旧文件 | 使用 `obsidian move` 移动到 `70-Archive/` |
