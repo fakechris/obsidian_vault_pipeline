@@ -1,5 +1,4 @@
 ---
-
 title: "Obsidian Vault Pipeline"
 description: "全自动知识管理流水线"
 date: 2026-04-03
@@ -21,6 +20,25 @@ type: meta
 [📺 查看效果](#查看效果) • [🚀 快速开始](#30秒快速开始) • [📖 使用指南](#使用指南) • [🔧 功能特性](#核心特性)
 
 </div>
+
+---
+
+## 两个项目，两种选择
+
+| 项目 | 定位 | 适合场景 |
+|------|------|----------|
+| [**obsidian_vault_showcase**](https://github.com/fakechris/obsidian_vault_showcase) | **带Demo的开箱即用版本** | 想先看效果，或基于现有内容继续 |
+| **obsidian_vault_pipeline** | **纯代码模板（本项目）** | 想从零开始，理解Pipeline实现 |
+
+### 如何选择？
+
+| 你的需求 | 推荐项目 | 原因 |
+|----------|----------|------|
+| 想先看看效果再决定是否使用 | [obsidian_vault_showcase](https://github.com/fakechris/obsidian_vault_showcase) | 有76篇真实内容可浏览 |
+| 想开箱即用，在上面改 | [obsidian_vault_showcase](https://github.com/fakechris/obsidian_vault_showcase) | 克隆后直接Obsidian打开 |
+| 想从零开始，完全自定义 | **本项目** | 空白模板，无demo数据 |
+| 想了解Pipeline技术实现 | **本项目** | 代码结构更清晰 |
+| 想基于现有内容继续生成 | [obsidian_vault_showcase](https://github.com/fakechris/obsidian_vault_showcase) | 已有内容+完整脚本 |
 
 ---
 
@@ -456,61 +474,6 @@ on:
 ## 许可证
 
 MIT License - 详见 [LICENSE](LICENSE)
-
----
-
-## 选择指南
-
-### 方式一：直接体验完整效果（推荐）
-
-想直接看到最终效果，并在此基础上开发？
-
-```bash
-# 克隆 showcase（包含完整数据）
-git clone https://github.com/fakechris/obsidian_vault_showcase.git my-showcase
-cd my-showcase
-
-# 用 Obsidian 打开即可体验完整的知识库
-```
-
-✅ 已有 76 篇深度解读和 8 个 Evergreen 概念
-✅ 可直接体验双向链接和 Graph View
-✅ 修改后可以连接你自己的 API Key 继续生成
-
----
-
-### 方式二：从模板开始（自定义）
-
-想从空白开始，完全自定义？
-
-```bash
-# 克隆模板项目（空白结构）
-git clone https://github.com/fakechris/obsidian_vault_pipeline.git my-vault
-cd my-vault
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --init
-```
-
-✅ 空白模板，从零开始
-✅ 完整 Pipeline 流程
-✅ 完全自定义内容
-
----
-
-### 方式对比
-
-| 方式 | 适合 | 内容 | 上手难度 |
-|------|------|------|----------|
-| **Showcase** | 想先看效果 | 76篇解读+8个Evergreen | ⭐ 开箱即用 |
-| **Template** | 想自己搭建 | 空白+完整Pipeline | ⭐⭐ 需要配置 |
-
----
-
-## 相关仓库
-
-| 仓库 | 用途 | 链接 |
-|------|------|------|
-| **obsidian_vault_showcase** | 完整效果展示 | [GitHub](https://github.com/fakechris/obsidian_vault_showcase) |
-| **obsidian_vault_pipeline** | 模板项目（本仓库） | [GitHub](https://github.com/fakechris/obsidian_vault_pipeline) |
 
 ---
 
