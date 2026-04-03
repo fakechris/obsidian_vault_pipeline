@@ -254,7 +254,7 @@ ovp-moc --scan
 
 ```bash
 # GitHub项目深度解读
-ovp-github --single https://github.com/tw93/kaku
+ovp-github --single https://github.com/fakechris/obsidian_vault_pipeline
 
 # arXiv论文解读
 ovp-paper --arxiv https://arxiv.org/abs/2401.12345
