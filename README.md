@@ -73,6 +73,30 @@ python3 60-Logs/scripts/unified_pipeline_enhanced.py --check
 | **Evergreen提取** | LLM自动提取核心概念 | 90% |
 | **运行审计** | JSONL结构化日志 + 事务追踪 | 100% |
 
+### 模板系统（90-Templates/）
+
+预置 5 套专业模板：
+
+| 模板 | 用途 | 输出位置 |
+|------|------|----------|
+| **文章深度解读** | 6维度分析模板 | 20-Areas/ |
+| **Evergreen笔记** | 原子化知识模板 | 10-Knowledge/Evergreen/ |
+| **项目笔记** | PARA项目管理 | 30-Projects/ |
+| **MOC地图** | 知识导航模板 | 10-Knowledge/Atlas/ |
+| **每日日志** | 日志记录模板 | 60-Logs/Daily/ |
+
+### 视图系统（80-Views/）
+
+自动生成数据视图（纯 Markdown，无需插件）：
+
+| 视图 | 内容 | 更新命令 |
+|------|------|----------|
+| **最近新增** | 最近1天/7天新增的所有内容 | Pipeline 自动生成 |
+| **Evergreen索引** | 所有概念笔记的中央索引 | Pipeline 自动生成 |
+| **MOC索引** | 所有知识地图的导航 | 手动维护 |
+
+视图生成使用纯 Python 脚本，输出为 Markdown 表格，无需 Obsidian 插件即可阅读。
+
 ### 智能执行引擎
 
 | 特性 | 说明 | 优势 |
@@ -145,6 +169,9 @@ my-vault/
 │   ├── scripts/               # 【直接使用】核心脚本
 │   ├── pipeline.jsonl        # 【自动】统一结构化日志
 │   └── transactions/         # 【自动】事务状态
+├── 70-Archive/                # 【手动】归档完成项目
+├── 80-Views/                  # 【自动】数据视图（最近新增、Evergreen索引等）
+├── 90-Templates/              # 【内置】模板库（文章解读、项目、日志等）
 └── .claude/
     ├── QUALITY_STANDARDS.md   # 内容质量标准
     ├── precommit-check.sh     # 提交前检查脚本
