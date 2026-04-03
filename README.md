@@ -12,12 +12,13 @@ type: meta
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Obsidian](https://img.shields.io/badge/Obsidian-Plugin-7C3AED?logo=obsidian)](https://obsidian.md)
+[![PyPI](https://img.shields.io/pypi/v/obsidian-vault-pipeline.svg)](https://pypi.org/project/obsidian-vault-pipeline/)
 
 **生产级全自动化 Obsidian 知识管理流水线**
 
 输入 → 解读 → 质检 → 提炼 → 索引 → 可审计的全自动工作流
 
-[📺 查看效果](#查看效果) • [🚀 快速开始](#30秒快速开始) • [📖 使用指南](#使用指南) • [🔧 功能特性](#核心特性)
+[📦 PyPI安装](#pip安装) • [📺 查看效果](#查看效果) • [🚀 快速开始](#30秒快速开始) • [📖 使用指南](#使用指南)
 
 </div>
 
@@ -58,6 +59,23 @@ type: meta
 1. **只看效果** → 直接在 GitHub 上浏览
 2. **下载体验** → Clone 到本地用 Obsidian 打开
 3. **在此基础上开发** → 修改内容，连接你自己的 API Key 继续生成
+
+---
+
+## pip安装
+
+```bash
+pip install obsidian-vault-pipeline
+```
+
+安装后可用命令：
+- `ovp --init` - 初始化配置
+- `ovp --full` - 运行完整Pipeline
+- `ovp-article` - 文章处理器
+- `ovp-github` - GitHub项目处理器
+- `ovp-evergreen` - Evergreen提取
+- `ovp-moc` - MOC更新
+- `ovp-quality` - 质量检查
 
 ---
 
