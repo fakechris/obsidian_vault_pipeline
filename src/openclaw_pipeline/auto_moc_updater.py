@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 # 自动加载 .env 文件
-VAULT_DIR = Path(__file__).parent.parent.parent
+VAULT_DIR = Path.cwd()  # 默认使用当前目录，可被参数覆盖
 ENV_FILE = VAULT_DIR / ".env"
 if ENV_FILE.exists():
     try:

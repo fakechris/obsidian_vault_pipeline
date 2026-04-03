@@ -28,18 +28,26 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-# 自动加载 .env 文件
-VAULT_DIR = Path(__file__).parent.parent.parent
-ENV_FILE = VAULT_DIR / ".env"
-if ENV_FILE.exists():
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(dotenv_path=ENV_FILE, override=True)
-    except ImportError:
-        pass  # dotenv 未安装，跳过
+# 自动加载 .env 文件（尝试多个位置）
+def _load_env_files():
+    """加载 .env 文件，尝试多个位置"""
+    env_paths = [
+        Path.cwd() / ".env",  # 当前工作目录（优先）
+        Path(__file__).parent.parent.parent / ".env",  # 脚本相对路径
+    ]
+    for env_path in env_paths:
+        if env_path.exists():
+            try:
+                from dotenv import load_dotenv
+                load_dotenv(dotenv_path=env_path, override=True)
+                return env_path
+            except ImportError:
+                pass
+    return None
+
+_LOADED_ENV = _load_env_files()
 
 # Import litellm
-sys.path.insert(0, str(Path(__file__).parent / "auto_vault"))
 try:
     import litellm
     LITELLM_AVAILABLE = True
