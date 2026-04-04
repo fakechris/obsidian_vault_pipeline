@@ -18,6 +18,8 @@ type: meta
 
 Input → Interpret → Quality Check → Refine → Index → Fully auditable workflow
 
+🤖 **NEW: AutoPilot Mode** — Drop files into directory, everything else happens automatically
+
 [🇨🇳 中文](README.md)
 
 </div>
@@ -54,6 +56,7 @@ Obsidian Vault Pipeline is a **production-grade automated knowledge management s
 | **Backlink Maintenance** | Auto-detect broken links, update MOC | 95% |
 | **Evergreen Extraction** | LLM auto-extract core concepts | 90% |
 | **Runtime Audit** | JSONL structured logs + transaction tracking | 100% |
+| **🆕 AutoPilot** | Directory watcher + auto-queue + LLM quality scoring | Fully Auto |
 
 ### 6-Dimension Quality Model
 
@@ -112,6 +115,7 @@ Available commands after installation:
 | `ovp-evergreen --recent 7` | Extract Evergreen notes from last 7 days |
 | `ovp-moc --scan` | Scan and update MOC index |
 | `ovp-quality --recent 7` | Quality check |
+| `ovp-autopilot` | 🆕 Start AutoPilot daemon mode |
 
 ---
 
@@ -136,6 +140,44 @@ ovp --full
 ```
 
 **Result:** Auto-generate interpretations to `20-Areas/`, extract Evergreen to `10-Knowledge/`, update MOC index.
+
+---
+
+## 🚀 AutoPilot Mode
+
+> 🤖 **Drop files into directory, everything else happens automatically**
+
+AutoPilot is the fully automated form of the Pipeline. Once started, it will:
+1. **Monitor** `50-Inbox/01-Raw/` for new files
+2. **Auto-process** - Generate interpretation → LLM quality scoring → Extract Evergreen → Update MOC
+3. **Quality gate** - Auto-retry if below threshold, ensuring output quality
+4. **Auto-commit** - Automatically `git commit` when complete
+
+### Start AutoPilot
+
+```bash
+# Basic start (with cost warning confirmation)
+ovp-autopilot --watch=inbox --parallel=1
+
+# Skip confirmation (if you understand the cost risks)
+ovp-autopilot --yes
+
+# Multi-concurrency processing (watch the costs!)
+ovp-autopilot --parallel=2 --quality=3.5
+```
+
+### ⚠️ Cost Warning
+
+AutoPilot mode consumes **SIGNIFICANT TOKENS**:
+- 3-4 LLM calls per article
+- Deep interpretation: ~4K-8K tokens
+- Quality scoring: ~2K-4K tokens
+- Evergreen extraction: ~2K-4K tokens
+
+**Recommendations**:
+- Use monthly Coding Plan
+- Start with `--parallel=1` for testing
+- Test with small batches first
 
 ---
 
