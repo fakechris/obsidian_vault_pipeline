@@ -378,11 +378,28 @@ class AutoArticleProcessor:
             "status": "pending",
             "output_path": None,
             "tokens_used": 0,
+            "images_downloaded": 0,
             "error": None
         }
 
         try:
-            # 解析文件
+            # Step 1: 下载图片（如果存在远程图片）
+            from .image_downloader import ImageDownloader
+            image_downloader = ImageDownloader(self.vault_dir)
+            try:
+                _, downloaded_images = image_downloader.process_file(file_path, backup=True)
+                result["images_downloaded"] = len(downloaded_images)
+                if downloaded_images:
+                    self.logger.log("images_downloaded", {
+                        "file": str(file_path.name),
+                        "count": len(downloaded_images),
+                        "images": downloaded_images
+                    })
+            except Exception as img_err:
+                self.logger.log("image_download_error", {"file": str(file_path), "error": str(img_err)})
+                # 图片下载失败不阻止主流程
+
+            # Step 2: 解析文件
             file_data = self.parse_raw_file(file_path)
 
             if dry_run:

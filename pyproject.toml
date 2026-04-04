@@ -77,6 +77,8 @@ ovp-moc = "openclaw_pipeline.auto_moc_updater:main"
 ovp-quality = "openclaw_pipeline.batch_quality_checker:main"
 ovp-clippings = "openclaw_pipeline.clippings_processor:main"
 ovp-autopilot = "openclaw_pipeline.autopilot.daemon:main"
+ovp-lint = "openclaw_pipeline.lint_checker:main"
+ovp-query = "openclaw_pipeline.query_tool:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]
