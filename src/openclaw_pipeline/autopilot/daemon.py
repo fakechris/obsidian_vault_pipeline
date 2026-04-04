@@ -26,6 +26,118 @@ from .queue import TaskQueue, Task
 from .watcher import PollingWatcher
 
 
+class LLMQualityChecker:
+    """LLM 深度质量评分器"""
+
+    def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, model: Optional[str] = None):
+        self.api_key = api_key or os.getenv("AUTO_VAULT_API_KEY")
+        self.api_base = api_base or os.getenv("AUTO_VAULT_API_BASE")
+        self.model = model or os.getenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.5")
+
+        # 导入 litellm
+        try:
+            import litellm
+            self.litellm = litellm
+            self.available = True
+        except ImportError:
+            self.available = False
+
+    def score(self, content: str) -> dict:
+        """
+        LLM 深度评分：6 维度质量评估
+        返回: {"total": 0-5, "dimensions": {...}, "feedback": str}
+        """
+        if not self.available:
+            # Fallback: 启发式评分
+            return self._heuristic_score(content)
+
+        prompt = f"""你是一个专业的知识内容质量评估专家。请对以下深度解读内容进行 6 维度质量评分。
+
+评分标准（每项 0-5 分）：
+1. **定义清晰度**: 一句话定义是否准确、简洁、无歧义
+2. **解释深度**: What/Why/How 是否完整，有无明显遗漏
+3. **细节丰富度**: 技术细节是否具体、可验证、有信息量
+4. **结构化程度**: 架构图/流程图是否清晰表达核心逻辑
+5. **可执行性**: 行动建议是否具体可落地
+6. **知识网络**: 双向链接是否合理、有助于知识导航
+
+待评分内容：
+```markdown
+{content[:4000]}  # 限制长度避免 token 过多
+```
+
+请以 JSON 格式输出：
+{{
+    "dimensions": {{
+        "definition": 0-5,
+        "explanation": 0-5,
+        "details": 0-5,
+        "structure": 0-5,
+        "actionable": 0-5,
+        "linking": 0-5
+    }},
+    "total": 0-5,  // 平均分
+    "feedback": "简要评价优缺点"
+}}
+"""
+
+        try:
+            response = self.litellm.completion(
+                model=self.model,
+                api_key=self.api_key,
+                api_base=self.api_base,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=500
+            )
+
+            result_text = response.choices[0].message.content
+
+            # 提取 JSON
+            json_match = result_text.strip()
+            if "```json" in json_match:
+                json_match = json_match.split("```json")[1].split("```")[0]
+            elif "```" in json_match:
+                json_match = json_match.split("```")[1].split("```")[0]
+
+            scores = json.loads(json_match.strip())
+
+            return {
+                "total": float(scores.get("total", 0)),
+                "dimensions": scores.get("dimensions", {}),
+                "feedback": scores.get("feedback", ""),
+                "method": "llm"
+            }
+
+        except Exception as e:
+            # LLM 评分失败，回退到启发式
+            result = self._heuristic_score(content)
+            result["error"] = str(e)
+            return result
+
+    def _heuristic_score(self, content: str) -> dict:
+        """启发式评分（无需 LLM）"""
+        checks = {
+            "definition": '一句话定义' in content or '一句话定義' in content,
+            "explanation": '详细解释' in content or '詳細解釋' in content,
+            "details": '重要细节' in content or '重要細節' in content,
+            "structure": ('架构图' in content or '流程图' in content or
+                         '```' in content and ('┌' in content or '▶' in content)),
+            "actionable": '行动建议' in content or '行動建議' in content,
+            "linking": '[[' in content and ']]' in content
+        }
+
+        scores = {k: (5.0 if v else 1.0) for k, v in checks.items()}
+        total = sum(scores.values()) / len(scores)
+
+        return {
+            "total": round(total, 1),
+            "dimensions": scores,
+            "feedback": "启发式评分（LLM 不可用）",
+            "method": "heuristic"
+        }
+
+
 class AutoPilotDaemon:
     """
     全自动知识管理守护进程
@@ -58,6 +170,9 @@ class AutoPilotDaemon:
         self.queue = TaskQueue(self.vault_dir / "60-Logs" / "autopilot.db")
         self.watcher: Optional[PollingWatcher] = None
         self.executor: Optional[ThreadPoolExecutor] = None
+
+        # 质量检查器
+        self.quality_checker = LLMQualityChecker()
 
         # 状态
         self.running = False
@@ -135,8 +250,9 @@ class AutoPilotDaemon:
             result['stages'].append('interpretation')
 
             # Stage 2: 质量评分
-            quality = self._check_quality(task)
+            quality, dimensions = self._check_quality(task)
             result['quality'] = quality
+            result['quality_dimensions'] = dimensions
 
             if quality < self.quality_threshold:
                 self.log(f"⚠️ 质量不足 ({quality:.1f}/{self.quality_threshold})，尝试重试")
@@ -169,13 +285,12 @@ class AutoPilotDaemon:
 
         return result
 
-    def _check_quality(self, task: Task) -> float:
+    def _check_quality(self, task: Task) -> tuple[float, dict]:
         """
-        LLM 自评分
-        读取生成的深度解读文件，评估质量
+        LLM 深度评分
+        读取生成的深度解读文件，使用 LLM 进行 6 维度质量评估
+        返回: (总分, 详细评分维度)
         """
-        # 简化版：检查文件生成 + 基础指标
-        # 完整版应调用 LLM 做 6-dimension 评分
         try:
             # 找到生成的解读文件
             file_name = Path(task.file_path).stem
@@ -189,33 +304,39 @@ class AutoPilotDaemon:
                         if target.exists():
                             content = target.read_text(encoding='utf-8')
 
-                            # 基础评分：检查6维度完整性
-                            score = 0.0
-                            checks = [
-                                '一句话定义' in content,
-                                '详细解释' in content,
-                                '重要细节' in content,
-                                '架构图' in content or '```' in content,
-                                '行动建议' in content,
-                                '[[' in content  # 双向链接
-                            ]
-                            score = sum(checks) / len(checks) * 5  # 0-5分
+                            # 使用 LLM 进行深度评分
+                            if self.quality_checker.available:
+                                self.log(f"🔍 LLM 质量评分 [#{task.id}] {target.name}")
+                                result = self.quality_checker.score(content)
+                                total = result.get("total", 0)
+                                dimensions = result.get("dimensions", {})
+                                method = result.get("method", "unknown")
 
-                            return round(score, 1)
+                                if method == "heuristic":
+                                    self.log(f"⚠️ 使用启发式评分 (LLM 不可用): {total:.1f}")
+                                else:
+                                    self.log(f"✅ LLM 评分完成: {total:.1f}/5")
 
-            return 0.0  # 未找到生成文件
+                                return total, dimensions
+                            else:
+                                # LLM 不可用，回退到启发式评分
+                                self.log(f"⚠️ LLM 不可用，使用启发式评分 [#{task.id}]")
+                                result = self.quality_checker._heuristic_score(content)
+                                return result.get("total", 0), result.get("dimensions", {})
+
+            return 0.0, {}  # 未找到生成文件
 
         except Exception as e:
             self.log(f"⚠️ 质量检查异常: {e}")
-            return 0.0
+            return 0.0, {}
 
     def _retry_with_fallback(self, task: Task) -> float:
-        """使用备用策略重试"""
-        # 第一次重试：延长超时
-        # 第二次重试：换更强的模型（如果有配置）
-        # 这里简化实现
-        time.sleep(2)  # 短暂等待
-        return self._check_quality(task) + 0.5  # 简化处理
+        """使用备用策略重试（简化实现）"""
+        time.sleep(2)
+        # 重新检查质量（可能文件已更新）
+        quality, dimensions = self._check_quality(task)
+        # 更新任务的维度信息以便调试
+        return quality
 
     def _run_evergreen_extraction(self):
         """运行 Evergreen 提取"""
