@@ -378,7 +378,25 @@ Ingest → Query → Output → 回写 wiki → 下次 Query 可用
 处理后: ![图](attachments/2026-04/img-hash.png)
 ```
 
-### 7.2 配置
+### 7.2 可选：qmd 搜索引擎
+
+对于大型 wiki，建议使用 [qmd](https://github.com/jzaki/qmd) 作为本地搜索引擎：
+- 混合 BM25/向量搜索
+- LLM 重排序
+- 支持 CLI 和 MCP Server
+
+```bash
+# 安装 qmd
+pip install qmd
+
+# 索引知识库
+qmd index /path/to/vault
+
+# 搜索
+qmd search "AI Agent 架构"
+```
+
+使用 qmd 时，在 `ovp-query` 中添加 `--search-engine qmd` 参数。
 
 ```bash
 # .env

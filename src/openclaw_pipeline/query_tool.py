@@ -126,9 +126,68 @@ class VaultQuerier:
 
     def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
         """
-        基于关键词的搜索（简单 BM25 近似）
-        未来可接入 qmd 等向量搜索引擎
+        搜索知识库
+        优先使用 qmd（如果安装并配置），否则使用内置 BM25 近似搜索
         """
+        # 尝试使用 qmd（如果可用）
+        qmd_results = self._search_with_qmd(query, top_k)
+        if qmd_results:
+            return qmd_results
+
+        # 回退到内置搜索
+        return self._search_builtin(query, top_k)
+
+    def _search_with_qmd(self, query: str, top_k: int) -> Optional[List[SearchResult]]:
+        """尝试使用 qmd 搜索引擎"""
+        try:
+            # 检查 qmd 是否可用
+            import subprocess
+            result = subprocess.run(
+                ["qmd", "search", query, "--limit", str(top_k)],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode != 0:
+                return None
+
+            # 解析 qmd 输出
+            results = []
+            for line in result.stdout.strip().split('\n'):
+                if '|' in line:
+                    parts = line.split('|')
+                    if len(parts) >= 3:
+                        file_path = parts[0].strip()
+                        score = float(parts[1].strip())
+                        title = parts[2].strip()
+
+                        # 获取摘录
+                        page = self.all_pages.get(file_path, {})
+                        excerpt = page.get('excerpt', '')
+
+                        results.append(SearchResult(
+                            file=file_path,
+                            title=title,
+                            relevance=score,
+                            excerpt=excerpt
+                        ))
+
+            if results:
+                self.log(f"使用 qmd 搜索引擎，找到 {len(results)} 个结果")
+                return results
+
+        except (subprocess.SubprocessError, FileNotFoundError, ValueError):
+            pass
+
+        return None
+
+    def _search_builtin(self, query: str, top_k: int = 10) -> List[SearchResult]:
+        """
+        内置 BM25 近似搜索（qmd 不可用时回退）
+        """
+        self.log("使用内置搜索引擎 (qmd 未配置或不可用)")
+
         query_terms = set(query.lower().split())
         scores = []
 
