@@ -42,7 +42,13 @@ class VaultQuerier:
         self.vault_dir = Path(vault_dir)
         self.api_key = os.getenv("AUTO_VAULT_API_KEY")
         self.api_base = os.getenv("AUTO_VAULT_API_BASE")
-        self.model = os.getenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.5")
+        # 支持多种模型格式：minimax/xxx 或 openai/xxx
+        raw_model = os.getenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.5")
+        # 如果模型名没有 / 前缀，添加 openai/
+        if "/" not in raw_model:
+            self.model = f"openai/{raw_model}"
+        else:
+            self.model = raw_model
 
         # 关键目录
         self.evergreen_dir = self.vault_dir / "10-Knowledge" / "Evergreen"
@@ -380,6 +386,10 @@ title: {question}
         moc_file = self.moc_dir / "MOC-Queries.md"
 
         timestamp = datetime.now().strftime('%Y-%m-%d')
+        # 确保 target_file 是绝对路径或相对于 vault_dir
+        target_file = Path(target_file)
+        if not target_file.is_absolute():
+            target_file = self.vault_dir / target_file
         rel_path = str(target_file.relative_to(self.vault_dir))
 
         entry = f"- [[{rel_path.replace('.md', '')}|{question}]] - {timestamp}\n"
