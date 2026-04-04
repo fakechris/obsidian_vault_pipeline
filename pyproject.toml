@@ -48,6 +48,7 @@ dependencies = [
     "feedparser>=6.0.0",
     "beautifulsoup4>=4.12.0",
     "tiktoken>=0.5.0",
+    "watchdog>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -75,6 +76,7 @@ ovp-evergreen = "openclaw_pipeline.auto_evergreen_extractor:main"
 ovp-moc = "openclaw_pipeline.auto_moc_updater:main"
 ovp-quality = "openclaw_pipeline.batch_quality_checker:main"
 ovp-clippings = "openclaw_pipeline.clippings_processor:main"
+ovp-autopilot = "openclaw_pipeline.autopilot.daemon:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]

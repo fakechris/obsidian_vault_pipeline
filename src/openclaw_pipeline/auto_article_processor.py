@@ -476,6 +476,7 @@ def main():
     parser.add_argument("--input", "-i", help="输入文件（每行一个URL）")
     parser.add_argument("--single", "-s", help="单个URL")
     parser.add_argument("--process-inbox", action="store_true", help="处理50-Inbox/01-Raw/")
+    parser.add_argument("--process-single", type=Path, help="处理单个本地文件")
     parser.add_argument("--dry-run", action="store_true", help="预览模式")
     parser.add_argument("--batch-size", type=int, help="批量处理数量")
     parser.add_argument("--api-key", help="API Key")
@@ -506,6 +507,15 @@ def main():
 
     if args.process_inbox:
         results = processor.process_inbox(dry_run=args.dry_run, batch_size=args.batch_size)
+    elif args.process_single:
+        result = processor.process_single_file(args.process_single, dry_run=args.dry_run)
+        results = {
+            "total": 1,
+            "completed": 1 if result["status"] == "completed" else 0,
+            "failed": 1 if result["status"] == "error" else 0,
+            "skipped": 1 if result["status"] == "skipped" else 0,
+            "total_tokens": result.get("tokens_used", 0)
+        }
     elif args.single:
         print("Single URL processing not yet implemented (requires WebFetch)")
         results = {"total": 0, "completed": 0, "failed": 0}
