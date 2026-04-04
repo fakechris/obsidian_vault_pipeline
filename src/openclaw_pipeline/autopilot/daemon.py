@@ -463,6 +463,48 @@ class AutoPilotDaemon:
         self.log("👋 AutoPilot 已停止")
 
 
+def print_cost_warning():
+    """打印Token消耗风险提示 - 中英文双语"""
+    warning = """
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                           ⚠️  COST WARNING / 费用警告 ⚠️                    ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  EN: AutoPilot mode may consume SIGNIFICANT TOKENS (potentially $10-$100+)   ║
+║      Each processed article requires 3-4 LLM calls:                            ║
+║      - Article interpretation (L1→L2): ~4K-8K tokens                          ║
+║      - Quality scoring (6-dimension LLM evaluation): ~2K-4K tokens           ║
+║      - Evergreen extraction (L2→L3): ~2K-4K tokens                           ║
+║      - MOC indexing: ~1K-2K tokens                                             ║
+║                                                                               ║
+║  CN: AutoPilot 模式可能消耗大量 Token（可能 $10-$100+）                        ║
+║      每篇文章处理需要 3-4 次 LLM 调用：                                        ║
+║      - 深度解读生成 (L1→L2): ~4K-8K tokens                                     ║
+║      - 质量评分 (6维度LLM评估): ~2K-4K tokens                                  ║
+║      - Evergreen提取 (L2→L3): ~2K-4K tokens                                    ║
+║      - MOC索引更新: ~1K-2K tokens                                              ║
+║                                                                               ║
+║  💡 RECOMMENDATION / 建议:                                                     ║
+║     • Use monthly "Coding Plan" / 使用包月 "Coding Plan"                        ║
+║     • Monitor costs with --parallel=1 initially / 初始建议 --parallel=1        ║
+║     • Test with small batches first / 先小批量测试                              ║
+║                                                                               ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"""
+    print(warning)
+
+
+def confirm_continue() -> bool:
+    """询问用户是否确认继续"""
+    print("Do you want to continue? / 是否继续? (yes/no): ", end="")
+    try:
+        response = input().strip().lower()
+        return response in ('yes', 'y', '是', '继续', 'continue', 'c')
+    except (EOFError, KeyboardInterrupt):
+        print("\nAborted. / 已取消。")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="AutoPilot - 全自动知识管理守护进程"
@@ -501,8 +543,21 @@ def main():
         action="store_true",
         help="禁用自动 Git 提交"
     )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip cost warning confirmation / 跳过费用警告确认"
+    )
 
     args = parser.parse_args()
+
+    # 打印风险提示
+    if not args.yes:
+        print_cost_warning()
+        if not confirm_continue():
+            sys.exit(0)
+        print("\n" + "─" * 50)
 
     vault_dir = args.vault_dir or Path.cwd()
     watch_sources = [s.strip() for s in args.watch.split(",")]
