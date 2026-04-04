@@ -30,6 +30,8 @@ type: meta
 
 Obsidian Vault Pipeline 是一套**生产级自动化知识管理系统**，帮你把碎片信息（书签、文章、笔记）自动转化为结构化的永恒知识。
 
+> 🙏 **致敬**: 本项目的核心理念受启发于 [Andrej Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)——"Obsidian 是 IDE，LLM 是程序员，Wiki 是代码库"。
+
 **核心流程：**
 
 ```
@@ -146,7 +148,12 @@ ovp --full
 
 > 🤖 **把文件丢进目录，全自动完成后续所有步骤**
 
-AutoPilot 是 Pipeline 的完全自动形态。一旦启动，它会：
+AutoPilot 是 Pipeline 的完全自动形态，也是 [Karpathy LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)的工程实现——让 LLM 成为你的知识库维护者，而你只需专注于阅读和思考。
+
+核心理念：
+- **Obsidian 是 IDE** —— 你查看、导航、思考的地方
+- **LLM 是程序员** —— AutoPilot 自动完成编译、链接、维护
+- **Wiki 是代码库** —— 持续编译、自动维护的结构化知识
 1. **监控** `50-Inbox/01-Raw/` 目录的新文件
 2. **自动处理** - 生成深度解读 → LLM质量评分 → 提取Evergreen → 更新MOC
 3. **质量把关** - 低于阈值自动重试，确保输出质量
@@ -387,13 +394,14 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-## 相关仓库
+## 相关仓库与参考
 
-| 仓库 | 用途 | 链接 |
-|------|------|------|
+| 仓库/资源 | 用途 | 链接 |
+|----------|------|------|
 | **obsidian_vault_showcase** | 完整效果展示（带Demo） | [GitHub](https://github.com/fakechris/obsidian_vault_showcase) |
 | **obsidian_vault_pipeline** | 模板项目（本仓库） | [GitHub](https://github.com/fakechris/obsidian_vault_pipeline) |
 | **PyPI** | pip安装包 | [PyPI](https://pypi.org/project/obsidian-vault-pipeline/) |
+| **Karpathy's LLM Wiki** | 核心理念参考 | [Gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) |
 
 ---
 

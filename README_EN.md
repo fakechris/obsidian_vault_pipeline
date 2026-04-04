@@ -30,6 +30,8 @@ Input → Interpret → Quality Check → Refine → Index → Fully auditable w
 
 Obsidian Vault Pipeline is a **production-grade automated knowledge management system** that transforms fragmented information (bookmarks, articles, notes) into structured evergreen knowledge.
 
+> 🙏 **Credit**: This project's core philosophy is inspired by [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — "Obsidian is the IDE; the LLM is the programmer; the wiki is the codebase."
+
 **Core Workflow:**
 
 ```
@@ -147,7 +149,12 @@ ovp --full
 
 > 🤖 **Drop files into directory, everything else happens automatically**
 
-AutoPilot is the fully automated form of the Pipeline. Once started, it will:
+AutoPilot is the fully automated form of the Pipeline, and an engineering implementation of [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — let the LLM be your wiki maintainer while you focus on reading and thinking.
+
+Core philosophy:
+- **Obsidian is the IDE** — where you browse, navigate, and think
+- **LLM is the programmer** — AutoPilot handles compilation, linking, maintenance
+- **Wiki is the codebase** — continuously compiled, auto-maintained structured knowledge
 1. **Monitor** `50-Inbox/01-Raw/` for new files
 2. **Auto-process** - Generate interpretation → LLM quality scoring → Extract Evergreen → Update MOC
 3. **Quality gate** - Auto-retry if below threshold, ensuring output quality
@@ -388,13 +395,14 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-## Related Repositories
+## Related Repositories & References
 
 | Repository | Purpose | Link |
 |------------|---------|------|
 | **obsidian_vault_showcase** | Complete demo (with sample data) | [GitHub](https://github.com/fakechris/obsidian_vault_showcase) |
 | **obsidian_vault_pipeline** | Template project (this repo) | [GitHub](https://github.com/fakechris/obsidian_vault_pipeline) |
 | **PyPI** | pip install package | [PyPI](https://pypi.org/project/obsidian-vault-pipeline/) |
+| **Karpathy's LLM Wiki** | Core philosophy reference | [Gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) |
 
 ---
 
