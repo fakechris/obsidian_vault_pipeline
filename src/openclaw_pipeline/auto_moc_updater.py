@@ -22,9 +22,17 @@ import argparse
 import json
 import os
 import re
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+# Try to import concept registry
+try:
+    from .concept_registry import ConceptRegistry, STATUS_ACTIVE, STATUS_CANDIDATE
+    HAS_REGISTRY = True
+except ImportError:
+    HAS_REGISTRY = False
 
 # 自动加载 .env 文件
 VAULT_DIR = Path.cwd()  # 默认使用当前目录，可被参数覆盖
@@ -308,6 +316,97 @@ class MOCUpdater:
 
         return result
 
+    def update_atlas_from_registry(self, dry_run: bool = False) -> dict:
+        """
+        Update Atlas MOC from registry instead of filesystem.
+
+        Only links active concepts. Candidates are excluded.
+        Uses registry as source of truth.
+        """
+        result = {
+            "active_concepts": 0,
+            "candidates": 0,
+            "areas": {},
+            "errors": []
+        }
+
+        if not HAS_REGISTRY:
+            result["errors"].append("Registry not available")
+            return result
+
+        try:
+            registry = ConceptRegistry(self.vault_dir).load()
+        except Exception as e:
+            result["errors"].append(f"Could not load registry: {e}")
+            return result
+
+        # Get active concepts grouped by area
+        active_concepts = registry.active_concepts
+        result["active_concepts"] = len(active_concepts)
+
+        candidates = registry.candidates
+        result["candidates"] = len(candidates)
+
+        # Group by area
+        by_area: dict[str, list] = defaultdict(list)
+        for entry in active_concepts:
+            area = entry.area or "general"
+            by_area[area].append(entry)
+
+        result["areas"] = {area: len(concepts) for area, concepts in by_area.items()}
+
+        # Generate Atlas content grouped by area
+        lines = [
+            "---",
+            "title: Atlas Index",
+            "description: Canonical concept index by area",
+            "tags: [atlas, index]",
+            "---",
+            "",
+            "# Atlas Index",
+            "",
+            f"> **Active Concepts**: {len(active_concepts)} | **Candidates**: {len(candidates)}",
+            "",
+        ]
+
+        for area in sorted(by_area.keys()):
+            concepts = sorted(by_area[area], key=lambda e: e.title)
+            lines.append(f"## {area}")
+            lines.append("")
+            for entry in concepts:
+                # Use canonical slug for link, title for display
+                lines.append(f"- [[{entry.slug}|{entry.title}]]")
+            lines.append("")
+
+        # Candidates section (separate, not in main Atlas)
+        if candidates:
+            lines.append("")
+            lines.append("## Candidates (Pending Review)")
+            lines.append("")
+            lines.append(f"> These concepts are not yet active. Review with `ovp-promote-candidates`.")
+            lines.append("")
+            for entry in sorted(candidates, key=lambda e: e.title):
+                lines.append(f"- [[{entry.slug}|{entry.title}]]")
+            lines.append("")
+
+        atlas_content = "\n".join(lines)
+
+        if not dry_run:
+            # Write to Atlas directory
+            atlas_index = self.atlas_dir / "Atlas-Index.md"
+            self.atlas_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                with open(atlas_index, "w", encoding="utf-8") as f:
+                    f.write(atlas_content)
+                self.logger.log("atlas_updated_from_registry", {
+                    "active": len(active_concepts),
+                    "candidates": len(candidates),
+                })
+            except Exception as e:
+                result["errors"].append(f"Could not write Atlas: {e}")
+
+        return result
+
     def scan_all_areas(self, dry_run: bool = False) -> list[dict]:
         """扫描所有Areas"""
         areas = ["AI-Research", "Tools", "Investing", "Programming"]
@@ -328,7 +427,9 @@ def main():
     parser = argparse.ArgumentParser(description="自动MOC索引更新器")
     parser.add_argument("--scan", action="store_true", help="扫描并更新所有MOC")
     parser.add_argument("--check-area", help="检查指定Area")
-    parser.add_argument("--update-atlas", action="store_true", help="更新Atlas MOC")
+    parser.add_argument("--update-atlas", action="store_true", help="更新Atlas MOC (legacy filesystem)")
+    parser.add_argument("--update-atlas-from-registry", action="store_true",
+                        help="从registry更新Atlas (推荐)")
     parser.add_argument("--dry-run", action="store_true", help="预览模式")
     parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
     args = parser.parse_args()
@@ -338,12 +439,22 @@ def main():
     updater = MOCUpdater(args.vault_dir, logger)
 
     # 执行更新
-    if args.scan:
+    if args.update_atlas_from_registry:
+        print("Updating Atlas from registry...")
+        result = updater.update_atlas_from_registry(dry_run=args.dry_run)
+        results = [result]
+        print(f"  Active concepts: {result['active_concepts']}")
+        print(f"  Candidates: {result['candidates']}")
+        print(f"  Areas: {result['areas']}")
+        if result['errors']:
+            print(f"  Errors: {result['errors']}")
+
+    elif args.scan:
         print("Scanning all areas...")
         results = updater.scan_all_areas(dry_run=args.dry_run)
 
         if args.update_atlas:
-            print("\nUpdating Atlas...")
+            print("\nUpdating Atlas (legacy)...")
             atlas_result = updater.update_atlas_moc(dry_run=args.dry_run)
             results.append({"area": "Atlas", **atlas_result})
 

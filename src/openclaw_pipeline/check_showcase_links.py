@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
 Showcase Link Checker - 链接稳定性检查器
-检查所有 wikilink 是否指向存在的文件
+检查所有 wikilink 是否指向存在的文件，并接入 registry 进行语义检查
+
+Uses concept registry to distinguish:
+- ok: link to active concept
+- alias_warning: link targets an alias (should use canonical slug)
+- candidate_warning: link targets a candidate concept
+- broken: link target doesn't exist
 """
 
 from __future__ import annotations
@@ -11,111 +17,285 @@ import re
 import sys
 from pathlib import Path
 from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Any
 
 VAULT_DIR = Path(__file__).parent.parent.parent.parent / "openclaw-showcase"
 
-def extract_wikilinks(content: str) -> list[str]:
-    """提取所有 wikilink [[...]]"""
-    # 匹配 [[link]] 或 [[link|alias]]
-    pattern = r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]'
-    return re.findall(pattern, content)
+# Try to import concept registry
+try:
+    from .concept_registry import ConceptRegistry
+    HAS_REGISTRY = True
+except ImportError:
+    HAS_REGISTRY = False
 
-def get_all_md_files() -> set[str]:
-    """获取所有 Markdown 文件名（不含扩展名）"""
-    files = set()
-    if not VAULT_DIR.exists():
-        print(f"✗ Vault 目录不存在: {VAULT_DIR}")
-        return files
 
-    for md_file in VAULT_DIR.rglob("*.md"):
-        # 文件名（不含扩展名）
-        files.add(md_file.stem)
-        # 带路径的文件名
-        rel_path = md_file.relative_to(VAULT_DIR)
-        files.add(str(rel_path.with_suffix('')))
+@dataclass
+class LinkCheckResult:
+    """Result of checking a single link."""
+    file_path: str
+    surface: str
+    status: str  # "ok", "alias_warning", "candidate_warning", "broken"
+    canonical_slug: str = ""
+    suggestion: str = ""
 
-    return files
+
+class WikilinkExtractor:
+    """Extract wikilinks from markdown content."""
+
+    # Pattern: [[target]] or [[target|display]]
+    WIKILINK_PATTERN = re.compile(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]')
+
+    @classmethod
+    def extract_all(cls, content: str) -> list[tuple[str, str]]:
+        """Extract all wikilinks. Returns list of (surface, display) tuples."""
+        results = []
+        for match in cls.WIKILINK_PATTERN.finditer(content):
+            surface = match.group(1).strip()
+            # Check for display
+            full_match = match.group(0)
+            if '|' in full_match:
+                display = full_match.split('|')[1].split(']]')[0].strip()
+            else:
+                display = surface
+            results.append((surface, display))
+        return results
+
+
+class RegistryLinkChecker:
+    """Check links using the concept registry."""
+
+    def __init__(self, vault_dir: Path):
+        self.vault_dir = vault_dir
+        self.registry = None
+        self._all_files: set[str] = set()
+        self._build_file_index()
+
+        if HAS_REGISTRY:
+            try:
+                self.registry = ConceptRegistry(vault_dir).load()
+            except Exception as e:
+                print(f"Warning: could not load registry: {e}")
+
+    def _build_file_index(self) -> None:
+        """Build index of all markdown files."""
+        self._all_files = set()
+        for md_file in self.vault_dir.rglob("*.md"):
+            rel = md_file.relative_to(self.vault_dir)
+            self._all_files.add(rel.as_posix())
+            self._all_files.add(rel.stem)
+            for parent in rel.parents:
+                self._all_files.add(parent.as_posix())
+
+    def check_link(self, surface: str) -> LinkCheckResult:
+        """Check a single link surface form."""
+        # Check registry (active concept)
+        if self.registry:
+            entry = self.registry.find_by_slug(surface)
+            if entry and entry.status == "active":
+                return LinkCheckResult(
+                    file_path="",
+                    surface=surface,
+                    status="ok",
+                    canonical_slug=entry.slug,
+                    suggestion=""
+                )
+
+            # Check alias
+            entry = self.registry.find_by_alias(surface)
+            if entry and entry.status == "active":
+                return LinkCheckResult(
+                    file_path="",
+                    surface=surface,
+                    status="alias_warning",
+                    canonical_slug=entry.slug,
+                    suggestion=f"Use [[{entry.slug}|{surface}]] instead"
+                )
+
+            # Check candidate
+            entry = self.registry.find_by_slug(surface)
+            if entry and entry.status == "candidate":
+                return LinkCheckResult(
+                    file_path="",
+                    surface=surface,
+                    status="candidate_warning",
+                    canonical_slug=entry.slug,
+                    suggestion=f"'{surface}' is a candidate concept, not yet active"
+                )
+
+        # Check filesystem
+        if surface in self._all_files:
+            return LinkCheckResult(
+                file_path="",
+                surface=surface,
+                status="ok",
+                canonical_slug="",
+                suggestion=""
+            )
+
+        # Check common path patterns
+        for pattern in [
+            f"10-Knowledge/Evergreen/{surface}.md",
+            f"10-Knowledge/Evergreen/{surface}/index.md",
+            f"20-Areas/{surface}.md",
+        ]:
+            if pattern in self._all_files or (self.vault_dir / pattern).exists():
+                return LinkCheckResult(
+                    file_path="",
+                    surface=surface,
+                    status="ok",
+                    canonical_slug="",
+                    suggestion=""
+                )
+
+        # True broken link
+        return LinkCheckResult(
+            file_path="",
+            surface=surface,
+            status="broken",
+            canonical_slug="",
+            suggestion=self._suggest_fixes(surface)
+        )
+
+    def _suggest_fixes(self, surface: str) -> str:
+        """Suggest top-3 possible fixes for a broken link."""
+        if not self.registry:
+            return "No suggestions available"
+
+        suggestions = []
+
+        # Search registry for similar
+        results = self.registry.search(surface, topk=3)
+        if results:
+            suggestions.append(f"Similar concepts: {', '.join(e.slug for e, _ in results)}")
+
+        # Check if it might be an alias
+        if self.registry.has_alias(surface):
+            entry = self.registry.find_by_alias(surface)
+            if entry:
+                suggestions.append(f"Alias of '{entry.slug}' - use canonical slug")
+
+        if not suggestions:
+            return "No similar concepts found in registry"
+
+        return "; ".join(suggestions[:3])
+
 
 def check_links():
-    """检查所有链接"""
-    print("="*70)
-    print("Showcase Link Checker")
-    print("="*70)
+    """Check all links in the vault."""
+    print("=" * 70)
+    print("Showcase Link Checker (Registry-Aware)")
+    print("=" * 70)
     print(f"Vault: {VAULT_DIR}")
     print()
 
     if not VAULT_DIR.exists():
-        print(f"✗ 错误: Vault 目录不存在")
+        print(f"✗ Error: Vault directory does not exist")
         return 1
 
-    # 获取所有文件
-    all_files = get_all_md_files()
-    print(f"✓ 发现 {len(all_files)} 个 Markdown 文件")
+    # Initialize checker
+    checker = RegistryLinkChecker(VAULT_DIR)
+    print(f"✓ Discovered {len(checker._all_files)} files")
+    if checker.registry:
+        print(f"✓ Registry loaded: {len(checker.registry.entries)} entries")
     print()
 
-    # 统计
-    broken_links = defaultdict(list)  # file -> [broken_links]
-    all_links = []  # (file, link) 列表
+    # Statistics
+    stats = {
+        "ok": 0,
+        "alias_warning": 0,
+        "candidate_warning": 0,
+        "broken": 0,
+    }
 
-    # 遍历所有文件检查链接
+    broken_links: dict[str, list[str]] = defaultdict(list)
+    alias_warnings: dict[str, list[str]] = defaultdict(list)
+    candidate_warnings: dict[str, list[str]] = defaultdict(list)
+
+    # Check all files
     for md_file in VAULT_DIR.rglob("*.md"):
         rel_path = md_file.relative_to(VAULT_DIR)
         try:
             content = md_file.read_text(encoding='utf-8')
-            links = extract_wikilinks(content)
+            wikilinks = WikilinkExtractor.extract_all(content)
 
-            for link in links:
-                all_links.append((str(rel_path), link))
+            for surface, display in wikilinks:
+                result = checker.check_link(surface)
+                result.file_path = str(rel_path)
 
-                # 检查链接目标是否存在
-                # 清理链接（移除锚点 #...）
-                clean_link = link.split('#')[0].strip()
+                stats[result.status] = stats.get(result.status, 0) + 1
 
-                # 检查文件名匹配
-                if clean_link not in all_files:
-                    # 尝试不同路径格式
-                    found = False
-                    for f in all_files:
-                        if f.endswith(clean_link) or f == clean_link:
-                            found = True
-                            break
-                    if not found:
-                        broken_links[str(rel_path)].append(link)
+                if result.status == "broken":
+                    broken_links[str(rel_path)].append(surface)
+                elif result.status == "alias_warning":
+                    alias_warnings[str(rel_path)].append(f"{surface} -> {result.canonical_slug}")
+                elif result.status == "candidate_warning":
+                    candidate_warnings[str(rel_path)].append(surface)
 
         except Exception as e:
-            print(f"✗ 读取文件失败: {rel_path} - {e}")
+            print(f"✗ Error reading {rel_path}: {e}")
 
-    # 报告
-    total_links = len(all_links)
-    broken_count = sum(len(links) for links in broken_links.values())
-
-    print(f"总链接数: {total_links}")
-    print(f"断裂链接: {broken_count}")
-    print(f"健康率: {(total_links - broken_count) / total_links * 100:.1f}%" if total_links > 0 else "N/A")
+    # Report
+    total = sum(stats.values())
+    print(f"Total links checked: {total}")
+    print(f"  OK: {stats['ok']}")
+    print(f"  Alias warnings: {stats['alias_warning']}")
+    print(f"  Candidate warnings: {stats['candidate_warning']}")
+    print(f"  Broken: {stats['broken']}")
     print()
 
-    # 详细报告
+    # Detailed reports
     if broken_links:
-        print("="*70)
-        print("断裂链接详情")
-        print("="*70)
+        print("=" * 70)
+        print(f"BROKEN LINKS ({sum(len(v) for v in broken_links.values())} total)")
+        print("=" * 70)
         for file, links in sorted(broken_links.items()):
             print(f"\n📄 {file}")
             for link in links:
+                result = checker.check_link(link)
                 print(f"   ✗ [[{link}]]")
-        print()
-    else:
-        print("✓ 所有链接都有效！")
+                if result.suggestion:
+                    print(f"     → {result.suggestion}")
         print()
 
-    # 返回状态码
+    if alias_warnings:
+        print("=" * 70)
+        print(f"ALIAS WARNINGS ({sum(len(v) for v in alias_warnings.values())} total)")
+        print("=" * 70)
+        print("(These links work but should use canonical slug)")
+        for file, warnings in sorted(alias_warnings.items())[:10]:  # Limit output
+            print(f"\n📄 {file}")
+            for w in warnings:
+                print(f"   ⚠ {w}")
+        if len(alias_warnings) > 10:
+            print(f"\n... and {len(alias_warnings) - 10} more files")
+        print()
+
+    if candidate_warnings:
+        print("=" * 70)
+        print(f"CANDIDATE WARNINGS ({sum(len(v) for v in candidate_warnings.values())} total)")
+        print("=" * 70)
+        print("(These links target candidate concepts that are not yet active)")
+        for file, warnings in sorted(candidate_warnings.items())[:10]:
+            print(f"\n📄 {file}")
+            for w in warnings:
+                print(f"   ? [[{w}]]")
+        if len(candidate_warnings) > 10:
+            print(f"\n... and {len(candidate_warnings) - 10} more files")
+        print()
+
+    if not broken_links:
+        print("✓ No broken links!")
+    print()
+
     return 0 if not broken_links else 1
 
+
 def check_data_quality():
-    """检查数据质量"""
-    print("="*70)
-    print("数据质量检查")
-    print("="*70)
+    """Check data quality."""
+    print("=" * 70)
+    print("Data Quality Check")
+    print("=" * 70)
     print()
 
     issues = []
@@ -125,33 +305,31 @@ def check_data_quality():
         try:
             content = md_file.read_text(encoding='utf-8')
 
-            # 检查 frontmatter
             if not content.startswith('---'):
-                issues.append(f"{rel_path}: 缺少 frontmatter")
+                issues.append(f"{rel_path}: Missing frontmatter")
 
-            # 检查内容长度
             lines = content.split('\n')
             content_lines = [l for l in lines if l.strip() and not l.strip().startswith('#')]
             if len(content_lines) < 5:
-                issues.append(f"{rel_path}: 内容过短 ({len(content_lines)} 行)")
+                issues.append(f"{rel_path}: Content too short ({len(content_lines)} lines)")
 
-            # 检查是否有内容
             if len(content.strip()) < 100:
-                issues.append(f"{rel_path}: 文件内容过少")
+                issues.append(f"{rel_path}: File content too small")
 
         except Exception as e:
-            issues.append(f"{rel_path}: 读取错误 - {e}")
+            issues.append(f"{rel_path}: Read error - {e}")
 
     if issues:
-        print(f"⚠ 发现 {len(issues)} 个问题:")
-        for issue in issues[:20]:  # 最多显示20个
+        print(f"⚠ Found {len(issues)} issues:")
+        for issue in issues[:20]:
             print(f"  - {issue}")
         if len(issues) > 20:
-            print(f"  ... 还有 {len(issues) - 20} 个问题")
+            print(f"  ... and {len(issues) - 20} more")
         return 1
     else:
-        print("✓ 数据质量检查通过")
+        print("✓ Data quality check passed")
         return 0
+
 
 if __name__ == "__main__":
     link_status = check_links()
@@ -159,10 +337,10 @@ if __name__ == "__main__":
     quality_status = check_data_quality()
 
     print()
-    print("="*70)
+    print("=" * 70)
     if link_status == 0 and quality_status == 0:
-        print("✓ 所有检查通过")
+        print("✓ All checks passed")
         sys.exit(0)
     else:
-        print("⚠ 部分检查失败，请查看详情")
+        print("⚠ Some checks failed, see details above")
         sys.exit(1)

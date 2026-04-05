@@ -27,6 +27,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+# Try to import concept registry
+try:
+    from .concept_registry import ConceptRegistry, STATUS_ACTIVE, STATUS_CANDIDATE
+    HAS_REGISTRY = True
+except ImportError:
+    HAS_REGISTRY = False
+
 # 自动加载 .env 文件
 VAULT_DIR = Path.cwd()  # 默认使用当前目录，可被参数覆盖
 ENV_FILE = VAULT_DIR / ".env"
@@ -238,7 +245,20 @@ class AutoEvergreenExtractor:
         self.extractor = EvergreenExtractor(llm_client, self.logger)
 
     def evergreen_exists(self, concept_name: str) -> bool:
-        """检查Evergreen笔记是否已存在"""
+        """检查Evergreen笔记是否已存在（registry优先，文件系统备选）"""
+        # Check registry first
+        if HAS_REGISTRY:
+            try:
+                registry = ConceptRegistry(self.vault_dir).load()
+                if registry.has_active_slug(concept_name):
+                    return True
+                # Also check by alias
+                if registry.find_by_alias(concept_name):
+                    return True
+            except Exception:
+                pass  # Fall back to filesystem
+
+        # Fall back to filesystem check
         possible_paths = [
             self.evergreen_dir / f"{concept_name}.md",
             self.evergreen_dir / f"{concept_name.replace('-', '_')}.md",
@@ -246,11 +266,11 @@ class AutoEvergreenExtractor:
         return any(p.exists() for p in possible_paths)
 
     def process_file(self, file_path: Path, dry_run: bool = False) -> dict:
-        """处理单个文件"""
+        """处理单个文件 - 将提取的概念添加到candidate队列"""
         result = {
             "file": str(file_path),
             "concepts_extracted": 0,
-            "concepts_created": 0,
+            "candidates_added": 0,
             "concepts_skipped": 0,
             "concepts": []
         }
@@ -263,6 +283,14 @@ class AutoEvergreenExtractor:
             concepts = self.extractor.extract_concepts(file_path, content)
             result["concepts_extracted"] = len(concepts)
 
+            # Load registry if available
+            registry = None
+            if HAS_REGISTRY:
+                try:
+                    registry = ConceptRegistry(self.vault_dir).load()
+                except Exception:
+                    pass
+
             for concept in concepts:
                 concept_name = concept.get("concept_name")
                 if not concept_name:
@@ -273,7 +301,7 @@ class AutoEvergreenExtractor:
                     "status": "pending"
                 }
 
-                # 检查是否已存在
+                # 检查是否已存在（registry或文件系统）
                 if self.evergreen_exists(concept_name):
                     concept_info["status"] = "exists"
                     result["concepts_skipped"] += 1
@@ -282,28 +310,48 @@ class AutoEvergreenExtractor:
 
                 if dry_run:
                     concept_info["status"] = "dry_run"
-                    result["concepts_created"] += 1
+                    result["candidates_added"] += 1
                     result["concepts"].append(concept_info)
                     continue
 
-                # 创建Evergreen笔记
-                note_content = self.extractor.create_evergreen_note(concept, file_path)
-                output_path = self.evergreen_dir / f"{concept_name}.md"
+                # 添加到candidate队列（而不是直接创建active Evergreen）
+                if registry:
+                    try:
+                        registry.upsert_candidate(
+                            slug=concept_name,
+                            title=concept.get("title", concept_name.replace("-", " ")),
+                            definition=concept.get("one_sentence_def", ""),
+                            area="general",
+                            aliases=[concept_name],
+                        )
+                        registry.save()
+                        concept_info["status"] = "candidate_added"
+                        result["candidates_added"] += 1
+                    except ValueError:
+                        # Already exists
+                        concept_info["status"] = "exists"
+                        result["concepts_skipped"] += 1
+                    except Exception as e:
+                        concept_info["status"] = "error"
+                        concept_info["error"] = str(e)
+                else:
+                    # Fallback: create directly (legacy behavior)
+                    note_content = self.extractor.create_evergreen_note(concept, file_path)
+                    output_path = self.evergreen_dir / f"{concept_name}.md"
+                    self.evergreen_dir.mkdir(parents=True, exist_ok=True)
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(note_content)
+                    concept_info["status"] = "created"
+                    concept_info["path"] = str(output_path)
+                    result["candidates_added"] += 1
 
-                self.evergreen_dir.mkdir(parents=True, exist_ok=True)
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(note_content)
+                    self.logger.log("evergreen_created", {
+                        "concept": concept_name,
+                        "source": str(file_path.name),
+                        "path": str(output_path)
+                    })
 
-                concept_info["status"] = "created"
-                concept_info["path"] = str(output_path)
-                result["concepts_created"] += 1
                 result["concepts"].append(concept_info)
-
-                self.logger.log("evergreen_created", {
-                    "concept": concept_name,
-                    "source": str(file_path.name),
-                    "path": str(output_path)
-                })
 
         except Exception as e:
             result["error"] = str(e)
@@ -381,7 +429,7 @@ def main():
 
     # 汇总
     total_extracted = sum(r.get("concepts_extracted", 0) for r in results)
-    total_created = sum(r.get("concepts_created", 0) for r in results)
+    total_added = sum(r.get("candidates_added", 0) for r in results)
     total_skipped = sum(r.get("concepts_skipped", 0) for r in results)
 
     print(f"\n{'='*60}")
@@ -389,13 +437,16 @@ def main():
     print(f"{'='*60}")
     print(f"Files processed: {len(results)}")
     print(f"Concepts extracted: {total_extracted}")
-    print(f"Concepts created: {total_created}")
+    print(f"Candidates added: {total_added}")
     print(f"Concepts skipped (exists): {total_skipped}")
+    print()
+    print("Note: Extracted concepts are added to candidate queue.")
+    print("Use 'ovp-promote-candidates review' to review and promote.")
 
     logger.log("evergreen_extraction_complete", {
         "files": len(results),
         "extracted": total_extracted,
-        "created": total_created,
+        "candidates_added": total_added,
         "skipped": total_skipped
     })
 
