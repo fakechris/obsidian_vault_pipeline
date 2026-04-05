@@ -58,6 +58,20 @@ except ImportError:
     LITELLM_AVAILABLE = False
     print("Warning: litellm not available, LLM calls will fail")
 
+# Import concept resolver
+try:
+    from .concept_registry import ConceptRegistry
+    from .concept_resolver import (
+        MentionExtractor,
+        ConceptResolver,
+        LinkRenderer,
+        LinkResolutionSidecar,
+    )
+    RESOLVER_AVAILABLE = True
+except ImportError:
+    RESOLVER_AVAILABLE = False
+    print("Warning: concept_resolver not available, link resolution disabled")
+
 # ========== 配置 ==========
 RAW_DIR = VAULT_DIR / "50-Inbox" / "01-Raw"
 PROCESSED_DIR = VAULT_DIR / "50-Inbox" / "03-Processed"
@@ -71,6 +85,8 @@ MANIFEST_FILE = VAULT_DIR / "50-Inbox" / ".manifest.json"
 LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
 TXN_DIR = VAULT_DIR / "60-Logs" / "transactions"
 EVERGREEN_DIR = VAULT_DIR / "10-Knowledge" / "Evergreen"
+LINK_RESOLUTION_DIR = VAULT_DIR / "60-Logs" / "link-resolution"
+RESOLVER_VERSION = "v2"
 
 
 class PipelineLogger:
@@ -247,15 +263,10 @@ class ArticleProcessor:
 - 如果新概念与现有概念语义相近，合并链接到现有概念
 - 例如：没有 `折现率.md` 但有 `WACC.md`，可考虑合并或明确区分
 
-**第3优先级 - 创建新的 Evergreen（最后手段）：**
-- 只有当概念完全新且无相似时才创建
-- 创建格式：在关联知识部分末尾，用以下格式声明
-
-```evergreen
-name: 概念名（kebab-case）
-title: 显示标题
-definition: 一句话定义（中文，保留技术术语英文）
-```
+**关于未知概念：**
+- 如果概念不存在，不要创建 Evergreen 文件
+- 直接使用 [[概念名]] 格式即可，resolver 会自动处理
+- resolver 会决定：链接到现有概念、创建候选概念、或移除链接
 
 ## 输出格式要求：
 1. YAML frontmatter必须包含：title, source, author, date, type, tags, status
@@ -265,7 +276,7 @@ definition: 一句话定义（中文，保留技术术语英文）
    - 重要细节：至少3个关键技术点/数据/案例
    - 架构图/流程图：如有技术架构，用ASCII图表展示
    - 行动建议：至少2条可落地的具体建议
-   - 关联知识：[[已存在的概念]] + ```evergreen 块（如需创建新概念）
+   - 关联知识：使用 [[概念名]] 格式链接到已存在的 Evergreen
 
 质量规则：
 - 不确定的信息标注"原文未说明"，禁止编造
@@ -332,8 +343,8 @@ definition: 一句话定义（中文，保留技术术语英文）
 5. 架构图/流程图（如有）
 6. 行动建议（至少2条）
 7. 关联知识：
-   - 只使用已存在的 Evergreen 概念 [[Existing-Concept]]
-   - 如需创建新概念，在末尾用 ```evergreen 块声明
+   - 使用 [[概念名]] 格式链接到已存在的 Evergreen 概念
+   - resolver 会自动处理未知概念
    - 概念名用 kebab-case（如 DCF-Valuation）"""
 
         content_result, metadata = self.llm.generate(
@@ -445,6 +456,135 @@ class AutoArticleProcessor:
         self.llm = llm_client
         self.article_processor = ArticleProcessor(llm_client, self.logger)
 
+    # ========== Link Resolution Methods ==========
+
+    def _resolve_article_links(self, content: str, article_stem: str,
+                                area: str, txn_id: str) -> tuple[str, list, LinkResolutionSidecar]:
+        """
+        Resolve wikilinks in article content using the concept registry.
+
+        Returns: (resolved_content, decisions, sidecar)
+        """
+        if not RESOLVER_AVAILABLE:
+            return content, [], None
+
+        try:
+            registry = ConceptRegistry(self.vault_dir).load()
+        except Exception as e:
+            print(f"Warning: could not load registry: {e}")
+            return content, [], None
+
+        # Extract mentions
+        extractor = MentionExtractor()
+        mentions = extractor.extract_all(content, area, self.llm)
+
+        if not mentions:
+            return content, [], None
+
+        # Resolve mentions
+        resolver = ConceptResolver(registry, self.llm)
+        decisions = resolver.resolve_mentions(mentions, area)
+
+        # Render deterministic wikilinks
+        renderer = LinkRenderer(registry)
+        resolved_content = renderer.render_all(content, decisions)
+
+        # Build sidecar
+        sidecar = LinkResolutionSidecar(
+            article=article_stem,
+            resolver_version=RESOLVER_VERSION,
+            area=area,
+            decisions=decisions,
+        )
+
+        return resolved_content, decisions, sidecar
+
+    def _write_resolution_sidecar(self, article_path: Path, sidecar: LinkResolutionSidecar) -> None:
+        """Write resolution sidecar file."""
+        if sidecar is None:
+            return
+        stem = article_path.stem
+        sidecar_path = LINK_RESOLUTION_DIR / f"{stem}.json"
+        sidecar.write(sidecar_path)
+
+    def _upsert_candidates(self, decisions: list, registry: Any) -> list[str]:
+        """
+        Upsert candidate decisions to registry.
+
+        Returns: list of candidate slugs created/updated.
+        """
+        if not decisions:
+            return []
+
+        upserted = []
+        for d in decisions:
+            if d.action == "create_candidate" and d.proposed_slug:
+                try:
+                    registry.upsert_candidate(
+                        slug=d.proposed_slug,
+                        title=d.title or d.surface,
+                        definition=d.definition or "",
+                        area="general",  # Will be updated on promote
+                        aliases=[d.surface] if d.surface != d.proposed_slug else [],
+                    )
+                    upserted.append(d.proposed_slug)
+                except ValueError:
+                    # Candidate already exists with different status
+                    pass
+                except Exception as e:
+                    print(f"Warning: could not upsert candidate '{d.proposed_slug}': {e}")
+        return upserted
+
+    def _augment_frontmatter(self, content: str, decisions: list, area: str,
+                              txn_id: str) -> str:
+        """
+        Augment article frontmatter with link resolution metadata.
+
+        Adds: area, canonical_concepts, concept_candidates,
+              link_resolution_status, link_resolution_version, pipeline_run_id
+        """
+        if not content.startswith("---"):
+            return content
+
+        parts = content.split("---", 2)
+        if len(parts) < 3:
+            return content
+
+        fm_text = parts[1].strip()
+        body = parts[2]
+
+        # Build new frontmatter fields
+        canonical = sorted({d.slug for d in decisions if d.action == "link_existing" and d.slug})
+        candidates = sorted({d.proposed_slug for d in decisions
+                            if d.action == "create_candidate" and d.proposed_slug})
+
+        # Parse existing frontmatter
+        fm_lines = fm_text.split("\n")
+        fm_dict: dict[str, str] = {}
+        for line in fm_lines:
+            if ":" in line:
+                key, val = line.split(":", 1)
+                fm_dict[key.strip()] = val.strip().strip('"').strip("'")
+
+        # Update frontmatter
+        fm_dict["area"] = area
+        fm_dict["canonical_concepts"] = "[" + ", ".join(canonical) + "]"
+        fm_dict["concept_candidates"] = "[" + ", ".join(candidates) + "]"
+        fm_dict["link_resolution_status"] = "resolved"
+        fm_dict["link_resolution_version"] = RESOLVER_VERSION
+        fm_dict["pipeline_run_id"] = txn_id
+
+        # Reconstruct frontmatter
+        new_fm_lines = []
+        for key, val in fm_dict.items():
+            if isinstance(val, str):
+                new_fm_lines.append(f'{key}: {val}')
+            else:
+                new_fm_lines.append(f'{key}: {val}')
+
+        new_fm_text = "\n".join(new_fm_lines)
+        return f"---\n{new_fm_text}\n---\n{body}"
+
     def parse_raw_file(self, file_path: Path) -> dict[str, Any]:
         """解析Raw文件，提取元数据和内容"""
         with open(file_path, "r", encoding="utf-8") as f:
@@ -524,15 +664,19 @@ class AutoArticleProcessor:
                 date=file_data["date"]
             )
 
-            # Step 3: 从 ```evergreen 块创建新的 Evergreen 文件
-            new_evergreens = self.article_processor.create_embedded_evergreens(
-                interpretation, output_dir=None
+            # Step 3: Link Resolution (replaces create_embedded_evergreens)
+            # Get txn_id for pipeline_run_id
+            txn_id = self.logger.session_id
+            article_stem = file_path.stem
+
+            interpretation, decisions, sidecar = self._resolve_article_links(
+                interpretation, article_stem, classification, txn_id
             )
-            if new_evergreens:
-                self.logger.log("evergreens_created", {
-                    "file": str(file_path.name),
-                    "concepts": new_evergreens
-                })
+
+            # Augment frontmatter with resolution metadata
+            interpretation = self._augment_frontmatter(
+                interpretation, decisions, classification, txn_id
+            )
 
             # 确定输出路径
             output_dir = OUTPUT_DIRS.get(classification, OUTPUT_DIRS["ai"])
@@ -543,7 +687,27 @@ class AutoArticleProcessor:
             output_name = f"{file_data['date']}_{clean_title}_深度解读.md"
             output_path = output_dir / output_name
 
-            # 写入文件
+            # Write sidecar
+            self._write_resolution_sidecar(output_path, sidecar)
+
+            # Upsert candidates to registry
+            if decisions and RESOLVER_AVAILABLE:
+                try:
+                    registry = ConceptRegistry(self.vault_dir).load()
+                    candidates = self._upsert_candidates(decisions, registry)
+                    if candidates:
+                        registry.save()
+                        self.logger.log("candidates_upserted", {
+                            "file": str(file_path.name),
+                            "candidates": candidates
+                        })
+                except Exception as e:
+                    self.logger.log("candidate_upsert_error", {
+                        "file": str(file_path.name),
+                        "error": str(e)
+                    })
+
+            # Write file
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(interpretation)
 
