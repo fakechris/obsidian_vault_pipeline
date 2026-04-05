@@ -79,6 +79,9 @@ ovp-clippings = "openclaw_pipeline.clippings_processor:main"
 ovp-autopilot = "openclaw_pipeline.autopilot.daemon:main"
 ovp-lint = "openclaw_pipeline.lint_checker:main"
 ovp-query = "openclaw_pipeline.query_tool:main"
+ovp-repair = "openclaw_pipeline.repair:main"
+ovp-query-to-wiki = "openclaw_pipeline.query_to_wiki:main"
+ovp-batch-evergreen = "openclaw_pipeline.batch_evergreen:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]

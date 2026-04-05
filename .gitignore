@@ -54,3 +54,4 @@ node_modules/
 *.avi
 *.zip
 *.tar.gz
+.gstack/

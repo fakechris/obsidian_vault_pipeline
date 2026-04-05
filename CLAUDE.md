@@ -267,37 +267,47 @@ aliases: ["{英文名}"]
 
 ## 5. Lint 规则 (知识健康检查)
 
-### 5.1 检查项
+### 5.1 WIGS 5层架构检查
 
 ```bash
-ovp-lint  # 运行知识健康检查
+ovp-lint  # 运行 WIGS 5层架构检查（默认启用）
+ovp-lint --no-wigs  # 禁用 WIGS 检查，仅运行基础检查
 ```
 
-**L1: 孤儿页面检测**
+**WIGS (Workflow Integrity Guarantee System) 5层架构**:
+
+| 层级 | 检查项 | 说明 |
+|------|--------|------|
+| L1 | 事务状态 | 检查未完成的工作流事务 |
+| L2 | 孤儿Evergreen | 未链接到MOC的Evergreen页面 |
+| L2 | 断裂链接 | 无效的 `[[...]]` 链接 |
+| L3 | Ingestion Pipeline | Clippings未迁移、Pinboard待处理、重复文件 |
+| L4 | Areas完整性 | 未在MOC中索引的深度解读 |
+| L4 | Git完整性 | 未提交的修改 |
+| L5 | Archive层 | 超过1年未访问的归档文件 |
+
+### 5.2 基础检查项
+
+**孤儿页面检测**
 - 扫描无入链的 Evergreen 页面
 - 原因：未被任何深度解读或 MOC 引用
 - 处理：补充引用或考虑删除
 
-**L2: 缺失概念检测**
+**缺失概念检测**
 - 扫描深度解读中 `[[概念]]` 链接
 - 检查目标页面是否存在
 - 原因：提到了但未创建独立页面
 - 处理：自动提取为 Evergreen
 
-**L3: 矛盾检测**
-- 对比不同页面关于同一实体的描述
-- 标记时间、数据、观点不一致
-- 需要 LLM 比对（成本较高）
-
-**L4: 过时页面检测**
+**过时页面检测**
 - 标记超过 90 天未更新的技术内容
 - 提示需要重新验证或更新
 
-**L5: 断裂链接检测**
+**断裂链接检测**
 - 检查所有 `[[...]]` 链接是否有效
 - 列出无效链接和来源页面
 
-### 5.2 修复流程
+### 5.3 修复流程
 
 ```bash
 # 检查并报告
@@ -308,6 +318,53 @@ ovp-lint --fix
 
 # 交互式修复（推荐）
 ovp-lint --interactive
+```
+
+---
+
+## 5.4 事务系统 (Transaction Manager)
+
+用于跟踪长时间运行的工作流任务。
+
+```bash
+# 创建新事务
+python3 -m openclaw_pipeline.txn start <type> <description>
+
+# 更新步骤
+python3 -m openclaw_pipeline.txn step <txn_id> <step_name> <status> [output]
+
+# 完成事务
+python3 -m openclaw_pipeline.txn complete <txn_id>
+
+# 失败事务
+python3 -m openclaw_pipeline.txn fail <txn_id> <reason>
+
+# 列出未完成
+python3 -m openclaw_pipeline.txn list
+
+# 显示详情
+python3 -m openclaw_pipeline.txn show <txn_id>
+
+# 归档旧事务
+python3 -m openclaw_pipeline.txn archive [days]
+```
+
+**事务JSON结构**:
+```json
+{
+  "id": "txn-YYYYMMDD-HHMMSS-uuid",
+  "type": "workflow_type",
+  "description": "description",
+  "status": "in_progress|completed|failed",
+  "steps": {
+    "step_name": {
+      "status": "pending|processing|completed|failed",
+      "output": "step output",
+      "updated_at": "ISO timestamp"
+    }
+  },
+  "checkpoint": "current step"
+}
 ```
 
 ---

@@ -169,6 +169,71 @@ def save_state(state: dict):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
 
+def save_bookmarks_to_inbox(bookmarks: List[Bookmark], vault_dir: Path) -> dict:
+    """保存书签到 50-Inbox/02-Pinboard/ 目录
+
+    Returns: dict with counts of saved files
+    """
+    saved = {"github": 0, "article": 0, "website": 0, "social": 0}
+
+    inbox_dir = vault_dir / "50-Inbox" / "02-Pinboard"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+
+    for bm in bookmarks:
+        # 生成文件名
+        if bm.url_type == "github":
+            parsed = parse_github_url(bm.href)
+            if parsed:
+                owner, repo = parsed
+                filename = f"{bm.date}_{owner}_{repo}.md"
+            else:
+                clean_title = re.sub(r'[^\w\-]', '_', bm.title[:30])
+                filename = f"{bm.date}_{clean_title}.md"
+        elif bm.url_type == "article":
+            title = re.sub(r'[^\w\u4e00-\u9fff\-]', '_', bm.title)[:50]
+            filename = f"{bm.date}_{title}.md"
+        else:
+            # website or social - use domain + date
+            parsed_url = re.match(r'https?://([^/]+)', bm.href)
+            domain = parsed_url.group(1) if parsed_url else "unknown"
+            filename = f"{bm.date}_{domain}.md"
+
+        filepath = inbox_dir / filename
+
+        # 避免覆盖：如果文件已存在，跳过
+        if filepath.exists():
+            continue
+
+        # 生成文件内容
+        tags_list = bm.tags.split() if bm.tags else []
+        tags_str = ", ".join(tags_list) if tags_list else "none"
+
+        content = f"""---
+title: "{bm.title}"
+source: {bm.href}
+date: {bm.date}
+type: pinboard-{bm.url_type}
+tags: [{tags_str}]
+---
+
+{bm.description}
+
+## Notes
+
+{bm.extended}
+
+## Tags
+
+#{bm.tags.replace(' ', ' #') if bm.tags else 'untagged'}
+"""
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        saved[bm.url_type] += 1
+
+    return saved
+
 # ========== GitHub URL 解析 ==========
 def parse_github_url(url: str) -> Optional[Tuple[str, str]]:
     """从 GitHub URL 提取 owner/repo"""
@@ -565,6 +630,16 @@ def main(days: int = 7, dry_run: bool = True, incremental: bool = False,
         state["processed_count"]["website"] += len(stats["website"])
         state["processed_count"]["article"] += len(stats["article"])
         state["processed_count"]["social"] += len(stats["social"])
+
+        # 【FIXED】实际保存书签文件到 50-Inbox/02-Pinboard/
+        if new_items:
+            saved = save_bookmarks_to_inbox(new_items, VAULT_DIR)
+            print(f"\n💾 已保存书签到 inbox:")
+            for url_type, count in saved.items():
+                if count > 0:
+                    icon = {"github": "🔬", "article": "📝", "website": "🌐", "social": "📱"}.get(url_type, "📌")
+                    print(f"   {icon} {url_type}: {count} 个")
+
         save_state(state)
         print(f"\n✅ 状态已更新: {STATE_FILE}")
 

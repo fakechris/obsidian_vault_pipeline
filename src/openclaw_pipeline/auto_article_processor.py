@@ -70,6 +70,7 @@ OUTPUT_DIRS = {
 MANIFEST_FILE = VAULT_DIR / "50-Inbox" / ".manifest.json"
 LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
 TXN_DIR = VAULT_DIR / "60-Logs" / "transactions"
+EVERGREEN_DIR = VAULT_DIR / "10-Knowledge" / "Evergreen"
 
 
 class PipelineLogger:
@@ -234,7 +235,29 @@ class ArticleProcessor:
 
     SYSTEM_PROMPT = """你是专业的技术文章分析师，负责创建6维度深度解读。
 
-输出格式要求：
+## 关联知识处理（关键规则）
+
+处理 [[概念链接]] 时必须遵循以下优先级：
+
+**第1优先级 - 链接已存在的 Evergreen：**
+- 优先搜索并链接已存在的 Evergreen 概念
+- 例如：已有 `DCF-Valuation.md`，则使用 `[[DCF-Valuation]]`
+
+**第2优先级 - 合并到相似概念：**
+- 如果新概念与现有概念语义相近，合并链接到现有概念
+- 例如：没有 `折现率.md` 但有 `WACC.md`，可考虑合并或明确区分
+
+**第3优先级 - 创建新的 Evergreen（最后手段）：**
+- 只有当概念完全新且无相似时才创建
+- 创建格式：在关联知识部分末尾，用以下格式声明
+
+```evergreen
+name: 概念名（kebab-case）
+title: 显示标题
+definition: 一句话定义（中文，保留技术术语英文）
+```
+
+## 输出格式要求：
 1. YAML frontmatter必须包含：title, source, author, date, type, tags, status
 2. 6个标准维度：
    - 一句话定义：核心概念的精准概括
@@ -242,12 +265,13 @@ class ArticleProcessor:
    - 重要细节：至少3个关键技术点/数据/案例
    - 架构图/流程图：如有技术架构，用ASCII图表展示
    - 行动建议：至少2条可落地的具体建议
-   - 关联知识：相关概念的双向链接[[...]]
+   - 关联知识：[[已存在的概念]] + ```evergreen 块（如需创建新概念）
 
 质量规则：
 - 不确定的信息标注"原文未说明"，禁止编造
 - 技术术语保持英文（如MCP Protocol, function calling）
 - 使用中文撰写，但保留技术术语原文
+- 关联知识中的概念名用 kebab-case（如 DCF-Valuation）
 """
 
     def __init__(self, llm_client: LiteLLMClient, logger: PipelineLogger):
@@ -307,7 +331,10 @@ class ArticleProcessor:
 4. 重要细节（至少3个）
 5. 架构图/流程图（如有）
 6. 行动建议（至少2条）
-7. 关联知识（[[...]]格式）"""
+7. 关联知识：
+   - 只使用已存在的 Evergreen 概念 [[Existing-Concept]]
+   - 如需创建新概念，在末尾用 ```evergreen 块声明
+   - 概念名用 kebab-case（如 DCF-Valuation）"""
 
         content_result, metadata = self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
@@ -316,6 +343,83 @@ class ArticleProcessor:
         )
 
         return content_result, metadata, classification
+
+    def create_embedded_evergreens(self, content: str, output_dir: Path) -> list[str]:
+        """
+        从 ```evergreen 块提取并创建 Evergreen 文件
+
+        格式：
+        ```evergreen
+        name: concept-name
+        title: 显示标题
+        definition: 一句话定义
+        ```
+        """
+        created = []
+        evergreen_blocks = re.findall(
+            r'```evergreen\s*\n(.*?)\n```',
+            content,
+            re.DOTALL
+        )
+
+        for block in evergreen_blocks:
+            try:
+                lines = block.strip().split('\n')
+                data = {}
+                for line in lines:
+                    if ':' in line:
+                        key, val = line.split(':', 1)
+                        data[key.strip()] = val.strip()
+
+                name = data.get('name', '')
+                title = data.get('title', data.get('name', ''))
+                definition = data.get('definition', '')
+
+                if not name or not definition:
+                    continue
+
+                # Kebab-case 确保
+                name = name.strip().replace(' ', '-')
+
+                # 检查是否已存在
+                evergreen_path = Path(EVERGREEN_DIR) / f"{name}.md"
+                if evergreen_path.exists():
+                    continue
+
+                # 创建 Evergreen
+                frontmatter = f'''---
+title: "{title}"
+type: evergreen
+date: {datetime.now().strftime("%Y-%m-%d")}
+tags: [evergreen, auto-created]
+aliases: []
+---
+
+# {title}
+
+> **一句话定义**: {definition}
+
+---
+
+*自动创建于 {datetime.now().strftime("%Y-%m-%d")}*
+'''
+                evergreen_path.parent.mkdir(parents=True, exist_ok=True)
+                evergreen_path.write_text(frontmatter, encoding='utf-8')
+                created.append(name)
+
+                # 移除 ```evergreen 块从内容中（可选，保留给后续处理）
+                content = re.sub(
+                    rf'```evergreen\s*\n{re.escape(block)}\n```',
+                    f'[[{name}]]',
+                    content,
+                    flags=re.DOTALL
+                )
+
+            except Exception as e:
+                print(f"Warning: failed to create evergreen from block: {e}")
+                continue
+
+        return created
 
 
 class AutoArticleProcessor:
@@ -419,6 +523,16 @@ class AutoArticleProcessor:
                 content=file_data["body"],
                 date=file_data["date"]
             )
+
+            # Step 3: 从 ```evergreen 块创建新的 Evergreen 文件
+            new_evergreens = self.article_processor.create_embedded_evergreens(
+                interpretation, output_dir=None
+            )
+            if new_evergreens:
+                self.logger.log("evergreens_created", {
+                    "file": str(file_path.name),
+                    "concepts": new_evergreens
+                })
 
             # 确定输出路径
             output_dir = OUTPUT_DIRS.get(classification, OUTPUT_DIRS["ai"])

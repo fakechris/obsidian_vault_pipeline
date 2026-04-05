@@ -2,22 +2,26 @@
 ovp-lint - 知识健康检查
 
 基于 Karpathy LLM Wiki 模式的 Lint 工具：
-- 孤儿页面检测（无入链）
-- 缺失概念检测（提及但未创建）
-- 矛盾检测（跨页面不一致）
-- 过时页面检测（长期未更新）
-- 断裂链接检测
+- L1: 事务状态检查（未完成事务）
+- L2: 孤儿页面检测（无入链的 Evergreen，未链接到 MOC）
+- L2: 断裂链接检测
+- L3: Ingestion 层检查（Clippings 未处理、Pinboard 待处理、重复文件、Manifest）
+- L4: Areas 层完整性（未索引的深度解读）
+- L4: Git 提交完整性
+- L5: Archive 层检查
 
 Usage:
     ovp-lint --check           # 检查并报告
     ovp-lint --fix             # 自动修复低风险问题
     ovp-lint --interactive     # 交互式修复
+    ovp-lint --wigs            # 启用 WIGS 5层架构检查
 """
 
 import os
 import re
 import json
 import argparse
+import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
@@ -28,8 +32,9 @@ from collections import defaultdict
 @dataclass
 class LintIssue:
     """Lint 问题"""
+    layer: str          # L1-L5 (WIGS layer)
     level: str          # error, warning, info
-    type: str           # orphan, missing-concept, stale, broken-link, contradiction
+    type: str           # orphan, missing-concept, stale, broken-link, etc.
     file: str
     message: str
     suggestion: str
@@ -45,9 +50,18 @@ class KnowledgeLinter:
     STALE_CONTENT = "stale"          # 过时内容
     BROKEN_LINK = "broken-link"       # 断裂链接
     CONTRADICTION = "contradiction"   # 矛盾
+    INCOMPLETE_TXN = "incomplete-txn"  # 未完成事务
+    UNLINKED_EVERGREEN = "unlinked-evergreen"  # 未链接到MOC的Evergreen
+    CLIPPINGS_UNPROCESSED = "clippings-unprocessed"  # Clippings未迁移
+    PINBOARD_PENDING = "pinboard-pending"  # Pinboard待处理
+    DUPLICATE_FILES = "duplicate"  # 重复文件
+    UNINDEXED_DEEP = "unindexed-deep"  # 未索引的深度解读
+    GIT_UNCOMMITTED = "git-uncommitted"  # Git未提交
+    ARCHIVE_OLD = "archive-old"  # 需归档的旧文件
 
-    def __init__(self, vault_dir: Path):
+    def __init__(self, vault_dir: Path, wigs_mode: bool = True):
         self.vault_dir = Path(vault_dir)
+        self.wigs_mode = wigs_mode
         self.issues: List[LintIssue] = []
         self.stats = defaultdict(int)
 
@@ -55,11 +69,18 @@ class KnowledgeLinter:
         self.evergreen_dir = self.vault_dir / "10-Knowledge" / "Evergreen"
         self.areas_dir = self.vault_dir / "20-Areas"
         self.moc_dir = self.vault_dir / "10-Knowledge" / "Atlas"
+        self.transactions_dir = self.vault_dir / "60-Logs" / "transactions"
+        self.clippings_dir = self.vault_dir / "Clippings"
+        self.inbox_dir = self.vault_dir / "50-Inbox"
+        self.raw_dir = self.inbox_dir / "01-Raw"
+        self.archive_dir = self.vault_dir / "70-Archive"
+        self.manifest_file = self.inbox_dir / ".manifest.json"
 
         # 缓存
         self.all_links: Dict[str, Set[str]] = {}      # 文件 -> 出链
         self.all_backlinks: Dict[str, Set[str]] = {}    # 文件 -> 入链
         self.all_files: Set[str] = set()
+        self.moc_links: Set[str] = set()  # 所有MOC中的链接
 
     def log(self, message: str):
         """打印日志"""
@@ -120,18 +141,124 @@ class KnowledgeLinter:
 
     def _resolve_link(self, link: str) -> Optional[str]:
         """解析链接到实际文件路径"""
-        # 尝试多种可能的路径
-        candidates = [
-            f"10-Knowledge/Evergreen/{link}.md",
-            f"20-Areas/{link}.md",
-            f"{link}.md",
-        ]
+        # 清理链接（移除路径分隔符，只保留文件名部分用于匹配）
+        link_clean = link.strip()
 
-        for c in candidates:
-            if c in self.all_files:
-                return c
+        # 处理相对路径 like ../../../10-Knowledge/Evergreen/Claude
+        if '/' in link_clean:
+            # 提取最后一部分作为文件名
+            link_clean = link_clean.split('/')[-1]
+
+        # 移除 .md 扩展名（如果有）
+        if link_clean.endswith('.md'):
+            link_clean = link_clean[:-3]
+
+        # 精确匹配: 文件名完全一致
+        for f in self.all_files:
+            # 取文件名（不含路径和扩展名）
+            f_stem = Path(f).stem
+            if f_stem == link_clean or f == link_clean:
+                return f
+
+        # 前缀匹配: link 是文件名开头 (处理日期前缀的文件)
+        # 例如 link="2026-01-30_Polymarket" 匹配 "2026-01-30_Polymarket_深度解读"
+        for f in self.all_files:
+            f_stem = Path(f).stem
+            if f_stem.startswith(link_clean) and len(link_clean) > 10:
+                return f
+
+        # 模糊匹配: link 是文件名的子串
+        for f in self.all_files:
+            f_stem = Path(f).stem
+            if link_clean in f_stem and len(link_clean) > 5:
+                return f
 
         return None
+
+    # =============================================================================
+    # WIGS Layer 1: Transaction State
+    # =============================================================================
+
+    def check_incomplete_transactions(self):
+        """L1: 检查未完成事务"""
+        self.log("检查 L1: 未完成事务...")
+
+        if not self.transactions_dir.exists():
+            self.issues.append(LintIssue(
+                layer="L1",
+                level="warning",
+                type=self.INCOMPLETE_TXN,
+                file=str(self.transactions_dir),
+                message="事务目录不存在",
+                suggestion="这是正常的如果还没有运行过事务",
+                auto_fixable=False
+            ))
+            return
+
+        for txn_file in sorted(self.transactions_dir.glob("*.json")):
+            if txn_file.stem == "archive":
+                continue
+            try:
+                txn_data = json.loads(txn_file.read_text())
+                if txn_data.get("status") == "in_progress":
+                    self.issues.append(LintIssue(
+                        layer="L1",
+                        level="error",
+                        type=self.INCOMPLETE_TXN,
+                        file=str(txn_file.relative_to(self.vault_dir)),
+                        message=f"未完成事务: {txn_data.get('id')} | {txn_data.get('type')} | {txn_data.get('description')}",
+                        suggestion=f"运行: txn.sh complete {txn_data.get('id')} 或 txn.sh fail {txn_data.get('id')} <reason>",
+                        auto_fixable=False
+                    ))
+                    self.stats["incomplete_txn"] += 1
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+    # =============================================================================
+    # WIGS Layer 2: Knowledge Graph
+    # =============================================================================
+
+    def _collect_moc_links(self):
+        """收集所有 MOC 文件中的链接"""
+        if self.moc_links:
+            return  # Already collected
+
+        for moc_pattern in ["**/MOC.md", "**/*MOC*.md"]:
+            for moc_file in self.vault_dir.glob(moc_pattern):
+                if ".git" in str(moc_file):
+                    continue
+                try:
+                    content = moc_file.read_text(encoding='utf-8', errors='ignore')
+                    # 匹配各种 wiki-link 格式
+                    for match in re.finditer(r'\[\[([^\]|]+)(?:\|[^\]]*)?\]\]', content):
+                        self.moc_links.add(match.group(1).strip())
+                except Exception:
+                    continue
+
+    def check_unlinked_evergreen(self):
+        """L2: 检查未链接到 MOC 的 Evergreen"""
+        self.log("检查 L2: 未链接到 MOC 的 Evergreen...")
+
+        if not self.evergreen_dir.exists():
+            return
+
+        self._collect_moc_links()
+
+        for evergreen_file in self.evergreen_dir.glob("*.md"):
+            if evergreen_file.stem.startswith("_"):
+                continue  # Skip templates
+
+            if evergreen_file.stem not in self.moc_links:
+                self.issues.append(LintIssue(
+                    layer="L2",
+                    level="warning",
+                    type=self.UNLINKED_EVERGREEN,
+                    file=str(evergreen_file.relative_to(self.vault_dir)),
+                    message=f"Evergreen 未链接到任何 MOC: {evergreen_file.stem}",
+                    suggestion=f"在相关 MOC 中添加 [[{evergreen_file.stem}]] 链接",
+                    auto_fixable=False
+                ))
+                self.stats["unlinked_evergreen"] += 1
 
     def check_orphan_pages(self):
         """L1: 检查孤儿页面（无入链的 Evergreen）"""
@@ -152,6 +279,7 @@ class KnowledgeLinter:
                     continue
 
                 issue = LintIssue(
+                    layer="L2",
                     level="warning",
                     type=self.ORPHAN_PAGE,
                     file=file_path,
@@ -194,6 +322,7 @@ class KnowledgeLinter:
                     referrers.append(file_path)
 
             issue = LintIssue(
+                layer="L2",
                 level="warning",
                 type=self.MISSING_CONCEPT,
                 file=referrers[0] if referrers else "unknown",
@@ -227,6 +356,7 @@ class KnowledgeLinter:
                         file_date = datetime.strptime(date_match.group(1), "%Y-%m-%d")
                         if file_date < cutoff:
                             issue = LintIssue(
+                                layer="L2",
                                 level="info",
                                 type=self.STALE_CONTENT,
                                 file=file_path,
@@ -252,6 +382,7 @@ class KnowledgeLinter:
                 target = self._resolve_link(link)
                 if target is None:
                     issue = LintIssue(
+                        layer="L2",
                         level="error",
                         type=self.BROKEN_LINK,
                         file=file_path,
@@ -262,9 +393,196 @@ class KnowledgeLinter:
                     self.issues.append(issue)
                     self.stats["broken-link"] += 1
 
+    # =============================================================================
+    # WIGS Layer 3: Ingestion Pipeline
+    # =============================================================================
+
+    def check_ingestion_layer(self):
+        """L3: 检查 Ingestion 层一致性"""
+        self.log("检查 L3: Ingestion Pipeline...")
+
+        # 3.1: Clippings 未迁移
+        if self.clippings_dir.exists():
+            clippings_md = list(self.clippings_dir.glob("*.md"))
+            if clippings_md:
+                for f in clippings_md[:5]:  # Show first 5
+                    self.issues.append(LintIssue(
+                        layer="L3",
+                        level="error",
+                        type=self.CLIPPINGS_UNPROCESSED,
+                        file=str(f.relative_to(self.vault_dir)),
+                        message=f"Clippings 有未迁移文件: {f.name}",
+                        suggestion="运行: python3 clippings-processor.py 或手动迁移到 50-Inbox/01-Raw/",
+                        auto_fixable=False
+                    ))
+                if len(clippings_md) > 5:
+                    self.stats["clippings_unprocessed"] = len(clippings_md)
+                else:
+                    self.stats["clippings_unprocessed"] = len(clippings_md)
+
+        # 3.2: 重复文件检查（带日期前缀和不带）
+        if self.raw_dir.exists():
+            for file_path in self.raw_dir.glob("*.md"):
+                if file_path.stem.startswith("20") or "_深度解读" in file_path.name:
+                    continue  # Skip dated files
+                # Check if a dated version exists
+                # Pattern: YYYY-MM-DD_filename.md
+                date_pattern = f"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_{file_path.name}"
+                dated_versions = list(self.raw_dir.glob(date_pattern))
+                if dated_versions:
+                    self.issues.append(LintIssue(
+                        layer="L3",
+                        level="warning",
+                        type=self.DUPLICATE_FILES,
+                        file=str(file_path.relative_to(self.vault_dir)),
+                        message=f"发现重复文件（带/不带日期前缀）: {file_path.name}",
+                        suggestion="确认后删除旧版本",
+                        auto_fixable=False
+                    ))
+                    self.stats["duplicate_files"] += 1
+
+        # 3.3: Manifest 检查
+        if not self.manifest_file.exists():
+            self.issues.append(LintIssue(
+                layer="L3",
+                level="error",
+                type="missing-manifest",
+                file=str(self.manifest_file.relative_to(self.vault_dir)),
+                message="Manifest 文件不存在",
+                suggestion="这是正常的如果还没有运行过处理流程",
+                auto_fixable=False
+            ))
+
+    # =============================================================================
+    # WIGS Layer 4: Areas/Projects Layer
+    # =============================================================================
+
+    def check_unindexed_deep_interpretations(self):
+        """L4: 检查 Areas 层未索引的深度解读"""
+        self.log("检查 L4: Areas 层未索引的深度解读...")
+
+        areas = ["AI-Research", "Tools", "Investing", "Programming"]
+        total_unindexed = 0
+
+        for area in areas:
+            topics_dir = self.vault_dir / "20-Areas" / area / "Topics"
+            if not topics_dir.exists():
+                continue
+
+            # Find all MOC files in this area
+            moc_files = list(topics_dir.glob("*MOC*.md")) + list(topics_dir.glob("MOC.md"))
+            moc_content = ""
+            for moc in moc_files:
+                try:
+                    moc_content += moc.read_text(encoding='utf-8', errors='ignore')
+                except Exception:
+                    continue
+
+            # Check each deep interpretation file
+            for di_file in topics_dir.glob("*_深度解读.md"):
+                stem = di_file.stem
+                if stem not in moc_content:
+                    self.issues.append(LintIssue(
+                        layer="L4",
+                        level="warning",
+                        type=self.UNINDEXED_DEEP,
+                        file=str(di_file.relative_to(self.vault_dir)),
+                        message=f"深度解读未在 {area} MOC 中索引: {stem}",
+                        suggestion=f"在 MOC 中添加 [[{stem}]] 链接",
+                        auto_fixable=False
+                    ))
+                    total_unindexed += 1
+
+        self.stats["unindexed_deep"] = total_unindexed
+
+    def check_git_integrity(self):
+        """L4: 检查 Git 提交完整性"""
+        self.log("检查 L4: Git 提交完整性...")
+
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.vault_dir,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.stdout.strip():
+                # Has uncommitted changes
+                for line in result.stdout.strip().split("\n")[:5]:
+                    self.issues.append(LintIssue(
+                        layer="L4",
+                        level="warning",
+                        type=self.GIT_UNCOMMITTED,
+                        file=line,
+                        message="存在未提交的修改",
+                        suggestion="运行: git add . && git commit -m '描述'",
+                        auto_fixable=False
+                    ))
+                self.stats["git_uncommitted"] = len(result.stdout.strip().split("\n"))
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass  # Not a git repo or git not available
+
+    # =============================================================================
+    # WIGS Layer 5: Archive Layer
+    # =============================================================================
+
+    def check_archive_layer(self):
+        """L5: 检查归档层"""
+        self.log("检查 L5: Archive 层...")
+
+        if not self.archive_dir.exists():
+            self.issues.append(LintIssue(
+                layer="L5",
+                level="info",
+                type="no-archive",
+                file=str(self.archive_dir.relative_to(self.vault_dir)),
+                message="归档目录不存在",
+                suggestion="这是正常的",
+                auto_fixable=False
+            ))
+            return
+
+        archive_count = len(list(self.archive_dir.rglob("*.*")))
+        self.log(f"Archive 包含 {archive_count} 个文件")
+
+        # Check for files older than 1 year
+        cutoff = datetime.now() - timedelta(days=365)
+        old_files = []
+        for f in self.archive_dir.rglob("*"):
+            if f.is_file():
+                try:
+                    mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                    if mtime < cutoff:
+                        old_files.append(f)
+                except Exception:
+                    continue
+
+        if old_files:
+            self.issues.append(LintIssue(
+                layer="L5",
+                level="info",
+                type=self.ARCHIVE_OLD,
+                file=str(self.archive_dir.relative_to(self.vault_dir)),
+                message=f"Archive 中有 {len(old_files)} 个文件超过1年未访问",
+                suggestion="考虑迁移到冷存储",
+                auto_fixable=False
+            ))
+            self.stats["archive_old"] = len(old_files)
+
     def run_all_checks(self, stale_days: int = 90):
         """运行所有检查"""
         self.scan()
+
+        if self.wigs_mode:
+            # WIGS 5层架构检查
+            self.check_incomplete_transactions()
+            self.check_unlinked_evergreen()
+            self.check_ingestion_layer()
+            self.check_unindexed_deep_interpretations()
+            self.check_git_integrity()
+            self.check_archive_layer()
+
         self.check_orphan_pages()
         self.check_missing_concepts()
         self.check_stale_content(days=stale_days)
@@ -274,7 +592,10 @@ class KnowledgeLinter:
         """生成检查报告"""
         lines = []
         lines.append("=" * 60)
-        lines.append("知识健康检查报告")
+        if self.wigs_mode:
+            lines.append("WIGS 知识健康检查报告 (5层架构)")
+        else:
+            lines.append("知识健康检查报告")
         lines.append("=" * 60)
         lines.append("")
 
@@ -282,9 +603,36 @@ class KnowledgeLinter:
         lines.append("📊 统计")
         lines.append(f"  总文件数: {len(self.all_files)}")
         lines.append(f"  问题总数: {len(self.issues)}")
+        if self.wigs_mode:
+            lines.append("  模式: WIGS 5层架构检查")
         lines.append("")
 
-        # 按类型分组
+        # 按层级分组
+        if self.wigs_mode:
+            by_layer = defaultdict(list)
+            for issue in self.issues:
+                by_layer[issue.layer].append(issue)
+
+            for layer in sorted(by_layer.keys()):
+                layer_issues = by_layer[layer]
+                layer_errors = [i for i in layer_issues if i.level == "error"]
+                layer_warnings = [i for i in layer_issues if i.level == "warning"]
+
+                if layer_errors or layer_warnings:
+                    lines.append(f"{layer} 层:")
+                    if layer_errors:
+                        lines.append(f"  ❌ 错误 ({len(layer_errors)})")
+                        for issue in layer_errors[:10]:
+                            lines.append(f"     [{issue.type}] {issue.file}")
+                            lines.append(f"     → {issue.message}")
+                    if layer_warnings:
+                        lines.append(f"  ⚠️  警告 ({len(layer_warnings)})")
+                        for issue in layer_warnings[:10]:
+                            lines.append(f"     [{issue.type}] {issue.file}")
+                            lines.append(f"     → {issue.message}")
+                    lines.append("")
+
+        # 按类型分组（Legacy 模式）
         by_level = defaultdict(list)
         for issue in self.issues:
             by_level[issue.level].append(issue)
@@ -395,7 +743,7 @@ aliases: []
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ovp-lint: 知识健康检查 (Karpathy LLM Wiki Pattern)"
+        description="ovp-lint: 知识健康检查 (Karpathy LLM Wiki Pattern + WIGS)"
     )
     parser.add_argument(
         "--vault-dir",
@@ -425,6 +773,17 @@ def main():
         default=None,
         help="导出 JSON 报告路径"
     )
+    parser.add_argument(
+        "--wigs",
+        action="store_true",
+        default=True,
+        help="启用 WIGS 5层架构检查 (默认开启)"
+    )
+    parser.add_argument(
+        "--no-wigs",
+        action="store_true",
+        help="禁用 WIGS 5层架构检查"
+    )
 
     args = parser.parse_args()
 
@@ -436,7 +795,8 @@ def main():
         print("提示: 请在 Vault 目录下运行，或使用 --vault-dir 指定")
         return 1
 
-    linter = KnowledgeLinter(vault_dir)
+    wigs_mode = not args.no_wigs
+    linter = KnowledgeLinter(vault_dir, wigs_mode=wigs_mode)
     linter.run_all_checks(stale_days=args.stale_days)
 
     # 自动修复
