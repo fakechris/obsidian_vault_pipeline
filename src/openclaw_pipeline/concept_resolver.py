@@ -442,7 +442,7 @@ class ConceptResolver:
                 action="link_existing",
                 slug=best_entry.slug,
                 display=mention.surface,
-                confidence=best_score * 0.8,
+                confidence=best_score,
             )
 
         # Low confidence - create candidate

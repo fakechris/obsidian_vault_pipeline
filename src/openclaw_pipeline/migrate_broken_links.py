@@ -217,7 +217,7 @@ class BrokenLinkResolver:
                     action="link_existing",
                     slug=best_entry.slug,
                     display=surface,
-                    confidence=best_score * 0.8,
+                    confidence=best_score,
                     occurrences=mention.occurrences,
                 )
 
