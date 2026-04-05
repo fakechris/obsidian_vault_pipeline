@@ -82,6 +82,9 @@ ovp-query = "openclaw_pipeline.query_tool:main"
 ovp-repair = "openclaw_pipeline.repair:main"
 ovp-query-to-wiki = "openclaw_pipeline.query_to_wiki:main"
 ovp-batch-evergreen = "openclaw_pipeline.batch_evergreen:main"
+ovp-rebuild-registry = "openclaw_pipeline.rebuild_registry:main"
+ovp-migrate-links = "openclaw_pipeline.migrate_broken_links:main"
+ovp-promote-candidates = "openclaw_pipeline.promote_candidates:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]
