@@ -78,13 +78,51 @@ class PipelineLogger:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+# 与spec-orch保持一致的环境变量回退机制
+_API_KEY_FALLBACKS = (
+    "AUTO_VAULT_API_KEY",
+    "SPEC_ORCH_LLM_API_KEY",
+    "MINIMAX_API_KEY",
+    "MINIMAX_CN_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+)
+
+_API_BASE_FALLBACKS = (
+    "AUTO_VAULT_API_BASE",
+    "SPEC_ORCH_LLM_API_BASE",
+    "MINIMAX_ANTHROPIC_BASE_URL",
+    "ANTHROPIC_BASE_URL",
+)
+
+
+def _resolve_api_key(api_key: str | None = None) -> str | None:
+    if api_key:
+        return api_key
+    for env_name in _API_KEY_FALLBACKS:
+        value = os.environ.get(env_name)
+        if value:
+            return value
+    return None
+
+
+def _resolve_api_base(api_base: str | None = None) -> str | None:
+    if api_base:
+        return api_base
+    for env_name in _API_BASE_FALLBACKS:
+        value = os.environ.get(env_name)
+        if value:
+            return value
+    return None
+
+
 class LiteLLMClient:
     """LiteLLM客户端"""
 
     def __init__(
         self,
         *,
-        model: str = "MiniMax-M2.5",
+        model: str = "MiniMax-M2.7-highspeed",
         api_type: str = "anthropic",
         api_key: str | None = None,
         api_base: str | None = None,
@@ -95,8 +133,8 @@ class LiteLLMClient:
             self.model = model
         else:
             self.model = f"{api_type}/{model}"
-        self._api_key = api_key or os.environ.get("AUTO_VAULT_API_KEY")
-        self.api_base = api_base or os.environ.get("AUTO_VAULT_API_BASE")
+        self._api_key = _resolve_api_key(api_key)
+        self.api_base = _resolve_api_base(api_base)
         self.temperature = temperature
 
     def generate(self, system_prompt: str, user_prompt: str, max_tokens: int = 2000) -> str:
@@ -254,7 +292,7 @@ class BatchQualityChecker:
         llm_client = LiteLLMClient(
             api_key=api_key,
             api_base=api_base,
-            model="MiniMax-M2.5",
+            model="MiniMax-M2.7-highspeed",
             api_type="anthropic",
             temperature=0.1
         )
