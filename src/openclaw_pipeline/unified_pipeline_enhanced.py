@@ -85,11 +85,25 @@ def _load_env(vault_dir: Path | None = None) -> bool:
 
 def _check_api_key() -> tuple[bool, str]:
     """检查API Key是否配置，返回(是否有效, 提示信息)"""
-    key = os.environ.get("AUTO_VAULT_API_KEY", "")
-    if not key or key == "your_key_here":
-        return False, "AUTO_VAULT_API_KEY not configured"
+    # API密钥回退链
+    key_fallbacks = (
+        "AUTO_VAULT_API_KEY",
+        "SPEC_ORCH_LLM_API_KEY",
+        "MINIMAX_API_KEY",
+        "MINIMAX_CN_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+    )
+    key = None
+    for env_name in key_fallbacks:
+        value = os.environ.get(env_name, "")
+        if value and value not in ("", "your_key_here", "test_key_for_testing_only"):
+            key = value
+            break
+    if not key:
+        return False, "No valid API key found in environment"
     if len(key) < 10:  # 基本验证
-        return False, "AUTO_VAULT_API_KEY looks invalid (too short)"
+        return False, "API key looks invalid (too short)"
     return True, "OK"
 
 
