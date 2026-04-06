@@ -101,7 +101,7 @@ def init_env_file() -> int:
 # MiniMax (推荐，成本较低，中文好)
 AUTO_VAULT_API_KEY=your_key_here
 AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
-AUTO_VAULT_MODEL=minimax/MiniMax-M2.5
+AUTO_VAULT_MODEL=minimax/MiniMax-M2.7-highspeed
 
 # 或 Anthropic (官方)
 # AUTO_VAULT_API_KEY=sk-ant-xxxxx
@@ -148,7 +148,7 @@ PINBOARD_TOKEN=your_username:your_token
 
     if choice == "1":
         base_url = "https://api.minimaxi.com/anthropic"
-        model = "minimax/MiniMax-M2.5"
+        model = "minimax/MiniMax-M2.7-highspeed"
     elif choice == "2":
         base_url = "https://api.anthropic.com"
         model = "anthropic/claude-3-5-sonnet-20241022"

@@ -149,7 +149,7 @@ class LiteLLMClient:
     def __init__(
         self,
         *,
-        model: str = "MiniMax-M2.5",
+        model: str = "MiniMax-M2.7-highspeed",
         api_type: str = "anthropic",
         api_key: str | None = None,
         api_base: str | None = None,
