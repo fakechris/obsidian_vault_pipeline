@@ -422,10 +422,17 @@ def main():
     print(f"\n{'='*60}")
     print(f"QUALITY CHECK COMPLETE")
     print(f"{'='*60}")
-    print(f"Checked: {len(results)} files")
-    print(f"Qualified: {sum(1 for r in results if r.get('is_qualified', False))}")
-    print(f"Failed: {sum(1 for r in results if not r.get('is_qualified', False))}")
+    checked = len(results)
+    qualified = sum(1 for r in results if r.get("is_qualified", False))
+    failed = checked - qualified
+    print(f"Checked: {checked} files")
+    print(f"Qualified: {qualified}")
+    print(f"Failed: {failed}")
     print(f"Report saved: {report_file}")
+
+    # 输出 JSON 行供 pipeline 解析
+    import json
+    print(f"\n__QC_JSON__: {json.dumps({'checked': checked, 'qualified': qualified, 'failed': failed, 'report': str(report_file)})}")
 
     logger.log("quality_check_complete", {
         "files_checked": len(results),

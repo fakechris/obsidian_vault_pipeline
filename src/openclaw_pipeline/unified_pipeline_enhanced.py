@@ -641,6 +641,18 @@ class EnhancedPipeline:
 
         if result["success"]:
             print("✓ Quality check completed")
+            # 解析 JSON 输出
+            stdout = result.get("stdout", "")
+            for line in stdout.split("\n"):
+                if line.startswith("__QC_JSON__:"):
+                    import json
+                    try:
+                        qc_data = json.loads(line.split("__QC_JSON__:", 1)[1].strip())
+                        result["quality_checked"] = qc_data.get("checked", 0)
+                        result["quality_qualified"] = qc_data.get("qualified", 0)
+                        result["quality_failed"] = qc_data.get("failed", 0)
+                    except:
+                        pass
         else:
             print(f"✗ Quality check failed: {result.get('error', 'Unknown error')}")
 
@@ -789,7 +801,39 @@ class EnhancedPipeline:
 
         for step, result in results.items():
             status = "✅ 成功" if result.get("success") else "❌ 失败"
-            detail = result.get("error", "") if not result.get("success") else "完成"
+            if result.get("success"):
+                # 显示实际产出数字
+                output = result.get("output", "完成")
+                # 尝试显示更详细的数字
+                if step == "pinboard":
+                    new_bm = result.get("new_bookmarks", 0)
+                    detail = f"新增书签: {new_bm}"
+                elif step == "clippings":
+                    migrated = result.get("migrated", 0)
+                    remaining = result.get("remaining", 0)
+                    detail = f"迁移: {migrated}, 待处理: {remaining}"
+                elif step == "articles":
+                    produced = result.get("produced", 0)
+                    total = result.get("total_interpretations", 0)
+                    detail = f"新增: {produced}, 累计: {total}"
+                elif step == "evergreen":
+                    produced = result.get("produced", 0)
+                    total = result.get("total_evergreen", 0)
+                    detail = f"新增: {produced}, 累计: {total}"
+                elif step == "moc":
+                    detail = "已更新"
+                elif step == "quality":
+                    checked = result.get("quality_checked", 0)
+                    qualified = result.get("quality_qualified", 0)
+                    failed = result.get("quality_failed", 0)
+                    if checked > 0:
+                        detail = f"检查: {checked}, 合格: {qualified}, 不合格: {failed}"
+                    else:
+                        detail = "检查完成"
+                else:
+                    detail = output
+            else:
+                detail = result.get("error", "未知错误")
             lines.append(f"| {step} | {status} | {detail} |")
 
         all_success = all(r.get("success") for r in results.values())
