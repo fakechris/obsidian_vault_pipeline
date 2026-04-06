@@ -28,6 +28,10 @@
 50-Inbox/.manifest.json
 50-Inbox/.pinboard_state.json
 
+# Autopilot and migration
+60-Logs/autopilot.db
+60-Logs/migration-reports/
+
 # System files
 .DS_Store
 Thumbs.db
