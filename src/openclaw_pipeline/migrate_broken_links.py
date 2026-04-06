@@ -31,14 +31,6 @@ from typing import Any
 from .concept_registry import ConceptRegistry, ConceptEntry, STATUS_ACTIVE
 
 
-# Try to import litellm
-try:
-    import litellm
-    LITELLM_AVAILABLE = True
-except ImportError:
-    LITELLM_AVAILABLE = False
-
-
 # Constants
 MIN_AUTO_FIX_CONFIDENCE = 0.90
 REPORT_DIR = Path("60-Logs/migration-reports")
@@ -72,6 +64,7 @@ class ResolutionResult:
     proposed_slug: str = ""
     title: str = ""
     definition: str = ""
+    reason: str = ""
     occurrences: list[BrokenLinkOccurrence] = field(default_factory=list)
 
 
@@ -113,14 +106,18 @@ class BrokenLinkScanner:
         self.vault_dir = vault_dir
         self.registry = registry
         self._all_files: set[str] = set()
+        self._file_map: dict[str, Path] = {}  # stem -> Path
 
     def _build_file_index(self) -> None:
         """Build index of all markdown files in vault."""
         self._all_files = set()
+        self._file_map = {}
         for md_file in self.vault_dir.rglob("*.md"):
             rel = md_file.relative_to(self.vault_dir)
             self._all_files.add(rel.as_posix())
             self._all_files.add(rel.stem)
+            # Map stem to full path for fuzzy matching
+            self._file_map[rel.stem] = rel
             # Also add without extension at various depths
             for parent in rel.parents:
                 self._all_files.add(parent.as_posix())
@@ -148,6 +145,30 @@ class BrokenLinkScanner:
                 return False
 
         return True
+
+    def find_matching_file(self, surface: str) -> Path | None:
+        """Find a file matching the given surface (for path-like or fuzzy matches)."""
+        # Direct path match
+        if (self.vault_dir / surface).exists():
+            return Path(surface)
+
+        # Try normalized path
+        normalized = surface.replace('\\', '/')
+        if (self.vault_dir / normalized).exists():
+            return Path(normalized)
+
+        # Try relative path resolution
+        for base in ['', '10-Knowledge/Evergreen/', '20-Areas/', '40-Resources/']:
+            test_path = base + surface
+            if (self.vault_dir / test_path).exists():
+                return Path(test_path)
+
+        # Try to find by stem (fuzzy match for date-titled articles)
+        # e.g., "2026-03-25_Harness_engineering_leveraging_Codex" -> "2026-03-25_Harness_engineering_leveraging_Codex_深度解读.md"
+        if surface in self._file_map:
+            return self._file_map[surface]
+
+        return None
 
     def scan(self) -> list[UniqueBrokenMention]:
         """Scan all markdown files and find broken links."""
@@ -184,18 +205,97 @@ class BrokenLinkScanner:
 
 
 class BrokenLinkResolver:
-    """Resolve broken links using registry + LLM."""
+    """
+    Resolve broken links using registry.
 
-    def __init__(self, registry: ConceptRegistry, llm_client: Any = None):
+    约定目录方案 (Agreed Directory Convention):
+    - Wikilink 包含 `/` → 路径型引用，跳过 registry，只验证文件存在
+    - Wikilink 不含 `/` → slug 型引用，通过 registry 解析
+
+    Resolution pipeline for slug-based wikilinks (no `/`):
+    1. Registry exact/alias match -> link_existing
+    2. Registry search match (score >= 0.5) -> link_existing
+    3. Otherwise -> create_candidate
+
+    Path-based wikilinks are left untouched (keep_as_path).
+    """
+
+    def __init__(self, registry: ConceptRegistry, scanner: "BrokenLinkScanner | None" = None,
+                 llm_client: Any = None):
         self.registry = registry
+        self.scanner = scanner
         self.llm = llm_client
 
     def resolve_unique_mention(self, mention: UniqueBrokenMention) -> ResolutionResult:
         """Resolve a unique broken mention to a decision."""
         surface = mention.surface
-        contexts = mention.contexts[:3]  # Limit to 3 contexts
 
-        # First try exact/alias match in registry
+        # Step 0: 判断是路径型还是 slug 型
+        if '/' in surface:
+            return self._resolve_path_based(surface, mention)
+        else:
+            return self._resolve_slug_based(surface, mention)
+
+    def _resolve_path_based(self, surface: str, mention: UniqueBrokenMention) -> ResolutionResult:
+        """
+        路径型 wikilink 处理：
+        - 尝试找对应文件（直接路径、规范化路径、.md后缀）
+        - 找到 → keep_as_path（不修改，保留文章链接）
+        - 找不到 → no_link（真正破碎的路径引用）
+        """
+        # 规范化路径（去除 ../ 或 ./ 等）
+        normalized = self._normalize_path(surface)
+
+        # 尝试多种路径组合（按优先级排序）
+        path_attempts = [
+            # 原始
+            surface,
+            normalized,
+            # 加 .md 后缀
+            f"{normalized}.md",
+            f"{surface}.md",
+            # 目录形式
+            f"{normalized}/index.md",
+            f"{surface}/index.md",
+        ]
+
+        vault_dir = self.scanner.vault_dir if self.scanner else None
+        if not vault_dir:
+            return ResolutionResult(
+                surface=surface,
+                action="no_link",
+                confidence=1.0,
+                reason="no_scanner",
+                occurrences=mention.occurrences,
+            )
+
+        for path_attempt in path_attempts:
+            if (vault_dir / path_attempt).is_file():
+                return ResolutionResult(
+                    surface=surface,
+                    action="keep_as_path",
+                    confidence=1.0,
+                    reason="file_exists_path_reference",
+                    occurrences=mention.occurrences,
+                )
+
+        # 文件找不到 → no_link
+        return ResolutionResult(
+            surface=surface,
+            action="no_link",
+            confidence=1.0,
+            reason="broken_path_reference",
+            occurrences=mention.occurrences,
+        )
+
+    def _resolve_slug_based(self, surface: str, mention: UniqueBrokenMention) -> ResolutionResult:
+        """
+        Slug 型 wikilink 处理：
+        - Registry 精确/别名匹配 → link_existing
+        - Registry 搜索匹配 (score >= 0.5) → link_existing
+        - 找不到 → create_candidate
+        """
+        # Step 1: Registry exact/alias match
         entry = self.registry.find_by_surface(surface)
         if entry and entry.status == STATUS_ACTIVE:
             return ResolutionResult(
@@ -207,7 +307,7 @@ class BrokenLinkResolver:
                 occurrences=mention.occurrences,
             )
 
-        # Search for similar concepts
+        # Step 2: Registry search match
         search_results = self.registry.search(surface, topk=10)
         if search_results:
             best_entry, best_score = search_results[0]
@@ -221,74 +321,30 @@ class BrokenLinkResolver:
                     occurrences=mention.occurrences,
                 )
 
-        # No good match - suggest candidate or no_link
-        # Use LLM if available for better judgment
-        if LITELLM_AVAILABLE and self.llm is not None:
-            try:
-                return self._resolve_via_llm(surface, contexts, mention.occurrences)
-            except Exception as e:
-                print(f"  Warning: LLM resolution failed for '{surface}': {e}")
+        # Step 3: No match -> create_candidate
+        return ResolutionResult(
+            surface=surface,
+            action="create_candidate",
+            proposed_slug=self._surface_to_slug(surface),
+            title=surface,
+            confidence=0.5,
+            reason="no_registry_match",
+            occurrences=mention.occurrences,
+        )
 
-        # Fallback: create candidate for reasonable-length surfaces
-        if len(surface) >= 3 and not any(
-            c in surface for c in ["http://", "https://", "file://"]
-        ):
-            return ResolutionResult(
-                surface=surface,
-                action="create_candidate",
-                proposed_slug=self._surface_to_slug(surface),
-                title=surface,
-                confidence=0.5,
-                occurrences=mention.occurrences,
-            )
-        else:
-            return ResolutionResult(
-                surface=surface,
-                action="no_link",
-                confidence=1.0,
-                occurrences=mention.occurrences,
-            )
-
-    def _resolve_via_llm(self, surface: str, contexts: list[str],
-                          occurrences: list[BrokenLinkOccurrence]) -> ResolutionResult:
-        """Use LLM to decide resolution."""
-        prompt = f"""你正在执行历史 wikilink 迁移。请对一个唯一 surface 的多条上下文做统一判断。
-
-Surface: {surface}
-Contexts:
-{chr(10).join(f'- {c}' for c in contexts)}
-
-请判断：
-- 如果这只是译名/缩写/旧称，合并到已有概念 (link_existing)
-- 如果这是新概念且有价值，创建候选 (create_candidate)
-- 如果这只是临时表述，没有长期链接价值，no_link
-
-只输出JSON：{{"action": "link_existing"|"create_candidate"|"no_link", "slug": "...", "confidence": 0.0}}
-"""
-
-        try:
-            response, _ = self.llm.generate(
-                system_prompt="你是一个概念链接决策专家。",
-                user_prompt=prompt,
-                max_tokens=500,
-            )
-
-            data = json.loads(response)
-            return ResolutionResult(
-                surface=surface,
-                action=data.get("action", "no_link"),
-                slug=data.get("slug", ""),
-                display=surface,
-                confidence=data.get("confidence", 0.5),
-                occurrences=occurrences,
-            )
-        except Exception:
-            return ResolutionResult(
-                surface=surface,
-                action="no_link",
-                confidence=0.0,
-                occurrences=occurrences,
-            )
+    def _normalize_path(self, surface: str) -> str:
+        """规范化路径：去除 ../ ./ 等"""
+        # 去除开头和结尾的 .././等
+        normalized = surface
+        # 去除 ../ 相对路径前缀
+        while normalized.startswith('../') or normalized.startswith('./'):
+            if normalized.startswith('../'):
+                normalized = normalized[3:]
+            elif normalized.startswith('./'):
+                normalized = normalized[2:]
+        # 去除结尾的 \ 或 /
+        normalized = normalized.rstrip('\\/')
+        return normalized
 
     def _surface_to_slug(self, surface: str) -> str:
         """Convert surface to kebab-case slug."""
@@ -395,11 +451,12 @@ def write_resolve_report(results: list[ResolutionResult], vault_dir: Path,
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     mode = "dry-run" if dry_run else "apply"
 
-    # Categorize by confidence
+    # Categorize by action
     auto_fix = [r for r in results if r.action == "link_existing" and r.confidence >= MIN_AUTO_FIX_CONFIDENCE]
-    review = [r for r in results if 0.7 <= r.confidence < MIN_AUTO_FIX_CONFIDENCE]
+    review = [r for r in results if r.action == "link_existing" and 0.7 <= r.confidence < MIN_AUTO_FIX_CONFIDENCE]
     candidates = [r for r in results if r.action == "create_candidate"]
     no_link = [r for r in results if r.action == "no_link"]
+    keep_as_path = [r for r in results if r.action == "keep_as_path"]
 
     # JSON report
     json_path = report_dir / f"resolution-report-{mode}-{timestamp}.json"
@@ -411,6 +468,7 @@ def write_resolve_report(results: list[ResolutionResult], vault_dir: Path,
             "review_count": len(review),
             "candidate_count": len(candidates),
             "no_link_count": len(no_link),
+            "keep_as_path_count": len(keep_as_path),
             "results": [
                 {
                     "surface": r.surface,
@@ -449,7 +507,8 @@ def write_resolve_report(results: list[ResolutionResult], vault_dir: Path,
     print(f"  Auto-fix (>= {MIN_AUTO_FIX_CONFIDENCE}): {len(auto_fix)}")
     print(f"  Review (0.7-0.9): {len(review)}")
     print(f"  Create candidate: {len(candidates)}")
-    print(f"  No link: {len(no_link)}")
+    print(f"  No link (broken path refs): {len(no_link)}")
+    print(f"  Keep as path (article links): {len(keep_as_path)}")
 
 
 def main():
@@ -488,7 +547,7 @@ def main():
 
         # Resolve
         print("Resolving...")
-        resolver = BrokenLinkResolver(registry)
+        resolver = BrokenLinkResolver(registry, scanner=scanner)
         results = []
         for i, mention in enumerate(mentions):
             if (i + 1) % 50 == 0:
