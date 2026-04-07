@@ -1,0 +1,651 @@
+from __future__ import annotations
+
+from array import array
+import hashlib
+from io import TextIOBase
+import json
+import math
+import re
+import sqlite3
+from pathlib import Path
+
+from .concept_registry import ConceptRegistry, ResolutionAction
+from .graph.frontmatter import FrontmatterParser, NoteMetadata
+from .graph.link_parser import LinkParser
+from .identity import canonicalize_note_id
+from .runtime import VaultLayout, resolve_vault_dir
+
+
+SCHEMA = """
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE pages_index (
+  slug TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  note_type TEXT NOT NULL,
+  path TEXT NOT NULL,
+  day_id TEXT NOT NULL,
+  frontmatter_json TEXT NOT NULL,
+  body TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE page_fts USING fts5(
+  slug UNINDEXED,
+  title,
+  body
+);
+
+CREATE TABLE page_links (
+  source_slug TEXT NOT NULL,
+  target_slug TEXT NOT NULL,
+  target_raw TEXT NOT NULL DEFAULT '',
+  link_type TEXT NOT NULL,
+  line_number INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX idx_page_links_source ON page_links(source_slug);
+CREATE INDEX idx_page_links_target ON page_links(target_slug);
+
+CREATE TABLE raw_data (
+  slug TEXT NOT NULL,
+  source_name TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  PRIMARY KEY (slug, source_name, source_path)
+);
+
+CREATE TABLE timeline_events (
+  slug TEXT NOT NULL,
+  event_date TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  heading TEXT NOT NULL DEFAULT '',
+  payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX idx_timeline_events_slug ON timeline_events(slug);
+CREATE INDEX idx_timeline_events_date ON timeline_events(event_date);
+
+CREATE TABLE audit_events (
+  source_log TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  slug TEXT NOT NULL DEFAULT '',
+  session_id TEXT NOT NULL DEFAULT '',
+  timestamp TEXT NOT NULL DEFAULT '',
+  payload_json TEXT NOT NULL
+);
+
+CREATE INDEX idx_audit_events_log ON audit_events(source_log);
+CREATE INDEX idx_audit_events_type ON audit_events(event_type);
+
+CREATE TABLE page_embeddings (
+  slug TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  section_title TEXT NOT NULL,
+  chunk_text TEXT NOT NULL,
+  embedding_blob BLOB NOT NULL,
+  embedding_model TEXT NOT NULL,
+  PRIMARY KEY (slug, chunk_index)
+);
+
+CREATE INDEX idx_page_embeddings_slug ON page_embeddings(slug);
+"""
+
+EMBEDDING_DIMENSIONS = 128
+EMBEDDING_MODEL = "local-hash-v1"
+
+
+def _split_frontmatter_body(content: str) -> str:
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) == 3:
+            return parts[2].lstrip("\n")
+    return content
+
+
+def _build_surface_map(metadata_items: list[NoteMetadata]) -> dict[str, str]:
+    surfaces: dict[str, str] = {}
+    for meta in metadata_items:
+        surfaces[canonicalize_note_id(meta.note_id)] = meta.note_id
+        surfaces[canonicalize_note_id(meta.title)] = meta.note_id
+        for alias in meta.aliases:
+            normalized = canonicalize_note_id(str(alias))
+            if normalized:
+                surfaces[normalized] = meta.note_id
+    return surfaces
+
+
+def _resolve_target_slug(raw_target: str, registry: ConceptRegistry, surface_map: dict[str, str]) -> str | None:
+    resolved = registry.resolve_mention(raw_target)
+    if resolved.action == ResolutionAction.LINK_EXISTING and resolved.entry:
+        return resolved.entry.slug
+
+    normalized = canonicalize_note_id(raw_target)
+    if normalized in surface_map:
+        return surface_map[normalized]
+    return None
+
+
+def _extract_timeline_events(meta: NoteMetadata, body: str) -> list[tuple[str, str, str, str, str]]:
+    events: list[tuple[str, str, str, str, str]] = []
+
+    if meta.day_id:
+        events.append(
+            (
+                meta.note_id,
+                meta.day_id,
+                "page_date",
+                "",
+                json.dumps({"path": meta.path, "title": meta.title}, ensure_ascii=False),
+            )
+        )
+
+    heading_date_pattern = re.compile(r"^#{2,3}\s+(\d{4}-\d{2}(?:-\d{2})?)\s*$")
+    for line in body.splitlines():
+        match = heading_date_pattern.match(line.strip())
+        if not match:
+            continue
+        event_date = match.group(1)
+        events.append(
+            (
+                meta.note_id,
+                event_date,
+                "heading_date",
+                line.strip().lstrip("#").strip(),
+                json.dumps({"path": meta.path, "title": meta.title}, ensure_ascii=False),
+            )
+        )
+    return events
+
+
+def _collect_raw_rows(layout: VaultLayout) -> list[tuple[str, str, str, str]]:
+    rows: list[tuple[str, str, str, str]] = []
+    if not layout.link_resolution_dir.exists():
+        return rows
+
+    for sidecar_path in sorted(layout.link_resolution_dir.glob("*.json")):
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        slug = canonicalize_note_id(payload.get("article") or sidecar_path.stem)
+        if not slug:
+            continue
+        rows.append(
+            (
+                slug,
+                "link_resolution",
+                json.dumps(payload, ensure_ascii=False),
+                str(sidecar_path),
+            )
+        )
+    return rows
+
+
+def _infer_audit_slug(payload: dict[str, object]) -> str:
+    slug = payload.get("slug")
+    if isinstance(slug, str):
+        return canonicalize_note_id(slug)
+
+    targets = payload.get("targets")
+    if isinstance(targets, list) and len(targets) == 1 and isinstance(targets[0], str):
+        return canonicalize_note_id(targets[0])
+    return ""
+
+
+def _collect_audit_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, str, str]]:
+    rows: list[tuple[str, str, str, str, str, str]] = []
+    log_specs = [
+        ("pipeline", layout.pipeline_log),
+        ("refine", layout.logs_dir / "refine-mutations.jsonl"),
+    ]
+    for source_log, path in log_specs:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            payload = json.loads(stripped)
+            rows.append(
+                (
+                    source_log,
+                    str(payload.get("event_type") or "unknown"),
+                    _infer_audit_slug(payload),
+                    str(payload.get("session_id") or ""),
+                    str(payload.get("timestamp") or ""),
+                    json.dumps(payload, ensure_ascii=False),
+                )
+            )
+    return rows
+
+
+def _chunk_page_body(body: str, fallback_title: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    current_title: str | None = None
+    current_lines: list[str] = []
+
+    for line in body.splitlines():
+        match = re.match(r"^##\s+(.+)$", line.strip())
+        if match:
+            if current_title is not None and "\n".join(current_lines).strip():
+                sections.append((current_title, "\n".join(current_lines).strip()))
+            current_title = match.group(1).strip()
+            current_lines = []
+            continue
+        if current_title is not None:
+            current_lines.append(line)
+
+    if current_title is not None and "\n".join(current_lines).strip():
+        sections.append((current_title, "\n".join(current_lines).strip()))
+
+    if sections:
+        return sections
+
+    normalized_body = body.strip()
+    if not normalized_body:
+        return []
+    return [(fallback_title, normalized_body)]
+
+
+def _tokenize_for_embedding(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _embed_text(text: str, dimensions: int = EMBEDDING_DIMENSIONS) -> bytes:
+    vector = [0.0] * dimensions
+    for token in _tokenize_for_embedding(text):
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+        bucket = int.from_bytes(digest[:4], "big") % dimensions
+        sign = 1.0 if digest[4] % 2 == 0 else -1.0
+        vector[bucket] += sign
+
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm > 0:
+        vector = [value / norm for value in vector]
+    return array("f", vector).tobytes()
+
+
+def _decode_embedding(blob: bytes) -> list[float]:
+    decoded = array("f")
+    decoded.frombytes(blob)
+    return list(decoded)
+
+
+def _dot_product(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right))
+
+
+def _initialize_database(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if db_path.exists():
+        db_path.unlink()
+    conn = sqlite3.connect(db_path)
+    conn.executescript(SCHEMA)
+    return conn
+
+
+def _ensure_knowledge_db(vault_dir: Path) -> tuple[Path, VaultLayout]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    if not layout.knowledge_db.exists():
+        rebuild_knowledge_index(resolved_vault)
+    return resolved_vault, layout
+
+
+def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    evergreen_dir = layout.evergreen_dir
+    parser = FrontmatterParser(resolved_vault)
+    link_parser = LinkParser(resolved_vault)
+    registry = ConceptRegistry(resolved_vault).load()
+
+    metadata_items = [
+        meta
+        for meta in parser.parse_directory(evergreen_dir, recursive=True)
+        if "_Candidates" not in Path(meta.path).parts
+    ]
+    surface_map = _build_surface_map(metadata_items)
+    known_slugs = {meta.note_id for meta in metadata_items}
+
+    with _initialize_database(layout.knowledge_db) as conn:
+        page_rows = []
+        timeline_rows = []
+        embedding_rows = []
+        for meta in metadata_items:
+            file_path = Path(meta.path)
+            body = _split_frontmatter_body(file_path.read_text(encoding="utf-8"))
+            page_rows.append(
+                (
+                    meta.note_id,
+                    meta.title,
+                    meta.note_type,
+                    str(file_path),
+                    meta.day_id,
+                    json.dumps(meta.to_dict(), ensure_ascii=False),
+                    body,
+                )
+            )
+            timeline_rows.extend(_extract_timeline_events(meta, body))
+            for chunk_index, (section_title, chunk_text) in enumerate(_chunk_page_body(body, meta.title)):
+                embedding_rows.append(
+                    (
+                        meta.note_id,
+                        chunk_index,
+                        section_title,
+                        chunk_text,
+                        _embed_text(f"{section_title}\n{chunk_text}"),
+                        EMBEDDING_MODEL,
+                    )
+                )
+
+        conn.executemany(
+            """
+            INSERT INTO pages_index (slug, title, note_type, path, day_id, frontmatter_json, body)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            page_rows,
+        )
+        conn.executemany(
+            "INSERT INTO page_fts (slug, title, body) VALUES (?, ?, ?)",
+            [(slug, title, body) for slug, title, _, _, _, _, body in page_rows],
+        )
+
+        link_rows = []
+        for file_path in sorted(evergreen_dir.rglob("*.md")):
+            if "_Candidates" in file_path.parts:
+                continue
+            for link in link_parser.parse_file(file_path):
+                target_slug = _resolve_target_slug(link.target_raw or link.target, registry, surface_map)
+                if not target_slug or target_slug not in known_slugs:
+                    continue
+                link_rows.append(
+                    (
+                        link.source,
+                        target_slug,
+                        link.target_raw,
+                        link.link_type,
+                        link.line_number,
+                    )
+                )
+
+        conn.executemany(
+            """
+            INSERT INTO page_links (source_slug, target_slug, target_raw, link_type, line_number)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            link_rows,
+        )
+
+        raw_rows = _collect_raw_rows(layout)
+        conn.executemany(
+            """
+            INSERT INTO raw_data (slug, source_name, payload_json, source_path)
+            VALUES (?, ?, ?, ?)
+            """,
+            raw_rows,
+        )
+
+        conn.executemany(
+            """
+            INSERT INTO timeline_events (slug, event_date, event_type, heading, payload_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            timeline_rows,
+        )
+
+        audit_rows = _collect_audit_rows(layout)
+        conn.executemany(
+            """
+            INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            audit_rows,
+        )
+        conn.executemany(
+            """
+            INSERT INTO page_embeddings (slug, chunk_index, section_title, chunk_text, embedding_blob, embedding_model)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            embedding_rows,
+        )
+        conn.commit()
+
+    return {
+        "db_path": str(layout.knowledge_db),
+        "pages_indexed": len(page_rows),
+        "links_indexed": len(link_rows),
+        "raw_records_indexed": len(raw_rows),
+        "timeline_events_indexed": len(timeline_rows),
+        "audit_events_indexed": len(audit_rows),
+        "embedding_chunks_indexed": len(embedding_rows),
+    }
+
+
+def query_knowledge_index(vault_dir: Path, query: str, limit: int = 5) -> list[dict[str, str | int | float]]:
+    _, layout = _ensure_knowledge_db(vault_dir)
+
+    query_vector = _decode_embedding(_embed_text(query))
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        rows = conn.execute(
+            """
+            SELECT slug, chunk_index, section_title, chunk_text, embedding_blob
+            FROM page_embeddings
+            """
+        ).fetchall()
+
+    scored = []
+    for slug, chunk_index, section_title, chunk_text, embedding_blob in rows:
+        score = _dot_product(query_vector, _decode_embedding(embedding_blob))
+        scored.append(
+            {
+                "slug": slug,
+                "chunk_index": chunk_index,
+                "section_title": section_title,
+                "chunk_text": chunk_text,
+                "score": score,
+            }
+        )
+    scored.sort(key=lambda item: item["score"], reverse=True)
+    return scored[:limit]
+
+
+def search_knowledge_index(vault_dir: Path, query: str, limit: int = 10) -> list[dict[str, str | float]]:
+    _, layout = _ensure_knowledge_db(vault_dir)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        matched_rows = conn.execute(
+            """
+            SELECT slug, title, bm25(page_fts) AS score
+            FROM page_fts
+            WHERE page_fts MATCH ?
+            ORDER BY score
+            LIMIT ?
+            """,
+            (query, limit),
+        ).fetchall()
+        matched_slugs = {row[0] for row in matched_rows}
+        remaining = max(limit - len(matched_rows), 0)
+        fallback_rows = []
+        if remaining:
+            if matched_slugs:
+                placeholders = ",".join("?" for _ in matched_slugs)
+                fallback_rows = conn.execute(
+                    f"""
+                    SELECT slug, title
+                    FROM pages_index
+                    WHERE slug NOT IN ({placeholders})
+                    ORDER BY title
+                    LIMIT ?
+                    """,
+                    (*matched_slugs, remaining),
+                ).fetchall()
+            else:
+                fallback_rows = conn.execute(
+                    """
+                    SELECT slug, title
+                    FROM pages_index
+                    ORDER BY title
+                    LIMIT ?
+                    """,
+                    (remaining,),
+                ).fetchall()
+
+    results = [
+        {
+            "slug": slug,
+            "title": title,
+            "score": float(-score),
+        }
+        for slug, title, score in matched_rows
+    ]
+    results.extend(
+        {
+            "slug": slug,
+            "title": title,
+            "score": 0.0,
+        }
+        for slug, title in fallback_rows
+    )
+    return results
+
+
+def get_knowledge_page(vault_dir: Path, slug: str) -> dict[str, object] | None:
+    _, layout = _ensure_knowledge_db(vault_dir)
+    canonical_slug = canonicalize_note_id(slug)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        row = conn.execute(
+            """
+            SELECT slug, title, note_type, path, day_id, frontmatter_json, body
+            FROM pages_index
+            WHERE slug = ?
+            """,
+            (canonical_slug,),
+        ).fetchone()
+    if row is None:
+        return None
+    page_slug, title, note_type, path, day_id, frontmatter_json, body = row
+    return {
+        "slug": page_slug,
+        "title": title,
+        "note_type": note_type,
+        "path": path,
+        "day_id": day_id,
+        "frontmatter": json.loads(frontmatter_json),
+        "body": body,
+    }
+
+
+def knowledge_index_stats(vault_dir: Path) -> dict[str, object]:
+    _, layout = _ensure_knowledge_db(vault_dir)
+    queries = {
+        "pages": "SELECT COUNT(*) FROM pages_index",
+        "links": "SELECT COUNT(*) FROM page_links",
+        "raw_records": "SELECT COUNT(*) FROM raw_data",
+        "timeline_events": "SELECT COUNT(*) FROM timeline_events",
+        "audit_events": "SELECT COUNT(*) FROM audit_events",
+        "embedding_chunks": "SELECT COUNT(*) FROM page_embeddings",
+    }
+    stats: dict[str, object] = {"db_path": str(layout.knowledge_db)}
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        for key, query in queries.items():
+            stats[key] = int(conn.execute(query).fetchone()[0])
+    return stats
+
+
+def recent_audit_events(vault_dir: Path, limit: int = 20, source_log: str | None = None) -> list[dict[str, object]]:
+    _, layout = _ensure_knowledge_db(vault_dir)
+    query = """
+        SELECT source_log, event_type, slug, session_id, timestamp, payload_json
+        FROM audit_events
+    """
+    params: tuple[object, ...]
+    if source_log:
+        query += " WHERE source_log = ?"
+        params = (source_log, limit)
+    else:
+        params = (limit,)
+    query += " ORDER BY timestamp DESC, rowid DESC LIMIT ?"
+
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    return [
+        {
+            "source_log": row[0],
+            "event_type": row[1],
+            "slug": row[2],
+            "session_id": row[3],
+            "timestamp": row[4],
+            "payload": json.loads(row[5]),
+        }
+        for row in rows
+    ]
+
+
+def knowledge_tools_json() -> list[dict[str, object]]:
+    return [
+        {
+            "name": "knowledge_search",
+            "description": "Keyword search against the derived knowledge index",
+            "args": {"query": "string", "limit": "integer?"},
+        },
+        {
+            "name": "knowledge_query",
+            "description": "Read-only semantic-style chunk retrieval from local embeddings",
+            "args": {"query": "string", "limit": "integer?"},
+        },
+        {
+            "name": "knowledge_get",
+            "description": "Fetch a canonical page payload by slug",
+            "args": {"slug": "string"},
+        },
+        {
+            "name": "knowledge_stats",
+            "description": "Return knowledge index table counts and db path",
+            "args": {},
+        },
+        {
+            "name": "knowledge_audit_recent",
+            "description": "Return recent audit events from the derived knowledge index",
+            "args": {"limit": "integer?", "source_log": "string?"},
+        },
+    ]
+
+
+def dispatch_knowledge_tool(vault_dir: Path, tool_name: str, args: dict[str, object]) -> dict[str, object]:
+    if tool_name == "knowledge_search":
+        query = str(args.get("query") or "")
+        limit = int(args.get("limit") or 10)
+        return {"results": search_knowledge_index(vault_dir, query, limit=limit)}
+    if tool_name == "knowledge_query":
+        query = str(args.get("query") or "")
+        limit = int(args.get("limit") or 5)
+        return {"results": query_knowledge_index(vault_dir, query, limit=limit)}
+    if tool_name == "knowledge_get":
+        slug = str(args.get("slug") or "")
+        return {"page": get_knowledge_page(vault_dir, slug)}
+    if tool_name == "knowledge_stats":
+        return {"stats": knowledge_index_stats(vault_dir)}
+    if tool_name == "knowledge_audit_recent":
+        limit = int(args.get("limit") or 20)
+        source_log = args.get("source_log")
+        source_log_value = str(source_log) if source_log else None
+        return {"events": recent_audit_events(vault_dir, limit=limit, source_log=source_log_value)}
+    raise ValueError(f"unknown tool: {tool_name}")
+
+
+def serve_knowledge_index(vault_dir: Path, stdin: TextIOBase, stdout: TextIOBase) -> None:
+    for line in stdin:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            request = json.loads(stripped)
+            tool_name = str(request.get("tool") or "")
+            args = request.get("args") or {}
+            if not isinstance(args, dict):
+                raise ValueError("args must be an object")
+            result = dispatch_knowledge_tool(vault_dir, tool_name, args)
+            response = {"ok": True, "result": result}
+        except Exception as exc:
+            response = {"ok": False, "error": str(exc)}
+        stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+        stdout.flush()

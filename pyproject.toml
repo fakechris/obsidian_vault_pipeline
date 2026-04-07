@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "obsidian-vault-pipeline"
-version = "0.4.0"
+version = "0.6.0"
 description = "全自动Obsidian知识管理Pipeline - 生产级知识管理流水线"
 readme = "README.md"
 license = "MIT"
@@ -91,6 +91,7 @@ ovp-graph = "openclaw_pipeline.graph_cli:main"
 ovp-absorb = "openclaw_pipeline.commands.absorb:main"
 ovp-cleanup = "openclaw_pipeline.commands.cleanup:main"
 ovp-breakdown = "openclaw_pipeline.commands.breakdown:main"
+ovp-knowledge-index = "openclaw_pipeline.commands.knowledge_index:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]

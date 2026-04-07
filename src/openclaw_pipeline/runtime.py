@@ -43,6 +43,10 @@ class VaultLayout:
         return self.logs_dir / "pipeline.jsonl"
 
     @property
+    def knowledge_db(self) -> Path:
+        return self.logs_dir / "knowledge.db"
+
+    @property
     def transactions_dir(self) -> Path:
         return self.logs_dir / "transactions"
 

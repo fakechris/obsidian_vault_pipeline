@@ -283,6 +283,7 @@ PIPELINE_STEPS = [
     "evergreen",      # 7. 提取Evergreen（quality >= 3.0 才能执行）
     "registry_sync",  # 8. 同步Registry与文件系统
     "moc",            # 9. 更新MOC
+    "knowledge_index",  # 10. 刷新派生 knowledge.db
 ]
 
 
@@ -318,6 +319,7 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
                 "evergreen",
                 "registry_sync",
                 "moc",
+                "knowledge_index",
             ],
             "pinboard_days": None,
             "pinboard_start": pinboard_start,
@@ -336,6 +338,7 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
                 "evergreen",
                 "registry_sync",
                 "moc",
+                "knowledge_index",
             ],
             "pinboard_days": args.pinboard_days,
             "pinboard_start": None,
@@ -513,6 +516,7 @@ class EnhancedPipeline:
         for moc_file in self.vault_dir.glob("20-Areas/**/Topics/*MOC.md"):
             moc_state[str(moc_file)] = moc_file.stat().st_mtime
         counts["moc_state"] = moc_state
+        counts["knowledge_db_mtime"] = self.layout.knowledge_db.stat().st_mtime if self.layout.knowledge_db.exists() else 0.0
 
         return counts
 
@@ -584,6 +588,13 @@ class EnhancedPipeline:
             results["qualified"] = cmd_result.get("quality_qualified", 0)
             results["failed"] = cmd_result.get("quality_failed", 0)
 
+        elif step == "knowledge_index":
+            current_mtime = self.layout.knowledge_db.stat().st_mtime if self.layout.knowledge_db.exists() else 0.0
+            before_mtime = before_counts.get("knowledge_db_mtime", 0.0)
+            results["produced"] = 1 if current_mtime and current_mtime != before_mtime else 0
+            results["db_path"] = str(self.layout.knowledge_db)
+            results["updated"] = bool(results["produced"])
+
         return results
 
     def _calculate_timeout(self, step: str, batch_size: int | None = None) -> int:
@@ -633,6 +644,8 @@ class EnhancedPipeline:
 
         elif step == "moc":
             return 120  # 2分钟
+        elif step == "knowledge_index":
+            return 120
 
         return 1800  # 默认30分钟
 
@@ -1021,6 +1034,27 @@ class EnhancedPipeline:
 
         return result
 
+    def step_knowledge_index(self, dry_run: bool = False) -> dict:
+        """刷新派生 knowledge.db。"""
+        print("\n" + "="*60)
+        print("STEP 10: Refreshing Knowledge Index")
+        print("="*60)
+
+        cmd = [
+            sys.executable, "-m", "openclaw_pipeline.commands.knowledge_index",
+            "--vault-dir", str(self.vault_dir),
+            "--json",
+        ]
+
+        result = self.run_command(cmd, "knowledge_index", timeout=120)
+
+        if result["success"]:
+            print("✓ Knowledge index refresh completed")
+        else:
+            print(f"✗ Knowledge index refresh failed: {result.get('error', 'Unknown error')}")
+
+        return result
+
     def run_pipeline(
         self,
         steps: list[str] | None = None,
@@ -1077,6 +1111,8 @@ class EnhancedPipeline:
                 cmd_result = self.step_registry_sync(dry_run)
             elif step == "moc":
                 cmd_result = self.step_moc(dry_run)
+            elif step == "knowledge_index":
+                cmd_result = self.step_knowledge_index(dry_run)
             else:
                 cmd_result = {"success": False, "error": f"Unknown step: {step}"}
 
@@ -1151,6 +1187,8 @@ class EnhancedPipeline:
                     detail = f"新增: {produced}, 累计: {total}"
                 elif step == "moc":
                     detail = "已更新"
+                elif step == "knowledge_index":
+                    detail = "knowledge.db 已刷新"
                 elif step == "quality":
                     checked = result.get("quality_checked", 0)
                     qualified = result.get("quality_qualified", 0)

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from openclaw_pipeline.autopilot.queue import Task, TaskQueue
+from openclaw_pipeline.autopilot.daemon import AutoPilotDaemon
 from openclaw_pipeline.commands.repair import repair_autopilot
 
 
@@ -43,3 +45,27 @@ def test_repair_autopilot_marks_stale_processing_tasks(tmp_path):
     assert result["fixed"] == 1
     assert status == "failed"
     assert error == "repaired_stale_processing_task"
+
+
+def test_autopilot_success_path_runs_knowledge_index_after_moc(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    daemon = AutoPilotDaemon(vault, watch_sources=["inbox"], auto_commit=False)
+
+    order: list[str] = []
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.autopilot.daemon.subprocess.run",
+        lambda *args, **kwargs: type("Completed", (), {"returncode": 0, "stderr": "", "stdout": ""})(),
+    )
+    monkeypatch.setattr(daemon, "_check_quality", lambda task: (4.0, {}))
+    monkeypatch.setattr(daemon, "_run_evergreen_extraction", lambda: order.append("evergreen"))
+    monkeypatch.setattr(daemon, "_run_moc_update", lambda: order.append("moc"))
+    monkeypatch.setattr(daemon, "_run_knowledge_index_refresh", lambda: order.append("knowledge_index"))
+
+    task = Task(id=1, source="inbox", file_path=str(vault / "50-Inbox" / "01-Raw" / "note.md"))
+    result = daemon.process_task(task)
+
+    assert result["success"] is True
+    assert result["stages"] == ["interpretation", "evergreen", "moc", "knowledge_index"]
+    assert order == ["evergreen", "moc", "knowledge_index"]

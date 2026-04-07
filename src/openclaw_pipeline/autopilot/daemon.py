@@ -312,7 +312,11 @@ class AutoPilotDaemon:
                 self._run_moc_update()
                 result['stages'].append('moc')
 
-                # Stage 5: 自动提交
+                # Stage 5: 刷新 derived knowledge index
+                self._run_knowledge_index_refresh()
+                result['stages'].append('knowledge_index')
+
+                # Stage 6: 自动提交
                 if self.auto_commit:
                     self._auto_commit(task, result)
 
@@ -409,6 +413,15 @@ class AutoPilotDaemon:
             sys.executable, "-m", "openclaw_pipeline.auto_moc_updater",
             "--scan",
             "--vault-dir", str(self.vault_dir),
+        ]
+        subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
+
+    def _run_knowledge_index_refresh(self):
+        """刷新派生 knowledge.db。"""
+        cmd = [
+            sys.executable, "-m", "openclaw_pipeline.commands.knowledge_index",
+            "--vault-dir", str(self.vault_dir),
+            "--json",
         ]
         subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
 
