@@ -148,7 +148,8 @@ class AutoPilotDaemon:
     2. 创建任务，加入 SQLite 队列
     3. 工作线程从队列取任务执行
     4. 质量检查，失败自动重试
-    5. 完成自动提交 Git
+    5. absorb / moc / optional refine / knowledge_index
+    6. 完成自动提交 Git
     """
 
     def __init__(
@@ -158,7 +159,8 @@ class AutoPilotDaemon:
         parallel: int = 1,
         interval: float = 5.0,
         quality_threshold: float = 3.0,
-        auto_commit: bool = True
+        auto_commit: bool = True,
+        with_refine: bool = False,
     ):
         self.vault_dir = Path(vault_dir)
         self.watch_sources = watch_sources
@@ -166,6 +168,7 @@ class AutoPilotDaemon:
         self.interval = interval
         self.quality_threshold = quality_threshold
         self.auto_commit = auto_commit
+        self.with_refine = with_refine
 
         # 组件初始化
         self.queue = TaskQueue(self.vault_dir / "60-Logs" / "autopilot.db")
@@ -228,9 +231,10 @@ class AutoPilotDaemon:
            - pinboard/social: 跳过
            - raw/clippings: ovp-article
         2. 质量评分
-        3. 质量达标 → ovp-evergreen (L2→L3)
+        3. 质量达标 → ovp-absorb (L2→L3)
         4. 质量达标 → ovp-moc --scan
-        5. 自动 git commit
+        5. 可选 refine → cleanup + breakdown
+        6. 自动 git commit
         """
         result = {
             'task_id': task.id,
@@ -304,19 +308,24 @@ class AutoPilotDaemon:
                 result['quality'] = quality
 
             if quality >= self.quality_threshold:
-                # Stage 3: 提取 Evergreen
-                self._run_evergreen_extraction()
-                result['stages'].append('evergreen')
+                # Stage 3: absorb 到知识层
+                self._run_absorb()
+                result['stages'].append('absorb')
 
                 # Stage 4: 更新 MOC
                 self._run_moc_update()
                 result['stages'].append('moc')
 
-                # Stage 5: 刷新 derived knowledge index
+                # Stage 5: 可选 Refine
+                if self.with_refine:
+                    self._run_refine()
+                    result['stages'].append('refine')
+
+                # Stage 6: 刷新 derived knowledge index
                 self._run_knowledge_index_refresh()
                 result['stages'].append('knowledge_index')
 
-                # Stage 6: 自动提交
+                # Stage 7: 自动提交
                 if self.auto_commit:
                     self._auto_commit(task, result)
 
@@ -398,14 +407,19 @@ class AutoPilotDaemon:
         # 更新任务的维度信息以便调试
         return quality
 
-    def _run_evergreen_extraction(self):
-        """运行 Evergreen 提取"""
+    def _run_absorb(self):
+        """运行 absorb 吸收层。"""
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.auto_evergreen_extractor",
+            sys.executable, "-m", "openclaw_pipeline.commands.absorb",
             "--recent", "1",
             "--vault-dir", str(self.vault_dir),
+            "--json",
         ]
         subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
+
+    def _run_evergreen_extraction(self):
+        """兼容旧调用，内部转到 absorb。"""
+        self._run_absorb()
 
     def _run_moc_update(self):
         """运行 MOC 更新"""
@@ -415,6 +429,25 @@ class AutoPilotDaemon:
             "--vault-dir", str(self.vault_dir),
         ]
         subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
+
+    def _run_refine(self):
+        """运行 cleanup + breakdown 批处理。"""
+        cleanup_cmd = [
+            sys.executable, "-m", "openclaw_pipeline.commands.cleanup",
+            "--vault-dir", str(self.vault_dir),
+            "--all",
+            "--write",
+            "--json",
+        ]
+        breakdown_cmd = [
+            sys.executable, "-m", "openclaw_pipeline.commands.breakdown",
+            "--vault-dir", str(self.vault_dir),
+            "--all",
+            "--write",
+            "--json",
+        ]
+        subprocess.run(cleanup_cmd, capture_output=True, cwd=str(self.vault_dir))
+        subprocess.run(breakdown_cmd, capture_output=True, cwd=str(self.vault_dir))
 
     def _run_knowledge_index_refresh(self):
         """刷新派生 knowledge.db。"""
@@ -515,6 +548,7 @@ class AutoPilotDaemon:
         self.log(f"👀 监控: {', '.join(self.watch_sources)}")
         self.log(f"🔧 并发: {self.parallel}")
         self.log(f"🎯 质量阈值: {self.quality_threshold}")
+        self.log(f"🧹 Refine: {'enabled' if self.with_refine else 'disabled'}")
         self.log("─" * 50)
 
         # 🔑 第一入口：运行 pinboard 和 clippings 抓取新内容
@@ -584,14 +618,14 @@ def print_cost_warning():
 ║      Each processed article requires 3-4 LLM calls:                            ║
 ║      - Article interpretation (L1→L2): ~4K-8K tokens                          ║
 ║      - Quality scoring (6-dimension LLM evaluation): ~2K-4K tokens           ║
-║      - Evergreen extraction (L2→L3): ~2K-4K tokens                           ║
+║      - Absorb / evergreen lifecycle (L2→L3): ~2K-4K tokens                   ║
 ║      - MOC indexing: ~1K-2K tokens                                             ║
 ║                                                                               ║
 ║  CN: AutoPilot 模式可能消耗大量 Token（可能 $10-$100+）                        ║
 ║      每篇文章处理需要 3-4 次 LLM 调用：                                        ║
 ║      - 深度解读生成 (L1→L2): ~4K-8K tokens                                     ║
 ║      - 质量评分 (6维度LLM评估): ~2K-4K tokens                                  ║
-║      - Evergreen提取 (L2→L3): ~2K-4K tokens                                    ║
+║      - Absorb / Evergreen 生命周期 (L2→L3): ~2K-4K tokens                      ║
 ║      - MOC索引更新: ~1K-2K tokens                                              ║
 ║                                                                               ║
 ║  💡 RECOMMENDATION / 建议:                                                     ║
@@ -659,6 +693,11 @@ def main():
         action="store_true",
         help="Skip cost warning confirmation / 跳过费用警告确认"
     )
+    parser.add_argument(
+        "--with-refine",
+        action="store_true",
+        help="在 absorb/moc 之后追加 cleanup + breakdown 批处理"
+    )
 
     args = parser.parse_args()
 
@@ -678,7 +717,8 @@ def main():
         parallel=args.parallel,
         interval=args.interval,
         quality_threshold=args.quality,
-        auto_commit=not args.no_commit
+        auto_commit=not args.no_commit,
+        with_refine=args.with_refine,
     )
 
     daemon.run()

@@ -47,7 +47,7 @@ def test_repair_autopilot_marks_stale_processing_tasks(tmp_path):
     assert error == "repaired_stale_processing_task"
 
 
-def test_autopilot_success_path_runs_knowledge_index_after_moc(tmp_path, monkeypatch):
+def test_autopilot_success_path_runs_absorb_and_knowledge_index_after_moc(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
     daemon = AutoPilotDaemon(vault, watch_sources=["inbox"], auto_commit=False)
@@ -59,7 +59,7 @@ def test_autopilot_success_path_runs_knowledge_index_after_moc(tmp_path, monkeyp
         lambda *args, **kwargs: type("Completed", (), {"returncode": 0, "stderr": "", "stdout": ""})(),
     )
     monkeypatch.setattr(daemon, "_check_quality", lambda task: (4.0, {}))
-    monkeypatch.setattr(daemon, "_run_evergreen_extraction", lambda: order.append("evergreen"))
+    monkeypatch.setattr(daemon, "_run_absorb", lambda: order.append("absorb"))
     monkeypatch.setattr(daemon, "_run_moc_update", lambda: order.append("moc"))
     monkeypatch.setattr(daemon, "_run_knowledge_index_refresh", lambda: order.append("knowledge_index"))
 
@@ -67,5 +67,30 @@ def test_autopilot_success_path_runs_knowledge_index_after_moc(tmp_path, monkeyp
     result = daemon.process_task(task)
 
     assert result["success"] is True
-    assert result["stages"] == ["interpretation", "evergreen", "moc", "knowledge_index"]
-    assert order == ["evergreen", "moc", "knowledge_index"]
+    assert result["stages"] == ["interpretation", "absorb", "moc", "knowledge_index"]
+    assert order == ["absorb", "moc", "knowledge_index"]
+
+
+def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    daemon = AutoPilotDaemon(vault, watch_sources=["inbox"], auto_commit=False, with_refine=True)
+
+    order: list[str] = []
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.autopilot.daemon.subprocess.run",
+        lambda *args, **kwargs: type("Completed", (), {"returncode": 0, "stderr": "", "stdout": ""})(),
+    )
+    monkeypatch.setattr(daemon, "_check_quality", lambda task: (4.0, {}))
+    monkeypatch.setattr(daemon, "_run_absorb", lambda: order.append("absorb"))
+    monkeypatch.setattr(daemon, "_run_moc_update", lambda: order.append("moc"))
+    monkeypatch.setattr(daemon, "_run_refine", lambda: order.append("refine"))
+    monkeypatch.setattr(daemon, "_run_knowledge_index_refresh", lambda: order.append("knowledge_index"))
+
+    task = Task(id=1, source="inbox", file_path=str(vault / "50-Inbox" / "01-Raw" / "note.md"))
+    result = daemon.process_task(task)
+
+    assert result["success"] is True
+    assert result["stages"] == ["interpretation", "absorb", "moc", "refine", "knowledge_index"]
+    assert order == ["absorb", "moc", "refine", "knowledge_index"]

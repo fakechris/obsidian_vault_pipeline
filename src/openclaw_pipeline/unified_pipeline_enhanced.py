@@ -24,7 +24,7 @@ Features:
     - Pinboard+Clippings双输入
     - 历史日期范围处理
     - 增量模式（只处理新书签）
-    - 全自动深度解读→质检→Evergreen→MOC
+    - 全自动深度解读→质检→Absorb→MOC→knowledge.db
     - 统一日志和报告
 """
 
@@ -273,29 +273,48 @@ def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
 
 # ========== 配置 ==========
 # Pipeline步骤定义（含Pinboard）
-PIPELINE_STEPS = [
+BASE_PIPELINE_STEPS = [
     "pinboard",       # 1. 获取Pinboard书签到 02-Pinboard/
     "pinboard_process", # 2. 处理 02-Pinboard/ 文件到对应处理器
     "clippings",      # 3. 扫描并迁移Clippings到 01-Raw/
     "articles",       # 4. 生成深度解读
     "quality",        # 5. 质量检查
     "fix_links",      # 6. 修复断裂链接
-    "evergreen",      # 7. 提取Evergreen（quality >= 3.0 才能执行）
+    "absorb",         # 7. 吸收 Evergreen 生命周期动作（quality >= 3.0 才能执行）
     "registry_sync",  # 8. 同步Registry与文件系统
     "moc",            # 9. 更新MOC
     "knowledge_index",  # 10. 刷新派生 knowledge.db
 ]
 
+OPTIONAL_PIPELINE_STEPS = ["refine"]  # cleanup + breakdown 的批处理重构
+STEP_ALIASES = {"evergreen": "absorb"}
+PIPELINE_STEP_CHOICES = [*BASE_PIPELINE_STEPS, *OPTIONAL_PIPELINE_STEPS, *STEP_ALIASES.keys()]
+
+
+def normalize_step_name(step: str | None) -> str | None:
+    if step is None:
+        return None
+    return STEP_ALIASES.get(step, step)
+
+
+def pipeline_steps(include_refine: bool = False) -> list[str]:
+    steps = list(BASE_PIPELINE_STEPS)
+    if include_refine and "refine" not in steps:
+        steps.insert(-1, "refine")
+    return steps
+
 
 def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
     """Build the requested execution plan from CLI args."""
+    include_refine = bool(getattr(args, "with_refine", False))
+
     if args.full:
         return {
-            "steps": None,
+            "steps": pipeline_steps(include_refine=include_refine),
             "pinboard_days": args.pinboard_days or 7,
             "pinboard_start": None,
             "pinboard_end": None,
-            "description": "Full pipeline (Pinboard+Clippings+All)",
+            "description": "Full pipeline (Pinboard+Clippings+Absorb+Derived)"
         }
 
     if args.pinboard_new:
@@ -316,9 +335,10 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
                 "articles",
                 "quality",
                 "fix_links",
-                "evergreen",
+                "absorb",
                 "registry_sync",
                 "moc",
+                *(["refine"] if include_refine else []),
                 "knowledge_index",
             ],
             "pinboard_days": None,
@@ -335,9 +355,10 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
                 "articles",
                 "quality",
                 "fix_links",
-                "evergreen",
+                "absorb",
                 "registry_sync",
                 "moc",
+                *(["refine"] if include_refine else []),
                 "knowledge_index",
             ],
             "pinboard_days": args.pinboard_days,
@@ -348,20 +369,23 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.step:
         return {
-            "steps": [args.step],
+            "steps": [normalize_step_name(args.step)],
             "pinboard_days": args.pinboard_days,
             "pinboard_start": None,
             "pinboard_end": None,
-            "description": f"Single step: {args.step}",
+            "description": f"Single step: {normalize_step_name(args.step)}",
         }
 
     if args.from_step:
+        requested_steps = pipeline_steps(include_refine=include_refine)
+        normalized_from_step = normalize_step_name(args.from_step)
+        start_idx = requested_steps.index(normalized_from_step) if normalized_from_step in requested_steps else 0
         return {
-            "steps": None,
+            "steps": requested_steps[start_idx:],
             "pinboard_days": args.pinboard_days or 7,
             "pinboard_start": None,
             "pinboard_end": None,
-            "description": f"From step: {args.from_step}",
+            "description": f"From step: {normalized_from_step}",
         }
 
     return {}
@@ -504,7 +528,7 @@ class EnhancedPipeline:
             len(list(d.glob("*_深度解读.md"))) for d in topics_dirs if d.exists()
         )
 
-        # Evergreen数量
+        # Evergreen 数量（供 absorb 产出统计使用）
         evergreen_dir = self.layout.evergreen_dir
         counts["evergreen"] = len(list(evergreen_dir.glob("*.md"))) if evergreen_dir.exists() else 0
 
@@ -517,6 +541,8 @@ class EnhancedPipeline:
             moc_state[str(moc_file)] = moc_file.stat().st_mtime
         counts["moc_state"] = moc_state
         counts["knowledge_db_mtime"] = self.layout.knowledge_db.stat().st_mtime if self.layout.knowledge_db.exists() else 0.0
+        refine_log = self.layout.logs_dir / "refine-mutations.jsonl"
+        counts["refine_log_mtime"] = refine_log.stat().st_mtime if refine_log.exists() else 0.0
 
         return counts
 
@@ -557,8 +583,8 @@ class EnhancedPipeline:
             results["produced"] = current_count - before_counts.get("interpretations", 0)
             results["total_interpretations"] = current_count
 
-        elif step == "evergreen":
-            # 检查新增的 Evergreen 数量
+        elif step == "absorb":
+            # 检查 absorb 阶段新增的 Evergreen 数量
             evergreen_dir = self.layout.evergreen_dir
             current_count = len(list(evergreen_dir.glob("*.md"))) if evergreen_dir.exists() else 0
             results["produced"] = current_count - before_counts.get("evergreen", 0)
@@ -594,6 +620,13 @@ class EnhancedPipeline:
             results["produced"] = 1 if current_mtime and current_mtime != before_mtime else 0
             results["db_path"] = str(self.layout.knowledge_db)
             results["updated"] = bool(results["produced"])
+        elif step == "refine":
+            refine_log = self.layout.logs_dir / "refine-mutations.jsonl"
+            current_mtime = refine_log.stat().st_mtime if refine_log.exists() else 0.0
+            before_mtime = before_counts.get("refine_log_mtime", 0.0)
+            results["produced"] = 1 if current_mtime and current_mtime != before_mtime else 0
+            results["updated"] = bool(results["produced"])
+            results["refine_log"] = str(refine_log)
 
         return results
 
@@ -636,7 +669,7 @@ class EnhancedPipeline:
         elif step == "clippings":
             return 180  # 3分钟
 
-        elif step == "evergreen":
+        elif step == "absorb":
             return 300  # 5分钟
 
         elif step == "quality":
@@ -644,6 +677,8 @@ class EnhancedPipeline:
 
         elif step == "moc":
             return 120  # 2分钟
+        elif step == "refine":
+            return 600  # cleanup + breakdown 可能扫描全库
         elif step == "knowledge_index":
             return 120
 
@@ -972,8 +1007,8 @@ class EnhancedPipeline:
 
         return result
 
-    def step_evergreen(self, recent_days: int = 7, dry_run: bool = False, quality_score: float = -1.0) -> dict:
-        """执行Evergreen提取步骤
+    def step_absorb(self, recent_days: int = 7, dry_run: bool = False, quality_score: float = -1.0) -> dict:
+        """执行 Absorb 步骤
 
         Args:
             recent_days: 处理最近N天的深度解读
@@ -982,34 +1017,39 @@ class EnhancedPipeline:
         """
         # Quality gate: 0 <= score < 3.0 时阻断（质量分数有效且低于阈值才阻断）
         if 0 <= quality_score < 3.0:
-            print(f"\n⚠️  Quality score ({quality_score:.1f}) < 3.0, blocking evergreen extraction")
+            print(f"\n⚠️  Quality score ({quality_score:.1f}) < 3.0, blocking absorb stage")
             return {
                 "success": False,
                 "blocked": True,
                 "reason": f"quality_score_too_low ({quality_score:.1f} < 3.0)",
-                "error": "Evergreen extraction blocked due to low quality score",
+                "error": "Absorb stage blocked due to low quality score",
             }
 
         print("\n" + "="*60)
-        print("STEP 7: Extracting Evergreen Notes")
+        print("STEP 7: Absorbing Knowledge Into Evergreen Layer")
         print("="*60)
 
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.auto_evergreen_extractor",
+            sys.executable, "-m", "openclaw_pipeline.commands.absorb",
             "--vault-dir", str(self.vault_dir),
-            "--recent", str(recent_days)
+            "--recent", str(recent_days),
+            "--json",
         ]
         if dry_run:
             cmd.append("--dry-run")
 
-        result = self.run_command(cmd, "evergreen")
+        result = self.run_command(cmd, "absorb")
 
         if result["success"]:
-            print("✓ Evergreen extraction completed")
+            print("✓ Absorb stage completed")
         else:
-            print(f"✗ Evergreen extraction failed: {result.get('error', 'Unknown error')}")
+            print(f"✗ Absorb stage failed: {result.get('error', 'Unknown error')}")
 
         return result
+
+    def step_evergreen(self, recent_days: int = 7, dry_run: bool = False, quality_score: float = -1.0) -> dict:
+        """兼容旧调用，内部转到 Absorb。"""
+        return self.step_absorb(recent_days=recent_days, dry_run=dry_run, quality_score=quality_score)
 
     def step_moc(self, dry_run: bool = False) -> dict:
         """执行MOC更新步骤"""
@@ -1033,6 +1073,45 @@ class EnhancedPipeline:
             print(f"✗ MOC update failed: {result.get('error', 'Unknown error')}")
 
         return result
+
+    def step_refine(self, dry_run: bool = False) -> dict:
+        """执行 Refine 批处理步骤（cleanup + breakdown）。"""
+        print("\n" + "="*60)
+        print("STEP 10: Refining Existing Evergreen Notes")
+        print("="*60)
+
+        cleanup_cmd = [
+            sys.executable, "-m", "openclaw_pipeline.commands.cleanup",
+            "--vault-dir", str(self.vault_dir),
+            "--all",
+            "--json",
+        ]
+        breakdown_cmd = [
+            sys.executable, "-m", "openclaw_pipeline.commands.breakdown",
+            "--vault-dir", str(self.vault_dir),
+            "--all",
+            "--json",
+        ]
+        if not dry_run:
+            cleanup_cmd.append("--write")
+            breakdown_cmd.append("--write")
+
+        cleanup_result = self.run_command(cleanup_cmd, "refine_cleanup", timeout=300)
+        if not cleanup_result["success"]:
+            print(f"✗ Cleanup refine failed: {cleanup_result.get('error', 'Unknown error')}")
+            return cleanup_result
+
+        breakdown_result = self.run_command(breakdown_cmd, "refine_breakdown", timeout=300)
+        if not breakdown_result["success"]:
+            print(f"✗ Breakdown refine failed: {breakdown_result.get('error', 'Unknown error')}")
+            return breakdown_result
+
+        print("✓ Refine batch completed")
+        return {
+            "success": True,
+            "cleanup": cleanup_result,
+            "breakdown": breakdown_result,
+        }
 
     def step_knowledge_index(self, dry_run: bool = False) -> dict:
         """刷新派生 knowledge.db。"""
@@ -1073,9 +1152,9 @@ class EnhancedPipeline:
             steps_to_run = steps
         else:
             start_idx = 0
-            if from_step and from_step in PIPELINE_STEPS:
-                start_idx = PIPELINE_STEPS.index(from_step)
-            steps_to_run = PIPELINE_STEPS[start_idx:]
+            if from_step and normalize_step_name(from_step) in pipeline_steps():
+                start_idx = pipeline_steps().index(normalize_step_name(from_step))
+            steps_to_run = pipeline_steps()[start_idx:]
 
         print(f"\nPipeline steps to run: {', '.join(steps_to_run)}")
 
@@ -1103,14 +1182,16 @@ class EnhancedPipeline:
                 cmd_result = self.step_quality(dry_run)
             elif step == "fix_links":
                 cmd_result = self.step_fix_links(dry_run)
-            elif step == "evergreen":
+            elif step == "absorb":
                 # 从 quality 步骤获取质量分数
                 quality_score = results.get("quality", {}).get("quality_score", -1.0)
-                cmd_result = self.step_evergreen(7, dry_run, quality_score=quality_score)
+                cmd_result = self.step_absorb(7, dry_run, quality_score=quality_score)
             elif step == "registry_sync":
                 cmd_result = self.step_registry_sync(dry_run)
             elif step == "moc":
                 cmd_result = self.step_moc(dry_run)
+            elif step == "refine":
+                cmd_result = self.step_refine(dry_run)
             elif step == "knowledge_index":
                 cmd_result = self.step_knowledge_index(dry_run)
             else:
@@ -1137,8 +1218,10 @@ class EnhancedPipeline:
                         before_counts["pinboard_archived"] += produced
                     elif step == "articles":
                         before_counts["interpretations"] += produced
-                    elif step == "evergreen":
+                    elif step == "absorb":
                         before_counts["evergreen"] += produced
+                    elif step == "refine":
+                        before_counts["refine_log_mtime"] = (self.layout.logs_dir / "refine-mutations.jsonl").stat().st_mtime if (self.layout.logs_dir / "refine-mutations.jsonl").exists() else before_counts.get("refine_log_mtime", 0.0)
 
             results[step] = cmd_result
             self.step_results[step] = cmd_result
@@ -1181,12 +1264,14 @@ class EnhancedPipeline:
                     produced = result.get("produced", 0)
                     total = result.get("total_interpretations", 0)
                     detail = f"新增: {produced}, 累计: {total}"
-                elif step == "evergreen":
+                elif step == "absorb":
                     produced = result.get("produced", 0)
                     total = result.get("total_evergreen", 0)
                     detail = f"新增: {produced}, 累计: {total}"
                 elif step == "moc":
                     detail = "已更新"
+                elif step == "refine":
+                    detail = "cleanup + breakdown 已执行"
                 elif step == "knowledge_index":
                     detail = "knowledge.db 已刷新"
                 elif step == "quality":
@@ -1224,17 +1309,17 @@ class EnhancedPipeline:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="增强版统一自动化Pipeline（支持Pinboard+Clippings双输入）"
+        description="增强版统一自动化Pipeline（支持 Pinboard/Clippings、Absorb、Refine、knowledge.db）"
     )
 
     parser.add_argument("--version", action="version", version=f"%(prog)s {_get_version()}")
 
     # 运行模式
     parser.add_argument("--full", action="store_true",
-                       help="完整Pipeline（Pinboard+Clippings+Articles+Quality+Evergreen+MOC）")
-    parser.add_argument("--step", choices=PIPELINE_STEPS,
+                       help="完整Pipeline（Pinboard+Clippings+Articles+Quality+Absorb+MOC+knowledge.db）")
+    parser.add_argument("--step", choices=PIPELINE_STEP_CHOICES,
                        help="运行指定步骤")
-    parser.add_argument("--from-step", choices=PIPELINE_STEPS,
+    parser.add_argument("--from-step", choices=PIPELINE_STEP_CHOICES,
                        help="从指定步骤开始")
     parser.add_argument("--init", action="store_true",
                        help="初始化环境配置（交互式）")
@@ -1253,6 +1338,7 @@ def main():
     # 其他参数
     parser.add_argument("--batch-size", type=int, help="批次大小（用于articles/clippings）")
     parser.add_argument("--dry-run", action="store_true", help="预览模式")
+    parser.add_argument("--with-refine", action="store_true", help="在 absorb/moc 之后执行 cleanup + breakdown 批处理")
     parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
 
     args = parser.parse_args()

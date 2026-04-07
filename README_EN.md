@@ -2,8 +2,8 @@
 schema_version: "1.0.0"
 note_id: readme_en-5d661efc
 title: "Obsidian Vault Pipeline"
-description: "Production-grade automated knowledge management pipeline"
-date: 2026-04-06
+description: "A six-layer Obsidian knowledge pipeline"
+date: 2026-04-07
 type: meta
 ---
 
@@ -13,335 +13,294 @@ type: meta
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Obsidian](https://img.shields.io/badge/Obsidian-Plugin-7C3AED?logo=obsidian)](https://obsidian.md)
-[![PyPI](https://pypi.org/pypi/obsidian-vault-pipeline/)](https://pypi.org/project/obsidian-vault-pipeline/)
+[![PyPI](https://img.shields.io/pypi/v/obsidian-vault-pipeline.svg)](https://pypi.org/project/obsidian-vault-pipeline/)
 
-**Production-grade fully automated Obsidian knowledge management pipeline**
-
-Ingest → Interpret → Absorb → Refine → Canonicalize → Derived Views
+Production-grade knowledge orchestration for Obsidian Vaults  
+Ingest → Interpret → Absorb → Refine → Canonical → Derived
 
 [🇨🇳 中文](README.md)
 
 </div>
 
----
+## What This Is
 
-## What Problem Does This Solve?
+This project is not a loose collection of scripts. It is a layered knowledge system built around an Obsidian vault:
 
-**Problem:** You have hundreds of bookmarks, articles, and papers scattered everywhere, never truly digested. They sit in your vault like code never compiled into running knowledge.
+- Ingest normalizes incoming raw material
+- Interpret turns raw material into deep-dive notes
+- Absorb compiles those notes into evergreen lifecycle actions
+- Refine performs cleanup and breakdown on existing notes
+- Canonical maintains registry, aliases, Atlas, and MOC
+- Derived builds `knowledge.db`, graph views, lint, and daily deltas
 
-**Solution:** Treat LLM as the "programmer" of your knowledge base, Obsidian as the IDE, and the Wiki as the codebase. Automate:
-- Fetch raw content
-- Generate structured deep interpretations
-- Extract reusable core concepts
-- Maintain bidirectional links between knowledge pieces
+The current release wires those layers into the actual runtime:
 
-> 🙏 **Credit**: [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+- `ovp --full` runs through `knowledge_index` by default
+- `ovp --full --with-refine` inserts `refine` before the final derived refresh
+- `ovp-autopilot` runs real-time `absorb -> moc -> knowledge_index`
+- `ovp-autopilot --with-refine` adds `refine` to that path
 
----
+## Runtime Model
 
-## Architecture: Tool Lineage
+### Source of Truth
 
-### Six-Layer Runtime Model
+The system keeps a hard boundary:
 
-| Layer | Goal | Representative commands | LLM-driven? |
+- **canonical truth**: vault markdown + concept registry
+- **derived views**: Atlas, MOC, graph, `knowledge.db`, lint, daily delta
+- **not canonical truth**: `knowledge.db`
+
+`knowledge.db` is the GBrain-inspired derived index layer. It stores:
+
+- page FTS
+- structured links
+- mirrored raw sidecars
+- timeline / audit events
+- deterministic section embeddings
+- read-only query / serve surfaces
+
+It is rebuildable and does not own canonical identity resolution.
+
+### The Six Layers
+
+| Layer | Responsibility | Representative commands | Can the LLM make major decisions here? |
 |---|---|---|---|
-| Ingest | Normalize incoming raw material | `ovp --step pinboard` `ovp --step clippings` `ovp-article` | No, prefer deterministic behavior |
-| Interpret | Turn source material into deep interpretations | `ovp-article` `ovp-github` `ovp-paper` | Yes, but with constrained output contracts |
-| Absorb | Compile interpretations into the knowledge base | `ovp-absorb` `ovp-evergreen` `ovp-query-to-wiki` | Yes, but major decisions must go through workflow |
-| Refine | Propose cleanup and breakdown of existing knowledge | `ovp-cleanup` `ovp-breakdown` | Yes, but only as structured proposals |
-| Canonical | Maintain registry / aliases / Atlas / MOC | `ovp-promote-candidates` `ovp-moc` `ovp-rebuild-registry` | No, keep deterministic |
-| Derived | Build graph, daily delta, lint, reports | `ovp-graph` `ovp-lint` | No, consume canonical state only |
+| Ingest | Normalize incoming material | `ovp --step pinboard` `ovp --step clippings` `ovp-article` | No |
+| Interpret | Produce deep interpretations | `ovp-article` `ovp-github` `ovp-paper` | Yes, with constrained output |
+| Absorb | Compile interpretations into lifecycle actions | `ovp-absorb` `ovp-evergreen` | Yes, but only through structured results |
+| Refine | Cleanup and breakdown existing notes | `ovp-cleanup` `ovp-breakdown` | Yes, but execution is controlled |
+| Canonical | Maintain registry / aliases / Atlas / MOC | `ovp-rebuild-registry` `ovp-moc` `ovp-promote-candidates` | No |
+| Derived | Build retrieval / graph / lint views | `ovp-knowledge-index` `ovp-graph` `ovp-lint` | No |
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              User Operation Layer                            │
-│  ovp --full          One-command full pipeline (daily use)                   │
-│  ovp-autopilot       Auto-pilot mode (continuous monitoring)                 │
-│  ovp --step X        Single step execution (debug/customize)                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                             Tool Chain Overview                             │
-│                                                                             │
-│  Input Sources                                                              │
-│  ├── Pinboard Bookmarks ──────┐                                             │
-│  ├── Kindle Clippings ────────┼──► ovp --step pinboard/clippings            │
-│  └── 50-Inbox/01-Raw/ ───────┘                                             │
-│                                                                             │
-│  Content Processing                                                         │
-│  ├── ovp-article    Raw → Deep Interpretation                               │
-│  ├── ovp-github    GitHub Project → 13-Section Deep Dive                    │
-│  └── ovp-paper     arXiv Paper → Academic Analysis                          │
-│                                                                             │
-│  Quality Assurance                                                          │
-│  ├── ovp-quality    6-Dimension quality scoring (1-5)                      │
-│  └── ovp-lint       Pre-commit checks (lines/placeholders/frontmatter)      │
-│                                                                             │
-│  Knowledge Absorb / Refine                                                 │
-│  ├── ovp-absorb     Absorb deep interpretations into candidate / active     │
-│  ├── ovp-evergreen  Compatibility entrypoint for direct evergreen extraction │
-│  ├── ovp-cleanup    Generate cleanup proposals for existing evergreen notes  │
-│  ├── ovp-breakdown  Generate split proposals for existing evergreen notes    │
-│  └── ovp-query-to-wiki  Archive Q&A to new concepts                         │
-│                                                                             │
-│  Index Maintenance                                                          │
-│  ├── ovp-moc        Update Area MOCs / Atlas Index                         │
-│  ├── ovp-migrate-links  Scan/fix broken wikilinks                          │
-│  └── ovp-rebuild-registry  Reconcile Evergreen and registry                │
-│                                                                             │
-│  Lifecycle Maintenance                                                      │
-│  ├── ovp-promote-candidates  promote / merge / reject candidates           │
-│  ├── ovp-graph      Build full graph / daily delta                         │
-│  └── ovp-repair     Repair transactions / autopilot / registry state       │
-└─────────────────────────────────────────────────────────────────────────────┘
+## What `ovp --full` Actually Runs
+
+Default full pipeline:
+
+```text
+pinboard
+→ pinboard_process
+→ clippings
+→ articles
+→ quality
+→ fix_links
+→ absorb
+→ registry_sync
+→ moc
+→ knowledge_index
 ```
 
----
+With refine enabled:
 
-## Tool Command Reference
-
-### One-Command Run (Daily)
-
-| Command | Solves What | Use Case |
-|---------|-------------|----------|
-| `ovp --full` | One-command full pipeline | Daily scheduled task |
-| `ovp --full --dry-run` | Preview what will be processed | Pre-change check |
-| `ovp --check` | Verify API Key and config | Post-setup verification |
-
-### AutoPilot Mode (Fully Automated)
-
-| Command | Solves What | Use Case |
-|---------|-------------|----------|
-| `ovp-autopilot --watch=inbox --parallel=1` | Monitor directory, auto-process | Continuous running |
-| `ovp-autopilot --yes` | Skip cost warning confirmation | Repeated execution after confirmation |
-| `ovp-autopilot --parallel=2 --quality=3.5` | High concurrency + high quality | Batch processing (expensive) |
-
-**AutoPilot Workflow:**
-```
-File enters 50-Inbox/01-Raw/
-        │
-        ▼
-  ┌─────────────┐
-  │  Watcher    │  ← watchdog monitors directory
-  └─────────────┘
-        │
-        ▼
-  ┌─────────────┐
-  │  Queue      │  ← SQLite persistent queue
-  └─────────────┘
-        │
-        ▼
-  ┌─────────────┐     ┌─────────────┐
-  │  Interpret  │────▶│  Quality    │
-  └─────────────┘     └─────────────┘
-        │                   │
-        │  ✗ Below threshold│ ✓ Pass
-        ▼                   ▼
-  ┌─────────────┐     ┌─────────────┐
-  │  Auto-retry │     │ Extract     │
-  └─────────────┘     │ Evergreen   │
-                       └─────────────┘
-                                   │
-                                   ▼
-                            ┌─────────────┐
-                            │ Update MOC │
-                            └─────────────┘
-                                   │
-                                   ▼
-                            ┌─────────────┐
-                            │ Git commit  │
-                            └─────────────┘
+```text
+pinboard
+→ pinboard_process
+→ clippings
+→ articles
+→ quality
+→ fix_links
+→ absorb
+→ registry_sync
+→ moc
+→ refine
+→ knowledge_index
 ```
 
-### Single Step Execution (Debug/Customize)
+Important details:
 
-| Command | Solves What |
-|---------|-------------|
-| `ovp --step pinboard` | Fetch Pinboard bookmarks |
-| `ovp --step clippings` | Migrate Kindle Clippings |
-| `ovp --step articles` | Process Raw → generate interpretations |
-| `ovp --step quality` | Quality scoring |
-| `ovp --step evergreen` | Extract core concepts |
-| `ovp --step moc` | Update MOC index |
+- `absorb` now shells to `openclaw_pipeline.commands.absorb`
+- `refine` is a batch wrapper over `cleanup + breakdown`
+- `knowledge_index` always runs last so `knowledge.db` reflects final canonical state
+- `--step evergreen` and `--from-step evergreen` are still accepted and map to `absorb`
 
-### Specialized Processors
+## What `ovp-autopilot` Actually Runs
 
-| Command | Solves What |
-|---------|-------------|
-| `ovp-github --single URL` | GitHub project → 13-section deep dive |
-| `ovp-paper --arxiv URL` | arXiv paper → academic analysis |
-| `ovp-absorb --recent 7 --dry-run --json` | Preview how recent interpretations will be absorbed |
-| `ovp-evergreen --recent 7` | Extract Evergreen from recent interpretations |
-| `ovp-cleanup --slug concept --json` | Generate cleanup proposal for one evergreen note |
-| `ovp-cleanup --slug concept --write --json` | Apply deterministic structural cleanup to a diary-shaped note |
-| `ovp-breakdown --all --json` | Generate breakdown proposals for the whole vault |
-| `ovp-breakdown --slug concept --write --json` | Create child notes and update the parent index section |
-| `ovp-moc --update-atlas-from-registry` | Rebuild Atlas Index from registry |
-| `ovp-quality --recent 7` | Batch quality scoring |
+Default real-time path:
 
-### Absorb / Refine Workflow
+```text
+interpretation
+→ quality
+→ absorb
+→ moc
+→ knowledge_index
+→ auto_commit(optional)
+```
 
-| Command | Contract | Notes |
-|---------|----------|-------|
-| `ovp-absorb` | Takes deep interpretations and emits lifecycle actions for candidate / active evergreen | Non-`--dry-run` calls the absorb pipeline and updates the canonical layer |
-| `ovp-cleanup` | Takes existing evergreen notes and emits `rewrite_decision` proposals, with optional `--write` execution | Current execution is limited to reversible structural cleanup, not freeform rewriting; writes trigger registry / Atlas refresh |
-| `ovp-breakdown` | Takes existing evergreen notes and emits `split_decision` proposals, with optional `--write` execution | Current execution only creates derived child notes and updates the parent index; it does not delete parent content, and writes trigger registry / Atlas refresh |
+Enable refine explicitly:
 
-### Maintenance Tools
+```bash
+ovp-autopilot --watch=inbox --with-refine --yes
+```
 
-| Command | Solves What |
-|---------|-------------|
-| `ovp-lint` | Pre-commit mandatory checks |
-| `ovp-repair --transactions --autopilot --registry` | Repair stuck transactions / queue state / registry drift |
-| `ovp-migrate-links --scan` | Scan broken wikilinks |
-| `ovp-migrate-links --write` | Apply high-confidence link fixes |
-| `ovp-rebuild-registry --json` | Inspect Evergreen / registry drift |
+That changes the path to:
+
+```text
+interpretation
+→ quality
+→ absorb
+→ moc
+→ refine
+→ knowledge_index
+→ auto_commit(optional)
+```
+
+Refine is not hidden or missing. It is wired in, but opt-in by default to avoid silent real-time structural rewrites of the whole knowledge base.
+
+## Command Overview
+
+### Daily entry points
+
+| Command | Purpose |
+|---|---|
+| `ovp --check` | Validate runtime configuration |
+| `ovp --full` | Run the full daily pipeline |
+| `ovp --full --with-refine` | Run full pipeline plus cleanup/breakdown |
+| `ovp --step absorb` | Run only the absorb layer |
+| `ovp --step refine` | Run only the batch refine layer |
+| `ovp --from-step absorb` | Resume from absorb onward |
+
+### Content processors
+
+| Command | Purpose |
+|---|---|
+| `ovp-article --process-inbox --vault-dir <vault>` | Process raw documents |
+| `ovp-github --process-single <file> --vault-dir <vault>` | Process GitHub inputs |
+| `ovp-paper --process-single <file> --vault-dir <vault>` | Process paper inputs |
+
+### Absorb / Refine / Canonical
+
+| Command | Purpose |
+|---|---|
+| `ovp-absorb --recent 7 --json` | Absorb recent deep dives |
+| `ovp-evergreen --recent 7 --json` | Compatibility alias for `ovp-absorb` |
+| `ovp-cleanup --all --json` | Generate cleanup proposals |
+| `ovp-cleanup --all --write --json` | Apply deterministic cleanup |
+| `ovp-breakdown --all --json` | Generate breakdown proposals |
+| `ovp-breakdown --all --write --json` | Apply incremental breakdown |
+| `ovp-rebuild-registry --json` | Reconcile evergreen notes and registry |
 | `ovp-promote-candidates review` | Review candidate lifecycle |
-| `ovp-graph --daily today` | Generate daily graph delta |
-| `ovp-query-to-wiki --create-evergreen "name"` | Create new note from Q&A |
+| `ovp-moc --scan --vault-dir <vault>` | Refresh MOC / Atlas |
 
----
+### Derived layer
 
-## AutoPilot Scenario Guide
+| Command | Purpose |
+|---|---|
+| `ovp-knowledge-index --json` | Rebuild `knowledge.db` |
+| `ovp-knowledge-index --search "query" --json` | Run FTS search |
+| `ovp-knowledge-index --query "question" --json` | Run embedding chunk query |
+| `ovp-knowledge-index --get slug --json` | Read a canonical page |
+| `ovp-knowledge-index --stats --json` | Read index stats |
+| `ovp-knowledge-index --audit-recent --json` | Read recent audit events |
+| `ovp-knowledge-index --tools-json` | Emit tool discovery JSON |
+| `ovp-knowledge-index --serve` | Start read-only stdio JSONL service |
+| `ovp-graph daily today --vault-dir <vault>` | Build daily graph delta |
+| `ovp-lint --check --vault-dir <vault>` | Run structure/link checks |
 
-### Scenario 1: Daily Incremental Processing (Recommended)
+### AutoPilot
 
-```bash
-# Run every morning
-ovp --full
+| Command | Purpose |
+|---|---|
+| `ovp-autopilot --watch=inbox --parallel=1 --yes` | Default real-time pipeline |
+| `ovp-autopilot --watch=inbox,pinboard --yes` | Watch multiple sources |
+| `ovp-autopilot --with-refine --yes` | Add refine to the real-time path |
+| `ovp-autopilot --no-commit --yes` | Disable auto-commit |
 
-# Or automate with cron
-# crontab -e
-# 0 8 * * * /path/to/ovp --full --vault-dir /path/to/vault
-```
+## Directory Layout
 
-### Scenario 2: Fully Autonomous AutoPilot
-
-```bash
-# Start background daemon
-ovp-autopilot --watch=inbox --parallel=1 --yes
-
-# Recommended: run in tmux/screen, or persist stdout yourself
-ovp-autopilot --watch=inbox --parallel=1 --yes | tee autopilot.log
-```
-
-### Scenario 3: Batch Historical Processing
-
-```bash
-# Process last 30 days of Pinboard
-ovp --pinboard-days 30
-
-# Process specific date range
-ovp --pinboard-history 2026-01-01 2026-03-31
-```
-
-### Scenario 4: Manual Single-Step Debugging
-
-```bash
-# Only fetch bookmarks, don't process
-ovp --step pinboard
-
-# Only generate interpretations, don't quality check
-ovp --step articles
-
-# Start from quality check
-ovp --from-step quality
-```
-
-### Scenario 5: Single Project Analysis
-
-```bash
-# GitHub project
-ovp-github --single https://github.com/anthropics/claude-code
-
-# arXiv paper
-ovp-paper --arxiv https://arxiv.org/abs/2403.03367
-```
-
----
-
-## Directory Structure (PARA Method)
-
-```
+```text
 vault/
-├── 50-Inbox/01-Raw/           # [Input] Raw documents (bookmarks/articles)
-├── 20-Areas/                   # [Output] Deep interpretations
-│   └── {AI-Research,Tools,Investing,Programming}/
-│       └── Topics/YYYY-MM/
+├── 50-Inbox/
+│   ├── 01-Raw/
+│   ├── 02-Pinboard/
+│   └── 03-Processed/
 ├── 10-Knowledge/
-│   ├── Evergreen/              # [Refined] Atomic notes
-│   └── Atlas/                 # [Indexed] MOC knowledge maps
+│   ├── Evergreen/
+│   └── Atlas/
 │       ├── Atlas-Index.md
 │       ├── concept-registry.jsonl
 │       └── alias-index.json
+├── 20-Areas/
+│   └── {AI-Research, Investing, Programming, Tools}/Topics/YYYY-MM/
 ├── 60-Logs/
-│   ├── pipeline.jsonl         # Structured logs
-│   ├── transactions/          # Transaction states
-│   ├── quality-reports/       # Quality reports
-│   └── daily-deltas/          # Daily graph deltas
-└── 70-Archive/               # [Archived] Completed content
+│   ├── pipeline.jsonl
+│   ├── refine-mutations.jsonl
+│   ├── transactions/
+│   ├── quality-reports/
+│   ├── daily-deltas/
+│   └── knowledge.db
+└── 70-Archive/
 ```
 
----
+## What `knowledge.db` Provides
 
-## 6-Dimension Quality Model
+`knowledge.db` is a rebuildable local derived index. It currently includes:
 
-Every interpretation includes:
+- `pages_index`
+- `page_fts`
+- `page_links`
+- `raw_data`
+- `timeline_events`
+- `audit_events`
+- `page_embeddings`
 
-| Dimension | Description |
-|-----------|-------------|
-| One-sentence definition | Precise core concept summary |
-| Detailed explanation | Complete What/Why/How analysis |
-| Key details | ≥3 technical points |
-| Architecture diagram | ASCII visualization (if applicable) |
-| Actionable advice | ≥2 practical recommendations |
-| Related knowledge | [[Bidirectional links]] |
+It exists to power:
 
----
+- keyword retrieval
+- embedding retrieval
+- canonical page reads
+- audit browsing
+- tool discovery and read-only serving
 
-## 30-Second Quick Start
+## Quick Start
 
 ```bash
-# 1. Install
 pip install obsidian-vault-pipeline
 
-# 2. Initialize
-ovp --init
+mkdir -p my-vault
+cd my-vault
 
-# 3. Add articles
-mkdir -p 50-Inbox/01-Raw
-echo "# Test\n\nContent" > 50-Inbox/01-Raw/test.md
-
-# 4. Run
+ovp --check
 ovp --full
 ```
 
----
-
-## Configuration Reference
+If you want to see the refine layer explicitly:
 
 ```bash
-# .env required config
+ovp --full --with-refine
+```
+
+If you want a daemon:
+
+```bash
+ovp-autopilot --watch=inbox --parallel=1 --yes
+```
+
+## Configuration
+
+Put `.env` in the vault root:
+
+```bash
 AUTO_VAULT_API_KEY=your_key_here
 AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
 
-# Optional config
+# Optional
 PINBOARD_TOKEN=username:token
 HTTP_PROXY=http://127.0.0.1:7897
 ```
 
----
+## Design Principles
+
+- identity consistency before feature growth
+- vault files + registry define canonical state
+- `knowledge.db` is derived retrieval, never a second truth source
+- absorb is part of daily automation; refine is powerful and opt-in by default
+- docs must describe what actually ships, not a future architecture sketch
 
 ## Related Resources
 
-| Resource | Description |
-|----------|-------------|
-| [showcase](https://github.com/fakechris/obsidian_vault_showcase) | Complete demo vault |
-| [Karpathy LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) | Core philosophy |
-| [PyPI](https://pypi.org/project/obsidian-vault-pipeline/) | pip install package |
+- [Showcase Vault](https://github.com/fakechris/obsidian_vault_showcase)
+- [PyPI](https://pypi.org/project/obsidian-vault-pipeline/)
+- [Karpathy LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
 
 ---
 
-*Version: 2.0 | Last Updated: 2026-04-06*
+This document targets: `v0.7.x`
