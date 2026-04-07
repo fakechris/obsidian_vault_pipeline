@@ -78,7 +78,7 @@ def cmd_daily(args):
         expand_hops=args.expand_hops
     )
 
-    # 保存
+    # 保存JSON
     output_file = delta_computer.save(delta)
 
     # 打印统计
@@ -87,6 +87,25 @@ def cmd_daily(args):
     print(f"   Seed笔记: {len(delta.get('seed_note_ids', []))}")
     print(f"   扩展节点: {stats.get('expanded_node_count', 0)}")
     print(f"   扩展边: {stats.get('expanded_edge_count', 0)}")
+
+    # 可视化
+    if args.viz:
+        from openclaw_pipeline.graph.visualize import GraphVisualizer
+
+        viz = GraphVisualizer(delta)
+
+        if args.viz == 'ascii':
+            print("\n" + viz.ascii())
+        elif args.viz == 'html':
+            html_path = vault_dir / "60-Logs" / "daily-deltas" / f"delta-{day_id}.html"
+            viz.html(html_path)
+            print(f"\n🌐 HTML已生成: {html_path}")
+            if args.open:
+                import webbrowser
+                webbrowser.open(f"file://{html_path}")
+        elif args.viz == 'graphml':
+            graphml_path = vault_dir / "60-Logs" / "daily-deltas" / f"delta-{day_id}.graphml"
+            viz.export_graphml(graphml_path)
 
     return 0
 
@@ -201,6 +220,8 @@ def main():
     daily_parser.add_argument("day", nargs="?", default="today", help="日期 YYYY-MM-DD 或 'today'")
     daily_parser.add_argument("--vault-id", default="ovp", help="Vault标识")
     daily_parser.add_argument("--expand-hops", type=int, default=1, help="扩展跳数 (0-3)")
+    daily_parser.add_argument("--viz", choices=["ascii", "html", "graphml"], help="可视化类型")
+    daily_parser.add_argument("--open", action="store_true", help="生成后自动在浏览器打开")
 
     # ovp-graph --validate
     subparsers.add_parser("validate", help="验证frontmatter")
