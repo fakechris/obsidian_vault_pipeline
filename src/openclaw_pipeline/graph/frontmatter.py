@@ -118,6 +118,10 @@ class NoteMetadata:
         if not meta.day_id:
             meta.day_id = cls._infer_day_id(path, meta)
 
+        # 推断 title (如果frontmatter没有)
+        if not meta.title:
+            meta.title = cls._infer_title(path, markdown)
+
         # 设置时间戳
         if not meta.updated_at:
             meta.updated_at = datetime.now().isoformat()
@@ -231,6 +235,33 @@ class NoteMetadata:
 
         # 默认今天
         return datetime.now().strftime('%Y-%m-%d')
+
+    @staticmethod
+    def _infer_title(path: str, markdown: str) -> str:
+        """从文件名或内容推断title"""
+        # 从文件名推断
+        if path:
+            # MOC.md -> "MOC"
+            # 20-Areas/Tools/MOC.md -> "Tools MOC"
+            stem = Path(path).stem
+            # 清理特殊字符
+            title = re.sub(r'[_-]', ' ', stem)
+            # 如果是MOC文件
+            if title.lower() == 'moc':
+                # 从路径获取_area名
+                parts = Path(path).parts
+                if len(parts) > 1:
+                    area = parts[-2] if parts[-1].lower() == 'moc.md' else parts[-1]
+                    area = re.sub(r'[_-]', ' ', area)
+                    title = f"{area} MOC"
+            return title
+
+        # 从markdown内容推断 (第一个#标题)
+        h1_match = re.search(r'^#\s+(.+)$', markdown, re.MULTILINE)
+        if h1_match:
+            return h1_match.group(1).strip()
+
+        return "Untitled"
 
 
 class FrontmatterParser:

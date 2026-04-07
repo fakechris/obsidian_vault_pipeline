@@ -17,6 +17,7 @@ from .frontmatter import FrontmatterParser, NoteMetadata
 from .link_parser import LinkParser
 from .graph_builder import GraphBuilder
 from .daily_delta import DailyDelta
+from .visualize import GraphVisualizer
 
 __all__ = [
     "FrontmatterParser",
@@ -24,4 +25,5 @@ __all__ = [
     "LinkParser",
     "GraphBuilder",
     "DailyDelta",
+    "GraphVisualizer",
 ]

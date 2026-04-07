@@ -60,7 +60,7 @@ def cmd_build(args):
 
 def cmd_daily(args):
     """生成每日增量图谱"""
-    from openclaw_pipeline.graph import DailyDelta
+    from openclaw_pipeline.graph import DailyDelta, GraphBuilder
 
     vault_dir = Path(args.vault_dir) if args.vault_dir else VAULT_DIR
     delta_computer = DailyDelta(vault_dir)
@@ -70,23 +70,63 @@ def cmd_daily(args):
         from datetime import datetime
         day_id = datetime.now().strftime('%Y-%m-%d')
 
-    print(f"📅 生成每日增量图谱: {day_id}")
+    # --full 模式: 显示完整图谱
+    if args.full:
+        print(f"📊 构建完整图谱...")
 
-    delta = delta_computer.generate(
-        day_id=day_id,
-        vault_id=args.vault_id or "ovp",
-        expand_hops=args.expand_hops
-    )
+        builder = GraphBuilder(vault_dir)
+        directories = [
+            vault_dir / "10-Knowledge" / "Evergreen",
+            vault_dir / "20-Areas",
+            vault_dir / "50-Inbox" / "01-Raw",
+        ]
 
-    # 保存JSON
-    output_file = delta_computer.save(delta)
+        all_nodes = []
+        all_edges = []
+
+        for directory in directories:
+            if directory.exists():
+                nodes, edges = builder.build_from_directory(directory, recursive=True)
+                all_nodes.extend(nodes)
+                all_edges.extend(edges)
+
+        # 构建完整图谱的delta格式
+        delta = {
+            "schema_version": "1.0.0",
+            "vault_id": args.vault_id or "ovp",
+            "day_id": day_id,
+            "generated_at": datetime.now().isoformat(),
+            "window": {"expand_hops": 99, "full": True},
+            "stats": {
+                "expanded_node_count": len(all_nodes),
+                "expanded_edge_count": len(all_edges),
+            },
+            "seed_note_ids": [],
+            "nodes": all_nodes,
+            "edges": all_edges,
+        }
+
+        output_file = vault_dir / "60-Logs" / "daily-deltas" / f"delta-{day_id}.json"
+        delta_computer.save(delta)
+    else:
+        print(f"📅 生成每日增量图谱: {day_id}")
+
+        delta = delta_computer.generate(
+            day_id=day_id,
+            vault_id=args.vault_id or "ovp",
+            expand_hops=args.expand_hops
+        )
+
+        # 保存JSON
+        output_file = delta_computer.save(delta)
 
     # 打印统计
     stats = delta.get('stats', {})
     print(f"\n📊 统计:")
-    print(f"   Seed笔记: {len(delta.get('seed_note_ids', []))}")
-    print(f"   扩展节点: {stats.get('expanded_node_count', 0)}")
-    print(f"   扩展边: {stats.get('expanded_edge_count', 0)}")
+    print(f"   节点: {stats.get('expanded_node_count', 0)}")
+    print(f"   边: {stats.get('expanded_edge_count', 0)}")
+    if not args.full:
+        print(f"   Seed笔记: {len(delta.get('seed_note_ids', []))}")
 
     # 可视化
     if args.viz:
@@ -222,6 +262,7 @@ def main():
     daily_parser.add_argument("--expand-hops", type=int, default=1, help="扩展跳数 (0-3)")
     daily_parser.add_argument("--viz", choices=["ascii", "html", "graphml"], help="可视化类型")
     daily_parser.add_argument("--open", action="store_true", help="生成后自动在浏览器打开")
+    daily_parser.add_argument("--full", action="store_true", help="显示完整图谱（忽略日期筛选）")
 
     # ovp-graph --validate
     subparsers.add_parser("validate", help="验证frontmatter")
