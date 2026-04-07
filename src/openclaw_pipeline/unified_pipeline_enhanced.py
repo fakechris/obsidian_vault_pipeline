@@ -874,6 +874,8 @@ def main():
         description="增强版统一自动化Pipeline（支持Pinboard+Clippings双输入）"
     )
 
+    parser.add_argument("--version", action="version", version="%(prog)s 0.3.2")
+
     # 运行模式
     parser.add_argument("--full", action="store_true",
                        help="完整Pipeline（Pinboard+Clippings+Articles+Quality+Evergreen+MOC）")
