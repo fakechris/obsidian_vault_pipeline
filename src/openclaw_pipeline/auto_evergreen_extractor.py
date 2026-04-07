@@ -228,6 +228,9 @@ aliases: ["{concept_name}"]
 class AutoEvergreenExtractor:
     """自动Evergreen提取器"""
 
+    # 默认 promote 阈值：同一概念出现在 3 篇以上深度解读时自动创建
+    DEFAULT_PROMOTE_THRESHOLD = 3
+
     def __init__(self, vault_dir: Path, logger: PipelineLogger):
         self.vault_dir = vault_dir
         self.evergreen_dir = vault_dir / "10-Knowledge" / "Evergreen"
@@ -265,13 +268,28 @@ class AutoEvergreenExtractor:
         ]
         return any(p.exists() for p in possible_paths)
 
-    def process_file(self, file_path: Path, dry_run: bool = False) -> dict:
-        """处理单个文件 - 将提取的概念添加到candidate队列"""
+    def process_file(
+        self,
+        file_path: Path,
+        dry_run: bool = False,
+        auto_promote: bool = False,
+        promote_threshold: int = DEFAULT_PROMOTE_THRESHOLD,
+    ) -> dict:
+        """处理单个文件 - 将提取的概念添加到candidate队列或自动创建
+
+        Args:
+            file_path: 要处理的文件路径
+            dry_run: 预览模式，不写入任何更改
+            auto_promote: 是否自动 promote 高 source_count 的候选
+            promote_threshold: 自动 promote 的 source_count 阈值
+        """
         result = {
             "file": str(file_path),
             "concepts_extracted": 0,
-            "candidates_added": 0,
+            "concepts_created": 0,
             "concepts_skipped": 0,
+            "candidates_added": 0,
+            "concepts_promoted": 0,
             "concepts": []
         }
 
@@ -317,7 +335,7 @@ class AutoEvergreenExtractor:
                 # 添加到candidate队列（而不是直接创建active Evergreen）
                 if registry:
                     try:
-                        registry.upsert_candidate(
+                        entry = registry.upsert_candidate(
                             slug=concept_name,
                             title=concept.get("title", concept_name.replace("-", " ")),
                             definition=concept.get("one_sentence_def", ""),
@@ -327,6 +345,31 @@ class AutoEvergreenExtractor:
                         registry.save()
                         concept_info["status"] = "candidate_added"
                         result["candidates_added"] += 1
+
+                        # Auto-promote: source_count 达到阈值时自动创建文件
+                        if auto_promote and entry.source_count >= promote_threshold:
+                            entry.status = STATUS_ACTIVE
+                            entry.review_state = "auto_promoted"
+                            registry.save()
+
+                            # 创建 Evergreen 文件
+                            note_content = self.extractor.create_evergreen_note(concept, file_path)
+                            output_path = self.evergreen_dir / f"{concept_name}.md"
+                            self.evergreen_dir.mkdir(parents=True, exist_ok=True)
+                            with open(output_path, "w", encoding="utf-8") as f:
+                                f.write(note_content)
+
+                            concept_info["status"] = "promoted_created"
+                            concept_info["path"] = str(output_path)
+                            result["concepts_promoted"] += 1
+                            result["concepts_created"] += 1
+
+                            self.logger.log("evergreen_auto_promoted", {
+                                "concept": concept_name,
+                                "source": str(file_path.name),
+                                "source_count": entry.source_count,
+                                "path": str(output_path)
+                            })
                     except ValueError:
                         # Already exists
                         concept_info["status"] = "exists"
@@ -343,7 +386,7 @@ class AutoEvergreenExtractor:
                         f.write(note_content)
                     concept_info["status"] = "created"
                     concept_info["path"] = str(output_path)
-                    result["candidates_added"] += 1
+                    result["concepts_created"] += 1
 
                     self.logger.log("evergreen_created", {
                         "concept": concept_name,
@@ -359,7 +402,13 @@ class AutoEvergreenExtractor:
 
         return result
 
-    def process_directory(self, directory: Path, dry_run: bool = False) -> list[dict]:
+    def process_directory(
+        self,
+        directory: Path,
+        dry_run: bool = False,
+        auto_promote: bool = False,
+        promote_threshold: int = DEFAULT_PROMOTE_THRESHOLD,
+    ) -> list[dict]:
         """处理整个目录"""
         if not directory.exists():
             return []
@@ -370,10 +419,16 @@ class AutoEvergreenExtractor:
         results = []
         for file_path in files:
             print(f"  Processing: {file_path.name}")
-            result = self.process_file(file_path, dry_run)
+            result = self.process_file(
+                file_path,
+                dry_run=dry_run,
+                auto_promote=auto_promote,
+                promote_threshold=promote_threshold,
+            )
             results.append(result)
             print(f"    Extracted: {result['concepts_extracted']}, "
-                  f"Created: {result['concepts_created']}, "
+                  f"Candidates: {result['candidates_added']}, "
+                  f"Promoted: {result.get('concepts_promoted', 0)}, "
                   f"Skipped: {result['concepts_skipped']}")
 
         return results
@@ -385,6 +440,11 @@ def main():
     parser.add_argument("--file", type=Path, help="处理单个文件")
     parser.add_argument("--recent", type=int, help="处理最近N天的深度解读")
     parser.add_argument("--dry-run", action="store_true", help="预览模式")
+    parser.add_argument("--auto-promote", action="store_true",
+                        help="自动 promote source_count >= threshold 的候选概念")
+    parser.add_argument("--promote-threshold", type=int,
+                        default=AutoEvergreenExtractor.DEFAULT_PROMOTE_THRESHOLD,
+                        help=f"自动 promote 的 source_count 阈值 (默认: {AutoEvergreenExtractor.DEFAULT_PROMOTE_THRESHOLD})")
     parser.add_argument("--api-key", help="API Key")
     parser.add_argument("--api-base", help="API Base URL")
     parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
@@ -407,7 +467,12 @@ def main():
         results = extractor.process_directory(args.dir, dry_run=args.dry_run)
     elif args.file:
         print(f"\nProcessing file: {args.file}")
-        results = [extractor.process_file(args.file, dry_run=args.dry_run)]
+        results = [extractor.process_file(
+            args.file,
+            dry_run=args.dry_run,
+            auto_promote=args.auto_promote,
+            promote_threshold=args.promote_threshold,
+        )]
     elif args.recent:
         # 处理最近N天的所有Areas
         areas = ["AI-Research", "Tools", "Investing", "Programming"]
@@ -420,7 +485,12 @@ def main():
                 ).strftime("%Y-%m")
                 if date_dir.exists():
                     print(f"\nProcessing {area} - {date_dir.name}...")
-                    results = extractor.process_directory(date_dir, dry_run=args.dry_run)
+                    results = extractor.process_directory(
+                        date_dir,
+                        dry_run=args.dry_run,
+                        auto_promote=args.auto_promote,
+                        promote_threshold=args.promote_threshold,
+                    )
                     all_results.extend(results)
         results = all_results
     else:
@@ -430,6 +500,8 @@ def main():
     # 汇总
     total_extracted = sum(r.get("concepts_extracted", 0) for r in results)
     total_added = sum(r.get("candidates_added", 0) for r in results)
+    total_promoted = sum(r.get("concepts_promoted", 0) for r in results)
+    total_created = sum(r.get("concepts_created", 0) for r in results)
     total_skipped = sum(r.get("concepts_skipped", 0) for r in results)
 
     print(f"\n{'='*60}")
@@ -438,16 +510,25 @@ def main():
     print(f"Files processed: {len(results)}")
     print(f"Concepts extracted: {total_extracted}")
     print(f"Candidates added: {total_added}")
+    if args.auto_promote:
+        print(f"Concepts auto-promoted: {total_promoted}")
+        print(f"Files created: {total_created}")
     print(f"Concepts skipped (exists): {total_skipped}")
     print()
-    print("Note: Extracted concepts are added to candidate queue.")
-    print("Use 'ovp-promote-candidates review' to review and promote.")
+    if args.auto_promote:
+        print("Note: High-confidence concepts have been auto-promoted and files created.")
+    else:
+        print("Note: Extracted concepts are added to candidate queue.")
+        print("Use --auto-promote to automatically create files for high source_count concepts.")
 
     logger.log("evergreen_extraction_complete", {
         "files": len(results),
         "extracted": total_extracted,
         "candidates_added": total_added,
-        "skipped": total_skipped
+        "promoted": total_promoted,
+        "created": total_created,
+        "skipped": total_skipped,
+        "auto_promote": args.auto_promote,
     })
 
     return 0

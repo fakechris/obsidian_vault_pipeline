@@ -95,17 +95,25 @@ class LinkParser:
         return links
 
     def _slug_to_note_id(self, slug: str) -> str:
-        """将wikilink的slug转换为note_id"""
-        # 清理slug
-        slug = slug.strip()
-        # 移除#heading
-        if '#' in slug:
-            slug = slug.split('#')[0]
-        # 移除查询参数
-        if '?' in slug:
-            slug = slug.split('?')[0]
+        """将 wikilink surface 规范化为 note_id（与 Registry slug 兼容）。
 
-        return slug
+        处理:
+        - 去除 heading (#) 和 query (?) 后缀
+        - 空格/下划线转连字符
+        - 移除非法字符
+        - 小写化
+        """
+        # 去除 heading 和 query
+        slug = re.sub(r'[#?].*$', '', slug)
+        slug = slug.strip()
+        # 空格/下划线转连字符
+        slug = re.sub(r'[\s_]+', '-', slug)
+        # 移除非法字符（保留连字符）
+        slug = re.sub(r'[^\w\-]', '', slug)
+        # 合并连续连字符
+        slug = re.sub(r'-+', '-', slug)
+        # 小写化
+        return slug.lower()
 
     def _infer_link_type(self, target: str) -> str:
         """推断链接类型"""

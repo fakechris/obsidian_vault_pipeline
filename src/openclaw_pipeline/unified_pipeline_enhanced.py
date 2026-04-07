@@ -273,12 +273,14 @@ REPORT_DIR = VAULT_DIR / "60-Logs" / "pipeline-reports"
 
 # Pipeline步骤定义（含Pinboard）
 PIPELINE_STEPS = [
-    "pinboard",     # 1. 获取Pinboard书签
-    "clippings",    # 2. 扫描并迁移Clippings
-    "articles",     # 3. 生成深度解读
-    "quality",      # 4. 质量检查
-    "evergreen",    # 5. 提取Evergreen
-    "moc",          # 6. 更新MOC
+    "pinboard",       # 1. 获取Pinboard书签
+    "clippings",      # 2. 扫描并迁移Clippings
+    "articles",       # 3. 生成深度解读
+    "quality",        # 4. 质量检查
+    "fix_links",      # 5. 修复断裂链接
+    "evergreen",      # 6. 提取Evergreen（quality >= 3.0 才能执行）
+    "registry_sync",  # 7. 同步Registry与文件系统
+    "moc",            # 8. 更新MOC
 ]
 
 
@@ -608,8 +610,8 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable,
-            str(self.scripts_dir / "clippings_processor.py"),
+            sys.executable, "-m", "openclaw_pipeline.clippings_processor",
+            "--vault-dir", str(self.vault_dir)
         ]
         if dry_run:
             cmd.append("--dry-run")
@@ -632,8 +634,8 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable,
-            str(self.scripts_dir / "auto_article_processor.py"),
+            sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+            "--vault-dir", str(self.vault_dir),
             "--process-inbox"
         ]
         if dry_run:
@@ -657,8 +659,7 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable,
-            str(self.scripts_dir / "batch_quality_checker.py"),
+            sys.executable, "-m", "openclaw_pipeline.batch_quality_checker",
             "--all"
         ]
         if dry_run:
@@ -678,6 +679,12 @@ class EnhancedPipeline:
                         result["quality_checked"] = qc_data.get("checked", 0)
                         result["quality_qualified"] = qc_data.get("qualified", 0)
                         result["quality_failed"] = qc_data.get("failed", 0)
+                        # 计算平均质量分数（如果有）
+                        if "avg_score" in qc_data:
+                            result["quality_score"] = qc_data["avg_score"]
+                        elif result["quality_checked"] > 0:
+                            # 估算：qualified / checked 作为代理分数
+                            result["quality_score"] = result["quality_qualified"] / result["quality_checked"] * 5.0
                     except:
                         pass
         else:
@@ -685,15 +692,78 @@ class EnhancedPipeline:
 
         return result
 
-    def step_evergreen(self, recent_days: int = 7, dry_run: bool = False) -> dict:
+    def step_fix_links(self, dry_run: bool = False) -> dict:
+        """执行断裂链接修复步骤"""
+        print("\n" + "="*60)
+        print("STEP 5: Fixing Broken Links")
+        print("="*60)
+
+        cmd = [
+            sys.executable, "-m", "openclaw_pipeline.commands.migrate_broken_links",
+            "--scan",
+            "--write" if not dry_run else "--dry-run",
+            "--vault-dir", str(self.vault_dir),
+        ]
+
+        result = self.run_command(cmd, "fix_links", timeout=300)
+
+        if result["success"]:
+            print("✓ Broken links fixed")
+        else:
+            print(f"✗ Fix links failed: {result.get('error', 'Unknown error')}")
+
+        return result
+
+    def step_registry_sync(self, dry_run: bool = False) -> dict:
+        """执行Registry同步步骤"""
+        print("\n" + "="*60)
+        print("STEP 7: Syncing Registry with Filesystem")
+        print("="*60)
+
+        cmd = [
+            sys.executable, "-m", "openclaw_pipeline.commands.rebuild_registry",
+            "--write" if not dry_run else "--dry-run",
+            "--vault-dir", str(self.vault_dir),
+        ]
+
+        result = self.run_command(cmd, "registry_sync", timeout=120)
+
+        if result["success"]:
+            print("✓ Registry sync completed")
+        else:
+            print(f"✗ Registry sync failed: {result.get('error', 'Unknown error')}")
+
+        return result
+
+    def step_evergreen(self, recent_days: int = 7, dry_run: bool = False, quality_score: float = 0.0) -> dict:
+        """执行Evergreen提取步骤
+
+        Args:
+            recent_days: 处理最近N天的深度解读
+            dry_run: 预览模式
+            quality_score: 质量分数，< 3.0 时阻断执行
+        """
+        # Quality gate: 如果质量分数 < 3.0，阻断 evergreen 步骤
+        if quality_score > 0 and quality_score < 3.0:
+            print(f"\n⚠️  Quality score ({quality_score:.1f}) < 3.0, blocking evergreen extraction")
+            return {
+                "success": False,
+                "blocked": True,
+                "reason": f"quality_score_too_low ({quality_score:.1f} < 3.0)",
+                "error": "Evergreen extraction blocked due to low quality score",
+            }
+
+        print("\n" + "="*60)
+        print("STEP 6: Extracting Evergreen Notes")
+        print("="*60)
         """执行Evergreen提取步骤"""
         print("\n" + "="*60)
         print("STEP 5: Extracting Evergreen Notes")
         print("="*60)
 
         cmd = [
-            sys.executable,
-            str(self.scripts_dir / "auto_evergreen_extractor.py"),
+            sys.executable, "-m", "openclaw_pipeline.auto_evergreen_extractor",
+            "--vault-dir", str(self.vault_dir),
             "--recent", str(recent_days)
         ]
         if dry_run:
@@ -715,8 +785,8 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable,
-            str(self.scripts_dir / "auto_moc_updater.py"),
+            sys.executable, "-m", "openclaw_pipeline.auto_moc_updater",
+            "--vault-dir", str(self.vault_dir),
             "--scan"
         ]
         if dry_run:
@@ -775,8 +845,14 @@ class EnhancedPipeline:
                 cmd_result = self.step_articles(batch_size, dry_run)
             elif step == "quality":
                 cmd_result = self.step_quality(dry_run)
+            elif step == "fix_links":
+                cmd_result = self.step_fix_links(dry_run)
             elif step == "evergreen":
-                cmd_result = self.step_evergreen(7, dry_run)
+                # 从 quality 步骤获取质量分数
+                quality_score = results.get("quality", {}).get("quality_score", 0.0)
+                cmd_result = self.step_evergreen(7, dry_run, quality_score=quality_score)
+            elif step == "registry_sync":
+                cmd_result = self.step_registry_sync(dry_run)
             elif step == "moc":
                 cmd_result = self.step_moc(dry_run)
             else:

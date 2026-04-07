@@ -5,7 +5,6 @@ Frontmatter Parser - 解析和标准化笔记frontmatter
 """
 
 import re
-import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -186,16 +185,17 @@ class NoteMetadata:
 
     @staticmethod
     def _generate_note_id(path: str) -> str:
-        """从文件路径生成稳定note_id"""
-        # 使用相对路径的hash作为ID
-        path_hash = hashlib.sha256(path.encode()).hexdigest()[:16]
-        # 从路径提取有意义的slug
+        """从文件路径生成 note_id（与 Registry slug 兼容）。
+
+        注意：废弃 hash 后缀，改为直接返回规范化 slug。
+        这确保 Graph 模块的 note_id 与 Registry slug 完全一致。
+        """
         stem = Path(path).stem
-        # 清理slug
+        # 清理 slug：非字母数字转连字符，合并连续连字符
         slug = re.sub(r'[^\w]', '-', stem.lower())
         slug = re.sub(r'-+', '-', slug)
         slug = slug.strip('-')[:50]
-        return f"{slug}-{path_hash[:8]}"
+        return slug
 
     @staticmethod
     def _infer_note_type(path: str, markdown: str) -> str:
