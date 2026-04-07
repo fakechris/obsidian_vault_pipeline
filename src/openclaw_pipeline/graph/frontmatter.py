@@ -11,6 +11,9 @@ from typing import Optional
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 
+from ..identity import canonicalize_note_id
+from ..runtime import iter_markdown_files
+
 
 class NoteType(Enum):
     RAW = "raw"
@@ -167,6 +170,10 @@ class NoteMetadata:
             setattr(self, key, value)
         elif key == 'title':
             self.title = value
+        elif key == 'note_id':
+            self.note_id = canonicalize_note_id(value)
+        elif key == 'type':
+            self.note_type = value
         elif key == 'note_type':
             self.note_type = value
         elif key == 'status':
@@ -190,12 +197,7 @@ class NoteMetadata:
         注意：废弃 hash 后缀，改为直接返回规范化 slug。
         这确保 Graph 模块的 note_id 与 Registry slug 完全一致。
         """
-        stem = Path(path).stem
-        # 清理 slug：非字母数字转连字符，合并连续连字符
-        slug = re.sub(r'[^\w]', '-', stem.lower())
-        slug = re.sub(r'-+', '-', slug)
-        slug = slug.strip('-')[:50]
-        return slug
+        return canonicalize_note_id(Path(path).stem)[:50]
 
     @staticmethod
     def _infer_note_type(path: str, markdown: str) -> str:
@@ -277,12 +279,7 @@ class FrontmatterParser:
     def parse_directory(self, directory: Path, recursive: bool = True) -> list[NoteMetadata]:
         """解析目录下的所有markdown文件"""
         results = []
-        pattern = "**/*.md" if recursive else "*.md"
-
-        for md_file in directory.glob(pattern):
-            # 跳过隐藏文件和目录
-            if any(part.startswith('.') for part in md_file.parts):
-                continue
+        for md_file in iter_markdown_files(directory, recursive=recursive):
             try:
                 meta = self.parse_file(md_file)
                 results.append(meta)

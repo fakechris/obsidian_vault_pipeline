@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -30,15 +32,48 @@ from .concept_registry import (
     STATUS_CANDIDATE,
     STATUS_REJECTED,
 )
+from .identity import canonicalize_note_id
+from .runtime import resolve_vault_dir
 
 
 EVERGREEN_DIR = Path("10-Knowledge/Evergreen")
 CANDIDATES_DIR = Path("10-Knowledge/Evergreen/_Candidates")
+WIKILINK_PATTERN = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
+
+
+@dataclass
+class LifecycleMutation:
+    action: str
+    slug: str
+    target_slug: str | None = None
+    touched_files: list[str] = field(default_factory=list)
+    deleted_files: list[str] = field(default_factory=list)
+    link_updates: dict[str, int] = field(default_factory=dict)
+    atlas_refreshed: bool = False
+
+    def to_dict(self) -> dict:
+        return {
+            "action": self.action,
+            "slug": self.slug,
+            "target_slug": self.target_slug,
+            "touched_files": self.touched_files,
+            "deleted_files": self.deleted_files,
+            "link_updates": self.link_updates,
+            "atlas_refreshed": self.atlas_refreshed,
+        }
+
+
+def candidate_file_path(vault_dir: Path, slug: str) -> Path:
+    return vault_dir / CANDIDATES_DIR / f"{slug}.md"
+
+
+def evergreen_file_path(vault_dir: Path, slug: str) -> Path:
+    return vault_dir / EVERGREEN_DIR / f"{slug}.md"
 
 
 def write_evergreen_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = True) -> Path | None:
     """Write a formal Evergreen file for an active concept."""
-    evergreen_path = vault_dir / EVERGREEN_DIR / f"{entry.slug}.md"
+    evergreen_path = evergreen_file_path(vault_dir, entry.slug)
 
     if dry_run:
         print(f"  [DRY RUN] Would create: {evergreen_path}")
@@ -47,6 +82,7 @@ def write_evergreen_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = T
     evergreen_path.parent.mkdir(parents=True, exist_ok=True)
 
     frontmatter = f'''---
+note_id: {entry.slug}
 title: "{entry.title}"
 type: evergreen
 date: {datetime.now().strftime("%Y-%m-%d")}
@@ -72,7 +108,7 @@ area: {entry.area}
 def write_candidate_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = True) -> Path | None:
     """Write a candidate file in the _Candidates directory."""
     candidates_dir = vault_dir / CANDIDATES_DIR
-    candidate_path = candidates_dir / f"{entry.slug}.md"
+    candidate_path = candidate_file_path(vault_dir, entry.slug)
 
     if dry_run:
         print(f"  [DRY RUN] Would create candidate file: {candidate_path}")
@@ -81,6 +117,7 @@ def write_candidate_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = T
     candidates_dir.mkdir(parents=True, exist_ok=True)
 
     frontmatter = f'''---
+note_id: {entry.slug}
 title: "{entry.title}"
 type: candidate
 date: {datetime.now().strftime("%Y-%m-%d")}
@@ -102,6 +139,174 @@ review_state: {entry.review_state}
     candidate_path.write_text(frontmatter, encoding="utf-8")
     print(f"  Created candidate: {candidate_path}")
     return candidate_path
+
+
+def delete_candidate_file(vault_dir: Path, slug: str, dry_run: bool = True) -> Path | None:
+    """Remove a candidate file if it exists."""
+    path = candidate_file_path(vault_dir, slug)
+    if not path.exists():
+        return None
+    if dry_run:
+        print(f"  [DRY RUN] Would delete candidate file: {path}")
+        return path
+    path.unlink()
+    print(f"  Deleted candidate file: {path}")
+    return path
+
+
+def refresh_atlas_from_registry(vault_dir: Path, dry_run: bool = True) -> bool:
+    """Refresh Atlas index from registry."""
+    try:
+        from .auto_moc_updater import MOCUpdater, PipelineLogger
+    except ImportError:
+        from auto_moc_updater import MOCUpdater, PipelineLogger  # type: ignore
+
+    logger = PipelineLogger(vault_dir / "60-Logs" / "pipeline.jsonl")
+    updater = MOCUpdater(vault_dir, logger)
+    result = updater.update_atlas_from_registry(dry_run=dry_run)
+    return not result.get("errors")
+
+
+def rewrite_candidate_links(
+    vault_dir: Path,
+    source_surfaces: list[str],
+    target_slug: str,
+    dry_run: bool = True,
+) -> dict[str, int]:
+    """
+    Rewrite wikilinks that point to a merged candidate so they target the active slug.
+
+    The visible display text is preserved where possible.
+    """
+    normalized = {canonicalize_note_id(surface) for surface in source_surfaces if surface}
+    normalized = {surface for surface in normalized if surface}
+    if not normalized:
+        return {}
+
+    scan_roots = [
+        vault_dir / "10-Knowledge" / "Evergreen",
+        vault_dir / "20-Areas",
+    ]
+    updates: dict[str, int] = {}
+
+    for root in scan_roots:
+        if not root.exists():
+            continue
+        for md_file in root.rglob("*.md"):
+            if md_file.parts[-2:] == ("_Candidates", md_file.name):
+                continue
+            content = md_file.read_text(encoding="utf-8")
+            replacements = 0
+
+            def repl(match: re.Match[str]) -> str:
+                nonlocal replacements
+                target_raw = match.group(1).strip()
+                display = match.group(2).strip() if match.group(2) else ""
+                if canonicalize_note_id(target_raw) not in normalized:
+                    return match.group(0)
+
+                replacements += 1
+                if display:
+                    return f"[[{target_slug}|{display}]]"
+                if canonicalize_note_id(target_raw) == target_slug:
+                    return f"[[{target_slug}]]"
+                return f"[[{target_slug}|{target_raw}]]"
+
+            rewritten = WIKILINK_PATTERN.sub(repl, content)
+            if replacements == 0:
+                continue
+            updates[str(md_file)] = replacements
+            if not dry_run:
+                md_file.write_text(rewritten, encoding="utf-8")
+
+    return updates
+
+
+def promote_candidate(vault_dir: Path, slug: str, dry_run: bool = True) -> LifecycleMutation:
+    """Promote a candidate and synchronize filesystem side effects."""
+    registry = ConceptRegistry(vault_dir).load()
+    entry = registry.find_by_slug(slug)
+    if not entry:
+        raise ValueError(f"Concept '{slug}' not found")
+    if entry.status != STATUS_CANDIDATE:
+        raise ValueError(f"'{slug}' is not a candidate (status: {entry.status})")
+
+    mutation = LifecycleMutation(action="promote", slug=slug, target_slug=slug)
+
+    registry.promote_to_active(slug)
+    entry = registry.find_by_slug(slug)
+    evergreen_path = write_evergreen_file(vault_dir, entry, dry_run=dry_run)
+    if evergreen_path:
+        mutation.touched_files.append(str(evergreen_path))
+    deleted = delete_candidate_file(vault_dir, slug, dry_run=dry_run)
+    if deleted:
+        mutation.deleted_files.append(str(deleted))
+
+    if not dry_run:
+        registry.save()
+    mutation.atlas_refreshed = refresh_atlas_from_registry(vault_dir, dry_run=dry_run)
+    if mutation.atlas_refreshed:
+        mutation.touched_files.append(str(vault_dir / "10-Knowledge" / "Atlas" / "Atlas-Index.md"))
+
+    return mutation
+
+
+def merge_candidate(vault_dir: Path, slug: str, target_slug: str, dry_run: bool = True) -> LifecycleMutation:
+    """Merge a candidate as alias and migrate obvious wikilinks."""
+    registry = ConceptRegistry(vault_dir).load()
+    candidate = registry.find_by_slug(slug)
+    target = registry.find_by_slug(target_slug)
+    if not candidate:
+        raise ValueError(f"Candidate '{slug}' not found")
+    if not target:
+        raise ValueError(f"Target '{target_slug}' not found")
+    if candidate.status == STATUS_ACTIVE:
+        raise ValueError(f"'{slug}' is already active, cannot merge")
+
+    aliases_to_add = [candidate.title, *candidate.aliases]
+    source_surfaces = [candidate.slug, candidate.title, *candidate.aliases]
+
+    mutation = LifecycleMutation(action="merge", slug=slug, target_slug=target_slug)
+    registry.merge_as_alias(slug, target_slug, aliases_to_add)
+    mutation.link_updates = rewrite_candidate_links(
+        vault_dir,
+        source_surfaces=source_surfaces,
+        target_slug=target_slug,
+        dry_run=dry_run,
+    )
+    deleted = delete_candidate_file(vault_dir, slug, dry_run=dry_run)
+    if deleted:
+        mutation.deleted_files.append(str(deleted))
+
+    if not dry_run:
+        registry.save()
+    mutation.atlas_refreshed = refresh_atlas_from_registry(vault_dir, dry_run=dry_run)
+    if mutation.atlas_refreshed:
+        mutation.touched_files.append(str(vault_dir / "10-Knowledge" / "Atlas" / "Atlas-Index.md"))
+
+    return mutation
+
+
+def reject_candidate(vault_dir: Path, slug: str, dry_run: bool = True) -> LifecycleMutation:
+    """Reject a candidate and remove candidate filesystem artifacts."""
+    registry = ConceptRegistry(vault_dir).load()
+    entry = registry.find_by_slug(slug)
+    if not entry:
+        raise ValueError(f"Concept '{slug}' not found")
+
+    mutation = LifecycleMutation(action="reject", slug=slug)
+    registry.reject(slug)
+    deleted = delete_candidate_file(vault_dir, slug, dry_run=dry_run)
+    if deleted:
+        mutation.deleted_files.append(str(deleted))
+
+    if not dry_run:
+        registry.save()
+    mutation.atlas_refreshed = refresh_atlas_from_registry(vault_dir, dry_run=dry_run)
+    if mutation.atlas_refreshed:
+        mutation.touched_files.append(str(vault_dir / "10-Knowledge" / "Atlas" / "Atlas-Index.md"))
+
+    return mutation
 
 
 def list_candidates(registry: ConceptRegistry) -> None:
@@ -185,94 +390,33 @@ def cmd_review(args: argparse.Namespace) -> None:
 
 def cmd_promote(args: argparse.Namespace) -> None:
     """Handle --promote <slug> command."""
-    registry = ConceptRegistry(args.vault_dir).load()
     dry_run = args.dry_run
 
     if dry_run:
         print(f"[DRY RUN] Promoting candidate: {args.slug}")
 
-    entry = registry.find_by_slug(args.slug)
-    if not entry:
-        print(f"Error: Concept '{args.slug}' not found")
-        return
-
-    if entry.status != STATUS_CANDIDATE:
-        print(f"Error: '{args.slug}' is not a candidate (status: {entry.status})")
-        return
-
-    # Promote
-    registry.promote_to_active(args.slug)
-    entry = registry.find_by_slug(args.slug)
-
-    # Write Evergreen file
-    write_evergreen_file(args.vault_dir, entry, dry_run=dry_run)
-
-    # Save registry
-    if not dry_run:
-        registry.save()
-        print(f"Promoted '{args.slug}' to active")
-    else:
-        print(f"[DRY RUN] Would promote and create Evergreen file")
+    mutation = promote_candidate(args.vault_dir, args.slug, dry_run=dry_run)
+    print(json.dumps(mutation.to_dict(), ensure_ascii=False, indent=2))
 
 
 def cmd_merge(args: argparse.Namespace) -> None:
     """Handle --merge <slug> --target <target_slug> command."""
-    registry = ConceptRegistry(args.vault_dir).load()
     dry_run = args.dry_run
 
     if dry_run:
         print(f"[DRY RUN] Merging '{args.slug}' as alias of '{args.target}'")
-
-    candidate = registry.find_by_slug(args.slug)
-    target = registry.find_by_slug(args.target)
-
-    if not candidate:
-        print(f"Error: Candidate '{args.slug}' not found")
-        return
-
-    if not target:
-        print(f"Error: Target '{args.target}' not found")
-        return
-
-    if candidate.status == STATUS_ACTIVE:
-        print(f"Error: '{args.slug}' is already active, cannot merge")
-        return
-
-    # Aliases to add from candidate
-    aliases_to_add = [candidate.title] + candidate.aliases
-
-    # Merge
-    registry.merge_as_alias(args.slug, args.target, aliases_to_add)
-
-    # Save
-    if not dry_run:
-        registry.save()
-        print(f"Merged '{args.slug}' as alias of '{args.target}'")
-        print(f"  Aliases added: {aliases_to_add}")
-    else:
-        print(f"[DRY RUN] Would merge with aliases: {aliases_to_add}")
+    mutation = merge_candidate(args.vault_dir, args.slug, args.target, dry_run=dry_run)
+    print(json.dumps(mutation.to_dict(), ensure_ascii=False, indent=2))
 
 
 def cmd_reject(args: argparse.Namespace) -> None:
     """Handle --reject <slug> command."""
-    registry = ConceptRegistry(args.vault_dir).load()
     dry_run = args.dry_run
 
     if dry_run:
         print(f"[DRY RUN] Rejecting candidate: {args.slug}")
-
-    entry = registry.find_by_slug(args.slug)
-    if not entry:
-        print(f"Error: Concept '{args.slug}' not found")
-        return
-
-    registry.reject(args.slug)
-
-    if not dry_run:
-        registry.save()
-        print(f"Rejected '{args.slug}'")
-    else:
-        print(f"[DRY RUN] Would reject '{args.slug}'")
+    mutation = reject_candidate(args.vault_dir, args.slug, dry_run=dry_run)
+    print(json.dumps(mutation.to_dict(), ensure_ascii=False, indent=2))
 
 
 def cmd_write_candidates(args: argparse.Namespace) -> None:
@@ -296,7 +440,7 @@ def cmd_write_candidates(args: argparse.Namespace) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Promote and manage candidate concepts")
-    parser.add_argument("--vault-dir", type=Path, default=Path.cwd())
+    parser.add_argument("--vault-dir", type=Path, default=None)
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -327,6 +471,8 @@ def main():
     write_parser.add_argument("--dry-run", action="store_true", help="Dry run")
 
     args = parser.parse_args()
+
+    args.vault_dir = resolve_vault_dir(args.vault_dir)
 
     if args.command == "list":
         cmd_list(args)

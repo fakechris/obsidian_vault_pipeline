@@ -25,11 +25,14 @@
 ## 测试
 
 ```bash
-# 运行一致性检查
-./60-Logs/scripts/check-consistency.sh
+# 运行测试
+pytest -q
 
-# 预览模式测试Pipeline
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --full --dry-run
+# 预览模式测试 Pipeline
+ovp --full --dry-run
+
+# 运行一致性检查
+ovp-lint --check
 ```
 
 ## License

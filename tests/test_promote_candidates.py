@@ -4,11 +4,19 @@ Tests for promote_candidates module.
 
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 from openclaw_pipeline.concept_registry import (
     ConceptRegistry,
     ConceptEntry,
     STATUS_ACTIVE,
     STATUS_CANDIDATE,
+)
+from openclaw_pipeline.auto_evergreen_extractor import AutoEvergreenExtractor, PipelineLogger as EvergreenLogger
+from openclaw_pipeline.promote_candidates import (
+    merge_candidate,
+    promote_candidate,
+    reject_candidate,
+    write_candidate_file,
 )
 
 
@@ -120,3 +128,111 @@ class TestCandidatePromotion:
 
         entry2 = registry.find_by_slug("new-concept")
         assert entry2.source_count == 2
+
+    def test_promote_candidate_syncs_files_and_atlas(self, temp_vault):
+        registry = ConceptRegistry(temp_vault)
+        entry = registry.upsert_candidate(
+            slug="new-concept",
+            title="New Concept",
+            definition="A new concept.",
+            area="testing",
+        )
+        registry.save()
+        write_candidate_file(temp_vault, entry, dry_run=False)
+
+        mutation = promote_candidate(temp_vault, "new-concept", dry_run=False)
+
+        evergreen_path = temp_vault / "10-Knowledge" / "Evergreen" / "new-concept.md"
+        candidate_path = temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "new-concept.md"
+        atlas_index = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+
+        assert evergreen_path.exists()
+        assert candidate_path.exists() is False
+        assert atlas_index.exists()
+        assert "[[new-concept|New Concept]]" in atlas_index.read_text(encoding="utf-8")
+        assert mutation.atlas_refreshed is True
+
+    def test_merge_candidate_rewrites_links_and_removes_candidate_file(self, temp_vault):
+        registry = ConceptRegistry(temp_vault)
+        registry.add_entry(ConceptEntry(
+            slug="existing-concept",
+            title="Existing Concept",
+            aliases=["existing"],
+            definition="Existing.",
+            area="testing",
+        ))
+        candidate = registry.upsert_candidate(
+            slug="variant-name",
+            title="Variant Name",
+            definition="A variant.",
+            area="testing",
+            aliases=["variant-alias"],
+        )
+        registry.save()
+        write_candidate_file(temp_vault, candidate, dry_run=False)
+
+        article_path = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04-01_Test.md"
+        article_path.parent.mkdir(parents=True, exist_ok=True)
+        article_path.write_text(
+            "# Test\n\nLinks [[Variant Name]] and [[variant-alias]].\n",
+            encoding="utf-8",
+        )
+
+        mutation = merge_candidate(temp_vault, "variant-name", "existing-concept", dry_run=False)
+
+        updated = article_path.read_text(encoding="utf-8")
+        existing = ConceptRegistry(temp_vault).load().find_by_slug("existing-concept")
+        candidate_path = temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "variant-name.md"
+
+        assert candidate_path.exists() is False
+        assert "[[existing-concept|Variant Name]]" in updated
+        assert "[[existing-concept|variant-alias]]" in updated
+        assert "variant-name" in existing.redirects
+        assert mutation.link_updates[str(article_path)] == 2
+
+    def test_reject_candidate_removes_candidate_file_and_updates_atlas(self, temp_vault):
+        registry = ConceptRegistry(temp_vault)
+        entry = registry.upsert_candidate(
+            slug="reject-me",
+            title="Reject Me",
+            definition="Reject.",
+            area="testing",
+        )
+        registry.save()
+        write_candidate_file(temp_vault, entry, dry_run=False)
+
+        mutation = reject_candidate(temp_vault, "reject-me", dry_run=False)
+
+        candidate_path = temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "reject-me.md"
+        atlas_index = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+        reloaded = ConceptRegistry(temp_vault).load().find_by_slug("reject-me")
+
+        assert candidate_path.exists() is False
+        assert atlas_index.exists()
+        assert reloaded.status == "rejected"
+        assert mutation.atlas_refreshed is True
+
+    def test_auto_evergreen_extractor_writes_candidate_file(self, temp_vault):
+        logger = EvergreenLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+        extractor = AutoEvergreenExtractor(temp_vault, logger)
+        extractor.extractor = SimpleNamespace(
+            extract_concepts=lambda file_path, content: [{
+                "concept_name": "new-candidate",
+                "title": "New Candidate",
+                "one_sentence_def": "Candidate definition",
+            }]
+        )
+
+        source_file = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04-01_Test_深度解读.md"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text("# Test\n", encoding="utf-8")
+
+        result = extractor.process_file(source_file, dry_run=False)
+
+        candidate_path = temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "new-candidate.md"
+        entry = ConceptRegistry(temp_vault).load().find_by_slug("new-candidate")
+
+        assert result["candidates_added"] == 1
+        assert candidate_path.exists()
+        assert entry is not None
+        assert entry.status == STATUS_CANDIDATE

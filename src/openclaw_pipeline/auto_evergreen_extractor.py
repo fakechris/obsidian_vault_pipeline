@@ -27,6 +27,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+try:
+    from .runtime import VaultLayout, resolve_vault_dir
+except ImportError:
+    from runtime import VaultLayout, resolve_vault_dir  # type: ignore
+
 # Try to import concept registry
 try:
     from .concept_registry import ConceptRegistry, STATUS_ACTIVE, STATUS_CANDIDATE
@@ -34,15 +39,20 @@ try:
 except ImportError:
     HAS_REGISTRY = False
 
-# 自动加载 .env 文件
-VAULT_DIR = Path.cwd()  # 默认使用当前目录，可被参数覆盖
-ENV_FILE = VAULT_DIR / ".env"
-if ENV_FILE.exists():
+VAULT_DIR = resolve_vault_dir()
+DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
+
+
+def load_env_file(vault_dir: Path) -> None:
+    env_file = vault_dir / ".env"
+    if not env_file.exists():
+        return
     try:
         from dotenv import load_dotenv
-        load_dotenv(dotenv_path=ENV_FILE, override=True)
+
+        load_dotenv(dotenv_path=env_file, override=True)
     except ImportError:
-        pass  # dotenv 未安装，跳过
+        pass
 
 sys.path.insert(0, str(Path(__file__).parent / "auto_vault"))
 try:
@@ -52,9 +62,9 @@ except ImportError:
     LITELLM_AVAILABLE = False
 
 # ========== 配置 ==========
-EVERGREEN_DIR = VAULT_DIR / "10-Knowledge" / "Evergreen"
-ATLAS_DIR = VAULT_DIR / "10-Knowledge" / "Atlas"
-LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
+EVERGREEN_DIR = DEFAULT_LAYOUT.evergreen_dir
+ATLAS_DIR = DEFAULT_LAYOUT.atlas_dir
+LOG_FILE = DEFAULT_LAYOUT.pipeline_log
 
 
 class PipelineLogger:
@@ -71,6 +81,7 @@ class PipelineLogger:
             "event_type": event_type,
             **data
         }
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -232,8 +243,9 @@ class AutoEvergreenExtractor:
     DEFAULT_PROMOTE_THRESHOLD = 3
 
     def __init__(self, vault_dir: Path, logger: PipelineLogger):
-        self.vault_dir = vault_dir
-        self.evergreen_dir = vault_dir / "10-Knowledge" / "Evergreen"
+        self.layout = VaultLayout.from_vault(vault_dir)
+        self.vault_dir = self.layout.vault_dir
+        self.evergreen_dir = self.layout.evergreen_dir
         self.logger = logger
         self.extractor = None
         self._registry = None  # 延迟加载，per-instance 单次加载
@@ -372,6 +384,9 @@ class AutoEvergreenExtractor:
                                 "path": str(output_path)
                             })
                         else:
+                            from .promote_candidates import write_candidate_file
+
+                            write_candidate_file(self.vault_dir, entry, dry_run=False)
                             concept_info["status"] = "candidate_added"
                             result["candidates_added"] += 1
                     except ValueError:
@@ -458,12 +473,15 @@ def main():
                         help=f"自动 promote 的 source_count 阈值 (默认: {AutoEvergreenExtractor.DEFAULT_PROMOTE_THRESHOLD})")
     parser.add_argument("--api-key", help="API Key")
     parser.add_argument("--api-base", help="API Base URL")
-    parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
+    parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
     args = parser.parse_args()
 
+    layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
+    load_env_file(layout.vault_dir)
+
     # 初始化
-    logger = PipelineLogger(LOG_FILE)
-    extractor = AutoEvergreenExtractor(args.vault_dir, logger)
+    logger = PipelineLogger(layout.pipeline_log)
+    extractor = AutoEvergreenExtractor(layout.vault_dir, logger)
 
     try:
         extractor.init_llm(api_key=args.api_key, api_base=args.api_base)
@@ -491,7 +509,7 @@ def main():
         for area in areas:
             # 查找最近N天的目录
             for days_ago in range(args.recent):
-                date_dir = args.vault_dir / "20-Areas" / area / "Topics" / (
+                date_dir = layout.vault_dir / "20-Areas" / area / "Topics" / (
                     datetime.now() - __import__('datetime').timedelta(days=days_ago)
                 ).strftime("%Y-%m")
                 if date_dir.exists():

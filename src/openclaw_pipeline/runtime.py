@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Iterator
+
+
+def resolve_vault_dir(vault_dir: Path | str | None = None) -> Path:
+    """Resolve the vault directory once and use the absolute path everywhere."""
+    base = Path.cwd() if vault_dir is None else Path(vault_dir)
+    return base.expanduser().resolve()
+
+
+def is_hidden_path(path: Path) -> bool:
+    """Return True only for actual hidden path parts, not '.' or '..'."""
+    return any(part.startswith(".") and part not in {".", ".."} for part in path.parts)
+
+
+def iter_markdown_files(directory: Path, recursive: bool = True) -> Iterator[Path]:
+    """Yield markdown files while skipping actual hidden files and directories."""
+    pattern = "**/*.md" if recursive else "*.md"
+    for md_file in directory.glob(pattern):
+        if is_hidden_path(md_file):
+            continue
+        yield md_file
+
+
+@dataclass(frozen=True)
+class VaultLayout:
+    vault_dir: Path
+
+    @classmethod
+    def from_vault(cls, vault_dir: Path | str | None = None) -> "VaultLayout":
+        return cls(resolve_vault_dir(vault_dir))
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.vault_dir / "60-Logs"
+
+    @property
+    def pipeline_log(self) -> Path:
+        return self.logs_dir / "pipeline.jsonl"
+
+    @property
+    def transactions_dir(self) -> Path:
+        return self.logs_dir / "transactions"
+
+    @property
+    def pipeline_reports_dir(self) -> Path:
+        return self.logs_dir / "pipeline-reports"
+
+    @property
+    def link_resolution_dir(self) -> Path:
+        return self.logs_dir / "link-resolution"
+
+    @property
+    def daily_delta_dir(self) -> Path:
+        return self.logs_dir / "daily-deltas"
+
+    @property
+    def quality_reports_dir(self) -> Path:
+        return self.logs_dir / "quality-reports"
+
+    @property
+    def raw_dir(self) -> Path:
+        return self.vault_dir / "50-Inbox" / "01-Raw"
+
+    @property
+    def clippings_dir(self) -> Path:
+        return self.vault_dir / "Clippings"
+
+    @property
+    def pinboard_dir(self) -> Path:
+        return self.vault_dir / "50-Inbox" / "02-Pinboard"
+
+    @property
+    def processed_dir(self) -> Path:
+        return self.vault_dir / "50-Inbox" / "03-Processed"
+
+    @property
+    def evergreen_dir(self) -> Path:
+        return self.vault_dir / "10-Knowledge" / "Evergreen"
+
+    @property
+    def atlas_dir(self) -> Path:
+        return self.vault_dir / "10-Knowledge" / "Atlas"
+
+    @property
+    def papers_dir(self) -> Path:
+        return self.vault_dir / "20-Areas" / "AI-Research" / "Papers"
+
+    @property
+    def pinboard_archive_dir(self) -> Path:
+        return self.vault_dir / "70-Archive" / "Pinboard"
+
+    def month_topics_dir(self, area: str, when: datetime | None = None) -> Path:
+        month = (when or datetime.now()).strftime("%Y-%m")
+        return self.vault_dir / "20-Areas" / area / "Topics" / month
+
+    def classification_output_dir(self, classification: str, when: datetime | None = None) -> Path:
+        mapping = {
+            "ai": "AI-Research",
+            "tools": "Tools",
+            "investing": "Investing",
+            "programming": "Programming",
+        }
+        area = mapping.get(classification, "AI-Research")
+        return self.month_topics_dir(area, when=when)

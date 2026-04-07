@@ -114,10 +114,10 @@ cp .env.example .env
 # 编辑 .env 填入API keys
 
 # 安装依赖
-pip install -r requirements.txt
+pip install -e .
 
 # 使用
-python3 60-Logs/scripts/unified_pipeline_enhanced.py --full
+ovp --full
 ```
 
 ## 维护更新

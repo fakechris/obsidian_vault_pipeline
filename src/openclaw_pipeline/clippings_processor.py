@@ -29,15 +29,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# 自动加载 .env 文件
-VAULT_DIR = Path.cwd()  # 默认使用当前目录，可被参数覆盖
-ENV_FILE = VAULT_DIR / ".env"
-if ENV_FILE.exists():
+try:
+    from .runtime import VaultLayout, resolve_vault_dir
+except ImportError:
+    from runtime import VaultLayout, resolve_vault_dir  # type: ignore
+
+
+VAULT_DIR = resolve_vault_dir()
+DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
+
+
+def load_env_file(vault_dir: Path) -> None:
+    env_file = vault_dir / ".env"
+    if not env_file.exists():
+        return
     try:
         from dotenv import load_dotenv
-        load_dotenv(dotenv_path=ENV_FILE, override=True)
+
+        load_dotenv(dotenv_path=env_file, override=True)
     except ImportError:
-        pass  # dotenv 未安装，跳过
+        pass
 
 # Import litellm for LLM calls
 sys.path.insert(0, str(Path(__file__).parent / "auto_vault"))
@@ -47,12 +58,12 @@ except ImportError:
     litellm = None
 
 # ========== 配置 ==========
-CLIPPINGS_DIR = VAULT_DIR / "Clippings"
-RAW_DIR = VAULT_DIR / "50-Inbox" / "01-Raw"
-PROCESSED_DIR = VAULT_DIR / "50-Inbox" / "03-Processed"
-MANIFEST_FILE = VAULT_DIR / "50-Inbox" / ".manifest.json"
-LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
-TXN_DIR = VAULT_DIR / "60-Logs" / "transactions"
+CLIPPINGS_DIR = DEFAULT_LAYOUT.clippings_dir
+RAW_DIR = DEFAULT_LAYOUT.raw_dir
+PROCESSED_DIR = DEFAULT_LAYOUT.processed_dir
+MANIFEST_FILE = DEFAULT_LAYOUT.vault_dir / "50-Inbox" / ".manifest.json"
+LOG_FILE = DEFAULT_LAYOUT.pipeline_log
+TXN_DIR = DEFAULT_LAYOUT.transactions_dir
 
 # 特殊字符映射表
 CHARACTER_MAP = {
@@ -91,6 +102,7 @@ class PipelineLogger:
             "event_type": event_type,
             **data
         }
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -208,9 +220,10 @@ class ClippingsProcessor:
     """Clippings处理器"""
 
     def __init__(self, vault_dir: Path, logger: PipelineLogger, txn: TransactionManager):
-        self.vault_dir = vault_dir
-        self.clippings_dir = vault_dir / "Clippings"
-        self.raw_dir = vault_dir / "50-Inbox" / "01-Raw"
+        self.layout = VaultLayout.from_vault(vault_dir)
+        self.vault_dir = self.layout.vault_dir
+        self.clippings_dir = self.layout.clippings_dir
+        self.raw_dir = self.layout.raw_dir
         self.logger = logger
         self.txn = txn
 
@@ -336,20 +349,23 @@ def main():
     parser = argparse.ArgumentParser(description="全自动Clippings处理器")
     parser.add_argument("--dry-run", action="store_true", help="预览模式")
     parser.add_argument("--batch-size", type=int, help="批量处理数量")
-    parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
+    parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
     args = parser.parse_args()
 
+    layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
+    load_env_file(layout.vault_dir)
+
     # 初始化组件
-    logger = PipelineLogger(LOG_FILE)
-    txn = TransactionManager(TXN_DIR)
-    manifest = ManifestManager(MANIFEST_FILE)
+    logger = PipelineLogger(layout.pipeline_log)
+    txn = TransactionManager(layout.transactions_dir)
+    manifest = ManifestManager(layout.vault_dir / "50-Inbox" / ".manifest.json")
 
     # 创建事务
     txn_id = txn.start("clippings-processing", f"Process clippings {datetime.now().isoformat()}")
     logger.log("transaction_started", {"txn_id": txn_id, "type": "clippings-processing"})
 
     # 初始化处理器
-    processor = ClippingsProcessor(args.vault_dir, logger, txn)
+    processor = ClippingsProcessor(layout.vault_dir, logger, txn)
 
     # 执行处理
     txn.step(txn_id, "scan", "in_progress", "Scanning Clippings directory")

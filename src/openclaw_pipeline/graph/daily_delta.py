@@ -72,7 +72,7 @@ class DailyDelta:
                 seed_notes.append(node)
 
         # BFS扩展邻居
-        expanded_ids = self._expand_hops(seed_ids, all_edges, expand_hops)
+        expanded_ids, distance_map = self._expand_hops(seed_ids, all_edges, expand_hops)
 
         # 构建子图
         subgraph_nodes = {
@@ -86,18 +86,19 @@ class DailyDelta:
 
         # 计算seed_role
         for nid, node in subgraph_nodes.items():
-            if nid in seed_ids:
+            distance = distance_map.get(nid, expand_hops + 1)
+            if distance == 0:
                 node['seed_role'] = 'seed'
                 node['distance_from_seed'] = 0
-            elif self._is_1hop(nid, seed_ids, all_edges):
+            elif distance == 1:
                 node['seed_role'] = 'neighbor_1hop'
                 node['distance_from_seed'] = 1
-            elif self._is_2hop(nid, seed_ids, all_edges):
+            elif distance == 2:
                 node['seed_role'] = 'neighbor_2hop'
                 node['distance_from_seed'] = 2
             else:
                 node['seed_role'] = 'neighbor_3hop'
-                node['distance_from_seed'] = 3
+                node['distance_from_seed'] = distance
 
         # 标记新边
         for eid, edge in subgraph_edges.items():
@@ -147,34 +148,36 @@ class DailyDelta:
         seed_ids: set[str],
         all_edges: dict,
         max_hops: int
-    ) -> set[str]:
-        """BFS扩展N跳邻居"""
+    ) -> tuple[set[str], dict[str, int]]:
+        """BFS扩展N跳邻居，按无向邻接扩展并返回距离映射。"""
         expanded = set(seed_ids)
         current_hop = set(seed_ids)
+        distance_map = {seed_id: 0 for seed_id in seed_ids}
 
-        # 构建邻接表
+        # 构建无向邻接表，daily delta 应同时观察入边和出边邻居
         adjacency = {}
         for edge in all_edges.values():
             src = edge['source']
             tgt = edge['target']
-            if src not in adjacency:
-                adjacency[src] = set()
-            adjacency[src].add(tgt)
+            adjacency.setdefault(src, set()).add(tgt)
+            adjacency.setdefault(tgt, set()).add(src)
 
-        for _ in range(max_hops):
+        for hop in range(1, max_hops + 1):
             next_hop = set()
             for node_id in current_hop:
                 if node_id in adjacency:
                     next_hop.update(adjacency[node_id])
 
             next_hop -= expanded
+            for node_id in next_hop:
+                distance_map[node_id] = hop
             expanded.update(next_hop)
             current_hop = next_hop
 
             if not current_hop:
                 break
 
-        return expanded
+        return expanded, distance_map
 
     def _is_1hop(self, node_id: str, seed_ids: set[str], all_edges: dict) -> bool:
         """判断是否是1跳邻居"""

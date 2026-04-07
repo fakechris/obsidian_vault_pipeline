@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -29,26 +30,37 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-# 自动加载 .env 文件
-VAULT_DIR = Path.cwd()  # 默认使用当前目录，可被参数覆盖
-ENV_FILE = VAULT_DIR / ".env"
-if ENV_FILE.exists():
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(dotenv_path=ENV_FILE, override=True)
-    except ImportError:
-        pass  # dotenv 未安装，跳过
-
 try:
-    import litellm
+    from .runtime import VaultLayout, resolve_vault_dir
 except ImportError:
-    print("Error: litellm is required. Install with: pip install litellm")
-    sys.exit(1)
+    from runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
+
+VAULT_DIR = resolve_vault_dir()
+DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
 
 # ========== 配置 ==========
-OUTPUT_DIR = VAULT_DIR / "20-Areas" / "Tools" / "Topics" / datetime.now().strftime("%Y-%m")
-LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
+OUTPUT_DIR = DEFAULT_LAYOUT.month_topics_dir("Tools")
+LOG_FILE = DEFAULT_LAYOUT.pipeline_log
+
+
+def load_env_file(vault_dir: Path) -> None:
+    """Load environment variables from the resolved vault root if available."""
+    env_file = vault_dir / ".env"
+    if not env_file.exists():
+        return
+
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(dotenv_path=env_file, override=True)
+    except ImportError:
+        pass
+
+
+def build_default_output_dir(vault_dir: Path | str | None = None) -> Path:
+    """Return the default GitHub output directory for a vault."""
+    return VaultLayout.from_vault(vault_dir).month_topics_dir("Tools")
 
 
 @dataclass
@@ -77,6 +89,7 @@ class PipelineLogger:
             "event_type": event_type,
             **data
         }
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -110,6 +123,11 @@ class LiteLLMClient:
 
         if not self._api_key:
             raise ValueError("API key required. Set AUTO_VAULT_API_KEY env var.")
+        try:
+            import litellm as litellm_module
+        except ImportError as exc:
+            raise ValueError("litellm is required. Install with: pip install litellm") from exc
+        self._litellm = litellm_module
 
     def generate(
         self,
@@ -131,7 +149,7 @@ class LiteLLMClient:
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
-        response = litellm.completion(**kwargs)
+        response = self._litellm.completion(**kwargs)
         self._total_calls += 1
 
         content = response.choices[0].message.content or ""
@@ -395,8 +413,10 @@ def main():
     parser.add_argument("--single", "-s", help="单个GitHub URL")
     parser.add_argument("--process-single", type=Path,
                         help="处理单个 pinboard 书签文件，提取 URL 并深度解读")
-    parser.add_argument("--output-dir", "-o", type=Path, default=OUTPUT_DIR,
-                        help=f"输出目录（默认: {OUTPUT_DIR}）")
+    parser.add_argument("--vault-dir", type=Path, default=None,
+                        help="Vault 根目录（默认: 当前工作目录）")
+    parser.add_argument("--output-dir", "-o", type=Path, default=None,
+                        help="输出目录（默认: <vault>/20-Areas/Tools/Topics/YYYY-MM）")
     parser.add_argument("--model", "-m", default="MiniMax-M2.5", help="LLM模型")
     parser.add_argument("--api-type", default="anthropic", choices=["anthropic", "openai"])
     parser.add_argument("--api-key", help="API Key（或设置AUTO_VAULT_API_KEY环境变量）")
@@ -409,6 +429,10 @@ def main():
     if not any([args.input, args.single, args.process_single]):
         parser.print_help()
         sys.exit(1)
+
+    layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
+    load_env_file(layout.vault_dir)
+    args.output_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else build_default_output_dir(layout.vault_dir)
 
     # 初始化LLM
     try:

@@ -19,18 +19,15 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+try:
+    from ..runtime import resolve_vault_dir
+except ImportError:
+    from runtime import resolve_vault_dir  # type: ignore
+
 
 def get_vault_dir() -> Path:
     """获取 Vault 目录"""
-    try:
-        import subprocess
-        git_root = subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"],
-            text=True
-        ).strip()
-        return Path(git_root)
-    except subprocess.CalledProcessError:
-        return Path.cwd()
+    return resolve_vault_dir()
 
 
 def repair_transactions(vault_dir: Path, dry_run: bool = True) -> dict:
@@ -148,30 +145,50 @@ def repair_autopilot(vault_dir: Path, dry_run: bool = True) -> dict:
 
             # 检查卡住的任务
             cursor.execute("""
-                SELECT id, status, created_at, updated_at
+                SELECT id, status, created_at, started_at
                 FROM tasks
-                WHERE status IN ('pending', 'running')
+                WHERE status IN ('pending', 'processing')
             """)
-            stuck_tasks = cursor.fetchall()
+            active_tasks = cursor.fetchall()
+            cutoff = datetime.now() - timedelta(days=1)
+            stuck_tasks = []
+
+            for task_id, status, created_at, started_at in active_tasks:
+                ref_time = started_at or created_at
+                try:
+                    ref_dt = datetime.fromisoformat(ref_time)
+                except (TypeError, ValueError):
+                    ref_dt = datetime.min
+                if ref_dt < cutoff:
+                    stuck_tasks.append((task_id, status, created_at, started_at))
 
             if stuck_tasks:
                 print(f"\n  Found {len(stuck_tasks)} stuck tasks:")
                 for task in stuck_tasks[:5]:
-                    print(f"    • {task[0]} | status={task[1]} | created={task[2]}")
+                    started_display = task[3] or "-"
+                    print(f"    • {task[0]} | status={task[1]} | created={task[2]} | started={started_display}")
                 if len(stuck_tasks) > 5:
                     print(f"    ... and {len(stuck_tasks) - 5} more")
 
                 if not dry_run:
-                    # 清理卡住的任务
-                    cursor.execute("""
-                        UPDATE tasks
-                        SET status = 'cancelled'
-                        WHERE status IN ('pending', 'running')
-                        AND datetime(updated_at) < datetime('now', '-1 day')
-                    """)
-                    result["fixed"] = cursor.rowcount
+                    fixed = 0
+                    for task_id, status, _created_at, _started_at in stuck_tasks:
+                        if status == "pending":
+                            cursor.execute("""
+                                UPDATE tasks
+                                SET status = 'failed', error = ?, completed_at = ?
+                                WHERE id = ?
+                            """, ("repaired_stale_pending_task", datetime.now().isoformat(), task_id))
+                        else:
+                            cursor.execute("""
+                                UPDATE tasks
+                                SET status = 'failed', error = ?, completed_at = ?
+                                WHERE id = ?
+                            """, ("repaired_stale_processing_task", datetime.now().isoformat(), task_id))
+                        fixed += cursor.rowcount
+                    result["fixed"] = fixed
                     conn.commit()
-                    print(f"\n  ✅ Cancelled {result['fixed']} stuck tasks")
+                    print(f"\n  ✅ Marked {result['fixed']} stuck tasks as failed")
             else:
                 print("  ✅ No stuck tasks")
 

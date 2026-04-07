@@ -27,6 +27,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+try:
+    from .runtime import VaultLayout, resolve_vault_dir
+except ImportError:
+    from runtime import VaultLayout, resolve_vault_dir  # type: ignore
+
 # Try to import concept registry
 try:
     from .concept_registry import ConceptRegistry, STATUS_ACTIVE, STATUS_CANDIDATE
@@ -34,20 +39,21 @@ try:
 except ImportError:
     HAS_REGISTRY = False
 
-# 自动加载 .env 文件
-VAULT_DIR = Path.cwd()  # 默认使用当前目录，可被参数覆盖
-ENV_FILE = VAULT_DIR / ".env"
-if ENV_FILE.exists():
+VAULT_DIR = resolve_vault_dir()
+DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
+LOG_FILE = DEFAULT_LAYOUT.pipeline_log
+
+
+def load_env_file(vault_dir: Path) -> None:
+    env_file = vault_dir / ".env"
+    if not env_file.exists():
+        return
     try:
         from dotenv import load_dotenv
-        load_dotenv(dotenv_path=ENV_FILE, override=True)
-    except ImportError:
-        pass  # dotenv 未安装，跳过
 
-# ========== 配置 ==========
-AREAS_DIR = VAULT_DIR / "20-Areas"
-ATLAS_DIR = VAULT_DIR / "10-Knowledge" / "Atlas"
-LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
+        load_dotenv(dotenv_path=env_file, override=True)
+    except ImportError:
+        pass
 
 # MOC映射配置
 AREA_MOC_MAPPING = {
@@ -88,6 +94,7 @@ class PipelineLogger:
             "event_type": event_type,
             **data
         }
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -431,12 +438,15 @@ def main():
     parser.add_argument("--update-atlas-from-registry", action="store_true",
                         help="从registry更新Atlas (推荐)")
     parser.add_argument("--dry-run", action="store_true", help="预览模式")
-    parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
+    parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
     args = parser.parse_args()
 
+    layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
+    load_env_file(layout.vault_dir)
+
     # 初始化
-    logger = PipelineLogger(LOG_FILE)
-    updater = MOCUpdater(args.vault_dir, logger)
+    logger = PipelineLogger(layout.pipeline_log)
+    updater = MOCUpdater(layout.vault_dir, logger)
 
     # 执行更新
     if args.update_atlas_from_registry:

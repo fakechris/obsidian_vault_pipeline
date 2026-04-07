@@ -15,12 +15,16 @@ from __future__ import annotations
 import os
 import re
 import sys
+import argparse
 from pathlib import Path
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-VAULT_DIR = Path(__file__).parent.parent.parent.parent / "openclaw-showcase"
+try:
+    from .runtime import iter_markdown_files, resolve_vault_dir
+except ImportError:
+    from runtime import iter_markdown_files, resolve_vault_dir  # type: ignore
 
 # Try to import concept registry
 try:
@@ -181,20 +185,20 @@ class RegistryLinkChecker:
         return "; ".join(suggestions[:3])
 
 
-def check_links():
+def check_links(vault_dir: Path):
     """Check all links in the vault."""
     print("=" * 70)
     print("Showcase Link Checker (Registry-Aware)")
     print("=" * 70)
-    print(f"Vault: {VAULT_DIR}")
+    print(f"Vault: {vault_dir}")
     print()
 
-    if not VAULT_DIR.exists():
+    if not vault_dir.exists():
         print(f"✗ Error: Vault directory does not exist")
         return 1
 
     # Initialize checker
-    checker = RegistryLinkChecker(VAULT_DIR)
+    checker = RegistryLinkChecker(vault_dir)
     print(f"✓ Discovered {len(checker._all_files)} files")
     if checker.registry:
         print(f"✓ Registry loaded: {len(checker.registry.entries)} entries")
@@ -213,8 +217,8 @@ def check_links():
     candidate_warnings: dict[str, list[str]] = defaultdict(list)
 
     # Check all files
-    for md_file in VAULT_DIR.rglob("*.md"):
-        rel_path = md_file.relative_to(VAULT_DIR)
+    for md_file in iter_markdown_files(vault_dir):
+        rel_path = md_file.relative_to(vault_dir)
         try:
             content = md_file.read_text(encoding='utf-8')
             wikilinks = WikilinkExtractor.extract_all(content)
@@ -291,7 +295,7 @@ def check_links():
     return 0 if not broken_links else 1
 
 
-def check_data_quality():
+def check_data_quality(vault_dir: Path):
     """Check data quality."""
     print("=" * 70)
     print("Data Quality Check")
@@ -300,8 +304,8 @@ def check_data_quality():
 
     issues = []
 
-    for md_file in VAULT_DIR.rglob("*.md"):
-        rel_path = md_file.relative_to(VAULT_DIR)
+    for md_file in iter_markdown_files(vault_dir):
+        rel_path = md_file.relative_to(vault_dir)
         try:
             content = md_file.read_text(encoding='utf-8')
 
@@ -331,16 +335,25 @@ def check_data_quality():
         return 0
 
 
-if __name__ == "__main__":
-    link_status = check_links()
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Registry-aware showcase link checker")
+    parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory to inspect")
+    args = parser.parse_args()
+
+    vault_dir = resolve_vault_dir(args.vault_dir)
+    link_status = check_links(vault_dir)
     print()
-    quality_status = check_data_quality()
+    quality_status = check_data_quality(vault_dir)
 
     print()
     print("=" * 70)
     if link_status == 0 and quality_status == 0:
         print("✓ All checks passed")
-        sys.exit(0)
-    else:
-        print("⚠ Some checks failed, see details above")
-        sys.exit(1)
+        return 0
+
+    print("⚠ Some checks failed, see details above")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

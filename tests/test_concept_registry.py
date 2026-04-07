@@ -215,6 +215,32 @@ class TestConceptRegistry:
         results = registry.search("valuation", area="investing", topk=5)
         assert all(r[0].area == "investing" for r in results)
 
+    def test_search_falls_back_to_alias_surface_ranking(self, temp_vault):
+        registry = ConceptRegistry(temp_vault)
+        registry.add_entry(
+            ConceptEntry(
+                slug="agent-harness",
+                title="Agent Harness",
+                aliases=["AI agent harness"],
+                definition="Harness for running agents.",
+                area="AI",
+            )
+        )
+        registry.add_entry(
+            ConceptEntry(
+                slug="agent-runtime",
+                title="Agent Runtime",
+                aliases=["runtime orchestration"],
+                definition="Runtime for orchestration.",
+                area="AI",
+            )
+        )
+
+        results = registry.search("agent harness", topk=5)
+        assert results
+        assert results[0][0].slug == "agent-harness"
+        assert results[0][1] >= 0.9
+
     def test_persist_and_load(self, temp_vault):
         registry = ConceptRegistry(temp_vault)
         entry = ConceptEntry(

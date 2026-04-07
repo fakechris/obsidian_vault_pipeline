@@ -22,6 +22,7 @@ import argparse
 import csv
 import json
 import re
+import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from .concept_registry import ConceptRegistry, ConceptEntry, STATUS_ACTIVE
+from .runtime import resolve_vault_dir
 
 
 # Constants
@@ -404,6 +406,38 @@ class LinkPatcher:
         }
 
 
+def scan_broken_mentions(vault_dir: Path, use_registry: bool = True) -> list[UniqueBrokenMention]:
+    """Scan the vault and return unique broken wikilink mentions."""
+    vault_dir = resolve_vault_dir(vault_dir)
+    registry = ConceptRegistry(vault_dir).load() if use_registry else ConceptRegistry(vault_dir)
+    scanner = BrokenLinkScanner(vault_dir, registry)
+    return scanner.scan()
+
+
+def resolve_broken_mentions(vault_dir: Path, use_registry: bool = True) -> list[ResolutionResult]:
+    """Resolve broken mentions using the canonical resolver pipeline."""
+    vault_dir = resolve_vault_dir(vault_dir)
+    registry = ConceptRegistry(vault_dir).load()
+    scanner = BrokenLinkScanner(vault_dir, registry)
+    mentions = scanner.scan()
+    resolver = BrokenLinkResolver(registry, scanner=scanner if use_registry else None)
+    return [resolver.resolve_unique_mention(mention) for mention in mentions]
+
+
+def apply_resolution_results(
+    vault_dir: Path,
+    results: list[ResolutionResult],
+    min_confidence: float = MIN_AUTO_FIX_CONFIDENCE,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Apply resolved link fixes and return patch stats."""
+    patcher = LinkPatcher(vault_dir, dry_run=dry_run)
+    for result in results:
+        if result.action == "link_existing" and result.confidence >= min_confidence:
+            patcher.patch(result)
+    return patcher.stats
+
+
 def write_scan_report(mentions: list[UniqueBrokenMention], vault_dir: Path) -> None:
     """Write scan results to report files."""
     report_dir = vault_dir / REPORT_DIR
@@ -511,43 +545,58 @@ def write_resolve_report(results: list[ResolutionResult], vault_dir: Path,
     print(f"  Keep as path (article links): {len(keep_as_path)}")
 
 
-def main():
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Migrate broken wikilinks")
-    parser.add_argument("--vault-dir", type=Path, default=Path.cwd())
+    parser.add_argument("--vault-dir", type=Path, default=None)
     parser.add_argument("--scan", action="store_true", help="Scan for broken links")
     parser.add_argument("--resolve", action="store_true", help="Resolve broken links")
     parser.add_argument("--apply", action="store_true", help="Apply fixes (requires --resolve)")
+    parser.add_argument("--write", action="store_true", help="Compatibility alias for --resolve --apply")
     parser.add_argument("--dry-run", action="store_true", help="Dry run (default for resolve)")
+    parser.add_argument("--json", action="store_true", help="Output JSON report")
+    parser.add_argument("--no-registry", action="store_true", help="Disable registry-based resolution")
     parser.add_argument("--min-confidence", type=float, default=MIN_AUTO_FIX_CONFIDENCE,
                         help=f"Min confidence for auto-fix (default: {MIN_AUTO_FIX_CONFIDENCE})")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    if not (args.scan or args.resolve):
-        parser.print_help()
-        return
+    vault_dir = resolve_vault_dir(args.vault_dir)
 
-    # Load registry
-    registry = ConceptRegistry(args.vault_dir).load()
+    if args.write:
+        args.resolve = True
+        args.apply = True
+
+    if not (args.scan or args.resolve or args.apply or args.dry_run or args.write):
+        args.resolve = True
+        args.dry_run = True
+
+    registry = ConceptRegistry(vault_dir).load()
     print(f"Loaded {len(registry.entries)} registry entries")
+    scanner = BrokenLinkScanner(vault_dir, registry)
+    payload: dict[str, Any] = {}
 
     if args.scan:
         print("Scanning for broken links...")
-        scanner = BrokenLinkScanner(args.vault_dir, registry)
         mentions = scanner.scan()
         print(f"Found {len(mentions)} unique broken mentions")
         print(f"Total broken occurrences: {sum(len(m.occurrences) for m in mentions)}")
-        write_scan_report(mentions, args.vault_dir)
+        write_scan_report(mentions, vault_dir)
+        payload["mentions"] = [
+            {
+                "surface": mention.surface,
+                "occurrence_count": len(mention.occurrences),
+            }
+            for mention in mentions
+        ]
 
-    if args.resolve:
+    if args.resolve or args.apply or args.dry_run or args.write:
         # Scan first
         print("Scanning for broken links...")
-        scanner = BrokenLinkScanner(args.vault_dir, registry)
         mentions = scanner.scan()
         print(f"Found {len(mentions)} unique broken mentions")
 
         # Resolve
         print("Resolving...")
-        resolver = BrokenLinkResolver(registry, scanner=scanner)
+        resolver = BrokenLinkResolver(registry, scanner=scanner if not args.no_registry else None)
         results = []
         for i, mention in enumerate(mentions):
             if (i + 1) % 50 == 0:
@@ -558,18 +607,34 @@ def main():
 
         # Report
         dry_run = not args.apply
-        write_resolve_report(results, args.vault_dir, dry_run)
+        write_resolve_report(results, vault_dir, dry_run)
+        payload["results"] = [
+            {
+                "surface": result.surface,
+                "action": result.action,
+                "slug": result.slug or result.proposed_slug,
+                "confidence": result.confidence,
+            }
+            for result in results
+        ]
 
         # Apply if requested
         if args.apply:
             print("Applying fixes...")
-            patcher = LinkPatcher(args.vault_dir, dry_run=False)
-            for result in results:
-                if result.action == "link_existing" and result.confidence >= args.min_confidence:
-                    patcher.patch(result)
-            stats = patcher.stats
+            stats = apply_resolution_results(
+                vault_dir,
+                results,
+                min_confidence=args.min_confidence,
+                dry_run=False,
+            )
             print(f"Patched {stats['patched_files']} files ({stats['total_patches']} links)")
+            payload["patch_stats"] = stats
+
+    if args.json and payload:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

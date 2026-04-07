@@ -28,6 +28,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+try:
+    from .runtime import VaultLayout, resolve_vault_dir
+except ImportError:  # pragma: no cover - script mode fallback
+    from runtime import VaultLayout, resolve_vault_dir
+
 # 自动加载 .env 文件（尝试多个位置）
 def _load_env_files():
     """加载 .env 文件，尝试多个位置"""
@@ -48,7 +53,8 @@ def _load_env_files():
 _LOADED_ENV = _load_env_files()
 
 # 确定 VAULT_DIR（优先使用当前工作目录）
-VAULT_DIR = Path.cwd()
+VAULT_DIR = resolve_vault_dir()
+DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
 
 # Import litellm
 try:
@@ -73,19 +79,13 @@ except ImportError:
     print("Warning: concept_resolver not available, link resolution disabled")
 
 # ========== 配置 ==========
-RAW_DIR = VAULT_DIR / "50-Inbox" / "01-Raw"
-PROCESSED_DIR = VAULT_DIR / "50-Inbox" / "03-Processed"
-OUTPUT_DIRS = {
-    "ai": VAULT_DIR / "20-Areas" / "AI-Research" / "Topics" / datetime.now().strftime("%Y-%m"),
-    "tools": VAULT_DIR / "20-Areas" / "Tools" / "Topics" / datetime.now().strftime("%Y-%m"),
-    "investing": VAULT_DIR / "20-Areas" / "Investing" / "Topics" / datetime.now().strftime("%Y-%m"),
-    "programming": VAULT_DIR / "20-Areas" / "Programming" / "Topics" / datetime.now().strftime("%Y-%m"),
-}
-MANIFEST_FILE = VAULT_DIR / "50-Inbox" / ".manifest.json"
-LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
-TXN_DIR = VAULT_DIR / "60-Logs" / "transactions"
-EVERGREEN_DIR = VAULT_DIR / "10-Knowledge" / "Evergreen"
-LINK_RESOLUTION_DIR = VAULT_DIR / "60-Logs" / "link-resolution"
+RAW_DIR = DEFAULT_LAYOUT.raw_dir
+PROCESSED_DIR = DEFAULT_LAYOUT.processed_dir
+MANIFEST_FILE = DEFAULT_LAYOUT.vault_dir / "50-Inbox" / ".manifest.json"
+LOG_FILE = DEFAULT_LAYOUT.pipeline_log
+TXN_DIR = DEFAULT_LAYOUT.transactions_dir
+EVERGREEN_DIR = DEFAULT_LAYOUT.evergreen_dir
+LINK_RESOLUTION_DIR = DEFAULT_LAYOUT.link_resolution_dir
 RESOLVER_VERSION = "v2"
 
 
@@ -103,6 +103,7 @@ class PipelineLogger:
             "event_type": event_type,
             **data
         }
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -426,7 +427,7 @@ class ArticleProcessor:
                 name = name.strip().replace(' ', '-')
 
                 # 检查是否已存在
-                evergreen_path = Path(EVERGREEN_DIR) / f"{name}.md"
+                evergreen_path = DEFAULT_LAYOUT.evergreen_dir / f"{name}.md"
                 if evergreen_path.exists():
                     continue
 
@@ -470,9 +471,10 @@ class AutoArticleProcessor:
     """全自动文章处理器"""
 
     def __init__(self, vault_dir: Path, logger: PipelineLogger, txn: TransactionManager):
-        self.vault_dir = vault_dir
-        self.raw_dir = vault_dir / "50-Inbox" / "01-Raw"
-        self.processed_dir = vault_dir / "50-Inbox" / "03-Processed"
+        self.layout = VaultLayout.from_vault(vault_dir)
+        self.vault_dir = self.layout.vault_dir
+        self.raw_dir = self.layout.raw_dir
+        self.processed_dir = self.layout.processed_dir
         self.logger = logger
         self.txn = txn
         self.llm = None
@@ -537,7 +539,7 @@ class AutoArticleProcessor:
         if sidecar is None:
             return
         stem = article_path.stem
-        sidecar_path = LINK_RESOLUTION_DIR / f"{stem}.json"
+        sidecar_path = self.layout.link_resolution_dir / f"{stem}.json"
         sidecar.write(sidecar_path)
 
     def _upsert_candidates(self, decisions: list, registry: Any) -> list[str]:
@@ -712,7 +714,7 @@ class AutoArticleProcessor:
             )
 
             # 确定输出路径
-            output_dir = OUTPUT_DIRS.get(classification, OUTPUT_DIRS["ai"])
+            output_dir = self.layout.classification_output_dir(classification)
             output_dir.mkdir(parents=True, exist_ok=True)
 
             # 文件名：YYYY-MM-DD_标题_深度解读.md
@@ -809,19 +811,22 @@ def main():
     parser.add_argument("--batch-size", type=int, help="批量处理数量")
     parser.add_argument("--api-key", help="API Key")
     parser.add_argument("--api-base", help="API Base URL")
-    parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
+    parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
+    parser.add_argument("--output-dir", type=Path, default=None, help="兼容旧入口，当前忽略")
     args = parser.parse_args()
 
+    layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
+
     # 初始化组件
-    logger = PipelineLogger(LOG_FILE)
-    txn = TransactionManager(TXN_DIR)
+    logger = PipelineLogger(layout.pipeline_log)
+    txn = TransactionManager(layout.transactions_dir)
 
     # 创建事务
     txn_id = txn.start("article-processing", f"Process articles {datetime.now().isoformat()}")
     logger.log("transaction_started", {"txn_id": txn_id, "type": "article-processing"})
 
     # 初始化处理器
-    processor = AutoArticleProcessor(args.vault_dir, logger, txn)
+    processor = AutoArticleProcessor(layout.vault_dir, logger, txn)
 
     try:
         processor.init_llm(api_key=args.api_key, api_base=args.api_base)

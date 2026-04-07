@@ -15,16 +15,18 @@ import argparse
 import sys
 from pathlib import Path
 
+from openclaw_pipeline.runtime import iter_markdown_files, resolve_vault_dir
+
 # 默认vault_dir: 假设从vault根目录运行
 # 通过 --vault-dir 或环境变量覆盖
-VAULT_DIR = Path.cwd()
+VAULT_DIR = resolve_vault_dir()
 
 
 def cmd_build(args):
     """全量构建图谱"""
     from openclaw_pipeline.graph import GraphBuilder
 
-    vault_dir = Path(args.vault_dir) if args.vault_dir else VAULT_DIR
+    vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
     builder = GraphBuilder(vault_dir)
 
     print("📊 开始构建全量图谱...")
@@ -62,7 +64,7 @@ def cmd_daily(args):
     """生成每日增量图谱"""
     from openclaw_pipeline.graph import DailyDelta, GraphBuilder
 
-    vault_dir = Path(args.vault_dir) if args.vault_dir else VAULT_DIR
+    vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
     delta_computer = DailyDelta(vault_dir)
 
     day_id = args.day
@@ -154,25 +156,21 @@ def cmd_validate(args):
     """验证frontmatter"""
     from openclaw_pipeline.graph.validators import validate_frontmatter_file
 
-    vault_dir = Path(args.vault_dir) if args.vault_dir else VAULT_DIR
+    vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
 
     print("🔍 验证frontmatter...")
 
     all_valid = True
     error_count = 0
 
-    for pattern in ["**/*.md"]:
-        for md_file in vault_dir.glob(pattern):
-            if any(part.startswith('.') for part in md_file.parts):
-                continue
-
-            valid, errors = validate_frontmatter_file(md_file)
-            if not valid:
-                all_valid = False
-                error_count += 1
-                print(f"\n❌ {md_file.relative_to(vault_dir)}:")
-                for error in errors:
-                    print(f"   - {error}")
+    for md_file in iter_markdown_files(vault_dir, recursive=True):
+        valid, errors = validate_frontmatter_file(md_file)
+        if not valid:
+            all_valid = False
+            error_count += 1
+            print(f"\n❌ {md_file.relative_to(vault_dir)}:")
+            for error in errors:
+                print(f"   - {error}")
 
     if all_valid:
         print("\n✅ 所有文件验证通过")
@@ -186,21 +184,17 @@ def cmd_upgrade(args):
     """升级现有文件frontmatter"""
     from openclaw_pipeline.graph import FrontmatterParser
 
-    vault_dir = Path(args.vault_dir) if args.vault_dir else VAULT_DIR
+    vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
     parser = FrontmatterParser(vault_dir)
 
     print("🔧 升级frontmatter...")
 
     upgraded_count = 0
 
-    for pattern in ["**/*.md"]:
-        for md_file in vault_dir.glob(pattern):
-            if any(part.startswith('.') for part in md_file.parts):
-                continue
-
-            if parser.upgrade_frontmatter(md_file):
-                upgraded_count += 1
-                print(f"  ✅ 升级: {md_file.relative_to(vault_dir)}")
+    for md_file in iter_markdown_files(vault_dir, recursive=True):
+        if parser.upgrade_frontmatter(md_file):
+            upgraded_count += 1
+            print(f"  ✅ 升级: {md_file.relative_to(vault_dir)}")
 
     print(f"\n✅ 完成: {upgraded_count} 个文件已升级")
 
@@ -209,7 +203,7 @@ def cmd_stats(args):
     """显示图谱统计"""
     from openclaw_pipeline.graph import GraphBuilder
 
-    vault_dir = Path(args.vault_dir) if args.vault_dir else VAULT_DIR
+    vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
     builder = GraphBuilder(vault_dir)
 
     print("📊 图谱统计...")

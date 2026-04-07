@@ -28,6 +28,11 @@ from dataclasses import dataclass, asdict
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
 
+try:
+    from .runtime import resolve_vault_dir
+except ImportError:
+    from runtime import resolve_vault_dir  # type: ignore
+
 
 @dataclass
 class LintIssue:
@@ -207,7 +212,7 @@ class KnowledgeLinter:
                         type=self.INCOMPLETE_TXN,
                         file=str(txn_file.relative_to(self.vault_dir)),
                         message=f"未完成事务: {txn_data.get('id')} | {txn_data.get('type')} | {txn_data.get('description')}",
-                        suggestion=f"运行: txn.sh complete {txn_data.get('id')} 或 txn.sh fail {txn_data.get('id')} <reason>",
+                        suggestion=f"运行: ovp-repair --fix-transactions 或手动完成事务 {txn_data.get('id')}",
                         auto_fixable=False
                     ))
                     self.stats["incomplete_txn"] += 1
@@ -787,7 +792,7 @@ def main():
 
     args = parser.parse_args()
 
-    vault_dir = args.vault_dir or Path.cwd()
+    vault_dir = resolve_vault_dir(args.vault_dir)
 
     # 检查是否是 vault 根目录
     if not (vault_dir / "10-Knowledge").exists() and not (vault_dir / "50-Inbox").exists():

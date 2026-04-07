@@ -18,6 +18,8 @@ except ImportError:
 
 from .frontmatter import NoteMetadata, FrontmatterParser
 from .link_parser import LinkParser, Link
+from ..concept_registry import ConceptRegistry, ResolutionAction, normalize_surface
+from ..identity import canonicalize_note_id
 
 
 @dataclass
@@ -70,11 +72,13 @@ class GraphBuilder:
         self.vault_dir = vault_dir
         self.frontmatter_parser = FrontmatterParser(vault_dir)
         self.link_parser = LinkParser(vault_dir)
+        self.registry = ConceptRegistry(vault_dir).load()
 
         # 数据存储
         self.nodes: dict[str, GraphNode] = {}
         self.edges: dict[str, GraphEdge] = {}
         self._edge_count = 0
+        self._surface_to_note_id: dict[str, str] = {}
 
         # Graphviz/NetworkX 图
         self.graph = None
@@ -177,12 +181,11 @@ class GraphBuilder:
         expanded = set(seed_ids)
         current_hop = set(seed_ids)
 
-        # 构建邻接表
+        # 构建无向邻接表，daily delta 需要同时包含入边和出边邻居
         adjacency = {}
         for link in all_links:
-            if link.source not in adjacency:
-                adjacency[link.source] = set()
-            adjacency[link.source].add(link.target)
+            adjacency.setdefault(link.source, set()).add(link.target)
+            adjacency.setdefault(link.target, set()).add(link.source)
 
         # BFS
         for _ in range(max_hops):
@@ -213,42 +216,52 @@ class GraphBuilder:
             tags=meta.tags
         )
         self.nodes[meta.note_id] = node
+        self._register_surface(meta.note_id, meta.note_id)
+        self._register_surface(meta.title, meta.note_id)
+        if meta.path:
+            self._register_surface(Path(meta.path).stem, meta.note_id)
+            self._register_surface(str(Path(meta.path).with_suffix("")), meta.note_id)
+        for alias in meta.aliases:
+            self._register_surface(alias, meta.note_id)
 
         if self.graph:
             self.graph.add_node(meta.note_id, **node.to_dict())
 
     def _add_edge(self, link: Link):
         """添加边"""
+        source_id = self._resolve_note_id(link.source)
+        target_id = self._resolve_link_target(link)
+
         # 确保节点存在
-        if link.source not in self.nodes:
+        if source_id not in self.nodes:
             # 创建一个占位节点
-            self.nodes[link.source] = GraphNode(
-                note_id=link.source,
-                title=link.source,
+            self.nodes[source_id] = GraphNode(
+                note_id=source_id,
+                title=source_id,
                 note_type="unknown",
                 path="",
                 day_id=""
             )
 
-        if link.target not in self.nodes:
-            self.nodes[link.target] = GraphNode(
-                note_id=link.target,
-                title=link.target,
+        if target_id not in self.nodes:
+            self.nodes[target_id] = GraphNode(
+                note_id=target_id,
+                title=link.target_raw or target_id,
                 note_type="unknown",
                 path="",
                 day_id=""
             )
 
         # 生成边ID
-        edge_id = f"{link.source}-{link.target}-{link.link_type}"
+        edge_id = f"{source_id}-{target_id}-{link.link_type}"
         if edge_id in self.edges:
             return  # 避免重复边
 
         self._edge_count += 1
         edge = GraphEdge(
             edge_id=edge_id,
-            source=link.source,
-            target=link.target,
+            source=source_id,
+            target=target_id,
             edge_type=link.link_type,
             weight=1.0,
             anchor_text=link.anchor,
@@ -257,7 +270,46 @@ class GraphBuilder:
         self.edges[edge_id] = edge
 
         if self.graph:
-            self.graph.add_edge(link.source, link.target, **edge.to_dict())
+            self.graph.add_edge(source_id, target_id, **edge.to_dict())
+
+    def _register_surface(self, surface: str, note_id: str) -> None:
+        """Register a local graph surface for later link resolution."""
+        if not surface:
+            return
+        normalized = normalize_surface(surface)
+        if normalized and normalized not in self._surface_to_note_id:
+            self._surface_to_note_id[normalized] = note_id
+
+    def _resolve_note_id(self, value: str) -> str:
+        """Resolve a note identifier through canonical slug normalization."""
+        resolved = canonicalize_note_id(value)
+        return resolved or value
+
+    def _resolve_link_target(self, link: Link) -> str:
+        """Resolve a link target using local graph nodes first, then the registry."""
+        for candidate in filter(None, [link.target, link.target_raw, link.anchor]):
+            normalized_id = canonicalize_note_id(candidate)
+            if normalized_id in self.nodes:
+                return normalized_id
+
+            normalized_surface = normalize_surface(candidate)
+            if normalized_surface in self._surface_to_note_id:
+                return self._surface_to_note_id[normalized_surface]
+
+            if candidate == link.anchor:
+                continue
+
+        for candidate in filter(None, [link.target_raw, link.anchor, link.target]):
+            resolution = self.registry.resolve_mention(candidate)
+            if resolution.action == ResolutionAction.LINK_EXISTING and resolution.entry:
+                return resolution.entry.slug
+            if resolution.action == ResolutionAction.PASSTHROUGH_PATH:
+                resolved = canonicalize_note_id(candidate)
+                if resolved:
+                    return resolved
+
+        resolved = canonicalize_note_id(link.target_raw or link.target or link.anchor)
+        return resolved or link.target
 
     def _calculate_metrics(self):
         """计算图谱全局指标"""

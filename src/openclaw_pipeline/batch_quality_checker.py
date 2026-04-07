@@ -28,15 +28,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# 自动加载 .env 文件
-VAULT_DIR = Path.cwd()  # 默认使用当前目录，可被参数覆盖
-ENV_FILE = VAULT_DIR / ".env"
-if ENV_FILE.exists():
+try:
+    from .runtime import VaultLayout, resolve_vault_dir
+except ImportError:
+    from runtime import VaultLayout, resolve_vault_dir  # type: ignore
+
+
+VAULT_DIR = resolve_vault_dir()
+DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
+
+
+def load_env_file(vault_dir: Path) -> None:
+    env_file = vault_dir / ".env"
+    if not env_file.exists():
+        return
     try:
         from dotenv import load_dotenv
-        load_dotenv(dotenv_path=ENV_FILE, override=True)
+
+        load_dotenv(dotenv_path=env_file, override=True)
     except ImportError:
-        pass  # dotenv 未安装，跳过
+        pass
 
 sys.path.insert(0, str(Path(__file__).parent / "auto_vault"))
 try:
@@ -46,8 +57,8 @@ except ImportError:
     LITELLM_AVAILABLE = False
 
 # ========== 配置 ==========
-REPORT_DIR = VAULT_DIR / "60-Logs" / "quality-reports"
-LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
+REPORT_DIR = DEFAULT_LAYOUT.quality_reports_dir
+LOG_FILE = DEFAULT_LAYOUT.pipeline_log
 
 # 6维度检查项
 DIMENSIONS = [
@@ -74,6 +85,7 @@ class PipelineLogger:
             "event_type": event_type,
             **data
         }
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -343,13 +355,16 @@ def main():
     parser.add_argument("--api-key", help="API Key")
     parser.add_argument("--api-base", help="API Base URL")
     parser.add_argument("--max-workers", type=int, default=3, help="并行 workers")
-    parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
+    parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
     parser.add_argument("--dry-run", action="store_true", help="预览模式（只显示要检查的文件）")
     args = parser.parse_args()
 
     # 初始化
-    logger = PipelineLogger(LOG_FILE)
-    checker = BatchQualityChecker(args.vault_dir, logger)
+    layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
+    load_env_file(layout.vault_dir)
+
+    logger = PipelineLogger(layout.pipeline_log)
+    checker = BatchQualityChecker(layout.vault_dir, logger)
 
     # 处理 --dry-run 模式：只列出要检查的文件
     if args.dry_run:
@@ -368,7 +383,7 @@ def main():
         elif args.all:
             areas = ["AI-Research", "Tools", "Investing", "Programming"]
             for area in areas:
-                area_dir = args.vault_dir / "20-Areas" / area / "Topics" / datetime.now().strftime("%Y-%m")
+                area_dir = layout.vault_dir / "20-Areas" / area / "Topics" / datetime.now().strftime("%Y-%m")
                 if area_dir.exists():
                     area_files = list(area_dir.glob("*.md"))
                     files_to_check.extend(area_files)
@@ -412,7 +427,7 @@ def main():
     report = checker.generate_report(results)
 
     # 保存报告
-    report_dir = args.vault_dir / "60-Logs" / "quality-reports"
+    report_dir = layout.quality_reports_dir
     report_dir.mkdir(parents=True, exist_ok=True)
     report_file = report_dir / f"quality-report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
 

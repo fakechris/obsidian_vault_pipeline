@@ -73,12 +73,14 @@ Input → Interpret → Quality → Refine → Index → Fully auditable workflo
 │  └── ovp-query-to-wiki  Archive Q&A to new concepts                         │
 │                                                                             │
 │  Index Maintenance                                                          │
-│  ├── ovp-moc        Scan and update MOC knowledge maps                     │
-│  └── repair.sh      Auto-fix broken links                                   │
+│  ├── ovp-moc        Update Area MOCs / Atlas Index                         │
+│  ├── ovp-migrate-links  Scan/fix broken wikilinks                          │
+│  └── ovp-rebuild-registry  Reconcile Evergreen and registry                │
 │                                                                             │
-│  Transaction Management                                                     │
-│  ├── txn.sh         Transaction start/complete/fail                         │
-│  └── check-consistency.sh  WIGS 5-Layer Integrity Check                     │
+│  Lifecycle Maintenance                                                      │
+│  ├── ovp-promote-candidates  promote / merge / reject candidates           │
+│  ├── ovp-graph      Build full graph / daily delta                         │
+│  └── ovp-repair     Repair transactions / autopilot / registry state       │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -157,7 +159,7 @@ File enters 50-Inbox/01-Raw/
 | `ovp-github --single URL` | GitHub project → 13-section deep dive |
 | `ovp-paper --arxiv URL` | arXiv paper → academic analysis |
 | `ovp-evergreen --recent 7` | Extract Evergreen from recent interpretations |
-| `ovp-moc --scan` | Scan and update MOC |
+| `ovp-moc --update-atlas-from-registry` | Rebuild Atlas Index from registry |
 | `ovp-quality --recent 7` | Batch quality scoring |
 
 ### Maintenance Tools
@@ -165,10 +167,12 @@ File enters 50-Inbox/01-Raw/
 | Command | Solves What |
 |---------|-------------|
 | `ovp-lint` | Pre-commit mandatory checks |
-| `check-consistency.sh` | WIGS 5-layer integrity check |
-| `repair.sh --auto` | Auto-fix broken links |
-| `txn.sh start <type> <desc>` | Start transaction |
-| `txn.sh complete <id>` | Complete transaction |
+| `ovp-repair --transactions --autopilot --registry` | Repair stuck transactions / queue state / registry drift |
+| `ovp-migrate-links --scan` | Scan broken wikilinks |
+| `ovp-migrate-links --write` | Apply high-confidence link fixes |
+| `ovp-rebuild-registry --json` | Inspect Evergreen / registry drift |
+| `ovp-promote-candidates review` | Review candidate lifecycle |
+| `ovp-graph --daily today` | Generate daily graph delta |
 | `ovp-query-to-wiki --create-evergreen "name"` | Create new note from Q&A |
 
 ---
@@ -192,8 +196,8 @@ ovp --full
 # Start background daemon
 ovp-autopilot --watch=inbox --parallel=1 --yes
 
-# View logs
-tail -f ~/.local/state/ovp/autopilot.log
+# Recommended: run in tmux/screen, or persist stdout yourself
+ovp-autopilot --watch=inbox --parallel=1 --yes | tee autopilot.log
 ```
 
 ### Scenario 3: Batch Historical Processing
@@ -242,11 +246,14 @@ vault/
 ├── 10-Knowledge/
 │   ├── Evergreen/              # [Refined] Atomic notes
 │   └── Atlas/                 # [Indexed] MOC knowledge maps
-│       └── MOC-*.md
+│       ├── Atlas-Index.md
+│       ├── concept-registry.jsonl
+│       └── alias-index.json
 ├── 60-Logs/
-│   ├── scripts/               # Core scripts (txn.sh, repair.sh, etc.)
 │   ├── pipeline.jsonl         # Structured logs
-│   └── transactions/          # Transaction states
+│   ├── transactions/          # Transaction states
+│   ├── quality-reports/       # Quality reports
+│   └── daily-deltas/          # Daily graph deltas
 └── 70-Archive/               # [Archived] Completed content
 ```
 

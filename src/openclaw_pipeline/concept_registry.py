@@ -472,7 +472,10 @@ class ConceptRegistry:
         Search concepts (legacy interface for backwards compatibility).
 
         DEPRECATED: Use resolve_mention() instead.
-        This method delegates to resolve_mention() for backwards compatibility.
+
+        Legacy callers expect search() to return a ranked candidate list even when
+        the deterministic resolver abstains. Keep exact-resolution semantics first,
+        then fall back to a lexical surface search over registry-managed identifiers.
         """
         result = self.resolve_mention(query, area=area)
         if result.action == ResolutionAction.LINK_EXISTING and result.entry:
@@ -487,7 +490,7 @@ class ConceptRegistry:
                 if entry:
                     results.append((entry, 0.0))
             return results
-        return []
+        return self._legacy_surface_search(query, area=area, topk=topk)
 
     # ========== New Resolution API ==========
 
@@ -727,6 +730,76 @@ class ConceptRegistry:
 
         return top1
 
+    def _legacy_surface_search(
+        self,
+        query: str,
+        area: str | None = None,
+        topk: int = 10,
+    ) -> list[tuple[ConceptEntry, float]]:
+        """
+        Compatibility search for legacy callers.
+
+        This is intentionally lexical-only. It ranks entries using their registry
+        surfaces (canonical title / title / slug / aliases / redirects) without
+        introducing semantic expansion or non-deterministic matching.
+        """
+        norm_query = normalize_surface(query)
+        if not norm_query:
+            return []
+
+        q_tokens = set(tokenize_surface(norm_query))
+        ranked: list[tuple[ConceptEntry, float]] = []
+
+        for entry in self._entries:
+            if area and entry.area and entry.area != area:
+                continue
+
+            best_score = 0.0
+            surfaces = [
+                entry.canonical_surface,
+                entry.title,
+                slug_to_surface(entry.slug),
+                *entry.aliases,
+                *entry.redirects,
+            ]
+
+            for surface in surfaces:
+                norm_surface = normalize_surface(surface)
+                if not norm_surface:
+                    continue
+
+                score = 0.0
+                surface_tokens = set(tokenize_surface(norm_surface))
+
+                if norm_query == norm_surface:
+                    score = 1.0
+                elif norm_query in surface_tokens:
+                    score = 0.90
+                elif norm_query in norm_surface:
+                    score = 0.82
+                elif q_tokens and q_tokens <= surface_tokens:
+                    score = 0.78
+                else:
+                    tf1 = self._token_f1(tuple(q_tokens), tuple(surface_tokens))
+                    tri = self._trigram_jaccard(norm_query, norm_surface)
+                    lr = self._length_ratio(norm_query, norm_surface)
+                    score = 0.45 * tf1 + 0.35 * tri + 0.20 * lr
+
+                best_score = max(best_score, score)
+
+            if best_score >= 0.25:
+                ranked.append((entry, round(best_score, 6)))
+
+        ranked.sort(
+            key=lambda item: (
+                -item[1],
+                item[0].status != STATUS_ACTIVE,
+                item[0].title.lower(),
+                item[0].slug,
+            )
+        )
+        return ranked[:topk]
+
     # ========== QMD (Auxiliary only) ==========
 
     def _qmd_related_context(self, mention: str, topk: int = 5) -> list[RelatedContext]:
@@ -887,6 +960,8 @@ class ConceptRegistry:
         for alias in aliases_to_add:
             if alias not in target.aliases:
                 target.aliases.append(alias)
+        if candidate.slug not in target.redirects:
+            target.redirects.append(candidate.slug)
         target.source_count += candidate.source_count
         target.evidence_count += candidate.evidence_count
         target.last_seen_at = datetime.now().strftime("%Y-%m-%d")

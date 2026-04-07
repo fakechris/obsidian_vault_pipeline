@@ -23,6 +23,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Tuple, Optional, List
 
+try:
+    from .runtime import resolve_vault_dir
+except ImportError:
+    from runtime import resolve_vault_dir  # type: ignore
+
 
 class ImageDownloader:
     """Markdown 图片下载器"""
@@ -243,7 +248,7 @@ def main():
 
     args = parser.parse_args()
 
-    vault_dir = args.vault_dir or Path.cwd()
+    vault_dir = resolve_vault_dir(args.vault_dir)
 
     # 处理文件
     downloader = ImageDownloader(vault_dir)

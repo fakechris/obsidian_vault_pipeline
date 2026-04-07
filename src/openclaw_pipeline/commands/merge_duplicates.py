@@ -21,6 +21,11 @@ from pathlib import Path
 from typing import Optional
 
 try:
+    from ..runtime import resolve_vault_dir
+except ImportError:
+    from runtime import resolve_vault_dir  # type: ignore
+
+try:
     from ..concept_registry import (
         ConceptRegistry, ConceptEntry, STATUS_ACTIVE,
         STATUS_CANDIDATE, normalize_surface, slug_to_surface
@@ -32,15 +37,7 @@ except ImportError:
 
 def get_vault_dir() -> Path:
     """获取 Vault 目录"""
-    try:
-        import subprocess
-        git_root = subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"],
-            text=True
-        ).strip()
-        return Path(git_root)
-    except subprocess.CalledProcessError:
-        return Path.cwd()
+    return resolve_vault_dir()
 
 
 def char_ngrams(s: str, n: int = 3) -> set[str]:
@@ -328,7 +325,7 @@ def main():
 
     args = parser.parse_args()
 
-    vault_dir = args.vault_dir or get_vault_dir()
+    vault_dir = resolve_vault_dir(args.vault_dir or get_vault_dir())
 
     # --write implies not dry_run
     dry_run = not args.write

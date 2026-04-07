@@ -73,12 +73,14 @@ type: meta
 │  └── ovp-query-to-wiki  从问答归档新概念                                      │
 │                                                                             │
 │  索引维护                                                                   │
-│  ├── ovp-moc        扫描更新 MOC 知识地图                                    │
-│  └── repair.sh      自动修复断裂链接                                          │
+│  ├── ovp-moc        更新 Area MOC / Atlas Index                              │
+│  ├── ovp-migrate-links  扫描/修复断裂 wikilink                               │
+│  └── ovp-rebuild-registry  对账 Evergreen 与 registry                        │
 │                                                                             │
-│  事务管理                                                                   │
-│  ├── txn.sh         事务启动/完成/失败                                       │
-│  └── check-consistency.sh  WIGS 5层完整性检查                                │
+│  生命周期维护                                                                │
+│  ├── ovp-promote-candidates  promote / merge / reject candidate              │
+│  ├── ovp-graph      构建全量图谱 / daily delta                               │
+│  └── ovp-repair     修复事务 / autopilot / registry 状态                     │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -156,7 +158,7 @@ type: meta
 | `ovp-github --single URL` | GitHub 项目 → 13节深度解读 |
 | `ovp-paper --arxiv URL` | arXiv 论文 → 学术解读 |
 | `ovp-evergreen --recent 7` | 从最近解读提取 Evergreen |
-| `ovp-moc --scan` | 扫描并更新 MOC |
+| `ovp-moc --update-atlas-from-registry` | 从 registry 重建 Atlas Index |
 | `ovp-quality --recent 7` | 批量质量评分 |
 
 ### 维护工具
@@ -164,10 +166,12 @@ type: meta
 | 命令 | 解决什么问题 |
 |------|-------------|
 | `ovp-lint` | 提交前强制检查 |
-| `check-consistency.sh` | WIGS 5层完整性检查 |
-| `repair.sh --auto` | 自动修复断裂链接 |
-| `txn.sh start <type> <desc>` | 启动事务 |
-| `txn.sh complete <id>` | 完成事务 |
+| `ovp-repair --transactions --autopilot --registry` | 修复卡住事务 / 队列状态 / registry 对账 |
+| `ovp-migrate-links --scan` | 扫描断裂 wikilink |
+| `ovp-migrate-links --write` | 应用高置信度链接修复 |
+| `ovp-rebuild-registry --json` | 查看 Evergreen / registry 分叉 |
+| `ovp-promote-candidates review` | 审核 candidate 生命周期 |
+| `ovp-graph --daily today` | 生成当日增量知识图谱 |
 | `ovp-query-to-wiki --create-evergreen "名称"` | 从问答创建新笔记 |
 
 ---
@@ -191,8 +195,8 @@ ovp --full
 # 启动后台守护进程
 ovp-autopilot --watch=inbox --parallel=1 --yes
 
-# 查看日志
-tail -f ~/.local/state/ovp/autopilot.log
+# 推荐在 tmux / screen 中运行，或直接保存 stdout
+ovp-autopilot --watch=inbox --parallel=1 --yes | tee autopilot.log
 ```
 
 ### 场景3：批量处理历史
@@ -241,11 +245,14 @@ vault/
 ├── 10-Knowledge/
 │   ├── Evergreen/              # 【提炼】原子笔记
 │   └── Atlas/                 # 【索引】MOC 知识地图
-│       └── MOC-*.md
+│       ├── Atlas-Index.md
+│       ├── concept-registry.jsonl
+│       └── alias-index.json
 ├── 60-Logs/
-│   ├── scripts/               # 核心脚本（txn.sh, repair.sh 等）
 │   ├── pipeline.jsonl         # 结构化日志
-│   └── transactions/          # 事务状态
+│   ├── transactions/          # 事务状态
+│   ├── quality-reports/       # 质检报告
+│   └── daily-deltas/          # 每日图谱增量
 └── 70-Archive/               # 【归档】完成的内容
 ```
 

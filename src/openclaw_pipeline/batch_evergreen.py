@@ -15,22 +15,21 @@ Prerequisites:
 import json
 import re
 import argparse
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+try:
+    from .identity import canonicalize_note_id
+    from .runtime import resolve_vault_dir
+except ImportError:
+    from identity import canonicalize_note_id  # type: ignore
+    from runtime import resolve_vault_dir  # type: ignore
+
 
 def get_vault_dir() -> Path:
     """获取 Vault 目录"""
-    try:
-        git_root = subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"],
-            text=True
-        ).strip()
-        return Path(git_root)
-    except subprocess.CalledProcessError:
-        return Path.cwd()
+    return resolve_vault_dir()
 
 
 def load_candidates(candidates_path: Path) -> dict:
@@ -100,12 +99,14 @@ def create_evergreen_note(concept: str, filename: str, definitions: list, existi
         aliases.append(concept.replace(' ', '-'))
 
     aliases_str = ', '.join([f'"{a}"' for a in aliases[:3]])
+    note_id = canonicalize_note_id(filename.removesuffix(".md"))
 
     # 清理 concept 用于 tag
     tag_name = concept.lower().replace(' ', '-').replace('-', '')[:20]
 
     content = f"""---
 title: "{concept}"
+note_id: "{note_id}"
 type: evergreen
 date: {datetime.now().strftime("%Y-%m-%d")}
 tags: [evergreen, {tag_name}]
@@ -260,7 +261,7 @@ def main():
 
     args = parser.parse_args()
 
-    vault_dir = args.vault_dir or get_vault_dir()
+    vault_dir = resolve_vault_dir(args.vault_dir or get_vault_dir())
     creator = BatchEvergreenCreator(vault_dir, dry_run=args.dry_run)
     creator.run(args.candidates, limit=args.limit)
 

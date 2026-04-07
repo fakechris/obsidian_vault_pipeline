@@ -9,6 +9,11 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Optional, List
 
+try:
+    from ..runtime import VaultLayout
+except ImportError:
+    from runtime import VaultLayout  # type: ignore
+
 
 @dataclass
 class Task:
@@ -43,7 +48,7 @@ class TaskQueue:
 
     def __init__(self, db_path: Optional[Path] = None):
         if db_path is None:
-            db_path = Path.cwd() / "60-Logs" / "autopilot.db"
+            db_path = VaultLayout.from_vault().logs_dir / "autopilot.db"
 
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,12 +81,28 @@ class TaskQueue:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_priority ON tasks(priority, created_at)
             """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_active_identity
+                ON tasks(source, file_path, url, status)
+            """)
 
             conn.commit()
 
     def add_task(self, task: Task) -> int:
         """添加任务到队列，返回任务ID"""
         with sqlite3.connect(self.db_path) as conn:
+            existing = conn.execute("""
+                SELECT id FROM tasks
+                WHERE source = ?
+                  AND COALESCE(file_path, '') = COALESCE(?, '')
+                  AND COALESCE(url, '') = COALESCE(?, '')
+                  AND status IN ('pending', 'processing')
+                ORDER BY id DESC
+                LIMIT 1
+            """, (task.source, task.file_path, task.url)).fetchone()
+            if existing:
+                return existing[0]
+
             cursor = conn.execute("""
                 INSERT INTO tasks (source, file_path, url, status, stage,
                                  priority, created_at, retry_count)

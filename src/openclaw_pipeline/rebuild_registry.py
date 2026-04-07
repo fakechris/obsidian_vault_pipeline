@@ -14,10 +14,12 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
 from .concept_registry import ConceptRegistry, ConceptEntry, STATUS_ACTIVE
+from .runtime import iter_markdown_files, resolve_vault_dir
 
 
 EVERGREEN_DIR = Path("10-Knowledge/Evergreen")
@@ -132,13 +134,13 @@ def extract_aliases(fm: dict, body: str) -> list[str]:
 
 def scan_evergreen_files(vault_dir: Path) -> list[Path]:
     """Find all Evergreen .md files (excluding _Candidates/)."""
-    evergreen_dir = vault_dir / EVERGREEN_DIR
+    evergreen_dir = resolve_vault_dir(vault_dir) / EVERGREEN_DIR
     if not evergreen_dir.exists():
         print(f"Warning: Evergreen directory not found: {evergreen_dir}")
         return []
 
     files = []
-    for md_file in evergreen_dir.rglob("*.md"):
+    for md_file in iter_markdown_files(evergreen_dir, recursive=True):
         # Skip _Candidates directory
         if "_Candidates" in md_file.parts:
             continue
@@ -194,6 +196,7 @@ def file_to_entry(vault_dir: Path, file_path: Path) -> ConceptEntry | None:
 
 def rebuild_registry(vault_dir: Path, dry_run: bool = False, verbose: bool = False) -> list[ConceptEntry]:
     """Rebuild registry from existing Evergreen files."""
+    vault_dir = resolve_vault_dir(vault_dir)
     files = scan_evergreen_files(vault_dir)
     print(f"Found {len(files)} Evergreen files")
 
@@ -221,39 +224,118 @@ def rebuild_registry(vault_dir: Path, dry_run: bool = False, verbose: bool = Fal
         for entry in entries:
             registry.upsert_entry(entry)
         registry.save()
-        print(f"Written to {vault_dir / '10-Knowledge/Atlas / concept-registry.jsonl'}")
+        print(f"Written to {vault_dir / '10-Knowledge' / 'Atlas' / 'concept-registry.jsonl'}")
 
     return entries
 
 
-def main():
+def reconcile_registry(vault_dir: Path, write: bool = False, verbose: bool = False) -> dict:
+    """
+    Compare Evergreen files against the registry and optionally add missing entries.
+
+    This is the authoritative implementation used by the CLI.
+    """
+    vault_dir = resolve_vault_dir(vault_dir)
+    entries = rebuild_registry(vault_dir, dry_run=True, verbose=verbose)
+    built_slugs = {entry.slug for entry in entries}
+    built_map = {entry.slug: entry for entry in entries}
+
+    registry = ConceptRegistry(vault_dir).load()
+    registry_slugs = {entry.slug for entry in registry.entries}
+
+    result = {
+        "dry_run": not write,
+        "write": write,
+        "fs_file_count": len(entries),
+        "registry_entry_count": len(registry.entries),
+        "fs_slugs": sorted(built_slugs),
+        "not_in_registry": [],
+        "not_in_filesystem": [],
+        "in_sync": sorted(built_slugs & registry_slugs),
+        "orphan_registry_entries": [],
+    }
+
+    for slug in sorted(built_slugs - registry_slugs):
+        entry = built_map[slug]
+        result["not_in_registry"].append({
+            "slug": slug,
+            "title": entry.title,
+            "area": entry.area,
+        })
+
+    for entry in sorted(registry.entries, key=lambda item: item.slug):
+        if entry.slug not in built_slugs:
+            payload = {
+                "slug": entry.slug,
+                "title": entry.title,
+                "status": entry.status,
+                "kind": getattr(entry, "kind", "unknown"),
+            }
+            result["not_in_filesystem"].append(payload)
+            if entry.status == STATUS_ACTIVE:
+                result["orphan_registry_entries"].append(payload)
+
+    if write:
+        for slug in sorted(built_slugs):
+            registry.upsert_entry(built_map[slug])
+        registry.save()
+
+    return result
+
+
+def print_report(result: dict) -> None:
+    """Print a human-readable reconciliation report."""
+    print("\n" + "=" * 60)
+    print("Registry Rebuild Report")
+    print("=" * 60)
+
+    print(f"\nFilesystem Evergreen files: {result['fs_file_count']}")
+    print(f"Registry entries: {result.get('registry_entry_count', 'N/A')}")
+
+    sync_count = len(result["in_sync"])
+    not_in_reg = len(result["not_in_registry"])
+    not_in_fs = len(result["not_in_filesystem"])
+
+    print("\nSync status:")
+    print(f"  ✅ In sync: {sync_count}")
+    print(f"  ⚠️  Not in registry: {not_in_reg}")
+    print(f"  ⚠️  Not in filesystem: {not_in_fs}")
+
+    if not not_in_reg and not not_in_fs:
+        print("\n✅ Registry and filesystem are fully synchronized!")
+    else:
+        pct_in_sync = sync_count / max(sync_count + not_in_reg, 1) * 100
+        print(f"\n📊 Sync rate: {pct_in_sync:.1f}%")
+
+    if result["dry_run"] and (not_in_reg > 0 or not_in_fs > 0):
+        print("\n💡 Run with --write to apply fixes")
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Rebuild concept registry from Evergreen files")
-    parser.add_argument("--vault-dir", type=Path, default=Path.cwd())
+    parser.add_argument("--vault-dir", type=Path, default=None)
     parser.add_argument("--write", action="store_true", help="Write to disk (default is dry-run)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
+    parser.add_argument("--json", action="store_true", help="Output JSON report")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    dry_run = not args.write
-    if dry_run:
-        print("DRY RUN - no files will be written")
-
-    entries = rebuild_registry(
-        vault_dir=args.vault_dir,
-        dry_run=dry_run,
+    vault_dir = resolve_vault_dir(args.vault_dir)
+    result = reconcile_registry(
+        vault_dir=vault_dir,
+        write=args.write,
         verbose=args.verbose,
     )
 
-    # Summary
-    print()
-    print(f"Summary: {len(entries)} entries")
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print_report(result)
 
-    by_area: dict[str, int] = {}
-    for e in entries:
-        by_area[e.area] = by_area.get(e.area, 0) + 1
-    for area, count in sorted(by_area.items()):
-        print(f"  {area}: {count}")
+    if result["not_in_registry"] or result["not_in_filesystem"]:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

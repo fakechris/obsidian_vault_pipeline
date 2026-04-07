@@ -5,20 +5,20 @@ Enhanced Unified Pipeline - 增强版统一自动化调度器
 
 Usage:
     # 完整Pipeline（当前新内容）
-    python3 unified_pipeline_enhanced.py --full
+    ovp --full
 
     # 处理历史Pinboard（指定日期范围）
-    python3 unified_pipeline_enhanced.py --pinboard-history 2026-02-01 2026-02-28
-    python3 unified_pipeline_enhanced.py --pinboard-days 30
+    ovp --pinboard-history 2026-02-01 2026-02-28
+    ovp --pinboard-days 30
 
     # 处理历史+当前
-    python3 unified_pipeline_enhanced.py --full --pinboard-days 7
+    ovp --full --pinboard-days 7
 
     # 仅处理新Pinboard书签
-    python3 unified_pipeline_enhanced.py --pinboard-new
+    ovp --pinboard-new
 
     # 单步执行
-    python3 unified_pipeline_enhanced.py --step pinboard --pinboard-days 14
+    ovp --step pinboard --pinboard-days 14
 
 Features:
     - Pinboard+Clippings双输入
@@ -38,6 +38,11 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+try:
+    from .runtime import VaultLayout, resolve_vault_dir
+except ImportError:  # pragma: no cover - script mode fallback
+    from runtime import VaultLayout, resolve_vault_dir
 
 # ========== 环境初始化 ==========
 # 加载 .env 文件（从 Vault 根目录或 auto_vault 目录）
@@ -217,7 +222,7 @@ AUTO_VAULT_MODEL={model}
     print(f"\n✓ 配置文件已创建: {ENV_FILE}")
     print(f"  Provider: {base_url}")
     print(f"  Model: {model}")
-    print(f"\n现在可以运行: python3 unified_pipeline_enhanced.py --full")
+    print("\n现在可以运行: ovp --full")
     return 0
 
 
@@ -267,10 +272,6 @@ def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
 
 
 # ========== 配置 ==========
-LOG_FILE = VAULT_DIR / "60-Logs" / "pipeline.jsonl"
-TXN_DIR = VAULT_DIR / "60-Logs" / "transactions"
-REPORT_DIR = VAULT_DIR / "60-Logs" / "pipeline-reports"
-
 # Pipeline步骤定义（含Pinboard）
 PIPELINE_STEPS = [
     "pinboard",       # 1. 获取Pinboard书签到 02-Pinboard/
@@ -283,6 +284,84 @@ PIPELINE_STEPS = [
     "registry_sync",  # 8. 同步Registry与文件系统
     "moc",            # 9. 更新MOC
 ]
+
+
+def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
+    """Build the requested execution plan from CLI args."""
+    if args.full:
+        return {
+            "steps": None,
+            "pinboard_days": args.pinboard_days or 7,
+            "pinboard_start": None,
+            "pinboard_end": None,
+            "description": "Full pipeline (Pinboard+Clippings+All)",
+        }
+
+    if args.pinboard_new:
+        return {
+            "steps": ["pinboard", "pinboard_process"],
+            "pinboard_days": 7,
+            "pinboard_start": None,
+            "pinboard_end": None,
+            "description": "New Pinboard bookmarks only",
+        }
+
+    if args.pinboard_history:
+        pinboard_start, pinboard_end = args.pinboard_history
+        return {
+            "steps": [
+                "pinboard",
+                "pinboard_process",
+                "articles",
+                "quality",
+                "fix_links",
+                "evergreen",
+                "registry_sync",
+                "moc",
+            ],
+            "pinboard_days": None,
+            "pinboard_start": pinboard_start,
+            "pinboard_end": pinboard_end,
+            "description": f"Historical Pinboard {pinboard_start} to {pinboard_end}",
+        }
+
+    if args.pinboard_days:
+        return {
+            "steps": [
+                "pinboard",
+                "pinboard_process",
+                "articles",
+                "quality",
+                "fix_links",
+                "evergreen",
+                "registry_sync",
+                "moc",
+            ],
+            "pinboard_days": args.pinboard_days,
+            "pinboard_start": None,
+            "pinboard_end": None,
+            "description": f"Pinboard last {args.pinboard_days} days + full pipeline",
+        }
+
+    if args.step:
+        return {
+            "steps": [args.step],
+            "pinboard_days": args.pinboard_days,
+            "pinboard_start": None,
+            "pinboard_end": None,
+            "description": f"Single step: {args.step}",
+        }
+
+    if args.from_step:
+        return {
+            "steps": None,
+            "pinboard_days": args.pinboard_days or 7,
+            "pinboard_start": None,
+            "pinboard_end": None,
+            "description": f"From step: {args.from_step}",
+        }
+
+    return {}
 
 
 class PipelineLogger:
@@ -299,6 +378,7 @@ class PipelineLogger:
             "event_type": event_type,
             **data
         }
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -384,8 +464,9 @@ class EnhancedPipeline:
     """增强版Pipeline调度器"""
 
     def __init__(self, vault_dir: Path, logger: PipelineLogger, txn: TransactionManager):
-        self.vault_dir = vault_dir
-        self.scripts_dir = vault_dir / "60-Logs" / "scripts"
+        self.layout = VaultLayout.from_vault(vault_dir)
+        self.vault_dir = self.layout.vault_dir
+        self.scripts_dir = self.vault_dir / "60-Logs" / "scripts"
         self.logger = logger
         self.txn = txn
         self.step_results = {}
@@ -396,57 +477,77 @@ class EnhancedPipeline:
         counts = {}
 
         # Raw目录文件数
-        raw_dir = self.vault_dir / "50-Inbox" / "01-Raw"
+        raw_dir = self.layout.raw_dir
         counts["raw"] = len(list(raw_dir.glob("*.md"))) if raw_dir.exists() else 0
 
         # Processed目录文件数
-        processed_dir = self.vault_dir / "50-Inbox" / "03-Processed"
+        processed_dir = self.layout.processed_dir
         counts["processed"] = len(list(processed_dir.glob("*.md"))) if processed_dir.exists() else 0
 
+        pinboard_dir = self.layout.pinboard_dir
+        counts["pinboard"] = len(list(pinboard_dir.glob("*.md"))) if pinboard_dir.exists() else 0
+
+        archive_month_dir = self.layout.pinboard_archive_dir / datetime.now().strftime("%Y-%m")
+        counts["pinboard_archived"] = len(list(archive_month_dir.glob("*.md"))) if archive_month_dir.exists() else 0
+
         # 深度解读数量（当前月份）
-        current_month = datetime.now().strftime("%Y-%m")
         topics_dirs = [
-            self.vault_dir / "20-Areas" / "AI-Research" / "Topics" / current_month,
-            self.vault_dir / "20-Areas" / "Investing" / "Topics" / current_month,
-            self.vault_dir / "20-Areas" / "Programming" / "Topics" / current_month,
-            self.vault_dir / "20-Areas" / "Tools" / "Topics" / current_month,
+            self.layout.month_topics_dir("AI-Research"),
+            self.layout.month_topics_dir("Investing"),
+            self.layout.month_topics_dir("Programming"),
+            self.layout.month_topics_dir("Tools"),
         ]
         counts["interpretations"] = sum(
             len(list(d.glob("*_深度解读.md"))) for d in topics_dirs if d.exists()
         )
 
         # Evergreen数量
-        evergreen_dir = self.vault_dir / "10-Knowledge" / "Evergreen"
+        evergreen_dir = self.layout.evergreen_dir
         counts["evergreen"] = len(list(evergreen_dir.glob("*.md"))) if evergreen_dir.exists() else 0
+
+        moc_state: dict[str, float] = {}
+        for moc_file in self.layout.atlas_dir.glob("*.md"):
+            moc_state[str(moc_file)] = moc_file.stat().st_mtime
+        for moc_file in self.vault_dir.glob("20-Areas/**/MOC*.md"):
+            moc_state[str(moc_file)] = moc_file.stat().st_mtime
+        for moc_file in self.vault_dir.glob("20-Areas/**/Topics/*MOC.md"):
+            moc_state[str(moc_file)] = moc_file.stat().st_mtime
+        counts["moc_state"] = moc_state
 
         return counts
 
-    def _count_output_files(self, step: str, before_counts: dict) -> dict:
+    def _count_output_files(self, step: str, before_counts: dict, cmd_result: dict) -> dict:
         """基于实际产出检测结果（替代依赖退出码）"""
         results = {"success": True, "produced": 0, "method": "filesystem"}
 
         if step == "clippings":
             # 检查迁移的文件数
-            raw_count = len(list((self.vault_dir / "50-Inbox" / "01-Raw").glob("*.md")))
-            processed_count = len(list((self.vault_dir / "50-Inbox" / "03-Processed").glob("*.md")))
+            raw_count = len(list(self.layout.raw_dir.glob("*.md")))
+            processed_count = len(list(self.layout.processed_dir.glob("*.md")))
             results["produced"] = processed_count - before_counts.get("processed", 0)
             results["migrated"] = results["produced"]
             results["remaining"] = raw_count
 
         elif step == "pinboard":
-            # 检查Raw目录新增文件
-            raw_count = len(list((self.vault_dir / "50-Inbox" / "01-Raw").glob("*.md")))
-            results["produced"] = raw_count - before_counts.get("raw", 0)
+            pinboard_count = len(list(self.layout.pinboard_dir.glob("*.md")))
+            results["produced"] = pinboard_count - before_counts.get("pinboard", 0)
             results["new_bookmarks"] = results["produced"]
+
+        elif step == "pinboard_process":
+            archived_dir = self.layout.pinboard_archive_dir / datetime.now().strftime("%Y-%m")
+            archived_count = len(list(archived_dir.glob("*.md"))) if archived_dir.exists() else 0
+            results["produced"] = archived_count - before_counts.get("pinboard_archived", 0)
+            results["processed"] = cmd_result.get("processed", results["produced"])
+            results["skipped"] = cmd_result.get("skipped", 0)
+            results["failed"] = cmd_result.get("failed", 0)
 
         elif step == "articles":
             # 检查生成的深度解读数量
-            current_month = datetime.now().strftime("%Y-%m")
             topics_dirs = [
-                self.vault_dir / "20-Areas" / "AI-Research" / "Topics" / current_month,
-                self.vault_dir / "20-Areas" / "Investing" / "Topics" / current_month,
-                self.vault_dir / "20-Areas" / "Programming" / "Topics" / current_month,
-                self.vault_dir / "20-Areas" / "Tools" / "Topics" / current_month,
+                self.layout.month_topics_dir("AI-Research"),
+                self.layout.month_topics_dir("Investing"),
+                self.layout.month_topics_dir("Programming"),
+                self.layout.month_topics_dir("Tools"),
             ]
             current_count = sum(len(list(d.glob("*_深度解读.md"))) for d in topics_dirs if d.exists())
             results["produced"] = current_count - before_counts.get("interpretations", 0)
@@ -454,20 +555,34 @@ class EnhancedPipeline:
 
         elif step == "evergreen":
             # 检查新增的 Evergreen 数量
-            evergreen_dir = self.vault_dir / "10-Knowledge" / "Evergreen"
+            evergreen_dir = self.layout.evergreen_dir
             current_count = len(list(evergreen_dir.glob("*.md"))) if evergreen_dir.exists() else 0
             results["produced"] = current_count - before_counts.get("evergreen", 0)
             results["total_evergreen"] = current_count
 
         elif step == "moc":
-            # MOC 更新没有直接产出文件数，标记为成功
-            results["produced"] = 1  # 标记为执行了
-            results["updated"] = True
+            current_state = {}
+            for moc_file in self.layout.atlas_dir.glob("*.md"):
+                current_state[str(moc_file)] = moc_file.stat().st_mtime
+            for moc_file in self.vault_dir.glob("20-Areas/**/MOC*.md"):
+                current_state[str(moc_file)] = moc_file.stat().st_mtime
+            for moc_file in self.vault_dir.glob("20-Areas/**/Topics/*MOC.md"):
+                current_state[str(moc_file)] = moc_file.stat().st_mtime
+            before_state = before_counts.get("moc_state", {})
+            changed = {
+                path for path, mtime in current_state.items()
+                if path not in before_state or before_state[path] != mtime
+            }
+            results["produced"] = len(changed)
+            results["updated"] = bool(changed)
+            results["changed_files"] = sorted(changed)
 
         elif step == "quality":
-            # 质量检查没有产出，标记为成功
-            results["produced"] = 1
-            results["checked"] = True
+            checked = cmd_result.get("quality_checked", 0)
+            results["produced"] = checked
+            results["checked"] = checked > 0
+            results["qualified"] = cmd_result.get("quality_qualified", 0)
+            results["failed"] = cmd_result.get("quality_failed", 0)
 
         return results
 
@@ -620,8 +735,8 @@ class EnhancedPipeline:
         print("STEP 2: Processing Pinboard Files")
         print("="*60)
 
-        pinboard_dir = self.vault_dir / "50-Inbox" / "02-Pinboard"
-        archive_dir = self.vault_dir / "70-Archive" / "Pinboard"
+        pinboard_dir = self.layout.pinboard_dir
+        archive_dir = self.layout.pinboard_archive_dir
 
         if not pinboard_dir.exists():
             print("  02-Pinboard/ 目录不存在，跳过")
@@ -658,19 +773,19 @@ class EnhancedPipeline:
                     cmd = [
                         sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
                         "--process-single", str(f),
-                        "--output-dir", str(self.vault_dir / "20-Areas" / "Tools" / "Topics")
+                        "--vault-dir", str(self.vault_dir),
                     ]
                 elif url_type == "paper":
                     cmd = [
                         sys.executable, "-m", "openclaw_pipeline.auto_paper_processor",
                         "--process-single", str(f),
-                        "--output-dir", str(self.vault_dir / "20-Areas")
+                        "--vault-dir", str(self.vault_dir),
                     ]
                 elif url_type in ("article", "website"):
                     cmd = [
                         sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
                         "--process-single", str(f),
-                        "--output-dir", str(self.vault_dir / "20-Areas")
+                        "--vault-dir", str(self.vault_dir),
                     ]
                 else:
                     print(f"  ⏭️  跳过未知类型 {url_type}: {f.name}")
@@ -769,7 +884,8 @@ class EnhancedPipeline:
 
         cmd = [
             sys.executable, "-m", "openclaw_pipeline.batch_quality_checker",
-            "--all"
+            "--all",
+            "--vault-dir", str(self.vault_dir),
         ]
         if dry_run:
             cmd.append("--dry-run")
@@ -966,7 +1082,7 @@ class EnhancedPipeline:
 
             # 基于实际产出判断状态（非dry_run模式）
             if not dry_run and cmd_result.get("success"):
-                output_check = self._count_output_files(step, before_counts)
+                output_check = self._count_output_files(step, before_counts, cmd_result)
                 produced = output_check.get("produced", 0)
 
                 # 更新结果信息
@@ -979,6 +1095,10 @@ class EnhancedPipeline:
                     # 更新 before_counts 为下次检查做准备
                     if step == "clippings":
                         before_counts["processed"] += produced
+                    elif step == "pinboard":
+                        before_counts["pinboard"] += produced
+                    elif step == "pinboard_process":
+                        before_counts["pinboard_archived"] += produced
                     elif step == "articles":
                         before_counts["interpretations"] += produced
                     elif step == "evergreen":
@@ -1131,56 +1251,23 @@ def main():
         print("\n请先运行: ovp --init")
         return 1
 
-    # 初始化
-    logger = PipelineLogger(LOG_FILE)
-    txn = TransactionManager(TXN_DIR)
-    pipeline = EnhancedPipeline(args.vault_dir, logger, txn)
-
-    # 确定运行模式
-    if args.full:
-        # 完整模式
-        steps = None  # 运行所有步骤
-        pinboard_days = args.pinboard_days or 7
-        pinboard_start = None
-        pinboard_end = None
-        description = "Full pipeline (Pinboard+Clippings+All)"
-    elif args.pinboard_new:
-        # 仅处理新Pinboard
-        steps = ["pinboard"]
-        pinboard_days = 7
-        pinboard_start = None
-        pinboard_end = None
-        description = "New Pinboard bookmarks only"
-    elif args.pinboard_history:
-        # 历史Pinboard模式
-        steps = ["pinboard", "articles", "quality", "evergreen", "moc"]
-        pinboard_days = None
-        pinboard_start, pinboard_end = args.pinboard_history
-        description = f"Historical Pinboard {pinboard_start} to {pinboard_end}"
-    elif args.pinboard_days:
-        # 最近N天Pinboard（包含后续处理）
-        steps = ["pinboard", "articles", "quality", "evergreen", "moc"]
-        pinboard_days = args.pinboard_days
-        pinboard_start = None
-        pinboard_end = None
-        description = f"Pinboard last {args.pinboard_days} days + full pipeline"
-    elif args.step:
-        # 单步模式
-        steps = [args.step]
-        pinboard_days = args.pinboard_days
-        pinboard_start = None
-        pinboard_end = None
-        description = f"Single step: {args.step}"
-    elif args.from_step:
-        # 从指定步骤开始
-        steps = None
-        pinboard_days = args.pinboard_days or 7
-        pinboard_start = None
-        pinboard_end = None
-        description = f"From step: {args.from_step}"
-    else:
+    execution_plan = build_execution_plan(args)
+    if not execution_plan:
         parser.print_help()
         sys.exit(1)
+
+    layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
+
+    # 初始化
+    logger = PipelineLogger(layout.pipeline_log)
+    txn = TransactionManager(layout.transactions_dir)
+    pipeline = EnhancedPipeline(layout.vault_dir, logger, txn)
+
+    steps = execution_plan["steps"]
+    pinboard_days = execution_plan["pinboard_days"]
+    pinboard_start = execution_plan["pinboard_start"]
+    pinboard_end = execution_plan["pinboard_end"]
+    description = execution_plan["description"]
 
     # 创建事务
     pipeline.txn_id = txn.start("enhanced-pipeline", description)

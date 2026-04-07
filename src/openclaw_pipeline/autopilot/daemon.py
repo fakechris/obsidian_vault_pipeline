@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
 from .queue import TaskQueue, Task
+from ..runtime import resolve_vault_dir
 from .watcher import MultiSourceWatcher
 
 
@@ -252,19 +253,19 @@ class AutoPilotDaemon:
                     cmd = [
                         sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
                         "--process-single", task.file_path,
-                        "--output-dir", str(self.vault_dir / "20-Areas" / "Tools" / "Topics")
+                        "--vault-dir", str(self.vault_dir),
                     ]
                 elif url_type == "paper":
                     cmd = [
                         sys.executable, "-m", "openclaw_pipeline.auto_paper_processor",
                         "--process-single", task.file_path,
-                        "--output-dir", str(self.vault_dir / "20-Areas")
+                        "--vault-dir", str(self.vault_dir),
                     ]
                 elif url_type in ("article", "website"):
                     cmd = [
                         sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
                         "--process-single", task.file_path,
-                        "--output-dir", str(self.vault_dir / "20-Areas")
+                        "--vault-dir", str(self.vault_dir),
                     ]
                 else:
                     self.log(f"⏭️ 跳过 social 类型: {task.file_path}")
@@ -275,7 +276,7 @@ class AutoPilotDaemon:
                 cmd = [
                     sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
                     "--process-single", task.file_path,
-                    "--output-dir", str(self.vault_dir / "20-Areas")
+                    "--vault-dir", str(self.vault_dir),
                 ]
 
             proc = subprocess.run(
@@ -397,7 +398,8 @@ class AutoPilotDaemon:
         """运行 Evergreen 提取"""
         cmd = [
             sys.executable, "-m", "openclaw_pipeline.auto_evergreen_extractor",
-            "--recent", "1"
+            "--recent", "1",
+            "--vault-dir", str(self.vault_dir),
         ]
         subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
 
@@ -405,7 +407,8 @@ class AutoPilotDaemon:
         """运行 MOC 更新"""
         cmd = [
             sys.executable, "-m", "openclaw_pipeline.auto_moc_updater",
-            "--scan"
+            "--scan",
+            "--vault-dir", str(self.vault_dir),
         ]
         subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
 
@@ -653,7 +656,7 @@ def main():
             sys.exit(0)
         print("\n" + "─" * 50)
 
-    vault_dir = args.vault_dir or Path.cwd()
+    vault_dir = resolve_vault_dir(args.vault_dir)
     watch_sources = [s.strip() for s in args.watch.split(",")]
 
     daemon = AutoPilotDaemon(

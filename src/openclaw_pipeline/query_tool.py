@@ -20,6 +20,11 @@ from typing import List, Dict, Set, Optional
 from dataclasses import dataclass
 
 try:
+    from .runtime import resolve_vault_dir
+except ImportError:
+    from runtime import resolve_vault_dir  # type: ignore
+
+try:
     import litellm
     LITELLM_AVAILABLE = True
 except ImportError:
@@ -516,7 +521,7 @@ def main():
 
     args = parser.parse_args()
 
-    vault_dir = args.vault_dir or Path.cwd()
+    vault_dir = resolve_vault_dir(args.vault_dir)
 
     # 检查是否是 vault 根目录
     if not (vault_dir / "10-Knowledge").exists() and not (vault_dir / "50-Inbox").exists():
