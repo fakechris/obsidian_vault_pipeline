@@ -18,7 +18,7 @@ type: meta
 
 **生产级全自动化 Obsidian 知识管理流水线**
 
-输入 → 解读 → 质检 → 提炼 → 索引 → 可审计的全自动工作流
+摄入 → 解读 → 吸收 → 整形 → 规范化 → 派生视图
 
 [🇬🇧 English](README_EN.md)
 
@@ -41,6 +41,17 @@ type: meta
 ---
 
 ## 架构图：工具脉络
+
+### 六层运行模型
+
+| 层 | 目标 | 代表命令 | 是否允许 LLM 主判断 |
+|---|---|---|---|
+| Ingest | 采集并规范化原始输入 | `ovp --step pinboard` `ovp --step clippings` `ovp-article` | 否，尽量 deterministic |
+| Interpret | 把原始内容变成深度解读 | `ovp-article` `ovp-github` `ovp-paper` | 是，但输出格式受约束 |
+| Absorb | 把解读吸收到知识库 | `ovp-absorb` `ovp-evergreen` `ovp-query-to-wiki` | 是，重大判断需走工作流 |
+| Refine | 对既有知识库做 cleanup / breakdown | `ovp-cleanup` `ovp-breakdown` | 是，输出必须是结构化 proposal |
+| Canonical | 维护 registry / alias / Atlas / MOC | `ovp-promote-candidates` `ovp-moc` `ovp-rebuild-registry` | 否，尽量 deterministic |
+| Derived | 构图、delta、lint、报告 | `ovp-graph` `ovp-lint` | 否，只消费 canonical 状态 |
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -68,8 +79,11 @@ type: meta
 │  ├── ovp-quality    6维度质量评分（1-5分）                                   │
 │  └── ovp-lint       提交前检查（行数/占位符/frontmatter）                      │
 │                                                                             │
-│  知识提炼                                                                   │
-│  ├── ovp-evergreen  从解读提取原子笔记                                       │
+│  知识吸收与整形                                                              │
+│  ├── ovp-absorb     从深度解读吸收概念，驱动 candidate / active 生命周期      │
+│  ├── ovp-evergreen  兼容入口：直接从解读提取 Evergreen                        │
+│  ├── ovp-cleanup    生成知识页重写 proposal                                   │
+│  ├── ovp-breakdown  生成知识页拆分 proposal                                   │
 │  └── ovp-query-to-wiki  从问答归档新概念                                      │
 │                                                                             │
 │  索引维护                                                                   │
@@ -157,9 +171,22 @@ type: meta
 |------|-------------|
 | `ovp-github --single URL` | GitHub 项目 → 13节深度解读 |
 | `ovp-paper --arxiv URL` | arXiv 论文 → 学术解读 |
+| `ovp-absorb --recent 7 --dry-run --json` | 预览最近解读会如何被吸收到知识层 |
 | `ovp-evergreen --recent 7` | 从最近解读提取 Evergreen |
+| `ovp-cleanup --slug 概念 --json` | 生成单页 cleanup proposal |
+| `ovp-cleanup --slug 概念 --write --json` | 对日记式知识页执行确定性结构清理 |
+| `ovp-breakdown --all --json` | 生成全库 breakdown proposal |
+| `ovp-breakdown --slug 概念 --write --json` | 生成子页并回写父页索引 |
 | `ovp-moc --update-atlas-from-registry` | 从 registry 重建 Atlas Index |
 | `ovp-quality --recent 7` | 批量质量评分 |
+
+### 吸收与整形工作流
+
+| 命令 | 契约 | 说明 |
+|------|------|------|
+| `ovp-absorb` | 输入深度解读，输出 candidate / active evergreen 的生命周期动作 | 非 `--dry-run` 会调用吸收流程并更新 canonical 层 |
+| `ovp-cleanup` | 输入既有 Evergreen，输出 `rewrite_decision` proposal，并可在 `--write` 下执行确定性重排 | 当前只做可逆结构清理，不做自由文本重写；写入后会刷新 registry / Atlas |
+| `ovp-breakdown` | 输入既有 Evergreen，输出 `split_decision` proposal，并可在 `--write` 下创建子页 | 当前只做增量派生，不删除父页原内容；写入后会刷新 registry / Atlas |
 
 ### 维护工具
 

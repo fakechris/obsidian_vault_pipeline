@@ -469,7 +469,123 @@ class AutoEvergreenExtractor:
         return results
 
 
-def main():
+def build_extraction_summary(
+    results: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+    auto_promote: bool,
+    promote_threshold: int,
+    source_scope: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a structured absorb summary payload from per-file extraction results."""
+    return {
+        "mode": "absorb",
+        "dry_run": dry_run,
+        "auto_promote": auto_promote,
+        "promote_threshold": promote_threshold,
+        "source_scope": source_scope,
+        "summary": {
+            "files_processed": len(results),
+            "concepts_extracted": sum(r.get("concepts_extracted", 0) for r in results),
+            "candidates_added": sum(r.get("candidates_added", 0) for r in results),
+            "concepts_promoted": sum(r.get("concepts_promoted", 0) for r in results),
+            "concepts_created": sum(r.get("concepts_created", 0) for r in results),
+            "concepts_skipped": sum(r.get("concepts_skipped", 0) for r in results),
+            "errors": sum(1 for r in results if r.get("error")),
+        },
+        "results": results,
+    }
+
+
+def run_absorb_workflow(
+    vault_dir: Path,
+    *,
+    file_path: Path | None = None,
+    directory: Path | None = None,
+    recent: int | None = None,
+    dry_run: bool = False,
+    auto_promote: bool = False,
+    promote_threshold: int = AutoEvergreenExtractor.DEFAULT_PROMOTE_THRESHOLD,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    layout = VaultLayout.from_vault(vault_dir)
+    load_env_file(layout.vault_dir)
+
+    logger = PipelineLogger(layout.pipeline_log)
+    extractor = AutoEvergreenExtractor(layout.vault_dir, logger)
+    extractor.init_llm(api_key=api_key, api_base=api_base)
+    if verbose:
+        print("✓ LLM Client initialized")
+
+    if directory:
+        if verbose:
+            print(f"\nProcessing directory: {directory}")
+        results = extractor.process_directory(
+            directory,
+            dry_run=dry_run,
+            auto_promote=auto_promote,
+            promote_threshold=promote_threshold,
+        )
+    elif file_path:
+        if verbose:
+            print(f"\nProcessing file: {file_path}")
+        results = [
+            extractor.process_file(
+                file_path,
+                dry_run=dry_run,
+                auto_promote=auto_promote,
+                promote_threshold=promote_threshold,
+            )
+        ]
+    elif recent:
+        areas = ["AI-Research", "Tools", "Investing", "Programming"]
+        results = []
+        for area in areas:
+            for days_ago in range(recent):
+                date_dir = layout.vault_dir / "20-Areas" / area / "Topics" / (
+                    datetime.now() - __import__("datetime").timedelta(days=days_ago)
+                ).strftime("%Y-%m")
+                if date_dir.exists():
+                    if verbose:
+                        print(f"\nProcessing {area} - {date_dir.name}...")
+                    results.extend(
+                        extractor.process_directory(
+                            date_dir,
+                            dry_run=dry_run,
+                            auto_promote=auto_promote,
+                            promote_threshold=promote_threshold,
+                        )
+                    )
+    else:
+        raise ValueError("one of file_path, directory, or recent must be provided")
+
+    payload = build_extraction_summary(
+        results,
+        dry_run=dry_run,
+        auto_promote=auto_promote,
+        promote_threshold=promote_threshold,
+        source_scope={
+            "file": str(file_path) if file_path else None,
+            "dir": str(directory) if directory else None,
+            "recent": recent,
+        },
+    )
+
+    logger.log(
+        "evergreen_extraction_complete",
+        {
+            **payload["summary"],
+            "auto_promote": auto_promote,
+            "dry_run": dry_run,
+            **payload["source_scope"],
+        },
+    )
+    return payload
+
+
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="自动Evergreen笔记提取器")
     parser.add_argument("--dir", type=Path, help="处理目录")
     parser.add_argument("--file", type=Path, help="处理单个文件")
@@ -483,96 +599,51 @@ def main():
     parser.add_argument("--api-key", help="API Key")
     parser.add_argument("--api-base", help="API Base URL")
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
-    args = parser.parse_args()
+    parser.add_argument("--json", action="store_true", help="输出结构化 JSON 汇总")
+    args = parser.parse_args(argv)
 
     layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
-    load_env_file(layout.vault_dir)
-
-    # 初始化
-    logger = PipelineLogger(layout.pipeline_log)
-    extractor = AutoEvergreenExtractor(layout.vault_dir, logger)
 
     try:
-        extractor.init_llm(api_key=args.api_key, api_base=args.api_base)
-        print(f"✓ LLM Client initialized")
-    except Exception as e:
-        print(f"✗ {e}")
-        sys.exit(1)
-
-    # 执行处理
-    if args.dir:
-        print(f"\nProcessing directory: {args.dir}")
-        results = extractor.process_directory(
-            args.dir,
+        payload = run_absorb_workflow(
+            layout.vault_dir,
+            file_path=args.file,
+            directory=args.dir,
+            recent=args.recent,
             dry_run=args.dry_run,
             auto_promote=args.auto_promote,
             promote_threshold=args.promote_threshold,
+            api_key=args.api_key,
+            api_base=args.api_base,
+            verbose=not args.json,
         )
-    elif args.file:
-        print(f"\nProcessing file: {args.file}")
-        results = [extractor.process_file(
-            args.file,
-            dry_run=args.dry_run,
-            auto_promote=args.auto_promote,
-            promote_threshold=args.promote_threshold,
-        )]
-    elif args.recent:
-        # 处理最近N天的所有Areas
-        areas = ["AI-Research", "Tools", "Investing", "Programming"]
-        all_results = []
-        for area in areas:
-            # 查找最近N天的目录
-            for days_ago in range(args.recent):
-                date_dir = layout.vault_dir / "20-Areas" / area / "Topics" / (
-                    datetime.now() - __import__('datetime').timedelta(days=days_ago)
-                ).strftime("%Y-%m")
-                if date_dir.exists():
-                    print(f"\nProcessing {area} - {date_dir.name}...")
-                    results = extractor.process_directory(
-                        date_dir,
-                        dry_run=args.dry_run,
-                        auto_promote=args.auto_promote,
-                        promote_threshold=args.promote_threshold,
-                    )
-                    all_results.extend(results)
-        results = all_results
-    else:
-        parser.print_help()
+    except Exception as e:
+        if args.json:
+            print(json.dumps({"mode": "absorb", "error": str(e)}, ensure_ascii=False, indent=2))
+        else:
+            print(f"✗ {e}")
         sys.exit(1)
 
-    # 汇总
-    total_extracted = sum(r.get("concepts_extracted", 0) for r in results)
-    total_added = sum(r.get("candidates_added", 0) for r in results)
-    total_promoted = sum(r.get("concepts_promoted", 0) for r in results)
-    total_created = sum(r.get("concepts_created", 0) for r in results)
-    total_skipped = sum(r.get("concepts_skipped", 0) for r in results)
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
 
     print(f"\n{'='*60}")
     print(f"EVERGREEN EXTRACTION COMPLETE")
     print(f"{'='*60}")
-    print(f"Files processed: {len(results)}")
-    print(f"Concepts extracted: {total_extracted}")
-    print(f"Candidates added: {total_added}")
+    print(f"Files processed: {payload['summary']['files_processed']}")
+    print(f"Concepts extracted: {payload['summary']['concepts_extracted']}")
+    print(f"Candidates added: {payload['summary']['candidates_added']}")
     if args.auto_promote:
-        print(f"Concepts auto-promoted: {total_promoted}")
-        print(f"Files created: {total_created}")
-    print(f"Concepts skipped (exists): {total_skipped}")
+        print(f"Concepts auto-promoted: {payload['summary']['concepts_promoted']}")
+        print(f"Files created: {payload['summary']['concepts_created']}")
+    print(f"Concepts skipped (exists): {payload['summary']['concepts_skipped']}")
     print()
     if args.auto_promote:
         print("Note: High-confidence concepts have been auto-promoted and files created.")
     else:
         print("Note: Extracted concepts are added to candidate queue.")
         print("Use --auto-promote to automatically create files for high source_count concepts.")
-
-    logger.log("evergreen_extraction_complete", {
-        "files": len(results),
-        "extracted": total_extracted,
-        "candidates_added": total_added,
-        "promoted": total_promoted,
-        "created": total_created,
-        "skipped": total_skipped,
-        "auto_promote": args.auto_promote,
-    })
 
     return 0
 

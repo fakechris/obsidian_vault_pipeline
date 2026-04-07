@@ -18,7 +18,7 @@ type: meta
 
 **Production-grade fully automated Obsidian knowledge management pipeline**
 
-Input → Interpret → Quality → Refine → Index → Fully auditable workflow
+Ingest → Interpret → Absorb → Refine → Canonicalize → Derived Views
 
 [🇨🇳 中文](README.md)
 
@@ -41,6 +41,17 @@ Input → Interpret → Quality → Refine → Index → Fully auditable workflo
 ---
 
 ## Architecture: Tool Lineage
+
+### Six-Layer Runtime Model
+
+| Layer | Goal | Representative commands | LLM-driven? |
+|---|---|---|---|
+| Ingest | Normalize incoming raw material | `ovp --step pinboard` `ovp --step clippings` `ovp-article` | No, prefer deterministic behavior |
+| Interpret | Turn source material into deep interpretations | `ovp-article` `ovp-github` `ovp-paper` | Yes, but with constrained output contracts |
+| Absorb | Compile interpretations into the knowledge base | `ovp-absorb` `ovp-evergreen` `ovp-query-to-wiki` | Yes, but major decisions must go through workflow |
+| Refine | Propose cleanup and breakdown of existing knowledge | `ovp-cleanup` `ovp-breakdown` | Yes, but only as structured proposals |
+| Canonical | Maintain registry / aliases / Atlas / MOC | `ovp-promote-candidates` `ovp-moc` `ovp-rebuild-registry` | No, keep deterministic |
+| Derived | Build graph, daily delta, lint, reports | `ovp-graph` `ovp-lint` | No, consume canonical state only |
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -68,8 +79,11 @@ Input → Interpret → Quality → Refine → Index → Fully auditable workflo
 │  ├── ovp-quality    6-Dimension quality scoring (1-5)                      │
 │  └── ovp-lint       Pre-commit checks (lines/placeholders/frontmatter)      │
 │                                                                             │
-│  Knowledge Refinement                                                      │
-│  ├── ovp-evergreen  Extract atomic notes from interpretations                │
+│  Knowledge Absorb / Refine                                                 │
+│  ├── ovp-absorb     Absorb deep interpretations into candidate / active     │
+│  ├── ovp-evergreen  Compatibility entrypoint for direct evergreen extraction │
+│  ├── ovp-cleanup    Generate cleanup proposals for existing evergreen notes  │
+│  ├── ovp-breakdown  Generate split proposals for existing evergreen notes    │
 │  └── ovp-query-to-wiki  Archive Q&A to new concepts                         │
 │                                                                             │
 │  Index Maintenance                                                          │
@@ -158,9 +172,22 @@ File enters 50-Inbox/01-Raw/
 |---------|-------------|
 | `ovp-github --single URL` | GitHub project → 13-section deep dive |
 | `ovp-paper --arxiv URL` | arXiv paper → academic analysis |
+| `ovp-absorb --recent 7 --dry-run --json` | Preview how recent interpretations will be absorbed |
 | `ovp-evergreen --recent 7` | Extract Evergreen from recent interpretations |
+| `ovp-cleanup --slug concept --json` | Generate cleanup proposal for one evergreen note |
+| `ovp-cleanup --slug concept --write --json` | Apply deterministic structural cleanup to a diary-shaped note |
+| `ovp-breakdown --all --json` | Generate breakdown proposals for the whole vault |
+| `ovp-breakdown --slug concept --write --json` | Create child notes and update the parent index section |
 | `ovp-moc --update-atlas-from-registry` | Rebuild Atlas Index from registry |
 | `ovp-quality --recent 7` | Batch quality scoring |
+
+### Absorb / Refine Workflow
+
+| Command | Contract | Notes |
+|---------|----------|-------|
+| `ovp-absorb` | Takes deep interpretations and emits lifecycle actions for candidate / active evergreen | Non-`--dry-run` calls the absorb pipeline and updates the canonical layer |
+| `ovp-cleanup` | Takes existing evergreen notes and emits `rewrite_decision` proposals, with optional `--write` execution | Current execution is limited to reversible structural cleanup, not freeform rewriting; writes trigger registry / Atlas refresh |
+| `ovp-breakdown` | Takes existing evergreen notes and emits `split_decision` proposals, with optional `--write` execution | Current execution only creates derived child notes and updates the parent index; it does not delete parent content, and writes trigger registry / Atlas refresh |
 
 ### Maintenance Tools
 

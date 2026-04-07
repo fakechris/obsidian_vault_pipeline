@@ -88,6 +88,9 @@ ovp-migrate-links = "openclaw_pipeline.commands.migrate_broken_links:main"
 ovp-merge-duplicates = "openclaw_pipeline.commands.merge_duplicates:main"
 ovp-promote-candidates = "openclaw_pipeline.promote_candidates:main"
 ovp-graph = "openclaw_pipeline.graph_cli:main"
+ovp-absorb = "openclaw_pipeline.commands.absorb:main"
+ovp-cleanup = "openclaw_pipeline.commands.cleanup:main"
+ovp-breakdown = "openclaw_pipeline.commands.breakdown:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]
