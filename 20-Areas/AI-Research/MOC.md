@@ -36,3 +36,4 @@
 ---
 
 *Last updated: {{date}}*
+- [[2026-04-06_test-ai-article_深度解读]]

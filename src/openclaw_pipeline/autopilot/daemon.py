@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
 from .queue import TaskQueue, Task
-from .watcher import PollingWatcher
+from .watcher import MultiSourceWatcher
 
 
 class LLMQualityChecker:
@@ -197,21 +197,31 @@ class AutoPilotDaemon:
 
     def on_new_file(self, source: str, file_path: str):
         """新文件回调"""
+        # 根据来源设置处理阶段
+        if source == "pinboard":
+            stage = "github"
+        elif source == "clippings":
+            stage = "ingestion"  # clippings 迁移后作为 raw 处理
+        else:
+            stage = "ingestion"
+
         task = Task(
             source=source,
             file_path=file_path,
-            stage='ingestion',
+            stage=stage,
             priority=1  # 高优先级
         )
         task_id = self.queue.add_task(task)
-        self.log(f"📥 加入队列 [#{task_id}] {Path(file_path).name}")
+        self.log(f"📥 加入队列 [#{task_id}] {source}:{Path(file_path).name}")
 
     def process_task(self, task: Task) -> dict:
         """
         处理单个任务，返回结果
 
         执行流水线:
-        1. ovp-article --process-single (L1→L2)
+        1. 根据source类型选择处理器:
+           - pinboard: ovp-github
+           - raw/clippings: ovp-article
         2. 质量评分
         3. 质量达标 → ovp-evergreen (L2→L3)
         4. 质量达标 → ovp-moc --scan
@@ -220,21 +230,30 @@ class AutoPilotDaemon:
         result = {
             'task_id': task.id,
             'file': task.file_path,
+            'source': task.source,
             'stages': [],
             'success': False,
             'quality': None
         }
 
         try:
-            # Stage 1: 文章处理 (ingestion → interpretation)
-            self.log(f"📝 处理文章 [#{task.id}] {Path(task.file_path).name}")
+            # Stage 1: 根据source类型选择处理器
+            self.log(f"📝 处理 [{task.source}] [#{task.id}] {Path(task.file_path).name}")
 
-            # 构建命令
-            cmd = [
-                sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
-                "--process-single", task.file_path,
-                "--output-dir", str(self.vault_dir / "20-Areas")
-            ]
+            if task.source == "pinboard":
+                # Pinboard GitHub 仓库使用 ovp-github
+                cmd = [
+                    sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
+                    "--single", task.file_path,
+                    "--output-dir", str(self.vault_dir / "20-Areas" / "Tools" / "Topics")
+                ]
+            else:
+                # Raw/Clippings 使用 ovp-article
+                cmd = [
+                    sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+                    "--process-single", task.file_path,
+                    "--output-dir", str(self.vault_dir / "20-Areas")
+                ]
 
             proc = subprocess.run(
                 cmd,
@@ -245,7 +264,7 @@ class AutoPilotDaemon:
             )
 
             if proc.returncode != 0:
-                raise RuntimeError(f"文章处理失败: {proc.stderr}")
+                raise RuntimeError(f"处理失败: {proc.stderr[:200]}")
 
             result['stages'].append('interpretation')
 
@@ -452,9 +471,16 @@ class AutoPilotDaemon:
         if "clippings" in self.watch_sources:
             self._run_clippings()
 
-        # 设置监控
-        inbox_path = self.vault_dir / "50-Inbox" / "01-Raw"
-        self.watcher = PollingWatcher(inbox_path, self.on_new_file)
+        # 设置多来源监控
+        source_map = {}
+        if "inbox" in self.watch_sources:
+            source_map["inbox"] = self.vault_dir / "50-Inbox" / "01-Raw"
+        if "pinboard" in self.watch_sources:
+            source_map["pinboard"] = self.vault_dir / "50-Inbox" / "02-Pinboard"
+        if "clippings" in self.watch_sources:
+            source_map["clippings"] = self.vault_dir / "Clippings"
+
+        self.watcher = MultiSourceWatcher(source_map, self.on_new_file)
 
         # 首次扫描现有文件
         existing = self.watcher.scan()
