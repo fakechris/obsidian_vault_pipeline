@@ -408,6 +408,32 @@ class AutoPilotDaemon:
                     max_retries=3
                 )
 
+    def _run_pinboard(self):
+        """运行 Pinboard 抓取"""
+        self.log("📡 抓取 Pinboard 书签...")
+        cmd = [
+            sys.executable, "-m", "openclaw_pipeline.unified_pipeline_enhanced",
+            "--step", "pinboard"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.vault_dir))
+        if result.returncode == 0:
+            self.log("✅ Pinboard 抓取完成")
+        else:
+            self.log(f"⚠️ Pinboard 抓取失败: {result.stderr[:200]}")
+
+    def _run_clippings(self):
+        """运行 Clippings 处理"""
+        self.log("📚 处理 Clippings...")
+        cmd = [
+            sys.executable, "-m", "openclaw_pipeline.unified_pipeline_enhanced",
+            "--step", "clippings"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.vault_dir))
+        if result.returncode == 0:
+            self.log("✅ Clippings 处理完成")
+        else:
+            self.log(f"⚠️ Clippings 处理失败: {result.stderr[:200]}")
+
     def run(self):
         """主循环 - 前台运行"""
         self.running = True
@@ -419,6 +445,12 @@ class AutoPilotDaemon:
         self.log(f"🔧 并发: {self.parallel}")
         self.log(f"🎯 质量阈值: {self.quality_threshold}")
         self.log("─" * 50)
+
+        # 🔑 第一入口：运行 pinboard 和 clippings 抓取新内容
+        if "pinboard" in self.watch_sources:
+            self._run_pinboard()
+        if "clippings" in self.watch_sources:
+            self._run_clippings()
 
         # 设置监控
         inbox_path = self.vault_dir / "50-Inbox" / "01-Raw"
