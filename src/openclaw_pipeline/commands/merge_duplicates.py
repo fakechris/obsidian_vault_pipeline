@@ -246,16 +246,34 @@ def merge_duplicate_cluster(
             result["failed"].append(dup_slug)
             continue
 
-        # 2. 删除 duplicate 文件
+        # 2. 在所有文件中替换对 duplicate 的引用为 canonical
         if dup_path.exists():
             try:
-                # 备份内容以便更新引用
                 dup_content = dup_path.read_text(encoding="utf-8")
 
-                # 替换文件中的引用
-                # 注意：这只是简单替换，完整实现需要更新所有引用
+                # 扫描 vault 中所有 md 文件，替换 wikilink 引用
+                replacements_made = 0
+                for md_file in vault_dir.rglob("*.md"):
+                    if md_file == dup_path:
+                        continue
+                    try:
+                        file_content = md_file.read_text(encoding="utf-8")
+                        # 匹配 [[dup_slug]] 或 [[dup_slug|display]] 或 [[anything|dup_slug]]
+                        pattern = rf'\[\[{re.escape(dup_slug)}(\|[^\]]+)?\]\]'
+                        new_content, count = re.subn(
+                            pattern,
+                            lambda m: f"[[{canonical}{m.group(1) or ''}]]",
+                            file_content
+                        )
+                        if count > 0:
+                            md_file.write_text(new_content, encoding="utf-8")
+                            replacements_made += count
+                    except Exception:
+                        pass
+
+                # 3. 删除 duplicate 文件
                 dup_path.unlink()
-                print(f"  ✅ Deleted duplicate file {dup_path.name}")
+                print(f"  ✅ Deleted duplicate file {dup_path.name} (replaced {replacements_made} links)")
 
                 result["merged"].append(dup_slug)
             except Exception as e:

@@ -700,7 +700,6 @@ class EnhancedPipeline:
 
         cmd = [
             sys.executable, "-m", "openclaw_pipeline.commands.migrate_broken_links",
-            "--scan",
             "--write" if not dry_run else "--dry-run",
             "--vault-dir", str(self.vault_dir),
         ]
@@ -735,16 +734,16 @@ class EnhancedPipeline:
 
         return result
 
-    def step_evergreen(self, recent_days: int = 7, dry_run: bool = False, quality_score: float = 0.0) -> dict:
+    def step_evergreen(self, recent_days: int = 7, dry_run: bool = False, quality_score: float = -1.0) -> dict:
         """执行Evergreen提取步骤
 
         Args:
             recent_days: 处理最近N天的深度解读
             dry_run: 预览模式
-            quality_score: 质量分数，< 3.0 时阻断执行
+            quality_score: 质量分数，>= 0 且 < 3.0 时阻断执行；< 0 表示未执行质量检查（不阻断）
         """
-        # Quality gate: 如果质量分数 < 3.0，阻断 evergreen 步骤
-        if quality_score > 0 and quality_score < 3.0:
+        # Quality gate: 0 <= score < 3.0 时阻断（质量分数有效且低于阈值才阻断）
+        if 0 <= quality_score < 3.0:
             print(f"\n⚠️  Quality score ({quality_score:.1f}) < 3.0, blocking evergreen extraction")
             return {
                 "success": False,
@@ -755,10 +754,6 @@ class EnhancedPipeline:
 
         print("\n" + "="*60)
         print("STEP 6: Extracting Evergreen Notes")
-        print("="*60)
-        """执行Evergreen提取步骤"""
-        print("\n" + "="*60)
-        print("STEP 5: Extracting Evergreen Notes")
         print("="*60)
 
         cmd = [
@@ -849,7 +844,7 @@ class EnhancedPipeline:
                 cmd_result = self.step_fix_links(dry_run)
             elif step == "evergreen":
                 # 从 quality 步骤获取质量分数
-                quality_score = results.get("quality", {}).get("quality_score", 0.0)
+                quality_score = results.get("quality", {}).get("quality_score", -1.0)
                 cmd_result = self.step_evergreen(7, dry_run, quality_score=quality_score)
             elif step == "registry_sync":
                 cmd_result = self.step_registry_sync(dry_run)

@@ -236,6 +236,16 @@ class AutoEvergreenExtractor:
         self.evergreen_dir = vault_dir / "10-Knowledge" / "Evergreen"
         self.logger = logger
         self.extractor = None
+        self._registry = None  # 延迟加载，per-instance 单次加载
+
+    def _get_registry(self):
+        """获取已加载的 registry（每实例只 load 一次）"""
+        if self._registry is None and HAS_REGISTRY:
+            try:
+                self._registry = ConceptRegistry(self.vault_dir).load()
+            except Exception:
+                pass
+        return self._registry
 
     def init_llm(self, api_key: str | None = None, api_base: str | None = None):
         """初始化LLM"""
@@ -247,16 +257,16 @@ class AutoEvergreenExtractor:
         )
         self.extractor = EvergreenExtractor(llm_client, self.logger)
 
-    def evergreen_exists(self, concept_name: str) -> bool:
+    def evergreen_exists(self, concept_name: str, registry=None) -> bool:
         """检查Evergreen笔记是否已存在（registry优先，文件系统备选）"""
-        # Check registry first
-        if HAS_REGISTRY:
+        # Check registry first (use provided registry or instance cache)
+        reg = registry or self._get_registry()
+        if reg:
             try:
-                registry = ConceptRegistry(self.vault_dir).load()
-                if registry.has_active_slug(concept_name):
+                if reg.has_active_slug(concept_name):
                     return True
                 # Also check by alias
-                if registry.find_by_alias(concept_name):
+                if reg.find_by_alias(concept_name):
                     return True
             except Exception:
                 pass  # Fall back to filesystem
@@ -301,13 +311,8 @@ class AutoEvergreenExtractor:
             concepts = self.extractor.extract_concepts(file_path, content)
             result["concepts_extracted"] = len(concepts)
 
-            # Load registry if available
-            registry = None
-            if HAS_REGISTRY:
-                try:
-                    registry = ConceptRegistry(self.vault_dir).load()
-                except Exception:
-                    pass
+            # 获取已加载的 registry（每文件一次，不是每概念一次）
+            registry = self._get_registry()
 
             for concept in concepts:
                 concept_name = concept.get("concept_name")
@@ -320,7 +325,7 @@ class AutoEvergreenExtractor:
                 }
 
                 # 检查是否已存在（registry或文件系统）
-                if self.evergreen_exists(concept_name):
+                if self.evergreen_exists(concept_name, registry=registry):
                     concept_info["status"] = "exists"
                     result["concepts_skipped"] += 1
                     result["concepts"].append(concept_info)
@@ -342,15 +347,11 @@ class AutoEvergreenExtractor:
                             area="general",
                             aliases=[concept_name],
                         )
-                        registry.save()
-                        concept_info["status"] = "candidate_added"
-                        result["candidates_added"] += 1
 
                         # Auto-promote: source_count 达到阈值时自动创建文件
                         if auto_promote and entry.source_count >= promote_threshold:
                             entry.status = STATUS_ACTIVE
                             entry.review_state = "auto_promoted"
-                            registry.save()
 
                             # 创建 Evergreen 文件
                             note_content = self.extractor.create_evergreen_note(concept, file_path)
@@ -370,6 +371,9 @@ class AutoEvergreenExtractor:
                                 "source_count": entry.source_count,
                                 "path": str(output_path)
                             })
+                        else:
+                            concept_info["status"] = "candidate_added"
+                            result["candidates_added"] += 1
                     except ValueError:
                         # Already exists
                         concept_info["status"] = "exists"
@@ -395,6 +399,13 @@ class AutoEvergreenExtractor:
                     })
 
                 result["concepts"].append(concept_info)
+
+            # 文件内所有概念处理完毕后，一次性保存 registry（而非每概念保存一次）
+            if registry and not dry_run:
+                try:
+                    registry.save()
+                except Exception:
+                    pass
 
         except Exception as e:
             result["error"] = str(e)
