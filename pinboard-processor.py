@@ -269,9 +269,21 @@ def fetch_bookmarks(days: int = 7, start_date: datetime = None, end_date: dateti
         }
 
         try:
-            response = requests.get(url, params=params, proxies={"http": PROXY, "https": PROXY}, timeout=30)
+            # 先尝试带代理
+            proxies = {"http": PROXY, "https": PROXY} if PROXY else None
+            response = requests.get(url, params=params, proxies=proxies, timeout=30)
             response.raise_for_status()
         except requests.exceptions.ProxyError:
+            # 代理失败，尝试直连
+            try:
+                response = requests.get(url, params=params, timeout=30)
+                response.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                print(f"❌ 请求失败: {e}")
+                return []
+        except requests.exceptions.RequestException as e:
+            print(f"❌ 请求失败: {e}")
+            return []
             print("❌ 代理连接失败，请检查 PROXY 配置")
             return []
         except requests.exceptions.RequestException as e:
