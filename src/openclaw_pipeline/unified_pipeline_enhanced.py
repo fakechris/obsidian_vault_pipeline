@@ -83,6 +83,19 @@ def _load_env(vault_dir: Path | None = None) -> bool:
         ])
 
 
+def _get_version() -> str:
+    """从pyproject.toml读取版本"""
+    try:
+        import tomllib
+        pyproject = Path(__file__).parent.parent.parent / "pyproject.toml"
+        if pyproject.exists():
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            return data.get("project", {}).get("version", "0.3.2")
+    except Exception:
+        pass
+    return "0.3.2"
+
+
 def _check_api_key() -> tuple[bool, str]:
     """检查API Key是否配置，返回(是否有效, 提示信息)"""
     # API密钥回退链
@@ -874,7 +887,7 @@ def main():
         description="增强版统一自动化Pipeline（支持Pinboard+Clippings双输入）"
     )
 
-    parser.add_argument("--version", action="version", version="%(prog)s 0.3.2")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_get_version()}")
 
     # 运行模式
     parser.add_argument("--full", action="store_true",

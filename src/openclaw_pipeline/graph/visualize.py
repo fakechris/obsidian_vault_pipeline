@@ -42,11 +42,27 @@ class GraphVisualizer:
         lines.append(f"   🔄 2-hop      - 2跳关联")
         lines.append(f"   📦 3-hop      - 3跳关联")
 
+        # 过滤模板文件
+        def is_valid_node(node: dict) -> bool:
+            title = node.get('title', '')
+            note_id = node.get('note_id', '')
+            path = node.get('path', '')
+            # 跳过模板占位符
+            if '{{' in title or '{{' in note_id:
+                return False
+            # 跳过模板文件
+            if '_template' in path.lower() or note_id.startswith('_'):
+                return False
+            return True
+
         # 按类型分组
         by_type = {}
+        valid_nodes = []
         for node in self.nodes.values():
-            t = node.get('note_type', 'unknown')
-            by_type.setdefault(t, []).append(node)
+            if is_valid_node(node):
+                valid_nodes.append(node)
+                t = node.get('note_type', 'unknown')
+                by_type.setdefault(t, []).append(node)
 
         lines.append(f"\n📚 按类型:")
         type_icons = {
@@ -61,8 +77,8 @@ class GraphVisualizer:
             lines.append(f"   {icon} {note_type}: {len(nodes)}")
 
         # 节点列表
-        lines.append(f"\n🌐 节点 ({len(self.nodes)}):")
-        for node in sorted(self.nodes.values(), key=lambda n: n.get('seed_role', '')):
+        lines.append(f"\n🌐 节点 ({len(valid_nodes)}):")
+        for node in sorted(valid_nodes, key=lambda n: n.get('seed_role', '')):
             seed_role = node.get('seed_role', 'unknown')
             role_icon = {
                 'seed': '🌱',
