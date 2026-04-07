@@ -7,6 +7,8 @@
 > - Wiki 是代码库 —— 持续编译、自动维护的结构化知识
 
 ---
+schema_version: "1.0.0"
+note_id: claude-0db92ed6
 
 ## 1. 目录结构 (PARA Method)
 

@@ -1,4 +1,6 @@
 ---
+schema_version: "1.0.0"
+note_id: readme-dc2a69e8
 title: "Obsidian Vault Pipeline"
 description: "全自动知识管理流水线"
 date: 2026-04-06

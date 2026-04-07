@@ -1,4 +1,6 @@
 ---
+schema_version: "1.0.0"
+note_id: readme_en-5d661efc
 title: "Obsidian Vault Pipeline"
 description: "Production-grade automated knowledge management pipeline"
 date: 2026-04-06
