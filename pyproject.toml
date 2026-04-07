@@ -49,6 +49,7 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "tiktoken>=0.5.0",
     "watchdog>=3.0.0",
+    "networkx>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -85,6 +86,7 @@ ovp-batch-evergreen = "openclaw_pipeline.batch_evergreen:main"
 ovp-rebuild-registry = "openclaw_pipeline.rebuild_registry:main"
 ovp-migrate-links = "openclaw_pipeline.migrate_broken_links:main"
 ovp-promote-candidates = "openclaw_pipeline.promote_candidates:main"
+ovp-graph = "openclaw_pipeline.graph_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]
