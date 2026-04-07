@@ -448,10 +448,12 @@ def main():
     parser.add_argument("--api-base", help="API Base URL")
     parser.add_argument("--dry-run", action="store_true", help="预览模式")
     parser.add_argument("--delay", "-d", type=float, default=2.0, help="调用间隔（秒）")
+    parser.add_argument("--process-single", type=Path,
+                        help="处理单个 pinboard 书签文件，提取 URL 并深度解读")
 
     args = parser.parse_args()
 
-    if not any([args.arxiv, args.pdf, args.input]):
+    if not any([args.arxiv, args.pdf, args.input, args.process_single]):
         parser.print_help()
         sys.exit(1)
 
@@ -496,6 +498,29 @@ def main():
                         "authors": [],
                         "date": datetime.now().strftime("%Y-%m-%d"),
                     })
+    elif args.process_single:
+        # 从 pinboard 文件读取 frontmatter 提取 URL
+        import re
+        content = args.process_single.read_text(encoding="utf-8")
+        # 提取 source URL
+        source_match = re.search(r'^source:\s*(.+)$', content, re.MULTILINE)
+        title_match = re.search(r'^title:\s*"?(.+?)"?\s*$', content, re.MULTILINE)
+        date_match = re.search(r'^date:\s*(.+)$', content, re.MULTILINE)
+
+        if not source_match:
+            print(f"❌ 无法从文件提取 source URL: {args.process_single}")
+            sys.exit(1)
+
+        source = source_match.group(1).strip()
+        title = title_match.group(1).strip() if title_match else None
+        date = date_match.group(1).strip() if date_match else datetime.now().strftime("%Y-%m-%d")
+
+        papers_to_process.append({
+            "source": source,
+            "title": title,
+            "authors": [],
+            "date": date,
+        })
 
     print(f"\nProcessing {len(papers_to_process)} papers...")
     print(f"Output: {args.output_dir}")

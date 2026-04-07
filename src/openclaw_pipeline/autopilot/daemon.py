@@ -219,8 +219,12 @@ class AutoPilotDaemon:
         处理单个任务，返回结果
 
         执行流水线:
-        1. 根据source类型选择处理器:
-           - pinboard: ovp-github
+        1. 根据source类型和url_type选择处理器:
+           - pinboard/github: ovp-github
+           - pinboard/paper: ovp-paper
+           - pinboard/article: ovp-article
+           - pinboard/website: ovp-article
+           - pinboard/social: 跳过
            - raw/clippings: ovp-article
         2. 质量评分
         3. 质量达标 → ovp-evergreen (L2→L3)
@@ -237,16 +241,35 @@ class AutoPilotDaemon:
         }
 
         try:
-            # Stage 1: 根据source类型选择处理器
+            # Stage 1: 根据source和url_type选择处理器
             self.log(f"📝 处理 [{task.source}] [#{task.id}] {Path(task.file_path).name}")
 
             if task.source == "pinboard":
-                # Pinboard GitHub 仓库使用 ovp-github
-                cmd = [
-                    sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
-                    "--single", task.file_path,
-                    "--output-dir", str(self.vault_dir / "20-Areas" / "Tools" / "Topics")
-                ]
+                # 读取 pinboard 文件的 frontmatter 获取 url_type
+                url_type = self._get_pinboard_url_type(task.file_path)
+
+                if url_type == "github":
+                    cmd = [
+                        sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
+                        "--process-single", task.file_path,
+                        "--output-dir", str(self.vault_dir / "20-Areas" / "Tools" / "Topics")
+                    ]
+                elif url_type == "paper":
+                    cmd = [
+                        sys.executable, "-m", "openclaw_pipeline.auto_paper_processor",
+                        "--process-single", task.file_path,
+                        "--output-dir", str(self.vault_dir / "20-Areas")
+                    ]
+                elif url_type in ("article", "website"):
+                    cmd = [
+                        sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+                        "--process-single", task.file_path,
+                        "--output-dir", str(self.vault_dir / "20-Areas")
+                    ]
+                else:
+                    self.log(f"⏭️ 跳过 social 类型: {task.file_path}")
+                    result['stages'].append('skipped')
+                    return result
             else:
                 # Raw/Clippings 使用 ovp-article
                 cmd = [
@@ -303,6 +326,19 @@ class AutoPilotDaemon:
             self.failed_count += 1
 
         return result
+
+    def _get_pinboard_url_type(self, file_path: str) -> str:
+        """从 pinboard 文件的 frontmatter 读取 url_type"""
+        try:
+            import re
+            content = Path(file_path).read_text(encoding="utf-8")
+            # frontmatter 中 type: pinboard-{url_type}
+            match = re.search(r'^type:\s*pinboard-(\w+)', content, re.MULTILINE)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+        return "unknown"
 
     def _check_quality(self, task: Task) -> tuple[float, dict]:
         """

@@ -121,10 +121,12 @@ class Bookmark:
 
 # ========== 分类逻辑 ==========
 def classify_url(url: str) -> str:
-    """分类 URL 类型: github / article / website / social"""
+    """分类 URL 类型: github / paper / article / website / social"""
     url_lower = url.lower()
     if "github.com" in url_lower:
         return "github"
+    elif "arxiv.org" in url_lower:
+        return "paper"
     elif any(ext in url_lower for ext in [
         '.md', '.txt', 'medium.com', 'blog.', 'dev.to',
         'substack.com', 'news.ycombinator.com', 'lobste.rs'
@@ -148,7 +150,7 @@ def load_state() -> dict:
         "last_processed_date": None,  # 最新处理的日期（正向）
         "first_processed_date": None,  # 最早处理的日期（反向）
         "last_processed_hash": None,
-        "processed_count": {"github": 0, "website": 0, "article": 0, "social": 0}
+        "processed_count": {"github": 0, "paper": 0, "website": 0, "article": 0, "social": 0}
     }
 
 def save_state(state: dict):
@@ -162,7 +164,7 @@ def save_bookmarks_to_inbox(bookmarks: List[Bookmark], vault_dir: Path) -> dict:
 
     Returns: dict with counts of saved files
     """
-    saved = {"github": 0, "article": 0, "website": 0, "social": 0}
+    saved = {"github": 0, "paper": 0, "article": 0, "website": 0, "social": 0}
 
     inbox_dir = vault_dir / "50-Inbox" / "02-Pinboard"
     inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -387,7 +389,7 @@ def generate_processing_instructions(new_items: List[Bookmark]) -> str:
     lines.append("📋 处理指令")
     lines.append("="*70)
 
-    for url_type in ["github", "article", "website", "social"]:
+    for url_type in ["github", "paper", "article", "website", "social"]:
         type_items = [bm for bm in new_items if bm.url_type == url_type]
         if not type_items:
             continue
@@ -406,6 +408,12 @@ def generate_processing_instructions(new_items: List[Bookmark]) -> str:
                     owner, repo = parsed
                     lines.append(f"→ 调用 `github-project-processor` skill")
                     lines.append(f"→ 目标路径: `Projects/{DATE}_{owner}_{repo}.md`")
+
+            elif url_type == "paper":
+                arxiv_match = re.search(r'arxiv\.org/(?:abs|pdf)/(\d+\.\d+)', bm.href)
+                if arxiv_match:
+                    lines.append(f"→ 调用 `paper-processor` skill")
+                    lines.append(f"→ 目标路径: `AI-Research/Papers/{bm.date}_{arxiv_match.group(1)}.md`")
 
             elif url_type == "article":
                 title = re.sub(r'[^\w\u4e00-\u9fff-]', '_', bm.title)[:50]
@@ -497,7 +505,7 @@ def main(days: int = 7, dry_run: bool = True, incremental: bool = False,
         return
 
     # 分类统计
-    stats = {"github": [], "article": [], "website": [], "social": []}
+    stats = {"github": [], "paper": [], "article": [], "website": [], "social": []}
     for bm in bookmarks:
         if bm.url_type in stats:
             stats[bm.url_type].append(bm)
@@ -505,7 +513,7 @@ def main(days: int = 7, dry_run: bool = True, incremental: bool = False,
     print(f"📊 总计: {len(bookmarks)} 个书签")
     for url_type, items in stats.items():
         if items:
-            icon = {"github": "🔬", "article": "📝", "website": "🌐", "social": "📱"}[url_type]
+            icon = {"github": "🔬", "paper": "📄", "article": "📝", "website": "🌐", "social": "📱"}[url_type]
             print(f"   {icon} {url_type}: {len(items)}")
 
     # 去重检查
@@ -526,7 +534,7 @@ def main(days: int = 7, dry_run: bool = True, incremental: bool = False,
     print(f"\n⏭️  已存在 ({len(duplicate_items)} 个) - 将跳过:")
     if duplicate_items:
         for bm, dup_file in duplicate_items[:10]:
-            icon = {"github": "🔬", "article": "📝", "website": "🌐", "social": "📱"}.get(bm.url_type, "📌")
+            icon = {"github": "🔬", "paper": "📄", "article": "📝", "website": "🌐", "social": "📱"}.get(bm.url_type, "📌")
             print(f"   {icon} {bm.title[:50]}")
             print(f"      → {Path(dup_file).name}")
         if len(duplicate_items) > 10:
@@ -545,8 +553,8 @@ def main(days: int = 7, dry_run: bool = True, incremental: bool = False,
             if not type_items:
                 continue
 
-            icon = {"github": "🔬", "article": "📝", "website": "🌐", "social": "📱"}[url_type]
-            type_name = {"github": "GitHub 项目", "article": "文章", "website": "网站", "social": "社交媒体"}[url_type]
+            icon = {"github": "🔬", "paper": "📄", "article": "📝", "website": "🌐", "social": "📱"}[url_type]
+            type_name = {"github": "GitHub 项目", "paper": "学术论文", "article": "文章", "website": "网站", "social": "社交媒体"}[url_type]
             print(f"\n{icon} **{type_name}** ({len(type_items)}):")
 
             for bm in type_items:
@@ -590,6 +598,7 @@ def main(days: int = 7, dry_run: bool = True, incremental: bool = False,
     print(f"   - 已收录: {len(duplicate_items)}")
     print(f"   - 待处理: {len(new_items)}")
     print(f"     🔬 GitHub: {len(stats['github'])}")
+    print(f"     📄 论文: {len(stats['paper'])}")
     print(f"     📝 文章: {len(stats['article'])}")
     print(f"     🌐 网站: {len(stats['website'])}")
     print(f"     📱 社交: {len(stats['social'])}")
@@ -622,6 +631,7 @@ def main(days: int = 7, dry_run: bool = True, incremental: bool = False,
             state["last_processed_date"] = DATE
 
         state["processed_count"]["github"] += len(stats["github"])
+        state["processed_count"]["paper"] += len(stats["paper"])
         state["processed_count"]["website"] += len(stats["website"])
         state["processed_count"]["article"] += len(stats["article"])
         state["processed_count"]["social"] += len(stats["social"])
@@ -632,7 +642,7 @@ def main(days: int = 7, dry_run: bool = True, incremental: bool = False,
             print(f"\n💾 已保存书签到 inbox:")
             for url_type, count in saved.items():
                 if count > 0:
-                    icon = {"github": "🔬", "article": "📝", "website": "🌐", "social": "📱"}.get(url_type, "📌")
+                    icon = {"github": "🔬", "paper": "📄", "article": "📝", "website": "🌐", "social": "📱"}.get(url_type, "📌")
                     print(f"   {icon} {url_type}: {count} 个")
 
         save_state(state)

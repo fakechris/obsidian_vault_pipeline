@@ -393,6 +393,8 @@ def main():
     parser = argparse.ArgumentParser(description="GitHub项目13节深度解读生成器")
     parser.add_argument("--input", "-i", help="输入文件（每行一个GitHub URL）")
     parser.add_argument("--single", "-s", help="单个GitHub URL")
+    parser.add_argument("--process-single", type=Path,
+                        help="处理单个 pinboard 书签文件，提取 URL 并深度解读")
     parser.add_argument("--output-dir", "-o", type=Path, default=OUTPUT_DIR,
                         help=f"输出目录（默认: {OUTPUT_DIR}）")
     parser.add_argument("--model", "-m", default="MiniMax-M2.5", help="LLM模型")
@@ -404,7 +406,7 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.input and not args.single:
+    if not any([args.input, args.single, args.process_single]):
         parser.print_help()
         sys.exit(1)
 
@@ -441,6 +443,30 @@ def main():
                         "tags": [],
                         "description": "",
                     })
+    elif args.process_single:
+        # 从 pinboard 文件读取 frontmatter 提取 URL
+        import re
+        content = args.process_single.read_text(encoding="utf-8")
+        source_match = re.search(r'^source:\s*(.+)$', content, re.MULTILINE)
+        title_match = re.search(r'^title:\s*"?(.+?)"?\s*$', content, re.MULTILINE)
+        date_match = re.search(r'^date:\s*(.+)$', content, re.MULTILINE)
+        tags_match = re.search(r'^tags:\s*\[(.+?)\]', content, re.MULTILINE)
+
+        if not source_match:
+            print(f"❌ 无法从文件提取 source URL: {args.process_single}")
+            sys.exit(1)
+
+        source = source_match.group(1).strip()
+        title = title_match.group(1).strip() if title_match else None
+        date = date_match.group(1).strip() if date_match else datetime.now().strftime("%Y-%m-%d")
+        tags = [t.strip() for t in tags_match.group(1).split(",")] if tags_match else []
+
+        urls_to_process.append({
+            "url": source,
+            "date": date,
+            "tags": tags,
+            "description": title or "",
+        })
 
     print(f"\nProcessing {len(urls_to_process)} GitHub repositories...")
     print(f"Output: {args.output_dir}")

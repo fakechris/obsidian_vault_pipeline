@@ -273,14 +273,15 @@ REPORT_DIR = VAULT_DIR / "60-Logs" / "pipeline-reports"
 
 # Pipeline步骤定义（含Pinboard）
 PIPELINE_STEPS = [
-    "pinboard",       # 1. 获取Pinboard书签
-    "clippings",      # 2. 扫描并迁移Clippings
-    "articles",       # 3. 生成深度解读
-    "quality",        # 4. 质量检查
-    "fix_links",      # 5. 修复断裂链接
-    "evergreen",      # 6. 提取Evergreen（quality >= 3.0 才能执行）
-    "registry_sync",  # 7. 同步Registry与文件系统
-    "moc",            # 8. 更新MOC
+    "pinboard",       # 1. 获取Pinboard书签到 02-Pinboard/
+    "pinboard_process", # 2. 处理 02-Pinboard/ 文件到对应处理器
+    "clippings",      # 3. 扫描并迁移Clippings到 01-Raw/
+    "articles",       # 4. 生成深度解读
+    "quality",        # 5. 质量检查
+    "fix_links",      # 6. 修复断裂链接
+    "evergreen",      # 7. 提取Evergreen（quality >= 3.0 才能执行）
+    "registry_sync",  # 8. 同步Registry与文件系统
+    "moc",            # 9. 更新MOC
 ]
 
 
@@ -498,6 +499,14 @@ class EnhancedPipeline:
             # Pinboard 可能需要更长时间（网络请求）
             return 300  # 5分钟
 
+        elif step == "pinboard_process":
+            # 处理 pinboard 文件，每个文件最多5分钟
+            pinboard_dir = self.vault_dir / "50-Inbox" / "02-Pinboard"
+            if pinboard_dir.exists():
+                file_count = len(list(pinboard_dir.glob("*.md")))
+                return max(60, min(1800, file_count * 300))  # 每人5分钟
+            return 300
+
         elif step == "clippings":
             return 180  # 3分钟
 
@@ -603,10 +612,110 @@ class EnhancedPipeline:
 
         return result
 
+    def step_pinboard_process(self, dry_run: bool = False) -> dict:
+        """处理 02-Pinboard/ 中的书签文件，路由到对应处理器"""
+        import re
+
+        print("\n" + "="*60)
+        print("STEP 2: Processing Pinboard Files")
+        print("="*60)
+
+        pinboard_dir = self.vault_dir / "50-Inbox" / "02-Pinboard"
+        archive_dir = self.vault_dir / "70-Archive" / "Pinboard"
+
+        if not pinboard_dir.exists():
+            print("  02-Pinboard/ 目录不存在，跳过")
+            return {"success": True, "processed": 0, "skipped": 0}
+
+        files = list(pinboard_dir.glob("*.md"))
+        if not files:
+            print("  没有待处理的 Pinboard 文件")
+            return {"success": True, "processed": 0, "skipped": 0}
+
+        print(f"  找到 {len(files)} 个 Pinboard 文件")
+
+        results = {"processed": 0, "skipped": 0, "failed": 0}
+
+        for f in files:
+            try:
+                content = f.read_text(encoding="utf-8")
+                # 读取 frontmatter 获取 url_type
+                type_match = re.search(r'^type:\s*pinboard-(\w+)', content, re.MULTILINE)
+                if not type_match:
+                    print(f"  ⚠️  无法识别类型: {f.name}")
+                    results["skipped"] += 1
+                    continue
+
+                url_type = type_match.group(1)
+
+                if url_type == "social":
+                    print(f"  ⏭️  跳过 social: {f.name}")
+                    results["skipped"] += 1
+                    continue
+
+                # 构建命令
+                if url_type == "github":
+                    cmd = [
+                        sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
+                        "--process-single", str(f),
+                        "--output-dir", str(self.vault_dir / "20-Areas" / "Tools" / "Topics")
+                    ]
+                elif url_type == "paper":
+                    cmd = [
+                        sys.executable, "-m", "openclaw_pipeline.auto_paper_processor",
+                        "--process-single", str(f),
+                        "--output-dir", str(self.vault_dir / "20-Areas")
+                    ]
+                elif url_type in ("article", "website"):
+                    cmd = [
+                        sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+                        "--process-single", str(f),
+                        "--output-dir", str(self.vault_dir / "20-Areas")
+                    ]
+                else:
+                    print(f"  ⏭️  跳过未知类型 {url_type}: {f.name}")
+                    results["skipped"] += 1
+                    continue
+
+                if dry_run:
+                    print(f"  🔍 [DRY RUN] 路由 {url_type}: {f.name}")
+                    results["processed"] += 1
+                    continue
+
+                # 执行处理器
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(self.vault_dir),
+                    timeout=300
+                )
+
+                if result.returncode == 0:
+                    print(f"  ✅ {url_type}: {f.name}")
+                    results["processed"] += 1
+
+                    # 移动到 archive
+                    month_dir = archive_dir / datetime.now().strftime("%Y-%m")
+                    month_dir.mkdir(parents=True, exist_ok=True)
+                    archive_file = month_dir / f.name
+                    f.rename(archive_file)
+                else:
+                    print(f"  ❌ {url_type} 处理失败: {f.name}")
+                    print(f"     {result.stderr[:100]}")
+                    results["failed"] += 1
+
+            except Exception as e:
+                print(f"  ❌ 处理异常 {f.name}: {e}")
+                results["failed"] += 1
+
+        print(f"\n  汇总: 处理 {results['processed']}, 跳过 {results['skipped']}, 失败 {results['failed']}")
+        return {"success": results["failed"] == 0, **results}
+
     def step_clippings(self, batch_size: int | None = None, dry_run: bool = False) -> dict:
         """执行Clippings处理步骤"""
         print("\n" + "="*60)
-        print("STEP 2: Processing Clippings")
+        print("STEP 3: Processing Clippings")
         print("="*60)
 
         cmd = [
@@ -630,7 +739,7 @@ class EnhancedPipeline:
     def step_articles(self, batch_size: int | None = None, dry_run: bool = False) -> dict:
         """执行文章深度解读步骤"""
         print("\n" + "="*60)
-        print("STEP 3: Generating Article Interpretations")
+        print("STEP 4: Generating Article Interpretations")
         print("="*60)
 
         cmd = [
@@ -655,7 +764,7 @@ class EnhancedPipeline:
     def step_quality(self, dry_run: bool = False) -> dict:
         """执行质量检查步骤"""
         print("\n" + "="*60)
-        print("STEP 4: Quality Check")
+        print("STEP 5: Quality Check")
         print("="*60)
 
         cmd = [
@@ -695,7 +804,7 @@ class EnhancedPipeline:
     def step_fix_links(self, dry_run: bool = False) -> dict:
         """执行断裂链接修复步骤"""
         print("\n" + "="*60)
-        print("STEP 5: Fixing Broken Links")
+        print("STEP 6: Fixing Broken Links")
         print("="*60)
 
         cmd = [
@@ -716,7 +825,7 @@ class EnhancedPipeline:
     def step_registry_sync(self, dry_run: bool = False) -> dict:
         """执行Registry同步步骤"""
         print("\n" + "="*60)
-        print("STEP 7: Syncing Registry with Filesystem")
+        print("STEP 8: Syncing Registry with Filesystem")
         print("="*60)
 
         cmd = [
@@ -753,7 +862,7 @@ class EnhancedPipeline:
             }
 
         print("\n" + "="*60)
-        print("STEP 6: Extracting Evergreen Notes")
+        print("STEP 7: Extracting Evergreen Notes")
         print("="*60)
 
         cmd = [
@@ -776,7 +885,7 @@ class EnhancedPipeline:
     def step_moc(self, dry_run: bool = False) -> dict:
         """执行MOC更新步骤"""
         print("\n" + "="*60)
-        print("STEP 6: Updating MOC Indexes")
+        print("STEP 9: Updating MOC Indexes")
         print("="*60)
 
         cmd = [
@@ -834,6 +943,8 @@ class EnhancedPipeline:
                     end_date=pinboard_end,
                     dry_run=dry_run
                 )
+            elif step == "pinboard_process":
+                cmd_result = self.step_pinboard_process(dry_run)
             elif step == "clippings":
                 cmd_result = self.step_clippings(batch_size, dry_run)
             elif step == "articles":

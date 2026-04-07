@@ -7,6 +7,17 @@
 !.obsidian/plugins/*/data.json
 .trash/
 
+# Vault data (user content) — DO NOT TRACK IN GIT
+00-Polaris/
+10-Knowledge/
+20-Areas/
+30-Projects/
+40-Resources/
+50-Inbox/
+60-Logs/
+70-Archive/
+80-Views/
+
 # Private data
 .env
 .personal/
@@ -21,12 +32,13 @@
 *_api_key*
 
 # Pipeline logs with personal data
-60-Logs/pipeline.jsonl
-60-Logs/transactions/*.json
-60-Logs/quality-reports/*.md
-60-Logs/pipeline-reports/*.md
-50-Inbox/.manifest.json
-50-Inbox/.pinboard_state.json
+# (already covered by 60-Logs/ above, but keep for clarity)
+# 60-Logs/pipeline.jsonl
+# 60-Logs/transactions/*.json
+# 60-Logs/quality-reports/*.md
+# 60-Logs/pipeline-reports/*.md
+# 50-Inbox/.manifest.json
+# 50-Inbox/.pinboard_state.json
 
 # Autopilot and migration
 60-Logs/autopilot.db
