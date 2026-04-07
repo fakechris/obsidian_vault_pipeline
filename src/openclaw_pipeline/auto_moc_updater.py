@@ -130,6 +130,41 @@ class MOCUpdater:
 
         return None
 
+    def ensure_moc_file(self, area: str, moc_type: str, dry_run: bool = False) -> Path | None:
+        """Create the expected MOC file when it does not exist yet."""
+        mapping = AREA_MOC_MAPPING.get(area, {})
+        moc_rel = mapping.get(moc_type)
+        if not moc_rel:
+            return None
+
+        moc_path = self.areas_dir / area / moc_rel
+        if moc_path.exists():
+            return moc_path
+
+        if dry_run:
+            return moc_path
+
+        moc_path.parent.mkdir(parents=True, exist_ok=True)
+        title = moc_path.stem
+        kind = "Topics" if moc_type == "topics_moc" else "Area"
+        content = f"""---
+title: "{title}"
+type: moc
+area: {area}
+---
+
+# {title}
+
+> Auto-created {kind} MOC for {area}.
+"""
+        moc_path.write_text(content, encoding="utf-8")
+        self.logger.log("moc_created", {
+            "area": area,
+            "moc_type": moc_type,
+            "path": str(moc_path),
+        })
+        return moc_path
+
     def scan_files_in_area(self, area: str) -> list[Path]:
         """扫描Area中的所有深度解读文件"""
         area_dir = self.areas_dir / area
@@ -254,6 +289,10 @@ class MOCUpdater:
         # 找到MOC文件
         topics_moc = self.find_moc_file(area, "topics_moc")
         main_moc = self.find_moc_file(area, "main_moc")
+        if topics_moc is None and main_moc is None:
+            topics_moc = self.ensure_moc_file(area, "topics_moc", dry_run=dry_run)
+            if topics_moc is None:
+                main_moc = self.ensure_moc_file(area, "main_moc", dry_run=dry_run)
 
         for file_path in files:
             file_stem = file_path.stem

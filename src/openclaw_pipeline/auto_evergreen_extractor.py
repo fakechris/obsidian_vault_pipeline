@@ -32,6 +32,11 @@ try:
 except ImportError:
     from runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
+try:
+    from .identity import canonicalize_note_id
+except ImportError:
+    from identity import canonicalize_note_id  # type: ignore
+
 # Try to import concept registry
 try:
     from .concept_registry import ConceptRegistry, STATUS_ACTIVE, STATUS_CANDIDATE
@@ -197,6 +202,7 @@ Evergreen笔记标准：
     def create_evergreen_note(self, concept: dict, source_file: Path) -> str:
         """创建Evergreen笔记内容"""
         concept_name = concept.get("concept_name", "Untitled")
+        note_id = canonicalize_note_id(concept_name)
         title = concept.get("title", concept_name.replace("-", " "))
         definition = concept.get("one_sentence_def", "")
         explanation = concept.get("explanation", "")
@@ -207,6 +213,7 @@ Evergreen笔记标准：
         related_links = "\n".join([f"- [[{c}]]" for c in related if c])
 
         note = f"""---
+note_id: {note_id}
 title: "{title}"
 type: evergreen
 date: {datetime.now().strftime('%Y-%m-%d')}
@@ -314,6 +321,7 @@ class AutoEvergreenExtractor:
             "concepts_promoted": 0,
             "concepts": []
         }
+        registry_needs_save = False
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -362,18 +370,17 @@ class AutoEvergreenExtractor:
 
                         # Auto-promote: source_count 达到阈值时自动创建文件
                         if auto_promote and entry.source_count >= promote_threshold:
-                            entry.status = STATUS_ACTIVE
-                            entry.review_state = "auto_promoted"
+                            registry.save()
+                            from .promote_candidates import promote_candidate
 
-                            # 创建 Evergreen 文件
-                            note_content = self.extractor.create_evergreen_note(concept, file_path)
+                            mutation = promote_candidate(self.vault_dir, concept_name, dry_run=False)
                             output_path = self.evergreen_dir / f"{concept_name}.md"
-                            self.evergreen_dir.mkdir(parents=True, exist_ok=True)
-                            with open(output_path, "w", encoding="utf-8") as f:
-                                f.write(note_content)
+                            self._registry = ConceptRegistry(self.vault_dir).load()
+                            registry = self._registry
 
                             concept_info["status"] = "promoted_created"
                             concept_info["path"] = str(output_path)
+                            concept_info["mutation"] = mutation.to_dict()
                             result["concepts_promoted"] += 1
                             result["concepts_created"] += 1
 
@@ -381,7 +388,8 @@ class AutoEvergreenExtractor:
                                 "concept": concept_name,
                                 "source": str(file_path.name),
                                 "source_count": entry.source_count,
-                                "path": str(output_path)
+                                "path": str(output_path),
+                                "mutation": mutation.to_dict(),
                             })
                         else:
                             from .promote_candidates import write_candidate_file
@@ -389,6 +397,7 @@ class AutoEvergreenExtractor:
                             write_candidate_file(self.vault_dir, entry, dry_run=False)
                             concept_info["status"] = "candidate_added"
                             result["candidates_added"] += 1
+                            registry_needs_save = True
                     except ValueError:
                         # Already exists
                         concept_info["status"] = "exists"
@@ -416,7 +425,7 @@ class AutoEvergreenExtractor:
                 result["concepts"].append(concept_info)
 
             # 文件内所有概念处理完毕后，一次性保存 registry（而非每概念保存一次）
-            if registry and not dry_run:
+            if registry and registry_needs_save and not dry_run:
                 try:
                     registry.save()
                 except Exception:
@@ -493,7 +502,12 @@ def main():
     # 执行处理
     if args.dir:
         print(f"\nProcessing directory: {args.dir}")
-        results = extractor.process_directory(args.dir, dry_run=args.dry_run)
+        results = extractor.process_directory(
+            args.dir,
+            dry_run=args.dry_run,
+            auto_promote=args.auto_promote,
+            promote_threshold=args.promote_threshold,
+        )
     elif args.file:
         print(f"\nProcessing file: {args.file}")
         results = [extractor.process_file(

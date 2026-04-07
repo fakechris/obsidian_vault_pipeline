@@ -11,7 +11,11 @@ from openclaw_pipeline.concept_registry import (
     STATUS_ACTIVE,
     STATUS_CANDIDATE,
 )
-from openclaw_pipeline.auto_evergreen_extractor import AutoEvergreenExtractor, PipelineLogger as EvergreenLogger
+from openclaw_pipeline.auto_evergreen_extractor import (
+    AutoEvergreenExtractor,
+    PipelineLogger as EvergreenLogger,
+    main as evergreen_main,
+)
 from openclaw_pipeline.promote_candidates import (
     merge_candidate,
     promote_candidate,
@@ -236,3 +240,97 @@ class TestCandidatePromotion:
         assert candidate_path.exists()
         assert entry is not None
         assert entry.status == STATUS_CANDIDATE
+
+    def test_auto_evergreen_extractor_auto_promotes_into_active_note_with_note_id(self, temp_vault):
+        logger = EvergreenLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+        extractor = AutoEvergreenExtractor(temp_vault, logger)
+        extractor.extractor = SimpleNamespace(
+            extract_concepts=lambda file_path, content: [{
+                "concept_name": "promoted-concept",
+                "title": "Promoted Concept",
+                "one_sentence_def": "Promoted definition",
+                "explanation": "Detailed explanation",
+                "importance": "Important",
+                "related_concepts": ["existing-concept"],
+            }]
+        )
+
+        registry = ConceptRegistry(temp_vault)
+        registry.upsert_candidate(
+            slug="promoted-concept",
+            title="Promoted Concept",
+            definition="Promoted definition",
+            area="general",
+        )
+        registry.upsert_candidate(
+            slug="promoted-concept",
+            title="Promoted Concept",
+            definition="Promoted definition",
+            area="general",
+        )
+        registry.save()
+
+        source_file = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "2026-04-01_Test_深度解读.md"
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text("# Test\n", encoding="utf-8")
+
+        result = extractor.process_file(
+            source_file,
+            dry_run=False,
+            auto_promote=True,
+            promote_threshold=3,
+        )
+
+        evergreen_path = temp_vault / "10-Knowledge" / "Evergreen" / "promoted-concept.md"
+        atlas_index = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+        candidate_path = temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "promoted-concept.md"
+        entry = ConceptRegistry(temp_vault).load().find_by_slug("promoted-concept")
+        content = evergreen_path.read_text(encoding="utf-8")
+
+        assert result["concepts_promoted"] == 1
+        assert result["concepts_created"] == 1
+        assert evergreen_path.exists()
+        assert "note_id: promoted-concept" in content
+        assert atlas_index.exists()
+        assert "[[promoted-concept|Promoted Concept]]" in atlas_index.read_text(encoding="utf-8")
+        assert candidate_path.exists() is False
+        assert entry is not None
+        assert entry.status == STATUS_ACTIVE
+
+    def test_auto_evergreen_cli_dir_passes_auto_promote(self, monkeypatch, temp_vault):
+        captured = {}
+
+        class FakeExtractor:
+            DEFAULT_PROMOTE_THRESHOLD = 3
+
+            def __init__(self, vault_dir, logger):
+                captured["vault_dir"] = Path(vault_dir)
+
+            def init_llm(self, api_key=None, api_base=None):
+                return None
+
+            def process_directory(self, directory, dry_run=False, auto_promote=False, promote_threshold=0):
+                captured["directory"] = Path(directory)
+                captured["dry_run"] = dry_run
+                captured["auto_promote"] = auto_promote
+                captured["promote_threshold"] = promote_threshold
+                return []
+
+        monkeypatch.setattr("openclaw_pipeline.auto_evergreen_extractor.AutoEvergreenExtractor", FakeExtractor)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "ovp-evergreen",
+                "--vault-dir", str(temp_vault),
+                "--dir", str(temp_vault / "20-Areas" / "AI-Research" / "Topics"),
+                "--auto-promote",
+                "--promote-threshold", "5",
+            ],
+        )
+
+        result = evergreen_main()
+
+        assert result == 0
+        assert captured["vault_dir"] == temp_vault.resolve()
+        assert captured["auto_promote"] is True
+        assert captured["promote_threshold"] == 5

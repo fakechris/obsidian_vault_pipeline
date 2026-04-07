@@ -29,8 +29,10 @@ from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
 
 try:
+    from .identity import canonicalize_note_id
     from .runtime import resolve_vault_dir
 except ImportError:
+    from identity import canonicalize_note_id  # type: ignore
     from runtime import resolve_vault_dir  # type: ignore
 
 
@@ -86,6 +88,8 @@ class KnowledgeLinter:
         self.all_backlinks: Dict[str, Set[str]] = {}    # 文件 -> 入链
         self.all_files: Set[str] = set()
         self.moc_links: Set[str] = set()  # 所有MOC中的链接
+        self.file_identities: Dict[str, Set[str]] = {}
+        self.identity_to_file: Dict[str, str] = {}
 
     def log(self, message: str):
         """打印日志"""
@@ -120,6 +124,8 @@ class KnowledgeLinter:
             self.log(f"警告: 无法读取 {file_path}: {e}")
             return
 
+        self._index_file_identities(file_path, content)
+
         # 匹配 [[...]] 双向链接
         links = set()
         for match in re.finditer(r'\[\[([^\]]+)\]\]', content):
@@ -132,6 +138,40 @@ class KnowledgeLinter:
             links.add(link)
 
         self.all_links[file_path] = links
+
+    def _index_file_identities(self, file_path: str, content: str) -> None:
+        """Index stable identities for a note so lint resolution uses note_id, aliases and titles."""
+        identities = {file_path, str(Path(file_path).with_suffix("")), Path(file_path).stem}
+        metadata: dict = {}
+
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                try:
+                    import yaml
+
+                    metadata = yaml.safe_load(parts[1]) or {}
+                except Exception:
+                    metadata = {}
+
+        note_id = metadata.get("note_id")
+        title = metadata.get("title")
+        aliases = metadata.get("aliases") or []
+        if isinstance(aliases, str):
+            aliases = [aliases]
+
+        for value in [note_id, title, *aliases]:
+            if not value:
+                continue
+            text = str(value).strip()
+            identities.add(text)
+            normalized = canonicalize_note_id(text)
+            if normalized:
+                identities.add(normalized)
+
+        self.file_identities[file_path] = identities
+        for identity in identities:
+            self.identity_to_file.setdefault(identity, file_path)
 
     def _compute_backlinks(self):
         """计算反向链接"""
@@ -157,6 +197,16 @@ class KnowledgeLinter:
         # 移除 .md 扩展名（如果有）
         if link_clean.endswith('.md'):
             link_clean = link_clean[:-3]
+
+        direct_candidates = {
+            link.strip(),
+            link_clean,
+            canonicalize_note_id(link_clean),
+            str(Path(link_clean).with_suffix("")),
+        }
+        for candidate in direct_candidates:
+            if candidate and candidate in self.identity_to_file:
+                return self.identity_to_file[candidate]
 
         # 精确匹配: 文件名完全一致
         for f in self.all_files:
@@ -253,7 +303,9 @@ class KnowledgeLinter:
             if evergreen_file.stem.startswith("_"):
                 continue  # Skip templates
 
-            if evergreen_file.stem not in self.moc_links:
+            rel_path = str(evergreen_file.relative_to(self.vault_dir))
+            moc_targets = {self._resolve_link(link) for link in self.moc_links}
+            if rel_path not in moc_targets:
                 self.issues.append(LintIssue(
                     layer="L2",
                     level="warning",
@@ -300,7 +352,6 @@ class KnowledgeLinter:
         self.log("检查缺失概念...")
 
         mentioned_concepts: Set[str] = set()
-        existing_concepts: Set[str] = set()
 
         # 收集所有被提及的概念
         for file_path, links in self.all_links.items():
@@ -311,13 +362,8 @@ class KnowledgeLinter:
                         continue
                     mentioned_concepts.add(link)
 
-        # 收集所有存在的 Evergreen
-        if self.evergreen_dir.exists():
-            for f in self.evergreen_dir.glob("*.md"):
-                existing_concepts.add(f.stem)
-
         # 找出缺失的
-        missing = mentioned_concepts - existing_concepts
+        missing = {concept for concept in mentioned_concepts if self._resolve_link(concept) is None}
 
         for concept in missing:
             # 找出哪些文件提及了它
