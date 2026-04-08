@@ -250,6 +250,13 @@ vault/
 - 审计事件浏览
 - 工具发现与只读服务
 
+默认 discovery 也已经统一到这里：
+
+- `ovp-query` 默认走 `knowledge.db`
+- 关键词检索使用 FTS5 BM25
+- 语义检索使用本地 deterministic embeddings
+- QMD 不再是默认检索依赖，只能通过显式 `--engine qmd` 启用
+
 ## 快速开始
 
 ```bash

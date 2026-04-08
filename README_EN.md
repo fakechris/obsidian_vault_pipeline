@@ -250,6 +250,13 @@ It exists to power:
 - audit browsing
 - tool discovery and read-only serving
 
+Default discovery now routes through this layer:
+
+- `ovp-query` uses `knowledge.db` by default
+- keyword retrieval uses FTS5 BM25
+- semantic retrieval uses local deterministic embeddings
+- QMD is no longer the default runtime dependency; it is opt-in via `--engine qmd`
+
 ## Quick Start
 
 ```bash

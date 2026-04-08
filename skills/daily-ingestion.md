@@ -25,22 +25,23 @@ git checkout main && git pull origin main
 git status
 ```
 
-## QMD 配置
+## 检索配置
 
-**重要**：必须用 npm/node 运行，不能用 bunx：
+默认不需要 QMD。
+
+当前日常流程的默认 discovery 已经统一到 `knowledge.db`：
+- `ovp-query` 默认使用 `knowledge.db`
+- 关键词检索使用 FTS5 BM25
+- 语义检索使用本地 deterministic embeddings
+
+只有在你需要额外的外部 discovery 对照时，才显式使用 QMD：
 
 ```bash
-# 安装（用 npm，不用 bunx）
-npm install -g @tobilu/qmd
-
-# 初始化 collection
-qmd collection add openclaw ${WIGS_VAULT_DIR:-~/openclaw-vault}
-
-# 生成向量嵌入（首次或更新后）
-node ~/.nvm/versions/node/v22.20.0/lib/node_modules/@tobilu/qmd/dist/cli/qmd.js embed --collection openclaw -f
-
-# 注意：bunx 会导致 sqlite-vec 加载失败（Bun 的 SQLite 不支持扩展加载）
+ovp-query "AI Agent 架构"
+ovp-query --engine qmd "AI Agent 架构"
 ```
+
+QMD 是可选 adapter，不参与自动链接和 canonical 概念决策。
 
 ---
 

@@ -16,8 +16,18 @@ import json
 import argparse
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Set, Optional
+from typing import List, Dict
 from dataclasses import dataclass
+
+try:
+    from .discovery import discover_related
+except ImportError:
+    from discovery import discover_related  # type: ignore
+
+try:
+    from .evidence import build_evidence_payload
+except ImportError:
+    from evidence import build_evidence_payload  # type: ignore
 
 try:
     from .runtime import resolve_vault_dir
@@ -129,109 +139,22 @@ class VaultQuerier:
 
         return text[:max_len] + "..." if len(text) > max_len else text
 
-    def search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+    def search(self, query: str, top_k: int = 10, engine: str = "knowledge") -> List[SearchResult]:
         """
         搜索知识库
-        优先使用 qmd（如果安装并配置），否则使用内置 BM25 近似搜索
+        默认使用 knowledge.db；QMD 仅作为显式引擎
         """
-        # 尝试使用 qmd（如果可用）
-        qmd_results = self._search_with_qmd(query, top_k)
-        if qmd_results:
-            return qmd_results
-
-        # 回退到内置搜索
-        return self._search_builtin(query, top_k)
-
-    def _search_with_qmd(self, query: str, top_k: int) -> Optional[List[SearchResult]]:
-        """尝试使用 qmd 搜索引擎"""
-        try:
-            # 检查 qmd 是否可用
-            import subprocess
-            result = subprocess.run(
-                ["qmd", "search", query, "--limit", str(top_k)],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-
-            if result.returncode != 0:
-                return None
-
-            # 解析 qmd 输出
-            results = []
-            for line in result.stdout.strip().split('\n'):
-                if '|' in line:
-                    parts = line.split('|')
-                    if len(parts) >= 3:
-                        file_path = parts[0].strip()
-                        score = float(parts[1].strip())
-                        title = parts[2].strip()
-
-                        # 获取摘录
-                        page = self.all_pages.get(file_path, {})
-                        excerpt = page.get('excerpt', '')
-
-                        results.append(SearchResult(
-                            file=file_path,
-                            title=title,
-                            relevance=score,
-                            excerpt=excerpt
-                        ))
-
-            if results:
-                self.log(f"使用 qmd 搜索引擎，找到 {len(results)} 个结果")
-                return results
-
-        except (subprocess.SubprocessError, FileNotFoundError, ValueError):
-            pass
-
-        return None
-
-    def _search_builtin(self, query: str, top_k: int = 10) -> List[SearchResult]:
-        """
-        内置 BM25 近似搜索（qmd 不可用时回退）
-        """
-        self.log("使用内置搜索引擎 (qmd 未配置或不可用)")
-
-        query_terms = set(query.lower().split())
-        scores = []
-
-        for path, page in self.all_pages.items():
-            score = 0.0
-
-            # 标题匹配（高权重）
-            title_lower = page['title'].lower()
-            for term in query_terms:
-                if term in title_lower:
-                    score += 10.0
-
-            # 内容匹配
-            content_lower = page['content'].lower()
-            for term in query_terms:
-                count = content_lower.count(term)
-                score += count * 1.0
-
-            # 标签匹配
-            for tag in page.get('tags', []):
-                for term in query_terms:
-                    if term in tag.lower():
-                        score += 5.0
-
-            if score > 0:
-                scores.append((path, score, page))
-
-        # 排序取 top_k
-        scores.sort(key=lambda x: x[1], reverse=True)
-
         results = []
-        for path, score, page in scores[:top_k]:
+        for row in discover_related(self.vault_dir, query, engine=engine, limit=top_k):
+            path = str(row.get("path") or row.get("slug") or "")
+            title = str(row.get("title") or row.get("slug") or path)
+            excerpt = str(row.get("snippet") or "")
             results.append(SearchResult(
                 file=path,
-                title=page['title'],
-                relevance=score,
-                excerpt=page['excerpt']
+                title=title,
+                relevance=float(row.get("score") or 0.0),
+                excerpt=excerpt,
             ))
-
         return results
 
     def query(self, question: str, search_results: List[SearchResult]) -> dict:
@@ -485,7 +408,7 @@ type: moc
         self.log(f"已更新 MOC-Queries.md")
 
 
-def main():
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
         description="ovp-query: 查询知识库并归档回写 (Karpathy LLM Wiki Pattern)"
     )
@@ -518,8 +441,14 @@ def main():
         default=10,
         help="搜索返回的相关页面数量 (默认: 10)"
     )
+    parser.add_argument(
+        "--engine",
+        choices=["knowledge", "qmd"],
+        default="knowledge",
+        help="检索引擎: knowledge(默认) 或 qmd",
+    )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     vault_dir = resolve_vault_dir(args.vault_dir)
 
@@ -544,7 +473,11 @@ def main():
 
     # 搜索
     querier.log(f"搜索: {question}")
-    results = querier.search(question, top_k=args.top_k)
+    try:
+        results = querier.search(question, top_k=args.top_k, engine=args.engine)
+    except RuntimeError as exc:
+        print(f"❌ {exc}")
+        return 1
 
     if not results:
         print("❌ 未找到相关内容")
@@ -558,6 +491,13 @@ def main():
     # 查询
     querier.log("使用 LLM 生成回答...")
     answer = querier.query(question, results)
+    answer["evidence"] = build_evidence_payload(
+        vault_dir,
+        query=question,
+        mentions=[result.title for result in results[:3]],
+        slugs=[Path(result.file).stem for result in results[:5] if result.file],
+        limit=min(args.top_k, 5),
+    )
 
     print(f"\n💡 回答:\n")
     print(answer['answer'])

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..refine import (
     analyze_cleanup,
+    attach_proposal_evidence,
     execute_cleanup,
     load_note_targets,
     record_refine_run,
@@ -26,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
 
     vault_dir = resolve_vault_dir(args.vault_dir)
     targets = load_note_targets(vault_dir, slug=args.slug, all_notes=args.all)
-    proposals = [analyze_cleanup(target) for target in targets]
+    proposals = [attach_proposal_evidence(vault_dir, analyze_cleanup(target)) for target in targets]
     mutations = []
     canonical_refresh = None
     if args.write:

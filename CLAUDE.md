@@ -437,25 +437,24 @@ Ingest → Query → Output → 回写 wiki → 下次 Query 可用
 处理后: ![图](attachments/2026-04/img-hash.png)
 ```
 
-### 7.2 可选：qmd 搜索引擎
+### 7.2 可选：QMD 外部发现适配器
 
-对于大型 wiki，建议使用 [qmd](https://github.com/jzaki/qmd) 作为本地搜索引擎：
-- 混合 BM25/向量搜索
-- LLM 重排序
-- 支持 CLI 和 MCP Server
+当前默认 discovery 已经统一到 `knowledge.db`：
+- `ovp-query` 默认走 `knowledge.db`
+- 关键词检索使用 FTS5 BM25
+- 语义检索使用本地 deterministic embeddings
+
+QMD 现在只是**显式可选**的外部发现适配器，不再是默认 runtime 依赖，也不会参与自动链接或 canonical identity 决策。
 
 ```bash
-# 安装 qmd
-pip install qmd
+# 默认：knowledge.db
+ovp-query "AI Agent 架构"
 
-# 索引知识库
-qmd index /path/to/vault
-
-# 搜索
-qmd search "AI Agent 架构"
+# 显式改用 qmd
+ovp-query --engine qmd "AI Agent 架构"
 ```
 
-使用 qmd 时，在 `ovp-query` 中添加 `--search-engine qmd` 参数。
+如果需要保留 QMD 做人工探索或对照检索，可以单独安装并维护它，但不要把 QMD 结果当成自动 link resolution 的依据。
 
 ```bash
 # .env
