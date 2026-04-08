@@ -47,7 +47,7 @@ tags: [paper]
 
     captured: list[list[str]] = []
 
-    def fake_run(cmd, capture_output, text, cwd, timeout):
+    def fake_run(cmd, capture_output, text, cwd, timeout, env=None):
         captured.append(cmd)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -83,7 +83,7 @@ example/repo
 
     captured: list[int] = []
 
-    def fake_run(cmd, capture_output, text, cwd, timeout):
+    def fake_run(cmd, capture_output, text, cwd, timeout, env=None):
         captured.append(timeout)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -93,6 +93,42 @@ example/repo
 
     assert result["processed"] == 1
     assert captured == [600]
+
+
+def test_pipeline_subprocesses_include_project_src_on_pythonpath(temp_vault, monkeypatch):
+    pinboard_file = temp_vault / "50-Inbox" / "02-Pinboard" / "2026-04-07_example.md"
+    pinboard_file.parent.mkdir(parents=True, exist_ok=True)
+    pinboard_file.write_text(
+        """---
+title: "example/repo"
+source: https://github.com/example/repo
+date: 2026-04-07
+type: pinboard-github
+tags: [tool]
+---
+
+example/repo
+""",
+        encoding="utf-8",
+    )
+
+    logger = PipelineLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(temp_vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(temp_vault, logger, txn)
+
+    captured_envs: list[dict[str, str]] = []
+
+    def fake_run(cmd, capture_output, text, cwd, timeout, env):
+        captured_envs.append(env)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
+
+    result = pipeline.step_pinboard_process(dry_run=False)
+
+    assert result["processed"] == 1
+    assert captured_envs
+    assert str((Path(__file__).resolve().parents[1] / "src")) in captured_envs[0]["PYTHONPATH"]
 
 
 def test_article_processor_abstains_when_only_metadata_is_available(temp_vault, monkeypatch):

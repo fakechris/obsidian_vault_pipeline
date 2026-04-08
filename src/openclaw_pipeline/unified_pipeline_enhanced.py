@@ -338,6 +338,8 @@ BASE_PIPELINE_STEPS = [
 OPTIONAL_PIPELINE_STEPS = ["refine"]  # cleanup + breakdown 的批处理重构
 STEP_ALIASES = {"evergreen": "absorb"}
 PIPELINE_STEP_CHOICES = [*BASE_PIPELINE_STEPS, *OPTIONAL_PIPELINE_STEPS, *STEP_ALIASES.keys()]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_SRC = PROJECT_ROOT / "src"
 
 
 def normalize_step_name(step: str | None) -> str | None:
@@ -741,7 +743,8 @@ class EnhancedPipeline:
                 cwd=self.vault_dir,
                 capture_output=True,
                 text=True,
-                timeout=timeout
+                timeout=timeout,
+                env=self._subprocess_env(),
             )
 
             success = result.returncode == 0
@@ -769,6 +772,16 @@ class EnhancedPipeline:
         except Exception as e:
             self.logger.log("command_error", {"step": step_name, "error": str(e)})
             return {"success": False, "error": str(e)}
+
+    def _subprocess_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        project_src = str(PROJECT_SRC)
+        current_pythonpath = env.get("PYTHONPATH", "")
+        segments = [segment for segment in current_pythonpath.split(os.pathsep) if segment]
+        if project_src not in segments:
+            segments.insert(0, project_src)
+        env["PYTHONPATH"] = os.pathsep.join(segments)
+        return env
 
     def step_pinboard(
         self,
@@ -890,7 +903,8 @@ class EnhancedPipeline:
                     capture_output=True,
                     text=True,
                     cwd=str(self.vault_dir),
-                    timeout=600
+                    timeout=600,
+                    env=self._subprocess_env(),
                 )
 
                 if result.returncode == 0:
