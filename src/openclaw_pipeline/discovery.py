@@ -5,6 +5,8 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from .packs.base import BaseDomainPack
+from .packs.loader import load_pack
 from .runtime import resolve_vault_dir
 
 
@@ -122,32 +124,90 @@ def _discover_with_qmd(vault_dir: Path, query: str, limit: int) -> list[dict[str
     return rows[:limit]
 
 
+def _resolve_pack(pack: str | BaseDomainPack | None) -> BaseDomainPack:
+    if isinstance(pack, BaseDomainPack):
+        return pack
+    return load_pack(pack or "default-knowledge")
+
+
+def _slug_object_kinds(vault_dir: Path) -> dict[str, str]:
+    from .concept_registry import ConceptRegistry
+
+    registry = ConceptRegistry(vault_dir).load()
+    return {entry.slug: entry.kind for entry in registry.entries}
+
+
+def _annotate_discovery_rows(
+    vault_dir: Path,
+    rows: list[dict[str, object]],
+    pack: BaseDomainPack,
+) -> list[dict[str, object]]:
+    slug_kinds = _slug_object_kinds(vault_dir)
+    allowed_kinds = set(pack.discoverable_object_kinds())
+
+    annotated: list[dict[str, object]] = []
+    for row in rows:
+        slug = str(row.get("slug") or "")
+        object_kind = slug_kinds.get(slug, "document")
+        if allowed_kinds and object_kind not in allowed_kinds:
+            continue
+        normalized = dict(row)
+        normalized["pack"] = pack.name
+        normalized["object_kind"] = object_kind
+        annotated.append(normalized)
+    return annotated
+
+
 def discover_related(
     vault_dir: Path,
     query: str,
     *,
     engine: str = "knowledge",
     limit: int = 10,
+    pack: str | BaseDomainPack | None = None,
 ) -> list[dict[str, object]]:
     resolved_vault = resolve_vault_dir(vault_dir)
+    resolved_pack = _resolve_pack(pack)
     if engine == "knowledge":
-        return _discover_with_knowledge(resolved_vault, query, limit)
+        return _annotate_discovery_rows(
+            resolved_vault,
+            _discover_with_knowledge(resolved_vault, query, limit),
+            resolved_pack,
+        )
     if engine == "qmd":
-        return _discover_with_qmd(resolved_vault, query, limit)
+        return _annotate_discovery_rows(
+            resolved_vault,
+            _discover_with_qmd(resolved_vault, query, limit),
+            resolved_pack,
+        )
     raise ValueError(f"Unsupported discovery engine: {engine}")
 
 
-def discover_identity_context(registry: object, mention: str) -> dict[str, object]:
+def discover_identity_context(
+    registry: object,
+    mention: str,
+    *,
+    pack: str | BaseDomainPack | None = None,
+) -> dict[str, object]:
+    resolved_pack = _resolve_pack(pack)
     resolution = registry.resolve_mention(mention)
     return {
         "action": resolution.action.value if hasattr(resolution.action, "value") else str(resolution.action),
         "mention": resolution.mention,
         "normalized_mention": resolution.normalized_mention,
         "entry_slug": resolution.entry.slug if resolution.entry else "",
+        "pack": resolved_pack.name,
+        "object_kind": getattr(registry.find_by_slug(resolution.entry.slug), "kind", "document") if resolution.entry else "",
         "confidence": resolution.confidence,
         "ambiguous_slugs": [entry.slug for entry in resolution.ambiguous_entries],
     }
 
 
-def discover_query_context(vault_dir: Path, query: str, *, limit: int = 10) -> list[dict[str, object]]:
-    return discover_related(vault_dir, query, engine="knowledge", limit=limit)
+def discover_query_context(
+    vault_dir: Path,
+    query: str,
+    *,
+    limit: int = 10,
+    pack: str | BaseDomainPack | None = None,
+) -> list[dict[str, object]]:
+    return discover_related(vault_dir, query, engine="knowledge", limit=limit, pack=pack)

@@ -6,6 +6,13 @@
 > - LLM 是程序员 —— AutoPilot 自动完成编译、链接、维护
 > - Wiki 是代码库 —— 持续编译、自动维护的结构化知识
 
+## 当前平台边界
+
+- 当前内置标准 pack 是 `default-knowledge`
+- 主流程可显式选择 `--pack default-knowledge --profile full`
+- AutoPilot 可显式选择 `--pack default-knowledge --profile autopilot`
+- 第三方领域包通过 Pack API 接入，文档见 `docs/pack-api/`
+
 ---
 schema_version: "1.0.0"
 note_id: claude-0db92ed6
@@ -159,7 +166,7 @@ ovp --full
 
 # 或分步执行
 ovp --step articles       # L1 → L2: 生成深度解读
-ovp-evergreen --recent 7  # L2 → L3: 提取 Evergreen
+ovp-absorb --recent 7     # L2 → L3: 提取/吸收 Evergreen 生命周期动作
 ovp-moc --scan           # 更新 MOC 索引
 ```
 
@@ -175,9 +182,10 @@ mv article.md 50-Inbox/01-Raw/
 # 全自动发生:
 # 1. 检测新文件 → 加入队列
 # 2. 生成深度解读 (6维度质量评分)
-# 3. 质量达标 → 提取 Evergreen
+# 3. 质量达标 → absorb
 # 4. 更新 MOC
-# 5. 自动 git commit
+# 5. 刷新 knowledge.db
+# 6. 自动 git commit
 ```
 
 ### 3.3 完整数据流
@@ -190,7 +198,7 @@ ovp-article --process     # L1 → L2
 20-Areas/AI-Research/     # L2: 深度解读
 Topics/2026-04/
     ↓
-ovp-evergreen --recent 7  # L2 → L3
+ovp-absorb --recent 7     # L2 → L3
     ↓
 10-Knowledge/Evergreen/   # L3: 原子概念
     ↓

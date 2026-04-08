@@ -40,6 +40,121 @@ The current release wires those layers into the actual runtime:
 - `ovp-autopilot` runs real-time `absorb -> moc -> knowledge_index`
 - `ovp-autopilot --with-refine` adds `refine` to that path
 
+## Why The Architecture Looks Like This
+
+This repository started as a set of Obsidian automation scripts, but that model stopped scaling once the system grew:
+
+- the main runtime and individual scripts drifted apart
+- concepts, links, Atlas, graph, and retrieval indexes were tightly coupled without a clean truth boundary
+- new domains like media, medical, or engineering research could not be modeled safely with a concept-only core
+
+The current architecture is the direct answer to those failures:
+
+- the six-layer runtime makes orchestration, canonical state, and derived state explicit
+- `default-knowledge` freezes the current default domain semantics as a pack instead of scattering them through core
+- Pack API turns future domains into installable packs rather than more hardcoded branches inside the runtime
+
+So the project is no longer just a Vault automation repo. It is now:
+
+> an extensible knowledge orchestration platform for Obsidian-style vault workflows
+
+with `default-knowledge` as the first built-in standard pack.
+
+## Domain Packs
+
+The core runtime is now being formalized as a pack-aware platform.
+
+- Built-in standard pack: `default-knowledge`
+- Runtime selection is exposed through `--pack` and `--profile`
+- Third-party packs can be discovered through the `openclaw_pipeline.packs` entry point group or the `OPENCLAW_PACK_MANIFESTS` manifest list
+
+Examples:
+
+```bash
+ovp --pack default-knowledge --profile full
+ovp-autopilot --pack default-knowledge --profile autopilot --yes
+```
+
+Pack API documentation for third-party developers lives in:
+
+- `docs/pack-api/README.md`
+- `docs/pack-api/manifest-and-hooks.md`
+- `docs/pack-api/dogfooding-with-media-pack.md`
+
+## Platform Architecture
+
+From a platform perspective, the system now has three layers:
+
+1. **Core Platform**
+2. **Domain Pack**
+3. **Workflow Profile**
+
+### 1. Core Platform
+
+Core owns the cross-domain pieces that must remain stable:
+
+- runtime / vault layout
+- CLI orchestration
+- autopilot / queue / watcher
+- canonical identity helpers
+- registry framework
+- derived `knowledge.db`
+- graph / lint / audit infrastructure
+- plugin / pack loading
+- base evidence schema contracts
+
+### 2. Domain Pack
+
+A pack is not just a prompt bundle. It defines domain semantics:
+
+- object kinds
+- workflow profiles
+- discovery boundaries
+- absorb / refine / lint rules
+- schemas / templates / prompt resources
+
+The built-in pack is `default-knowledge`. Future domains such as media, medical, or engineering research should arrive as external pack projects.
+
+### 3. Workflow Profile
+
+A workflow profile is an executable DAG under a pack.
+
+The built-in profiles currently shipped are:
+
+- `default-knowledge/full`
+- `default-knowledge/autopilot`
+
+That is why these are now first-class runtime invocations:
+
+```bash
+ovp --pack default-knowledge --profile full
+ovp-autopilot --pack default-knowledge --profile autopilot --yes
+```
+
+## Plugin Design
+
+The plugin / pack surface is no longer only a design memo. There is now a minimal working integration path.
+
+Two discovery modes are supported:
+
+1. Python entry point group: `openclaw_pipeline.packs`
+2. Explicit manifest list: `OPENCLAW_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
+
+The minimum third-party loading chain is:
+
+1. provide a manifest
+2. declare `entrypoints.pack`
+3. return a `BaseDomainPack`
+4. pass `api_version` validation
+5. select it through `--pack/--profile`
+
+Hard boundaries currently enforced by core:
+
+- a pack cannot turn semantic retrieval into canonical identity
+- a pack cannot treat `knowledge.db` as source of truth
+- a pack cannot bypass audit/logging
+- all derived state must remain rebuildable
+
 ## Runtime Model
 
 ### Source of Truth

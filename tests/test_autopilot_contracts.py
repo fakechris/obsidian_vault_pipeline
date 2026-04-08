@@ -71,6 +71,23 @@ def test_autopilot_success_path_runs_absorb_and_knowledge_index_after_moc(tmp_pa
     assert order == ["absorb", "moc", "knowledge_index"]
 
 
+def test_autopilot_accepts_explicit_default_pack_profile(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+
+    daemon = AutoPilotDaemon(
+        vault,
+        watch_sources=["inbox"],
+        auto_commit=False,
+        pack="default-knowledge",
+        profile="autopilot",
+    )
+
+    assert daemon.pack.name == "default-knowledge"
+    assert daemon.workflow_profile.name == "autopilot"
+    assert daemon.workflow_profile.stages == ["interpretation", "quality", "absorb", "moc", "knowledge_index"]
+
+
 def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)

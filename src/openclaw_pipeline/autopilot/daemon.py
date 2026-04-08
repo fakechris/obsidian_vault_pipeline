@@ -24,6 +24,7 @@ from threading import Lock
 
 from .queue import TaskQueue, Task
 from ..runtime import resolve_vault_dir
+from ..packs.loader import resolve_workflow_profile
 from .watcher import MultiSourceWatcher
 
 
@@ -161,6 +162,8 @@ class AutoPilotDaemon:
         quality_threshold: float = 3.0,
         auto_commit: bool = True,
         with_refine: bool = False,
+        pack: str | None = None,
+        profile: str | None = None,
     ):
         self.vault_dir = Path(vault_dir)
         self.watch_sources = watch_sources
@@ -169,6 +172,12 @@ class AutoPilotDaemon:
         self.quality_threshold = quality_threshold
         self.auto_commit = auto_commit
         self.with_refine = with_refine
+        self.pack, self.workflow_profile = resolve_workflow_profile(
+            pack_name=pack,
+            profile_name=profile,
+            default_profile="autopilot",
+            require_autopilot=True,
+        )
 
         # 组件初始化
         self.queue = TaskQueue(self.vault_dir / "60-Logs" / "autopilot.db")
@@ -187,6 +196,9 @@ class AutoPilotDaemon:
         # 信号处理
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _profile_has_stage(self, stage: str) -> bool:
+        return stage in self.workflow_profile.stages
 
     def _signal_handler(self, signum, frame):
         """优雅关闭"""
@@ -308,22 +320,21 @@ class AutoPilotDaemon:
                 result['quality'] = quality
 
             if quality >= self.quality_threshold:
-                # Stage 3: absorb 到知识层
-                self._run_absorb()
-                result['stages'].append('absorb')
+                if self._profile_has_stage('absorb'):
+                    self._run_absorb()
+                    result['stages'].append('absorb')
 
-                # Stage 4: 更新 MOC
-                self._run_moc_update()
-                result['stages'].append('moc')
+                if self._profile_has_stage('moc'):
+                    self._run_moc_update()
+                    result['stages'].append('moc')
 
-                # Stage 5: 可选 Refine
                 if self.with_refine:
                     self._run_refine()
                     result['stages'].append('refine')
 
-                # Stage 6: 刷新 derived knowledge index
-                self._run_knowledge_index_refresh()
-                result['stages'].append('knowledge_index')
+                if self._profile_has_stage('knowledge_index'):
+                    self._run_knowledge_index_refresh()
+                    result['stages'].append('knowledge_index')
 
                 # Stage 7: 自动提交
                 if self.auto_commit:
@@ -698,6 +709,16 @@ def main():
         action="store_true",
         help="在 absorb/moc 之后追加 cleanup + breakdown 批处理"
     )
+    parser.add_argument(
+        "--pack",
+        default=None,
+        help="Domain pack 名称（默认: default-knowledge）",
+    )
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Workflow profile 名称（默认: autopilot）",
+    )
 
     args = parser.parse_args()
 
@@ -719,6 +740,8 @@ def main():
         quality_threshold=args.quality,
         auto_commit=not args.no_commit,
         with_refine=args.with_refine,
+        pack=args.pack,
+        profile=args.profile,
     )
 
     daemon.run()

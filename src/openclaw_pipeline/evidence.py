@@ -6,10 +6,32 @@ from typing import Any
 
 from .discovery import discover_related
 from .knowledge_index import knowledge_index_stats, recent_audit_events
+from .packs.base import BaseDomainPack
+from .packs.loader import load_pack
 from .runtime import VaultLayout, resolve_vault_dir
 
 
-def _build_identity_evidence(vault_dir: Path, mentions: list[str], registry: Any | None = None) -> list[dict[str, object]]:
+def _resolve_pack(pack: str | BaseDomainPack | None) -> BaseDomainPack:
+    if isinstance(pack, BaseDomainPack):
+        return pack
+    return load_pack(pack or "default-knowledge")
+
+
+def _slug_object_kinds(vault_dir: Path, registry: Any | None = None) -> dict[str, str]:
+    if registry is None:
+        from .concept_registry import ConceptRegistry
+
+        registry = ConceptRegistry(vault_dir).load()
+    return {entry.slug: entry.kind for entry in registry.entries}
+
+
+def _build_identity_evidence(
+    vault_dir: Path,
+    mentions: list[str],
+    registry: Any | None = None,
+    *,
+    pack: BaseDomainPack,
+) -> list[dict[str, object]]:
     if not mentions:
         return []
     if registry is None:
@@ -27,13 +49,22 @@ def _build_identity_evidence(vault_dir: Path, mentions: list[str], registry: Any
                 "action": result.action.value if hasattr(result.action, "value") else str(result.action),
                 "confidence": result.confidence,
                 "entry_slug": result.entry.slug if result.entry else "",
+                "pack": pack.name,
+                "object_kind": getattr(registry.find_by_slug(result.entry.slug), "kind", "document") if result.entry else "",
                 "ambiguous_slugs": [entry.slug for entry in result.ambiguous_entries],
             }
         )
     return evidence
 
 
-def _build_retrieval_evidence(vault_dir: Path, query: str | None, mentions: list[str], limit: int) -> list[dict[str, object]]:
+def _build_retrieval_evidence(
+    vault_dir: Path,
+    query: str | None,
+    mentions: list[str],
+    limit: int,
+    *,
+    pack: BaseDomainPack,
+) -> list[dict[str, object]]:
     retrieval_queries = []
     if query:
         retrieval_queries.append(query)
@@ -42,7 +73,7 @@ def _build_retrieval_evidence(vault_dir: Path, query: str | None, mentions: list
     results: list[dict[str, object]] = []
     seen: set[tuple[str, str, str]] = set()
     for item_query in retrieval_queries[:3]:
-        for row in discover_related(vault_dir, item_query, engine="knowledge", limit=limit):
+        for row in discover_related(vault_dir, item_query, engine="knowledge", limit=limit, pack=pack):
             normalized = {
                 "channel": "retrieval",
                 "query": item_query,
@@ -50,6 +81,8 @@ def _build_retrieval_evidence(vault_dir: Path, query: str | None, mentions: list
                 "kind": row.get("kind", "semantic"),
                 "slug": row.get("slug", ""),
                 "title": row.get("title", ""),
+                "pack": row.get("pack", pack.name),
+                "object_kind": row.get("object_kind", "document"),
                 "score": float(row.get("score") or 0.0),
                 "snippet": row.get("snippet", ""),
                 "path": row.get("path", ""),
@@ -62,7 +95,14 @@ def _build_retrieval_evidence(vault_dir: Path, query: str | None, mentions: list
     return results[:limit]
 
 
-def _build_graph_evidence(vault_dir: Path, slugs: list[str], limit: int) -> list[dict[str, object]]:
+def _build_graph_evidence(
+    vault_dir: Path,
+    slugs: list[str],
+    limit: int,
+    *,
+    pack: BaseDomainPack,
+    slug_kinds: dict[str, str],
+) -> list[dict[str, object]]:
     if not slugs:
         return []
 
@@ -81,24 +121,36 @@ def _build_graph_evidence(vault_dir: Path, slugs: list[str], limit: int) -> list
     return [
         {
             "channel": "graph",
+            "pack": pack.name,
             "source_slug": source_slug,
             "target_slug": target_slug,
+            "source_kind": slug_kinds.get(source_slug, "document"),
+            "target_kind": slug_kinds.get(target_slug, "document"),
             "link_type": link_type,
         }
         for source_slug, target_slug, link_type in rows
     ]
 
 
-def _build_audit_evidence(vault_dir: Path, slugs: list[str], limit: int) -> list[dict[str, object]]:
+def _build_audit_evidence(
+    vault_dir: Path,
+    slugs: list[str],
+    limit: int,
+    *,
+    pack: BaseDomainPack,
+    slug_kinds: dict[str, str],
+) -> list[dict[str, object]]:
     rows = recent_audit_events(vault_dir, limit=max(limit * 5, 10))
     if slugs:
         rows = [row for row in rows if row.get("slug") in slugs]
     return [
         {
             "channel": "audit",
+            "pack": pack.name,
             "source_log": row.get("source_log", ""),
             "event_type": row.get("event_type", ""),
             "slug": row.get("slug", ""),
+            "object_kind": slug_kinds.get(str(row.get("slug") or ""), "document"),
             "timestamp": row.get("timestamp", ""),
         }
         for row in rows[:limit]
@@ -113,18 +165,44 @@ def build_evidence_payload(
     slugs: list[str] | None = None,
     limit: int = 5,
     registry: Any | None = None,
+    pack: str | BaseDomainPack | None = None,
 ) -> dict[str, list[dict[str, object]]]:
     resolved_vault = resolve_vault_dir(vault_dir)
+    resolved_pack = _resolve_pack(pack)
     mentions = [mention for mention in (mentions or []) if mention]
-    identity_evidence = _build_identity_evidence(resolved_vault, mentions or ([query] if query else []), registry=registry)
-    retrieval_evidence = _build_retrieval_evidence(resolved_vault, query, mentions, limit=limit)
+    identity_evidence = _build_identity_evidence(
+        resolved_vault,
+        mentions or ([query] if query else []),
+        registry=registry,
+        pack=resolved_pack,
+    )
+    retrieval_evidence = _build_retrieval_evidence(
+        resolved_vault,
+        query,
+        mentions,
+        limit=limit,
+        pack=resolved_pack,
+    )
 
     derived_slugs = [str(row.get("slug") or "") for row in retrieval_evidence if row.get("slug")]
     graph_targets = list(dict.fromkeys([*(slugs or []), *derived_slugs]))
+    slug_kinds = _slug_object_kinds(resolved_vault, registry=registry)
 
     return {
         "identity_evidence": identity_evidence,
         "retrieval_evidence": retrieval_evidence,
-        "graph_evidence": _build_graph_evidence(resolved_vault, graph_targets, limit=limit),
-        "audit_evidence": _build_audit_evidence(resolved_vault, graph_targets, limit=limit),
+        "graph_evidence": _build_graph_evidence(
+            resolved_vault,
+            graph_targets,
+            limit=limit,
+            pack=resolved_pack,
+            slug_kinds=slug_kinds,
+        ),
+        "audit_evidence": _build_audit_evidence(
+            resolved_vault,
+            graph_targets,
+            limit=limit,
+            pack=resolved_pack,
+            slug_kinds=slug_kinds,
+        ),
     }

@@ -41,8 +41,10 @@ from typing import Any
 
 try:
     from .runtime import VaultLayout, resolve_vault_dir
+    from .packs.loader import resolve_workflow_profile
 except ImportError:  # pragma: no cover - script mode fallback
     from runtime import VaultLayout, resolve_vault_dir
+    from packs.loader import resolve_workflow_profile
 
 # ========== 环境初始化 ==========
 # 加载 .env 文件（从 Vault 根目录或 auto_vault 目录）
@@ -297,8 +299,11 @@ def normalize_step_name(step: str | None) -> str | None:
     return STEP_ALIASES.get(step, step)
 
 
-def pipeline_steps(include_refine: bool = False) -> list[str]:
-    steps = list(BASE_PIPELINE_STEPS)
+def pipeline_steps(
+    include_refine: bool = False,
+    base_steps: list[str] | None = None,
+) -> list[str]:
+    steps = list(base_steps or BASE_PIPELINE_STEPS)
     if include_refine and "refine" not in steps:
         steps.insert(-1, "refine")
     return steps
@@ -307,86 +312,78 @@ def pipeline_steps(include_refine: bool = False) -> list[str]:
 def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
     """Build the requested execution plan from CLI args."""
     include_refine = bool(getattr(args, "with_refine", False))
+    pack_name = getattr(args, "pack", None)
+    profile_name = getattr(args, "profile", None)
+    pack, profile = resolve_workflow_profile(
+        pack_name=pack_name,
+        profile_name=profile_name,
+        default_profile="full",
+    )
+    selected_steps = pipeline_steps(include_refine=include_refine, base_steps=profile.stages)
+    pinboard_selected_steps = [step for step in selected_steps if step != "clippings"]
+
+    def plan_dict(steps: list[str], description: str, pinboard_days: int | None, pinboard_start: str | None, pinboard_end: str | None) -> dict[str, Any]:
+        return {
+            "pack": pack.name,
+            "profile": profile.name,
+            "steps": steps,
+            "pinboard_days": pinboard_days,
+            "pinboard_start": pinboard_start,
+            "pinboard_end": pinboard_end,
+            "description": description,
+        }
 
     if args.full:
-        return {
-            "steps": pipeline_steps(include_refine=include_refine),
-            "pinboard_days": args.pinboard_days or 7,
-            "pinboard_start": None,
-            "pinboard_end": None,
-            "description": "Full pipeline (Pinboard+Clippings+Absorb+Derived)"
-        }
+        return plan_dict(
+            selected_steps,
+            f"Full pipeline ({pack.name}/{profile.name})",
+            args.pinboard_days or 7,
+            None,
+            None,
+        )
 
     if args.pinboard_new:
-        return {
-            "steps": ["pinboard", "pinboard_process"],
-            "pinboard_days": 7,
-            "pinboard_start": None,
-            "pinboard_end": None,
-            "description": "New Pinboard bookmarks only",
-        }
+        return plan_dict(["pinboard", "pinboard_process"], "New Pinboard bookmarks only", 7, None, None)
 
     if args.pinboard_history:
         pinboard_start, pinboard_end = args.pinboard_history
-        return {
-            "steps": [
-                "pinboard",
-                "pinboard_process",
-                "articles",
-                "quality",
-                "fix_links",
-                "absorb",
-                "registry_sync",
-                "moc",
-                *(["refine"] if include_refine else []),
-                "knowledge_index",
-            ],
-            "pinboard_days": None,
-            "pinboard_start": pinboard_start,
-            "pinboard_end": pinboard_end,
-            "description": f"Historical Pinboard {pinboard_start} to {pinboard_end}",
-        }
+        return plan_dict(
+            pinboard_selected_steps,
+            f"Historical Pinboard {pinboard_start} to {pinboard_end}",
+            None,
+            pinboard_start,
+            pinboard_end,
+        )
 
     if args.pinboard_days:
-        return {
-            "steps": [
-                "pinboard",
-                "pinboard_process",
-                "articles",
-                "quality",
-                "fix_links",
-                "absorb",
-                "registry_sync",
-                "moc",
-                *(["refine"] if include_refine else []),
-                "knowledge_index",
-            ],
-            "pinboard_days": args.pinboard_days,
-            "pinboard_start": None,
-            "pinboard_end": None,
-            "description": f"Pinboard last {args.pinboard_days} days + full pipeline",
-        }
+        return plan_dict(
+            pinboard_selected_steps,
+            f"Pinboard last {args.pinboard_days} days + full pipeline",
+            args.pinboard_days,
+            None,
+            None,
+        )
 
     if args.step:
-        return {
-            "steps": [normalize_step_name(args.step)],
-            "pinboard_days": args.pinboard_days,
-            "pinboard_start": None,
-            "pinboard_end": None,
-            "description": f"Single step: {normalize_step_name(args.step)}",
-        }
+        return plan_dict(
+            [normalize_step_name(args.step)],
+            f"Single step: {normalize_step_name(args.step)}",
+            args.pinboard_days,
+            None,
+            None,
+        )
 
     if args.from_step:
-        requested_steps = pipeline_steps(include_refine=include_refine)
+        requested_steps = selected_steps
         normalized_from_step = normalize_step_name(args.from_step)
         start_idx = requested_steps.index(normalized_from_step) if normalized_from_step in requested_steps else 0
-        return {
-            "steps": requested_steps[start_idx:],
-            "pinboard_days": args.pinboard_days or 7,
-            "pinboard_start": None,
-            "pinboard_end": None,
-            "description": f"From step: {normalized_from_step}",
-        }
+        return plan_dict(
+            requested_steps[start_idx:],
+            f"From step: {normalized_from_step}",
+            args.pinboard_days or 7,
+            None,
+            None,
+        )
 
     return {}
 
@@ -1339,6 +1336,8 @@ def main():
     parser.add_argument("--batch-size", type=int, help="批次大小（用于articles/clippings）")
     parser.add_argument("--dry-run", action="store_true", help="预览模式")
     parser.add_argument("--with-refine", action="store_true", help="在 absorb/moc 之后执行 cleanup + breakdown 批处理")
+    parser.add_argument("--pack", default=None, help="Domain pack 名称（默认: default-knowledge）")
+    parser.add_argument("--profile", default=None, help="Workflow profile 名称（默认: full）")
     parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
 
     args = parser.parse_args()

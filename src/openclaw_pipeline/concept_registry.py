@@ -496,6 +496,12 @@ class ConceptRegistry:
             return results
         return self._legacy_surface_search(query, area=area, topk=topk)
 
+    def to_object_records(self) -> list[Any]:
+        """Project legacy concept entries into pack-aware object records."""
+        from .object_registry import record_from_concept_entry
+
+        return [record_from_concept_entry(entry) for entry in self._entries]
+
     # ========== New Resolution API ==========
 
     def resolve_mention(self, mention: str, area: str | None = None) -> ResolutionResult:

@@ -33,6 +33,8 @@ The harness coordinates architecture, execution, and tools.
     assert results[0]["engine"] == "knowledge"
     assert results[0]["slug"] == "agent-harness"
     assert results[0]["kind"] in {"lexical", "semantic"}
+    assert results[0]["pack"] == "default-knowledge"
+    assert results[0]["object_kind"] == "document"
     assert "title" in results[0]
     assert "snippet" in results[0]
 
@@ -63,6 +65,7 @@ def test_discover_related_qmd_engine_is_explicit_and_typed(temp_vault, monkeypat
             "title": "Agent Runtime",
             "score": 0.91,
             "snippet": "runtime orchestration",
+            "pack": "default-knowledge",
+            "object_kind": "document",
         }
     ]
-

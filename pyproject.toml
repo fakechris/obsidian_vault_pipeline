@@ -93,6 +93,9 @@ ovp-cleanup = "openclaw_pipeline.commands.cleanup:main"
 ovp-breakdown = "openclaw_pipeline.commands.breakdown:main"
 ovp-knowledge-index = "openclaw_pipeline.commands.knowledge_index:main"
 
+[project.entry-points."openclaw_pipeline.packs"]
+default-knowledge = "openclaw_pipeline.packs.default_knowledge:get_pack"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]
 
