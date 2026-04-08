@@ -33,6 +33,11 @@ try:
 except ImportError:
     from runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
+try:
+    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+except ImportError:
+    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base  # type: ignore
+
 
 VAULT_DIR = resolve_vault_dir()
 DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
@@ -96,19 +101,21 @@ class LiteLLMClient:
     def __init__(
         self,
         *,
-        model: str = "MiniMax-M2.5",
+        model: str = DEFAULT_MINIMAX_MODEL,
         api_type: str = "anthropic",
         api_key: str | None = None,
         api_base: str | None = None,
         temperature: float = 0.1,  # 质检用低temperature
     ):
         self.api_type = api_type
-        if "/" in model:
-            self.model = model
-        else:
-            self.model = f"{api_type}/{model}"
         self._api_key = api_key or os.environ.get("AUTO_VAULT_API_KEY")
         self.api_base = api_base or os.environ.get("AUTO_VAULT_API_BASE")
+        self.model = normalize_model_for_api_base(
+            model,
+            api_type=api_type,
+            api_base=self.api_base,
+            default_model=DEFAULT_MINIMAX_MODEL,
+        )
         self.temperature = temperature
 
     def generate(self, system_prompt: str, user_prompt: str, max_tokens: int = 2000) -> str:
@@ -266,7 +273,7 @@ class BatchQualityChecker:
         llm_client = LiteLLMClient(
             api_key=api_key,
             api_base=api_base,
-            model="MiniMax-M2.5",
+            model=DEFAULT_MINIMAX_MODEL,
             api_type="anthropic",
             temperature=0.1
         )

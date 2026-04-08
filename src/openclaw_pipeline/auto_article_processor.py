@@ -23,15 +23,31 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
+
+try:
+    import requests
+except ImportError:  # pragma: no cover - optional dependency
+    requests = None
+
+try:
+    from bs4 import BeautifulSoup
+except ImportError:  # pragma: no cover - optional dependency
+    BeautifulSoup = None
 
 try:
     from .runtime import VaultLayout, resolve_vault_dir
 except ImportError:  # pragma: no cover - script mode fallback
     from runtime import VaultLayout, resolve_vault_dir
+
+try:
+    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+except ImportError:  # pragma: no cover - script mode fallback
+    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
 
 # 自动加载 .env 文件（尝试多个位置）
 def _load_env_files():
@@ -195,7 +211,7 @@ class LiteLLMClient:
     def __init__(
         self,
         *,
-        model: str = "MiniMax-M2.5",
+        model: str | None = None,
         api_type: str = "anthropic",
         api_key: str | None = None,
         api_base: str | None = None,
@@ -204,12 +220,14 @@ class LiteLLMClient:
         if api_type not in self.VALID_API_TYPES:
             raise ValueError(f"api_type must be one of {self.VALID_API_TYPES}")
         self.api_type = api_type
-        if "/" in model:
-            self.model = model
-        else:
-            self.model = f"{api_type}/{model}"
         self._api_key = api_key or self._resolve_api_key()
         self.api_base = api_base or self._resolve_api_base()
+        self.model = normalize_model_for_api_base(
+            model or os.environ.get("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
+            api_type=api_type,
+            api_base=self.api_base,
+            default_model=DEFAULT_MINIMAX_MODEL,
+        )
         self.temperature = temperature
         self._total_calls = 0
         self._total_tokens = 0
@@ -256,7 +274,18 @@ class LiteLLMClient:
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
-        response = litellm.completion(**kwargs)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = litellm.completion(**kwargs)
+                break
+            except Exception as exc:  # pragma: no cover - exercised via tests
+                last_error = exc
+                if attempt == 2:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
+        else:  # pragma: no cover - defensive fallback
+            raise last_error or RuntimeError("litellm completion failed")
         self._total_calls += 1
 
         content = response.choices[0].message.content or ""
@@ -480,12 +509,151 @@ class AutoArticleProcessor:
         self.llm = None
         self.article_processor = None
 
+    @staticmethod
+    def _clean_body_text(body: str, title: str = "") -> str:
+        lines: list[str] = []
+        for raw_line in body.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line in {"## Notes", "## Tags", "Notes", "Tags"}:
+                continue
+            if line.startswith("#") and not line.startswith("## "):
+                continue
+            if title and line == title.strip():
+                continue
+            if re.fullmatch(r"#\S+", line):
+                continue
+            lines.append(line)
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _has_substantive_content(text: str) -> bool:
+        plain = re.sub(r"\s+", " ", text).strip()
+        if len(plain) >= 600:
+            return True
+        words = re.findall(r"[A-Za-z0-9_]+", plain)
+        han = re.findall(r"[\u4e00-\u9fff]", plain)
+        return len(words) >= 120 or len(han) >= 180
+
+    @staticmethod
+    def _looks_like_paper_source(source: str, tags: Any, title: str = "") -> bool:
+        source_lower = (source or "").lower().strip()
+        title = (title or "").strip()
+        if not source_lower and not tags:
+            return False
+        tag_text = " ".join(tags) if isinstance(tags, list) else str(tags or "")
+        tag_text = tag_text.lower()
+        return (
+            "arxiv.org" in source_lower
+            or source_lower.endswith(".pdf")
+            or "paper" in tag_text
+            or bool(re.match(r"^\[\d{4}\.\d+\]", title))
+        )
+
+    def _extract_html_text(self, html: str) -> tuple[str, list[str]]:
+        if not html:
+            return "", []
+
+        if BeautifulSoup is None:
+            text = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
+            text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
+            text = re.sub(r"<[^>]+>", " ", text)
+            text = re.sub(r"\s+", " ", text).strip()
+            hrefs = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.I)
+            return text, hrefs
+
+        soup = BeautifulSoup(html, "html.parser")
+        for node in soup(["script", "style", "noscript"]):
+            node.decompose()
+        text = soup.get_text("\n", strip=True)
+        hrefs = [a.get("href", "") for a in soup.find_all("a", href=True)]
+        return text, hrefs
+
+    def _fetch_url_text(self, url: str) -> tuple[str, str | None]:
+        if requests is None:
+            return "", None
+
+        headers = {"User-Agent": "openclaw-pipeline/1.0"}
+        try:
+            response = requests.get(url, timeout=15, headers=headers, allow_redirects=True)
+        except Exception:
+            return "", None
+
+        if response.status_code != 200:
+            return "", None
+
+        content_type = response.headers.get("Content-Type", "").lower()
+        if "pdf" in content_type:
+            return "", None
+        if "html" not in content_type and "text" not in content_type and "markdown" not in content_type:
+            return "", None
+
+        text, _ = self._extract_html_text(response.text)
+        return text, response.text
+
+    def _fetch_docs_fallback_text(self, source_url: str, homepage_html: str | None) -> tuple[str, str | None]:
+        if requests is None or not homepage_html:
+            return "", None
+
+        _, hrefs = self._extract_html_text(homepage_html)
+        candidates: list[tuple[int, str]] = []
+        for href in hrefs:
+            if not href:
+                continue
+            absolute = urljoin(source_url, href)
+            label = f"{href} {absolute}".lower()
+            score = 0
+            if "docs" in label or "documentation" in label:
+                score += 3
+            if "readme" in label:
+                score += 3
+            if "guide" in label or "getting-started" in label or "start" in label:
+                score += 2
+            if score:
+                candidates.append((score, absolute))
+
+        tried: set[str] = set()
+        for _, candidate in sorted(candidates, key=lambda item: item[0], reverse=True)[:5]:
+            if candidate in tried:
+                continue
+            tried.add(candidate)
+            text, _ = self._fetch_url_text(candidate)
+            if self._has_substantive_content(text):
+                return text, candidate
+        return "", None
+
+    def _prepare_interpretation_source(self, file_data: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+        title = str(file_data.get("title") or "").strip()
+        source = str(file_data.get("source") or "").strip()
+        tags = file_data.get("tags") or []
+        body = self._clean_body_text(str(file_data.get("body") or ""), title=title)
+
+        if self._looks_like_paper_source(source, tags, title):
+            return None, {"reason": "paper_source_requires_paper_processor"}
+
+        if self._has_substantive_content(body):
+            return body, {"origin": "body"}
+
+        if not source:
+            return None, {"reason": "insufficient_source_material"}
+
+        fetched_text, homepage_html = self._fetch_url_text(source)
+        if self._has_substantive_content(fetched_text):
+            return fetched_text, {"origin": "source_url", "resolved_url": source}
+
+        docs_text, docs_url = self._fetch_docs_fallback_text(source, homepage_html)
+        if self._has_substantive_content(docs_text):
+            return docs_text, {"origin": "docs_fallback", "resolved_url": docs_url}
+
+        return None, {"reason": "insufficient_source_material"}
+
     def init_llm(self, api_key: str | None = None, api_base: str | None = None):
         """初始化LLM客户端"""
         llm_client = LiteLLMClient(
             api_key=api_key,
             api_base=api_base,
-            model="MiniMax-M2.5",
+            model=os.environ.get("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
             api_type="anthropic"
         )
         self.llm = llm_client
@@ -648,6 +816,7 @@ class AutoArticleProcessor:
             "author": frontmatter.get("author", "unknown"),
             "source": frontmatter.get("source", ""),
             "date": frontmatter.get("date", datetime.now().strftime("%Y-%m-%d")),
+            "tags": frontmatter.get("tags", ""),
         }
 
     def process_single_file(self, file_path: Path, dry_run: bool = False) -> dict:
@@ -666,7 +835,7 @@ class AutoArticleProcessor:
             from .image_downloader import ImageDownloader
             image_downloader = ImageDownloader(self.vault_dir)
             try:
-                _, downloaded_images = image_downloader.process_file(file_path, backup=True)
+                downloaded_images = image_downloader.process_file(file_path, backup=True)
                 result["images_downloaded"] = len(downloaded_images)
                 if downloaded_images:
                     self.logger.log("images_downloaded", {
@@ -690,12 +859,26 @@ class AutoArticleProcessor:
                 result["error"] = "LLM not initialized"
                 return result
 
+            source_material, source_meta = self._prepare_interpretation_source(file_data)
+            if not source_material:
+                result["status"] = "skipped"
+                result["error"] = str(source_meta.get("reason", "insufficient_source_material"))
+                self.logger.log(
+                    "article_abstained",
+                    {
+                        "file": str(file_path.name),
+                        "reason": result["error"],
+                        "source": file_data["source"],
+                    },
+                )
+                return result
+
             # 生成深度解读
             interpretation, metadata, classification = self.article_processor.generate_interpretation(
                 title=file_data["title"],
                 author=file_data["author"],
                 source=file_data["source"],
-                content=file_data["body"],
+                content=source_material,
                 date=file_data["date"]
             )
 
@@ -755,7 +938,8 @@ class AutoArticleProcessor:
                 "file": str(file_path.name),
                 "output": str(output_path),
                 "classification": classification,
-                "tokens": metadata.get("tokens", 0)
+                "tokens": metadata.get("tokens", 0),
+                "source_material_origin": source_meta.get("origin", "body"),
             })
 
         except Exception as e:

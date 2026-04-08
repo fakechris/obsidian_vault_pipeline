@@ -403,6 +403,7 @@ Put `.env` in the vault root:
 ```bash
 AUTO_VAULT_API_KEY=your_key_here
 AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
+AUTO_VAULT_MODEL=anthropic/MiniMax-M2.7-highspeed
 
 # Optional
 PINBOARD_TOKEN=username:token

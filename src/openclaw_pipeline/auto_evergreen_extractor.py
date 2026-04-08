@@ -37,6 +37,11 @@ try:
 except ImportError:
     from identity import canonicalize_note_id  # type: ignore
 
+try:
+    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+except ImportError:
+    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base  # type: ignore
+
 # Try to import concept registry
 try:
     from .concept_registry import ConceptRegistry, STATUS_ACTIVE, STATUS_CANDIDATE
@@ -97,19 +102,21 @@ class LiteLLMClient:
     def __init__(
         self,
         *,
-        model: str = "MiniMax-M2.5",
+        model: str = DEFAULT_MINIMAX_MODEL,
         api_type: str = "anthropic",
         api_key: str | None = None,
         api_base: str | None = None,
         temperature: float = 0.3,
     ):
         self.api_type = api_type
-        if "/" in model:
-            self.model = model
-        else:
-            self.model = f"{api_type}/{model}"
         self._api_key = api_key or os.environ.get("AUTO_VAULT_API_KEY")
         self.api_base = api_base or os.environ.get("AUTO_VAULT_API_BASE")
+        self.model = normalize_model_for_api_base(
+            model,
+            api_type=api_type,
+            api_base=self.api_base,
+            default_model=DEFAULT_MINIMAX_MODEL,
+        )
         self.temperature = temperature
 
     def generate(self, system_prompt: str, user_prompt: str, max_tokens: int = 4000) -> str:
@@ -271,7 +278,7 @@ class AutoEvergreenExtractor:
         llm_client = LiteLLMClient(
             api_key=api_key,
             api_base=api_base,
-            model="MiniMax-M2.5",
+            model=DEFAULT_MINIMAX_MODEL,
             api_type="anthropic"
         )
         self.extractor = EvergreenExtractor(llm_client, self.logger)

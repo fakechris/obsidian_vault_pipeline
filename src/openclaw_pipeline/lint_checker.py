@@ -202,8 +202,9 @@ class KnowledgeLinter:
             link.strip(),
             link_clean,
             canonicalize_note_id(link_clean),
-            str(Path(link_clean).with_suffix("")),
         }
+        if link_clean not in {"", ".", ".."}:
+            direct_candidates.add(str(Path(link_clean).with_suffix("")))
         for candidate in direct_candidates:
             if candidate and candidate in self.identity_to_file:
                 return self.identity_to_file[candidate]

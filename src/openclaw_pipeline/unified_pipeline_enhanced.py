@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -53,6 +54,52 @@ VAULT_DIR = SCRIPTS_DIR.parent.parent
 ENV_FILE = VAULT_DIR / ".env"
 ENV_FILE_ALT = SCRIPTS_DIR / "auto_vault" / ".env"
 ENV_EXAMPLE = VAULT_DIR / ".env.example"
+
+
+def parse_pinboard_frontmatter(content: str) -> dict[str, str]:
+    """Parse lightweight frontmatter emitted by pinboard-processor."""
+    metadata: dict[str, str] = {}
+    if not content.startswith("---"):
+        return metadata
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return metadata
+    for line in parts[1].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        metadata[key.strip()] = value.strip().strip('"').strip("'")
+    return metadata
+
+
+def detect_pinboard_processor(content: str) -> str | None:
+    """Route stale Pinboard files by source/title/tags instead of trusting old type fields."""
+    metadata = parse_pinboard_frontmatter(content)
+    declared_type = metadata.get("type", "")
+    if declared_type.startswith("pinboard-"):
+        declared_type = declared_type.split("pinboard-", 1)[1]
+
+    source = metadata.get("source", "").lower()
+    title = metadata.get("title", "")
+    tags = metadata.get("tags", "").lower()
+
+    if "github.com" in source or declared_type == "github":
+        return "github"
+    if (
+        "arxiv.org" in source
+        or source.endswith(".pdf")
+        or "paper" in tags
+        or re.match(r"^\[\d{4}\.\d+\]", title)
+        or declared_type == "paper"
+    ):
+        return "paper"
+    if declared_type == "social":
+        return "social"
+    if declared_type in ("article", "website"):
+        return declared_type
+    if source:
+        return "website"
+    return None
 
 
 def _load_env(vault_dir: Path | None = None) -> bool:
@@ -155,7 +202,7 @@ def init_env_file() -> int:
 # MiniMax (推荐，成本较低，中文好)
 AUTO_VAULT_API_KEY=your_key_here
 AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
-AUTO_VAULT_MODEL=minimax/MiniMax-M2.5
+AUTO_VAULT_MODEL=anthropic/MiniMax-M2.7-highspeed
 
 # 或 Anthropic (官方)
 # AUTO_VAULT_API_KEY=sk-ant-xxxxx
@@ -202,7 +249,7 @@ PINBOARD_TOKEN=your_username:your_token
 
     if choice == "1":
         base_url = "https://api.minimaxi.com/anthropic"
-        model = "minimax/MiniMax-M2.5"
+        model = "anthropic/MiniMax-M2.7-highspeed"
     elif choice == "2":
         base_url = "https://api.anthropic.com"
         model = "anthropic/claude-3-5-sonnet-20241022"
@@ -774,8 +821,6 @@ class EnhancedPipeline:
 
     def step_pinboard_process(self, dry_run: bool = False) -> dict:
         """处理 02-Pinboard/ 中的书签文件，路由到对应处理器"""
-        import re
-
         print("\n" + "="*60)
         print("STEP 2: Processing Pinboard Files")
         print("="*60)
@@ -799,14 +844,11 @@ class EnhancedPipeline:
         for f in files:
             try:
                 content = f.read_text(encoding="utf-8")
-                # 读取 frontmatter 获取 url_type
-                type_match = re.search(r'^type:\s*pinboard-(\w+)', content, re.MULTILINE)
-                if not type_match:
+                url_type = detect_pinboard_processor(content)
+                if not url_type:
                     print(f"  ⚠️  无法识别类型: {f.name}")
                     results["skipped"] += 1
                     continue
-
-                url_type = type_match.group(1)
 
                 if url_type == "social":
                     print(f"  ⏭️  跳过 social: {f.name}")
@@ -848,7 +890,7 @@ class EnhancedPipeline:
                     capture_output=True,
                     text=True,
                     cwd=str(self.vault_dir),
-                    timeout=300
+                    timeout=600
                 )
 
                 if result.returncode == 0:
