@@ -15,6 +15,7 @@ Pinboard Bookmark Processor
     python3 pinboard-processor.py 7 --dry-run=false  # 执行实际处理
     python3 pinboard-processor.py --incremental-backward  # 处理历史书签
 """
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -316,6 +317,30 @@ def fetch_bookmarks(days: int = 7, start_date: datetime = None, end_date: dateti
         current += timedelta(days=1)
 
     return all_bookmarks
+
+
+def parse_cli_date(value: str) -> datetime:
+    """Parse YYYY-MM-DD CLI arguments."""
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError(f"无效日期格式: {value}，应为 YYYY-MM-DD") from exc
+
+
+def validate_single_day_range(start_date: datetime, end_date: datetime) -> None:
+    """Pinboard low-level queries must target exactly one day."""
+    start_day = start_date.date()
+    end_day = end_date.date()
+    if start_day > end_day:
+        raise ValueError(
+            f"无效日期范围: start_date={start_day.isoformat()} 晚于 end_date={end_day.isoformat()}"
+        )
+    if start_day != end_day:
+        raise ValueError(
+            "Pinboard API 不支持跨天范围查询。"
+            f"收到 {start_day.isoformat()} ~ {end_day.isoformat()}。"
+            "请传入同一天的 --start-date/--end-date，或让上层 pipeline 按天拆分调用。"
+        )
 
 # ========== 去重检查 ==========
 def check_duplicate_in_vault(bookmark: Bookmark, vault_dir: Path) -> Optional[str]:
@@ -666,19 +691,42 @@ def main(days: int = 7, dry_run: bool = True, incremental: bool = False,
         print(f"\n✅ 状态已更新: {STATE_FILE}")
 
 if __name__ == "__main__":
-    days = 7
-    dry_run = True
-    incremental = "--incremental" in sys.argv
-    incremental_forward = "--incremental-forward" in sys.argv
-    incremental_backward = "--incremental-backward" in sys.argv
+    argv = list(sys.argv[1:])
+    if "--dry-run=false" in argv:
+        argv = ["--execute" if arg == "--dry-run=false" else arg for arg in argv]
 
-    if len(sys.argv) > 1 and not incremental and not incremental_forward and not incremental_backward:
+    parser = argparse.ArgumentParser(
+        description="Pinboard Bookmark Processor（底层只接受单日查询，上层范围处理必须按天拆分）"
+    )
+    parser.add_argument("days", nargs="?", type=int, default=7, help="最近 N 天（默认 7）")
+    parser.add_argument("--start-date", help="起始日期 YYYY-MM-DD。仅允许与 --end-date 为同一天")
+    parser.add_argument("--end-date", help="结束日期 YYYY-MM-DD。仅允许与 --start-date 为同一天")
+    parser.add_argument("--incremental", action="store_true", help="自上次处理以来的增量")
+    parser.add_argument("--incremental-forward", action="store_true", help="向前增量处理新书签")
+    parser.add_argument("--incremental-backward", action="store_true", help="向后增量处理历史书签")
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=True, help="预览模式")
+    parser.add_argument("--execute", dest="dry_run", action="store_false", help="执行实际写入（兼容 --dry-run=false）")
+    args = parser.parse_args(argv)
+
+    if (args.start_date is None) ^ (args.end_date is None):
+        parser.error("--start-date 和 --end-date 必须同时提供，并且必须是同一天。")
+
+    start_date = None
+    end_date = None
+    if args.start_date and args.end_date:
         try:
-            days = int(sys.argv[1])
-        except ValueError:
-            pass
-    if "--dry-run=false" in sys.argv:
-        dry_run = False
+            start_date = parse_cli_date(args.start_date)
+            end_date = parse_cli_date(args.end_date)
+            validate_single_day_range(start_date, end_date)
+        except ValueError as exc:
+            parser.error(str(exc))
 
-    main(days=days, dry_run=dry_run, incremental=incremental,
-         incremental_forward=incremental_forward, incremental_backward=incremental_backward)
+    main(
+        days=args.days,
+        dry_run=args.dry_run,
+        incremental=args.incremental,
+        incremental_forward=args.incremental_forward,
+        incremental_backward=args.incremental_backward,
+        start_date=start_date,
+        end_date=end_date,
+    )

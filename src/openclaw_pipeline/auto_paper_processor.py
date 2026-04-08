@@ -40,9 +40,9 @@ except ImportError:
     from runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
 try:
-    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
 except ImportError:
-    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base  # type: ignore
+    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
 
 try:
     from .markdown_generation import sanitize_generated_markdown
@@ -124,8 +124,8 @@ class LiteLLMClient:
         if api_type not in self.VALID_API_TYPES:
             raise ValueError(f"api_type must be one of {self.VALID_API_TYPES}")
         self.api_type = api_type
-        self._api_key = api_key or os.environ.get("AUTO_VAULT_API_KEY")
-        self.api_base = api_base or os.environ.get("AUTO_VAULT_API_BASE")
+        self._api_key = resolve_api_key(api_key)
+        self.api_base = resolve_api_base(api_base)
         self.model = normalize_model_for_api_base(
             model or os.environ.get("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
             api_type=api_type,
@@ -137,7 +137,7 @@ class LiteLLMClient:
         self._total_tokens = 0
 
         if not self._api_key:
-            raise ValueError("API key required. Set AUTO_VAULT_API_KEY env var.")
+            raise ValueError("API key required. Set AUTO_VAULT_API_KEY or MINIMAX_API_KEY env var.")
         try:
             import litellm as litellm_module
         except ImportError as exc:

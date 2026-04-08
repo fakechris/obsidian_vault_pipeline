@@ -38,9 +38,9 @@ except ImportError:
     from identity import canonicalize_note_id  # type: ignore
 
 try:
-    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
 except ImportError:
-    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base  # type: ignore
+    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
 
 # Try to import concept registry
 try:
@@ -109,8 +109,8 @@ class LiteLLMClient:
         temperature: float = 0.3,
     ):
         self.api_type = api_type
-        self._api_key = api_key or os.environ.get("AUTO_VAULT_API_KEY")
-        self.api_base = api_base or os.environ.get("AUTO_VAULT_API_BASE")
+        self._api_key = resolve_api_key(api_key)
+        self.api_base = resolve_api_base(api_base)
         self.model = normalize_model_for_api_base(
             model,
             api_type=api_type,

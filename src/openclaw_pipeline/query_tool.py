@@ -35,9 +35,9 @@ except ImportError:
     from runtime import resolve_vault_dir  # type: ignore
 
 try:
-    from .llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+    from .llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
 except ImportError:
-    from llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base  # type: ignore
+    from llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
 
 try:
     import litellm
@@ -60,8 +60,8 @@ class VaultQuerier:
 
     def __init__(self, vault_dir: Path):
         self.vault_dir = Path(vault_dir)
-        self.api_key = os.getenv("AUTO_VAULT_API_KEY")
-        self.api_base = os.getenv("AUTO_VAULT_API_BASE", DEFAULT_MINIMAX_API_BASE)
+        self.api_key = resolve_api_key()
+        self.api_base = resolve_api_base(default=DEFAULT_MINIMAX_API_BASE)
         self.model = normalize_model_for_api_base(
             os.getenv("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
             api_type="anthropic",

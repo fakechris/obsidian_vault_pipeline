@@ -34,9 +34,9 @@ except ImportError:
     from runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
 try:
-    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
 except ImportError:
-    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base  # type: ignore
+    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
 
 
 VAULT_DIR = resolve_vault_dir()
@@ -108,8 +108,8 @@ class LiteLLMClient:
         temperature: float = 0.1,  # 质检用低temperature
     ):
         self.api_type = api_type
-        self._api_key = api_key or os.environ.get("AUTO_VAULT_API_KEY")
-        self.api_base = api_base or os.environ.get("AUTO_VAULT_API_BASE")
+        self._api_key = resolve_api_key(api_key)
+        self.api_base = resolve_api_base(api_base)
         self.model = normalize_model_for_api_base(
             model,
             api_type=api_type,

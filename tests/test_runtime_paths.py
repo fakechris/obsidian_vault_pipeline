@@ -147,6 +147,37 @@ def test_step_absorb_invokes_absorb_command(tmp_path, monkeypatch):
     assert "--vault-dir" in captured["cmd"]
 
 
+def test_step_pinboard_decomposes_cross_day_history_into_daily_requests(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    captured_cmds: list[list[str]] = []
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        captured_cmds.append(cmd)
+        return {"success": True, "stdout": "ok", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_pinboard(
+        start_date="2026-04-01",
+        end_date="2026-04-03",
+        dry_run=False,
+    )
+
+    assert result["success"] is True
+    assert result["days_processed"] == 3
+    assert len(captured_cmds) == 3
+    assert captured_cmds[0][-5:] == ["--start-date", "2026-04-01", "--end-date", "2026-04-01", "--dry-run=false"]
+    assert captured_cmds[1][-5:] == ["--start-date", "2026-04-02", "--end-date", "2026-04-02", "--dry-run=false"]
+    assert captured_cmds[2][-5:] == ["--start-date", "2026-04-03", "--end-date", "2026-04-03", "--dry-run=false"]
+
+
 def test_step_refine_runs_cleanup_then_breakdown(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 

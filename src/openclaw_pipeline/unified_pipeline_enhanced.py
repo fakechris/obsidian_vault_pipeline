@@ -801,8 +801,25 @@ class EnhancedPipeline:
         ]
 
         if start_date and end_date:
-            # 指定日期范围
-            print(f"  Date range: {start_date} to {end_date}")
+            try:
+                start_day = datetime.strptime(start_date, "%Y-%m-%d").date()
+                end_day = datetime.strptime(end_date, "%Y-%m-%d").date()
+            except ValueError:
+                error = f"Invalid pinboard date format: {start_date} ~ {end_date}. Expected YYYY-MM-DD."
+                print(f"✗ Pinboard processing failed: {error}")
+                return {"success": False, "error": error}
+
+            if start_day > end_day:
+                error = f"Invalid pinboard date range: {start_date} is after {end_date}"
+                print(f"✗ Pinboard processing failed: {error}")
+                return {"success": False, "error": error}
+
+            if start_day != end_day:
+                print(f"  Date range: {start_date} to {end_date}")
+                print("  Pinboard only accepts same-day low-level queries; decomposing into daily requests.")
+                return self._step_pinboard_by_day(start_day, end_day, dry_run=dry_run)
+
+            print(f"  Single day: {start_date}")
             cmd.extend(["--start-date", start_date, "--end-date", end_date])
         elif days:
             # 最近N天
@@ -831,6 +848,60 @@ class EnhancedPipeline:
             print(f"✗ Pinboard processing failed: {result.get('error', 'Unknown error')}")
 
         return result
+
+    def _step_pinboard_by_day(self, start_day, end_day, dry_run: bool = False) -> dict:
+        combined_stdout: list[str] = []
+        combined_stderr: list[str] = []
+        current = start_day
+        day_count = 0
+
+        while current <= end_day:
+            day_str = current.isoformat()
+            cmd = [
+                sys.executable,
+                str(self.vault_dir / "pinboard-processor.py"),
+                "--start-date",
+                day_str,
+                "--end-date",
+                day_str,
+            ]
+            if dry_run:
+                cmd.append("--dry-run")
+            else:
+                cmd.append("--dry-run=false")
+
+            result = self.run_command(cmd, "pinboard")
+            if result.get("stdout"):
+                combined_stdout.append(result["stdout"])
+            if result.get("stderr"):
+                combined_stderr.append(result["stderr"])
+
+            if not result.get("success"):
+                error = (
+                    f"Pinboard day {day_str} failed. "
+                    "Pinboard low-level queries must stay within one day; "
+                    "see that day's stdout/stderr for details."
+                )
+                print(f"✗ Pinboard processing failed: {error}")
+                return {
+                    "success": False,
+                    "error": error,
+                    "stdout": "\n".join(combined_stdout),
+                    "stderr": "\n".join(combined_stderr),
+                    "days_processed": day_count,
+                    "failed_day": day_str,
+                }
+
+            day_count += 1
+            current += timedelta(days=1)
+
+        print(f"✓ Pinboard processed successfully across {day_count} daily request(s)")
+        return {
+            "success": True,
+            "stdout": "\n".join(combined_stdout),
+            "stderr": "\n".join(combined_stderr),
+            "days_processed": day_count,
+        }
 
     def step_pinboard_process(self, dry_run: bool = False) -> dict:
         """处理 02-Pinboard/ 中的书签文件，路由到对应处理器"""

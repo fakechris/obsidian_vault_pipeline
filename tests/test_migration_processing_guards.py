@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -149,6 +151,30 @@ source: https://example.com
     assert cleaned.rstrip().endswith("# Body")
 
 
+def test_pinboard_processor_rejects_cross_day_cli_range(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "pinboard-processor.py"
+    env = os.environ.copy()
+    env["PINBOARD_TOKEN"] = "user:token"
+    env["WIGS_VAULT_DIR"] = str(tmp_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--start-date",
+            "2026-04-01",
+            "--end-date",
+            "2026-04-02",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "不支持跨天范围查询" in result.stderr
+
+
 def test_article_processor_abstains_when_only_metadata_is_available(temp_vault, monkeypatch):
     raw_file = temp_vault / "50-Inbox" / "02-Pinboard" / "2026-04-07_arxiv.org.md"
     raw_file.parent.mkdir(parents=True, exist_ok=True)
@@ -281,6 +307,21 @@ def test_processors_default_to_auto_vault_model_env(monkeypatch):
     assert article_client.model == "anthropic/MiniMax-M2.7-highspeed"
     assert paper_client.model == "anthropic/MiniMax-M2.7-highspeed"
     assert github_client.model == "anthropic/MiniMax-M2.7-highspeed"
+
+
+def test_processors_fall_back_to_minimax_api_key_env(monkeypatch):
+    monkeypatch.delenv("AUTO_VAULT_API_KEY", raising=False)
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    monkeypatch.setenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.7-highspeed")
+    monkeypatch.setenv("AUTO_VAULT_API_BASE", "https://api.minimaxi.com/anthropic")
+
+    paper_client = PaperLiteLLMClient()
+    github_client = GithubLiteLLMClient()
+    article_client = ArticleLiteLLMClient()
+
+    assert paper_client._api_key == "minimax-key"
+    assert github_client._api_key == "minimax-key"
+    assert article_client._api_key == "minimax-key"
 
 
 def test_github_cli_does_not_override_auto_vault_model_when_flag_is_omitted(temp_vault, monkeypatch):

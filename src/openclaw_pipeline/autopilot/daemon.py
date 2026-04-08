@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
 from .queue import TaskQueue, Task
-from ..llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+from ..llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
 from ..runtime import resolve_vault_dir
 from ..packs.loader import resolve_workflow_profile
 from .watcher import MultiSourceWatcher
@@ -33,8 +33,8 @@ class LLMQualityChecker:
     """LLM 深度质量评分器"""
 
     def __init__(self, api_key: Optional[str] = None, api_base: Optional[str] = None, model: Optional[str] = None):
-        self.api_key = api_key or os.getenv("AUTO_VAULT_API_KEY")
-        self.api_base = api_base or os.getenv("AUTO_VAULT_API_BASE", DEFAULT_MINIMAX_API_BASE)
+        self.api_key = resolve_api_key(api_key)
+        self.api_base = resolve_api_base(api_base, default=DEFAULT_MINIMAX_API_BASE)
         self.model = normalize_model_for_api_base(
             model or os.getenv("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
             api_type="anthropic",
