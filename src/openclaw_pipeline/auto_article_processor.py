@@ -49,6 +49,11 @@ try:
 except ImportError:  # pragma: no cover - script mode fallback
     from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
 
+try:
+    from .markdown_generation import sanitize_generated_markdown
+except ImportError:  # pragma: no cover - script mode fallback
+    from markdown_generation import sanitize_generated_markdown
+
 # 自动加载 .env 文件（尝试多个位置）
 def _load_env_files():
     """加载 .env 文件，尝试多个位置"""
@@ -415,6 +420,8 @@ class ArticleProcessor:
             user_prompt=user_prompt,
             max_tokens=8000,
         )
+
+        content_result = sanitize_generated_markdown(content_result)
 
         return content_result, metadata, classification
 

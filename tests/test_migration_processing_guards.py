@@ -17,6 +17,7 @@ from openclaw_pipeline.auto_article_processor import (
 from openclaw_pipeline.auto_github_processor import LiteLLMClient as GithubLiteLLMClient
 from openclaw_pipeline.auto_paper_processor import LiteLLMClient as PaperLiteLLMClient, process_single_paper
 from openclaw_pipeline.lint_checker import KnowledgeLinter
+from openclaw_pipeline.markdown_generation import sanitize_generated_markdown
 from openclaw_pipeline.unified_pipeline_enhanced import (
     EnhancedPipeline,
     PipelineLogger,
@@ -129,6 +130,23 @@ example/repo
     assert result["processed"] == 1
     assert captured_envs
     assert str((Path(__file__).resolve().parents[1] / "src")) in captured_envs[0]["PYTHONPATH"]
+
+
+def test_sanitize_generated_markdown_unwraps_fenced_frontmatter():
+    raw = """```yaml
+---
+title: Example
+source: https://example.com
+---
+
+# Body
+```"""
+
+    cleaned = sanitize_generated_markdown(raw)
+
+    assert cleaned.startswith("---\n")
+    assert "```yaml" not in cleaned
+    assert cleaned.rstrip().endswith("# Body")
 
 
 def test_article_processor_abstains_when_only_metadata_is_available(temp_vault, monkeypatch):

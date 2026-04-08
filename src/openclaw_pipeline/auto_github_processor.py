@@ -40,6 +40,11 @@ try:
 except ImportError:
     from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base  # type: ignore
 
+try:
+    from .markdown_generation import sanitize_generated_markdown
+except ImportError:
+    from markdown_generation import sanitize_generated_markdown  # type: ignore
+
 
 VAULT_DIR = resolve_vault_dir()
 DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
@@ -287,11 +292,12 @@ README内容:
 
 请严格按照13节结构输出完整Markdown（从--- frontmatter开始）。"""
 
-        return self.llm.generate(
+        content, metadata = self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=8000,
         )
+        return sanitize_generated_markdown(content), metadata
 
 
 def fetch_github_readme(owner: str, repo: str) -> tuple[str, int]:
