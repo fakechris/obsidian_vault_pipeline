@@ -40,6 +40,121 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 - `ovp-autopilot` 默认实时跑 `absorb -> moc -> knowledge_index`
 - `ovp-autopilot --with-refine` 会在实时链路里追加 `refine`
 
+## 为什么会变成现在这套架构
+
+这个项目最早是围绕 Obsidian Vault 的自动化整理脚本发展起来的，但随着能力增加，出现了三个典型问题：
+
+- 运行时主流程和单个脚本各自演化，难以保证契约一致
+- 概念、链接、Atlas、graph、检索索引彼此耦合，但真相边界不清楚
+- 一旦要支持媒体、医疗、工程研究这类不同领域，原来的 concept-only 模型会失真
+
+现在这套设计的目标就是把这些问题拆开：
+
+- 用六层运行模型明确“什么是编排层、什么是真相层、什么是派生层”
+- 用 `default-knowledge` 固化当前默认领域，而不是把它散落在 core 里
+- 用 Pack API 让不同领域通过 pack 接入，而不是继续往 core 里硬编码特例
+
+这意味着当前仓库已经不只是一个 Vault 自动化项目，而是一个：
+
+> 面向 Obsidian/Vault 工作流的可扩展知识编排平台
+
+其中 `default-knowledge` 是第一个内置标准 pack，不是唯一领域模型。
+
+## Domain Packs
+
+当前 core 已经开始 pack 化。
+
+- 内置标准 pack：`default-knowledge`
+- 运行时可通过 `--pack` 和 `--profile` 选择 workflow
+- 第三方 pack 可以通过 `openclaw_pipeline.packs` entry point 或 `OPENCLAW_PACK_MANIFESTS` manifest 列表接入
+
+示例：
+
+```bash
+ovp --pack default-knowledge --profile full
+ovp-autopilot --pack default-knowledge --profile autopilot --yes
+```
+
+面向第三方 pack 作者的 API 文档在：
+
+- `docs/pack-api/README.md`
+- `docs/pack-api/manifest-and-hooks.md`
+- `docs/pack-api/dogfooding-with-media-pack.md`
+
+## 平台架构
+
+从平台视角看，当前系统分成三层：
+
+1. **Core Platform**
+2. **Domain Pack**
+3. **Workflow Profile**
+
+### 1. Core Platform
+
+core 负责通用且必须稳定的部分：
+
+- runtime / vault layout
+- CLI orchestration
+- autopilot / queue / watcher
+- canonical identity helper
+- registry framework
+- derived `knowledge.db`
+- graph / lint / audit 基础设施
+- plugin / pack loader
+- evidence schema 基础契约
+
+### 2. Domain Pack
+
+pack 负责领域语义，而不是只放几段 prompt。它定义：
+
+- object kinds
+- workflow profile
+- discovery boundary
+- absorb / refine / lint 规则
+- schema / template / prompt 资源
+
+当前内置的是 `default-knowledge`。未来媒体、医疗、工程研究这类领域，应该各自作为外部 pack 工程接入。
+
+### 3. Workflow Profile
+
+profile 是某个 pack 下的一条可执行 DAG。
+
+当前已经实现的标准 profile：
+
+- `default-knowledge/full`
+- `default-knowledge/autopilot`
+
+这也是为什么现在可以显式运行：
+
+```bash
+ovp --pack default-knowledge --profile full
+ovp-autopilot --pack default-knowledge --profile autopilot --yes
+```
+
+## 插件设计
+
+当前插件/pack 接入面已经有最小闭环，不再只是设计稿。
+
+支持两种发现方式：
+
+1. Python entry point 组：`openclaw_pipeline.packs`
+2. 显式 manifest 列表：`OPENCLAW_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
+
+最小接入链路是：
+
+1. 第三方 pack 提供 manifest
+2. manifest 声明 `entrypoints.pack`
+3. entrypoint 返回 `BaseDomainPack`
+4. core 校验 `api_version`
+5. 用户通过 `--pack/--profile` 运行
+
+当前已经实现的硬边界：
+
+- pack 不能把 semantic retrieval 直接升级成 canonical identity
+- pack 不能把 `knowledge.db` 当 source of truth
+- pack 不能绕过 audit/logging
+- 所有 derived state 都必须可重建
+
 ## 真实运行模型
 
 ### Source of Truth
@@ -249,6 +364,13 @@ vault/
 - canonical slug 读取
 - 审计事件浏览
 - 工具发现与只读服务
+
+默认 discovery 也已经统一到这里：
+
+- `ovp-query` 默认走 `knowledge.db`
+- 关键词检索使用 FTS5 BM25
+- 语义检索使用本地 deterministic embeddings
+- QMD 不再是默认检索依赖，只能通过显式 `--engine qmd` 启用
 
 ## 快速开始
 

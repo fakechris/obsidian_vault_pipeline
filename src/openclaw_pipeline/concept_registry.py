@@ -38,6 +38,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable
 
+from .discovery import discover_related
+
 try:
     import jieba
     JIEBA_AVAILABLE = True
@@ -95,6 +97,8 @@ class RelatedContext:
     slug: str
     title: str
     score: float
+    engine: str = "knowledge"
+    kind: str = "semantic"
     snippet: str | None = None
 
 
@@ -492,6 +496,12 @@ class ConceptRegistry:
             return results
         return self._legacy_surface_search(query, area=area, topk=topk)
 
+    def to_object_records(self) -> list[Any]:
+        """Project legacy concept entries into pack-aware object records."""
+        from .object_registry import record_from_concept_entry
+
+        return [record_from_concept_entry(entry) for entry in self._entries]
+
     # ========== New Resolution API ==========
 
     def resolve_mention(self, mention: str, area: str | None = None) -> ResolutionResult:
@@ -560,7 +570,7 @@ class ConceptRegistry:
                     normalized_query=norm,
                     matched_surface=norm,
                 )],
-                related_context=self._qmd_related_context(mention),
+                related_context=self._discover_related_context(mention),
             )
 
         # Step 3: Safe near match
@@ -594,7 +604,7 @@ class ConceptRegistry:
                 normalized_query=norm,
                 matched_surface=norm,
             )],
-            related_context=self._qmd_related_context(mention),
+            related_context=self._discover_related_context(mention),
         )
 
     def _dedupe_entries(self, records: list[SurfaceRecord]) -> list[RegistryEntry]:
@@ -864,6 +874,25 @@ class ConceptRegistry:
         except (subprocess.SubprocessError, json.JSONDecodeError, ValueError, TimeoutError):
             return []
 
+    def _discover_related_context(self, mention: str, topk: int = 5) -> list[RelatedContext]:
+        """
+        Shared related-context discovery for candidate/review flows.
+
+        This is auxiliary only. It never determines canonical identity.
+        """
+        rows = discover_related(self.vault_dir, mention, engine="knowledge", limit=topk)
+        return [
+            RelatedContext(
+                slug=str(row["slug"]),
+                title=str(row["title"]),
+                score=float(row["score"]),
+                engine=str(row.get("engine") or "knowledge"),
+                kind=str(row.get("kind") or "semantic"),
+                snippet=str(row.get("snippet") or "") or None,
+            )
+            for row in rows
+        ]
+
     # ========== Legacy Search Methods (Deprecated) ==========
 
     def _search_via_qmd(self, query: str, area: str | None, topk: int) -> list[tuple[ConceptEntry, float]]:
@@ -1118,7 +1147,7 @@ class ConceptRegistry:
         maps to multiple different slugs (e.g., "MCP" and "MCP-Protocol").
 
         Resolution logic:
-        - If QMD similarity between entries > similarity_threshold -> merge_as_alias
+        - QMD similarity is a review signal, not an automatic merge trigger
         - If QMD similarity between entries > min_similarity_for_merge -> review_needed
         - If QMD similarity < min_similarity_for_merge -> separate (remove conflict aliases)
 
@@ -1200,10 +1229,6 @@ class ConceptRegistry:
             if sentence_like_entries:
                 conflict_info["action"] = "review_title"
                 results["review_needed"].append(conflict_info)
-            elif avg_similarity >= similarity_threshold:
-                conflict_info["action"] = "merge"
-                conflict_info["target_slug"] = unique_slugs[0]  # Keep first as canonical
-                results["merge_candidates"].append(conflict_info)
             elif avg_similarity >= min_similarity_for_merge:
                 conflict_info["action"] = "review"
                 results["review_needed"].append(conflict_info)

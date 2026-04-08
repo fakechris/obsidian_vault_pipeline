@@ -6,6 +6,13 @@
 > - LLM 是程序员 —— AutoPilot 自动完成编译、链接、维护
 > - Wiki 是代码库 —— 持续编译、自动维护的结构化知识
 
+## 当前平台边界
+
+- 当前内置标准 pack 是 `default-knowledge`
+- 主流程可显式选择 `--pack default-knowledge --profile full`
+- AutoPilot 可显式选择 `--pack default-knowledge --profile autopilot`
+- 第三方领域包通过 Pack API 接入，文档见 `docs/pack-api/`
+
 ---
 schema_version: "1.0.0"
 note_id: claude-0db92ed6
@@ -159,7 +166,7 @@ ovp --full
 
 # 或分步执行
 ovp --step articles       # L1 → L2: 生成深度解读
-ovp-evergreen --recent 7  # L2 → L3: 提取 Evergreen
+ovp-absorb --recent 7     # L2 → L3: 提取/吸收 Evergreen 生命周期动作
 ovp-moc --scan           # 更新 MOC 索引
 ```
 
@@ -175,9 +182,10 @@ mv article.md 50-Inbox/01-Raw/
 # 全自动发生:
 # 1. 检测新文件 → 加入队列
 # 2. 生成深度解读 (6维度质量评分)
-# 3. 质量达标 → 提取 Evergreen
+# 3. 质量达标 → absorb
 # 4. 更新 MOC
-# 5. 自动 git commit
+# 5. 刷新 knowledge.db
+# 6. 自动 git commit
 ```
 
 ### 3.3 完整数据流
@@ -190,7 +198,7 @@ ovp-article --process     # L1 → L2
 20-Areas/AI-Research/     # L2: 深度解读
 Topics/2026-04/
     ↓
-ovp-evergreen --recent 7  # L2 → L3
+ovp-absorb --recent 7     # L2 → L3
     ↓
 10-Knowledge/Evergreen/   # L3: 原子概念
     ↓
@@ -437,25 +445,24 @@ Ingest → Query → Output → 回写 wiki → 下次 Query 可用
 处理后: ![图](attachments/2026-04/img-hash.png)
 ```
 
-### 7.2 可选：qmd 搜索引擎
+### 7.2 可选：QMD 外部发现适配器
 
-对于大型 wiki，建议使用 [qmd](https://github.com/jzaki/qmd) 作为本地搜索引擎：
-- 混合 BM25/向量搜索
-- LLM 重排序
-- 支持 CLI 和 MCP Server
+当前默认 discovery 已经统一到 `knowledge.db`：
+- `ovp-query` 默认走 `knowledge.db`
+- 关键词检索使用 FTS5 BM25
+- 语义检索使用本地 deterministic embeddings
+
+QMD 现在只是**显式可选**的外部发现适配器，不再是默认 runtime 依赖，也不会参与自动链接或 canonical identity 决策。
 
 ```bash
-# 安装 qmd
-pip install qmd
+# 默认：knowledge.db
+ovp-query "AI Agent 架构"
 
-# 索引知识库
-qmd index /path/to/vault
-
-# 搜索
-qmd search "AI Agent 架构"
+# 显式改用 qmd
+ovp-query --engine qmd "AI Agent 架构"
 ```
 
-使用 qmd 时，在 `ovp-query` 中添加 `--search-engine qmd` 参数。
+如果需要保留 QMD 做人工探索或对照检索，可以单独安装并维护它，但不要把 QMD 结果当成自动 link resolution 的依据。
 
 ```bash
 # .env

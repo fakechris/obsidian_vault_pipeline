@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from ..auto_evergreen_extractor import run_absorb_workflow
+from ..evidence import build_evidence_payload
 from ..runtime import resolve_vault_dir
 
 
@@ -47,6 +48,17 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=False,
         auto_promote=args.auto_promote,
         promote_threshold=args.promote_threshold,
+    )
+    mentions = [
+        str(concept.get("name") or "")
+        for result in workflow_payload.get("results", [])
+        for concept in result.get("concepts", [])
+        if concept.get("name")
+    ]
+    workflow_payload["evidence"] = build_evidence_payload(
+        vault_dir,
+        mentions=mentions[:10],
+        limit=5,
     )
 
     if args.json:

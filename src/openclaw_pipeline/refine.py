@@ -180,6 +180,20 @@ def record_refine_run(
     )
 
 
+def attach_proposal_evidence(vault_dir: Path, proposal: dict[str, Any]) -> dict[str, Any]:
+    from .evidence import build_evidence_payload
+
+    enriched = dict(proposal)
+    enriched["evidence"] = build_evidence_payload(
+        vault_dir,
+        query=str(proposal.get("slug") or ""),
+        mentions=[str(proposal.get("slug") or "")],
+        slugs=[str(proposal.get("slug") or "")],
+        limit=5,
+    )
+    return enriched
+
+
 def _rewrite_cleanup_body(body: str) -> str:
     lines = body.splitlines()
     rewritten: list[str] = []
