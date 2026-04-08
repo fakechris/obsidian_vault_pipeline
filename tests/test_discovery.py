@@ -69,3 +69,33 @@ def test_discover_related_qmd_engine_is_explicit_and_typed(temp_vault, monkeypat
             "object_kind": "document",
         }
     ]
+
+
+def test_discover_with_knowledge_deduplicates_by_slug_and_skips_semantic_when_lexical_is_enough(
+    temp_vault,
+    monkeypatch,
+):
+    from openclaw_pipeline import discovery
+
+    monkeypatch.setattr(
+        discovery,
+        "_safe_search_knowledge",
+        lambda vault_dir, query, limit: [  # noqa: ARG005
+            {"slug": "agent-harness", "title": "Agent Harness", "score": 12.0},
+            {"slug": "agent-runtime", "title": "Agent Runtime", "score": 11.0},
+        ],
+    )
+
+    def fail_semantic(vault_dir, query, limit):  # noqa: ARG001
+        raise AssertionError("semantic search should not run when lexical already satisfies the limit")
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.knowledge_index.get_knowledge_page",
+        lambda vault_dir, slug: {"title": slug.replace("-", " ").title(), "path": f"{slug}.md", "body": slug},
+    )
+    monkeypatch.setattr("openclaw_pipeline.knowledge_index.query_knowledge_index", fail_semantic)
+
+    results = discovery._discover_with_knowledge(temp_vault, "agent runtime", limit=2)
+
+    assert [row["slug"] for row in results] == ["agent-harness", "agent-runtime"]
+    assert {row["kind"] for row in results} == {"lexical"}

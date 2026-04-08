@@ -37,13 +37,15 @@ def _discover_with_knowledge(vault_dir: Path, query: str, limit: int) -> list[di
     from .knowledge_index import get_knowledge_page, query_knowledge_index
 
     lexical_rows = [row for row in _safe_search_knowledge(vault_dir, query, limit=limit) if float(row.get("score", 0.0)) > 0.0]
-    semantic_rows = query_knowledge_index(vault_dir, query, limit=limit)
 
     results: list[dict[str, object]] = []
-    seen: set[tuple[str, str]] = set()
+    seen_slugs: set[str] = set()
 
     for row in lexical_rows:
         slug = str(row["slug"])
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
         page = get_knowledge_page(vault_dir, slug)
         entry = {
             "engine": "knowledge",
@@ -54,32 +56,35 @@ def _discover_with_knowledge(vault_dir: Path, query: str, limit: int) -> list[di
             "snippet": _snippet_from_page(page),
             "path": str(page["path"]) if page else "",
         }
-        key = (entry["kind"], slug)
-        if key not in seen:
-            seen.add(key)
-            results.append(entry)
+        results.append(entry)
 
+    if len(results) >= limit:
+        return results[:limit]
+
+    semantic_rows = query_knowledge_index(vault_dir, query, limit=limit)
     for row in semantic_rows:
         slug = str(row["slug"])
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
         page = get_knowledge_page(vault_dir, slug)
         title = str(page["title"]) if page else slug
         snippet = str(row.get("chunk_text") or "")[:180]
-        entry = {
-            "engine": "knowledge",
-            "kind": "semantic",
-            "slug": slug,
-            "title": title,
-            "score": float(row["score"]),
-            "snippet": snippet,
-            "path": str(page["path"]) if page else "",
-            "section_title": str(row.get("section_title") or ""),
-        }
-        key = (entry["kind"], slug)
-        if key not in seen:
-            seen.add(key)
-            results.append(entry)
+        results.append(
+            {
+                "engine": "knowledge",
+                "kind": "semantic",
+                "slug": slug,
+                "title": title,
+                "score": float(row["score"]),
+                "snippet": snippet,
+                "path": str(page["path"]) if page else "",
+                "section_title": str(row.get("section_title") or ""),
+            }
+        )
+        if len(results) >= limit:
+            break
 
-    results.sort(key=lambda item: (item["kind"] != "lexical", -float(item["score"])))
     return results[:limit]
 
 
