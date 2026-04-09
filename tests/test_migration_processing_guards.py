@@ -281,6 +281,158 @@ Example SDK
     assert result["classification"] == "tools"
 
 
+def test_process_inbox_moves_completed_sources_to_monthly_processed(temp_vault, monkeypatch):
+    raw_file = temp_vault / "50-Inbox" / "01-Raw" / "2026-04-07_example.md"
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_file.write_text(
+        """---
+title: "Example SDK"
+source: https://example.com
+author: unknown
+date: 2026-04-07
+type: article
+tags: [sdk]
+---
+
+Example SDK body
+""",
+        encoding="utf-8",
+    )
+
+    logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+    txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor.article_processor = SimpleNamespace(
+        generate_interpretation=lambda **kwargs: (
+            "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
+            {"tokens": 1},
+            "tools",
+        )
+    )
+    monkeypatch.setattr(
+        processor,
+        "_prepare_interpretation_source",
+        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
+    )
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.image_downloader.ImageDownloader.process_file",
+        lambda self, file_path, backup=True: [],
+    )
+
+    results = processor.process_inbox(dry_run=False, batch_size=1)
+
+    processed_file = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / raw_file.name
+    processing_file = temp_vault / "50-Inbox" / "02-Processing" / raw_file.name
+
+    assert results["completed"] == 1
+    assert not raw_file.exists()
+    assert not processing_file.exists()
+    assert processed_file.exists()
+
+
+def test_process_inbox_restores_failed_sources_back_to_raw(temp_vault, monkeypatch):
+    raw_file = temp_vault / "50-Inbox" / "01-Raw" / "2026-04-07_failure.md"
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_file.write_text(
+        """---
+title: "Broken Example"
+source: https://example.com
+author: unknown
+date: 2026-04-07
+type: article
+tags: [sdk]
+---
+
+Broken body
+""",
+        encoding="utf-8",
+    )
+
+    logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+    txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor.article_processor = SimpleNamespace(
+        generate_interpretation=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    monkeypatch.setattr(
+        processor,
+        "_prepare_interpretation_source",
+        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
+    )
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.image_downloader.ImageDownloader.process_file",
+        lambda self, file_path, backup=True: [],
+    )
+
+    results = processor.process_inbox(dry_run=False, batch_size=1)
+
+    processed_file = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / raw_file.name
+    processing_file = temp_vault / "50-Inbox" / "02-Processing" / raw_file.name
+
+    assert results["failed"] == 1
+    assert raw_file.exists()
+    assert not processing_file.exists()
+    assert not processed_file.exists()
+
+
+def test_process_inbox_resumes_files_left_in_processing_first(temp_vault, monkeypatch):
+    raw_file = temp_vault / "50-Inbox" / "01-Raw" / "2026-04-07_raw.md"
+    processing_file = temp_vault / "50-Inbox" / "02-Processing" / "2026-04-07_stuck.md"
+    raw_file.parent.mkdir(parents=True, exist_ok=True)
+    processing_file.parent.mkdir(parents=True, exist_ok=True)
+
+    template = """---
+title: "{title}"
+source: https://example.com
+author: unknown
+date: 2026-04-07
+type: article
+tags: [sdk]
+---
+
+Body
+"""
+    raw_file.write_text(template.format(title="Raw First"), encoding="utf-8")
+    processing_file.write_text(template.format(title="Processing First"), encoding="utf-8")
+
+    logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+    txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor.article_processor = SimpleNamespace(
+        generate_interpretation=lambda **kwargs: (
+            "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
+            {"tokens": 1},
+            "tools",
+        )
+    )
+
+    monkeypatch.setattr(
+        processor,
+        "_prepare_interpretation_source",
+        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
+    )
+    monkeypatch.setattr(
+        "openclaw_pipeline.image_downloader.ImageDownloader.process_file",
+        lambda self, file_path, backup=True: [],
+    )
+
+    seen: list[str] = []
+    original = processor.process_single_file
+
+    def wrapped(file_path, dry_run=False):
+        seen.append(Path(file_path).name)
+        return original(file_path, dry_run=dry_run)
+
+    monkeypatch.setattr(processor, "process_single_file", wrapped)
+
+    results = processor.process_inbox(dry_run=False, batch_size=1)
+
+    assert results["completed"] == 1
+    assert seen == ["2026-04-07_stuck.md"]
+
+
 def test_linter_resolve_link_handles_dot_relative_target_without_crashing(temp_vault):
     note = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04-07_Test.md"
     note.parent.mkdir(parents=True, exist_ok=True)

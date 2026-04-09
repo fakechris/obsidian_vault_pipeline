@@ -510,11 +510,56 @@ class AutoArticleProcessor:
         self.layout = VaultLayout.from_vault(vault_dir)
         self.vault_dir = self.layout.vault_dir
         self.raw_dir = self.layout.raw_dir
+        self.processing_dir = self.layout.processing_dir
         self.processed_dir = self.layout.processed_dir
         self.logger = logger
         self.txn = txn
         self.llm = None
         self.article_processor = None
+
+    def _extract_source_date(self, file_path: Path) -> datetime:
+        match = re.match(r"^(\d{4}-\d{2}-\d{2})_", file_path.name)
+        if match:
+            try:
+                return datetime.strptime(match.group(1), "%Y-%m-%d")
+            except ValueError:
+                pass
+        return datetime.now()
+
+    def _move_source_file(self, source: Path, destination: Path) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            destination.unlink()
+        return source.rename(destination)
+
+    def _stage_source_for_processing(self, file_path: Path) -> Path:
+        self.processing_dir.mkdir(parents=True, exist_ok=True)
+        if file_path.parent == self.processing_dir:
+            return file_path
+        staged_path = self.processing_dir / file_path.name
+        staged = self._move_source_file(file_path, staged_path)
+        self.logger.log("source_staged_for_processing", {
+            "source": str(file_path),
+            "staged": str(staged),
+        })
+        return staged
+
+    def _restore_source_to_raw(self, file_path: Path) -> Path:
+        restored = self._move_source_file(file_path, self.raw_dir / file_path.name)
+        self.logger.log("source_restored_to_raw", {
+            "source": str(file_path),
+            "restored": str(restored),
+        })
+        return restored
+
+    def _archive_source_to_processed(self, file_path: Path) -> Path:
+        destination = self.layout.processed_month_dir(self._extract_source_date(file_path)) / file_path.name
+        archived = self._move_source_file(file_path, destination)
+        self.logger.log("source_archived_to_processed", {
+            "source": str(file_path),
+            "archived": str(archived),
+        })
+        return archived
 
     @staticmethod
     def _clean_body_text(body: str, title: str = "") -> str:
@@ -968,26 +1013,39 @@ class AutoArticleProcessor:
         }
 
         if not self.raw_dir.exists():
-            return results
+            self.raw_dir.mkdir(parents=True, exist_ok=True)
 
-        # 获取所有.md文件
-        files = list(self.raw_dir.glob("*.md"))
+        self.processing_dir.mkdir(parents=True, exist_ok=True)
+
+        processing_files = sorted(self.processing_dir.glob("*.md"))
+        raw_files = sorted(self.raw_dir.glob("*.md"))
+        files = processing_files + raw_files
         results["total"] = len(files)
 
         if batch_size:
             files = files[:batch_size]
 
         for file_path in files:
-            result = self.process_single_file(file_path, dry_run)
+            working_path = file_path
+            if not dry_run and file_path.parent != self.processing_dir:
+                working_path = self._stage_source_for_processing(file_path)
+
+            result = self.process_single_file(working_path, dry_run)
             results["files"].append(result)
 
             if result["status"] == "completed":
                 results["completed"] += 1
                 results["total_tokens"] += result.get("tokens_used", 0)
+                if not dry_run:
+                    self._archive_source_to_processed(working_path)
             elif result["status"] == "error":
                 results["failed"] += 1
+                if not dry_run and working_path.exists():
+                    self._restore_source_to_raw(working_path)
             else:
                 results["skipped"] += 1
+                if not dry_run and working_path.exists():
+                    self._restore_source_to_raw(working_path)
 
         return results
 

@@ -571,7 +571,7 @@ class EnhancedPipeline:
 
         # Processed目录文件数
         processed_dir = self.layout.processed_dir
-        counts["processed"] = len(list(processed_dir.glob("*.md"))) if processed_dir.exists() else 0
+        counts["processed"] = len(list(processed_dir.rglob("*.md"))) if processed_dir.exists() else 0
 
         pinboard_dir = self.layout.pinboard_dir
         counts["pinboard"] = len(list(pinboard_dir.glob("*.md"))) if pinboard_dir.exists() else 0
@@ -615,7 +615,7 @@ class EnhancedPipeline:
         if step == "clippings":
             # 检查迁移的文件数
             raw_count = len(list(self.layout.raw_dir.glob("*.md")))
-            processed_count = len(list(self.layout.processed_dir.glob("*.md")))
+            processed_count = len(list(self.layout.processed_dir.rglob("*.md")))
             results["produced"] = processed_count - before_counts.get("processed", 0)
             results["migrated"] = results["produced"]
             results["remaining"] = raw_count
@@ -695,26 +695,27 @@ class EnhancedPipeline:
     def _calculate_timeout(self, step: str, batch_size: int | None = None) -> int:
         """计算动态超时（根据步骤和文件大小）"""
         if step == "articles":
-            # 基于Raw目录文件大小计算超时
-            total_chars = 0
-            raw_dir = self.vault_dir / "50-Inbox" / "01-Raw"
-            if raw_dir.exists():
-                for f in raw_dir.glob("*.md"):
-                    try:
-                        total_chars += f.stat().st_size
-                    except OSError:
-                        pass
+            # 基于 Raw + Processing 队列体量计算超时
+            queue_files: list[Path] = []
+            if self.layout.processing_dir.exists():
+                queue_files.extend(sorted(self.layout.processing_dir.glob("*.md")))
+            if self.layout.raw_dir.exists():
+                queue_files.extend(sorted(self.layout.raw_dir.glob("*.md")))
 
-            # 每1000字符10秒，最小60秒，最大300秒（单篇文章不应超过5分钟）
-            estimated_timeout = max(60, min(300, (total_chars // 1000) * 10))
-
-            # 如果有batch_size，根据文件数调整
             if batch_size:
-                raw_files = len(list(raw_dir.glob("*.md"))) if raw_dir.exists() else 1
-                if raw_files > 0:
-                    estimated_timeout = min(300, estimated_timeout * batch_size // raw_files)
+                queue_files = queue_files[:batch_size]
 
-            return estimated_timeout
+            file_count = len(queue_files)
+            total_chars = 0
+            for f in queue_files:
+                try:
+                    total_chars += f.stat().st_size
+                except OSError:
+                    pass
+
+            per_file_budget = max(180, (total_chars // max(file_count, 1)) // 20)
+            estimated_timeout = max(300, per_file_budget * max(file_count, 1))
+            return min(43200, estimated_timeout)
 
         elif step == "pinboard":
             # Pinboard 可能需要更长时间（网络请求）

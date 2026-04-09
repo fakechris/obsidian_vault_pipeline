@@ -79,8 +79,16 @@ class VaultLayout:
         return self.vault_dir / "50-Inbox" / "02-Pinboard"
 
     @property
+    def processing_dir(self) -> Path:
+        return self.vault_dir / "50-Inbox" / "02-Processing"
+
+    @property
     def processed_dir(self) -> Path:
         return self.vault_dir / "50-Inbox" / "03-Processed"
+
+    def processed_month_dir(self, when: datetime | None = None) -> Path:
+        month = (when or datetime.now()).strftime("%Y-%m")
+        return self.processed_dir / month
 
     @property
     def evergreen_dir(self) -> Path:

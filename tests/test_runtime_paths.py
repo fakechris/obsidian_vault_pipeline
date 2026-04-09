@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -30,8 +31,12 @@ def test_vault_layout_uses_resolved_vault_dir(tmp_path):
     assert layout.pipeline_log == (tmp_path / "vault" / "60-Logs" / "pipeline.jsonl").resolve()
     assert layout.knowledge_db == (tmp_path / "vault" / "60-Logs" / "knowledge.db").resolve()
     assert layout.transactions_dir == (tmp_path / "vault" / "60-Logs" / "transactions").resolve()
+    assert layout.processing_dir == (tmp_path / "vault" / "50-Inbox" / "02-Processing").resolve()
     assert layout.classification_output_dir("tools").parts[-3:-1] == ("Tools", "Topics")
     assert layout.papers_dir == (tmp_path / "vault" / "20-Areas" / "AI-Research" / "Papers").resolve()
+    assert layout.processed_month_dir(datetime(2026, 4, 8)) == (
+        tmp_path / "vault" / "50-Inbox" / "03-Processed" / "2026-04"
+    ).resolve()
 
 
 def test_specialized_processors_derive_default_outputs_from_vault(tmp_path):
@@ -364,6 +369,48 @@ def test_step_pinboard_decomposes_cross_day_history_into_daily_requests(tmp_path
     assert captured_cmds[0][-5:] == ["--start-date", "2026-04-01", "--end-date", "2026-04-01", "--dry-run=false"]
     assert captured_cmds[1][-5:] == ["--start-date", "2026-04-02", "--end-date", "2026-04-02", "--dry-run=false"]
     assert captured_cmds[2][-5:] == ["--start-date", "2026-04-03", "--end-date", "2026-04-03", "--dry-run=false"]
+
+
+def test_before_counts_include_monthly_processed_files(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    processed_file = vault / "50-Inbox" / "03-Processed" / "2026-04" / "example.md"
+    processed_file.parent.mkdir(parents=True, exist_ok=True)
+    processed_file.write_text("# done\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    counts = pipeline._get_before_counts()
+
+    assert counts["processed"] == 1
+
+
+def test_articles_timeout_scales_with_raw_and_processing_queue(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    raw_dir = vault / "50-Inbox" / "01-Raw"
+    processing_dir = vault / "50-Inbox" / "02-Processing"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    processing_dir.mkdir(parents=True, exist_ok=True)
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+
+    for idx in range(3):
+        (raw_dir / f"2026-04-08_raw_{idx}.md").write_text("x" * 1200, encoding="utf-8")
+    for idx in range(2):
+        (processing_dir / f"2026-04-08_processing_{idx}.md").write_text("y" * 1200, encoding="utf-8")
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    timeout = pipeline._calculate_timeout("articles")
+
+    assert timeout > 300
 
 
 def test_step_refine_runs_cleanup_then_breakdown(tmp_path, monkeypatch):
