@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "obsidian-vault-pipeline"
-version = "0.7.0"
+version = "0.8.1"
 description = "全自动Obsidian知识管理Pipeline - 生产级知识管理流水线"
 readme = "README.md"
 license = "MIT"

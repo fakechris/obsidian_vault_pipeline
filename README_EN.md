@@ -22,6 +22,8 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 
 </div>
 
+Current document version: `v0.8.1`
+
 ## What This Is
 
 This project is not a loose collection of scripts. It is a layered knowledge system built around an Obsidian vault:
