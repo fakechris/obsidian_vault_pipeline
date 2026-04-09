@@ -441,6 +441,23 @@ def main():
     with open(report_file, "w", encoding="utf-8") as f:
         f.write(report)
 
+    results_file = report_dir / f"quality-results-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    qualified_files = [
+        str(Path(r["file"]).resolve())
+        for r in results
+        if r.get("is_qualified", False)
+    ]
+    results_payload = {
+        "checked": len(results),
+        "qualified": sum(1 for r in results if r.get("is_qualified", False)),
+        "failed": len(results) - sum(1 for r in results if r.get("is_qualified", False)),
+        "report": str(report_file),
+        "qualified_files": qualified_files,
+        "results": results,
+    }
+    with open(results_file, "w", encoding="utf-8") as f:
+        json.dump(results_payload, f, ensure_ascii=False, indent=2)
+
     print(f"\n{'='*60}")
     print(f"QUALITY CHECK COMPLETE")
     print(f"{'='*60}")
@@ -453,13 +470,16 @@ def main():
     print(f"Report saved: {report_file}")
 
     # 输出 JSON 行供 pipeline 解析
-    import json
-    print(f"\n__QC_JSON__: {json.dumps({'checked': checked, 'qualified': qualified, 'failed': failed, 'report': str(report_file)})}")
+    print(
+        f"\n__QC_JSON__: "
+        f"{json.dumps({'checked': checked, 'qualified': qualified, 'failed': failed, 'report': str(report_file), 'results_json': str(results_file), 'qualified_files': qualified_files}, ensure_ascii=False)}"
+    )
 
     logger.log("quality_check_complete", {
         "files_checked": len(results),
         "qualified": sum(1 for r in results if r.get("is_qualified", False)),
-        "report_file": str(report_file)
+        "report_file": str(report_file),
+        "results_file": str(results_file),
     })
 
     return 0

@@ -348,11 +348,6 @@ def parse_github_url(url: str) -> tuple[str, str] | None:
     if len(parts) < 2:
         return None
 
-    # 过滤非仓库路径
-    skip_paths = {"blob", "tree", "issues", "pull", "wiki", "actions", "releases"}
-    if any(p in parts for p in skip_paths):
-        return None
-
     return parts[0], parts[1]
 
 

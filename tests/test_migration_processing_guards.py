@@ -17,6 +17,7 @@ from openclaw_pipeline.auto_article_processor import (
     TransactionManager as ArticleTxn,
 )
 from openclaw_pipeline.auto_github_processor import LiteLLMClient as GithubLiteLLMClient
+from openclaw_pipeline.auto_github_processor import parse_github_url
 from openclaw_pipeline.auto_paper_processor import LiteLLMClient as PaperLiteLLMClient, process_single_paper
 from openclaw_pipeline.lint_checker import KnowledgeLinter
 from openclaw_pipeline.markdown_generation import sanitize_generated_markdown
@@ -61,6 +62,12 @@ tags: [paper]
     assert result["processed"] == 1
     assert "openclaw_pipeline.auto_paper_processor" in " ".join(captured[0])
     assert captured[0]
+
+
+def test_parse_github_url_accepts_blob_tree_and_release_urls():
+    assert parse_github_url("https://github.com/andelf/picc/blob/master/src/bin/voice_correct.rs") == ("andelf", "picc")
+    assert parse_github_url("https://github.com/Yeachan-Heo/oh-my-codex/tree/main") == ("Yeachan-Heo", "oh-my-codex")
+    assert parse_github_url("https://github.com/hyperspaceai/agi/releases/tag/architect-v1") == ("hyperspaceai", "agi")
 
 
 def test_pinboard_process_uses_extended_subprocess_timeout_for_slow_github_repos(temp_vault, monkeypatch):

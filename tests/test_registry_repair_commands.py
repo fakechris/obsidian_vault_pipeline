@@ -31,6 +31,48 @@ def test_rebuild_registry_reconcile_reports_drift(temp_vault, sample_evergreen_f
     assert "orphan-entry" in missing_from_fs
 
 
+def test_reconcile_registry_respects_candidate_files_and_prunes_stale_on_write(temp_vault, sample_evergreen_files):
+    candidate_dir = temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    (candidate_dir / "live-candidate.md").write_text("# live candidate\n", encoding="utf-8")
+
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="live-candidate",
+            title="Live Candidate",
+            aliases=[],
+            definition="has candidate file",
+            area="testing",
+            status="candidate",
+        )
+    )
+    registry.add_entry(
+        ConceptEntry(
+            slug="stale-candidate",
+            title="Stale Candidate",
+            aliases=[],
+            definition="no candidate file",
+            area="testing",
+            status="candidate",
+        )
+    )
+    registry.save()
+
+    dry_run = rebuild_source.reconcile_registry(temp_vault, write=False)
+    missing_from_fs = {item["slug"] for item in dry_run["not_in_filesystem"]}
+
+    assert "live-candidate" not in missing_from_fs
+    assert "stale-candidate" in missing_from_fs
+
+    rebuild_source.reconcile_registry(temp_vault, write=True)
+    reloaded = ConceptRegistry(temp_vault).load()
+    slugs = {entry.slug for entry in reloaded.entries}
+
+    assert "live-candidate" in slugs
+    assert "stale-candidate" not in slugs
+
+
 def test_rebuild_registry_command_wrapper_reexports_source():
     assert rebuild_command.rebuild_registry is rebuild_source.rebuild_registry
     assert rebuild_command.reconcile_registry is rebuild_source.reconcile_registry

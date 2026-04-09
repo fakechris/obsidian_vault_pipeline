@@ -235,11 +235,14 @@ class TestCandidatePromotion:
 
         candidate_path = temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "new-candidate.md"
         entry = ConceptRegistry(temp_vault).load().find_by_slug("new-candidate")
+        content = candidate_path.read_text(encoding="utf-8")
 
         assert result["candidates_added"] == 1
         assert candidate_path.exists()
         assert entry is not None
         assert entry.status == STATUS_CANDIDATE
+        assert "## 🔗 关联概念" in content
+        assert "[[2026-04-01_Test_深度解读]]" in content
 
     def test_auto_evergreen_extractor_auto_promotes_into_active_note_with_note_id(self, temp_vault):
         logger = EvergreenLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
@@ -291,6 +294,11 @@ class TestCandidatePromotion:
         assert result["concepts_created"] == 1
         assert evergreen_path.exists()
         assert "note_id: promoted-concept" in content
+        assert "## 📝 详细解释" in content
+        assert "Detailed explanation" in content
+        assert "## 🔗 关联概念" in content
+        assert "[[existing-concept]]" in content
+        assert "[[2026-04-01_Test_深度解读]]" in content
         assert atlas_index.exists()
         assert "[[promoted-concept|Promoted Concept]]" in atlas_index.read_text(encoding="utf-8")
         assert candidate_path.exists() is False

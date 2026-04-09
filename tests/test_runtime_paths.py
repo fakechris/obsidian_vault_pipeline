@@ -8,7 +8,7 @@ import pytest
 from openclaw_pipeline.auto_github_processor import build_default_output_dir as github_output_dir
 from openclaw_pipeline.auto_paper_processor import build_default_output_dir as paper_output_dir
 from openclaw_pipeline.runtime import VaultLayout, iter_markdown_files, resolve_vault_dir
-from openclaw_pipeline.unified_pipeline_enhanced import EnhancedPipeline, build_execution_plan
+from openclaw_pipeline.unified_pipeline_enhanced import EnhancedPipeline, build_execution_plan, detect_pinboard_processor
 
 
 def test_resolve_vault_dir_returns_absolute_path(tmp_path, monkeypatch):
@@ -95,6 +95,37 @@ def test_build_execution_plan_full_can_insert_refine_before_knowledge_index():
     assert "absorb" in plan["steps"]
 
 
+def test_build_execution_plan_full_respects_from_step():
+    args = Namespace(
+        full=True,
+        with_refine=True,
+        pinboard_new=False,
+        pinboard_history=None,
+        pinboard_days=None,
+        step=None,
+        from_step="quality",
+    )
+
+    plan = build_execution_plan(args)
+
+    assert plan["steps"][0] == "quality"
+    assert "pinboard" not in plan["steps"]
+    assert plan["steps"][-2:] == ["refine", "knowledge_index"]
+
+
+def test_detect_pinboard_processor_routes_gist_to_article_stack():
+    content = """---
+title: "GBrain.md"
+source: https://gist.github.com/garrytan/49c88e83cf8d7ae95e087426368809cb
+date: 2026-04-05
+type: pinboard-github
+tags: [knowledge]
+---
+"""
+
+    assert detect_pinboard_processor(content) == "website"
+
+
 def test_step_knowledge_index_invokes_rebuild_command(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
@@ -145,6 +176,163 @@ def test_step_absorb_invokes_absorb_command(tmp_path, monkeypatch):
     assert captured["step_name"] == "absorb"
     assert "openclaw_pipeline.commands.absorb" in " ".join(captured["cmd"])
     assert "--vault-dir" in captured["cmd"]
+
+
+def test_step_quality_parses_qualified_files_from_qc_json(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "example_深度解读.md"
+    qualified_file.parent.mkdir(parents=True, exist_ok=True)
+    qualified_file.write_text("# example\n", encoding="utf-8")
+
+    stdout = (
+        "__QC_JSON__: "
+        '{"checked": 2, "qualified": 1, "failed": 1, '
+        f'"qualified_files": ["{qualified_file}"]'
+        "}"
+    )
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        return {"success": True, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_quality(dry_run=False)
+
+    assert result["success"] is True
+    assert result["quality_checked"] == 2
+    assert result["quality_qualified"] == 1
+    assert result["quality_qualified_files"] == [str(qualified_file)]
+
+
+def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "example_深度解读.md"
+    qualified_file.parent.mkdir(parents=True, exist_ok=True)
+    qualified_file.write_text("# example\n", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        captured["cmd"] = cmd
+        captured["step_name"] = step_name
+        captured["timeout"] = timeout
+        absorb_dir = Path(cmd[cmd.index("--dir") + 1])
+        staged_files = sorted(p.name for p in absorb_dir.glob("*.md"))
+        captured["staged_files"] = staged_files
+        return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=1.3,
+        qualified_files=[str(qualified_file)],
+    )
+
+    assert result["success"] is True
+    assert captured["step_name"] == "absorb"
+    assert "--dir" in captured["cmd"]
+    assert "--auto-promote" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--promote-threshold") + 1] == "1"
+    assert captured["staged_files"] == ["example_深度解读.md"]
+    assert captured["timeout"] == 600
+
+
+def test_step_absorb_skips_cleanly_when_no_qualified_files(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    result = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=1.2,
+        qualified_files=[],
+    )
+
+    assert result["success"] is True
+    assert result["skipped"] is True
+    assert result["produced"] == 0
+
+
+def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    import json
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs" / "quality-reports").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "example_深度解读.md"
+    qualified_file.parent.mkdir(parents=True, exist_ok=True)
+    qualified_file.write_text("# example\n", encoding="utf-8")
+
+    results_file = vault / "60-Logs" / "quality-reports" / "quality-results-20260408-000000.json"
+    results_file.write_text(
+        json.dumps(
+            {
+                "checked": 1,
+                "qualified": 1,
+                "failed": 0,
+                "qualified_files": [str(qualified_file)],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        captured["cmd"] = cmd
+        captured["timeout"] = timeout
+        absorb_dir = Path(cmd[cmd.index("--dir") + 1])
+        captured["staged_files"] = sorted(p.name for p in absorb_dir.glob("*.md"))
+        return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_absorb(dry_run=False, quality_score=-1.0, qualified_files=None)
+
+    assert result["success"] is True
+    assert "--dir" in captured["cmd"]
+    assert "--auto-promote" in captured["cmd"]
+    assert captured["staged_files"] == ["example_深度解读.md"]
+    assert captured["timeout"] == 600
+
+
+def test_run_command_timeout_is_failure(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    result = pipeline.run_command(["python3", "-c", "import time; time.sleep(2)"], "absorb", timeout=1)
+
+    assert result["success"] is False
+    assert result["timeout"] is True
 
 
 def test_step_pinboard_decomposes_cross_day_history_into_daily_requests(tmp_path, monkeypatch):

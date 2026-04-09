@@ -36,6 +36,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,8 @@ def detect_pinboard_processor(content: str) -> str | None:
     title = metadata.get("title", "")
     tags = metadata.get("tags", "").lower()
 
+    if "gist.github.com" in source:
+        return "website"
     if "github.com" in source or declared_type == "github":
         return "github"
     if (
@@ -370,6 +373,11 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
     )
     selected_steps = pipeline_steps(include_refine=include_refine, base_steps=profile.stages)
     pinboard_selected_steps = [step for step in selected_steps if step != "clippings"]
+    normalized_from_step = (
+        normalize_step_name(args.from_step)
+        if getattr(args, "from_step", None)
+        else None
+    )
 
     def plan_dict(steps: list[str], description: str, pinboard_days: int | None, pinboard_start: str | None, pinboard_end: str | None) -> dict[str, Any]:
         return {
@@ -382,10 +390,21 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
             "description": description,
         }
 
+    def slice_from_step(steps: list[str]) -> list[str]:
+        if normalized_from_step and normalized_from_step in steps:
+            return steps[steps.index(normalized_from_step):]
+        return steps
+
     if args.full:
+        requested_steps = slice_from_step(selected_steps)
+        description = (
+            f"Full pipeline from {normalized_from_step} ({pack.name}/{profile.name})"
+            if normalized_from_step
+            else f"Full pipeline ({pack.name}/{profile.name})"
+        )
         return plan_dict(
-            selected_steps,
-            f"Full pipeline ({pack.name}/{profile.name})",
+            requested_steps,
+            description,
             args.pinboard_days or 7,
             None,
             None,
@@ -423,11 +442,8 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.from_step:
-        requested_steps = selected_steps
-        normalized_from_step = normalize_step_name(args.from_step)
-        start_idx = requested_steps.index(normalized_from_step) if normalized_from_step in requested_steps else 0
         return plan_dict(
-            requested_steps[start_idx:],
+            slice_from_step(selected_steps),
             f"From step: {normalized_from_step}",
             args.pinboard_days or 7,
             None,
@@ -767,8 +783,7 @@ class EnhancedPipeline:
 
         except subprocess.TimeoutExpired:
             self.logger.log("command_timeout", {"step": step_name, "timeout": timeout})
-            # 超时不一定是失败，返回特殊标记让上层基于产出检测
-            return {"success": True, "timeout": True, "error": f"Timeout after {timeout}s"}
+            return {"success": False, "timeout": True, "error": f"Timeout after {timeout}s"}
         except Exception as e:
             self.logger.log("command_error", {"step": step_name, "error": str(e)})
             return {"success": False, "error": str(e)}
@@ -1076,6 +1091,8 @@ class EnhancedPipeline:
                         result["quality_checked"] = qc_data.get("checked", 0)
                         result["quality_qualified"] = qc_data.get("qualified", 0)
                         result["quality_failed"] = qc_data.get("failed", 0)
+                        result["quality_qualified_files"] = qc_data.get("qualified_files", [])
+                        result["quality_results_json"] = qc_data.get("results_json")
                         # 计算平均质量分数（如果有）
                         if "avg_score" in qc_data:
                             result["quality_score"] = qc_data["avg_score"]
@@ -1131,16 +1148,64 @@ class EnhancedPipeline:
 
         return result
 
-    def step_absorb(self, recent_days: int = 7, dry_run: bool = False, quality_score: float = -1.0) -> dict:
+    def _load_latest_qualified_files(self) -> list[str]:
+        results_dir = self.layout.quality_reports_dir
+        if not results_dir.exists():
+            return []
+
+        candidates = sorted(
+            results_dir.glob("quality-results-*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for results_file in candidates:
+            try:
+                payload = json.loads(results_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            qualified_files = payload.get("qualified_files")
+            if isinstance(qualified_files, list):
+                return [str(Path(path).resolve()) for path in qualified_files if Path(path).exists()]
+        return []
+
+    def step_absorb(
+        self,
+        recent_days: int = 7,
+        dry_run: bool = False,
+        quality_score: float = -1.0,
+        qualified_files: list[str] | None = None,
+    ) -> dict:
         """执行 Absorb 步骤
 
         Args:
             recent_days: 处理最近N天的深度解读
             dry_run: 预览模式
             quality_score: 质量分数，>= 0 且 < 3.0 时阻断执行；< 0 表示未执行质量检查（不阻断）
+            qualified_files: 通过质检的深度解读文件列表；提供时按文件级门禁执行
         """
-        # Quality gate: 0 <= score < 3.0 时阻断（质量分数有效且低于阈值才阻断）
-        if 0 <= quality_score < 3.0:
+        normalized_files = None
+        if qualified_files is None:
+            fallback_files = self._load_latest_qualified_files()
+            if fallback_files:
+                normalized_files = fallback_files
+        else:
+            normalized_files = [
+                str(Path(path).resolve())
+                for path in qualified_files
+                if Path(path).exists()
+            ]
+            if not normalized_files:
+                print("\n⚠️  No qualified deep-dive files to absorb; skipping absorb stage")
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "no_qualified_files",
+                    "output": "No qualified files to absorb",
+                    "produced": 0,
+                }
+
+        # Quality gate: 仅在没有文件级质检结果时才阻断
+        if normalized_files is None and 0 <= quality_score < 3.0:
             print(f"\n⚠️  Quality score ({quality_score:.1f}) < 3.0, blocking absorb stage")
             return {
                 "success": False,
@@ -1153,16 +1218,43 @@ class EnhancedPipeline:
         print("STEP 7: Absorbing Knowledge Into Evergreen Layer")
         print("="*60)
 
-        cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.absorb",
-            "--vault-dir", str(self.vault_dir),
-            "--recent", str(recent_days),
-            "--json",
-        ]
-        if dry_run:
-            cmd.append("--dry-run")
+        if normalized_files is not None:
+            self.layout.logs_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="absorb-qualified-", dir=str(self.layout.logs_dir)) as staging_dir:
+                staging_path = Path(staging_dir)
+                for path in normalized_files:
+                    source = Path(path)
+                    target = staging_path / source.name
+                    try:
+                        target.symlink_to(source)
+                    except OSError:
+                        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
-        result = self.run_command(cmd, "absorb")
+                cmd = [
+                    sys.executable, "-m", "openclaw_pipeline.commands.absorb",
+                    "--vault-dir", str(self.vault_dir),
+                    "--dir", str(staging_path),
+                    "--auto-promote",
+                    "--promote-threshold", "1",
+                    "--json",
+                ]
+                if dry_run:
+                    cmd.append("--dry-run")
+
+                absorb_timeout = max(600, min(3600, len(normalized_files) * 90))
+                result = self.run_command(cmd, "absorb", timeout=absorb_timeout)
+                result["qualified_files"] = normalized_files
+        else:
+            cmd = [
+                sys.executable, "-m", "openclaw_pipeline.commands.absorb",
+                "--vault-dir", str(self.vault_dir),
+                "--recent", str(recent_days),
+                "--json",
+            ]
+            if dry_run:
+                cmd.append("--dry-run")
+
+            result = self.run_command(cmd, "absorb")
 
         if result["success"]:
             print("✓ Absorb stage completed")
@@ -1309,7 +1401,13 @@ class EnhancedPipeline:
             elif step == "absorb":
                 # 从 quality 步骤获取质量分数
                 quality_score = results.get("quality", {}).get("quality_score", -1.0)
-                cmd_result = self.step_absorb(7, dry_run, quality_score=quality_score)
+                qualified_files = results.get("quality", {}).get("quality_qualified_files")
+                cmd_result = self.step_absorb(
+                    7,
+                    dry_run,
+                    quality_score=quality_score,
+                    qualified_files=qualified_files,
+                )
             elif step == "registry_sync":
                 cmd_result = self.step_registry_sync(dry_run)
             elif step == "moc":

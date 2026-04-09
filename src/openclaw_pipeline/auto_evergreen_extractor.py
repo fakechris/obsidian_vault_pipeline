@@ -151,6 +151,7 @@ Evergreen笔记标准：
 2. 永久性：时间无关的知识
 3. 可链接：能与其他概念连接
 4. 命名：用陈述句命名（如"AI agents require persistent memory"）
+5. 非元数据：不要把文件名、仓库文件、README、AGENTS.md、package.json、GitHub Action、目录结构、具体 URL 本身当成概念
 
 输出格式（严格JSON数组）：
 [
@@ -169,6 +170,11 @@ Evergreen笔记标准：
 - 技术术语保持英文（如MCP Protocol, function calling）
 - 解释部分使用中文
 - 最多5个概念，选择最有价值的
+- `one_sentence_def` 不能为空，必须是完整定义句
+- `concept_name` 必须是稳定的 kebab-case slug，不能包含文件扩展名或 URL 片段
+- `title` 应该是紧凑、可复用的知识标题，不要直接复述文件名/README 标题
+- `related_concepts` 至少给出 1-3 个真正相关的概念；如果没有合适项，返回空数组
+- 如果全文主要是项目包装、目录说明、营销文案、或信息不足以形成稳定知识，请返回空数组
 """
 
     def __init__(self, llm_client: LiteLLMClient, logger: PipelineLogger):
@@ -378,7 +384,15 @@ class AutoEvergreenExtractor:
                         # Auto-promote: source_count 达到阈值时自动创建文件
                         if auto_promote and entry.source_count >= promote_threshold:
                             registry.save()
-                            from .promote_candidates import promote_candidate
+                            from .promote_candidates import promote_candidate, write_candidate_file
+
+                            write_candidate_file(
+                                self.vault_dir,
+                                entry,
+                                dry_run=False,
+                                concept_data=concept,
+                                source_file=file_path,
+                            )
 
                             mutation = promote_candidate(self.vault_dir, concept_name, dry_run=False)
                             output_path = self.evergreen_dir / f"{concept_name}.md"
@@ -401,7 +415,13 @@ class AutoEvergreenExtractor:
                         else:
                             from .promote_candidates import write_candidate_file
 
-                            write_candidate_file(self.vault_dir, entry, dry_run=False)
+                            write_candidate_file(
+                                self.vault_dir,
+                                entry,
+                                dry_run=False,
+                                concept_data=concept,
+                                source_file=file_path,
+                            )
                             concept_info["status"] = "candidate_added"
                             result["candidates_added"] += 1
                             registry_needs_save = True

@@ -74,6 +74,7 @@ def evergreen_file_path(vault_dir: Path, slug: str) -> Path:
 def write_evergreen_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = True) -> Path | None:
     """Write a formal Evergreen file for an active concept."""
     evergreen_path = evergreen_file_path(vault_dir, entry.slug)
+    candidate_path = candidate_file_path(vault_dir, entry.slug)
 
     if dry_run:
         print(f"  [DRY RUN] Would create: {evergreen_path}")
@@ -81,19 +82,33 @@ def write_evergreen_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = T
 
     evergreen_path.parent.mkdir(parents=True, exist_ok=True)
 
+    aliases = list(dict.fromkeys([alias for alias in entry.aliases if alias]))
+
+    body = f"""# {entry.title}
+
+> **定义**: {entry.definition}
+"""
+    if candidate_path.exists():
+        candidate_text = candidate_path.read_text(encoding="utf-8")
+        if candidate_text.startswith("---"):
+            parts = candidate_text.split("---", 2)
+            if len(parts) >= 3:
+                body = parts[2].strip()
+        body = body.replace("*Candidate concept - pending review*", "").strip()
+        if not body.startswith("# "):
+            body = f"# {entry.title}\n\n{body}".strip()
+
     frontmatter = f'''---
 note_id: {entry.slug}
 title: "{entry.title}"
 type: evergreen
 date: {datetime.now().strftime("%Y-%m-%d")}
 tags: [{entry.area}, evergreen]
-aliases: [{", ".join(f'"{a}"' for a in entry.aliases)}]
+aliases: [{", ".join(f'"{a}"' for a in aliases)}]
 area: {entry.area}
 ---
 
-# {entry.title}
-
-> **定义**: {entry.definition}
+{body}
 
 ---
 
@@ -105,7 +120,14 @@ area: {entry.area}
     return evergreen_path
 
 
-def write_candidate_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = True) -> Path | None:
+def write_candidate_file(
+    vault_dir: Path,
+    entry: ConceptEntry,
+    dry_run: bool = True,
+    *,
+    concept_data: dict | None = None,
+    source_file: Path | None = None,
+) -> Path | None:
     """Write a candidate file in the _Candidates directory."""
     candidates_dir = vault_dir / CANDIDATES_DIR
     candidate_path = candidate_file_path(vault_dir, entry.slug)
@@ -116,13 +138,28 @@ def write_candidate_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = T
 
     candidates_dir.mkdir(parents=True, exist_ok=True)
 
+    aliases = list(dict.fromkeys([alias for alias in entry.aliases if alias]))
+    explanation = str((concept_data or {}).get("explanation", "")).strip()
+    importance = str((concept_data or {}).get("importance", "")).strip()
+    raw_related = (concept_data or {}).get("related_concepts", []) or []
+    related = []
+    for item in raw_related:
+        normalized = canonicalize_note_id(str(item))
+        if normalized and normalized != entry.slug and normalized not in related:
+            related.append(normalized)
+
+    related_block = "\n".join(f"- [[{slug}]]" for slug in related) or "- 暂无"
+    source_link = ""
+    if source_file is not None:
+        source_link = f"\n## 📚 来源\n- [[{source_file.stem}]]\n"
+
     frontmatter = f'''---
 note_id: {entry.slug}
 title: "{entry.title}"
 type: candidate
 date: {datetime.now().strftime("%Y-%m-%d")}
 tags: [candidate, {entry.area}]
-aliases: [{", ".join(f'"{a}"' for a in entry.aliases)}]
+aliases: [{", ".join(f'"{a}"' for a in aliases)}]
 area: {entry.area}
 review_state: {entry.review_state}
 ---
@@ -130,6 +167,16 @@ review_state: {entry.review_state}
 # {entry.title}
 
 > **定义**: {entry.definition}
+
+## 📝 详细解释
+{explanation or "待补充"}
+
+## 为什么重要
+{importance or "待补充"}
+
+## 🔗 关联概念
+{related_block}
+{source_link}
 
 ---
 
