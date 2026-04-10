@@ -320,6 +320,12 @@ def reconcile_registry(vault_dir: Path, write: bool = False, verbose: bool = Fal
         registry._entries = retained_entries
         registry._registry_entries = [entry.to_registry_entry() for entry in retained_entries]
         registry.save()
+        retained_slugs = {entry.slug for entry in retained_entries}
+        result["registry_entry_count"] = len(retained_entries)
+        result["not_in_registry"] = []
+        result["not_in_filesystem"] = []
+        result["orphan_registry_entries"] = []
+        result["in_sync"] = sorted(built_slugs & retained_slugs)
 
     return result
 

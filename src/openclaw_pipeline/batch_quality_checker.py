@@ -354,6 +354,23 @@ class BatchQualityChecker:
         return "\n".join(lines)
 
 
+def collect_quality_files(layout: VaultLayout, *, directory: Path | None = None, file_path: Path | None = None, all_areas: bool = False) -> list[Path]:
+    if directory:
+        return sorted(directory.glob("*.md"))
+    if file_path:
+        return [file_path] if file_path.exists() else []
+    if all_areas:
+        files: list[Path] = []
+        areas = ["AI-Research", "Tools", "Investing", "Programming"]
+        month = datetime.now().strftime("%Y-%m")
+        for area in areas:
+            area_dir = layout.vault_dir / "20-Areas" / area / "Topics" / month
+            if area_dir.exists():
+                files.extend(sorted(area_dir.glob("*.md")))
+        return files
+    return []
+
+
 def main():
     parser = argparse.ArgumentParser(description="批量文章质量质检器")
     parser.add_argument("--dir", type=Path, help="检查目录")
@@ -364,6 +381,8 @@ def main():
     parser.add_argument("--max-workers", type=int, default=3, help="并行 workers")
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
     parser.add_argument("--dry-run", action="store_true", help="预览模式（只显示要检查的文件）")
+    parser.add_argument("--start-index", type=int, default=0, help="起始文件偏移（用于批处理续跑）")
+    parser.add_argument("--batch-size", type=int, help="本次只检查前 N 个文件")
     args = parser.parse_args()
 
     # 初始化
@@ -380,22 +399,17 @@ def main():
         print("="*60)
         print("预览模式：只列出要检查的文件，不执行实际检查\n")
 
-        files_to_check = []
-        if args.dir and args.dir.exists():
-            files_to_check = list(args.dir.glob("*.md"))
-            print(f"📁 目录: {args.dir}")
-        elif args.file and args.file.exists():
-            files_to_check = [args.file]
-            print(f"📄 文件: {args.file}")
-        elif args.all:
-            areas = ["AI-Research", "Tools", "Investing", "Programming"]
-            for area in areas:
-                area_dir = layout.vault_dir / "20-Areas" / area / "Topics" / datetime.now().strftime("%Y-%m")
-                if area_dir.exists():
-                    area_files = list(area_dir.glob("*.md"))
-                    files_to_check.extend(area_files)
-                    if area_files:
-                        print(f"📁 {area}: {len(area_files)} files")
+        files_to_check = collect_quality_files(
+            layout,
+            directory=args.dir,
+            file_path=args.file,
+            all_areas=args.all,
+        )
+        total_files = len(files_to_check)
+        if args.start_index or args.batch_size:
+            end_index = None if args.batch_size is None else args.start_index + args.batch_size
+            files_to_check = files_to_check[args.start_index:end_index]
+            print(f"切片: start={args.start_index}, batch_size={args.batch_size or 'ALL'}, total={total_files}")
 
         print(f"\n共计: {len(files_to_check)} 个文件待检查")
         print("="*60)
@@ -409,26 +423,58 @@ def main():
         sys.exit(1)
 
     # 执行检查
-    if args.dir:
-        print(f"\nChecking directory: {args.dir}")
-        results = checker.check_directory(args.dir, max_workers=args.max_workers)
-    elif args.file:
-        print(f"\nChecking file: {args.file}")
-        results = [checker.checker.check_file(args.file)]
-    elif args.all:
-        # 检查所有Areas
-        areas = ["AI-Research", "Tools", "Investing", "Programming"]
-        all_results = []
-        for area in areas:
-            area_dir = args.vault_dir / "20-Areas" / area / "Topics" / datetime.now().strftime("%Y-%m")
-            if area_dir.exists():
-                print(f"\nChecking {area}...")
-                results = checker.check_directory(area_dir, max_workers=args.max_workers)
-                all_results.extend(results)
-        results = all_results
-    else:
+    target_files = collect_quality_files(
+        layout,
+        directory=args.dir,
+        file_path=args.file,
+        all_areas=args.all,
+    )
+    if not target_files:
         parser.print_help()
         sys.exit(1)
+
+    total_files = len(target_files)
+    if args.start_index or args.batch_size:
+        end_index = None if args.batch_size is None else args.start_index + args.batch_size
+        target_files = target_files[args.start_index:end_index]
+        print(
+            f"\nChecking files slice: start={args.start_index}, "
+            f"batch_size={args.batch_size or 'ALL'}, selected={len(target_files)}/{total_files}"
+        )
+    if not target_files:
+        print("\nNo files selected for this quality batch")
+        results = []
+    elif len(target_files) == 1:
+        print(f"\nChecking file: {target_files[0]}")
+        results = [checker.checker.check_file(target_files[0])]
+    else:
+        temp_batch_dir = None
+        try:
+            if args.dir and args.start_index == 0 and args.batch_size is None:
+                print(f"\nChecking directory: {args.dir}")
+                results = checker.check_directory(args.dir, max_workers=args.max_workers)
+            else:
+                import tempfile
+
+                temp_batch_dir = Path(tempfile.mkdtemp(prefix="quality-batch-"))
+                original_by_name = {path.name: path for path in target_files}
+                for path in target_files:
+                    link = temp_batch_dir / path.name
+                    try:
+                        link.symlink_to(path)
+                    except OSError:
+                        link.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+                print(f"\nChecking batch of {len(target_files)} files")
+                results = checker.check_directory(temp_batch_dir, max_workers=args.max_workers)
+                for item in results:
+                    original = original_by_name.get(Path(item["file"]).name)
+                    if original is not None:
+                        item["file"] = str(original)
+        finally:
+            if temp_batch_dir and temp_batch_dir.exists():
+                for item in temp_batch_dir.iterdir():
+                    item.unlink(missing_ok=True)
+                temp_batch_dir.rmdir()
 
     # 生成报告
     report = checker.generate_report(results)
@@ -452,6 +498,9 @@ def main():
         "qualified": sum(1 for r in results if r.get("is_qualified", False)),
         "failed": len(results) - sum(1 for r in results if r.get("is_qualified", False)),
         "report": str(report_file),
+        "start_index": args.start_index,
+        "batch_size": args.batch_size,
+        "total_files": total_files,
         "qualified_files": qualified_files,
         "results": results,
     }

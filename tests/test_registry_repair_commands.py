@@ -73,6 +73,27 @@ def test_reconcile_registry_respects_candidate_files_and_prunes_stale_on_write(t
     assert "stale-candidate" not in slugs
 
 
+def test_reconcile_registry_write_returns_clean_diff_after_pruning(temp_vault, sample_evergreen_files):
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="orphan-entry",
+            title="Orphan Entry",
+            aliases=[],
+            definition="No file",
+            area="testing",
+            status="active",
+        )
+    )
+    registry.save()
+
+    result = rebuild_source.reconcile_registry(temp_vault, write=True)
+
+    assert result["not_in_registry"] == []
+    assert result["not_in_filesystem"] == []
+    assert result["orphan_registry_entries"] == []
+
+
 def test_rebuild_registry_command_wrapper_reexports_source():
     assert rebuild_command.rebuild_registry is rebuild_source.rebuild_registry
     assert rebuild_command.reconcile_registry is rebuild_source.reconcile_registry

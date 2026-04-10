@@ -44,9 +44,11 @@ from typing import Any
 try:
     from .runtime import VaultLayout, resolve_vault_dir
     from .packs.loader import resolve_workflow_profile
+    from .batch_quality_checker import collect_quality_files
 except ImportError:  # pragma: no cover - script mode fallback
     from runtime import VaultLayout, resolve_vault_dir
     from packs.loader import resolve_workflow_profile
+    from batch_quality_checker import collect_quality_files
 
 # ========== 环境初始化 ==========
 # 加载 .env 文件（从 Vault 根目录或 auto_vault 目录）
@@ -102,6 +104,30 @@ def detect_pinboard_processor(content: str) -> str | None:
         return declared_type
     if source:
         return "website"
+    return None
+
+
+def _extract_json_suffix(text: str) -> dict[str, Any] | None:
+    """Extract a JSON object payload from stdout that may contain log prefixes."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for idx, ch in enumerate(raw):
+        if ch != "{":
+            continue
+        try:
+            payload, end = decoder.raw_decode(raw[idx:])
+        except json.JSONDecodeError:
+            continue
+        if idx + end == len(raw) and isinstance(payload, dict):
+            return payload
     return None
 
 
@@ -733,10 +759,22 @@ class EnhancedPipeline:
             return 180  # 3分钟
 
         elif step == "absorb":
-            return 300  # 5分钟
+            file_count = batch_size or 0
+            if file_count <= 0:
+                return 300
+            return min(14400, max(600, file_count * 120))
 
         elif step == "quality":
-            return 600  # 10分钟（检查所有文件）
+            file_count = batch_size or len(collect_quality_files(self.layout, all_areas=True))
+            if file_count <= 0:
+                return 300
+            return min(14400, max(600, file_count * 90))
+
+        elif step == "fix_links":
+            file_count = len(collect_quality_files(self.layout, all_areas=True))
+            if file_count <= 0:
+                return 300
+            return min(10800, max(300, file_count * 40))
 
         elif step == "moc":
             return 120  # 2分钟
@@ -1064,48 +1102,92 @@ class EnhancedPipeline:
 
         return result
 
-    def step_quality(self, dry_run: bool = False) -> dict:
+    def step_quality(self, batch_size: int | None = None, dry_run: bool = False) -> dict:
         """执行质量检查步骤"""
         print("\n" + "="*60)
         print("STEP 5: Quality Check")
         print("="*60)
 
-        cmd = [
-            sys.executable, "-m", "openclaw_pipeline.batch_quality_checker",
-            "--all",
-            "--vault-dir", str(self.vault_dir),
-        ]
-        if dry_run:
-            cmd.append("--dry-run")
+        target_files = collect_quality_files(self.layout, all_areas=True)
+        total_files = len(target_files)
+        effective_batch_size = batch_size or total_files
 
-        result = self.run_command(cmd, "quality")
+        if total_files == 0:
+            print("  没有待质检的深度解读文件")
+            return {
+                "success": True,
+                "quality_checked": 0,
+                "quality_qualified": 0,
+                "quality_failed": 0,
+                "quality_qualified_files": [],
+                "quality_results_json": None,
+                "quality_score": 0.0,
+            }
 
-        if result["success"]:
-            print("✓ Quality check completed")
-            # 解析 JSON 输出
+        aggregated = {
+            "success": True,
+            "quality_checked": 0,
+            "quality_qualified": 0,
+            "quality_failed": 0,
+            "quality_qualified_files": [],
+            "quality_results_json": None,
+            "quality_score": 0.0,
+        }
+
+        for start_index in range(0, total_files, effective_batch_size):
+            current_batch = min(effective_batch_size, total_files - start_index)
+            cmd = [
+                sys.executable, "-m", "openclaw_pipeline.batch_quality_checker",
+                "--all",
+                "--vault-dir", str(self.vault_dir),
+                "--start-index", str(start_index),
+                "--batch-size", str(current_batch),
+            ]
+            if dry_run:
+                cmd.append("--dry-run")
+
+            result = self.run_command(
+                cmd,
+                "quality",
+                timeout=self._calculate_timeout("quality", batch_size=current_batch),
+            )
+
+            if not result["success"]:
+                print(f"✗ Quality check failed: {result.get('error', 'Unknown error')}")
+                result.update(aggregated)
+                return result
+
+            batch_payload = None
             stdout = result.get("stdout", "")
             for line in stdout.split("\n"):
                 if line.startswith("__QC_JSON__:"):
-                    import json
                     try:
-                        qc_data = json.loads(line.split("__QC_JSON__:", 1)[1].strip())
-                        result["quality_checked"] = qc_data.get("checked", 0)
-                        result["quality_qualified"] = qc_data.get("qualified", 0)
-                        result["quality_failed"] = qc_data.get("failed", 0)
-                        result["quality_qualified_files"] = qc_data.get("qualified_files", [])
-                        result["quality_results_json"] = qc_data.get("results_json")
-                        # 计算平均质量分数（如果有）
-                        if "avg_score" in qc_data:
-                            result["quality_score"] = qc_data["avg_score"]
-                        elif result["quality_checked"] > 0:
-                            # 估算：qualified / checked 作为代理分数
-                            result["quality_score"] = result["quality_qualified"] / result["quality_checked"] * 5.0
-                    except:
-                        pass
-        else:
-            print(f"✗ Quality check failed: {result.get('error', 'Unknown error')}")
+                        batch_payload = json.loads(line.split("__QC_JSON__:", 1)[1].strip())
+                    except json.JSONDecodeError:
+                        batch_payload = None
+                    break
 
-        return result
+            if batch_payload is None:
+                print("✗ Quality check failed: missing __QC_JSON__ payload")
+                return {
+                    "success": False,
+                    "error": "missing_quality_payload",
+                    **aggregated,
+                }
+
+            aggregated["quality_checked"] += batch_payload.get("checked", 0)
+            aggregated["quality_qualified"] += batch_payload.get("qualified", 0)
+            aggregated["quality_failed"] += batch_payload.get("failed", 0)
+            aggregated["quality_qualified_files"].extend(batch_payload.get("qualified_files", []))
+            aggregated["quality_results_json"] = batch_payload.get("results_json")
+
+        if aggregated["quality_checked"] > 0:
+            aggregated["quality_score"] = (
+                aggregated["quality_qualified"] / aggregated["quality_checked"] * 5.0
+            )
+
+        print("✓ Quality check completed")
+        return aggregated
 
     def step_fix_links(self, dry_run: bool = False) -> dict:
         """执行断裂链接修复步骤"""
@@ -1119,7 +1201,7 @@ class EnhancedPipeline:
             "--vault-dir", str(self.vault_dir),
         ]
 
-        result = self.run_command(cmd, "fix_links", timeout=300)
+        result = self.run_command(cmd, "fix_links", timeout=self._calculate_timeout("fix_links"))
 
         if result["success"]:
             print("✓ Broken links fixed")
@@ -1175,6 +1257,7 @@ class EnhancedPipeline:
         dry_run: bool = False,
         quality_score: float = -1.0,
         qualified_files: list[str] | None = None,
+        batch_size: int | None = None,
     ) -> dict:
         """执行 Absorb 步骤
 
@@ -1220,31 +1303,84 @@ class EnhancedPipeline:
         print("="*60)
 
         if normalized_files is not None:
+            effective_batch_size = batch_size or len(normalized_files)
+            aggregated_summary = {
+                "files_processed": 0,
+                "concepts_extracted": 0,
+                "candidates_added": 0,
+                "concepts_created": 0,
+                "concepts_promoted": 0,
+                "concepts_skipped": 0,
+                "errors": 0,
+            }
+            aggregated_results: list[dict[str, Any]] = []
             self.layout.logs_dir.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix="absorb-qualified-", dir=str(self.layout.logs_dir)) as staging_dir:
-                staging_path = Path(staging_dir)
-                for path in normalized_files:
-                    source = Path(path)
-                    target = staging_path / source.name
-                    try:
-                        target.symlink_to(source)
-                    except OSError:
-                        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
-                cmd = [
-                    sys.executable, "-m", "openclaw_pipeline.commands.absorb",
-                    "--vault-dir", str(self.vault_dir),
-                    "--dir", str(staging_path),
-                    "--auto-promote",
-                    "--promote-threshold", "1",
-                    "--json",
-                ]
-                if dry_run:
-                    cmd.append("--dry-run")
+            for start_index in range(0, len(normalized_files), effective_batch_size):
+                batch_files = normalized_files[start_index:start_index + effective_batch_size]
+                with tempfile.TemporaryDirectory(prefix="absorb-qualified-", dir=str(self.layout.logs_dir)) as staging_dir:
+                    staging_path = Path(staging_dir)
+                    for path in batch_files:
+                        source = Path(path)
+                        target = staging_path / source.name
+                        try:
+                            target.symlink_to(source)
+                        except OSError:
+                            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
-                absorb_timeout = max(600, min(3600, len(normalized_files) * 90))
-                result = self.run_command(cmd, "absorb", timeout=absorb_timeout)
-                result["qualified_files"] = normalized_files
+                    cmd = [
+                        sys.executable, "-m", "openclaw_pipeline.commands.absorb",
+                        "--vault-dir", str(self.vault_dir),
+                        "--dir", str(staging_path),
+                        "--auto-promote",
+                        "--promote-threshold", "1",
+                        "--json",
+                    ]
+                    if dry_run:
+                        cmd.append("--dry-run")
+
+                    result = self.run_command(
+                        cmd,
+                        "absorb",
+                        timeout=self._calculate_timeout("absorb", batch_size=len(batch_files)),
+                    )
+                    if not result["success"]:
+                        print(f"✗ Absorb stage failed: {result.get('error', 'Unknown error')}")
+                        result["qualified_files"] = normalized_files
+                        result["summary"] = aggregated_summary
+                        result["results"] = aggregated_results
+                        return result
+
+                    payload = _extract_json_suffix(result.get("stdout", ""))
+                    if payload is None:
+                        print("✗ Absorb stage failed: missing absorb JSON payload")
+                        return {
+                            "success": False,
+                            "error": "missing_absorb_payload",
+                            "qualified_files": normalized_files,
+                            "summary": aggregated_summary,
+                            "results": aggregated_results,
+                        }
+
+                    summary = payload.get("summary", {})
+                    for key in aggregated_summary:
+                        aggregated_summary[key] += int(summary.get(key, 0) or 0)
+                    aggregated_results.extend(payload.get("results", []))
+
+            result = {
+                "success": True,
+                "qualified_files": normalized_files,
+                "summary": aggregated_summary,
+                "results": aggregated_results,
+                "stdout": json.dumps(
+                    {
+                        "summary": aggregated_summary,
+                        "results": aggregated_results,
+                    },
+                    ensure_ascii=False,
+                ),
+                "stderr": "",
+            }
         else:
             cmd = [
                 sys.executable, "-m", "openclaw_pipeline.commands.absorb",
@@ -1396,7 +1532,7 @@ class EnhancedPipeline:
             elif step == "articles":
                 cmd_result = self.step_articles(batch_size, dry_run)
             elif step == "quality":
-                cmd_result = self.step_quality(dry_run)
+                cmd_result = self.step_quality(batch_size=batch_size, dry_run=dry_run)
             elif step == "fix_links":
                 cmd_result = self.step_fix_links(dry_run)
             elif step == "absorb":
@@ -1408,6 +1544,7 @@ class EnhancedPipeline:
                     dry_run,
                     quality_score=quality_score,
                     qualified_files=qualified_files,
+                    batch_size=batch_size,
                 )
             elif step == "registry_sync":
                 cmd_result = self.step_registry_sync(dry_run)

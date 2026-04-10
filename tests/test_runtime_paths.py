@@ -216,8 +216,69 @@ def test_step_quality_parses_qualified_files_from_qc_json(tmp_path, monkeypatch)
     assert result["quality_qualified_files"] == [str(qualified_file)]
 
 
+def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for idx in range(3):
+        path = topic_dir / f"batch_{idx}_深度解读.md"
+        path.write_text(f"# {idx}\n", encoding="utf-8")
+        files.append(path)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    calls: list[tuple[list[str], int | None]] = []
+    payloads = [
+        {
+            "checked": 2,
+            "qualified": 1,
+            "failed": 1,
+            "qualified_files": [str(files[0])],
+            "results_json": str(vault / "60-Logs" / "quality-reports" / "batch-1.json"),
+        },
+        {
+            "checked": 1,
+            "qualified": 1,
+            "failed": 0,
+            "qualified_files": [str(files[2])],
+            "results_json": str(vault / "60-Logs" / "quality-reports" / "batch-2.json"),
+        },
+    ]
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        calls.append((cmd, timeout))
+        payload = payloads[len(calls) - 1]
+        return {
+            "success": True,
+            "stdout": "__QC_JSON__: " + __import__("json").dumps(payload, ensure_ascii=False),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_quality(batch_size=2, dry_run=False)
+
+    assert result["success"] is True
+    assert result["quality_checked"] == 3
+    assert result["quality_qualified"] == 2
+    assert result["quality_failed"] == 1
+    assert result["quality_qualified_files"] == [str(files[0]), str(files[2])]
+    assert calls[0][0][calls[0][0].index("--start-index") + 1] == "0"
+    assert calls[0][0][calls[0][0].index("--batch-size") + 1] == "2"
+    assert calls[1][0][calls[1][0].index("--start-index") + 1] == "2"
+    assert calls[0][1] == 600
+    assert calls[1][1] == 600
+
+
 def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    import json
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -238,7 +299,25 @@ def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_pat
         absorb_dir = Path(cmd[cmd.index("--dir") + 1])
         staged_files = sorted(p.name for p in absorb_dir.glob("*.md"))
         captured["staged_files"] = staged_files
-        return {"success": True, "stdout": "", "stderr": ""}
+        return {
+            "success": True,
+            "stdout": json.dumps(
+                {
+                    "summary": {
+                        "files_processed": 1,
+                        "concepts_extracted": 1,
+                        "candidates_added": 1,
+                        "concepts_created": 1,
+                        "concepts_promoted": 1,
+                        "concepts_skipped": 0,
+                        "errors": 0,
+                    },
+                    "results": [],
+                },
+                ensure_ascii=False,
+            ),
+            "stderr": "",
+        }
 
     monkeypatch.setattr(pipeline, "run_command", fake_run_command)
 
@@ -312,7 +391,25 @@ def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeyp
         captured["timeout"] = timeout
         absorb_dir = Path(cmd[cmd.index("--dir") + 1])
         captured["staged_files"] = sorted(p.name for p in absorb_dir.glob("*.md"))
-        return {"success": True, "stdout": "", "stderr": ""}
+        return {
+            "success": True,
+            "stdout": json.dumps(
+                {
+                    "summary": {
+                        "files_processed": 1,
+                        "concepts_extracted": 1,
+                        "candidates_added": 1,
+                        "concepts_created": 1,
+                        "concepts_promoted": 1,
+                        "concepts_skipped": 0,
+                        "errors": 0,
+                    },
+                    "results": [],
+                },
+                ensure_ascii=False,
+            ),
+            "stderr": "",
+        }
 
     monkeypatch.setattr(pipeline, "run_command", fake_run_command)
 
@@ -323,6 +420,145 @@ def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeyp
     assert "--auto-promote" in captured["cmd"]
     assert captured["staged_files"] == ["example_深度解读.md"]
     assert captured["timeout"] == 600
+
+
+def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    import json
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for idx in range(3):
+        path = topic_dir / f"absorb_{idx}_深度解读.md"
+        path.write_text(f"# {idx}\n", encoding="utf-8")
+        files.append(path)
+
+    calls: list[tuple[list[str], int | None]] = []
+    payloads = [
+        {
+            "summary": {
+                "files_processed": 2,
+                "concepts_extracted": 5,
+                "candidates_added": 3,
+                "concepts_created": 2,
+                "concepts_promoted": 2,
+                "concepts_skipped": 1,
+                "errors": 0,
+            },
+            "results": [],
+        },
+        {
+            "summary": {
+                "files_processed": 1,
+                "concepts_extracted": 2,
+                "candidates_added": 1,
+                "concepts_created": 1,
+                "concepts_promoted": 1,
+                "concepts_skipped": 0,
+                "errors": 0,
+            },
+            "results": [],
+        },
+    ]
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        calls.append((cmd, timeout))
+        absorb_dir = Path(cmd[cmd.index("--dir") + 1])
+        staged_files = sorted(p.name for p in absorb_dir.glob("*.md"))
+        payload = payloads[len(calls) - 1]
+        return {
+            "success": True,
+            "stdout": json.dumps(payload, ensure_ascii=False),
+            "stderr": "",
+            "staged_files": staged_files,
+        }
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=4.0,
+        qualified_files=[str(path) for path in files],
+        batch_size=2,
+    )
+
+    assert result["success"] is True
+    assert result["summary"]["files_processed"] == 3
+    assert result["summary"]["concepts_extracted"] == 7
+    assert result["summary"]["candidates_added"] == 4
+    assert result["summary"]["concepts_created"] == 3
+    assert result["summary"]["concepts_promoted"] == 3
+    assert result["summary"]["concepts_skipped"] == 1
+    assert len(calls) == 2
+    assert calls[0][1] == 600
+    assert calls[1][1] == 600
+
+
+def test_absorb_timeout_scales_with_batch_size(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    timeout = pipeline._calculate_timeout("absorb", batch_size=40)
+
+    assert timeout > 300
+
+
+def test_step_absorb_parses_json_payload_after_log_prefix(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    import json
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    deep_dive = topic_dir / "prefixed_深度解读.md"
+    deep_dive.write_text("# prefixed\n", encoding="utf-8")
+
+    payload = {
+        "summary": {
+            "files_processed": 1,
+            "concepts_extracted": 2,
+            "candidates_added": 1,
+            "concepts_created": 1,
+            "concepts_promoted": 1,
+            "concepts_skipped": 0,
+            "errors": 0,
+        },
+        "results": [],
+    }
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        stdout = "processing batch...\nextra note\n" + json.dumps(payload, ensure_ascii=False)
+        return {"success": True, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=4.0,
+        qualified_files=[str(deep_dive)],
+        batch_size=1,
+    )
+
+    assert result["success"] is True
+    assert result["summary"]["files_processed"] == 1
+    assert result["summary"]["concepts_promoted"] == 1
 
 
 def test_run_command_timeout_is_failure(tmp_path):
@@ -411,6 +647,73 @@ def test_articles_timeout_scales_with_raw_and_processing_queue(tmp_path):
     timeout = pipeline._calculate_timeout("articles")
 
     assert timeout > 300
+
+
+def test_quality_timeout_scales_with_batch_size(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    timeout = pipeline._calculate_timeout("quality", batch_size=12)
+
+    assert timeout > 600
+
+
+def test_fix_links_timeout_scales_with_deep_dive_count(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+
+    for idx in range(12):
+        (topic_dir / f"fix_links_{idx}_深度解读.md").write_text("# x\n", encoding="utf-8")
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    timeout = pipeline._calculate_timeout("fix_links")
+
+    assert timeout > 300
+
+
+def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+
+    for idx in range(8):
+        (topic_dir / f"fix_links_{idx}_深度解读.md").write_text("# x\n", encoding="utf-8")
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    captured: dict[str, object] = {}
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        captured["timeout"] = timeout
+        captured["step_name"] = step_name
+        captured["cmd"] = cmd
+        return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_fix_links(dry_run=False)
+
+    assert result["success"] is True
+    assert captured["step_name"] == "fix_links"
+    assert "openclaw_pipeline.commands.migrate_broken_links" in " ".join(captured["cmd"])
+    assert captured["timeout"] > 300
 
 
 def test_step_refine_runs_cleanup_then_breakdown(tmp_path, monkeypatch):
