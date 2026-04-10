@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
 from .discovery import discover_related
+from .extraction.artifacts import iter_run_results
 from .knowledge_index import knowledge_index_stats, recent_audit_events
 from .packs.base import BaseDomainPack
 from .packs.loader import load_pack
@@ -157,6 +159,36 @@ def _build_audit_evidence(
     ]
 
 
+def _build_extraction_evidence(
+    vault_dir: Path,
+    limit: int,
+    *,
+    pack: BaseDomainPack,
+    extraction_profile: str | None,
+) -> list[dict[str, object]]:
+    evidence: list[dict[str, object]] = []
+    for result in iter_run_results(VaultLayout.from_vault(vault_dir), pack_name=pack.name, profile_name=extraction_profile):
+        for record in result.records:
+            if len(evidence) >= limit:
+                return evidence
+            span = record.spans[0] if record.spans else None
+            evidence.append(
+                {
+                    "channel": "extraction",
+                    "pack": pack.name,
+                    "profile": result.profile_name,
+                    "object_kind": "document",
+                    "source_path": result.source_path,
+                    "quote": span.quote if span else "",
+                    "char_start": span.char_start if span else 0,
+                    "char_end": span.char_end if span else 0,
+                    "section_title": span.section_title if span else "",
+                    "values": record.values,
+                }
+            )
+    return list(islice(evidence, limit))
+
+
 def build_evidence_payload(
     vault_dir: Path,
     *,
@@ -166,6 +198,8 @@ def build_evidence_payload(
     limit: int = 5,
     registry: Any | None = None,
     pack: str | BaseDomainPack | None = None,
+    include_extraction: bool = False,
+    extraction_profile: str | None = None,
 ) -> dict[str, list[dict[str, object]]]:
     resolved_vault = resolve_vault_dir(vault_dir)
     resolved_pack = _resolve_pack(pack)
@@ -188,7 +222,7 @@ def build_evidence_payload(
     graph_targets = list(dict.fromkeys([*(slugs or []), *derived_slugs]))
     slug_kinds = _slug_object_kinds(resolved_vault, registry=registry)
 
-    return {
+    payload = {
         "identity_evidence": identity_evidence,
         "retrieval_evidence": retrieval_evidence,
         "graph_evidence": _build_graph_evidence(
@@ -206,3 +240,11 @@ def build_evidence_payload(
             slug_kinds=slug_kinds,
         ),
     }
+    if include_extraction:
+        payload["extraction_evidence"] = _build_extraction_evidence(
+            resolved_vault,
+            limit=limit,
+            pack=resolved_pack,
+            extraction_profile=extraction_profile,
+        )
+    return payload
