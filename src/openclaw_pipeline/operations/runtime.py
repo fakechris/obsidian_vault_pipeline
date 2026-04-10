@@ -1,29 +1,18 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
-import yaml
-
 from ..derived.paths import review_queue_path
-from ..runtime import VaultLayout, iter_markdown_files, resolve_vault_dir
+from ..runtime import VaultLayout, iter_markdown_files, read_markdown_frontmatter, resolve_vault_dir
 from .specs import OperationProfileSpec
-
-
-def _frontmatter_for(path: Path) -> dict[str, object]:
-    content = path.read_text(encoding="utf-8")
-    if not content.startswith("---"):
-        return {}
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return {}
-    return yaml.safe_load(parts[1]) or {}
 
 
 def _frontmatter_audit_items(vault_dir: Path) -> list[dict[str, object]]:
     items: list[dict[str, object]] = []
     for md_file in iter_markdown_files(vault_dir):
-        frontmatter = _frontmatter_for(md_file)
+        frontmatter = read_markdown_frontmatter(md_file)
         if frontmatter.get("title"):
             continue
         items.append(
@@ -38,14 +27,22 @@ def _frontmatter_audit_items(vault_dir: Path) -> list[dict[str, object]]:
     return items
 
 
+def _noop_items(_: Path) -> list[dict[str, object]]:
+    return []
+
+
+_OPERATION_BUILDERS: dict[str, Callable[[Path], list[dict[str, object]]]] = {
+    "vault/frontmatter_audit": _frontmatter_audit_items,
+    "vault/review_queue": _noop_items,
+    "vault/bridge_recommendations": _noop_items,
+}
+
+
 def run_operation_profile(vault_dir: Path, profile: OperationProfileSpec) -> list[Path]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
-
-    if profile.name == "vault/frontmatter_audit":
-        items = _frontmatter_audit_items(resolved_vault)
-    else:
-        items = []
+    builder = _OPERATION_BUILDERS.get(profile.name, _noop_items)
+    items = builder(resolved_vault)
 
     written: list[Path] = []
     for item in items:

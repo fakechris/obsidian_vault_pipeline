@@ -2,22 +2,37 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
 from ..derived.paths import compiled_view_path
-from ..runtime import VaultLayout, resolve_vault_dir
+from ..runtime import VaultLayout, iter_markdown_files, markdown_title, resolve_vault_dir
 from .specs import WikiViewSpec
 
 
-def _load_title(path: Path) -> str:
-    content = path.read_text(encoding="utf-8")
-    if content.startswith("---"):
-        parts = content.split("---", 2)
-        if len(parts) >= 3:
-            metadata = yaml.safe_load(parts[1]) or {}
-            if metadata.get("title"):
-                return str(metadata["title"])
-    return path.stem
+def _paths_for_source_kind(layout: VaultLayout, source_kind: str) -> list[Path]:
+    source_roots = {
+        "evergreen": layout.evergreen_dir,
+        "query": layout.queries_dir,
+        "atlas": layout.atlas_dir,
+        "raw": layout.raw_dir,
+    }
+    root = source_roots.get(source_kind)
+    if root is None or not root.exists():
+        return []
+    return sorted(iter_markdown_files(root))
+
+
+def _resolve_view_inputs(layout: VaultLayout, spec: WikiViewSpec) -> list[Path]:
+    if not spec.input_sources:
+        return _paths_for_source_kind(layout, "evergreen")
+
+    seen: set[Path] = set()
+    resolved: list[Path] = []
+    for input_spec in spec.input_sources:
+        for path in _paths_for_source_kind(layout, input_spec.source_kind):
+            if path in seen:
+                continue
+            seen.add(path)
+            resolved.append(path)
+    return resolved
 
 
 def build_view(vault_dir: Path, spec: WikiViewSpec) -> Path:
@@ -27,9 +42,8 @@ def build_view(vault_dir: Path, spec: WikiViewSpec) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     titles: list[str] = []
-    if layout.evergreen_dir.exists():
-        for note in sorted(layout.evergreen_dir.glob("*.md")):
-            titles.append(_load_title(note))
+    for note in _resolve_view_inputs(layout, spec):
+        titles.append(markdown_title(note))
 
     lines = [
         f"# {spec.name}",

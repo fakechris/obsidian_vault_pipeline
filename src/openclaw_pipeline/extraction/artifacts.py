@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Iterator
 
-from ..derived.paths import extraction_run_path
+from ..derived.paths import extraction_run_path, normalize_derived_name
 from ..runtime import VaultLayout
 from .results import ExtractionRunResult
 
@@ -26,13 +27,20 @@ def load_run_results(
     pack_name: str,
     profile_name: str | None = None,
 ) -> list[ExtractionRunResult]:
+    return list(iter_run_results(layout, pack_name=pack_name, profile_name=profile_name))
+
+
+def iter_run_results(
+    layout: VaultLayout,
+    *,
+    pack_name: str,
+    profile_name: str | None = None,
+) -> Iterator[ExtractionRunResult]:
     base_dir = layout.extraction_runs_dir / pack_name
     if profile_name:
-        base_dir = base_dir / profile_name.replace("/", "__").replace("\\", "__")
+        base_dir = base_dir / normalize_derived_name(profile_name)
     if not base_dir.exists():
-        return []
+        return
 
-    results: list[ExtractionRunResult] = []
     for artifact in sorted(base_dir.rglob("*.json")):
-        results.append(ExtractionRunResult.from_dict(json.loads(artifact.read_text(encoding="utf-8"))))
-    return results
+        yield ExtractionRunResult.from_dict(json.loads(artifact.read_text(encoding="utf-8")))

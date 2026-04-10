@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openclaw_pipeline.derived.paths import compiled_view_path, extraction_run_path, review_queue_path
+from openclaw_pipeline.derived.paths import (
+    compiled_view_path,
+    extraction_run_path,
+    normalize_derived_name,
+    review_queue_path,
+)
 from openclaw_pipeline.runtime import VaultLayout
 
 
@@ -34,3 +39,7 @@ def test_compiled_view_path_stays_under_compiled_view_directory(tmp_path):
 
     assert path.parent == layout.compiled_views_dir / "default-knowledge"
     assert path.name == "overview__domain.md"
+
+
+def test_normalize_derived_name_handles_spaces_and_separators():
+    assert normalize_derived_name("  tech / doc structure  ") == "tech-__-doc-structure"

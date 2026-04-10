@@ -7,7 +7,13 @@ import pytest
 
 from openclaw_pipeline.auto_github_processor import build_default_output_dir as github_output_dir
 from openclaw_pipeline.auto_paper_processor import build_default_output_dir as paper_output_dir
-from openclaw_pipeline.runtime import VaultLayout, iter_markdown_files, resolve_vault_dir
+from openclaw_pipeline.runtime import (
+    VaultLayout,
+    iter_markdown_files,
+    markdown_title,
+    read_markdown_frontmatter,
+    resolve_vault_dir,
+)
 from openclaw_pipeline.unified_pipeline_enhanced import EnhancedPipeline, build_execution_plan
 
 
@@ -37,6 +43,7 @@ def test_vault_layout_uses_resolved_vault_dir(tmp_path):
     assert layout.processing_dir == (tmp_path / "vault" / "50-Inbox" / "02-Processing").resolve()
     assert layout.classification_output_dir("tools").parts[-3:-1] == ("Tools", "Topics")
     assert layout.papers_dir == (tmp_path / "vault" / "20-Areas" / "AI-Research" / "Papers").resolve()
+    assert layout.queries_dir == (tmp_path / "vault" / "20-Areas" / "Queries").resolve()
 
 
 def test_specialized_processors_derive_default_outputs_from_vault(tmp_path):
@@ -191,3 +198,22 @@ def test_iter_markdown_files_does_not_drop_parent_relative_paths(tmp_path, monke
 
     assert len(files) == 1
     assert files[0].name == "Example.md"
+
+
+def test_markdown_helpers_read_frontmatter_and_title(tmp_path):
+    note = tmp_path / "Example.md"
+    note.write_text(
+        """---
+title: Runtime Helpers
+type: evergreen
+---
+
+# Runtime Helpers
+""",
+        encoding="utf-8",
+    )
+
+    metadata = read_markdown_frontmatter(note)
+
+    assert metadata["title"] == "Runtime Helpers"
+    assert markdown_title(note) == "Runtime Helpers"

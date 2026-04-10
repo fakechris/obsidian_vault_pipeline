@@ -5,7 +5,7 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
-from .extraction.artifacts import load_run_results
+from .extraction.artifacts import iter_run_results
 from .packs.base import BaseDomainPack
 from .packs.loader import load_pack
 from .runtime import VaultLayout, resolve_vault_dir
@@ -141,7 +141,7 @@ def _discover_with_extraction(
     normalized_query = query.lower().strip()
     rows: list[dict[str, object]] = []
     layout = VaultLayout.from_vault(vault_dir)
-    for result in load_run_results(layout, pack_name=pack.name, profile_name=extraction_profile):
+    for result in iter_run_results(layout, pack_name=pack.name, profile_name=extraction_profile):
         for record in result.records:
             search_blob = " ".join(str(value) for value in record.values.values()).lower()
             if normalized_query and normalized_query not in search_blob:

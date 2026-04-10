@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .discovery import discover_related
-from .extraction.artifacts import load_run_results
+from .extraction.artifacts import iter_run_results
 from .knowledge_index import knowledge_index_stats, recent_audit_events
 from .packs.base import BaseDomainPack
 from .packs.loader import load_pack
@@ -167,8 +167,10 @@ def _build_extraction_evidence(
     extraction_profile: str | None,
 ) -> list[dict[str, object]]:
     evidence: list[dict[str, object]] = []
-    for result in load_run_results(VaultLayout.from_vault(vault_dir), pack_name=pack.name, profile_name=extraction_profile):
+    for result in iter_run_results(VaultLayout.from_vault(vault_dir), pack_name=pack.name, profile_name=extraction_profile):
         for record in result.records:
+            if len(evidence) >= limit:
+                return evidence
             span = record.spans[0] if record.spans else None
             evidence.append(
                 {
