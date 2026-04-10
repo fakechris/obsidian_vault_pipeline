@@ -52,7 +52,12 @@ type: evergreen
 date: {date_str}
 tags: [evergreen, auto-generated]
 aliases: ["{title}", "{slug}"]
----
+"""
+    if sources:
+        md_content += "sources:\n"
+        for source in sources:
+            md_content += f'  - "{source}"\n'
+    md_content += f"""---
 
 # {title}
 

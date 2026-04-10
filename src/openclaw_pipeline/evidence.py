@@ -220,7 +220,7 @@ def build_evidence_payload(
     graph_targets = list(dict.fromkeys([*(slugs or []), *derived_slugs]))
     slug_kinds = _slug_object_kinds(resolved_vault, registry=registry)
 
-    return {
+    payload = {
         "identity_evidence": identity_evidence,
         "retrieval_evidence": retrieval_evidence,
         "graph_evidence": _build_graph_evidence(
@@ -237,10 +237,12 @@ def build_evidence_payload(
             pack=resolved_pack,
             slug_kinds=slug_kinds,
         ),
-        "extraction_evidence": _build_extraction_evidence(
+    }
+    if include_extraction:
+        payload["extraction_evidence"] = _build_extraction_evidence(
             resolved_vault,
             limit=limit,
             pack=resolved_pack,
             extraction_profile=extraction_profile,
-        ) if include_extraction else [],
-    }
+        )
+    return payload

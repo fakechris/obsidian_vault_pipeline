@@ -9,8 +9,8 @@ def test_default_pack_exposes_new_derived_extension_points():
     pack = load_default_pack()
 
     assert pack.extraction_profiles()
-    assert pack.operation_profiles() == []
-    assert pack.wiki_views() == []
+    assert pack.operation_profiles()
+    assert pack.wiki_views()
 
 
 def test_base_pack_lookup_methods_raise_for_unknown_extension_names():

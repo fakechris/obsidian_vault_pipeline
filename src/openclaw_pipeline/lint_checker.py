@@ -48,6 +48,19 @@ class LintIssue:
     auto_fixable: bool = False
 
 
+def issue_to_operation_proposal(issue: LintIssue) -> dict[str, object]:
+    queue_name = "frontmatter" if "frontmatter" in issue.type else "review"
+    return {
+        "proposal_type": "lint_issue",
+        "queue_name": queue_name,
+        "review_required": True,
+        "file": issue.file,
+        "message": issue.message,
+        "suggestion": issue.suggestion,
+        "level": issue.level,
+    }
+
+
 class KnowledgeLinter:
     """知识库健康检查器"""
 
