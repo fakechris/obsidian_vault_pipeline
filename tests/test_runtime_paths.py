@@ -30,6 +30,11 @@ def test_vault_layout_uses_resolved_vault_dir(tmp_path):
     assert layout.pipeline_log == (tmp_path / "vault" / "60-Logs" / "pipeline.jsonl").resolve()
     assert layout.knowledge_db == (tmp_path / "vault" / "60-Logs" / "knowledge.db").resolve()
     assert layout.transactions_dir == (tmp_path / "vault" / "60-Logs" / "transactions").resolve()
+    assert layout.derived_dir == (tmp_path / "vault" / "60-Logs" / "derived").resolve()
+    assert layout.extraction_runs_dir == (tmp_path / "vault" / "60-Logs" / "derived" / "extraction-runs").resolve()
+    assert layout.review_queue_dir == (tmp_path / "vault" / "60-Logs" / "derived" / "review-queue").resolve()
+    assert layout.compiled_views_dir == (tmp_path / "vault" / "60-Logs" / "derived" / "compiled-views").resolve()
+    assert layout.processing_dir == (tmp_path / "vault" / "50-Inbox" / "02-Processing").resolve()
     assert layout.classification_output_dir("tools").parts[-3:-1] == ("Tools", "Topics")
     assert layout.papers_dir == (tmp_path / "vault" / "20-Areas" / "AI-Research" / "Papers").resolve()
 

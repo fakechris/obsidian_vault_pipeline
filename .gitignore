@@ -72,3 +72,5 @@ node_modules/
 *.tar.gz
 .gstack/
 .worktrees/
+
+.supervisor/runtime/

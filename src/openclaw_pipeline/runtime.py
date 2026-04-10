@@ -51,6 +51,22 @@ class VaultLayout:
         return self.logs_dir / "transactions"
 
     @property
+    def derived_dir(self) -> Path:
+        return self.logs_dir / "derived"
+
+    @property
+    def extraction_runs_dir(self) -> Path:
+        return self.derived_dir / "extraction-runs"
+
+    @property
+    def review_queue_dir(self) -> Path:
+        return self.derived_dir / "review-queue"
+
+    @property
+    def compiled_views_dir(self) -> Path:
+        return self.derived_dir / "compiled-views"
+
+    @property
     def pipeline_reports_dir(self) -> Path:
         return self.logs_dir / "pipeline-reports"
 
