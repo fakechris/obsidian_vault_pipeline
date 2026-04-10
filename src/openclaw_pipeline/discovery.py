@@ -5,9 +5,10 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from .extraction.artifacts import load_run_results
 from .packs.base import BaseDomainPack
 from .packs.loader import load_pack
-from .runtime import resolve_vault_dir
+from .runtime import VaultLayout, resolve_vault_dir
 
 
 def _snippet_from_page(page: dict[str, object] | None, fallback: str = "") -> str:
@@ -129,6 +130,46 @@ def _discover_with_qmd(vault_dir: Path, query: str, limit: int) -> list[dict[str
     return rows[:limit]
 
 
+def _discover_with_extraction(
+    vault_dir: Path,
+    query: str,
+    limit: int,
+    *,
+    pack: BaseDomainPack,
+    extraction_profile: str | None,
+) -> list[dict[str, object]]:
+    normalized_query = query.lower().strip()
+    rows: list[dict[str, object]] = []
+    layout = VaultLayout.from_vault(vault_dir)
+    for result in load_run_results(layout, pack_name=pack.name, profile_name=extraction_profile):
+        for record in result.records:
+            search_blob = " ".join(str(value) for value in record.values.values()).lower()
+            if normalized_query and normalized_query not in search_blob:
+                continue
+            title = str(
+                record.values.get("section_title")
+                or record.values.get("claim")
+                or record.values.get("subject")
+                or record.values.get("step_name")
+                or result.profile_name
+            )
+            rows.append(
+                {
+                    "engine": "extraction",
+                    "kind": "derived",
+                    "slug": "",
+                    "title": title,
+                    "score": 1.0,
+                    "snippet": " ".join(str(value) for value in record.values.values())[:180],
+                    "path": result.source_path,
+                    "profile": result.profile_name,
+                }
+            )
+            if len(rows) >= limit:
+                return rows
+    return rows
+
+
 def _resolve_pack(pack: str | BaseDomainPack | None) -> BaseDomainPack:
     if isinstance(pack, BaseDomainPack):
         return pack
@@ -170,15 +211,24 @@ def discover_related(
     engine: str = "knowledge",
     limit: int = 10,
     pack: str | BaseDomainPack | None = None,
+    include_extraction: bool = False,
+    extraction_profile: str | None = None,
 ) -> list[dict[str, object]]:
     resolved_vault = resolve_vault_dir(vault_dir)
     resolved_pack = _resolve_pack(pack)
     if engine == "knowledge":
-        return _annotate_discovery_rows(
-            resolved_vault,
-            _discover_with_knowledge(resolved_vault, query, limit),
-            resolved_pack,
-        )
+        rows = _discover_with_knowledge(resolved_vault, query, limit)
+        if include_extraction and len(rows) < limit:
+            rows.extend(
+                _discover_with_extraction(
+                    resolved_vault,
+                    query,
+                    limit - len(rows),
+                    pack=resolved_pack,
+                    extraction_profile=extraction_profile,
+                )
+            )
+        return _annotate_discovery_rows(resolved_vault, rows, resolved_pack)
     if engine == "qmd":
         return _annotate_discovery_rows(
             resolved_vault,

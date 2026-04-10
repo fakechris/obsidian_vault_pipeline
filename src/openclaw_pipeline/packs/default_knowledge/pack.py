@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..base import BaseDomainPack
+from .extraction_profiles import DEFAULT_EXTRACTION_PROFILES
 from .profiles import DEFAULT_KNOWLEDGE_AUTOPILOT_PROFILE, DEFAULT_KNOWLEDGE_FULL_PROFILE
 from .schemas import DEFAULT_KNOWLEDGE_OBJECT_KINDS
 
@@ -15,4 +16,5 @@ def get_pack() -> BaseDomainPack:
             DEFAULT_KNOWLEDGE_FULL_PROFILE,
             DEFAULT_KNOWLEDGE_AUTOPILOT_PROFILE,
         ],
+        _extraction_profiles=list(DEFAULT_EXTRACTION_PROFILES),
     )
