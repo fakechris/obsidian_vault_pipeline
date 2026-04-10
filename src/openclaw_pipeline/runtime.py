@@ -95,6 +95,10 @@ class VaultLayout:
         return self.vault_dir / "50-Inbox" / "02-Pinboard"
 
     @property
+    def processing_dir(self) -> Path:
+        return self.vault_dir / "50-Inbox" / "02-Processing"
+
+    @property
     def processed_dir(self) -> Path:
         return self.vault_dir / "50-Inbox" / "03-Processed"
 
