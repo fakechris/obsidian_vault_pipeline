@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..derived.paths import review_queue_path
 from ..extraction.artifacts import iter_run_results
+from ..packs.loader import DEFAULT_PACK_NAME
 from ..runtime import VaultLayout, iter_markdown_files, read_markdown_frontmatter, resolve_vault_dir
 from ..truth_store import subject_key
 from .specs import OperationProfileSpec
@@ -35,9 +36,13 @@ def _noop_items(_: Path) -> list[dict[str, object]]:
 
 
 def _review_queue_items(vault_dir: Path) -> list[dict[str, object]]:
+    return _review_queue_items_for_pack(vault_dir, pack_name=DEFAULT_PACK_NAME)
+
+
+def _review_queue_items_for_pack(vault_dir: Path, *, pack_name: str) -> list[dict[str, object]]:
     layout = VaultLayout.from_vault(vault_dir)
     items: list[dict[str, object]] = []
-    for result in iter_run_results(layout, pack_name="default-knowledge"):
+    for result in iter_run_results(layout, pack_name=pack_name):
         issue_type = "extraction-empty" if not result.records else "extraction-review"
         items.append(
             {
@@ -171,8 +176,11 @@ _OPERATION_BUILDERS: dict[str, Callable[[Path], list[dict[str, object]]]] = {
 def run_operation_profile(vault_dir: Path, profile: OperationProfileSpec) -> list[Path]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
-    builder = _OPERATION_BUILDERS.get(profile.name, _noop_items)
-    items = builder(resolved_vault)
+    if profile.name == "vault/review_queue":
+        items = _review_queue_items_for_pack(resolved_vault, pack_name=profile.pack)
+    else:
+        builder = _OPERATION_BUILDERS.get(profile.name, _noop_items)
+        items = builder(resolved_vault)
 
     written: list[Path] = []
     for item in items:

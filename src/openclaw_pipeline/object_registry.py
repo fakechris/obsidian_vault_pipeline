@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from .packs.loader import DEFAULT_PACK_NAME
+
 if TYPE_CHECKING:
     from .concept_registry import ConceptEntry, ConceptRegistry
 
 
-DEFAULT_OBJECT_PACK = "default-knowledge"
+DEFAULT_OBJECT_PACK = DEFAULT_PACK_NAME
 
 
 @dataclass(frozen=True)
@@ -37,15 +39,24 @@ class ObjectRegistry:
         return None
 
     @classmethod
-    def from_concept_registry(cls, registry: ConceptRegistry) -> ObjectRegistry:
-        return cls([record_from_concept_entry(entry) for entry in registry.entries])
+    def from_concept_registry(
+        cls,
+        registry: ConceptRegistry,
+        *,
+        pack: str = DEFAULT_OBJECT_PACK,
+    ) -> ObjectRegistry:
+        return cls([record_from_concept_entry(entry, pack=pack) for entry in registry.entries])
 
 
-def record_from_concept_entry(entry: ConceptEntry) -> ObjectRecord:
+def record_from_concept_entry(
+    entry: ConceptEntry,
+    *,
+    pack: str = DEFAULT_OBJECT_PACK,
+) -> ObjectRecord:
     return ObjectRecord(
         id=entry.slug,
         kind=entry.kind,
-        pack=DEFAULT_OBJECT_PACK,
+        pack=pack,
         title=entry.title,
         status=entry.status,
         aliases=tuple(entry.aliases),

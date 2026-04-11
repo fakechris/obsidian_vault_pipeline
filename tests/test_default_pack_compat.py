@@ -58,3 +58,27 @@ def test_step_aliases_remain_compatible_with_default_pack():
 
     assert STEP_ALIASES["evergreen"] == "absorb"
     assert "absorb" in default_pack.profile("full").stages
+
+
+def test_explicit_research_tech_pack_profile_matches_full_profile():
+    from openclaw_pipeline.packs.loader import load_pack
+    from openclaw_pipeline.unified_pipeline_enhanced import build_execution_plan
+
+    args = Namespace(
+        full=True,
+        with_refine=False,
+        pinboard_new=False,
+        pinboard_history=None,
+        pinboard_days=None,
+        step=None,
+        from_step=None,
+        pack="research-tech",
+        profile="full",
+    )
+
+    plan = build_execution_plan(args)
+    pack = load_pack("research-tech")
+
+    assert plan["pack"] == "research-tech"
+    assert plan["profile"] == "full"
+    assert plan["steps"] == pack.profile("full").stages

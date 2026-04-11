@@ -92,3 +92,36 @@ def test_extract_profiles_command_uses_default_profile_extractor(temp_vault):
         record["values"]["section_title"] in {"System", "Overview", "Flow"}
         for record in payload["records"]
     )
+
+
+def test_extract_profiles_command_supports_research_tech_pack(temp_vault, monkeypatch):
+    from openclaw_pipeline.commands import extract_profiles
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "50-Inbox" / "01-Raw" / "research.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# Architecture\n\nRuntime tools.\n", encoding="utf-8")
+
+    monkeypatch.setattr(extract_profiles, "build_extractor", lambda: FakeCommandExtractor())
+
+    result = extract_profiles.main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "research-tech",
+            "--profile",
+            "tech/doc_structure",
+            "--source",
+            str(source),
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    artifacts = sorted((layout.extraction_runs_dir / "research-tech").rglob("*.json"))
+
+    assert result == 0
+    assert artifacts
+    payload = json.loads(artifacts[0].read_text(encoding="utf-8"))
+    assert payload["pack_name"] == "research-tech"
+    assert payload["profile_name"] == "tech/doc_structure"

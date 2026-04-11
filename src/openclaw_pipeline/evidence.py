@@ -9,14 +9,14 @@ from .discovery import discover_related
 from .extraction.artifacts import iter_run_results
 from .knowledge_index import knowledge_index_stats, recent_audit_events
 from .packs.base import BaseDomainPack
-from .packs.loader import load_pack
+from .packs.loader import DEFAULT_PACK_NAME, load_pack
 from .runtime import VaultLayout, resolve_vault_dir
 
 
 def _resolve_pack(pack: str | BaseDomainPack | None) -> BaseDomainPack:
     if isinstance(pack, BaseDomainPack):
         return pack
-    return load_pack(pack or "default-knowledge")
+    return load_pack(pack or DEFAULT_PACK_NAME)
 
 
 def _slug_object_kinds(vault_dir: Path, registry: Any | None = None) -> dict[str, str]:

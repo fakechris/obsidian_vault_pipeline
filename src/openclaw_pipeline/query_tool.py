@@ -35,6 +35,11 @@ except ImportError:
     from runtime import resolve_vault_dir  # type: ignore
 
 try:
+    from .packs.loader import DEFAULT_PACK_NAME
+except ImportError:
+    from packs.loader import DEFAULT_PACK_NAME  # type: ignore
+
+try:
     from .llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
 except ImportError:
     from llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
@@ -58,8 +63,9 @@ class SearchResult:
 class VaultQuerier:
     """知识库查询器"""
 
-    def __init__(self, vault_dir: Path):
+    def __init__(self, vault_dir: Path, *, pack: str = DEFAULT_PACK_NAME):
         self.vault_dir = Path(vault_dir)
+        self.pack = pack
         self.api_key = resolve_api_key()
         self.api_base = resolve_api_base(default=DEFAULT_MINIMAX_API_BASE)
         self.model = normalize_model_for_api_base(
@@ -149,7 +155,7 @@ class VaultQuerier:
         默认使用 knowledge.db；QMD 仅作为显式引擎
         """
         results = []
-        for row in discover_related(self.vault_dir, query, engine=engine, limit=top_k):
+        for row in discover_related(self.vault_dir, query, engine=engine, limit=top_k, pack=self.pack):
             path = str(row.get("path") or row.get("slug") or "")
             title = str(row.get("title") or row.get("slug") or path)
             excerpt = str(row.get("snippet") or "")
@@ -451,6 +457,11 @@ def main(argv: list[str] | None = None):
         default="knowledge",
         help="检索引擎: knowledge(默认) 或 qmd",
     )
+    parser.add_argument(
+        "--pack",
+        default=DEFAULT_PACK_NAME,
+        help=f"Pack name (default compatibility pack: {DEFAULT_PACK_NAME}; primary pack: research-tech)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -470,7 +481,7 @@ def main(argv: list[str] | None = None):
         print("❌ 错误: 需要提供查询问题")
         return 1
 
-    querier = VaultQuerier(vault_dir)
+    querier = VaultQuerier(vault_dir, pack=args.pack)
 
     # 构建索引
     querier.build_index()
@@ -501,6 +512,7 @@ def main(argv: list[str] | None = None):
         mentions=[result.title for result in results[:3]],
         slugs=[Path(result.file).stem for result in results[:5] if result.file],
         limit=min(args.top_k, 5),
+        pack=args.pack,
     )
 
     print(f"\n💡 回答:\n")

@@ -51,28 +51,35 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 现在这套设计的目标就是把这些问题拆开：
 
 - 用六层运行模型明确“什么是编排层、什么是真相层、什么是派生层”
-- 用 `default-knowledge` 固化当前默认领域，而不是把它散落在 core 里
+- 先把当前技术研究语义正式化为 `research-tech`
+- 再把 `default-knowledge` 收敛成默认兼容层，而不是继续承担所有领域语义
 - 用 Pack API 让不同领域通过 pack 接入，而不是继续往 core 里硬编码特例
 
 这意味着当前仓库已经不只是一个 Vault 自动化项目，而是一个：
 
 > 面向 Obsidian/Vault 工作流的可扩展知识编排平台
 
-其中 `default-knowledge` 是第一个内置标准 pack，不是唯一领域模型。
+其中：
+
+- `research-tech` 是第一套显式内置标准 pack
+- `default-knowledge` 当前仍保留为默认兼容 pack
 
 ## Domain Packs
 
 当前 core 已经开始 pack 化。
 
-- 内置标准 pack：`default-knowledge`
+- 内置标准 pack：`research-tech`
+- 默认兼容 pack：`default-knowledge`
 - 运行时可通过 `--pack` 和 `--profile` 选择 workflow
 - 第三方 pack 可以通过 `openclaw_pipeline.packs` entry point 或 `OPENCLAW_PACK_MANIFESTS` manifest 列表接入
 
 示例：
 
 ```bash
+ovp-packs
+ovp --pack research-tech --profile full
+ovp-autopilot --pack research-tech --profile autopilot --yes
 ovp --pack default-knowledge --profile full
-ovp-autopilot --pack default-knowledge --profile autopilot --yes
 ```
 
 面向第三方 pack 作者的 API 文档在：
@@ -113,7 +120,12 @@ pack 负责领域语义，而不是只放几段 prompt。它定义：
 - absorb / refine / lint 规则
 - schema / template / prompt 资源
 
-当前内置的是 `default-knowledge`。未来媒体、医疗、工程研究这类领域，应该各自作为外部 pack 工程接入。
+当前内置的是：
+
+- `research-tech`：当前技术研究知识流的显式 pack
+- `default-knowledge`：默认兼容层
+
+未来媒体、医疗这类领域，应该各自作为外部 pack 工程接入。
 
 ### 3. Workflow Profile
 
@@ -121,14 +133,18 @@ profile 是某个 pack 下的一条可执行 DAG。
 
 当前已经实现的标准 profile：
 
+- `research-tech/full`
+- `research-tech/autopilot`
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
 
 这也是为什么现在可以显式运行：
 
 ```bash
+ovp --pack research-tech --profile full
+ovp-autopilot --pack research-tech --profile autopilot --yes
+# 兼容路径
 ovp --pack default-knowledge --profile full
-ovp-autopilot --pack default-knowledge --profile autopilot --yes
 ```
 
 ## 插件设计

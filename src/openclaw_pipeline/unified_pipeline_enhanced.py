@@ -43,11 +43,11 @@ from typing import Any
 
 try:
     from .runtime import VaultLayout, resolve_vault_dir
-    from .packs.loader import resolve_workflow_profile
+    from .packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
 except ImportError:  # pragma: no cover - script mode fallback
     from runtime import VaultLayout, resolve_vault_dir
-    from packs.loader import resolve_workflow_profile
+    from packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
 
 # ========== 环境初始化 ==========
@@ -1749,7 +1749,14 @@ def main():
     parser.add_argument("--batch-size", type=int, help="批次大小（用于articles/clippings）")
     parser.add_argument("--dry-run", action="store_true", help="预览模式")
     parser.add_argument("--with-refine", action="store_true", help="在 absorb/moc 之后执行 cleanup + breakdown 批处理")
-    parser.add_argument("--pack", default=None, help="Domain pack 名称（默认: default-knowledge）")
+    parser.add_argument(
+        "--pack",
+        default=None,
+        help=(
+            f"Domain pack 名称 (默认兼容 pack: {DEFAULT_PACK_NAME}; "
+            f"第一标准 pack: {PRIMARY_PACK_NAME})"
+        ),
+    )
     parser.add_argument("--profile", default=None, help="Workflow profile 名称（默认: full）")
     parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
 

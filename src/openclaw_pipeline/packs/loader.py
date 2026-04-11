@@ -7,20 +7,40 @@ from .base import BaseDomainPack, WorkflowProfile
 
 
 DEFAULT_PACK_NAME = "default-knowledge"
+PRIMARY_PACK_NAME = "research-tech"
+BUILTIN_PACK_LOADERS = {
+    "default-knowledge": ("openclaw_pipeline.packs.default_knowledge", "get_pack"),
+    "research-tech": ("openclaw_pipeline.packs.research_tech", "get_pack"),
+}
 
 
 def load_default_pack() -> BaseDomainPack:
-    from .default_knowledge import get_pack
+    return load_builtin_pack(DEFAULT_PACK_NAME)
 
-    pack = get_pack()
+
+def load_primary_pack() -> BaseDomainPack:
+    return load_builtin_pack(PRIMARY_PACK_NAME)
+
+
+def list_builtin_packs() -> list[BaseDomainPack]:
+    return [load_builtin_pack(name) for name in BUILTIN_PACK_LOADERS]
+
+
+def load_builtin_pack(name: str) -> BaseDomainPack:
+    if name not in BUILTIN_PACK_LOADERS:
+        available = ", ".join(sorted(BUILTIN_PACK_LOADERS))
+        raise ValueError(f"Unknown builtin pack '{name}'. Available builtin packs: {available}")
+    module_name, factory_name = BUILTIN_PACK_LOADERS[name]
+    module = __import__(module_name, fromlist=[factory_name])
+    pack = getattr(module, factory_name)()
     if not isinstance(pack, BaseDomainPack):
-        raise TypeError("default pack entrypoint did not return a BaseDomainPack")
+        raise TypeError(f"builtin pack '{name}' did not return a BaseDomainPack")
     return pack
 
 
 def load_pack(name: str) -> BaseDomainPack:
-    if name == DEFAULT_PACK_NAME:
-        return load_default_pack()
+    if name in BUILTIN_PACK_LOADERS:
+        return load_builtin_pack(name)
     from ..plugins import discover_entrypoint_packs, discover_plugin_manifests, load_manifest_pack
 
     entrypoint_packs = discover_entrypoint_packs()
