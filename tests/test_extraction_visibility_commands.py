@@ -74,6 +74,19 @@ def test_extract_preview_command_returns_latest_artifact(temp_vault, capsys):
     assert payload["records"][0]["values"]["section_title"] == "Architecture"
 
 
+def test_extract_preview_help_mentions_primary_pack(capsys):
+    from openclaw_pipeline.commands import extract_preview
+
+    try:
+        extract_preview.main(["--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    output = " ".join(capsys.readouterr().out.split())
+    assert "compatibility pack" in output
+    assert "research-tech" in output
+
+
 def test_extract_preview_command_normalizes_source_filter(temp_vault, capsys):
     from openclaw_pipeline.commands import extract_preview
     from openclaw_pipeline.runtime import VaultLayout
@@ -159,6 +172,19 @@ def test_extraction_dashboard_command_summarizes_profiles(temp_vault, capsys):
     assert payload["total_runs"] == 2
     assert payload["profiles"]["tech/doc_structure"]["run_count"] == 1
     assert payload["profiles"]["media/commentary_sentiment"]["run_count"] == 1
+
+
+def test_extraction_dashboard_help_mentions_primary_pack(capsys):
+    from openclaw_pipeline.commands import extraction_dashboard
+
+    try:
+        extraction_dashboard.main(["--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    output = " ".join(capsys.readouterr().out.split())
+    assert "compatibility pack" in output
+    assert "research-tech" in output
 
 
 def test_extract_preview_command_supports_research_tech_pack(temp_vault, capsys):

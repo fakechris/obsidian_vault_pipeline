@@ -5,14 +5,18 @@ import json
 from pathlib import Path
 
 from ..operations.runtime import run_operation_profile
-from ..packs.loader import load_pack
+from ..packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME, load_pack
 from ..runtime import resolve_vault_dir
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a pack-defined knowledge operation profile.")
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
-    parser.add_argument("--pack", default="default-knowledge", help="Pack name")
+    parser.add_argument(
+        "--pack",
+        default=DEFAULT_PACK_NAME,
+        help=f"Pack name (default compatibility pack: {DEFAULT_PACK_NAME}; primary pack: {PRIMARY_PACK_NAME})",
+    )
     parser.add_argument("--profile", required=True, help="Operation profile name")
     args = parser.parse_args(argv)
 

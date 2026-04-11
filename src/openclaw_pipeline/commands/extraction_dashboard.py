@@ -5,14 +5,18 @@ import json
 from pathlib import Path
 
 from ..extraction.artifacts import iter_run_results
-from ..packs.loader import load_pack
+from ..packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME, load_pack
 from ..runtime import VaultLayout, resolve_vault_dir
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Summarize extraction run artifacts for a pack.")
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
-    parser.add_argument("--pack", default="default-knowledge", help="Pack name")
+    parser.add_argument(
+        "--pack",
+        default=DEFAULT_PACK_NAME,
+        help=f"Pack name (default compatibility pack: {DEFAULT_PACK_NAME}; primary pack: {PRIMARY_PACK_NAME})",
+    )
     args = parser.parse_args(argv)
 
     vault_dir = resolve_vault_dir(args.vault_dir)

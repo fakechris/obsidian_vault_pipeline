@@ -1,6 +1,19 @@
 from __future__ import annotations
 
 
+def test_build_views_help_mentions_primary_pack(capsys):
+    from openclaw_pipeline.commands.build_views import main
+
+    try:
+        main(["--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    output = " ".join(capsys.readouterr().out.split())
+    assert "compatibility pack" in output
+    assert "research-tech" in output
+
+
 def test_build_views_command_requires_object_id_for_object_page(temp_vault):
     from openclaw_pipeline.commands.build_views import main
 

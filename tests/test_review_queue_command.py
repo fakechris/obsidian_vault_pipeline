@@ -3,6 +3,19 @@ from __future__ import annotations
 import json
 
 
+def test_run_operations_help_mentions_primary_pack(capsys):
+    from openclaw_pipeline.commands.run_operations import main
+
+    try:
+        main(["--help"])
+    except SystemExit as exc:
+        assert exc.code == 0
+
+    output = " ".join(capsys.readouterr().out.split())
+    assert "compatibility pack" in output
+    assert "research-tech" in output
+
+
 def test_run_operations_command_writes_frontmatter_review_items(temp_vault):
     from openclaw_pipeline.commands.run_operations import main
     from openclaw_pipeline.runtime import VaultLayout

@@ -7,7 +7,7 @@ from pathlib import Path
 from ..extraction.artifacts import write_run_result
 from ..extraction.llm_extractor import DefaultProfileExtractor
 from ..extraction.runtime import ExtractionRuntime
-from ..packs.loader import load_pack
+from ..packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME, load_pack
 from ..runtime import VaultLayout, resolve_vault_dir
 
 def build_extractor() -> object:
@@ -17,7 +17,11 @@ def build_extractor() -> object:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a pack extraction profile and emit derived artifacts.")
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
-    parser.add_argument("--pack", default="default-knowledge", help="Pack name")
+    parser.add_argument(
+        "--pack",
+        default=DEFAULT_PACK_NAME,
+        help=f"Pack name (default compatibility pack: {DEFAULT_PACK_NAME}; primary pack: {PRIMARY_PACK_NAME})",
+    )
     parser.add_argument("--profile", required=True, help="Extraction profile name")
     parser.add_argument("--source", type=Path, required=True, help="Source markdown/text file")
     args = parser.parse_args(argv)

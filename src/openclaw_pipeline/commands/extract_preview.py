@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from ..extraction.artifacts import load_run_results
-from ..packs.loader import load_pack
+from ..packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME, load_pack
 from ..runtime import VaultLayout, resolve_vault_dir
 
 
@@ -26,7 +26,11 @@ def _normalize_source_path(path: str | Path, *, vault_dir: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Show a preview of the latest extraction artifacts for a profile.")
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
-    parser.add_argument("--pack", default="default-knowledge", help="Pack name")
+    parser.add_argument(
+        "--pack",
+        default=DEFAULT_PACK_NAME,
+        help=f"Pack name (default compatibility pack: {DEFAULT_PACK_NAME}; primary pack: {PRIMARY_PACK_NAME})",
+    )
     parser.add_argument("--profile", required=True, help="Extraction profile name")
     parser.add_argument("--source", type=Path, default=None, help="Optional source path to filter by")
     parser.add_argument("--limit", type=_non_negative_int, default=5, help="Maximum number of records to show")
