@@ -93,6 +93,9 @@ ovp-cleanup = "openclaw_pipeline.commands.cleanup:main"
 ovp-breakdown = "openclaw_pipeline.commands.breakdown:main"
 ovp-knowledge-index = "openclaw_pipeline.commands.knowledge_index:main"
 ovp-watch-progress = "openclaw_pipeline.commands.watch_progress:main"
+ovp-extract = "openclaw_pipeline.commands.extract_profiles:main"
+ovp-ops = "openclaw_pipeline.commands.run_operations:main"
+ovp-build-views = "openclaw_pipeline.commands.build_views:main"
 
 [project.entry-points."openclaw_pipeline.packs"]
 default-knowledge = "openclaw_pipeline.packs.default_knowledge:get_pack"

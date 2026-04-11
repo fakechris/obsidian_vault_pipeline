@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
+import yaml
+
 
 def resolve_vault_dir(vault_dir: Path | str | None = None) -> Path:
     """Resolve the vault directory once and use the absolute path everywhere."""
@@ -24,6 +26,24 @@ def iter_markdown_files(directory: Path, recursive: bool = True) -> Iterator[Pat
         if is_hidden_path(md_file):
             continue
         yield md_file
+
+
+def read_markdown_frontmatter(path: Path) -> dict[str, object]:
+    """Return parsed YAML frontmatter for a markdown file, if present."""
+    content = path.read_text(encoding="utf-8")
+    if not content.startswith("---"):
+        return {}
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    return yaml.safe_load(parts[1]) or {}
+
+
+def markdown_title(path: Path) -> str:
+    """Return a markdown file title from frontmatter, falling back to the stem."""
+    metadata = read_markdown_frontmatter(path)
+    title = metadata.get("title")
+    return str(title) if title else path.stem
 
 
 @dataclass(frozen=True)
@@ -49,6 +69,22 @@ class VaultLayout:
     @property
     def transactions_dir(self) -> Path:
         return self.logs_dir / "transactions"
+
+    @property
+    def derived_dir(self) -> Path:
+        return self.logs_dir / "derived"
+
+    @property
+    def extraction_runs_dir(self) -> Path:
+        return self.derived_dir / "extraction-runs"
+
+    @property
+    def review_queue_dir(self) -> Path:
+        return self.derived_dir / "review-queue"
+
+    @property
+    def compiled_views_dir(self) -> Path:
+        return self.derived_dir / "compiled-views"
 
     @property
     def pipeline_reports_dir(self) -> Path:
@@ -101,6 +137,10 @@ class VaultLayout:
     @property
     def papers_dir(self) -> Path:
         return self.vault_dir / "20-Areas" / "AI-Research" / "Papers"
+
+    @property
+    def queries_dir(self) -> Path:
+        return self.vault_dir / "20-Areas" / "Queries"
 
     @property
     def pinboard_archive_dir(self) -> Path:

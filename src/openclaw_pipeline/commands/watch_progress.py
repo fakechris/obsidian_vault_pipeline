@@ -96,14 +96,15 @@ def _load_in_progress_transactions(layout: VaultLayout) -> list[dict[str, Any]]:
 
 
 def _count_state(layout: VaultLayout) -> dict[str, int]:
+    candidates_dir = layout.evergreen_dir / "_Candidates"
     return {
         "raw": len(list(layout.raw_dir.glob("*.md"))),
         "processing": len(list(layout.processing_dir.glob("*.md"))),
-        "processed": len(list((layout.vault_dir / "50-Inbox" / "03-Processed").rglob("*.md"))),
+        "processed": len(list(layout.processed_dir.rglob("*.md"))),
         "deep_dives": len(list((layout.vault_dir / "20-Areas").rglob("*_深度解读.md"))),
-        "evergreen": len(list((layout.vault_dir / "10-Knowledge" / "Evergreen").glob("*.md"))),
-        "candidates": len(list((layout.vault_dir / "10-Knowledge" / "Evergreen" / "_Candidates").glob("*.md"))),
-        "atlas": len(list((layout.vault_dir / "10-Knowledge" / "Atlas").glob("*.md"))),
+        "evergreen": len(list(layout.evergreen_dir.glob("*.md"))),
+        "candidates": len(list(candidates_dir.glob("*.md"))),
+        "atlas": len(list(layout.atlas_dir.glob("*.md"))),
     }
 
 

@@ -34,6 +34,9 @@ class BaseDomainPack:
     _object_kinds: list[ObjectKindSpec] = field(default_factory=list)
     _workflow_profiles: list[WorkflowProfile] = field(default_factory=list)
     _discoverable_object_kinds: list[str] = field(default_factory=list)
+    _extraction_profiles: list[object] = field(default_factory=list)
+    _operation_profiles: list[object] = field(default_factory=list)
+    _wiki_views: list[object] = field(default_factory=list)
 
     def object_kinds(self) -> list[ObjectKindSpec]:
         return list(self._object_kinds)
@@ -51,3 +54,30 @@ class BaseDomainPack:
             if profile.name == name:
                 return profile
         raise ValueError(f"Unknown workflow profile '{name}' for pack '{self.name}'")
+
+    def extraction_profiles(self) -> list[object]:
+        return list(self._extraction_profiles)
+
+    def extraction_profile(self, name: str) -> object:
+        for profile in self._extraction_profiles:
+            if getattr(profile, "name", None) == name:
+                return profile
+        raise ValueError(f"Unknown extraction profile '{name}' for pack '{self.name}'")
+
+    def operation_profiles(self) -> list[object]:
+        return list(self._operation_profiles)
+
+    def operation_profile(self, name: str) -> object:
+        for profile in self._operation_profiles:
+            if getattr(profile, "name", None) == name:
+                return profile
+        raise ValueError(f"Unknown operation profile '{name}' for pack '{self.name}'")
+
+    def wiki_views(self) -> list[object]:
+        return list(self._wiki_views)
+
+    def wiki_view(self, name: str) -> object:
+        for view in self._wiki_views:
+            if getattr(view, "name", None) == name:
+                return view
+        raise ValueError(f"Unknown wiki view '{name}' for pack '{self.name}'")

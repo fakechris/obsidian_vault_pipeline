@@ -629,7 +629,7 @@ class AutoArticleProcessor:
         headers = {"User-Agent": "openclaw-pipeline/1.0"}
         try:
             response = requests.get(url, timeout=15, headers=headers, allow_redirects=True)
-        except Exception:
+        except requests.RequestException:
             return "", None
 
         if response.status_code != 200:

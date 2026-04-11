@@ -174,7 +174,7 @@ class LiteLLMClient:
                 if attempt == 2:
                     raise
                 time.sleep(1.5 * (attempt + 1))
-        else:  # pragma: no cover - defensive fallback
+        if last_error is not None and "response" not in locals():  # pragma: no cover - defensive fallback
             raise last_error or RuntimeError("litellm completion failed")
         self._total_calls += 1
 

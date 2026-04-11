@@ -1273,8 +1273,12 @@ class EnhancedPipeline:
         Args:
             recent_days: 处理最近N天的深度解读
             dry_run: 预览模式
-            quality_score: 质量分数，>= 0 且 < 3.0 时阻断执行；< 0 表示未执行质量检查（不阻断）
-            qualified_files: 通过质检的深度解读文件列表；提供时按文件级门禁执行
+            quality_score: 质量分数。只有在 normalized_files is None 时，>= 0 且 < 3.0 才阻断执行；
+                < 0 表示未执行质量检查（不阻断）。
+            qualified_files: 通过质检的深度解读文件列表。提供时会先解析成 normalized_files，
+                并过滤为当前仍存在的文件；若为 None，则回退到 _load_latest_qualified_files()。
+                只要 normalized_files 非空，就按文件级白名单执行 absorb，不再使用 quality_score
+                做整批阻断。
         """
         normalized_files = None
         if qualified_files is None:
@@ -1329,9 +1333,21 @@ class EnhancedPipeline:
                 batch_files = normalized_files[start_index:start_index + effective_batch_size]
                 with tempfile.TemporaryDirectory(prefix="absorb-qualified-", dir=str(self.layout.logs_dir)) as staging_dir:
                     staging_path = Path(staging_dir)
+                    used_targets: set[Path] = set()
                     for path in batch_files:
                         source = Path(path)
                         target = staging_path / source.name
+                        if target.exists() or target in used_targets:
+                            stem = source.stem
+                            suffix = source.suffix
+                            counter = 2
+                            while True:
+                                candidate = staging_path / f"{stem}-{counter}{suffix}"
+                                if not candidate.exists() and candidate not in used_targets:
+                                    target = candidate
+                                    break
+                                counter += 1
+                        used_targets.add(target)
                         try:
                             target.symlink_to(source)
                         except OSError:

@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+from ...operations.specs import OperationCheckSpec, OperationProfileSpec, OperationProposalSpec
+
+
+DEFAULT_OPERATION_PROFILES = [
+    OperationProfileSpec(
+        name="vault/frontmatter_audit",
+        pack="default-knowledge",
+        scope="vault",
+        triggers=["manual", "pre-refine"],
+        checks=[OperationCheckSpec(name="required-frontmatter", description="Ensure title and note metadata exist")],
+        proposal_types=[OperationProposalSpec(proposal_type="frontmatter_fix", queue_name="frontmatter")],
+        auto_fix_policy="manual",
+        review_required=True,
+    ),
+    OperationProfileSpec(
+        name="vault/review_queue",
+        pack="default-knowledge",
+        scope="vault",
+        triggers=["manual"],
+        checks=[OperationCheckSpec(name="queue-health", description="Inspect pending review items")],
+        proposal_types=[OperationProposalSpec(proposal_type="queue_review", queue_name="review")],
+        auto_fix_policy="manual",
+        review_required=True,
+    ),
+    OperationProfileSpec(
+        name="vault/bridge_recommendations",
+        pack="default-knowledge",
+        scope="vault",
+        triggers=["manual", "post-absorb"],
+        checks=[OperationCheckSpec(name="bridge-gaps", description="Suggest cross-note bridge candidates")],
+        proposal_types=[OperationProposalSpec(proposal_type="bridge_note", queue_name="bridges")],
+        auto_fix_policy="manual",
+        review_required=True,
+    ),
+]

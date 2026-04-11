@@ -319,6 +319,8 @@ def reconcile_registry(vault_dir: Path, write: bool = False, verbose: bool = Fal
             retained_entries.append(built_map[slug])
         registry._entries = retained_entries
         registry._registry_entries = [entry.to_registry_entry() for entry in retained_entries]
+        registry._build_surface_index()
+        registry._token_cache = {}
         registry.save()
         retained_slugs = {entry.slug for entry in retained_entries}
         result["registry_entry_count"] = len(retained_entries)
