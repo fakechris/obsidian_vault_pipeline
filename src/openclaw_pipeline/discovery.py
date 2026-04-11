@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .extraction.artifacts import iter_run_results
 from .packs.base import BaseDomainPack
-from .packs.loader import load_pack
+from .packs.loader import DEFAULT_PACK_NAME, load_pack
 from .runtime import VaultLayout, resolve_vault_dir
 
 
@@ -173,7 +173,7 @@ def _discover_with_extraction(
 def _resolve_pack(pack: str | BaseDomainPack | None) -> BaseDomainPack:
     if isinstance(pack, BaseDomainPack):
         return pack
-    return load_pack(pack or "default-knowledge")
+    return load_pack(pack or DEFAULT_PACK_NAME)
 
 
 def _slug_object_kinds(vault_dir: Path) -> dict[str, str]:

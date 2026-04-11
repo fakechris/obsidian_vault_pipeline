@@ -35,6 +35,11 @@ except ImportError:
     from runtime import resolve_vault_dir  # type: ignore
 
 try:
+    from .packs.loader import DEFAULT_PACK_NAME
+except ImportError:
+    from packs.loader import DEFAULT_PACK_NAME  # type: ignore
+
+try:
     from .llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
 except ImportError:
     from llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
@@ -58,7 +63,7 @@ class SearchResult:
 class VaultQuerier:
     """知识库查询器"""
 
-    def __init__(self, vault_dir: Path, *, pack: str = "default-knowledge"):
+    def __init__(self, vault_dir: Path, *, pack: str = DEFAULT_PACK_NAME):
         self.vault_dir = Path(vault_dir)
         self.pack = pack
         self.api_key = resolve_api_key()
@@ -454,7 +459,7 @@ def main(argv: list[str] | None = None):
     )
     parser.add_argument(
         "--pack",
-        default="default-knowledge",
+        default=DEFAULT_PACK_NAME,
         help="Pack name",
     )
 

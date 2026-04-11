@@ -7,6 +7,7 @@ from .base import BaseDomainPack, WorkflowProfile
 
 
 DEFAULT_PACK_NAME = "default-knowledge"
+PRIMARY_PACK_NAME = "research-tech"
 BUILTIN_PACK_LOADERS = {
     "default-knowledge": ("openclaw_pipeline.packs.default_knowledge", "get_pack"),
     "research-tech": ("openclaw_pipeline.packs.research_tech", "get_pack"),
@@ -15,6 +16,10 @@ BUILTIN_PACK_LOADERS = {
 
 def load_default_pack() -> BaseDomainPack:
     return load_builtin_pack(DEFAULT_PACK_NAME)
+
+
+def load_primary_pack() -> BaseDomainPack:
+    return load_builtin_pack(PRIMARY_PACK_NAME)
 
 
 def load_builtin_pack(name: str) -> BaseDomainPack:

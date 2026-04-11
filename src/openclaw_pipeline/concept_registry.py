@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .discovery import discover_related
+from .packs.loader import DEFAULT_PACK_NAME
 
 try:
     import jieba
@@ -496,7 +497,7 @@ class ConceptRegistry:
             return results
         return self._legacy_surface_search(query, area=area, topk=topk)
 
-    def to_object_records(self, *, pack: str = "default-knowledge") -> list[Any]:
+    def to_object_records(self, *, pack: str = DEFAULT_PACK_NAME) -> list[Any]:
         """Project legacy concept entries into pack-aware object records."""
         from .object_registry import record_from_concept_entry
 

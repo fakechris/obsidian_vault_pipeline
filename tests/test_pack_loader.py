@@ -32,6 +32,14 @@ def test_load_pack_by_name_returns_research_tech():
     assert pack.name == "research-tech"
 
 
+def test_load_primary_pack_returns_research_tech():
+    from openclaw_pipeline.packs.loader import load_primary_pack
+
+    pack = load_primary_pack()
+
+    assert pack.name == "research-tech"
+
+
 def test_load_pack_rejects_unknown_pack():
     from openclaw_pipeline.packs.loader import load_pack
 

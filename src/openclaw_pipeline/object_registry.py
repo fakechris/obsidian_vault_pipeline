@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from .packs.loader import DEFAULT_PACK_NAME
+
 if TYPE_CHECKING:
     from .concept_registry import ConceptEntry, ConceptRegistry
 
 
-DEFAULT_OBJECT_PACK = "default-knowledge"
+DEFAULT_OBJECT_PACK = DEFAULT_PACK_NAME
 
 
 @dataclass(frozen=True)
