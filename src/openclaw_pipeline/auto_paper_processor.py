@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,10 +32,22 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import requests
+
 try:
     from .runtime import VaultLayout, resolve_vault_dir
 except ImportError:
     from runtime import VaultLayout, resolve_vault_dir  # type: ignore
+
+try:
+    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
+except ImportError:
+    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
+
+try:
+    from .markdown_generation import sanitize_generated_markdown
+except ImportError:
+    from markdown_generation import sanitize_generated_markdown  # type: ignore
 
 
 VAULT_DIR = resolve_vault_dir()
@@ -102,7 +115,7 @@ class LiteLLMClient:
     def __init__(
         self,
         *,
-        model: str = "MiniMax-M2.5",
+        model: str | None = None,
         api_type: str = "anthropic",
         api_key: str | None = None,
         api_base: str | None = None,
@@ -111,18 +124,20 @@ class LiteLLMClient:
         if api_type not in self.VALID_API_TYPES:
             raise ValueError(f"api_type must be one of {self.VALID_API_TYPES}")
         self.api_type = api_type
-        if "/" in model:
-            self.model = model
-        else:
-            self.model = f"{api_type}/{model}"
-        self._api_key = api_key or os.environ.get("AUTO_VAULT_API_KEY")
-        self.api_base = api_base or os.environ.get("AUTO_VAULT_API_BASE")
+        self._api_key = resolve_api_key(api_key)
+        self.api_base = resolve_api_base(api_base)
+        self.model = normalize_model_for_api_base(
+            model or os.environ.get("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
+            api_type=api_type,
+            api_base=self.api_base,
+            default_model=DEFAULT_MINIMAX_MODEL,
+        )
         self.temperature = temperature
         self._total_calls = 0
         self._total_tokens = 0
 
         if not self._api_key:
-            raise ValueError("API key required. Set AUTO_VAULT_API_KEY env var.")
+            raise ValueError("API key required. Set AUTO_VAULT_API_KEY or MINIMAX_API_KEY env var.")
         try:
             import litellm as litellm_module
         except ImportError as exc:
@@ -149,7 +164,18 @@ class LiteLLMClient:
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
-        response = self._litellm.completion(**kwargs)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = self._litellm.completion(**kwargs)
+                break
+            except Exception as exc:  # pragma: no cover - exercised via tests
+                last_error = exc
+                if attempt == 2:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
+        if last_error is not None and "response" not in locals():  # pragma: no cover - defensive fallback
+            raise last_error or RuntimeError("litellm completion failed")
         self._total_calls += 1
 
         content = response.choices[0].message.content or ""
@@ -268,11 +294,12 @@ class PaperProcessor:
 3. 核心洞察
 4. 关联研究的[[双括号链接]]"""
 
-        return self.llm.generate(
+        content, metadata = self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=8000,
         )
+        return sanitize_generated_markdown(content), metadata
 
 
 def extract_arxiv_id(url: str) -> str | None:
@@ -360,6 +387,20 @@ def extract_pdf_text(pdf_path: str, max_chars: int = 10000) -> str:
     return ""
 
 
+def download_remote_pdf(url: str) -> str | None:
+    """Download a remote PDF to a temp file and return its path."""
+    try:
+        response = requests.get(url, timeout=30)
+        if response.status_code != 200:
+            return None
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as handle:
+            handle.write(response.content)
+            return handle.name
+    except Exception as e:
+        print(f"Error downloading PDF: {e}")
+        return None
+
+
 def process_single_paper(
     source: str,
     title: str | None,
@@ -381,6 +422,7 @@ def process_single_paper(
     arxiv_id = ""
     abstract = ""
     pdf_content = ""
+    downloaded_pdf_path: str | None = None
 
     # 判断来源类型并获取内容
     if "arxiv.org" in source:
@@ -395,9 +437,20 @@ def process_single_paper(
                 if not authors:
                     authors = info.get("authors", [])
                 print(f"  ✓ Got arXiv info: {title[:60]}...")
+            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+            downloaded_pdf_path = download_remote_pdf(pdf_url)
+            if downloaded_pdf_path:
+                pdf_content = extract_pdf_text(downloaded_pdf_path)
+                if pdf_content:
+                    print(f"  ✓ Extracted PDF text from arXiv: {len(pdf_content)} chars")
     elif source.endswith(".pdf"):
+        pdf_path = source
+        if source.startswith("http://") or source.startswith("https://"):
+            downloaded_pdf_path = download_remote_pdf(source)
+            if downloaded_pdf_path:
+                pdf_path = downloaded_pdf_path
         print(f"  Extracting PDF: {source}...")
-        pdf_content = extract_pdf_text(source)
+        pdf_content = extract_pdf_text(pdf_path)
         if not title:
             title = Path(source).stem
         print(f"  ✓ Extracted {len(pdf_content)} chars")
@@ -446,6 +499,12 @@ def process_single_paper(
         result["status"] = "error"
         result["error"] = str(e)
         print(f"  ✗ Error: {e}")
+    finally:
+        if downloaded_pdf_path:
+            try:
+                Path(downloaded_pdf_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
     return result
 
@@ -461,7 +520,7 @@ def main():
                         help="Vault 根目录（默认: 当前工作目录）")
     parser.add_argument("--output-dir", "-o", type=Path, default=None,
                         help="输出目录（默认: <vault>/20-Areas/AI-Research/Papers）")
-    parser.add_argument("--model", "-m", default="MiniMax-M2.5", help="LLM模型")
+    parser.add_argument("--model", "-m", default=None, help="LLM模型（默认读取 AUTO_VAULT_MODEL）")
     parser.add_argument("--api-type", default="anthropic", choices=["anthropic", "openai"])
     parser.add_argument("--api-key", help="API Key")
     parser.add_argument("--api-base", help="API Base URL")

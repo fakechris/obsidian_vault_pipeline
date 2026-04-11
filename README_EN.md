@@ -22,6 +22,8 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 
 </div>
 
+Current document version: `v0.8.1`
+
 ## What This Is
 
 This project is not a loose collection of scripts. It is a layered knowledge system built around an Obsidian vault:
@@ -403,6 +405,7 @@ Put `.env` in the vault root:
 ```bash
 AUTO_VAULT_API_KEY=your_key_here
 AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
+AUTO_VAULT_MODEL=anthropic/MiniMax-M2.7-highspeed
 
 # Optional
 PINBOARD_TOKEN=username:token
@@ -425,4 +428,4 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-This document targets: `v0.7.x`
+This document targets: `v0.8.1`

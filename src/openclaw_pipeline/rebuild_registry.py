@@ -18,7 +18,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .concept_registry import ConceptRegistry, ConceptEntry, STATUS_ACTIVE
+from .concept_registry import (
+    ConceptRegistry,
+    ConceptEntry,
+    STATUS_ACTIVE,
+    STATUS_CANDIDATE,
+    normalize_surface,
+)
 from .runtime import iter_markdown_files, resolve_vault_dir
 
 
@@ -149,6 +155,14 @@ def scan_evergreen_files(vault_dir: Path) -> list[Path]:
     return files
 
 
+def scan_candidate_files(vault_dir: Path) -> list[Path]:
+    """Find all candidate markdown files under Evergreen/_Candidates."""
+    candidates_dir = resolve_vault_dir(vault_dir) / CANDIDATES_DIR
+    if not candidates_dir.exists():
+        return []
+    return sorted(candidates_dir.glob("*.md"))
+
+
 def file_to_entry(vault_dir: Path, file_path: Path) -> ConceptEntry | None:
     """Convert an Evergreen file to a registry entry."""
     try:
@@ -192,6 +206,27 @@ def file_to_entry(vault_dir: Path, file_path: Path) -> ConceptEntry | None:
         last_seen_at=datetime.now().strftime("%Y-%m-%d"),
         review_state="seeded_from_existing",
     )
+
+
+def candidate_file_slugs(vault_dir: Path) -> set[str]:
+    """Return candidate slugs that have backing files on disk."""
+    slugs: set[str] = set()
+    for path in scan_candidate_files(vault_dir):
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            slugs.add(path.stem)
+            continue
+        fm, _body = parse_frontmatter(content)
+        note_id = str(fm.get("note_id", "")).strip()
+        title = str(fm.get("title", "")).strip()
+        if note_id:
+            slugs.add(note_id)
+        elif title:
+            slugs.add(normalize_surface(title).replace(" ", "-"))
+        else:
+            slugs.add(path.stem)
+    return slugs
 
 
 def rebuild_registry(vault_dir: Path, dry_run: bool = False, verbose: bool = False) -> list[ConceptEntry]:
@@ -239,6 +274,7 @@ def reconcile_registry(vault_dir: Path, write: bool = False, verbose: bool = Fal
     entries = rebuild_registry(vault_dir, dry_run=True, verbose=verbose)
     built_slugs = {entry.slug for entry in entries}
     built_map = {entry.slug: entry for entry in entries}
+    candidate_slugs = candidate_file_slugs(vault_dir)
 
     registry = ConceptRegistry(vault_dir).load()
     registry_slugs = {entry.slug for entry in registry.entries}
@@ -264,7 +300,9 @@ def reconcile_registry(vault_dir: Path, write: bool = False, verbose: bool = Fal
         })
 
     for entry in sorted(registry.entries, key=lambda item: item.slug):
-        if entry.slug not in built_slugs:
+        if entry.slug not in built_slugs and not (
+            entry.status == STATUS_CANDIDATE and entry.slug in candidate_slugs
+        ):
             payload = {
                 "slug": entry.slug,
                 "title": entry.title,
@@ -276,9 +314,29 @@ def reconcile_registry(vault_dir: Path, write: bool = False, verbose: bool = Fal
                 result["orphan_registry_entries"].append(payload)
 
     if write:
+        retained_entries = [
+            entry
+            for entry in registry.entries
+            if entry.slug not in built_slugs and (
+                entry.status != STATUS_CANDIDATE or entry.slug in candidate_slugs
+            )
+        ]
         for slug in sorted(built_slugs):
-            registry.upsert_entry(built_map[slug])
+            existing = next((entry for entry in retained_entries if entry.slug == slug), None)
+            if existing is not None:
+                retained_entries.remove(existing)
+            retained_entries.append(built_map[slug])
+        registry._entries = retained_entries
+        registry._registry_entries = [entry.to_registry_entry() for entry in retained_entries]
+        registry._build_surface_index()
+        registry._token_cache = {}
         registry.save()
+        retained_slugs = {entry.slug for entry in retained_entries}
+        result["registry_entry_count"] = len(retained_entries)
+        result["not_in_registry"] = []
+        result["not_in_filesystem"] = []
+        result["orphan_registry_entries"] = []
+        result["in_sync"] = sorted(built_slugs & retained_slugs)
 
     return result
 

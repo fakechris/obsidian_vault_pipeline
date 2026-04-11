@@ -35,6 +35,11 @@ except ImportError:
     from runtime import resolve_vault_dir  # type: ignore
 
 try:
+    from .llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
+except ImportError:
+    from llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
+
+try:
     import litellm
     LITELLM_AVAILABLE = True
 except ImportError:
@@ -55,15 +60,14 @@ class VaultQuerier:
 
     def __init__(self, vault_dir: Path):
         self.vault_dir = Path(vault_dir)
-        self.api_key = os.getenv("AUTO_VAULT_API_KEY")
-        self.api_base = os.getenv("AUTO_VAULT_API_BASE")
-        # 支持多种模型格式：minimax/xxx 或 openai/xxx
-        raw_model = os.getenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.5")
-        # 如果模型名没有 / 前缀，添加 openai/
-        if "/" not in raw_model:
-            self.model = f"openai/{raw_model}"
-        else:
-            self.model = raw_model
+        self.api_key = resolve_api_key()
+        self.api_base = resolve_api_base(default=DEFAULT_MINIMAX_API_BASE)
+        self.model = normalize_model_for_api_base(
+            os.getenv("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
+            api_type="anthropic",
+            api_base=self.api_base,
+            default_model=DEFAULT_MINIMAX_MODEL,
+        )
 
         # 关键目录
         self.evergreen_dir = self.vault_dir / "10-Knowledge" / "Evergreen"

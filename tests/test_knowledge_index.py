@@ -673,3 +673,128 @@ def test_knowledge_index_cli_tools_json_lists_tools(capsys):
     payload = json.loads(captured.out)
     tool_names = {tool["name"] for tool in payload}
     assert "knowledge_query" in tool_names
+
+
+def test_rebuild_knowledge_index_preserves_existing_db_on_failure(temp_vault, monkeypatch):
+    from openclaw_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    evergreen.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+## Architecture
+Stable body.
+""",
+        encoding="utf-8",
+    )
+
+    first = rebuild_knowledge_index(temp_vault)
+    assert first["pages_indexed"] == 1
+
+    def fail_embed(_: str, dimensions: int = 128) -> bytes:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("openclaw_pipeline.knowledge_index._embed_text", fail_embed)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        rebuild_knowledge_index(temp_vault)
+
+    stats = knowledge_index_stats(temp_vault)
+    assert stats["pages"] == 1
+    assert stats["embedding_chunks"] == 1
+    assert VaultLayout.from_vault(temp_vault).knowledge_db.exists()
+
+
+def test_rebuild_knowledge_index_cleans_stale_temp_sqlite_sidecars(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    evergreen.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+## Architecture
+Stable body.
+""",
+        encoding="utf-8",
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    temp_db = layout.knowledge_db.with_name(f"{layout.knowledge_db.name}.tmp")
+    temp_db.parent.mkdir(parents=True, exist_ok=True)
+    for artifact in (
+        temp_db,
+        temp_db.with_name(f"{temp_db.name}-wal"),
+        temp_db.with_name(f"{temp_db.name}-shm"),
+    ):
+        artifact.write_bytes(b"stale")
+
+    result = rebuild_knowledge_index(temp_vault)
+
+    assert result["pages_indexed"] == 1
+    assert layout.knowledge_db.exists()
+
+
+def test_rebuild_knowledge_index_does_not_reenter_knowledge_discovery(temp_vault, monkeypatch):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Links to [[Target Note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+aliases: [Target Note]
+---
+
+# Target Note
+""",
+        encoding="utf-8",
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+    layout.knowledge_db.unlink()
+
+    def fail_related(*args, **kwargs):
+        raise AssertionError("knowledge discovery should not run during rebuild")
+
+    monkeypatch.setattr("openclaw_pipeline.concept_registry.discover_related", fail_related)
+
+    result = rebuild_knowledge_index(temp_vault)
+
+    assert result["pages_indexed"] == 2
+    assert result["links_indexed"] == 1

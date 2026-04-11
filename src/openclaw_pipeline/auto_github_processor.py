@@ -35,6 +35,16 @@ try:
 except ImportError:
     from runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
+try:
+    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
+except ImportError:
+    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
+
+try:
+    from .markdown_generation import sanitize_generated_markdown
+except ImportError:
+    from markdown_generation import sanitize_generated_markdown  # type: ignore
+
 
 VAULT_DIR = resolve_vault_dir()
 DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
@@ -102,7 +112,7 @@ class LiteLLMClient:
     def __init__(
         self,
         *,
-        model: str = "MiniMax-M2.5",
+        model: str | None = None,
         api_type: str = "anthropic",
         api_key: str | None = None,
         api_base: str | None = None,
@@ -111,18 +121,20 @@ class LiteLLMClient:
         if api_type not in self.VALID_API_TYPES:
             raise ValueError(f"api_type must be one of {self.VALID_API_TYPES}")
         self.api_type = api_type
-        if "/" in model:
-            self.model = model
-        else:
-            self.model = f"{api_type}/{model}"
-        self._api_key = api_key or os.environ.get("AUTO_VAULT_API_KEY")
-        self.api_base = api_base or os.environ.get("AUTO_VAULT_API_BASE")
+        self._api_key = resolve_api_key(api_key)
+        self.api_base = resolve_api_base(api_base)
+        self.model = normalize_model_for_api_base(
+            model or os.environ.get("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
+            api_type=api_type,
+            api_base=self.api_base,
+            default_model=DEFAULT_MINIMAX_MODEL,
+        )
         self.temperature = temperature
         self._total_calls = 0
         self._total_tokens = 0
 
         if not self._api_key:
-            raise ValueError("API key required. Set AUTO_VAULT_API_KEY env var.")
+            raise ValueError("API key required. Set AUTO_VAULT_API_KEY or MINIMAX_API_KEY env var.")
         try:
             import litellm as litellm_module
         except ImportError as exc:
@@ -149,7 +161,18 @@ class LiteLLMClient:
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
-        response = self._litellm.completion(**kwargs)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = self._litellm.completion(**kwargs)
+                break
+            except Exception as exc:  # pragma: no cover - exercised via tests
+                last_error = exc
+                if attempt == 2:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
+        else:  # pragma: no cover - defensive fallback
+            raise last_error or RuntimeError("litellm completion failed")
         self._total_calls += 1
 
         content = response.choices[0].message.content or ""
@@ -269,11 +292,12 @@ README内容:
 
 请严格按照13节结构输出完整Markdown（从--- frontmatter开始）。"""
 
-        return self.llm.generate(
+        content, metadata = self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
             max_tokens=8000,
         )
+        return sanitize_generated_markdown(content), metadata
 
 
 def fetch_github_readme(owner: str, repo: str) -> tuple[str, int]:
@@ -322,11 +346,6 @@ def parse_github_url(url: str) -> tuple[str, str] | None:
 
     parts = parsed.path.strip("/").split("/")
     if len(parts) < 2:
-        return None
-
-    # 过滤非仓库路径
-    skip_paths = {"blob", "tree", "issues", "pull", "wiki", "actions", "releases"}
-    if any(p in parts for p in skip_paths):
         return None
 
     return parts[0], parts[1]
@@ -417,7 +436,7 @@ def main():
                         help="Vault 根目录（默认: 当前工作目录）")
     parser.add_argument("--output-dir", "-o", type=Path, default=None,
                         help="输出目录（默认: <vault>/20-Areas/Tools/Topics/YYYY-MM）")
-    parser.add_argument("--model", "-m", default="MiniMax-M2.5", help="LLM模型")
+    parser.add_argument("--model", "-m", default=None, help="LLM模型（默认读取 AUTO_VAULT_MODEL）")
     parser.add_argument("--api-type", default="anthropic", choices=["anthropic", "openai"])
     parser.add_argument("--api-key", help="API Key（或设置AUTO_VAULT_API_KEY环境变量）")
     parser.add_argument("--api-base", help="API Base URL")

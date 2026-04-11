@@ -403,6 +403,7 @@ ovp-autopilot --watch=inbox --parallel=1 --yes
 ```bash
 AUTO_VAULT_API_KEY=your_key_here
 AUTO_VAULT_API_BASE=https://api.minimaxi.com/anthropic
+AUTO_VAULT_MODEL=anthropic/MiniMax-M2.7-highspeed
 
 # Optional
 PINBOARD_TOKEN=username:token
@@ -425,4 +426,4 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-当前文档对应版本：`v0.7.x`
+当前文档对应版本：`v0.8.1`
