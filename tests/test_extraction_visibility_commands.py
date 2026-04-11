@@ -74,6 +74,58 @@ def test_extract_preview_command_returns_latest_artifact(temp_vault, capsys):
     assert payload["records"][0]["values"]["section_title"] == "Architecture"
 
 
+def test_extract_preview_command_normalizes_source_filter(temp_vault, capsys):
+    from openclaw_pipeline.commands import extract_preview
+    from openclaw_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    _write_run(
+        layout,
+        source_name="doc-one.md",
+        profile_name="tech/doc_structure",
+        values={"section_title": "Architecture", "summary": "Overview"},
+    )
+
+    exit_code = extract_preview.main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--profile",
+            "tech/doc_structure",
+            "--source",
+            str(temp_vault / "50-Inbox" / "01-Raw" / "doc-one.md"),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["run_count"] == 1
+
+
+def test_extract_preview_command_rejects_negative_limit(temp_vault):
+    from openclaw_pipeline.commands import extract_preview
+
+    try:
+        extract_preview.main(
+            [
+                "--vault-dir",
+                str(temp_vault),
+                "--pack",
+                "default-knowledge",
+                "--profile",
+                "tech/doc_structure",
+                "--limit",
+                "-1",
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected argparse failure for negative limit")
+
+
 def test_extraction_dashboard_command_summarizes_profiles(temp_vault, capsys):
     from openclaw_pipeline.commands import extraction_dashboard
     from openclaw_pipeline.runtime import VaultLayout

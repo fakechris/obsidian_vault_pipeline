@@ -2,7 +2,12 @@
 
 ## Goal
 
-把 `/Users/chris/Downloads/ovp_knowledge_system_docs` 里的架构分析，收敛成当前 `openclaw-template` 可执行的大项目实施稿。
+把 `OVP_KNOWLEDGE_DIR` 指向的外部架构分析文档，收敛成当前 `openclaw-template` 可执行的大项目实施稿。
+
+建议做法：
+
+- 把源文档同步到仓库内的 `docs/ovp_knowledge_system_docs/`
+- 或在本地约定环境变量 `OVP_KNOWLEDGE_DIR` 指向外部文档目录
 
 目标不是重写仓库，而是把现有的 `pack/profile/extraction/knowledge.db/review` 半成品补成强运行时。
 

@@ -8,7 +8,7 @@ def validate_record(profile: ExtractionProfileSpec, record: ExtractionRecord) ->
     for field in profile.fields:
         if field.required and record.values.get(field.name) in (None, "", [], {}):
             return False
-    if profile.grounding_policy.require_quote and not record.spans:
+    if profile.grounding_policy.require_quote and not any(span.quote.strip() for span in record.spans):
         return False
     return True
 

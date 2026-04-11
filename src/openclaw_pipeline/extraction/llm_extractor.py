@@ -54,12 +54,19 @@ class DefaultProfileExtractor:
         return records
 
     def _extract_workflow_graph(self, text: str, source_path: Path) -> list[ExtractionRecord]:
-        steps = [match.group("step").strip() for match in _BULLET_RE.finditer(text)]
-        if not steps:
-            steps = [section.title for section in _split_sections(text) if section.title]
+        step_matches = [
+            (match.group("step").strip(), match.start("step"), match.end("step"))
+            for match in _BULLET_RE.finditer(text)
+        ]
+        if not step_matches:
+            step_matches = [
+                (section.title, section.char_start, section.char_start + len(section.title))
+                for section in _split_sections(text)
+                if section.title
+            ]
         records: list[ExtractionRecord] = []
         previous_step = ""
-        for step in steps:
+        for step, char_start, char_end in step_matches:
             depends_on = [previous_step] if previous_step else []
             records.append(
                 ExtractionRecord(
@@ -73,9 +80,9 @@ class DefaultProfileExtractor:
                         ExtractionSpan(
                             source_path=str(source_path),
                             section_title=step,
-                            char_start=max(text.find(step), 0),
-                            char_end=max(text.find(step), 0) + len(step),
-                            quote=step[:180],
+                            char_start=char_start,
+                            char_end=char_end,
+                            quote=text[char_start:char_end][:180],
                         )
                     ],
                 )
@@ -152,11 +159,11 @@ def _split_sections(text: str) -> list[Section]:
 
     sections: list[Section] = []
     for index, match in enumerate(matches):
-        start = match.start()
+        body_start = match.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         title = match.group(2).strip()
-        body = text[match.end():end].strip()
-        sections.append(Section(title=title, body=body, char_start=start, char_end=end))
+        body = text[body_start:end].strip()
+        sections.append(Section(title=title, body=body, char_start=body_start, char_end=end))
     return sections
 
 

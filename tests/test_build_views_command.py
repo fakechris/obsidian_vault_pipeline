@@ -1,6 +1,26 @@
 from __future__ import annotations
 
 
+def test_build_views_command_requires_object_id_for_object_page(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+
+    try:
+        main(
+            [
+                "--vault-dir",
+                str(temp_vault),
+                "--pack",
+                "default-knowledge",
+                "--view",
+                "object/page",
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected object/page to require --object-id")
+
+
 def test_build_views_command_writes_compiled_markdown(temp_vault):
     from openclaw_pipeline.commands.build_views import main
     from openclaw_pipeline.runtime import VaultLayout
@@ -229,6 +249,80 @@ Source note does not support the runtime architecture.
     assert "source note" in content
     assert "needs_human" in content
     assert "Needs editorial review." in content
+
+
+def test_build_views_command_escapes_like_wildcards_in_object_id_lookup(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+    import sqlite3
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Baseline.md"
+    note.write_text(
+        """---
+note_id: baseline-note
+title: Baseline Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Baseline Note
+
+Baseline note.
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+    layout = VaultLayout.from_vault(temp_vault)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
+            VALUES ('agent_note', 'evergreen', 'Agent Note', '10-Knowledge/Evergreen/Agent Note.md', 'agent_note')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
+            VALUES ('agent_note', 'Agent note documents an unrelated system.', 'agent_note')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO contradictions (
+              contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
+            ) VALUES (
+              'contradiction::underscore',
+              'agent platform',
+              '[\"agentXnote::positive\"]',
+              '[\"agentXnote::negative\"]',
+              'open',
+              '',
+              ''
+            )
+            """
+        )
+        conn.commit()
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "object/page",
+            "--object-id",
+            "agent_note",
+        ]
+    )
+
+    content = (layout.compiled_views_dir / "default-knowledge" / "objects" / "agent_note.md").read_text(encoding="utf-8")
+
+    assert result == 0
+    assert "## Contradictions" in content
+    assert "- (none)" in content
 
 
 def test_build_views_command_can_materialize_topic_view_from_truth_store(temp_vault):

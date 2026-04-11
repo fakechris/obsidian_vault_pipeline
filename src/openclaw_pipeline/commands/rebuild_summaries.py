@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from ..knowledge_index import rebuild_compiled_summaries
@@ -15,7 +16,11 @@ def _object_ids_from_queue(layout: VaultLayout, queue_name: str) -> list[str]:
 
     object_ids: list[str] = []
     for artifact in sorted(queue_dir.rglob("*.json")):
-        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            print(f"Skipping malformed queue artifact {artifact}: {exc}", file=sys.stderr)
+            continue
         object_id = payload.get("object_id")
         if object_id:
             object_ids.append(str(object_id))

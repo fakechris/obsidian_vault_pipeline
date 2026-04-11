@@ -20,6 +20,8 @@ def main(argv: list[str] | None = None) -> int:
     vault_dir = resolve_vault_dir(args.vault_dir)
     pack = load_pack(args.pack)
     view = pack.wiki_view(args.view)
+    if view.builder == "object_page" and not args.object_id:
+        parser.error("the --object-id argument is required for object/page views")
     output_path = build_view(vault_dir, view, object_id=args.object_id)
     print(json.dumps({"output_path": str(output_path)}, ensure_ascii=False))
     return 0

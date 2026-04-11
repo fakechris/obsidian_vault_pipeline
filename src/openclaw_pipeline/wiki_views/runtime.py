@@ -67,7 +67,7 @@ def build_view(vault_dir: Path, spec: WikiViewSpec, *, object_id: str | None = N
     output_path = compiled_view_path(layout, pack_name=spec.pack, view_name=spec.name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if any(input_spec.source_kind == "extraction" for input_spec in spec.input_sources):
+    if any(input_spec.source_kind == "extraction" for input_spec in (spec.input_sources or [])):
         lines = [
             f"# {spec.name}",
             "",

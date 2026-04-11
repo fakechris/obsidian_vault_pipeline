@@ -16,6 +16,9 @@ from .identity import canonicalize_note_id
 from .runtime import VaultLayout, resolve_vault_dir
 from .truth_store import TRUTH_STORE_SCHEMA, build_truth_store_projection
 
+SUMMARY_MAX_LEN = 320
+SUMMARY_RELATED_LIMIT = 3
+
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -777,7 +780,7 @@ def rebuild_compiled_summaries(vault_dir: Path, object_ids: list[str] | None = N
             ).fetchall()
 
         rebuilt_ids: list[str] = []
-        for object_id, title, outgoing_count in object_rows:
+        for object_id, title, _outgoing_count in object_rows:
             claim_rows = conn.execute(
                 """
                 SELECT claim_text
@@ -794,14 +797,16 @@ def rebuild_compiled_summaries(vault_dir: Path, object_ids: list[str] | None = N
                 FROM relations
                 WHERE source_object_id = ?
                 ORDER BY target_object_id
-                LIMIT 3
+                LIMIT ?
                 """,
-                (object_id,),
+                (object_id, SUMMARY_RELATED_LIMIT),
             ).fetchall()
             related_ids = [row[0] for row in related_rows]
             summary = base_summary
             if related_ids:
                 summary = f"{base_summary} Related: {', '.join(related_ids)}."
+            if len(summary) > SUMMARY_MAX_LEN:
+                summary = summary[: SUMMARY_MAX_LEN - 3].rstrip() + "..."
 
             conn.execute(
                 """

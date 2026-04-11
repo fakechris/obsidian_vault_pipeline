@@ -61,6 +61,18 @@ CREATE TABLE contradictions (
 );
 """
 
+_NEGATION_RE = re.compile(r"\b(?:does not|doesn't|do not|is not|isn't|are not|aren't|has not|hasn't|have not|haven't|cannot|can't|not)\b")
+_NEGATION_EXCLUSIONS = (
+    "not only",
+    "not necessarily",
+    "not merely",
+    "not just",
+)
+CONTRADICTION_HEURISTIC_NOTE = (
+    "TODO: _detect_contradictions uses a regex-based negation heuristic with exclusions. "
+    "If it still produces noisy rows, tighten subject_key() normalization and contradiction_id_for_subject() grouping."
+)
+
 
 @dataclass(frozen=True)
 class TruthStoreProjection:
@@ -124,7 +136,7 @@ def _page_summary(body: str, *, fallback: str) -> str:
     return text[:220]
 
 
-def _subject_key(claim_text: str) -> str:
+def subject_key(claim_text: str) -> str:
     lowered = claim_text.strip().lower()
     lowered = re.sub(r"\s+", " ", lowered)
     for marker in (" supports ", " does not support ", " is ", " are ", " has ", " have "):
@@ -144,15 +156,15 @@ def _detect_contradictions(
     for claim_id, _object_id, claim_kind, claim_text, _confidence in claims:
         if claim_kind != "page_summary":
             continue
-        subject = _subject_key(claim_text)
+        subject = subject_key(claim_text)
         if not subject:
             continue
         grouped.setdefault(subject, []).append((claim_id, claim_text))
 
     contradictions: list[tuple[str, str, str, str, str, str, str]] = []
     for subject, rows in grouped.items():
-        positives = [claim_id for claim_id, text in rows if " does not " not in text.lower() and " not " not in text.lower()]
-        negatives = [claim_id for claim_id, text in rows if " does not " in text.lower() or " not " in text.lower()]
+        positives = [claim_id for claim_id, text in rows if not _is_negative_claim(text)]
+        negatives = [claim_id for claim_id, text in rows if _is_negative_claim(text)]
         if not positives or not negatives:
             continue
         contradiction_id = contradiction_id_for_subject(subject)
@@ -168,3 +180,10 @@ def _detect_contradictions(
             )
         )
     return contradictions
+
+
+def _is_negative_claim(claim_text: str) -> bool:
+    lowered = claim_text.strip().lower()
+    if any(exclusion in lowered for exclusion in _NEGATION_EXCLUSIONS):
+        return False
+    return bool(_NEGATION_RE.search(lowered))

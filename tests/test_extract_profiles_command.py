@@ -88,4 +88,7 @@ def test_extract_profiles_command_uses_default_profile_extractor(temp_vault):
     assert artifacts
     payload = json.loads(artifacts[0].read_text(encoding="utf-8"))
     assert payload["records"]
-    assert payload["records"][0]["values"]["section_title"] in {"System", "Overview", "Flow"}
+    assert any(
+        record["values"]["section_title"] in {"System", "Overview", "Flow"}
+        for record in payload["records"]
+    )

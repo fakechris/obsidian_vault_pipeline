@@ -6,12 +6,17 @@ from pathlib import Path
 from ..runtime import VaultLayout, resolve_vault_dir
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def materialize_object_page(vault_dir: Path, *, pack_name: str, object_id: str) -> Path:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
     output_path = layout.compiled_views_dir / pack_name / "objects" / f"{object_id}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    escaped_object_id = _escape_like(object_id)
     with sqlite3.connect(layout.knowledge_db) as conn:
         object_row = conn.execute(
             """
@@ -50,10 +55,10 @@ def materialize_object_page(vault_dir: Path, *, pack_name: str, object_id: str) 
             """
             SELECT contradiction_id, subject_key, status, resolution_note
             FROM contradictions
-            WHERE positive_claim_ids_json LIKE ? OR negative_claim_ids_json LIKE ?
+            WHERE positive_claim_ids_json LIKE ? ESCAPE '\\' OR negative_claim_ids_json LIKE ? ESCAPE '\\'
             ORDER BY subject_key
             """,
-            (f"%{object_id}::%", f"%{object_id}::%"),
+            (f"%{escaped_object_id}::%", f"%{escaped_object_id}::%"),
         ).fetchall()
 
     _object_id, object_kind, title, canonical_path, source_slug = object_row

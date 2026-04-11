@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -9,6 +8,7 @@ from pathlib import Path
 from ..derived.paths import review_queue_path
 from ..extraction.artifacts import iter_run_results
 from ..runtime import VaultLayout, iter_markdown_files, read_markdown_frontmatter, resolve_vault_dir
+from ..truth_store import subject_key
 from .specs import OperationProfileSpec
 
 
@@ -54,15 +54,6 @@ def _review_queue_items(vault_dir: Path) -> list[dict[str, object]]:
     return items
 
 
-def _subject_key(claim_text: str) -> str:
-    lowered = claim_text.strip().lower()
-    lowered = re.sub(r"\s+", " ", lowered)
-    for marker in (" supports ", " does not support ", " is ", " are ", " has ", " have "):
-        if marker in lowered:
-            return lowered.split(marker, 1)[0].strip()
-    return lowered.split(".", 1)[0].strip()
-
-
 def _truth_contradiction_items(vault_dir: Path) -> list[dict[str, object]]:
     layout = VaultLayout.from_vault(vault_dir)
     if not layout.knowledge_db.exists():
@@ -77,9 +68,7 @@ def _truth_contradiction_items(vault_dir: Path) -> list[dict[str, object]]:
             ORDER BY subject_key
             """
         ).fetchall()
-
-    items: list[dict[str, object]] = []
-    with sqlite3.connect(layout.knowledge_db) as conn:
+        items: list[dict[str, object]] = []
         for contradiction_id, subject, positive_json, negative_json in rows:
             positive_ids = json.loads(str(positive_json))
             negative_ids = json.loads(str(negative_json))

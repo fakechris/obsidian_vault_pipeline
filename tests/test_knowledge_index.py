@@ -633,6 +633,7 @@ Agent harness architecture manages tools and execution layers.
     stats_result = dispatch_knowledge_tool(temp_vault, "knowledge_stats", {})
 
     assert search_result["results"][0]["slug"] == "agent-harness"
+    assert truth_result["results"]
     assert truth_result["results"][0]["object_id"] == "agent-harness"
     assert truth_result["results"][0]["claim_kind"] == "page_summary"
     assert contradictions_result["items"] == []

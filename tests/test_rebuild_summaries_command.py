@@ -92,3 +92,41 @@ Thin note.
     assert result == 0
     assert payload["objects_rebuilt"] == 1
     assert payload["object_ids"] == ["thin-note"]
+
+
+def test_rebuild_summaries_command_skips_malformed_queue_artifacts(temp_vault, capsys):
+    from openclaw_pipeline.commands.rebuild_summaries import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    note.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+    layout = VaultLayout.from_vault(temp_vault)
+    queue_dir = layout.review_queue_dir / "stale-summaries"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    (queue_dir / "broken.json").write_text("{not valid json", encoding="utf-8")
+    (queue_dir / "thin-note.json").write_text(
+        json.dumps({"queue_name": "stale-summaries", "object_id": "thin-note"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = main(["--vault-dir", str(temp_vault), "--from-queue", "stale-summaries", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["objects_rebuilt"] == 1
