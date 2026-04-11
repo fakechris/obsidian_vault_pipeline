@@ -683,6 +683,29 @@ def test_fix_links_timeout_scales_with_deep_dive_count(tmp_path):
     assert timeout > 300
 
 
+def test_knowledge_index_timeout_scales_with_evergreen_count(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    evergreen_dir = vault / "10-Knowledge" / "Evergreen"
+    evergreen_dir.mkdir(parents=True, exist_ok=True)
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+
+    for idx in range(400):
+        (evergreen_dir / f"evergreen_{idx}.md").write_text(
+            f"---\nnote_id: evergreen-{idx}\ntitle: Evergreen {idx}\ntype: evergreen\ndate: 2026-04-10\n---\n\n# Evergreen {idx}\n",
+            encoding="utf-8",
+        )
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    timeout = pipeline._calculate_timeout("knowledge_index")
+
+    assert timeout > 120
+
+
 def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
@@ -714,6 +737,42 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
     assert captured["step_name"] == "fix_links"
     assert "openclaw_pipeline.commands.migrate_broken_links" in " ".join(captured["cmd"])
     assert captured["timeout"] > 300
+
+
+def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    evergreen_dir = vault / "10-Knowledge" / "Evergreen"
+    evergreen_dir.mkdir(parents=True, exist_ok=True)
+    (vault / "60-Logs").mkdir(parents=True)
+
+    for idx in range(400):
+        (evergreen_dir / f"evergreen_{idx}.md").write_text(
+            f"---\nnote_id: evergreen-{idx}\ntitle: Evergreen {idx}\ntype: evergreen\ndate: 2026-04-10\n---\n\n# Evergreen {idx}\n",
+            encoding="utf-8",
+        )
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    captured: dict[str, object] = {}
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        captured["cmd"] = cmd
+        captured["step_name"] = step_name
+        captured["timeout"] = timeout
+        return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_knowledge_index(dry_run=False)
+
+    assert result["success"] is True
+    assert captured["step_name"] == "knowledge_index"
+    assert "openclaw_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
+    assert captured["timeout"] > 120
 
 
 def test_step_refine_runs_cleanup_then_breakdown(tmp_path, monkeypatch):

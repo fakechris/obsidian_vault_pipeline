@@ -504,7 +504,13 @@ class ConceptRegistry:
 
     # ========== New Resolution API ==========
 
-    def resolve_mention(self, mention: str, area: str | None = None) -> ResolutionResult:
+    def resolve_mention(
+        self,
+        mention: str,
+        area: str | None = None,
+        *,
+        include_related_context: bool = True,
+    ) -> ResolutionResult:
         """
         Resolve a mention to a registry entry using deterministic surface matching.
 
@@ -570,7 +576,7 @@ class ConceptRegistry:
                     normalized_query=norm,
                     matched_surface=norm,
                 )],
-                related_context=self._discover_related_context(mention),
+                related_context=self._discover_related_context(mention) if include_related_context else [],
             )
 
         # Step 3: Safe near match
@@ -604,7 +610,7 @@ class ConceptRegistry:
                 normalized_query=norm,
                 matched_surface=norm,
             )],
-            related_context=self._discover_related_context(mention),
+            related_context=self._discover_related_context(mention) if include_related_context else [],
         )
 
     def _dedupe_entries(self, records: list[SurfaceRecord]) -> list[RegistryEntry]:

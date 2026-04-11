@@ -781,7 +781,16 @@ class EnhancedPipeline:
         elif step == "refine":
             return 600  # cleanup + breakdown 可能扫描全库
         elif step == "knowledge_index":
-            return 120
+            file_count = len(
+                [
+                    path
+                    for path in self.layout.evergreen_dir.rglob("*.md")
+                    if "_Candidates" not in path.parts
+                ]
+            )
+            if file_count <= 0:
+                return 300
+            return min(14400, max(600, file_count * 2))
 
         return 1800  # 默认30分钟
 
@@ -1478,7 +1487,7 @@ class EnhancedPipeline:
             "--json",
         ]
 
-        result = self.run_command(cmd, "knowledge_index", timeout=120)
+        result = self.run_command(cmd, "knowledge_index", timeout=self._calculate_timeout("knowledge_index"))
 
         if result["success"]:
             print("✓ Knowledge index refresh completed")

@@ -116,7 +116,7 @@ def _build_surface_map(metadata_items: list[NoteMetadata]) -> dict[str, str]:
 
 
 def _resolve_target_slug(raw_target: str, registry: ConceptRegistry, surface_map: dict[str, str]) -> str | None:
-    resolved = registry.resolve_mention(raw_target)
+    resolved = registry.resolve_mention(raw_target, include_related_context=False)
     if resolved.action == ResolutionAction.LINK_EXISTING and resolved.entry:
         return resolved.entry.slug
 
@@ -273,10 +273,19 @@ def _dot_product(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
 
 
+def _remove_sqlite_artifacts(db_path: Path) -> None:
+    for candidate in (
+        db_path,
+        db_path.with_name(f"{db_path.name}-wal"),
+        db_path.with_name(f"{db_path.name}-shm"),
+    ):
+        if candidate.exists():
+            candidate.unlink()
+
+
 def _initialize_database(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    if db_path.exists():
-        db_path.unlink()
+    _remove_sqlite_artifacts(db_path)
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
     return conn
@@ -306,7 +315,12 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
     surface_map = _build_surface_map(metadata_items)
     known_slugs = {meta.note_id for meta in metadata_items}
 
-    with _initialize_database(layout.knowledge_db) as conn:
+    temp_db_path = layout.knowledge_db.with_name(f"{layout.knowledge_db.name}.tmp")
+    _remove_sqlite_artifacts(temp_db_path)
+
+    conn = None
+    try:
+        conn = _initialize_database(temp_db_path)
         page_rows = []
         timeline_rows = []
         embedding_rows = []
@@ -408,6 +422,15 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
             embedding_rows,
         )
         conn.commit()
+    except Exception:
+        if conn is not None:
+            conn.close()
+        _remove_sqlite_artifacts(temp_db_path)
+        raise
+    else:
+        assert conn is not None
+        conn.close()
+        temp_db_path.replace(layout.knowledge_db)
 
     return {
         "db_path": str(layout.knowledge_db),
