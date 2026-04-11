@@ -159,3 +159,72 @@ def test_extraction_dashboard_command_summarizes_profiles(temp_vault, capsys):
     assert payload["total_runs"] == 2
     assert payload["profiles"]["tech/doc_structure"]["run_count"] == 1
     assert payload["profiles"]["media/commentary_sentiment"]["run_count"] == 1
+
+
+def test_extract_preview_command_supports_research_tech_pack(temp_vault, capsys):
+    from openclaw_pipeline.commands import extract_preview
+    from openclaw_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    artifact_path = _write_run(
+        layout,
+        source_name="research-doc.md",
+        profile_name="tech/doc_structure",
+        values={"section_title": "Runtime", "summary": "Overview"},
+    )
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload["pack_name"] = "research-tech"
+    artifact_path.unlink()
+    research_artifact = layout.extraction_runs_dir / "research-tech" / "tech__doc_structure" / artifact_path.name
+    research_artifact.parent.mkdir(parents=True, exist_ok=True)
+    research_artifact.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    exit_code = extract_preview.main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "research-tech",
+            "--profile",
+            "tech/doc_structure",
+        ]
+    )
+
+    preview = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert preview["pack"] == "research-tech"
+    assert preview["record_count"] == 1
+
+
+def test_extraction_dashboard_command_supports_research_tech_pack(temp_vault, capsys):
+    from openclaw_pipeline.commands import extraction_dashboard
+    from openclaw_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    artifact_path = _write_run(
+        layout,
+        source_name="research-doc.md",
+        profile_name="tech/doc_structure",
+        values={"section_title": "Runtime", "summary": "Overview"},
+    )
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload["pack_name"] = "research-tech"
+    artifact_path.unlink()
+    research_artifact = layout.extraction_runs_dir / "research-tech" / "tech__doc_structure" / artifact_path.name
+    research_artifact.parent.mkdir(parents=True, exist_ok=True)
+    research_artifact.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    exit_code = extraction_dashboard.main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "research-tech",
+        ]
+    )
+
+    dashboard = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert dashboard["pack"] == "research-tech"
+    assert dashboard["total_runs"] == 1
+    assert dashboard["profiles"]["tech/doc_structure"]["run_count"] == 1
