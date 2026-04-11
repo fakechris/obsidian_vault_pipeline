@@ -152,6 +152,7 @@ openclaw-pack-<name>/
 示例：
 
 ```bash
+ovp-packs
 ovp --pack research-tech --profile full
 ovp-autopilot --pack research-tech --profile autopilot
 ovp --pack default-knowledge --profile full
@@ -163,6 +164,14 @@ ovp --pack media-editorial --profile daily-desk
 
 - Python entry point 组：`openclaw_pipeline.packs`
 - 显式 manifest 路径：环境变量 `OPENCLAW_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
+
+当前也可以直接通过：
+
+```bash
+ovp-packs --json
+```
+
+查看当前运行时可见的 builtin/external packs、角色、兼容基底和 profiles。
 
 对第三方 pack 来说，推荐优先提供 entry point；manifest 适合开发期和未安装场景。
 

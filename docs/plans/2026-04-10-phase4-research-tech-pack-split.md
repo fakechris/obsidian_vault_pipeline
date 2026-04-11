@@ -71,6 +71,23 @@ That keeps runtime stable while making the new pack real and reviewable.
 - current `default-knowledge` workflows still work unchanged
 - pack loader and compatibility tests cover the split
 - documentation explains the transitional status clearly
+- runtime can report pack roles and compatibility relationships without reading source
+
+## Completion Status
+
+Completed in this phase:
+
+- `research-tech` added as a first-class built-in pack
+- `default-knowledge` retained as a compatibility pack over the same core semantics
+- workflow, object projection, query, extraction visibility, review, and view surfaces made pack-aware
+- pack role metadata (`primary` vs `compatibility`) added to the runtime contract
+- `ovp-packs` added as a user-visible pack introspection command
+
+Still intentionally out of scope:
+
+- changing CLI defaults away from `default-knowledge`
+- implementing media or medical packs
+- shrinking `default-knowledge` to a final minimal demo-only surface
 
 ## Commit Boundary
 

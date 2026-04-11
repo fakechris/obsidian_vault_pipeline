@@ -76,6 +76,7 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 示例：
 
 ```bash
+ovp-packs
 ovp --pack research-tech --profile full
 ovp-autopilot --pack research-tech --profile autopilot --yes
 ovp --pack default-knowledge --profile full

@@ -78,6 +78,7 @@ The core runtime is now being formalized as a pack-aware platform.
 Examples:
 
 ```bash
+ovp-packs
 ovp --pack research-tech --profile full
 ovp-autopilot --pack research-tech --profile autopilot --yes
 ovp --pack default-knowledge --profile full
