@@ -122,8 +122,8 @@ pack 负责领域语义，而不是只放几段 prompt。它定义：
 
 当前内置的是：
 
-- `research-tech`：当前技术研究知识流的显式 pack
-- `default-knowledge`：默认兼容层
+- `research-tech`：当前技术研究知识流的显式 pack，也是默认 workflow pack
+- `default-knowledge`：兼容层
 
 未来媒体、医疗这类领域，应该各自作为外部 pack 工程接入。
 
@@ -138,7 +138,14 @@ profile 是某个 pack 下的一条可执行 DAG。
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
 
-这也是为什么现在可以显式运行：
+这也是为什么现在默认就会跑：
+
+```bash
+ovp --full
+ovp-autopilot --yes
+```
+
+也可以显式指定：
 
 ```bash
 ovp --pack research-tech --profile full

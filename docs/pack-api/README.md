@@ -77,6 +77,11 @@ Profile 是某个 pack 下的一条可执行 DAG。
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
 
+当前默认 workflow 入口走的是：
+
+- `ovp --full` -> `research-tech/full`
+- `ovp-autopilot` -> `research-tech/autopilot`
+
 ---
 
 ## 2. 第一个标准 Pack

@@ -124,8 +124,8 @@ A pack is not just a prompt bundle. It defines domain semantics:
 
 The built-in packs are:
 
-- `research-tech`: the explicit technical research pack
-- `default-knowledge`: the default compatibility layer
+- `research-tech`: the explicit technical research pack and the default workflow pack
+- `default-knowledge`: the compatibility layer
 
 Future domains such as media or medical should arrive as external pack projects.
 
@@ -140,7 +140,14 @@ The built-in profiles currently shipped are:
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
 
-That is why these are now first-class runtime invocations:
+That is why the default workflow path now runs:
+
+```bash
+ovp --full
+ovp-autopilot --yes
+```
+
+You can still select packs explicitly:
 
 ```bash
 ovp --pack research-tech --profile full
