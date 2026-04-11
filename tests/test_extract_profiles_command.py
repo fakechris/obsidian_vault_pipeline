@@ -55,3 +55,40 @@ def test_extract_profiles_command_writes_derived_json(temp_vault, monkeypatch):
     assert payload["profile_name"] == "tech/doc_structure"
     assert payload["records"][0]["values"]["section_title"] == "Architecture"
     assert not list((temp_vault / "10-Knowledge" / "Evergreen").glob("*.md"))
+
+
+def test_extract_profiles_command_uses_default_profile_extractor(temp_vault):
+    from openclaw_pipeline.commands import extract_profiles
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "50-Inbox" / "01-Raw" / "workflow.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        "# System\n\n## Overview\n\nThis runtime coordinates tools.\n\n## Flow\n\n- Fetch source\n- Extract records\n- Persist artifacts\n",
+        encoding="utf-8",
+    )
+
+    result = extract_profiles.main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--profile",
+            "tech/doc_structure",
+            "--source",
+            str(source),
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    artifacts = sorted(layout.extraction_runs_dir.rglob("*.json"))
+
+    assert result == 0
+    assert artifacts
+    payload = json.loads(artifacts[0].read_text(encoding="utf-8"))
+    assert payload["records"]
+    assert any(
+        record["values"]["section_title"] in {"System", "Overview", "Flow"}
+        for record in payload["records"]
+    )

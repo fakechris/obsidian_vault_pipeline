@@ -598,6 +598,8 @@ def test_knowledge_tools_json_exposes_expected_read_tools():
     assert {
         "knowledge_search",
         "knowledge_query",
+        "knowledge_truth_search",
+        "knowledge_contradictions",
         "knowledge_get",
         "knowledge_stats",
         "knowledge_audit_recent",
@@ -625,10 +627,16 @@ Agent harness architecture manages tools and execution layers.
     )
 
     search_result = dispatch_knowledge_tool(temp_vault, "knowledge_search", {"query": "architecture", "limit": 1})
+    truth_result = dispatch_knowledge_tool(temp_vault, "knowledge_truth_search", {"query": "architecture", "limit": 1})
+    contradictions_result = dispatch_knowledge_tool(temp_vault, "knowledge_contradictions", {"limit": 5})
     get_result = dispatch_knowledge_tool(temp_vault, "knowledge_get", {"slug": "agent-harness"})
     stats_result = dispatch_knowledge_tool(temp_vault, "knowledge_stats", {})
 
     assert search_result["results"][0]["slug"] == "agent-harness"
+    assert truth_result["results"]
+    assert truth_result["results"][0]["object_id"] == "agent-harness"
+    assert truth_result["results"][0]["claim_kind"] == "page_summary"
+    assert contradictions_result["items"] == []
     assert get_result["page"]["slug"] == "agent-harness"
     assert stats_result["stats"]["pages"] == 1
 
