@@ -9,9 +9,19 @@
 
 import time
 from pathlib import Path
-from typing import Callable, List, Set, Optional, Dict
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifiedEvent
+from typing import Any, Callable, Dict, List, Optional, Set
+
+try:  # pragma: no cover - exercised via import contract tests
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+    WATCHDOG_AVAILABLE = True
+except ModuleNotFoundError:  # pragma: no cover - environment-dependent
+    WATCHDOG_AVAILABLE = False
+
+    class FileSystemEventHandler:  # type: ignore[override]
+        pass
+
+    Observer = None  # type: ignore[assignment]
 
 
 class VaultEventHandler(FileSystemEventHandler):
@@ -33,13 +43,13 @@ class VaultEventHandler(FileSystemEventHandler):
                 return source
         return None
 
-    def on_created(self, event):
+    def on_created(self, event: Any):
         if not event.is_directory and event.src_path.endswith('.md'):
             source = self._get_source(event.src_path)
             if source:
                 self.callback(source, event.src_path)
 
-    def on_modified(self, event):
+    def on_modified(self, event: Any):
         pass
 
 
@@ -118,6 +128,11 @@ class MultiSourceWatcher:
         """启动实时监控（使用 watchdog）"""
         if self.observer:
             return  # 已启动
+        if not WATCHDOG_AVAILABLE:
+            raise RuntimeError(
+                "watchdog is required for realtime autopilot watching; "
+                "install watchdog or use polling mode"
+            )
 
         handler = VaultEventHandler(self.source_map, self.callback)
         self.observer = Observer()

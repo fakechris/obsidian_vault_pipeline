@@ -7,6 +7,7 @@ from pathlib import Path
 from openclaw_pipeline.autopilot.queue import Task, TaskQueue
 from openclaw_pipeline.autopilot.daemon import AutoPilotDaemon
 from openclaw_pipeline.commands.repair import repair_autopilot
+from openclaw_pipeline.autopilot.watcher import MultiSourceWatcher, WATCHDOG_AVAILABLE
 
 
 def test_task_queue_deduplicates_active_file_tasks(tmp_path):
@@ -128,3 +129,28 @@ def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monk
     assert result["success"] is True
     assert result["stages"] == ["interpretation", "absorb", "moc", "refine", "knowledge_index"]
     assert order == ["absorb", "moc", "refine", "knowledge_index"]
+
+
+def test_autopilot_watcher_import_does_not_require_watchdog(tmp_path):
+    watcher = MultiSourceWatcher({"inbox": tmp_path}, lambda source, path: None)
+
+    assert watcher.source_map["inbox"] == tmp_path
+    assert watcher.observer is None
+
+
+def test_autopilot_realtime_watcher_behaves_cleanly_without_watchdog(tmp_path):
+    watcher = MultiSourceWatcher({"inbox": tmp_path}, lambda source, path: None)
+
+    if WATCHDOG_AVAILABLE:
+        watcher.start_realtime()
+        assert watcher.running is True
+        watcher.stop_realtime()
+        assert watcher.observer is None
+        return
+
+    try:
+        watcher.start_realtime()
+    except RuntimeError as exc:
+        assert "watchdog" in str(exc)
+    else:
+        raise AssertionError("expected realtime watcher to require watchdog")

@@ -187,7 +187,7 @@ class AutoPilotDaemon:
 
         # 组件初始化
         self.queue = TaskQueue(self.vault_dir / "60-Logs" / "autopilot.db")
-        self.watcher: Optional[PollingWatcher] = None
+        self.watcher: Optional[MultiSourceWatcher] = None
         self.executor: Optional[ThreadPoolExecutor] = None
 
         # 质量检查器
