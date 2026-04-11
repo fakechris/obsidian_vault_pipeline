@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from ..knowledge_index import contradiction_object_ids, rebuild_compiled_summaries, resolve_contradictions
@@ -16,7 +17,11 @@ def _load_contradiction_ids_from_queue(layout: VaultLayout, queue_name: str) -> 
     contradiction_ids: list[str] = []
     queue_files_by_id: dict[str, list[Path]] = {}
     for artifact in sorted(queue_dir.rglob("*.json")):
-        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            print(f"Skipping malformed queue artifact {artifact}: {exc}", file=sys.stderr)
+            continue
         contradiction_id = payload.get("contradiction_id")
         if contradiction_id:
             resolved_id = str(contradiction_id)

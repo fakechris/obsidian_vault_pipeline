@@ -162,8 +162,10 @@ def _split_sections(text: str) -> list[Section]:
         body_start = match.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         title = match.group(2).strip()
-        body = text[body_start:end].strip()
-        sections.append(Section(title=title, body=body, char_start=body_start, char_end=end))
+        raw_body = text[body_start:end]
+        leading_stripped = len(raw_body) - len(raw_body.lstrip())
+        body = raw_body.strip()
+        sections.append(Section(title=title, body=body, char_start=body_start + leading_stripped, char_end=end))
     return sections
 
 

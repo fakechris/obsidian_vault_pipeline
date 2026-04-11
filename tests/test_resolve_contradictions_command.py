@@ -220,3 +220,33 @@ def test_resolve_contradictions_command_only_clears_resolved_queue_files(temp_va
     assert payload["cleared_queue_files"] == [str(resolved_file)]
     assert not resolved_file.exists()
     assert unresolved_file.exists()
+
+
+def test_resolve_contradictions_command_skips_malformed_queue_artifacts(temp_vault, capsys):
+    from openclaw_pipeline.commands.resolve_contradictions import main
+    from openclaw_pipeline.runtime import VaultLayout
+
+    contradiction_id, _one, _two = _build_contradiction(temp_vault)
+    layout = VaultLayout.from_vault(temp_vault)
+    queue_dir = layout.review_queue_dir / "contradictions"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    (queue_dir / "broken.json").write_text("{not valid json", encoding="utf-8")
+    valid_file = queue_dir / "resolved.json"
+    valid_file.write_text(json.dumps({"contradiction_id": contradiction_id}, ensure_ascii=False), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--from-queue",
+            "contradictions",
+            "--status",
+            "dismissed",
+            "--json",
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["resolved_count"] == 1
+    assert payload["cleared_queue_files"] == [str(valid_file)]
