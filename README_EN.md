@@ -78,9 +78,9 @@ The core runtime is now being formalized as a pack-aware platform.
 Examples:
 
 ```bash
-ovp --pack default-knowledge --profile full
 ovp --pack research-tech --profile full
-ovp-autopilot --pack default-knowledge --profile autopilot --yes
+ovp-autopilot --pack research-tech --profile autopilot --yes
+ovp --pack default-knowledge --profile full
 ```
 
 Pack API documentation for third-party developers lives in:
@@ -134,16 +134,18 @@ A workflow profile is an executable DAG under a pack.
 
 The built-in profiles currently shipped are:
 
-- `default-knowledge/full`
-- `default-knowledge/autopilot`
 - `research-tech/full`
 - `research-tech/autopilot`
+- `default-knowledge/full`
+- `default-knowledge/autopilot`
 
 That is why these are now first-class runtime invocations:
 
 ```bash
+ovp --pack research-tech --profile full
+ovp-autopilot --pack research-tech --profile autopilot --yes
+# compatibility path
 ovp --pack default-knowledge --profile full
-ovp-autopilot --pack default-knowledge --profile autopilot --yes
 ```
 
 ## Plugin Design

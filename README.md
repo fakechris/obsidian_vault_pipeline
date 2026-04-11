@@ -76,9 +76,9 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 示例：
 
 ```bash
-ovp --pack default-knowledge --profile full
 ovp --pack research-tech --profile full
-ovp-autopilot --pack default-knowledge --profile autopilot --yes
+ovp-autopilot --pack research-tech --profile autopilot --yes
+ovp --pack default-knowledge --profile full
 ```
 
 面向第三方 pack 作者的 API 文档在：
@@ -132,16 +132,18 @@ profile 是某个 pack 下的一条可执行 DAG。
 
 当前已经实现的标准 profile：
 
-- `default-knowledge/full`
-- `default-knowledge/autopilot`
 - `research-tech/full`
 - `research-tech/autopilot`
+- `default-knowledge/full`
+- `default-knowledge/autopilot`
 
 这也是为什么现在可以显式运行：
 
 ```bash
+ovp --pack research-tech --profile full
+ovp-autopilot --pack research-tech --profile autopilot --yes
+# 兼容路径
 ovp --pack default-knowledge --profile full
-ovp-autopilot --pack default-knowledge --profile autopilot --yes
 ```
 
 ## 插件设计

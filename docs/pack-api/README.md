@@ -65,10 +65,10 @@ Profile 是某个 pack 下的一条可执行 DAG。
 
 - `research-tech/full`
 - `research-tech/autopilot`
-- `default-knowledge/full`
-- `default-knowledge/autopilot`
 - `media-editorial/daily-desk`
 - `media-editorial/weibo-fastlane`
+- `default-knowledge/full`
+- `default-knowledge/autopilot`
 
 当前 core 已落地的是：
 
@@ -153,10 +153,10 @@ openclaw-pack-<name>/
 
 ```bash
 ovp --pack research-tech --profile full
-ovp --pack default-knowledge --profile full
-ovp --pack media-editorial --profile daily-desk
 ovp-autopilot --pack research-tech --profile autopilot
+ovp --pack default-knowledge --profile full
 ovp-autopilot --pack default-knowledge --profile autopilot
+ovp --pack media-editorial --profile daily-desk
 ```
 
 当前 core 已支持两种发现方式：
