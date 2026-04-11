@@ -31,6 +31,8 @@ class BaseDomainPack:
     name: str
     version: str
     api_version: int
+    role: str = "domain"
+    compatibility_base: str | None = None
     _object_kinds: list[ObjectKindSpec] = field(default_factory=list)
     _workflow_profiles: list[WorkflowProfile] = field(default_factory=list)
     _discoverable_object_kinds: list[str] = field(default_factory=list)

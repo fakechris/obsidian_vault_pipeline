@@ -22,6 +22,10 @@ def load_primary_pack() -> BaseDomainPack:
     return load_builtin_pack(PRIMARY_PACK_NAME)
 
 
+def list_builtin_packs() -> list[BaseDomainPack]:
+    return [load_builtin_pack(name) for name in BUILTIN_PACK_LOADERS]
+
+
 def load_builtin_pack(name: str) -> BaseDomainPack:
     module_name, factory_name = BUILTIN_PACK_LOADERS[name]
     module = __import__(module_name, fromlist=[factory_name])

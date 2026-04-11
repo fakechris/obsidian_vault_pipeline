@@ -13,6 +13,7 @@ def get_pack() -> BaseDomainPack:
         name="research-tech",
         version="0.1.0",
         api_version=1,
+        role="primary",
         _object_kinds=list(RESEARCH_TECH_OBJECT_KINDS),
         _workflow_profiles=list(RESEARCH_TECH_WORKFLOW_PROFILES),
         _extraction_profiles=list(RESEARCH_TECH_EXTRACTION_PROFILES),

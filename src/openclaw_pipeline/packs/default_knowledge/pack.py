@@ -13,6 +13,8 @@ def get_pack() -> BaseDomainPack:
         name="default-knowledge",
         version="0.1.0",
         api_version=1,
+        role="compatibility",
+        compatibility_base="research-tech",
         _object_kinds=list(DEFAULT_KNOWLEDGE_OBJECT_KINDS),
         _workflow_profiles=[
             DEFAULT_KNOWLEDGE_FULL_PROFILE,
