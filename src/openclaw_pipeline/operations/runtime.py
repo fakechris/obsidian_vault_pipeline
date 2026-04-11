@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..derived.paths import review_queue_path
 from ..extraction.artifacts import iter_run_results
+from ..packs.loader import DEFAULT_PACK_NAME
 from ..runtime import VaultLayout, iter_markdown_files, read_markdown_frontmatter, resolve_vault_dir
 from ..truth_store import subject_key
 from .specs import OperationProfileSpec
@@ -35,7 +36,7 @@ def _noop_items(_: Path) -> list[dict[str, object]]:
 
 
 def _review_queue_items(vault_dir: Path) -> list[dict[str, object]]:
-    return []
+    return _review_queue_items_for_pack(vault_dir, pack_name=DEFAULT_PACK_NAME)
 
 
 def _review_queue_items_for_pack(vault_dir: Path, *, pack_name: str) -> list[dict[str, object]]:

@@ -3,6 +3,29 @@ from __future__ import annotations
 import json
 
 
+def test_review_queue_builder_defaults_to_compatibility_pack(temp_vault):
+    from openclaw_pipeline.extraction.artifacts import write_run_result
+    from openclaw_pipeline.extraction.results import ExtractionRunResult
+    from openclaw_pipeline.operations.runtime import _review_queue_items
+    from openclaw_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    result = ExtractionRunResult(
+        pack_name="default-knowledge",
+        profile_name="tech/doc_structure",
+        source_path="50-Inbox/01-Raw/example.md",
+        records=[],
+    )
+    write_run_result(layout, result)
+
+    items = _review_queue_items(temp_vault)
+
+    assert len(items) == 1
+    assert items[0]["queue_name"] == "review"
+    assert items[0]["issue_type"] == "extraction-empty"
+    assert items[0]["profile"] == "tech/doc_structure"
+
+
 def test_run_operations_help_mentions_primary_pack(capsys):
     from openclaw_pipeline.commands.run_operations import main
 
