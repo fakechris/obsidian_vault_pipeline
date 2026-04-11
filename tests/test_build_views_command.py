@@ -159,6 +159,56 @@ def test_build_views_command_can_render_extraction_overview(temp_vault):
     assert "50-Inbox/01-Raw/example.md" in content
 
 
+def test_build_views_command_can_render_extraction_overview_for_research_tech(temp_vault):
+    import json
+    from pathlib import Path
+
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.derived.paths import extraction_run_path
+    from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult
+    from openclaw_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    artifact = extraction_run_path(
+        layout,
+        pack_name="research-tech",
+        profile_name="tech/doc_structure",
+        source_path=Path("50-Inbox/01-Raw/research.md"),
+    )
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            ExtractionRunResult(
+                pack_name="research-tech",
+                profile_name="tech/doc_structure",
+                source_path="50-Inbox/01-Raw/research.md",
+                records=[ExtractionRecord(values={"section_title": "Architecture"}, spans=[])],
+            ).to_dict(),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "research-tech",
+            "--view",
+            "overview/extraction",
+        ]
+    )
+
+    output_path = layout.compiled_views_dir / "research-tech" / "overview__extraction.md"
+
+    assert result == 0
+    assert output_path.exists()
+    content = output_path.read_text(encoding="utf-8")
+    assert "# overview/extraction" in content
+    assert "research.md" in content
+
+
 def test_build_views_command_can_materialize_object_page_from_truth_store(temp_vault):
     from openclaw_pipeline.commands.build_views import main
     from openclaw_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions

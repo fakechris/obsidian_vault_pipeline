@@ -53,20 +53,25 @@ This repository started as a set of Obsidian automation scripts, but that model 
 The current architecture is the direct answer to those failures:
 
 - the six-layer runtime makes orchestration, canonical state, and derived state explicit
-- `default-knowledge` freezes the current default domain semantics as a pack instead of scattering them through core
+- `research-tech` makes the current engineering research semantics explicit
+- `default-knowledge` is being reduced to a default compatibility layer instead of carrying every domain semantic
 - Pack API turns future domains into installable packs rather than more hardcoded branches inside the runtime
 
 So the project is no longer just a Vault automation repo. It is now:
 
 > an extensible knowledge orchestration platform for Obsidian-style vault workflows
 
-with `default-knowledge` as the first built-in standard pack.
+with:
+
+- `research-tech` as the first explicit built-in standard pack
+- `default-knowledge` retained as the default compatibility pack
 
 ## Domain Packs
 
 The core runtime is now being formalized as a pack-aware platform.
 
-- Built-in standard pack: `default-knowledge`
+- Built-in standard pack: `research-tech`
+- Default compatibility pack: `default-knowledge`
 - Runtime selection is exposed through `--pack` and `--profile`
 - Third-party packs can be discovered through the `openclaw_pipeline.packs` entry point group or the `OPENCLAW_PACK_MANIFESTS` manifest list
 
@@ -74,6 +79,7 @@ Examples:
 
 ```bash
 ovp --pack default-knowledge --profile full
+ovp --pack research-tech --profile full
 ovp-autopilot --pack default-knowledge --profile autopilot --yes
 ```
 
@@ -115,7 +121,12 @@ A pack is not just a prompt bundle. It defines domain semantics:
 - absorb / refine / lint rules
 - schemas / templates / prompt resources
 
-The built-in pack is `default-knowledge`. Future domains such as media, medical, or engineering research should arrive as external pack projects.
+The built-in packs are:
+
+- `research-tech`: the explicit technical research pack
+- `default-knowledge`: the default compatibility layer
+
+Future domains such as media or medical should arrive as external pack projects.
 
 ### 3. Workflow Profile
 
@@ -125,6 +136,8 @@ The built-in profiles currently shipped are:
 
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
+- `research-tech/full`
+- `research-tech/autopilot`
 
 That is why these are now first-class runtime invocations:
 

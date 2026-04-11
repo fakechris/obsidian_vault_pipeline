@@ -103,6 +103,7 @@ ovp-resolve-contradictions = "openclaw_pipeline.commands.resolve_contradictions:
 
 [project.entry-points."openclaw_pipeline.packs"]
 default-knowledge = "openclaw_pipeline.packs.default_knowledge:get_pack"
+research-tech = "openclaw_pipeline.packs.research_tech:get_pack"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/openclaw_pipeline"]

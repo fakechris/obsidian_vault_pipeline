@@ -94,6 +94,59 @@ def test_run_operations_command_writes_extraction_review_items(temp_vault):
     assert payload["profile"] == "tech/doc_structure"
 
 
+def test_run_operations_command_uses_profile_pack_for_extraction_review_items(temp_vault):
+    from openclaw_pipeline.commands.run_operations import main
+    from openclaw_pipeline.derived.paths import extraction_run_path
+    from openclaw_pipeline.extraction.results import ExtractionRunResult
+    from openclaw_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    source_path = temp_vault / "50-Inbox" / "01-Raw" / "research.md"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("# Research\n\nBody.\n", encoding="utf-8")
+
+    artifact = extraction_run_path(
+        layout,
+        pack_name="research-tech",
+        profile_name="tech/doc_structure",
+        source_path=source_path.relative_to(temp_vault),
+    )
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            ExtractionRunResult(
+                pack_name="research-tech",
+                profile_name="tech/doc_structure",
+                source_path=str(source_path.relative_to(temp_vault)),
+                records=[],
+            ).to_dict(),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "research-tech",
+            "--profile",
+            "vault/review_queue",
+        ]
+    )
+
+    artifacts = sorted(layout.review_queue_dir.rglob("*.json"))
+
+    assert result == 0
+    assert artifacts
+    payload = json.loads(artifacts[-1].read_text(encoding="utf-8"))
+    assert payload["queue_name"] == "review"
+    assert payload["issue_type"] == "extraction-empty"
+    assert payload["profile"] == "tech/doc_structure"
+    assert payload["file"] == "50-Inbox/01-Raw/research.md"
+
+
 def test_run_operations_command_writes_contradiction_review_items(temp_vault):
     from openclaw_pipeline.commands.run_operations import main
     from openclaw_pipeline.knowledge_index import rebuild_knowledge_index

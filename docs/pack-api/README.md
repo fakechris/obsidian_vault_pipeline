@@ -5,12 +5,14 @@
 当前状态：
 
 - 这不是纯设计稿了，core 已经实现了最小 pack runtime
-- 内置 `default-knowledge` 已经按 pack 运行
+- 内置 `research-tech` 已经按 pack 运行
+- `default-knowledge` 当前保留为默认兼容 pack
 - `ovp` / `ovp-autopilot` 已经支持 `--pack` / `--profile`
 - core 已支持 entry point 和 manifest 两种 pack 发现路径
 
 这套 API 的目标不是让外部开发者“改 core”，而是让他们在 **不破坏 core 运行时契约** 的前提下，开发自己的领域包：
 
+- `research-tech`
 - `default-knowledge`
 - `media-editorial`
 - `medical-evidence`
@@ -61,6 +63,8 @@ Profile 是某个 pack 下的一条可执行 DAG。
 
 例如：
 
+- `research-tech/full`
+- `research-tech/autopilot`
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
 - `media-editorial/daily-desk`
@@ -68,6 +72,8 @@ Profile 是某个 pack 下的一条可执行 DAG。
 
 当前 core 已落地的是：
 
+- `research-tech/full`
+- `research-tech/autopilot`
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
 
@@ -75,13 +81,21 @@ Profile 是某个 pack 下的一条可执行 DAG。
 
 ## 2. 第一个标准 Pack
 
-平台的第一个标准 pack 是：
+平台当前的第一套显式标准 pack 是：
+
+```text
+research-tech
+```
+
+它就是当前仓库现有的偏技术研究工作流，被正式包装成第一套标准领域包。
+
+同时：
 
 ```text
 default-knowledge
 ```
 
-它就是当前仓库现有的偏技术/知识管理工作流，被正式包装成默认领域包。
+当前仍保留为默认兼容 pack，用来保证既有 CLI 和运行时默认值稳定。
 
 这意味着：
 
@@ -138,8 +152,10 @@ openclaw-pack-<name>/
 示例：
 
 ```bash
+ovp --pack research-tech --profile full
 ovp --pack default-knowledge --profile full
 ovp --pack media-editorial --profile daily-desk
+ovp-autopilot --pack research-tech --profile autopilot
 ovp-autopilot --pack default-knowledge --profile autopilot
 ```
 

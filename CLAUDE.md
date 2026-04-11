@@ -8,9 +8,10 @@
 
 ## 当前平台边界
 
-- 当前内置标准 pack 是 `default-knowledge`
-- 主流程可显式选择 `--pack default-knowledge --profile full`
-- AutoPilot 可显式选择 `--pack default-knowledge --profile autopilot`
+- 当前第一套显式内置标准 pack 是 `research-tech`
+- `default-knowledge` 当前保留为默认兼容 pack
+- 主流程可显式选择 `--pack research-tech --profile full`
+- AutoPilot 可显式选择 `--pack research-tech --profile autopilot`
 - 第三方领域包通过 Pack API 接入，文档见 `docs/pack-api/`
 
 ---

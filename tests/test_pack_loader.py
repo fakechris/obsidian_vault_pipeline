@@ -24,9 +24,16 @@ def test_load_pack_by_name_returns_default_knowledge():
     assert pack.name == "default-knowledge"
 
 
+def test_load_pack_by_name_returns_research_tech():
+    from openclaw_pipeline.packs.loader import load_pack
+
+    pack = load_pack("research-tech")
+
+    assert pack.name == "research-tech"
+
+
 def test_load_pack_rejects_unknown_pack():
     from openclaw_pipeline.packs.loader import load_pack
 
     with pytest.raises(ValueError):
         load_pack("unknown-pack")
-
