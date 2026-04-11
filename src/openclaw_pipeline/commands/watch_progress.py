@@ -111,7 +111,19 @@ def _count_state(layout: VaultLayout) -> dict[str, int]:
 def collect_progress_snapshot(vault_dir: Path, process_lines: list[str] | None = None) -> dict[str, Any]:
     layout = VaultLayout.from_vault(vault_dir)
     process_lines = detect_openclaw_process_lines(layout.vault_dir) if process_lines is None else process_lines
-    reports = sorted(layout.pipeline_reports_dir.glob("pipeline-report-*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    def _safe_mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return float("-inf")
+
+    reports = sorted(
+        layout.pipeline_reports_dir.glob("pipeline-report-*.md"),
+        key=_safe_mtime,
+        reverse=True,
+    )
+    reports = [path for path in reports if _safe_mtime(path) != float("-inf")]
     return {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "vault_dir": str(layout.vault_dir),

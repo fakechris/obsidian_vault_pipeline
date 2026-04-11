@@ -1117,6 +1117,18 @@ class EnhancedPipeline:
         print("STEP 5: Quality Check")
         print("="*60)
 
+        if batch_size is not None and batch_size <= 0:
+            return {
+                "success": False,
+                "error": f"invalid_batch_size ({batch_size} <= 0)",
+                "quality_checked": 0,
+                "quality_qualified": 0,
+                "quality_failed": 0,
+                "quality_qualified_files": [],
+                "quality_results_json": None,
+                "quality_score": 0.0,
+            }
+
         target_files = collect_quality_files(self.layout, all_areas=True)
         total_files = len(target_files)
         effective_batch_size = batch_size or total_files
@@ -1248,8 +1260,9 @@ class EnhancedPipeline:
         candidates = sorted(
             results_dir.glob("quality-results-*.json"),
             key=lambda path: path.stat().st_mtime,
-            reverse=True,
         )
+        merged: list[str] = []
+        seen: set[str] = set()
         for results_file in candidates:
             try:
                 payload = json.loads(results_file.read_text(encoding="utf-8"))
@@ -1257,8 +1270,14 @@ class EnhancedPipeline:
                 continue
             qualified_files = payload.get("qualified_files")
             if isinstance(qualified_files, list):
-                return [str(Path(path).resolve()) for path in qualified_files if Path(path).exists()]
-        return []
+                for path in qualified_files:
+                    resolved_path = Path(path).resolve()
+                    resolved = str(resolved_path)
+                    if not resolved_path.exists() or resolved in seen:
+                        continue
+                    seen.add(resolved)
+                    merged.append(resolved)
+        return merged
 
     def step_absorb(
         self,
@@ -1280,6 +1299,12 @@ class EnhancedPipeline:
                 只要 normalized_files 非空，就按文件级白名单执行 absorb，不再使用 quality_score
                 做整批阻断。
         """
+        if batch_size is not None and batch_size <= 0:
+            return {
+                "success": False,
+                "error": f"invalid_batch_size ({batch_size} <= 0)",
+            }
+
         normalized_files = None
         if qualified_files is None:
             fallback_files = self._load_latest_qualified_files()

@@ -71,6 +71,32 @@ def test_collect_progress_snapshot_reads_counts_transactions_and_latest_event(te
     assert snapshot["active_processes"] == 1
 
 
+def test_collect_progress_snapshot_ignores_report_removed_during_sort(temp_vault, monkeypatch):
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.pipeline_reports_dir.mkdir(parents=True, exist_ok=True)
+    report = layout.pipeline_reports_dir / "pipeline-report-20260409-001500.md"
+    report.write_text("# report", encoding="utf-8")
+
+    from openclaw_pipeline.commands import watch_progress
+
+    original_stat = Path.stat
+    calls = {"count": 0}
+
+    def flaky_stat(self: Path, *args, **kwargs):
+        if self == report:
+            calls["count"] += 1
+            if calls["count"] >= 1:
+                report.unlink(missing_ok=True)
+                raise FileNotFoundError(self)
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(watch_progress.Path, "stat", flaky_stat)
+
+    snapshot = watch_progress.collect_progress_snapshot(temp_vault, process_lines=[])
+
+    assert snapshot["latest_report"] is None
+
+
 def test_format_progress_snapshot_shows_deltas(temp_vault):
     from openclaw_pipeline.commands.watch_progress import format_progress_snapshot
 

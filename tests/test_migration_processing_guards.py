@@ -468,6 +468,18 @@ def test_processors_default_to_auto_vault_model_env(monkeypatch):
     assert github_client.model == "anthropic/MiniMax-M2.7-highspeed"
 
 
+def test_article_processor_defaults_api_base_from_shared_resolver(monkeypatch):
+    monkeypatch.delenv("AUTO_VAULT_API_BASE", raising=False)
+    monkeypatch.delenv("SPEC_ORCH_LLM_API_BASE", raising=False)
+    monkeypatch.delenv("MINIMAX_ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
+
+    article_client = ArticleLiteLLMClient()
+
+    assert article_client.api_base == "https://api.minimaxi.com/anthropic"
+
+
 def test_processors_fall_back_to_minimax_api_key_env(monkeypatch):
     monkeypatch.delenv("AUTO_VAULT_API_KEY", raising=False)
     monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")

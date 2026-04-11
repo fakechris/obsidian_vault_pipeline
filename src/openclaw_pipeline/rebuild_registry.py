@@ -18,7 +18,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .concept_registry import ConceptRegistry, ConceptEntry, STATUS_ACTIVE, STATUS_CANDIDATE
+from .concept_registry import (
+    ConceptRegistry,
+    ConceptEntry,
+    STATUS_ACTIVE,
+    STATUS_CANDIDATE,
+    normalize_surface,
+)
 from .runtime import iter_markdown_files, resolve_vault_dir
 
 
@@ -217,8 +223,9 @@ def candidate_file_slugs(vault_dir: Path) -> set[str]:
         if note_id:
             slugs.add(note_id)
         elif title:
-            slugs.add(title)
-        slugs.add(path.stem)
+            slugs.add(normalize_surface(title).replace(" ", "-"))
+        else:
+            slugs.add(path.stem)
     return slugs
 
 
@@ -310,7 +317,9 @@ def reconcile_registry(vault_dir: Path, write: bool = False, verbose: bool = Fal
         retained_entries = [
             entry
             for entry in registry.entries
-            if entry.status == STATUS_CANDIDATE and entry.slug in candidate_slugs
+            if entry.slug not in built_slugs and (
+                entry.status != STATUS_CANDIDATE or entry.slug in candidate_slugs
+            )
         ]
         for slug in sorted(built_slugs):
             existing = next((entry for entry in retained_entries if entry.slug == slug), None)

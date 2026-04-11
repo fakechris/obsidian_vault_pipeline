@@ -292,6 +292,21 @@ def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
     assert calls[1][1] == 600
 
 
+def test_step_quality_rejects_non_positive_batch_size(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    result = pipeline.step_quality(batch_size=0, dry_run=False)
+
+    assert result["success"] is False
+    assert result["error"] == "invalid_batch_size (0 <= 0)"
+
+
 def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
@@ -438,6 +453,34 @@ def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeyp
     assert captured["timeout"] == 600
 
 
+def test_load_latest_qualified_files_unions_batches(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    reports_dir = vault / "60-Logs" / "quality-reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    file_a = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "a_深度解读.md"
+    file_b = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "b_深度解读.md"
+    file_a.parent.mkdir(parents=True, exist_ok=True)
+    file_a.write_text("# a\n", encoding="utf-8")
+    file_b.write_text("# b\n", encoding="utf-8")
+
+    (reports_dir / "quality-results-20260409-000001.json").write_text(
+        __import__("json").dumps({"qualified_files": [str(file_a)]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (reports_dir / "quality-results-20260409-000002.json").write_text(
+        __import__("json").dumps({"qualified_files": [str(file_a), str(file_b)]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    assert pipeline._load_latest_qualified_files() == [str(file_a.resolve()), str(file_b.resolve())]
+
+
 def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
@@ -575,6 +618,21 @@ def test_step_absorb_parses_json_payload_after_log_prefix(tmp_path, monkeypatch)
     assert result["success"] is True
     assert result["summary"]["files_processed"] == 1
     assert result["summary"]["concepts_promoted"] == 1
+
+
+def test_step_absorb_rejects_non_positive_batch_size(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    result = pipeline.step_absorb(batch_size=-1)
+
+    assert result["success"] is False
+    assert result["error"] == "invalid_batch_size (-1 <= 0)"
 
 
 def test_run_command_timeout_is_failure(tmp_path):

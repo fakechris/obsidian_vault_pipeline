@@ -45,9 +45,19 @@ except ImportError:  # pragma: no cover - script mode fallback
     from runtime import VaultLayout, resolve_vault_dir
 
 try:
-    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+    from .llm_defaults import (
+        DEFAULT_MINIMAX_MODEL,
+        normalize_model_for_api_base,
+        resolve_api_base,
+        resolve_api_key,
+    )
 except ImportError:  # pragma: no cover - script mode fallback
-    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base
+    from llm_defaults import (
+        DEFAULT_MINIMAX_MODEL,
+        normalize_model_for_api_base,
+        resolve_api_base,
+        resolve_api_key,
+    )
 
 try:
     from .markdown_generation import sanitize_generated_markdown
@@ -196,23 +206,6 @@ class LiteLLMClient:
 
     VALID_API_TYPES = ("anthropic", "openai")
 
-    # API密钥回退链
-    _API_KEY_FALLBACKS = (
-        "AUTO_VAULT_API_KEY",
-        "SPEC_ORCH_LLM_API_KEY",
-        "MINIMAX_API_KEY",
-        "MINIMAX_CN_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_API_KEY",
-    )
-
-    _API_BASE_FALLBACKS = (
-        "AUTO_VAULT_API_BASE",
-        "SPEC_ORCH_LLM_API_BASE",
-        "MINIMAX_ANTHROPIC_BASE_URL",
-        "ANTHROPIC_BASE_URL",
-    )
-
     def __init__(
         self,
         *,
@@ -225,8 +218,8 @@ class LiteLLMClient:
         if api_type not in self.VALID_API_TYPES:
             raise ValueError(f"api_type must be one of {self.VALID_API_TYPES}")
         self.api_type = api_type
-        self._api_key = api_key or self._resolve_api_key()
-        self.api_base = api_base or self._resolve_api_base()
+        self._api_key = api_key or resolve_api_key()
+        self.api_base = api_base or resolve_api_base()
         self.model = normalize_model_for_api_base(
             model or os.environ.get("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
             api_type=api_type,
@@ -239,22 +232,6 @@ class LiteLLMClient:
 
         if not self._api_key:
             raise ValueError("API key required. Set AUTO_VAULT_API_KEY env var.")
-
-    def _resolve_api_key(self) -> str | None:
-        """从回退链解析API密钥"""
-        for env_name in self._API_KEY_FALLBACKS:
-            value = os.environ.get(env_name)
-            if value and value not in ("", "test_key_for_testing_only"):
-                return value
-        return None
-
-    def _resolve_api_base(self) -> str | None:
-        """从回退链解析API Base"""
-        for env_name in self._API_BASE_FALLBACKS:
-            value = os.environ.get(env_name)
-            if value:
-                return value
-        return None
 
     def generate(
         self,
