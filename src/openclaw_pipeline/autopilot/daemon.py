@@ -719,8 +719,8 @@ def main():
         "--pack",
         default=None,
         help=(
-            f"Domain pack 名称（默认兼容 pack: {DEFAULT_PACK_NAME}；"
-            f"第一标准 pack: {PRIMARY_PACK_NAME}）"
+            f"Domain pack 名称 (默认兼容 pack: {DEFAULT_PACK_NAME}; "
+            f"第一标准 pack: {PRIMARY_PACK_NAME})"
         ),
     )
     parser.add_argument(

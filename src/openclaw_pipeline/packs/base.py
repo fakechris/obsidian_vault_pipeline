@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+ALLOWED_PACK_ROLES = {"domain", "primary", "compatibility"}
+
+
 @dataclass(frozen=True)
 class ObjectKindSpec:
     kind: str
@@ -39,6 +42,20 @@ class BaseDomainPack:
     _extraction_profiles: list[object] = field(default_factory=list)
     _operation_profiles: list[object] = field(default_factory=list)
     _wiki_views: list[object] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.role not in ALLOWED_PACK_ROLES:
+            raise ValueError(f"Invalid pack role '{self.role}' for pack '{self.name}'")
+        if self.compatibility_base is not None:
+            if not str(self.compatibility_base).strip():
+                raise ValueError(
+                    f"Pack '{self.name}' has invalid compatibility_base={self.compatibility_base!r}"
+                )
+            if self.role != "compatibility":
+                raise ValueError(
+                    f"Pack '{self.name}' has compatibility_base={self.compatibility_base!r} "
+                    f"but role is '{self.role}'"
+                )
 
     def object_kinds(self) -> list[ObjectKindSpec]:
         return list(self._object_kinds)

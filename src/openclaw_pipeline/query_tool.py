@@ -460,7 +460,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument(
         "--pack",
         default=DEFAULT_PACK_NAME,
-        help="Pack name",
+        help=f"Pack name (default compatibility pack: {DEFAULT_PACK_NAME}; primary pack: research-tech)",
     )
 
     args = parser.parse_args(argv)

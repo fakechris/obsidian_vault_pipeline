@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 
 def test_list_packs_command_outputs_builtin_roles(capsys):
@@ -26,3 +27,38 @@ def test_list_packs_command_help_mentions_domain_packs(capsys):
 
     output = capsys.readouterr().out
     assert "domain packs" in output.lower()
+
+
+def test_list_packs_command_reads_manifest_paths_from_os_pathsep(tmp_path, monkeypatch, capsys):
+    from openclaw_pipeline.commands.list_packs import main
+
+    first = tmp_path / "external-pack.yaml"
+    first.write_text(
+        """
+name: external-pack
+version: 0.1.0
+api_version: 1
+entrypoints:
+  pack: external.module:get_pack
+""".strip(),
+        encoding="utf-8",
+    )
+    second = tmp_path / "external-pack-two.yaml"
+    second.write_text(
+        """
+name: external-pack-two
+version: 0.1.0
+api_version: 1
+entrypoints:
+  pack: external.two:get_pack
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCLAW_PACK_MANIFESTS", f"{first}{os.pathsep}{second}")
+
+    exit_code = main(["--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    names = {item["name"] for item in payload["external"]}
+    assert names == {"external-pack", "external-pack-two"}

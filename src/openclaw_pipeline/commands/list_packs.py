@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     builtin = [_serialize_pack(pack, source="builtin") for pack in list_builtin_packs()]
 
     manifest_env = os.environ.get("OPENCLAW_PACK_MANIFESTS", "")
-    manifest_paths = [Path(item) for item in manifest_env.split(":") if item]
+    manifest_paths = [Path(item) for item in manifest_env.split(os.pathsep) if item]
     manifests = []
     if manifest_paths:
         for manifest in discover_plugin_manifests(manifest_paths).values():

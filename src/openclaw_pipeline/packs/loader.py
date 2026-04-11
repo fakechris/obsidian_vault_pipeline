@@ -27,6 +27,9 @@ def list_builtin_packs() -> list[BaseDomainPack]:
 
 
 def load_builtin_pack(name: str) -> BaseDomainPack:
+    if name not in BUILTIN_PACK_LOADERS:
+        available = ", ".join(sorted(BUILTIN_PACK_LOADERS))
+        raise ValueError(f"Unknown builtin pack '{name}'. Available builtin packs: {available}")
     module_name, factory_name = BUILTIN_PACK_LOADERS[name]
     module = __import__(module_name, fromlist=[factory_name])
     pack = getattr(module, factory_name)()
