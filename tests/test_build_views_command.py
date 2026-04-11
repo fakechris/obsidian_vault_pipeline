@@ -86,3 +86,325 @@ type: query
     content = artifacts[-1].read_text(encoding="utf-8")
     assert "Saved Answer" in content
     assert "Evergreen Only" not in content
+
+
+def test_build_views_command_can_render_extraction_overview(temp_vault):
+    import json
+    from pathlib import Path
+
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.derived.paths import extraction_run_path
+    from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult
+    from openclaw_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    artifact = extraction_run_path(
+        layout,
+        pack_name="default-knowledge",
+        profile_name="tech/doc_structure",
+        source_path=Path("50-Inbox/01-Raw/example.md"),
+    )
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            ExtractionRunResult(
+                pack_name="default-knowledge",
+                profile_name="tech/doc_structure",
+                source_path="50-Inbox/01-Raw/example.md",
+                records=[ExtractionRecord(values={"section_title": "Architecture"}, spans=[])],
+            ).to_dict(),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "overview/extraction",
+        ]
+    )
+
+    artifacts = sorted(layout.compiled_views_dir.rglob("*.md"))
+
+    assert result == 0
+    assert artifacts
+    content = artifacts[-1].read_text(encoding="utf-8")
+    assert "# overview/extraction" in content
+    assert "tech/doc_structure" in content
+    assert "50-Inbox/01-Raw/example.md" in content
+
+
+def test_build_views_command_can_materialize_object_page_from_truth_store(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+    conflict = temp_vault / "10-Knowledge" / "Evergreen" / "Conflict.md"
+
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Source note supports the runtime architecture.
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+
+Target note captures downstream effects.
+""",
+        encoding="utf-8",
+    )
+    conflict.write_text(
+        """---
+note_id: conflict-note
+title: Conflict Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Conflict Note
+
+Source note does not support the runtime architecture.
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+    contradiction_id = list_contradictions(temp_vault, limit=5)[0]["contradiction_id"]
+    resolve_contradictions(
+        temp_vault,
+        [contradiction_id],
+        status="needs_human",
+        note="Needs editorial review.",
+    )
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "object/page",
+            "--object-id",
+            "source-note",
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (layout.compiled_views_dir / "default-knowledge" / "objects" / "source-note.md").read_text(encoding="utf-8")
+
+    assert result == 0
+    assert "# Source Note" in content
+    assert "## Compiled Summary" in content
+    assert "Source note supports the runtime architecture." in content
+    assert "## Claims" in content
+    assert "## Related Objects" in content
+    assert "[[target-note]]" in content
+    assert "## Contradictions" in content
+    assert "source note" in content
+    assert "needs_human" in content
+    assert "Needs editorial review." in content
+
+
+def test_build_views_command_can_materialize_topic_view_from_truth_store(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Source note explains the runtime architecture.
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+
+Target note captures downstream effects.
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "overview/topic",
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (layout.compiled_views_dir / "default-knowledge" / "overview__topic.md").read_text(encoding="utf-8")
+
+    assert result == 0
+    assert "# overview/topic" in content
+    assert "## Object Summaries" in content
+    assert "Source Note" in content
+    assert "Target Note" in content
+    assert "Source note explains the runtime architecture." in content
+    assert "[[target-note]]" in content
+
+
+def test_build_views_command_can_materialize_event_dossier_from_truth_store(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Launch.md"
+    source.write_text(
+        """---
+note_id: launch-note
+title: Launch Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Launch Note
+
+Launch note explains the system launch details.
+
+## 2026-04-09
+The system launched publicly for operators.
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "event/dossier",
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (layout.compiled_views_dir / "default-knowledge" / "event__dossier.md").read_text(encoding="utf-8")
+
+    assert result == 0
+    assert "# event/dossier" in content
+    assert "## Timeline" in content
+    assert "2026-04-09" in content
+    assert "Launch Note" in content
+    assert "Launch note explains the system launch details." in content
+
+
+def test_build_views_command_can_materialize_contradictions_overview(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions
+    from openclaw_pipeline.runtime import VaultLayout
+
+    one = temp_vault / "10-Knowledge" / "Evergreen" / "One.md"
+    two = temp_vault / "10-Knowledge" / "Evergreen" / "Two.md"
+    one.write_text(
+        """---
+note_id: harness-positive
+title: Harness Positive
+type: evergreen
+date: 2026-04-10
+---
+
+# Harness Positive
+
+Agent harness supports local-first execution for operators.
+""",
+        encoding="utf-8",
+    )
+    two.write_text(
+        """---
+note_id: harness-negative
+title: Harness Negative
+type: evergreen
+date: 2026-04-10
+---
+
+# Harness Negative
+
+Agent harness does not support local-first execution for operators.
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+    contradiction_id = list_contradictions(temp_vault, limit=5)[0]["contradiction_id"]
+    resolve_contradictions(
+        temp_vault,
+        [contradiction_id],
+        status="dismissed",
+        note="False conflict after claim review.",
+    )
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "truth/contradictions",
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (layout.compiled_views_dir / "default-knowledge" / "truth__contradictions.md").read_text(encoding="utf-8")
+
+    assert result == 0
+    assert "# truth/contradictions" in content
+    assert "## Contradiction Records" in content
+    assert "agent harness" in content
+    assert "dismissed" in content
+    assert "False conflict after claim review." in content

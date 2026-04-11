@@ -5,18 +5,13 @@ import json
 from pathlib import Path
 
 from ..extraction.artifacts import write_run_result
+from ..extraction.llm_extractor import DefaultProfileExtractor
 from ..extraction.runtime import ExtractionRuntime
 from ..packs.loader import load_pack
 from ..runtime import VaultLayout, resolve_vault_dir
 
-
-class NoopExtractor:
-    def extract(self, chunk_text, *, chunk_index, source_path, profile):  # noqa: ANN001, ARG002
-        return []
-
-
 def build_extractor() -> object:
-    return NoopExtractor()
+    return DefaultProfileExtractor()
 
 
 def main(argv: list[str] | None = None) -> int:

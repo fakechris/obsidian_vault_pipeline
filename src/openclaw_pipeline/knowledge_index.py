@@ -14,6 +14,7 @@ from .graph.frontmatter import FrontmatterParser, NoteMetadata
 from .graph.link_parser import LinkParser
 from .identity import canonicalize_note_id
 from .runtime import VaultLayout, resolve_vault_dir
+from .truth_store import TRUTH_STORE_SCHEMA, build_truth_store_projection
 
 
 SCHEMA = """
@@ -90,6 +91,8 @@ CREATE TABLE page_embeddings (
 
 CREATE INDEX idx_page_embeddings_slug ON page_embeddings(slug);
 """
+
+SCHEMA += "\n" + TRUTH_STORE_SCHEMA
 
 EMBEDDING_DIMENSIONS = 128
 EMBEDDING_MODEL = "local-hash-v1"
@@ -389,6 +392,58 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
             link_rows,
         )
 
+        truth_projection = build_truth_store_projection(page_rows, link_rows)
+        conn.executemany(
+            """
+            INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            truth_projection.objects,
+        )
+        conn.executemany(
+            """
+            INSERT INTO claims (claim_id, object_id, claim_kind, claim_text, confidence)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            truth_projection.claims,
+        )
+        conn.executemany(
+            """
+            INSERT INTO claim_evidence (claim_id, source_slug, evidence_kind, quote_text)
+            VALUES (?, ?, ?, ?)
+            """,
+            truth_projection.claim_evidence,
+        )
+        conn.executemany(
+            """
+            INSERT INTO relations (source_object_id, target_object_id, relation_type, evidence_source_slug)
+            VALUES (?, ?, ?, ?)
+            """,
+            truth_projection.relations,
+        )
+        conn.executemany(
+            """
+            INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
+            VALUES (?, ?, ?)
+            """,
+            truth_projection.compiled_summaries,
+        )
+        conn.executemany(
+            """
+            INSERT INTO contradictions (
+                contradiction_id,
+                subject_key,
+                positive_claim_ids_json,
+                negative_claim_ids_json,
+                status,
+                resolution_note,
+                resolved_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            truth_projection.contradictions,
+        )
+
         raw_rows = _collect_raw_rows(layout)
         conn.executemany(
             """
@@ -440,6 +495,11 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
         "timeline_events_indexed": len(timeline_rows),
         "audit_events_indexed": len(audit_rows),
         "embedding_chunks_indexed": len(embedding_rows),
+        "objects_indexed": len(truth_projection.objects),
+        "claims_indexed": len(truth_projection.claims),
+        "relations_indexed": len(truth_projection.relations),
+        "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
+        "contradictions_indexed": len(truth_projection.contradictions),
     }
 
 
@@ -530,6 +590,238 @@ def search_knowledge_index(vault_dir: Path, query: str, limit: int = 10) -> list
     return results
 
 
+def search_truth_store(vault_dir: Path, query: str, limit: int = 10) -> list[dict[str, object]]:
+    _, layout = _ensure_knowledge_db(vault_dir)
+    like_query = f"%{query.strip()}%"
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        rows = conn.execute(
+            """
+            SELECT claims.object_id, objects.title, claims.claim_kind, claims.claim_text, compiled_summaries.summary_text
+            FROM claims
+            JOIN objects ON objects.object_id = claims.object_id
+            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = claims.object_id
+            WHERE claims.claim_text LIKE ? OR compiled_summaries.summary_text LIKE ? OR objects.title LIKE ?
+            ORDER BY claims.object_id
+            LIMIT ?
+            """,
+            (like_query, like_query, like_query, limit),
+        ).fetchall()
+
+    return [
+        {
+            "object_id": row[0],
+            "title": row[1],
+            "claim_kind": row[2],
+            "claim_text": row[3],
+            "summary_text": row[4] or "",
+        }
+        for row in rows
+    ]
+
+
+def list_contradictions(vault_dir: Path, limit: int = 20, subject: str | None = None) -> list[dict[str, object]]:
+    _, layout = _ensure_knowledge_db(vault_dir)
+    query = """
+        SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
+        FROM contradictions
+    """
+    params: tuple[object, ...]
+    if subject:
+        query += " WHERE subject_key LIKE ?"
+        params = (f"%{subject}%", limit)
+    else:
+        params = (limit,)
+    query += " ORDER BY subject_key LIMIT ?"
+
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    return [
+        {
+            "contradiction_id": row[0],
+            "subject_key": row[1],
+            "positive_claim_ids": json.loads(row[2]),
+            "negative_claim_ids": json.loads(row[3]),
+            "status": row[4],
+            "resolution_note": row[5] or "",
+            "resolved_at": row[6] or "",
+        }
+        for row in rows
+    ]
+
+
+def resolve_contradictions(
+    vault_dir: Path,
+    contradiction_ids: list[str],
+    *,
+    status: str,
+    note: str = "",
+) -> dict[str, object]:
+    _, layout = _ensure_knowledge_db(vault_dir)
+    resolved_ids = list(dict.fromkeys(contradiction_ids))
+    if not resolved_ids:
+        return {
+            "resolved_count": 0,
+            "contradiction_ids": [],
+            "status": status,
+            "resolution_note": note,
+            "db_path": str(layout.knowledge_db),
+        }
+
+    placeholders = ",".join("?" for _ in resolved_ids)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        existing = conn.execute(
+            f"""
+            SELECT contradiction_id
+            FROM contradictions
+            WHERE contradiction_id IN ({placeholders})
+            ORDER BY contradiction_id
+            """,
+            tuple(resolved_ids),
+        ).fetchall()
+        found_ids = [row[0] for row in existing]
+        if found_ids:
+            now_value = conn.execute("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')").fetchone()[0]
+            found_placeholders = ",".join("?" for _ in found_ids)
+            conn.execute(
+                f"""
+                UPDATE contradictions
+                SET status = ?, resolution_note = ?, resolved_at = ?
+                WHERE contradiction_id IN ({found_placeholders})
+                """,
+                (status, note, now_value, *found_ids),
+            )
+            conn.commit()
+
+    return {
+        "resolved_count": len(found_ids),
+        "contradiction_ids": found_ids,
+        "status": status,
+        "resolution_note": note,
+        "db_path": str(layout.knowledge_db),
+    }
+
+
+def contradiction_object_ids(vault_dir: Path, contradiction_ids: list[str]) -> list[str]:
+    _, layout = _ensure_knowledge_db(vault_dir)
+    resolved_ids = list(dict.fromkeys(contradiction_ids))
+    if not resolved_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in resolved_ids)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT positive_claim_ids_json, negative_claim_ids_json
+            FROM contradictions
+            WHERE contradiction_id IN ({placeholders})
+            """,
+            tuple(resolved_ids),
+        ).fetchall()
+
+        claim_ids: list[str] = []
+        for positive_json, negative_json in rows:
+            claim_ids.extend(json.loads(positive_json))
+            claim_ids.extend(json.loads(negative_json))
+        claim_ids = list(dict.fromkeys(claim_ids))
+        if not claim_ids:
+            return []
+
+        claim_placeholders = ",".join("?" for _ in claim_ids)
+        object_rows = conn.execute(
+            f"""
+            SELECT DISTINCT object_id
+            FROM claims
+            WHERE claim_id IN ({claim_placeholders})
+            ORDER BY object_id
+            """,
+            tuple(claim_ids),
+        ).fetchall()
+
+    return [row[0] for row in object_rows]
+
+
+def rebuild_compiled_summaries(vault_dir: Path, object_ids: list[str] | None = None) -> dict[str, object]:
+    _, layout = _ensure_knowledge_db(vault_dir)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        if object_ids:
+            placeholders = ",".join("?" for _ in object_ids)
+            object_rows = conn.execute(
+                f"""
+                SELECT objects.object_id, objects.title,
+                       COALESCE(rel.outgoing_count, 0) AS outgoing_count
+                FROM objects
+                LEFT JOIN (
+                    SELECT source_object_id, COUNT(*) AS outgoing_count
+                    FROM relations
+                    GROUP BY source_object_id
+                ) AS rel ON rel.source_object_id = objects.object_id
+                WHERE objects.object_id IN ({placeholders})
+                ORDER BY objects.object_id
+                """,
+                tuple(object_ids),
+            ).fetchall()
+        else:
+            object_rows = conn.execute(
+                """
+                SELECT objects.object_id, objects.title,
+                       COALESCE(rel.outgoing_count, 0) AS outgoing_count
+                FROM objects
+                LEFT JOIN (
+                    SELECT source_object_id, COUNT(*) AS outgoing_count
+                    FROM relations
+                    GROUP BY source_object_id
+                ) AS rel ON rel.source_object_id = objects.object_id
+                ORDER BY objects.object_id
+                """
+            ).fetchall()
+
+        rebuilt_ids: list[str] = []
+        for object_id, title, outgoing_count in object_rows:
+            claim_rows = conn.execute(
+                """
+                SELECT claim_text
+                FROM claims
+                WHERE object_id = ? AND claim_kind = 'page_summary'
+                ORDER BY claim_id
+                """,
+                (object_id,),
+            ).fetchall()
+            base_summary = str(claim_rows[0][0]) if claim_rows else str(title)
+            related_rows = conn.execute(
+                """
+                SELECT target_object_id
+                FROM relations
+                WHERE source_object_id = ?
+                ORDER BY target_object_id
+                LIMIT 3
+                """,
+                (object_id,),
+            ).fetchall()
+            related_ids = [row[0] for row in related_rows]
+            summary = base_summary
+            if related_ids:
+                summary = f"{base_summary} Related: {', '.join(related_ids)}."
+
+            conn.execute(
+                """
+                INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
+                VALUES (?, ?, ?)
+                ON CONFLICT(object_id) DO UPDATE SET summary_text = excluded.summary_text, source_slug = excluded.source_slug
+                """,
+                (object_id, summary, object_id),
+            )
+            rebuilt_ids.append(str(object_id))
+
+        conn.commit()
+
+    return {
+        "objects_rebuilt": len(rebuilt_ids),
+        "object_ids": rebuilt_ids,
+        "db_path": str(layout.knowledge_db),
+    }
+
+
 def get_knowledge_page(vault_dir: Path, slug: str) -> dict[str, object] | None:
     _, layout = _ensure_knowledge_db(vault_dir)
     canonical_slug = canonicalize_note_id(slug)
@@ -565,6 +857,11 @@ def knowledge_index_stats(vault_dir: Path) -> dict[str, object]:
         "timeline_events": "SELECT COUNT(*) FROM timeline_events",
         "audit_events": "SELECT COUNT(*) FROM audit_events",
         "embedding_chunks": "SELECT COUNT(*) FROM page_embeddings",
+        "objects": "SELECT COUNT(*) FROM objects",
+        "claims": "SELECT COUNT(*) FROM claims",
+        "relations": "SELECT COUNT(*) FROM relations",
+        "compiled_summaries": "SELECT COUNT(*) FROM compiled_summaries",
+        "contradictions": "SELECT COUNT(*) FROM contradictions",
     }
     stats: dict[str, object] = {"db_path": str(layout.knowledge_db)}
     with sqlite3.connect(layout.knowledge_db) as conn:
@@ -616,6 +913,16 @@ def knowledge_tools_json() -> list[dict[str, object]]:
             "args": {"query": "string", "limit": "integer?"},
         },
         {
+            "name": "knowledge_truth_search",
+            "description": "Search truth-store claims and compiled summaries",
+            "args": {"query": "string", "limit": "integer?"},
+        },
+        {
+            "name": "knowledge_contradictions",
+            "description": "List contradiction records from the truth store",
+            "args": {"limit": "integer?", "subject": "string?"},
+        },
+        {
             "name": "knowledge_get",
             "description": "Fetch a canonical page payload by slug",
             "args": {"slug": "string"},
@@ -642,6 +949,15 @@ def dispatch_knowledge_tool(vault_dir: Path, tool_name: str, args: dict[str, obj
         query = str(args.get("query") or "")
         limit = int(args.get("limit") or 5)
         return {"results": query_knowledge_index(vault_dir, query, limit=limit)}
+    if tool_name == "knowledge_truth_search":
+        query = str(args.get("query") or "")
+        limit = int(args.get("limit") or 10)
+        return {"results": search_truth_store(vault_dir, query, limit=limit)}
+    if tool_name == "knowledge_contradictions":
+        limit = int(args.get("limit") or 20)
+        subject = args.get("subject")
+        subject_value = str(subject) if subject else None
+        return {"items": list_contradictions(vault_dir, limit=limit, subject=subject_value)}
     if tool_name == "knowledge_get":
         slug = str(args.get("slug") or "")
         return {"page": get_knowledge_page(vault_dir, slug)}
