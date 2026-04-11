@@ -65,3 +65,44 @@ def test_concept_registry_exposes_object_records_without_changing_legacy_behavio
     assert len(records) == 1
     assert records[0].id == "deep-research"
     assert records[0].title == "Deep Research"
+
+
+def test_object_registry_can_project_entries_into_research_tech_pack(temp_vault):
+    from openclaw_pipeline.object_registry import ObjectRegistry
+
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="workflow-graph",
+            title="Workflow Graph",
+            aliases=["Graph Flow"],
+            definition="A workflow graph concept.",
+            area="AI",
+            status=STATUS_ACTIVE,
+        )
+    )
+
+    object_registry = ObjectRegistry.from_concept_registry(registry, pack="research-tech")
+    records = object_registry.records()
+
+    assert len(records) == 1
+    assert records[0].pack == "research-tech"
+
+
+def test_concept_registry_to_object_records_accepts_explicit_pack(temp_vault):
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="agent-runtime",
+            title="Agent Runtime",
+            aliases=["Runtime"],
+            definition="An agent runtime concept.",
+            area="AI",
+            status=STATUS_ACTIVE,
+        )
+    )
+
+    records = registry.to_object_records(pack="research-tech")
+
+    assert len(records) == 1
+    assert records[0].pack == "research-tech"

@@ -88,6 +88,23 @@ def test_autopilot_accepts_explicit_default_pack_profile(tmp_path):
     assert daemon.workflow_profile.stages == ["interpretation", "quality", "absorb", "moc", "knowledge_index"]
 
 
+def test_autopilot_accepts_explicit_research_tech_pack_profile(tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+
+    daemon = AutoPilotDaemon(
+        vault,
+        watch_sources=["inbox"],
+        auto_commit=False,
+        pack="research-tech",
+        profile="autopilot",
+    )
+
+    assert daemon.pack.name == "research-tech"
+    assert daemon.workflow_profile.name == "autopilot"
+    assert daemon.workflow_profile.stages == ["interpretation", "quality", "absorb", "moc", "knowledge_index"]
+
+
 def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
