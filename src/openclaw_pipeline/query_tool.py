@@ -58,8 +58,9 @@ class SearchResult:
 class VaultQuerier:
     """知识库查询器"""
 
-    def __init__(self, vault_dir: Path):
+    def __init__(self, vault_dir: Path, *, pack: str = "default-knowledge"):
         self.vault_dir = Path(vault_dir)
+        self.pack = pack
         self.api_key = resolve_api_key()
         self.api_base = resolve_api_base(default=DEFAULT_MINIMAX_API_BASE)
         self.model = normalize_model_for_api_base(
@@ -149,7 +150,7 @@ class VaultQuerier:
         默认使用 knowledge.db；QMD 仅作为显式引擎
         """
         results = []
-        for row in discover_related(self.vault_dir, query, engine=engine, limit=top_k):
+        for row in discover_related(self.vault_dir, query, engine=engine, limit=top_k, pack=self.pack):
             path = str(row.get("path") or row.get("slug") or "")
             title = str(row.get("title") or row.get("slug") or path)
             excerpt = str(row.get("snippet") or "")
@@ -451,6 +452,11 @@ def main(argv: list[str] | None = None):
         default="knowledge",
         help="检索引擎: knowledge(默认) 或 qmd",
     )
+    parser.add_argument(
+        "--pack",
+        default="default-knowledge",
+        help="Pack name",
+    )
 
     args = parser.parse_args(argv)
 
@@ -470,7 +476,7 @@ def main(argv: list[str] | None = None):
         print("❌ 错误: 需要提供查询问题")
         return 1
 
-    querier = VaultQuerier(vault_dir)
+    querier = VaultQuerier(vault_dir, pack=args.pack)
 
     # 构建索引
     querier.build_index()
@@ -501,6 +507,7 @@ def main(argv: list[str] | None = None):
         mentions=[result.title for result in results[:3]],
         slugs=[Path(result.file).stem for result in results[:5] if result.file],
         limit=min(args.top_k, 5),
+        pack=args.pack,
     )
 
     print(f"\n💡 回答:\n")
