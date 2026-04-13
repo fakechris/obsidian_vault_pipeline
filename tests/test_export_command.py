@@ -209,3 +209,31 @@ def test_export_command_handles_missing_contradictions_table(temp_vault, tmp_pat
     content = output_path.read_text(encoding="utf-8")
     assert "# truth/contradictions" in content
     assert "(none)" in content
+
+
+def test_export_command_surfaces_build_errors_as_cli_errors(temp_vault, tmp_path, monkeypatch):
+    from openclaw_pipeline.commands import export_artifact
+
+    _seed_truth_store(temp_vault)
+    output_path = tmp_path / "topic.md"
+
+    def raise_error(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(export_artifact, "build_view", raise_error)
+
+    try:
+        export_artifact.main(
+            [
+                "--vault-dir",
+                str(temp_vault),
+                "--target",
+                "topic-overview",
+                "--output-path",
+                str(output_path),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected export command to convert build errors into parser failures")

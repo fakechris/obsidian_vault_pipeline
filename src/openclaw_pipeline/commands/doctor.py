@@ -14,17 +14,32 @@ from ..runtime import VaultLayout, iter_markdown_files, resolve_vault_dir
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    current = Path(__file__).resolve()
+    for candidate in [current.parent, *current.parents]:
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+    return current.parents[3]
+
+
+def _doc_stem(pack_name: str, suffix: str) -> str:
+    normalized = pack_name.replace("-", "_").upper()
+    return f"{normalized}_{suffix}"
+
+
+def _count_markdown(directory: Path) -> int:
+    if not directory.exists():
+        return 0
+    return sum(1 for _ in iter_markdown_files(directory))
 
 
 def _docs_payload(repo_root: Path, *, pack_name: str) -> dict[str, object]:
     pack_slug = pack_name.replace("_", "-")
     docs_root = repo_root / "docs"
-    research_root = docs_root / "research-tech"
+    pack_docs_root = docs_root / pack_slug
     recipes_root = docs_root / "recipes" / pack_slug
 
-    skillpack = research_root / "RESEARCH_TECH_SKILLPACK.md"
-    verify = research_root / "RESEARCH_TECH_VERIFY.md"
+    skillpack = pack_docs_root / f"{_doc_stem(pack_name, 'SKILLPACK')}.md"
+    verify = pack_docs_root / f"{_doc_stem(pack_name, 'VERIFY')}.md"
     recipe_files = sorted(recipes_root.glob("*.md")) if recipes_root.exists() else []
     return {
         "skillpack": {"path": str(skillpack), "exists": skillpack.exists()},
@@ -44,12 +59,12 @@ def _vault_payload(vault_dir: Path | None) -> dict[str, object] | None:
     layout = VaultLayout.from_vault(vault_dir)
     return {
         "vault_dir": str(layout.vault_dir),
-        "raw_count": len(list(iter_markdown_files(layout.raw_dir))) if layout.raw_dir.exists() else 0,
-        "clippings_count": len(list(iter_markdown_files(layout.clippings_dir))) if layout.clippings_dir.exists() else 0,
-        "pinboard_count": len(list(iter_markdown_files(layout.pinboard_dir))) if layout.pinboard_dir.exists() else 0,
-        "processing_count": len(list(iter_markdown_files(layout.processing_dir))) if layout.processing_dir.exists() else 0,
-        "processed_count": len(list(iter_markdown_files(layout.processed_dir))) if layout.processed_dir.exists() else 0,
-        "evergreen_count": len(list(iter_markdown_files(layout.evergreen_dir))) if layout.evergreen_dir.exists() else 0,
+        "raw_count": _count_markdown(layout.raw_dir),
+        "clippings_count": _count_markdown(layout.clippings_dir),
+        "pinboard_count": _count_markdown(layout.pinboard_dir),
+        "processing_count": _count_markdown(layout.processing_dir),
+        "processed_count": _count_markdown(layout.processed_dir),
+        "evergreen_count": _count_markdown(layout.evergreen_dir),
         "knowledge_db_exists": layout.knowledge_db.exists(),
     }
 
@@ -120,7 +135,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Vault: "
             f"raw={vault['raw_count']} clippings={vault['clippings_count']} "
-            f"pinboard={vault['pinboard_count']} processed={vault['processed_count']} "
+            f"pinboard={vault['pinboard_count']} processing={vault['processing_count']} "
+            f"processed={vault['processed_count']} "
             f"evergreen={vault['evergreen_count']} knowledge_db_exists={vault['knowledge_db_exists']}"
         )
     return 0

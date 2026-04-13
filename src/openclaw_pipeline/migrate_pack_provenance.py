@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from .packs.loader import load_pack
@@ -26,6 +27,11 @@ def iter_provenance_files(layout: VaultLayout) -> list[Path]:
     )
 
 
+def _token_pattern(pack_name: str) -> re.Pattern[str]:
+    escaped = re.escape(pack_name)
+    return re.compile(rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])")
+
+
 def migrate_pack_provenance(
     vault_dir: Path | str | None = None,
     *,
@@ -41,6 +47,7 @@ def migrate_pack_provenance(
     files_changed = 0
     replacements = 0
     changed_paths: list[str] = []
+    errors: list[dict[str, str]] = []
 
     if from_pack == target_pack:
         return {
@@ -52,21 +59,28 @@ def migrate_pack_provenance(
             "files_changed": 0,
             "replacements": 0,
             "changed_paths": [],
+            "errors": [],
             "write": write,
         }
 
+    pattern = _token_pattern(from_pack)
     for path in iter_provenance_files(layout):
         files_scanned += 1
-        original = path.read_text(encoding="utf-8")
-        count = original.count(from_pack)
-        if count <= 0:
+        try:
+            original = path.read_text(encoding="utf-8")
+            matches = list(pattern.finditer(original))
+            count = len(matches)
+            if count <= 0:
+                continue
+            updated = pattern.sub(target_pack, original)
+            files_changed += 1
+            replacements += count
+            changed_paths.append(str(path))
+            if write:
+                path.write_text(updated, encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as exc:
+            errors.append({"path": str(path), "error": str(exc)})
             continue
-        updated = original.replace(from_pack, target_pack)
-        files_changed += 1
-        replacements += count
-        changed_paths.append(str(path))
-        if write:
-            path.write_text(updated, encoding="utf-8")
 
     return {
         "vault_dir": str(resolved_vault),
@@ -77,5 +91,6 @@ def migrate_pack_provenance(
         "files_changed": files_changed,
         "replacements": replacements,
         "changed_paths": changed_paths,
+        "errors": errors,
         "write": write,
     }

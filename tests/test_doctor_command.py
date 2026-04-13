@@ -30,6 +30,8 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
     assert payload["pack"]["name"] == "default-knowledge"
     assert payload["pack"]["role"] == "compatibility"
     assert payload["pack"]["compatibility_base"] == "research-tech"
+    assert payload["docs"]["skillpack"]["exists"] is False
+    assert payload["docs"]["verify"]["exists"] is False
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):
@@ -48,6 +50,20 @@ def test_doctor_command_reports_vault_health(temp_vault, capsys):
     assert payload["vault"]["raw_count"] == 1
     assert payload["vault"]["clippings_count"] == 1
     assert payload["vault"]["knowledge_db_exists"] is False
+
+
+def test_doctor_command_text_output_includes_processing_count(temp_vault, capsys):
+    from openclaw_pipeline.commands.doctor import main
+
+    processing = temp_vault / "50-Inbox" / "02-Processing"
+    processing.mkdir(parents=True, exist_ok=True)
+    (processing / "processing.md").write_text("# Processing\n", encoding="utf-8")
+
+    exit_code = main(["--vault-dir", str(temp_vault)])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "processing=1" in output
 
 
 def test_doctor_help_mentions_pglite(capsys):

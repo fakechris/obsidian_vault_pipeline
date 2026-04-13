@@ -32,12 +32,21 @@ def main(argv: list[str] | None = None) -> int:
     vault_dir = resolve_vault_dir(args.vault_dir)
     pack = load_pack(args.pack)
     view_name = TARGET_TO_VIEW[args.target]
-    view = pack.wiki_view(view_name)
+    try:
+        view = pack.wiki_view(view_name)
+    except Exception as exc:
+        parser.error(f"failed to resolve view '{view_name}' for pack '{pack.name}': {exc}")
 
     if args.target == "object-page" and not args.object_id:
         parser.error("the --object-id argument is required for object-page exports")
 
-    source_path = build_view(vault_dir, view, object_id=args.object_id)
+    try:
+        source_path = build_view(vault_dir, view, object_id=args.object_id)
+    except Exception as exc:
+        parser.error(
+            f"failed to build export target '{args.target}' for view '{view_name}' "
+            f"and object_id={args.object_id!r}: {exc}"
+        )
     output_path = args.output_path.expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source_path, output_path)
