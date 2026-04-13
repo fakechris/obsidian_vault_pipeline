@@ -77,6 +77,7 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 
 ```bash
 ovp-packs
+ovp-doctor --pack research-tech --json
 ovp --pack research-tech --profile full
 ovp-autopilot --pack research-tech --profile autopilot --yes
 ovp --pack default-knowledge --profile full
@@ -137,6 +138,29 @@ profile 是某个 pack 下的一条可执行 DAG。
 - `research-tech/autopilot`
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
+
+## 研究技术 Pack 的运营面
+
+`research-tech` 现在不只是一个内部 pack，也已经有最小运营面：
+
+- `ovp-doctor`
+  检查默认 workflow pack、pack 角色、operator docs、recipes，以及可选的 vault 健康状态
+- `ovp-export`
+  导出最小 compiled artifacts：
+  - `object-page`
+  - `topic-overview`
+  - `event-dossier`
+  - `contradictions`
+- `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
+- `docs/research-tech/RESEARCH_TECH_VERIFY.md`
+- `docs/recipes/research-tech/*.md`
+
+示例：
+
+```bash
+ovp-doctor --pack research-tech --json
+ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic.md
+```
 
 这也是为什么现在默认就会跑：
 
