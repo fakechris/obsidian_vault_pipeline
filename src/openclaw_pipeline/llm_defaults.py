@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 DEFAULT_MINIMAX_API_BASE = "https://api.minimaxi.com/anthropic"
 DEFAULT_MINIMAX_MODEL = "anthropic/MiniMax-M2.7-highspeed"
+DEFAULT_LITELLM_TIMEOUT_SECONDS = 180
 
 API_KEY_FALLBACKS = (
     "AUTO_VAULT_API_KEY",

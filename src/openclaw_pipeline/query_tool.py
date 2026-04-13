@@ -40,9 +40,23 @@ except ImportError:
     from packs.loader import DEFAULT_PACK_NAME  # type: ignore
 
 try:
-    from .llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
+    from .llm_defaults import (
+        DEFAULT_LITELLM_TIMEOUT_SECONDS,
+        DEFAULT_MINIMAX_API_BASE,
+        DEFAULT_MINIMAX_MODEL,
+        normalize_model_for_api_base,
+        resolve_api_base,
+        resolve_api_key,
+    )
 except ImportError:
-    from llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
+    from llm_defaults import (  # type: ignore
+        DEFAULT_LITELLM_TIMEOUT_SECONDS,
+        DEFAULT_MINIMAX_API_BASE,
+        DEFAULT_MINIMAX_MODEL,
+        normalize_model_for_api_base,
+        resolve_api_base,
+        resolve_api_key,
+    )
 
 try:
     import litellm
@@ -217,7 +231,8 @@ class VaultQuerier:
                 api_base=self.api_base,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=2000
+                max_tokens=2000,
+                timeout=DEFAULT_LITELLM_TIMEOUT_SECONDS,
             )
 
             answer = response.choices[0].message.content

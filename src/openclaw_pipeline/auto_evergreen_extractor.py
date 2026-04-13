@@ -38,9 +38,21 @@ except ImportError:
     from identity import canonicalize_note_id  # type: ignore
 
 try:
-    from .llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
+    from .llm_defaults import (
+        DEFAULT_LITELLM_TIMEOUT_SECONDS,
+        DEFAULT_MINIMAX_MODEL,
+        normalize_model_for_api_base,
+        resolve_api_base,
+        resolve_api_key,
+    )
 except ImportError:
-    from llm_defaults import DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key  # type: ignore
+    from llm_defaults import (  # type: ignore
+        DEFAULT_LITELLM_TIMEOUT_SECONDS,
+        DEFAULT_MINIMAX_MODEL,
+        normalize_model_for_api_base,
+        resolve_api_base,
+        resolve_api_key,
+    )
 
 # Try to import concept registry
 try:
@@ -131,6 +143,7 @@ class LiteLLMClient:
             ],
             "temperature": self.temperature,
             "max_tokens": max_tokens,
+            "timeout": DEFAULT_LITELLM_TIMEOUT_SECONDS,
         }
         if self._api_key:
             kwargs["api_key"] = self._api_key
