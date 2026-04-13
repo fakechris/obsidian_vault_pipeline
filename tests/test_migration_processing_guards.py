@@ -628,6 +628,48 @@ def test_litellm_clients_retry_transient_failures(monkeypatch, client_class, pat
     assert attempts["count"] == 2
 
 
+@pytest.mark.parametrize(("client_class", "patch_mode"), [
+    (ArticleLiteLLMClient, "article"),
+    (PaperLiteLLMClient, "module"),
+    (GithubLiteLLMClient, "module"),
+])
+def test_litellm_clients_pass_explicit_completion_timeout(monkeypatch, client_class, patch_mode):
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
+    monkeypatch.setenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.7-highspeed")
+
+    captured: dict[str, object] = {}
+
+    class FakeUsage:
+        total_tokens = 7
+
+    class FakeMessage:
+        content = "ok"
+
+    class FakeChoice:
+        message = FakeMessage()
+        finish_reason = "stop"
+
+    class FakeResponse:
+        choices = [FakeChoice()]
+        usage = FakeUsage()
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return FakeResponse()
+
+    if patch_mode == "article":
+        monkeypatch.setattr("openclaw_pipeline.auto_article_processor.litellm.completion", fake_completion)
+    else:
+        monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+
+    client = client_class()
+    content, metadata = client.generate("system", "user")
+
+    assert content == "ok"
+    assert metadata["tokens"] == 7
+    assert captured["timeout"] == 180
+
+
 def test_process_single_paper_downloads_remote_pdf_before_analysis(tmp_path, monkeypatch):
     class FakeResponse:
         def __init__(self, content: bytes):

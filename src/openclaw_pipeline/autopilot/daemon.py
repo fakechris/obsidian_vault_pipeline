@@ -23,7 +23,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
 from .queue import TaskQueue, Task
-from ..llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
+from ..llm_defaults import (
+    DEFAULT_LITELLM_TIMEOUT_SECONDS,
+    DEFAULT_MINIMAX_API_BASE,
+    DEFAULT_MINIMAX_MODEL,
+    normalize_model_for_api_base,
+    resolve_api_base,
+    resolve_api_key,
+)
 from ..runtime import resolve_vault_dir
 from ..packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
 from .watcher import MultiSourceWatcher
@@ -96,7 +103,8 @@ class LLMQualityChecker:
                 api_base=self.api_base,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=500
+                max_tokens=500,
+                timeout=DEFAULT_LITELLM_TIMEOUT_SECONDS,
             )
 
             result_text = response.choices[0].message.content

@@ -22,7 +22,7 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 
 </div>
 
-Current document version: `v0.8.1`
+Current document version: `v0.8.2`
 
 ## What This Is
 
@@ -475,4 +475,4 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-This document targets: `v0.8.1`
+This document targets: `v0.8.2`

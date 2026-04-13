@@ -47,6 +47,7 @@ except ImportError:  # pragma: no cover - script mode fallback
 try:
     from .llm_defaults import (
         DEFAULT_MINIMAX_MODEL,
+        DEFAULT_LITELLM_TIMEOUT_SECONDS,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
@@ -54,6 +55,7 @@ try:
 except ImportError:  # pragma: no cover - script mode fallback
     from llm_defaults import (
         DEFAULT_MINIMAX_MODEL,
+        DEFAULT_LITELLM_TIMEOUT_SECONDS,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
@@ -250,6 +252,7 @@ class LiteLLMClient:
             ],
             "temperature": self.temperature,
             "max_tokens": max_tokens,
+            "timeout": DEFAULT_LITELLM_TIMEOUT_SECONDS,
         }
         if self._api_key:
             kwargs["api_key"] = self._api_key
