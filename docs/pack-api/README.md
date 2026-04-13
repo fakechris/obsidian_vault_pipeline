@@ -77,6 +77,11 @@ Profile 是某个 pack 下的一条可执行 DAG。
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
 
+当前默认 workflow 入口走的是：
+
+- `ovp --full` -> `research-tech/full`
+- `ovp-autopilot` -> `research-tech/autopilot`
+
 ---
 
 ## 2. 第一个标准 Pack
@@ -172,6 +177,19 @@ ovp-packs --json
 ```
 
 查看当前运行时可见的 builtin/external packs、角色、兼容基底和 profiles。
+
+对于内置标准 pack 的运营验证，当前也已经有最小命令面：
+
+```bash
+ovp-doctor --pack research-tech --json
+ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic.md
+```
+
+这些命令不是 Pack API 本身，但它们定义了 pack 在真实运行时应该具备的 operator surface：
+
+- doctor / verify
+- recipes
+- exportable compiled artifacts
 
 对第三方 pack 来说，推荐优先提供 entry point；manifest 适合开发期和未安装场景。
 

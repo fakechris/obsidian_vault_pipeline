@@ -8,6 +8,7 @@ from .base import BaseDomainPack, WorkflowProfile
 
 DEFAULT_PACK_NAME = "default-knowledge"
 PRIMARY_PACK_NAME = "research-tech"
+DEFAULT_WORKFLOW_PACK_NAME = PRIMARY_PACK_NAME
 BUILTIN_PACK_LOADERS = {
     "default-knowledge": ("openclaw_pipeline.packs.default_knowledge", "get_pack"),
     "research-tech": ("openclaw_pipeline.packs.research_tech", "get_pack"),
@@ -65,7 +66,7 @@ def resolve_workflow_profile(
 ) -> tuple[BaseDomainPack, WorkflowProfile]:
     """Resolve a pack/profile pair with stable defaults."""
 
-    resolved_pack_name = pack_name or DEFAULT_PACK_NAME
+    resolved_pack_name = pack_name or DEFAULT_WORKFLOW_PACK_NAME
     resolved_profile_name = profile_name or default_profile
 
     pack = load_pack(resolved_pack_name)

@@ -79,6 +79,7 @@ Examples:
 
 ```bash
 ovp-packs
+ovp-doctor --pack research-tech --json
 ovp --pack research-tech --profile full
 ovp-autopilot --pack research-tech --profile autopilot --yes
 ovp --pack default-knowledge --profile full
@@ -124,8 +125,8 @@ A pack is not just a prompt bundle. It defines domain semantics:
 
 The built-in packs are:
 
-- `research-tech`: the explicit technical research pack
-- `default-knowledge`: the default compatibility layer
+- `research-tech`: the explicit technical research pack and the default workflow pack
+- `default-knowledge`: the compatibility layer
 
 Future domains such as media or medical should arrive as external pack projects.
 
@@ -138,9 +139,39 @@ The built-in profiles currently shipped are:
 - `research-tech/full`
 - `research-tech/autopilot`
 - `default-knowledge/full`
+
+## Research-Tech Operational Surface
+
+`research-tech` is no longer only an internal pack. It now has a minimal operational surface:
+
+- `ovp-doctor`
+  reports default workflow pack, pack roles, operator docs, recipes, and optional vault health
+- `ovp-export`
+  exports minimal compiled artifacts:
+  - `object-page`
+  - `topic-overview`
+  - `event-dossier`
+  - `contradictions`
+- `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
+- `docs/research-tech/RESEARCH_TECH_VERIFY.md`
+- `docs/recipes/research-tech/*.md`
+
+Examples:
+
+```bash
+ovp-doctor --pack research-tech --json
+ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic.md
+```
 - `default-knowledge/autopilot`
 
-That is why these are now first-class runtime invocations:
+That is why the default workflow path now runs:
+
+```bash
+ovp --full
+ovp-autopilot --yes
+```
+
+You can still select packs explicitly:
 
 ```bash
 ovp --pack research-tech --profile full

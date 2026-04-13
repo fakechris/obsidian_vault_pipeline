@@ -77,6 +77,7 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 
 ```bash
 ovp-packs
+ovp-doctor --pack research-tech --json
 ovp --pack research-tech --profile full
 ovp-autopilot --pack research-tech --profile autopilot --yes
 ovp --pack default-knowledge --profile full
@@ -122,8 +123,8 @@ pack 负责领域语义，而不是只放几段 prompt。它定义：
 
 当前内置的是：
 
-- `research-tech`：当前技术研究知识流的显式 pack
-- `default-knowledge`：默认兼容层
+- `research-tech`：当前技术研究知识流的显式 pack，也是默认 workflow pack
+- `default-knowledge`：兼容层
 
 未来媒体、医疗这类领域，应该各自作为外部 pack 工程接入。
 
@@ -138,7 +139,37 @@ profile 是某个 pack 下的一条可执行 DAG。
 - `default-knowledge/full`
 - `default-knowledge/autopilot`
 
-这也是为什么现在可以显式运行：
+## 研究技术 Pack 的运营面
+
+`research-tech` 现在不只是一个内部 pack，也已经有最小运营面：
+
+- `ovp-doctor`
+  检查默认 workflow pack、pack 角色、operator docs、recipes，以及可选的 vault 健康状态
+- `ovp-export`
+  导出最小 compiled artifacts：
+  - `object-page`
+  - `topic-overview`
+  - `event-dossier`
+  - `contradictions`
+- `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
+- `docs/research-tech/RESEARCH_TECH_VERIFY.md`
+- `docs/recipes/research-tech/*.md`
+
+示例：
+
+```bash
+ovp-doctor --pack research-tech --json
+ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic.md
+```
+
+这也是为什么现在默认就会跑：
+
+```bash
+ovp --full
+ovp-autopilot --yes
+```
+
+也可以显式指定：
 
 ```bash
 ovp --pack research-tech --profile full

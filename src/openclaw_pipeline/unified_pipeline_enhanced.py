@@ -43,11 +43,11 @@ from typing import Any
 
 try:
     from .runtime import VaultLayout, resolve_vault_dir
-    from .packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
+    from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
 except ImportError:  # pragma: no cover - script mode fallback
     from runtime import VaultLayout, resolve_vault_dir
-    from packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
+    from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
 
 # ========== 环境初始化 ==========
@@ -1753,8 +1753,8 @@ def main():
         "--pack",
         default=None,
         help=(
-            f"Domain pack 名称 (默认兼容 pack: {DEFAULT_PACK_NAME}; "
-            f"第一标准 pack: {PRIMARY_PACK_NAME})"
+            f"Domain pack 名称 (默认 workflow pack: {DEFAULT_WORKFLOW_PACK_NAME}; "
+            f"兼容 pack: {DEFAULT_PACK_NAME}; 第一标准 pack: {PRIMARY_PACK_NAME})"
         ),
     )
     parser.add_argument("--profile", default=None, help="Workflow profile 名称（默认: full）")

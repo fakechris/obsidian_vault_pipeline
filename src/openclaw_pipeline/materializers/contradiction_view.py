@@ -14,13 +14,18 @@ def materialize_contradiction_view(vault_dir: Path, *, pack_name: str, view_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with sqlite3.connect(layout.knowledge_db) as conn:
-        rows = conn.execute(
-            """
-            SELECT contradiction_id, subject_key, status, resolution_note, resolved_at
-            FROM contradictions
-            ORDER BY subject_key
-            """
-        ).fetchall()
+        try:
+            rows = conn.execute(
+                """
+                SELECT contradiction_id, subject_key, status, resolution_note, resolved_at
+                FROM contradictions
+                ORDER BY subject_key
+                """
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table: contradictions" not in str(exc):
+                raise
+            rows = []
 
     lines = [
         f"# {view_name}",

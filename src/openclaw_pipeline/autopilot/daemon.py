@@ -25,7 +25,7 @@ from threading import Lock
 from .queue import TaskQueue, Task
 from ..llm_defaults import DEFAULT_MINIMAX_API_BASE, DEFAULT_MINIMAX_MODEL, normalize_model_for_api_base, resolve_api_base, resolve_api_key
 from ..runtime import resolve_vault_dir
-from ..packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
+from ..packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
 from .watcher import MultiSourceWatcher
 
 
@@ -719,8 +719,8 @@ def main():
         "--pack",
         default=None,
         help=(
-            f"Domain pack 名称 (默认兼容 pack: {DEFAULT_PACK_NAME}; "
-            f"第一标准 pack: {PRIMARY_PACK_NAME})"
+            f"Domain pack 名称 (默认 workflow pack: {DEFAULT_WORKFLOW_PACK_NAME}; "
+            f"兼容 pack: {DEFAULT_PACK_NAME}; 第一标准 pack: {PRIMARY_PACK_NAME})"
         ),
     )
     parser.add_argument(
