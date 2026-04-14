@@ -23,19 +23,42 @@ def _validate_page_args(*, limit: int, offset: int = 0) -> tuple[int, int]:
     return limit, offset
 
 
-def list_objects(vault_dir: Path | str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def list_objects(
+    vault_dir: Path | str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    query: str | None = None,
+) -> list[dict[str, Any]]:
     limit, offset = _validate_page_args(limit=limit, offset=offset)
     db_path = _db_path(vault_dir)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
     with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
+        sql = """
             SELECT object_id, object_kind, title, canonical_path, source_slug
             FROM objects
-            ORDER BY object_id
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        ).fetchall()
+        """
+        params: list[Any] = []
+        if normalized_query:
+            sql += """
+                WHERE lower(object_id) LIKE ? ESCAPE '\\'
+                   OR lower(title) LIKE ? ESCAPE '\\'
+                   OR lower(source_slug) LIKE ? ESCAPE '\\'
+            """
+            params.extend(
+                [
+                    f"%{normalized_query}%",
+                    f"%{normalized_query}%",
+                    f"%{normalized_query}%",
+                ]
+            )
+        sql += " ORDER BY object_id LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = conn.execute(sql, tuple(params)).fetchall()
 
     return [
         {
@@ -49,9 +72,33 @@ def list_objects(vault_dir: Path | str, *, limit: int = 100, offset: int = 0) ->
     ]
 
 
+def count_objects(vault_dir: Path | str, *, query: str | None = None) -> int:
+    db_path = _db_path(vault_dir)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    sql = "SELECT COUNT(*) FROM objects"
+    params: list[Any] = []
+    if normalized_query:
+        sql += """
+            WHERE lower(object_id) LIKE ? ESCAPE '\\'
+               OR lower(title) LIKE ? ESCAPE '\\'
+               OR lower(source_slug) LIKE ? ESCAPE '\\'
+        """
+        params.extend(
+            [
+                f"%{normalized_query}%",
+                f"%{normalized_query}%",
+                f"%{normalized_query}%",
+            ]
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(sql, tuple(params)).fetchone()
+    return int(row[0]) if row else 0
+
+
 def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     db_path = _db_path(vault_dir)
-    escaped = object_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    escaped = _escape_like(object_id)
 
     with sqlite3.connect(db_path) as conn:
         object_row = conn.execute(
@@ -171,17 +218,30 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     }
 
 
-def list_contradictions(vault_dir: Path | str, *, limit: int = 100, status: str | None = None) -> list[dict[str, Any]]:
+def list_contradictions(
+    vault_dir: Path | str,
+    *,
+    limit: int = 100,
+    status: str | None = None,
+    query: str | None = None,
+) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
     query = """
         SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
         FROM contradictions
     """
     params: list[Any] = []
+    where_clauses: list[str] = []
     if status:
-        query += " WHERE status = ?"
+        where_clauses.append("status = ?")
         params.append(status)
+    if normalized_query:
+        where_clauses.append("lower(subject_key) LIKE ? ESCAPE '\\'")
+        params.append(f"%{normalized_query}%")
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY subject_key LIMIT ?"
     params.append(limit)
 

@@ -102,6 +102,17 @@ def test_truth_api_lists_contradictions(temp_vault):
     assert items[0]["negative_claim_ids"]
 
 
+def test_truth_api_filters_contradictions_by_query(temp_vault):
+    from openclaw_pipeline.truth_api import list_contradictions
+
+    vault = _seed_truth_vault(temp_vault)
+
+    items = list_contradictions(vault, query="agent")
+
+    assert len(items) == 1
+    assert items[0]["subject_key"] == "agent harness"
+
+
 def test_truth_api_builds_topic_neighborhood(temp_vault):
     from openclaw_pipeline.truth_api import get_topic_neighborhood
 
@@ -140,6 +151,56 @@ def test_truth_api_rejects_negative_pagination_inputs(temp_vault):
         assert "must be >= 0" in str(exc)
     else:
         raise AssertionError("Expected ValueError for negative contradiction limit")
+
+
+def test_truth_api_filters_objects_by_query(temp_vault):
+    from openclaw_pipeline.truth_api import list_objects
+
+    vault = _seed_truth_vault(temp_vault)
+
+    objects = list_objects(vault, query="target")
+
+    assert [item["object_id"] for item in objects] == ["target-note"]
+
+
+def test_truth_api_escapes_like_wildcards_in_object_queries(temp_vault):
+    from openclaw_pipeline.truth_api import list_objects
+
+    percent = temp_vault / "10-Knowledge" / "Evergreen" / "Percent.md"
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    percent.write_text(
+        """---
+note_id: percent%note
+title: Percent % Note
+type: evergreen
+date: 2026-04-13
+---
+
+# Percent % Note
+
+Literal percent id.
+""",
+        encoding="utf-8",
+    )
+    alpha.write_text(
+        """---
+note_id: alpha-note
+title: Alpha Note
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha Note
+
+Regular note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    objects = list_objects(temp_vault, query="%")
+
+    assert [item["title"] for item in objects] == ["Percent % Note"]
 
 
 def test_truth_api_matches_contradictions_by_exact_object_id_prefix(temp_vault):
