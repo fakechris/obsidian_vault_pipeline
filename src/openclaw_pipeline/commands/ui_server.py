@@ -629,6 +629,12 @@ def _render_dashboard(payload: dict) -> str:
         f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
         for item in payload["stale_summaries"]["items"]
     ) or "<li>None</li>"
+    priority_items = "".join(
+        f'<li><span class="pill">{escape(item["kind"].replace("_", " "))}</span> '
+        f'<a href="{escape(item["path"])}">{escape(item["label"])}</a>'
+        f"<div class='muted'>{escape(item['detail'])}</div></li>"
+        for item in payload["priorities"]
+    ) or "<li class='muted'>No urgent maintenance items surfaced.</li>"
     return _layout(
         "OpenClaw Truth UI",
         (
@@ -648,11 +654,15 @@ def _render_dashboard(payload: dict) -> str:
             "</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
+            f"<section class='card'><h2>Needs Attention Now</h2><ul class='list-tight'>{priority_items}</ul></section>"
             f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
             f"<section class='card'><h2>Recent Events</h2><ul class='list-tight'>{event_items}</ul></section>"
             f"<section class='card'><h2><a href='/summaries'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
             "</div>"
+            "<div class='section-stack'>"
             f"<section class='card'><h2>Contradiction Queue</h2><ul class='list-tight'>{contradiction_items}</ul></section>"
+            f"{_render_review_history(payload['recent_review_actions'], title='Recent Review Actions')}"
+            "</div>"
             "</section>"
         ),
     )
@@ -720,6 +730,33 @@ def _render_object_page(payload: dict) -> str:
     section_nav = "".join(
         f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>' for item in payload["section_nav"]
     )
+    contradiction_form = (
+        "<form method='post' action='/contradictions/resolve' class='link-row'>"
+        + "".join(
+            f"<input type='hidden' name='contradiction_id' value='{escape(contradiction_id)}' />"
+            for contradiction_id in payload["open_contradiction_ids"]
+        )
+        + "<select name='status'>"
+        + "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
+        + "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
+        + "<option value='dismissed'>dismissed</option>"
+        + "<option value='needs_human'>needs_human</option>"
+        + "</select>"
+        + "<input type='text' name='note' placeholder='Resolution note' />"
+        + "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>"
+        + "<button type='submit'>Resolve Open Contradictions</button>"
+        + "</form>"
+        if payload["open_contradiction_ids"]
+        else "<p class='muted'>No open contradictions on this object.</p>"
+    )
+    summary_form = (
+        "<form method='post' action='/summaries/rebuild' class='link-row'>"
+        + f"<input type='hidden' name='object_id' value='{escape(payload['object']['object_id'])}' />"
+        + "<button type='submit'>Rebuild This Summary</button>"
+        + "</form>"
+        if payload["stale_summary_details"]
+        else "<p class='muted'>No stale summary action needed for this object.</p>"
+    )
     return _layout(
         f"Object: {payload['object']['title']}",
         (
@@ -747,6 +784,10 @@ def _render_object_page(payload: dict) -> str:
             "<div class='section-stack'>"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
+            "<section class='card'><h2>Quick Maintenance</h2>"
+            f"{contradiction_form}"
+            f"{summary_form}"
+            "</section>"
             "<section class='card'><h2>Context</h2><dl class='meta-list'>"
             f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
             f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
@@ -774,6 +815,24 @@ def _render_topic_page(payload: dict) -> str:
     mocs = "".join(
         f"<li>{escape(item['title'])}</li>" for item in payload["provenance"]["mocs"]
     ) or "<li>None</li>"
+    summary_form = (
+        "<form method='post' action='/summaries/rebuild' class='link-row'>"
+        + "".join(
+            f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
+            for object_id in payload["scoped_stale_summary_ids"]
+        )
+        + "<button type='submit'>Rebuild Scoped Summaries</button>"
+        + "</form>"
+        if payload["scoped_stale_summary_ids"]
+        else "<p class='muted'>No stale summaries in this topic scope.</p>"
+    )
+    contradiction_entry = (
+        "<div class='link-row'>"
+        + f"<a href='{escape(payload['links']['contradictions_path'])}'>Review scoped contradictions</a>"
+        + "</div>"
+        if payload["scoped_open_contradiction_ids"]
+        else "<p class='muted'>No open contradictions in this topic scope.</p>"
+    )
     return _layout(
         f"Topic: {payload['center']['title']}",
         (
@@ -793,6 +852,10 @@ def _render_topic_page(payload: dict) -> str:
             f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
+            "<section class='card'><h2>Quick Maintenance</h2>"
+            f"{contradiction_entry}"
+            f"{summary_form}"
+            "</section>"
             "</section>"
         ),
     )
@@ -835,6 +898,26 @@ def _render_events_page(payload: dict) -> str:
         + "</ul></section>"
         for section in payload["date_sections"]
     ) or "<li>None</li>"
+    summary_form = (
+        "<form method='post' action='/summaries/rebuild' class='link-row'>"
+        + "".join(
+            f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
+            for object_id in payload["scoped_stale_summary_ids"]
+        )
+        + "<button type='submit'>Rebuild Visible Summaries</button>"
+        + "</form>"
+        if payload["scoped_stale_summary_ids"]
+        else "<p class='muted'>No stale summaries in the visible event scope.</p>"
+    )
+    contradiction_entry = (
+        f"<div class='link-row'><a href='/contradictions?q={escape(query)}'>Review visible contradictions</a></div>"
+        if payload["scoped_open_contradiction_ids"] and query
+        else (
+            "<div class='link-row'><a href='/contradictions'>Review visible contradictions</a></div>"
+            if payload["scoped_open_contradiction_ids"]
+            else "<p class='muted'>No open contradictions in the visible event scope.</p>"
+        )
+    )
     return _layout(
         "Event Dossier",
         (
@@ -848,6 +931,10 @@ def _render_events_page(payload: dict) -> str:
             f"<div class='link-row'>{type_breakdown}</div>"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
+            "<section class='card'><h2>Quick Maintenance</h2>"
+            f"{contradiction_entry}"
+            f"{summary_form}"
+            "</section>"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
             f"<nav class='subnav'>{date_nav}</nav>"
             f"{events}"

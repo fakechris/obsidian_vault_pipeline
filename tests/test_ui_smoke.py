@@ -165,6 +165,8 @@ date: 2026-04-13
     assert "Review Context" in object_body
     assert "Open contradictions" in object_body
     assert "/summaries?q=alpha" in object_body
+    assert "Quick Maintenance" in object_body
+    assert "Resolve Open Contradictions" in object_body
     assert f"/note?path={quote('10-Knowledge/Evergreen/Alpha.md', safe='')}" in object_body
     assert f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Source Deep Dive_深度解读.md', safe='')}" in object_body
     assert f"/note?path={quote('10-Knowledge/Atlas/Atlas-Index.md', safe='')}" in object_body
@@ -178,6 +180,8 @@ date: 2026-04-13
     assert "Atlas / MOC" in topic_body
     assert "Review Context" in topic_body
     assert "/summaries?q=alpha" in topic_body
+    assert "Quick Maintenance" in topic_body
+    assert "Review scoped contradictions" in topic_body
 
     assert events_status == 200
     assert "Event Dossier" in events_body
@@ -188,6 +192,8 @@ date: 2026-04-13
     assert "Model Notes" in events_body
     assert "Review Context" in events_body
     assert "/summaries?q=alpha" in events_body
+    assert "Quick Maintenance" in events_body
+    assert "Review visible contradictions" in events_body
     assert "page_date -" not in events_body
     assert "Source Deep Dive" in events_body
     assert "Atlas Index" in events_body
@@ -748,6 +754,7 @@ Thin note.
     assert "Contradictions Open" in root_body
     assert "Recent Events" in root_body
     assert "Stale Summaries" in root_body
+    assert "Needs Attention Now" in root_body
     assert "Alpha" in root_body
     assert "Thin Note" in root_body
     assert "/summaries" in root_body
