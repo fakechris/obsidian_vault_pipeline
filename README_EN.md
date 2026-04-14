@@ -152,6 +152,10 @@ The built-in profiles currently shipped are:
   - `topic-overview`
   - `event-dossier`
   - `contradictions`
+- `ovp-truth`
+  reads object / contradiction / neighborhood truth rows directly from `knowledge.db`
+- `ovp-ui`
+  launches a local read-only DB browser for object / topic / event / contradiction views
 - `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
 - `docs/research-tech/RESEARCH_TECH_VERIFY.md`
 - `docs/recipes/research-tech/*.md`
@@ -160,6 +164,8 @@ Examples:
 
 ```bash
 ovp-doctor --pack research-tech --json
+ovp-truth objects --vault-dir /path/to/vault
+ovp-ui --vault-dir /path/to/vault --port 8787
 ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic.md
 ```
 - `default-knowledge/autopilot`

@@ -16,11 +16,21 @@ def _db_path(vault_dir: Path | str) -> Path:
 
 def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     detail = get_object_detail(vault_dir, object_id)
+    neighborhood = get_topic_neighborhood(vault_dir, object_id)
+    neighbor_titles = {item["object_id"]: item["title"] for item in neighborhood["neighbors"]}
+    relations = [
+        {
+            **item,
+            "target_title": neighbor_titles.get(item["target_object_id"], item["target_object_id"]),
+        }
+        for item in detail["relations"]
+    ]
     return {
         "screen": "object/page",
         **detail,
+        "relations": relations,
         "claim_count": len(detail["claims"]),
-        "relation_count": len(detail["relations"]),
+        "relation_count": len(relations),
         "contradiction_count": len(detail["contradictions"]),
         "evidence_count": len(detail["evidence"]),
     }

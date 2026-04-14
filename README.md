@@ -151,6 +151,10 @@ profile 是某个 pack 下的一条可执行 DAG。
   - `topic-overview`
   - `event-dossier`
   - `contradictions`
+- `ovp-truth`
+  直接读取 `knowledge.db` 中的 object / contradiction / neighborhood truth rows
+- `ovp-ui`
+  启动一个本地只读 DB 浏览面，直接查看 object / topic / event / contradiction
 - `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
 - `docs/research-tech/RESEARCH_TECH_VERIFY.md`
 - `docs/recipes/research-tech/*.md`
@@ -159,6 +163,8 @@ profile 是某个 pack 下的一条可执行 DAG。
 
 ```bash
 ovp-doctor --pack research-tech --json
+ovp-truth objects --vault-dir /path/to/vault
+ovp-ui --vault-dir /path/to/vault --port 8787
 ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic.md
 ```
 

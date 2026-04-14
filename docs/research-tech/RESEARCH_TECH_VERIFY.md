@@ -7,6 +7,8 @@ Use this checklist when validating the primary `research-tech` pack.
 ```bash
 ovp-packs --json
 ovp-doctor --pack research-tech --json
+ovp-truth objects --vault-dir /path/to/vault
+ovp-ui --vault-dir /path/to/vault --port 8787
 ovp --help
 ovp-autopilot --help
 ```
@@ -16,6 +18,8 @@ Expected:
 - `research-tech` is `role=primary`
 - `default-knowledge` is `role=compatibility`
 - default workflow pack is `research-tech`
+- `ovp-truth` can read object rows directly from `knowledge.db`
+- `ovp-ui` starts a local DB-backed browser surface
 
 ## Test Checks
 
