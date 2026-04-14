@@ -28,6 +28,7 @@ from ..ui.view_models import (
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
+_GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
 
 
 def _layout(title: str, body: str) -> str:
@@ -109,6 +110,10 @@ def _layout(title: str, body: str) -> str:
 
 def _note_href(path: str) -> str:
     return f"/note?path={quote(path, safe='')}"
+
+
+def _objects_search_href(query: str) -> str:
+    return f"/objects?q={quote(query, safe='')}"
 
 
 def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
@@ -200,6 +205,10 @@ def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | N
     return (_note_href(relative_path), relative_path)
 
 
+def _is_search_href(href: str) -> bool:
+    return href.startswith("/objects?q=")
+
+
 def _strip_frontmatter(markdown: str) -> str:
     if not markdown.startswith("---\n"):
         return markdown
@@ -234,12 +243,21 @@ def _parse_frontmatter(markdown: str) -> tuple[dict[str, object], str]:
 
 
 def _render_frontmatter(frontmatter: dict[str, object]) -> str:
+    def render_value(value: object) -> str:
+        if isinstance(value, str) and value.startswith(("http://", "https://")):
+            return (
+                f'<a href="{escape(value)}" target="_blank" rel="noopener noreferrer">{escape(value)}</a>'
+            )
+        if isinstance(value, (list, dict)):
+            return escape(json.dumps(value, ensure_ascii=False))
+        return escape(str(value))
+
     if not frontmatter:
         return ""
     rows = "".join(
         "<tr>"
         f"<th>{escape(str(key))}</th>"
-        f"<td>{escape(json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else str(value))}</td>"
+        f"<td>{render_value(value)}</td>"
         "</tr>"
         for key, value in frontmatter.items()
     )
@@ -259,11 +277,10 @@ def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str) -> st
         target_part, _, label_part = raw_inner.partition("|")
         label = label_part.strip() or target_part.split("#", 1)[0].strip()
         resolved = _lookup_wikilink_target(vault_dir, target_part)
-        if not resolved:
-            return match.group(0)
-        href, _resolved_target = resolved
+        href = resolved[0] if resolved else _objects_search_href(target_part.split("#", 1)[0].strip() or label)
+        emoji = "🔍" if _is_search_href(href) else "🎯"
         safe_label = label.replace("[", "\\[").replace("]", "\\]")
-        return f"[{safe_label}]({href})"
+        return f"[{emoji} {safe_label}]({href})"
 
     output_lines: list[str] = []
     in_fence = False
@@ -280,9 +297,120 @@ def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str) -> st
     return "\n".join(output_lines)
 
 
+def _infer_github_repo_base(frontmatter: dict[str, object], markdown: str) -> str | None:
+    candidates: list[str] = []
+    for value in frontmatter.values():
+        if isinstance(value, str):
+            candidates.append(value)
+    candidates.append(markdown)
+    for candidate in candidates:
+        match = _GITHUB_REPO_RE.search(candidate)
+        if not match:
+            continue
+        owner, repo = match.groups()
+        return f"https://github.com/{owner}/{repo.removesuffix('.git')}"
+    return None
+
+
+def _smart_markdown_link(label: str, href: str) -> str:
+    safe_label = label.replace("[", "\\[").replace("]", "\\]")
+    return f"[{safe_label}]({href})"
+
+
+def _convert_box_table_fences(markdown: str, *, github_repo_base: str | None) -> str:
+    lines = markdown.splitlines()
+    output: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.strip().startswith("```"):
+            fence = [line]
+            index += 1
+            while index < len(lines):
+                fence.append(lines[index])
+                if lines[index].strip().startswith("```"):
+                    index += 1
+                    break
+                index += 1
+            body = fence[1:-1]
+            if body and any("│" in row for row in body) and any("┌" in row or "├" in row or "└" in row for row in body):
+                rows: list[tuple[str, str]] = []
+                for row in body:
+                    if "│" not in row:
+                        continue
+                    parts = [part.strip() for part in row.strip().strip("│").split("│")]
+                    if len(parts) != 2:
+                        continue
+                    left, right = parts
+                    if not left or left == "参考链接":
+                        continue
+                    if right.startswith(("http://", "https://")):
+                        right = _smart_markdown_link(right, right)
+                    elif github_repo_base and right.endswith(".md") and not right.startswith("/"):
+                        right = _smart_markdown_link(right, f"{github_repo_base}/blob/main/{right}")
+                    rows.append((left, right))
+                if rows:
+                    output.append("| 名称 | 值 |")
+                    output.append("| --- | --- |")
+                    for left, right in rows:
+                        output.append(f"| {left} | {right} |")
+                    continue
+            output.extend(fence)
+            continue
+        output.append(line)
+        index += 1
+    return "\n".join(output)
+
+
+def _linkify_keywords(markdown: str) -> str:
+    output: list[str] = []
+    keyword_re = re.compile(r"^(\*\*关键词\*\*|关键词)\s*[：:]\s*(.+)$")
+    for line in markdown.splitlines():
+        match = keyword_re.match(line.strip())
+        if not match:
+            output.append(line)
+            continue
+        prefix, values = match.groups()
+        rendered = []
+        for raw in values.split(","):
+            keyword = raw.strip()
+            if not keyword:
+                continue
+            rendered.append(_smart_markdown_link(keyword, _objects_search_href(keyword)))
+        output.append(f"{prefix}：{'，'.join(rendered)}")
+    return "\n".join(output)
+
+
+def _linkify_related_knowledge_section(vault_dir: Path, markdown: str) -> str:
+    output_lines: list[str] = []
+    in_related = False
+
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            in_related = stripped.lstrip("#").strip() == "关联知识"
+            output_lines.append(line)
+            continue
+        if in_related and re.match(r"^- [^\[][^—]+ — ", stripped):
+            concept, sep, remainder = stripped[2:].partition(" — ")
+            concept = concept.strip()
+            resolved = _lookup_wikilink_target(vault_dir, concept)
+            href = resolved[0] if resolved else _objects_search_href(concept)
+            emoji = "🔍" if _is_search_href(href) else "🎯"
+            output_lines.append(f'- [{emoji} {concept}]({href}) — {remainder}')
+            continue
+        output_lines.append(line)
+
+    return "\n".join(output_lines)
+
+
 def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
     frontmatter, body = _parse_frontmatter(markdown)
-    rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, body).strip()
+    github_repo_base = _infer_github_repo_base(frontmatter, body)
+    rendered_body = _convert_box_table_fences(body, github_repo_base=github_repo_base)
+    rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, rendered_body)
+    rendered_body = _linkify_related_knowledge_section(vault_dir, rendered_body)
+    rendered_body = _linkify_keywords(rendered_body).strip()
     if not rendered_body:
         html_body = "<p class='muted'>Empty note.</p>"
     else:
@@ -373,6 +501,12 @@ def _render_object_page(payload: dict) -> str:
         if evergreen_path
         else "<span class='muted'>None</span>"
     )
+    canonical_path = payload["context"]["canonical_path"]
+    canonical_path_html = (
+        f'<a href="{escape(_note_href(canonical_path))}">{escape(canonical_path)}</a>'
+        if canonical_path
+        else "<span class='muted'>None</span>"
+    )
     claims = "".join(f"<li>{escape(item['claim_text'])}</li>" for item in payload["claims"]) or "<li>None</li>"
     relations = "".join(
         f'<li><a href="/object?id={escape(item["target_object_id"])}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
@@ -423,7 +557,7 @@ def _render_object_page(payload: dict) -> str:
             "<section class='card'><h2>Context</h2><dl class='meta-list'>"
             f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
             f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
-            f"<div><dt>Canonical Path</dt><dd>{escape(payload['context']['canonical_path'])}</dd></div>"
+            f"<div><dt>Canonical Path</dt><dd>{canonical_path_html}</dd></div>"
             "</dl></section>"
             "<section class='card'><h2>Provenance</h2><dl class='meta-list'>"
             f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"

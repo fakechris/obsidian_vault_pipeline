@@ -144,6 +144,8 @@ date: 2026-04-13
     assert 'href="#claims"' in object_body
     assert "Source Slug" in object_body
     assert "Evergreen Markdown" in object_body
+    assert "10-Knowledge/Evergreen/Alpha.md" in object_body
+    assert "/private/" not in object_body
     assert "Source Deep Dive" in object_body
     assert "Atlas Index" in object_body
     assert f"/note?path={quote('10-Knowledge/Evergreen/Alpha.md', safe='')}" in object_body
@@ -302,9 +304,112 @@ Body paragraph.
     assert status == 200
     assert "Frontmatter" in body
     assert "https://example.com/post" in body
+    assert 'href="https://example.com/post"' in body
     assert "published" in body
     assert "```yaml" not in body
     assert "Body paragraph." in body
+
+
+def test_ui_note_page_normalizes_related_knowledge_links(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    prompt = temp_vault / "10-Knowledge" / "Evergreen" / "Prompt Engineering.md"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text(
+        """---
+note_id: prompt-engineering
+title: Prompt Engineering
+type: evergreen
+date: 2026-04-13
+---
+
+# Prompt Engineering
+""",
+        encoding="utf-8",
+    )
+    note = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Related Links_深度解读.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        """## 关联知识
+
+- [[ai-agent|AI-Agent]] — explanation
+- Prompt-Engineering — explanation
+- AI-Workflow — explanation
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, f"/note?path={quote('20-Areas/AI-Research/Topics/2026-04/Related Links_深度解读.md', safe='')}")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "[[ai-agent|AI-Agent]]" not in body
+    assert '🔍 AI-Agent' in body
+    assert '🎯 Prompt-Engineering' in body
+    assert '🔍 AI-Workflow' in body
+    assert '/objects?q=ai-agent' in body
+    assert '/object?id=prompt-engineering' in body
+    assert '/objects?q=AI-Workflow' in body
+
+
+def test_ui_note_page_smart_renders_reference_tables_and_keywords(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    note = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Repo Links_深度解读.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        """```yaml
+---
+title: "Repo Links"
+source: "https://github.com/example/repo"
+github: "https://github.com/example/repo"
+---
+```
+
+## 13. 页脚
+
+```
+┌────────────────────────────────────┐
+│ 参考链接                           │
+├────────────────────────────────────┤
+│ GitHub 仓库 │ https://github.com/example/repo │
+├────────────────────────────────────┤
+│ 打包文档 │ docs/RELEASING.md │
+└────────────────────────────────────┘
+```
+
+**关键词**：OpenCove, Claude Code
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Repo Links_深度解读.md', safe='')}")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert '<table>' in body
+    assert 'href="https://github.com/example/repo"' in body
+    assert 'href="https://github.com/example/repo/blob/main/docs/RELEASING.md"' in body
+    assert '/objects?q=OpenCove' in body
+    assert '/objects?q=Claude%20Code' in body
 
 
 def test_ui_root_dashboard_renders_db_summary(temp_vault):

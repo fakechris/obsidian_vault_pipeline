@@ -315,8 +315,8 @@ date: 2026-04-13
 
     detail = get_object_detail(temp_vault, "alpha")
 
-    assert detail["object"]["canonical_path"].endswith("10-Knowledge/Evergreen/Alpha.md")
-    assert detail["provenance"]["evergreen_path"].endswith("10-Knowledge/Evergreen/Alpha.md")
+    assert detail["object"]["canonical_path"] == "10-Knowledge/Evergreen/Alpha.md"
+    assert detail["provenance"]["evergreen_path"] == "10-Knowledge/Evergreen/Alpha.md"
     assert detail["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
     assert detail["provenance"]["source_notes"][0]["note_type"] == "deep_dive"
     assert detail["provenance"]["mocs"][0]["slug"] == "atlas-index"

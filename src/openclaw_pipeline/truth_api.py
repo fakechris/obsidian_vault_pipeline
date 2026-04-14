@@ -47,6 +47,7 @@ def list_objects(
 ) -> list[dict[str, Any]]:
     limit, offset = _validate_page_args(limit=limit, offset=offset)
     db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
     with sqlite3.connect(db_path) as conn:
         sql = """
@@ -76,7 +77,7 @@ def list_objects(
             "object_id": row[0],
             "object_kind": row[1],
             "title": row[2],
-            "canonical_path": row[3],
+            "canonical_path": _vault_relative_path(resolved_vault, row[3]),
             "source_slug": row[4],
         }
         for row in rows
@@ -212,7 +213,7 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             "object_id": object_row[0],
             "object_kind": object_row[1],
             "title": object_row[2],
-            "canonical_path": object_row[3],
+            "canonical_path": _vault_relative_path(resolved_vault, object_row[3]),
             "source_slug": object_row[4],
         },
         "summary": (
@@ -320,6 +321,7 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
         raise ValueError("Only depth=1 is currently supported")
 
     db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
     with sqlite3.connect(db_path) as conn:
         center = conn.execute(
             """
@@ -361,7 +363,7 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
             "object_id": center[0],
             "object_kind": center[1],
             "title": center[2],
-            "canonical_path": center[3],
+            "canonical_path": _vault_relative_path(resolved_vault, center[3]),
             "source_slug": center[4],
         },
         "neighbors": [
@@ -369,7 +371,7 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
                 "object_id": row[0],
                 "object_kind": row[1],
                 "title": row[2],
-                "canonical_path": row[3],
+                "canonical_path": _vault_relative_path(resolved_vault, row[3]),
                 "source_slug": row[4],
             }
             for row in neighbor_rows
@@ -394,6 +396,7 @@ def list_atlas_memberships(
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
     sql = """
         SELECT pages_index.slug, pages_index.title, pages_index.path, objects.object_id, objects.title
@@ -426,7 +429,7 @@ def list_atlas_memberships(
             {
                 "slug": slug,
                 "title": title,
-                "path": path,
+                "path": _vault_relative_path(resolved_vault, path),
                 "members": [],
             },
         )
@@ -442,6 +445,7 @@ def list_deep_dive_derivations(
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
     sql = """
         SELECT pages_index.slug, pages_index.title, pages_index.note_type, pages_index.path, objects.object_id, objects.title
@@ -475,7 +479,7 @@ def list_deep_dive_derivations(
                 "slug": slug,
                 "title": title,
                 "note_type": note_type,
-                "path": path,
+                "path": _vault_relative_path(resolved_vault, path),
                 "derived_objects": [],
             },
         )
