@@ -458,6 +458,11 @@ def _render_dashboard(payload: dict) -> str:
         f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
         for item in payload["events"]["items"]
     ) or "<li>None</li>"
+    stale_summary_items = "".join(
+        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
+        for item in payload["stale_summaries"]["items"]
+    ) or "<li>None</li>"
     return _layout(
         "OpenClaw Truth UI",
         (
@@ -472,11 +477,14 @@ def _render_dashboard(payload: dict) -> str:
             f"<p>{payload['contradictions']['open_count']}</p></div>"
             "<div class='card'><h2>Recent Events</h2>"
             f"<p>{payload['events']['count']}</p></div>"
+            "<div class='card'><h2>Stale Summaries</h2>"
+            f"<p>{payload['stale_summaries']['count']}</p></div>"
             "</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
             f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
             f"<section class='card'><h2>Recent Events</h2><ul class='list-tight'>{event_items}</ul></section>"
+            f"<section class='card'><h2><a href='/summaries'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
             "</div>"
             f"<section class='card'><h2>Contradiction Queue</h2><ul class='list-tight'>{contradiction_items}</ul></section>"
             "</section>"

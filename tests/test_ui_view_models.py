@@ -343,13 +343,31 @@ def test_build_truth_dashboard_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
 
     _seed_truth_store(temp_vault)
+    thin = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    thin.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
 
     payload = build_truth_dashboard_payload(temp_vault)
 
     assert payload["screen"] == "truth/dashboard"
-    assert payload["objects"]["count"] == 3
+    assert payload["objects"]["count"] == 4
     assert payload["contradictions"]["count"] == 1
-    assert payload["events"]["count"] == 3
+    assert payload["events"]["count"] == 4
+    assert payload["stale_summaries"]["count"] >= 1
+    assert "thin-note" in [item["object_id"] for item in payload["stale_summaries"]["items"]]
     assert payload["objects"]["items"][0]["object_id"] == "alpha"
 
 

@@ -239,6 +239,7 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
     objects = build_objects_index_payload(vault_dir, limit=12, offset=0)
     contradictions = build_contradiction_browser_payload(vault_dir)
     events = build_event_dossier_payload(vault_dir, limit=8)
+    stale_summaries = build_stale_summary_browser_payload(vault_dir)
     return {
         "screen": "truth/dashboard",
         "objects": {
@@ -254,6 +255,10 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
             "count": events["event_count"],
             "items": events["events"][:8],
             "dates": events["dates"],
+        },
+        "stale_summaries": {
+            "count": stale_summaries["count"],
+            "items": stale_summaries["items"][:8],
         },
     }
 
