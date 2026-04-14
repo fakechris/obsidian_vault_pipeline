@@ -178,7 +178,11 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["event_count"] == 3
     assert payload["dates"] == ["2026-04-13"]
     assert payload["events"][0]["object_id"] == "alpha"
+    assert payload["events"][0]["event_kind"] == "dated_note"
+    assert payload["events"][0]["event_label"] == "Dated Note"
     assert payload["date_sections"][0]["date"] == "2026-04-13"
+    assert payload["event_type_counts"] == {"dated_note": 3}
+    assert "dated notes projected from indexed pages" in payload["model_notes"][0]
 
 
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
@@ -238,6 +242,33 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["items"][0]["subject_key"] == "alpha"
     assert payload["open_count"] == 1
     assert payload["items"][0]["object_ids"] == ["alpha", "conflict"]
+    assert "page_summary claim polarity" in payload["detection_notes"][0]
+
+
+def test_build_contradiction_browser_payload_empty_state_explains_zero(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_contradiction_browser_payload(temp_vault)
+
+    assert payload["count"] == 0
+    assert "Zero results usually means the current heuristic did not detect a conflict" in payload["empty_state"]
 
 
 def test_build_contradiction_browser_payload_filters_by_status(temp_vault):

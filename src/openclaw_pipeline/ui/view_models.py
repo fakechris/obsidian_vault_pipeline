@@ -135,6 +135,8 @@ def build_event_dossier_payload(
         {
             "event_date": row[0],
             "event_type": row[1],
+            "event_kind": "dated_note" if row[1] == "page_date" else "dated_heading",
+            "event_label": "Dated Note" if row[1] == "page_date" else "Dated Heading",
             "object_id": row[2],
             "title": row[3],
             "summary_text": row[4] or "",
@@ -153,12 +155,18 @@ def build_event_dossier_payload(
     for event in events:
         grouped.setdefault(event["event_date"], []).append(event)
     date_sections = [{"date": date, "events": grouped[date]} for date in dates]
+    event_type_counts = Counter(event["event_kind"] for event in events)
     return {
         "screen": "event/dossier",
         "events": events,
         "event_count": len(events),
         "dates": dates,
         "date_sections": date_sections,
+        "event_type_counts": dict(event_type_counts),
+        "model_notes": [
+            "Event Dossier is a timeline over dated notes projected from indexed pages, not a separate event entity system.",
+            "page_date rows come from note-level dates; heading_date rows come from dated section headings.",
+        ],
         "query": query or "",
     }
 
@@ -216,6 +224,11 @@ def build_contradiction_browser_payload(
         "count": len(items),
         "open_count": status_counts.get("open", 0),
         "resolved_count": sum(count for status, count in status_counts.items() if status != "open"),
+        "detection_notes": [
+            "Contradictions are currently detected from page_summary claim polarity, not from full semantic contradiction analysis.",
+            "Zero results do not prove consistency; they usually mean the current heuristic did not detect a conflict.",
+        ],
+        "empty_state": "Zero results usually means the current heuristic did not detect a conflict, not that the vault is globally contradiction-free.",
         "status": status or "",
         "query": query or "",
     }

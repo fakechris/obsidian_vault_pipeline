@@ -611,6 +611,11 @@ def _render_topic_page(payload: dict) -> str:
 
 def _render_events_page(payload: dict) -> str:
     query = payload.get("query", "")
+    type_breakdown = "".join(
+        f"<span class='pill'>{escape(kind.replace('_', ' '))}: {count}</span>"
+        for kind, count in payload["event_type_counts"].items()
+    )
+    model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     date_nav = "".join(
         f"<a href='#date-{escape(section['date'])}'>{escape(section['date'])}</a>"
         for section in payload["date_sections"]
@@ -620,11 +625,7 @@ def _render_events_page(payload: dict) -> str:
         + "".join(
             (
                 "<li>"
-                + (
-                    f"{escape(item['event_type'])} - "
-                    if item["event_type"] != "page_date"
-                    else ""
-                )
+                + f"<span class='pill'>{escape(item['event_label'])}</span> "
                 + f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a>'
                 + f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
                 + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
@@ -646,6 +647,8 @@ def _render_events_page(payload: dict) -> str:
             "<button type='submit'>Search</button>"
             "</form>"
             f"<p class='muted'>{payload['event_count']} events across {len(payload['dates'])} dates.</p>"
+            f"<div class='link-row'>{type_breakdown}</div>"
+            f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
             f"<nav class='subnav'>{date_nav}</nav>"
             f"{events}"
         ),
@@ -727,6 +730,7 @@ def _render_derivations_page(payload: dict) -> str:
 def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
+    detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     items = "".join(
         "<li>"
         f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
@@ -744,7 +748,7 @@ def _render_contradictions_page(payload: dict) -> str:
         + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
         + "</li>"
         for item in payload["items"]
-    ) or "<li>None</li>"
+    ) or f"<li>{escape(payload['empty_state'])}</li>"
     return _layout(
         "Contradictions",
         (
@@ -759,6 +763,7 @@ def _render_contradictions_page(payload: dict) -> str:
             "<button type='submit'>Filter</button>"
             "</form>"
             f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.</p>"
+            f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )

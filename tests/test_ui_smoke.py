@@ -165,6 +165,8 @@ date: 2026-04-13
     assert "2026-04-13" in events_body
     assert 'id="date-2026-04-13"' in events_body
     assert "timeline-oriented" in events_body
+    assert "Dated Note" in events_body
+    assert "Model Notes" in events_body
     assert "page_date -" not in events_body
     assert "Source Deep Dive" in events_body
     assert "Atlas Index" in events_body
@@ -177,6 +179,7 @@ date: 2026-04-13
     assert '/object?id=alpha' in contradictions_body
     assert "Source Deep Dive" in contradictions_body
     assert "Atlas Index" in contradictions_body
+    assert "Detection Notes" in contradictions_body
 
 
 def test_ui_note_page_renders_markdown_note(temp_vault):
@@ -480,6 +483,40 @@ def test_ui_contradictions_page_filters_by_status(temp_vault):
     assert "resolved" in body
     assert "<span class='pill'>resolved</span>" in body
     assert "<span class='pill'>open</span>" not in body
+
+
+def test_ui_contradictions_empty_state_explains_heuristic_limit(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/contradictions")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Zero results usually means the current heuristic did not detect a conflict" in body
 
 
 def test_ui_contradictions_page_filters_by_query(temp_vault):
