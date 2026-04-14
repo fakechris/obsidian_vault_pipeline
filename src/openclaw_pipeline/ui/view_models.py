@@ -14,6 +14,18 @@ def _db_path(vault_dir: Path | str) -> Path:
     return VaultLayout.from_vault(resolved).knowledge_db
 
 
+def _object_ids_from_claim_ids(*claim_id_lists: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for claim_ids in claim_id_lists:
+        for claim_id in claim_ids:
+            object_id = claim_id.split("::", 1)[0]
+            if object_id and object_id not in seen:
+                seen.add(object_id)
+                ordered.append(object_id)
+    return ordered
+
+
 def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     detail = get_object_detail(vault_dir, object_id)
     neighborhood = get_topic_neighborhood(vault_dir, object_id)
@@ -33,21 +45,34 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
         "relation_count": len(relations),
         "contradiction_count": len(detail["contradictions"]),
         "evidence_count": len(detail["evidence"]),
+        "context": {
+            "object_kind": detail["object"]["object_kind"],
+            "source_slug": detail["object"]["source_slug"],
+            "canonical_path": detail["object"]["canonical_path"],
+        },
         "links": {
             "topic_path": f"/topic?id={object_id}",
             "events_path": f"/events?q={object_id}",
             "contradictions_path": f"/contradictions?q={object_id}",
         },
+        "section_nav": [
+            {"href": "#summary", "label": "Summary"},
+            {"href": "#claims", "label": "Claims"},
+            {"href": "#relations", "label": "Relations"},
+            {"href": "#contradictions", "label": "Contradictions"},
+        ],
     }
 
 
 def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     neighborhood = get_topic_neighborhood(vault_dir, object_id)
+    detail = get_object_detail(vault_dir, object_id)
     return {
         "screen": "overview/topic",
         **neighborhood,
         "edge_count": len(neighborhood["edges"]),
         "neighbor_count": len(neighborhood["neighbors"]),
+        "center_summary": detail["summary"]["summary_text"] if detail["summary"] else "",
         "links": {
             "center_object_path": f"/object?id={object_id}",
             "events_path": f"/events?q={object_id}",
@@ -98,11 +123,16 @@ def build_event_dossier_payload(vault_dir: Path | str, *, query: str | None = No
         for row in rows
     ]
     dates = sorted({event["event_date"] for event in events})
+    date_sections = [
+        {"date": date, "events": [event for event in events if event["event_date"] == date]}
+        for date in dates
+    ]
     return {
         "screen": "event/dossier",
         "events": events,
         "event_count": len(events),
         "dates": dates,
+        "date_sections": date_sections,
         "query": query or "",
     }
 
@@ -113,7 +143,19 @@ def build_contradiction_browser_payload(
     status: str | None = None,
     query: str | None = None,
 ) -> dict[str, Any]:
-    items = list_contradictions(vault_dir, status=status, query=query)
+    raw_items = list_contradictions(vault_dir, status=status, query=query)
+    items = []
+    for item in raw_items:
+        object_ids = _object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"])
+        items.append(
+            {
+                **item,
+                "object_ids": object_ids,
+                "object_links": [
+                    {"object_id": object_id, "path": f"/object?id={object_id}"} for object_id in object_ids
+                ],
+            }
+        )
     status_counts = Counter(item["status"] for item in items)
     return {
         "screen": "truth/contradictions",

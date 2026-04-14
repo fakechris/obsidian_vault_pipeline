@@ -62,8 +62,14 @@ def _layout(title: str, body: str) -> str:
       .pill {{ display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin-right: 0.5rem; }}
       .link-row {{ display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.9rem; }}
       .link-row a {{ color: var(--accent); text-decoration: none; font-weight: 600; }}
+      .subnav {{ display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.9rem; margin-bottom: 1rem; }}
+      .subnav a {{ color: var(--muted); text-decoration: none; padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }}
+      .subnav a:hover {{ color: var(--accent); border-color: var(--accent-soft); }}
       .list-tight li {{ margin-bottom: 0.4rem; }}
       .section-stack {{ display: grid; gap: 1rem; }}
+      .meta-list {{ display: grid; gap: 0.6rem; margin: 0; }}
+      .meta-list dt {{ font-weight: 700; }}
+      .meta-list dd {{ margin: 0; color: var(--muted); }}
       @media (max-width: 780px) {{ .two-col {{ grid-template-columns: 1fr; }} main {{ padding: 1rem 1rem 2rem; }} }}
     </style>
   </head>
@@ -161,6 +167,9 @@ def _render_object_page(payload: dict) -> str:
         for item in payload["contradictions"]
     ) or "<li>None</li>"
     summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
+    section_nav = "".join(
+        f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>' for item in payload["section_nav"]
+    )
     return _layout(
         f"Object: {payload['object']['title']}",
         (
@@ -171,6 +180,7 @@ def _render_object_page(payload: dict) -> str:
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
             "</div></section>"
+            f"<nav class='subnav'>{section_nav}</nav>"
             "<section class='grid stats'>"
             f"<div class='card'><h2>Claims</h2><p>{payload['claim_count']}</p></div>"
             f"<div class='card'><h2>Relations</h2><p>{payload['relation_count']}</p></div>"
@@ -178,12 +188,17 @@ def _render_object_page(payload: dict) -> str:
             "</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
-            f"<section class='card'><h2>Compiled Summary</h2><p>{escape(summary_text)}</p></section>"
-            f"<section class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
+            f"<section id='summary' class='card'><h2>Compiled Summary</h2><p>{escape(summary_text)}</p></section>"
+            f"<section id='claims' class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
-            f"<section class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>"
-            f"<section class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>"
+            "<section class='card'><h2>Context</h2><dl class='meta-list'>"
+            f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
+            f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
+            f"<div><dt>Canonical Path</dt><dd>{escape(payload['context']['canonical_path'])}</dd></div>"
+            "</dl></section>"
+            f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>"
+            f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>"
             "</div>"
             "</section>"
         ),
@@ -205,17 +220,29 @@ def _render_topic_page(payload: dict) -> str:
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
             "</div></section>"
+            "<section class='grid two-col'>"
+            f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
+            "</section>"
         ),
     )
 
 
 def _render_events_page(payload: dict) -> str:
     query = payload.get("query", "")
+    date_nav = "".join(
+        f"<a href='#date-{escape(section['date'])}'>{escape(section['date'])}</a>"
+        for section in payload["date_sections"]
+    )
     events = "".join(
-        f"<li>{escape(item['event_date'])} - "
-        f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
-        for item in payload["events"]
+        f'<section id="date-{escape(section["date"])}" class="card"><h2>{escape(section["date"])}</h2><ul class="list-tight">'
+        + "".join(
+            f"<li>{escape(item['event_type'])} - "
+            f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+            for item in section["events"]
+        )
+        + "</ul></section>"
+        for section in payload["date_sections"]
     ) or "<li>None</li>"
     return _layout(
         "Event Dossier",
@@ -226,7 +253,8 @@ def _render_events_page(payload: dict) -> str:
             "<button type='submit'>Search</button>"
             "</form>"
             f"<p class='muted'>{payload['event_count']} events across {len(payload['dates'])} dates.</p>"
-            f"<section class='card'><ul class='list-tight'>{events}</ul></section>"
+            f"<nav class='subnav'>{date_nav}</nav>"
+            f"{events}"
         ),
     )
 
@@ -235,7 +263,18 @@ def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
     items = "".join(
-        f"<li><span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}</li>"
+        "<li>"
+        f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
+        + (
+            " <span class='muted'>"
+            + ", ".join(
+                f'<a href="{escape(link["path"])}">{escape(link["object_id"])}</a>' for link in item["object_links"]
+            )
+            + "</span>"
+            if item["object_links"]
+            else ""
+        )
+        + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"
     return _layout(

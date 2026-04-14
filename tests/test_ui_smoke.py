@@ -109,20 +109,25 @@ def test_ui_smoke_pages_render_truth_views(temp_vault):
     assert '/topic?id=alpha' in object_body
     assert '/events?q=alpha' in object_body
     assert '/contradictions?q=alpha' in object_body
+    assert 'href="#claims"' in object_body
+    assert "Source Slug" in object_body
 
     assert topic_status == 200
     assert "Topic: Alpha" in topic_body
     assert "Neighbors" in topic_body
     assert '/object?id=alpha' in topic_body
     assert '/events?q=alpha' in topic_body
+    assert "Center Summary" in topic_body
 
     assert events_status == 200
     assert "Event Dossier" in events_body
     assert "2026-04-13" in events_body
+    assert 'id="date-2026-04-13"' in events_body
 
     assert contradictions_status == 200
     assert "Contradictions" in contradictions_body
     assert "alpha" in contradictions_body
+    assert '/object?id=alpha' in contradictions_body
 
 
 def test_ui_root_dashboard_renders_db_summary(temp_vault):

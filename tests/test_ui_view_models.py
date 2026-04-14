@@ -89,6 +89,8 @@ def test_build_object_page_payload(temp_vault):
     assert payload["links"]["topic_path"] == "/topic?id=alpha"
     assert payload["links"]["events_path"] == "/events?q=alpha"
     assert payload["links"]["contradictions_path"] == "/contradictions?q=alpha"
+    assert payload["context"]["source_slug"] == "alpha"
+    assert payload["section_nav"][0]["href"] == "#summary"
 
 
 def test_build_topic_overview_payload(temp_vault):
@@ -104,6 +106,7 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["edge_count"] == 1
     assert payload["links"]["center_object_path"] == "/object?id=alpha"
     assert payload["links"]["events_path"] == "/events?q=alpha"
+    assert payload["center_summary"] == "Alpha supports local-first execution."
 
 
 def test_build_event_dossier_payload(temp_vault):
@@ -117,6 +120,7 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["event_count"] == 3
     assert payload["dates"] == ["2026-04-13"]
     assert payload["events"][0]["object_id"] == "alpha"
+    assert payload["date_sections"][0]["date"] == "2026-04-13"
 
 
 def test_build_contradiction_browser_payload(temp_vault):
@@ -130,6 +134,7 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["count"] == 1
     assert payload["items"][0]["subject_key"] == "alpha"
     assert payload["open_count"] == 1
+    assert payload["items"][0]["object_ids"] == ["alpha", "conflict"]
 
 
 def test_build_contradiction_browser_payload_filters_by_status(temp_vault):
