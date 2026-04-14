@@ -195,7 +195,7 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["events"][0]["timeline_anchor_kind"] == "note"
     assert payload["events"][0]["timeline_anchor_label"] == "Alpha"
     assert payload["events"][0]["semantic_role"] == "note_date_projection"
-    assert payload["date_sections"][0]["date"] == "2026-04-13"
+    assert payload["cluster_sections"][0]["date"] == "2026-04-13"
     assert payload["event_type_counts"] == {"dated_note": 3}
     assert payload["timeline_contract"]["timeline_kind"] == "dated_note_projection"
     assert payload["timeline_contract"]["row_type_counts"] == {"page_date": 3}

@@ -9,6 +9,7 @@ from typing import Any
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
 from ..truth_api import (
+    CONTRADICTION_STATUS_EXPLANATIONS,
     count_objects,
     get_object_detail,
     get_note_provenance,
@@ -200,7 +201,6 @@ def build_event_dossier_payload(
     grouped: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         grouped.setdefault(event["event_date"], []).append(event)
-    date_sections = [{"date": date, "events": grouped[date]} for date in dates]
     cluster_sections = [
         {
             "date": date,
@@ -217,7 +217,6 @@ def build_event_dossier_payload(
         "event_count": len(events),
         "cluster_count": sum(len(section["clusters"]) for section in cluster_sections),
         "dates": dates,
-        "date_sections": date_sections,
         "cluster_sections": cluster_sections,
         "event_type_counts": dict(event_type_counts),
         "timeline_contract": {
@@ -309,13 +308,7 @@ def build_contradiction_browser_payload(
                 "open": status_counts.get("open", 0),
                 "reviewed": sum(count for row_status, count in status_counts.items() if row_status != "open"),
             },
-            "status_explanations": {
-                "open": "Active contradiction awaiting review.",
-                "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
-                "resolved_keep_negative": "Reviewed and the negative claim set remains the preferred interpretation.",
-                "dismissed": "Reviewed and dismissed as not worth keeping in the active contradiction queue.",
-                "needs_human": "Requires deeper human judgment before the contradiction can be considered closed.",
-            },
+            "status_explanations": CONTRADICTION_STATUS_EXPLANATIONS,
         },
         "detection_notes": [
             "Contradictions are currently detected from page_summary claim polarity, not from full semantic contradiction analysis.",

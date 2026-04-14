@@ -14,7 +14,7 @@ from .runtime import VaultLayout, resolve_vault_dir
 MAX_PAGE_SIZE = 500
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _REVIEW_AUDIT_LOG_NAME = "review-actions"
-_CONTRADICTION_STATUS_EXPLANATIONS = {
+CONTRADICTION_STATUS_EXPLANATIONS = {
     "open": "Active contradiction awaiting review.",
     "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
     "resolved_keep_negative": "Reviewed and the negative claim set remains the preferred interpretation.",
@@ -1075,7 +1075,7 @@ def list_contradictions(
         item["detection_model"] = "page_summary_polarity"
         item["detection_confidence"] = "heuristic"
         item["status_bucket"] = "open" if item["status"] == "open" else "reviewed"
-        item["status_explanation"] = _CONTRADICTION_STATUS_EXPLANATIONS.get(
+        item["status_explanation"] = CONTRADICTION_STATUS_EXPLANATIONS.get(
             item["status"],
             "Reviewed contradiction state.",
         )
