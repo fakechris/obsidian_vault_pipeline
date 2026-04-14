@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import threading
 from http.client import HTTPConnection
 from pathlib import Path
+from urllib.parse import urlencode
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 
@@ -148,6 +150,55 @@ def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
     assert response.status == 200
     assert payload["count"] == 1
     assert payload["items"][0]["subject_key"] == "alpha"
+
+
+def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.runtime import VaultLayout
+
+    _seed_truth_store(temp_vault)
+    layout = VaultLayout.from_vault(temp_vault)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        contradiction_id = conn.execute("SELECT contradiction_id FROM contradictions").fetchone()[0]
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode(
+            {
+                "contradiction_id": contradiction_id,
+                "status": "resolved_keep_positive",
+                "note": "Reviewed in UI",
+                "rebuild_summaries": "1",
+            }
+        )
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/contradictions/resolve",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["resolved_count"] == 1
+    assert payload["contradiction_ids"] == [contradiction_id]
+    assert payload["rebuilt_summary_count"] == 2
+
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        row = conn.execute(
+            "SELECT status, resolution_note FROM contradictions WHERE contradiction_id = ?",
+            (contradiction_id,),
+        ).fetchone()
+    assert row == ("resolved_keep_positive", "Reviewed in UI")
 
 
 def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from http.client import HTTPConnection
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 from openclaw_pipeline.runtime import VaultLayout
@@ -78,6 +78,20 @@ def _get(port: int, path: str) -> tuple[int, str]:
     conn.request("GET", path)
     response = conn.getresponse()
     return response.status, response.read().decode("utf-8")
+
+
+def _post(port: int, path: str, fields: dict[str, str]) -> tuple[int, str, dict[str, str]]:
+    conn = HTTPConnection("127.0.0.1", port, timeout=5)
+    body = urlencode(fields)
+    conn.request(
+        "POST",
+        path,
+        body=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    response = conn.getresponse()
+    headers = {key.lower(): value for key, value in response.getheaders()}
+    return response.status, response.read().decode("utf-8"), headers
 
 
 def test_ui_smoke_pages_render_truth_views(temp_vault):
@@ -536,6 +550,43 @@ def test_ui_contradictions_page_filters_by_query(temp_vault):
 
     assert status == 200
     assert "alpha" in body
+
+
+def test_ui_contradictions_page_can_resolve_item(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.runtime import VaultLayout
+
+    _seed_truth_store(temp_vault)
+    layout = VaultLayout.from_vault(temp_vault)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        contradiction_id = conn.execute("SELECT contradiction_id FROM contradictions").fetchone()[0]
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, _body, headers = _post(
+            port,
+            "/contradictions/resolve",
+            {
+                "contradiction_id": contradiction_id,
+                "status": "resolved_keep_positive",
+                "note": "Reviewed in browser",
+                "rebuild_summaries": "1",
+            },
+        )
+        page_status, page_body = _get(port, "/contradictions?status=resolved")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 303
+    assert headers["location"] == "/contradictions?status=resolved"
+    assert page_status == 200
+    assert "resolved_keep_positive" in page_body
+    assert "Reviewed in browser" in page_body
 
 
 def test_ui_events_page_filters_by_query(temp_vault):

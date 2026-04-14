@@ -437,8 +437,12 @@ def list_contradictions(
     params: list[Any] = []
     where_clauses: list[str] = []
     if status:
-        where_clauses.append("status = ?")
-        params.append(status)
+        if status == "resolved":
+            where_clauses.append("status != ?")
+            params.append("open")
+        else:
+            where_clauses.append("status = ?")
+            params.append(status)
     if normalized_query:
         where_clauses.append("lower(subject_key) LIKE ? ESCAPE '\\'")
         params.append(f"%{normalized_query}%")

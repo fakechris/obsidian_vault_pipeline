@@ -14,6 +14,7 @@ import yaml
 from markdown_it import MarkdownIt
 
 from ..identity import canonicalize_note_id
+from ..knowledge_index import contradiction_object_ids, rebuild_compiled_summaries, resolve_contradictions
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import (
     build_atlas_browser_payload,
@@ -746,6 +747,32 @@ def _render_contradictions_page(payload: dict) -> str:
         )
         + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
         + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+        + (
+            f"<div class='muted'>Resolution Note: {escape(item['resolution_note'])}</div>"
+            if item.get("resolution_note")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Resolved At: {escape(item['resolved_at'])}</div>"
+            if item.get("resolved_at")
+            else ""
+        )
+        + (
+            "<form method='post' action='/contradictions/resolve' class='link-row'>"
+            f"<input type='hidden' name='contradiction_id' value='{escape(item['contradiction_id'])}' />"
+            "<select name='status'>"
+            "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
+            "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
+            "<option value='dismissed'>dismissed</option>"
+            "<option value='needs_human'>needs_human</option>"
+            "</select>"
+            "<input type='text' name='note' placeholder='Resolution note' />"
+            "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>"
+            "<button type='submit'>Resolve</button>"
+            "</form>"
+            if item["status"] == "open"
+            else ""
+        )
         + "</li>"
         for item in payload["items"]
     ) or f"<li>{escape(payload['empty_state'])}</li>"
@@ -870,11 +897,62 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             except ValueError as exc:
                 self.send_error(400, str(exc))
 
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            path = parsed.path
+            try:
+                form = self._read_form()
+                if path == "/api/contradictions/resolve":
+                    self._write_json(self._resolve_contradiction_action(form))
+                    return
+                if path == "/contradictions/resolve":
+                    self._resolve_contradiction_action(form)
+                    self._redirect("/contradictions?status=resolved")
+                    return
+                self.send_error(404, "Not Found")
+            except ValueError as exc:
+                self.send_error(400, str(exc))
+
         def _required(self, query: dict[str, list[str]], key: str) -> str:
             values = query.get(key)
             if not values or not values[0]:
                 raise ValueError(f"missing required query param: {key}")
             return values[0]
+
+        def _read_form(self) -> dict[str, str]:
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8")
+            parsed = parse_qs(raw, keep_blank_values=True)
+            return {key: values[0] for key, values in parsed.items()}
+
+        def _resolve_contradiction_action(self, form: dict[str, str]) -> dict[str, object]:
+            contradiction_id = form.get("contradiction_id", "").strip()
+            status = form.get("status", "").strip()
+            note = form.get("note", "").strip()
+            if not contradiction_id:
+                raise ValueError("missing contradiction_id")
+            if status not in {
+                "resolved_keep_positive",
+                "resolved_keep_negative",
+                "dismissed",
+                "needs_human",
+            }:
+                raise ValueError("invalid contradiction status")
+            payload = resolve_contradictions(
+                resolved_vault,
+                [contradiction_id],
+                status=status,
+                note=note,
+            )
+            if payload["resolved_count"] and form.get("rebuild_summaries") == "1":
+                affected_object_ids = contradiction_object_ids(resolved_vault, payload["contradiction_ids"])
+                rebuild_payload = rebuild_compiled_summaries(resolved_vault, object_ids=affected_object_ids)
+                payload["rebuilt_summary_count"] = rebuild_payload["objects_rebuilt"]
+                payload["rebuilt_object_ids"] = rebuild_payload["object_ids"]
+            else:
+                payload["rebuilt_summary_count"] = 0
+                payload["rebuilt_object_ids"] = []
+            return payload
 
         def _write_json(self, payload: dict) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -891,6 +969,12 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _redirect(self, location: str) -> None:
+            self.send_response(303)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
     return ThreadingHTTPServer((host, port), Handler)
 
