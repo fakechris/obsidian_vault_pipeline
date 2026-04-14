@@ -616,6 +616,47 @@ def _find_note_from_pipeline_log(vault_dir: Path, *, note_path: str) -> dict[str
     }
 
 
+def _find_derived_notes_from_pipeline_log(vault_dir: Path, *, note_path: str) -> list[dict[str, str]]:
+    log_path = VaultLayout.from_vault(vault_dir).logs_dir / "pipeline.jsonl"
+    if not log_path.exists():
+        return []
+    target_name = Path(note_path).name
+    derived: list[dict[str, str]] = []
+    seen_paths: set[str] = set()
+    for raw_line in log_path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            event = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("event_type") != "article_processed":
+            continue
+        file_name = str(event.get("file", "")).strip()
+        if file_name != target_name:
+            continue
+        output = str(event.get("output", "")).strip()
+        if not output:
+            continue
+        candidate = Path(output)
+        if not candidate.is_absolute():
+            candidate = (vault_dir / output).resolve()
+        if not candidate.is_file():
+            continue
+        relative_path = str(candidate.resolve().relative_to(vault_dir.resolve()))
+        if relative_path in seen_paths:
+            continue
+        seen_paths.add(relative_path)
+        frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+        derived.append(
+            {
+                "title": str(frontmatter.get("title") or candidate.stem).strip(),
+                "path": relative_path,
+            }
+        )
+    return derived
+
+
 def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
     resolved_vault = resolve_vault_dir(vault_dir)
     frontmatter = _read_note_frontmatter(resolved_vault, note_path)
@@ -629,9 +670,11 @@ def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, A
         )
     if original_source_note is None:
         original_source_note = _find_note_from_pipeline_log(resolved_vault, note_path=note_path)
+    derived_deep_dives = _find_derived_notes_from_pipeline_log(resolved_vault, note_path=note_path)
     return {
         "note_path": note_path,
         "original_source_note": original_source_note,
+        "derived_deep_dives": derived_deep_dives,
     }
 
 

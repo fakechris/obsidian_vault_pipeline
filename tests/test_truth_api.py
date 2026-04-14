@@ -364,6 +364,65 @@ type: "ai"
     }
 
 
+def test_truth_api_resolves_processed_note_to_derived_deep_dives(temp_vault):
+    from openclaw_pipeline.truth_api import get_note_provenance
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: "The Harness Wars Begin"
+source: "https://x.com/0xJsum/status/2039198679815565508"
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "2026-04-09_The Harness Wars Begin_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """```yaml
+---
+title: "The Harness Wars Begin"
+source: "https://x.com/0xJsum/status/2039198679815565508"
+date: "2026-04-09"
+type: "ai"
+---
+```
+
+# One-liner
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        json.dumps(
+            {
+                "event_type": "article_processed",
+                "file": "2026-04-01_The_Harness_Wars_Begin.md",
+                "output": str(deep_dive),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    provenance = get_note_provenance(
+        temp_vault,
+        note_path="50-Inbox/03-Processed/2026-04/2026-04-01_The_Harness_Wars_Begin.md",
+    )
+
+    assert provenance["derived_deep_dives"] == [
+        {
+            "title": "The Harness Wars Begin",
+            "path": "20-Areas/AI-Research/Topics/2026-04/2026-04-09_The Harness Wars Begin_深度解读.md",
+        }
+    ]
+
+
 def test_truth_api_returns_object_provenance_and_moc_membership(temp_vault):
     from openclaw_pipeline.truth_api import get_object_detail
 

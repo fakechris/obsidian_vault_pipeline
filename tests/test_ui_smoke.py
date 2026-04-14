@@ -505,6 +505,112 @@ type: "ai"
     assert f'/note?path={quote("50-Inbox/03-Processed/2026-04/2026-04-01_The_Harness_Wars_Begin.md", safe="")}' in body
 
 
+def test_ui_note_page_shows_derived_deep_dive_for_processed_source(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: "The Harness Wars Begin"
+source: "https://x.com/0xJsum/status/2039198679815565508"
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    note = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "2026-04-09_The Harness Wars Begin_深度解读.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        """```yaml
+---
+title: "The Harness Wars Begin"
+source: "https://x.com/0xJsum/status/2039198679815565508"
+date: "2026-04-09"
+type: "ai"
+---
+```
+
+# One-liner
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        '{"event_type":"article_processed","file":"2026-04-01_The_Harness_Wars_Begin.md","output":"'
+        + str(note)
+        + '"}\n',
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(
+            port,
+            f"/note?path={quote('50-Inbox/03-Processed/2026-04/2026-04-01_The_Harness_Wars_Begin.md', safe='')}",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Derived Deep Dives" in body
+    assert f'/note?path={quote("20-Areas/AI-Research/Topics/2026-04/2026-04-09_The Harness Wars Begin_深度解读.md", safe="")}' in body
+
+
+def test_ui_note_page_rewrites_local_images_to_asset_route(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    asset = temp_vault / "50-Inbox" / "01-Raw" / "attachments" / "2026-04" / "sample.png"
+    asset.parent.mkdir(parents=True, exist_ok=True)
+    asset.write_bytes(
+        bytes.fromhex(
+            "89504E470D0A1A0A0000000D4948445200000001000000010802000000907753DE0000000C49444154789C6360000000020001E221BC330000000049454E44AE426082"
+        )
+    )
+    note = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Images.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        "![Image](50-Inbox/01-Raw/attachments/2026-04/sample.png)\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(
+            port,
+            f"/note?path={quote('50-Inbox/03-Processed/2026-04/Images.md', safe='')}",
+        )
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "GET",
+            f"/asset?path={quote('50-Inbox/01-Raw/attachments/2026-04/sample.png', safe='')}",
+        )
+        response = conn.getresponse()
+        asset_status = response.status
+        asset_body = response.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "/asset?path=50-Inbox%2F01-Raw%2Fattachments%2F2026-04%2Fsample.png" in body
+    assert asset_status == 200
+    assert asset_body.startswith(b"\x89PNG")
+
+
 def test_ui_search_page_combines_objects_and_notes(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 

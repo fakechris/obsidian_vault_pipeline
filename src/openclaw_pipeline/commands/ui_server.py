@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import sqlite3
 import re
 import sys
@@ -118,6 +119,10 @@ def _note_href(path: str) -> str:
     return f"/note?path={quote(path, safe='')}"
 
 
+def _asset_href(path: str) -> str:
+    return f"/asset?path={quote(path, safe='')}"
+
+
 def _search_href(query: str) -> str:
     return f"/search?q={quote(query, safe='')}"
 
@@ -131,6 +136,17 @@ def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
     if not candidate.is_file():
         raise ValueError(f"note not found: {relative_path}")
     return candidate, candidate.read_text(encoding="utf-8")
+
+
+def _read_vault_asset(vault_dir: Path, relative_path: str) -> tuple[bytes, str]:
+    candidate = (vault_dir / relative_path).resolve()
+    try:
+        candidate.relative_to(vault_dir.resolve())
+    except ValueError as exc:
+        raise ValueError("invalid asset path") from exc
+    if not candidate.is_file():
+        raise ValueError(f"asset not found: {relative_path}")
+    return candidate.read_bytes(), mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
 
 
 def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | None:
@@ -323,6 +339,24 @@ def _smart_markdown_link(label: str, href: str) -> str:
     return f"[{safe_label}]({href})"
 
 
+def _rewrite_local_image_links(vault_dir: Path, markdown: str) -> str:
+    def replace_match(match: re.Match[str]) -> str:
+        alt_text = match.group(1)
+        raw_target = match.group(2).strip()
+        if raw_target.startswith(("http://", "https://", "data:", "/asset?")):
+            return match.group(0)
+        candidate = (vault_dir / raw_target).resolve()
+        try:
+            relative_path = str(candidate.relative_to(vault_dir.resolve()))
+        except ValueError:
+            return match.group(0)
+        if not candidate.is_file():
+            return match.group(0)
+        return f"![{alt_text}]({_asset_href(relative_path)})"
+
+    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replace_match, markdown)
+
+
 def _convert_box_table_fences(markdown: str, *, github_repo_base: str | None) -> str:
     lines = markdown.splitlines()
     output: list[str] = []
@@ -414,6 +448,7 @@ def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
     frontmatter, body = _parse_frontmatter(markdown)
     github_repo_base = _infer_github_repo_base(frontmatter, body)
     rendered_body = _convert_box_table_fences(body, github_repo_base=github_repo_base)
+    rendered_body = _rewrite_local_image_links(vault_dir, rendered_body)
     rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, rendered_body)
     rendered_body = _linkify_related_knowledge_section(vault_dir, rendered_body)
     rendered_body = _linkify_keywords(rendered_body).strip()
@@ -427,8 +462,10 @@ def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
 def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payload: dict | None = None) -> str:
     frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown)
     source_note = None
+    derived_notes: list[dict[str, str]] = []
     if payload:
         source_note = payload.get("provenance", {}).get("original_source_note")
+        derived_notes = payload.get("provenance", {}).get("derived_deep_dives", [])
     provenance_html = ""
     if source_note:
         provenance_html = (
@@ -440,6 +477,18 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             f"<div class='muted'>{escape(source_note['path'])}</div>"
             "</dd></div>"
             "</dl>"
+            "</section>"
+        )
+    if derived_notes:
+        derived_list = "".join(
+            f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+            f"<div class='muted'>{escape(item['path'])}</div></li>"
+            for item in derived_notes
+        )
+        provenance_html += (
+            "<section class='card'>"
+            "<h2>Derived Deep Dives</h2>"
+            f"<ul class='list-tight'>{derived_list}</ul>"
             "</section>"
         )
     return _layout(
@@ -989,6 +1038,11 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     payload = build_note_page_payload(resolved_vault, note_path=relative_path)
                     self._write_html(_render_note_page(resolved_vault, relative_path, markdown, payload))
                     return
+                if path == "/asset":
+                    relative_path = self._required(query, "path")
+                    body, content_type = _read_vault_asset(resolved_vault, relative_path)
+                    self._write_bytes(body, content_type)
+                    return
                 if path == "/api/contradictions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
@@ -1088,6 +1142,13 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _write_bytes(self, body: bytes, content_type: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
