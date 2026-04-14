@@ -190,6 +190,7 @@ date: 2026-04-13
     assert "timeline-oriented" in events_body
     assert "Dated Note" in events_body
     assert "Model Notes" in events_body
+    assert "Timeline Contract" in events_body
     assert "Review Context" in events_body
     assert "/summaries?q=alpha" in events_body
     assert "Quick Maintenance" in events_body
@@ -208,6 +209,7 @@ date: 2026-04-13
     assert "Source Deep Dive" in contradictions_body
     assert "Atlas Index" in contradictions_body
     assert "Detection Notes" in contradictions_body
+    assert "Detection Contract" in contradictions_body
     assert "Claim Evidence" in contradictions_body
 
 

@@ -867,6 +867,18 @@ def _render_events_page(payload: dict) -> str:
         f"<span class='pill'>{escape(kind.replace('_', ' '))}: {count}</span>"
         for kind, count in payload["event_type_counts"].items()
     )
+    timeline_contract = payload["timeline_contract"]
+    timeline_contract_items = (
+        f"<li>Timeline kind: {escape(timeline_contract['timeline_kind'])}</li>"
+        + "".join(
+            f"<li>Row type {escape(str(row_type))}: {count}</li>"
+            for row_type, count in timeline_contract["row_type_counts"].items()
+        )
+        + "".join(
+            f"<li>Semantic role {escape(str(role))}: {count}</li>"
+            for role, count in timeline_contract["semantic_roles"].items()
+        )
+    )
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     date_nav = "".join(
         f"<a href='#date-{escape(section['date'])}'>{escape(section['date'])}</a>"
@@ -879,6 +891,7 @@ def _render_events_page(payload: dict) -> str:
                 "<li>"
                 + f"<span class='pill'>{escape(item['event_label'])}</span> "
                 + f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a>'
+                + f" <span class='muted'>({escape(item['timeline_anchor_kind'])}: {escape(item['timeline_anchor_label'])})</span>"
                 + (
                     f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
                     if item["provenance"]["evergreen_path"]
@@ -935,6 +948,7 @@ def _render_events_page(payload: dict) -> str:
             f"{contradiction_entry}"
             f"{summary_form}"
             "</section>"
+            f"<section class='card'><h2>Timeline Contract</h2><ul class='list-tight'>{timeline_contract_items}</ul></section>"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
             f"<nav class='subnav'>{date_nav}</nav>"
             f"{events}"
@@ -1018,6 +1032,15 @@ def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
+    detection_contract = payload["detection_contract"]
+    detection_contract_items = (
+        f"<li>Model: {escape(detection_contract['model'])}</li>"
+        + f"<li>Confidence: {escape(detection_contract['confidence'])}</li>"
+        + "".join(
+            f"<li>Status bucket {escape(str(bucket))}: {count}</li>"
+            for bucket, count in detection_contract["status_buckets"].items()
+        )
+    )
     items = "".join(
         "<li>"
         + (
@@ -1026,6 +1049,7 @@ def _render_contradictions_page(payload: dict) -> str:
             else ""
         )
         + f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
+        + f" <span class='muted'>[{escape(item['detection_model'])} / {escape(item['detection_confidence'])} / {escape(item['status_bucket'])}]</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -1153,6 +1177,7 @@ def _render_contradictions_page(payload: dict) -> str:
             "<button type='submit'>Resolve Selected</button>"
             "</form>"
             "</section>"
+            f"<section class='card'><h2>Detection Contract</h2><ul class='list-tight'>{detection_contract_items}</ul></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )

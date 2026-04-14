@@ -192,8 +192,14 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["events"][0]["object_id"] == "alpha"
     assert payload["events"][0]["event_kind"] == "dated_note"
     assert payload["events"][0]["event_label"] == "Dated Note"
+    assert payload["events"][0]["timeline_anchor_kind"] == "note"
+    assert payload["events"][0]["timeline_anchor_label"] == "Alpha"
+    assert payload["events"][0]["semantic_role"] == "note_date_projection"
     assert payload["date_sections"][0]["date"] == "2026-04-13"
     assert payload["event_type_counts"] == {"dated_note": 3}
+    assert payload["timeline_contract"]["timeline_kind"] == "dated_note_projection"
+    assert payload["timeline_contract"]["row_type_counts"] == {"page_date": 3}
+    assert payload["timeline_contract"]["semantic_roles"] == {"note_date_projection": 3}
     assert "dated notes projected from indexed pages" in payload["model_notes"][0]
     assert payload["review_context"]["object_count"] == 3
     assert payload["review_context"]["open_contradiction_count"] == 1
@@ -260,6 +266,11 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["items"][0]["subject_key"] == "alpha"
     assert payload["open_count"] == 1
     assert payload["items"][0]["object_ids"] == ["alpha", "conflict"]
+    assert payload["items"][0]["detection_model"] == "page_summary_polarity"
+    assert payload["items"][0]["detection_confidence"] == "heuristic"
+    assert payload["items"][0]["status_bucket"] == "open"
+    assert payload["detection_contract"]["model"] == "page_summary_polarity"
+    assert payload["detection_contract"]["confidence"] == "heuristic"
     assert "page_summary claim polarity" in payload["detection_notes"][0]
 
 

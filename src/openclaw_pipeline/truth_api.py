@@ -1043,6 +1043,9 @@ def list_contradictions(
             for claim_id in item["negative_claim_ids"]
             if claim_id in claim_map
         ]
+        item["detection_model"] = "page_summary_polarity"
+        item["detection_confidence"] = "heuristic"
+        item["status_bucket"] = "open" if item["status"] == "open" else "reviewed"
         item["review_history"] = list_review_actions(vault_dir, object_ids=object_ids, limit=5)
     return items
 

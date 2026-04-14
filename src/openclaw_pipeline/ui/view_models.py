@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from ..runtime import VaultLayout, resolve_vault_dir
+from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
 from ..truth_api import (
     count_objects,
     get_object_detail,
@@ -142,7 +144,8 @@ def build_event_dossier_payload(
     normalized_query = _escape_like(query.strip().lower()) if query else ""
     with sqlite3.connect(db_path) as conn:
         sql = """
-            SELECT timeline_events.event_date, timeline_events.event_type, objects.object_id, objects.title, compiled_summaries.summary_text
+            SELECT timeline_events.event_date, timeline_events.event_type, timeline_events.heading,
+                   timeline_events.payload_json, objects.object_id, objects.title, compiled_summaries.summary_text
             FROM timeline_events
             JOIN objects ON objects.object_id = timeline_events.slug
             LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
@@ -168,15 +171,7 @@ def build_event_dossier_payload(
         rows = conn.execute(sql, tuple(params)).fetchall()
 
     events = [
-        {
-            "event_date": row[0],
-            "event_type": row[1],
-            "event_kind": "dated_note" if row[1] == "page_date" else "dated_heading",
-            "event_label": "Dated Note" if row[1] == "page_date" else "Dated Heading",
-            "object_id": row[2],
-            "title": row[3],
-            "summary_text": row[4] or "",
-        }
+        _build_timeline_event_item(row)
         for row in rows
     ]
     provenance_map = get_object_provenance_map(vault_dir, [event["object_id"] for event in events])
@@ -207,6 +202,8 @@ def build_event_dossier_payload(
         grouped.setdefault(event["event_date"], []).append(event)
     date_sections = [{"date": date, "events": grouped[date]} for date in dates]
     event_type_counts = Counter(event["event_kind"] for event in events)
+    row_type_counts = Counter(event["row_type"] for event in events)
+    semantic_roles = Counter(event["semantic_role"] for event in events)
     return {
         "screen": "event/dossier",
         "events": events,
@@ -214,6 +211,11 @@ def build_event_dossier_payload(
         "dates": dates,
         "date_sections": date_sections,
         "event_type_counts": dict(event_type_counts),
+        "timeline_contract": {
+            "timeline_kind": "dated_note_projection",
+            "row_type_counts": dict(row_type_counts),
+            "semantic_roles": dict(semantic_roles),
+        },
         "review_context": review_context,
         "review_history": list_review_actions(vault_dir, object_ids=scoped_object_ids, limit=8),
         "scoped_object_ids": list(dict.fromkeys(scoped_object_ids)),
@@ -280,13 +282,54 @@ def build_contradiction_browser_payload(
         "count": len(items),
         "open_count": status_counts.get("open", 0),
         "resolved_count": sum(count for status, count in status_counts.items() if status != "open"),
+        "detection_contract": {
+            "model": "page_summary_polarity",
+            "confidence": "heuristic",
+            "status_buckets": {
+                "open": status_counts.get("open", 0),
+                "reviewed": sum(count for row_status, count in status_counts.items() if row_status != "open"),
+            },
+        },
         "detection_notes": [
             "Contradictions are currently detected from page_summary claim polarity, not from full semantic contradiction analysis.",
             "Zero results do not prove consistency; they usually mean the current heuristic did not detect a conflict.",
+            CONTRADICTION_HEURISTIC_NOTE,
         ],
         "empty_state": "Zero results usually means the current heuristic did not detect a conflict, not that the vault is globally contradiction-free.",
         "status": status or "",
         "query": query or "",
+    }
+
+
+def _build_timeline_event_item(row: tuple[Any, ...]) -> dict[str, Any]:
+    payload = json.loads(row[3] or "{}")
+    event_type = str(row[1])
+    title = str(row[5])
+    heading = str(row[2] or "").strip()
+    if event_type == "page_date":
+        timeline_anchor_kind = "note"
+        timeline_anchor_label = str(payload.get("title") or title)
+        semantic_role = "note_date_projection"
+        event_kind = "dated_note"
+        event_label = "Dated Note"
+    else:
+        timeline_anchor_kind = "heading"
+        timeline_anchor_label = heading or str(payload.get("title") or title)
+        semantic_role = "heading_date_projection"
+        event_kind = "dated_heading"
+        event_label = "Dated Heading"
+    return {
+        "event_date": row[0],
+        "event_type": event_type,
+        "row_type": event_type,
+        "event_kind": event_kind,
+        "event_label": event_label,
+        "semantic_role": semantic_role,
+        "timeline_anchor_kind": timeline_anchor_kind,
+        "timeline_anchor_label": timeline_anchor_label,
+        "object_id": row[4],
+        "title": title,
+        "summary_text": row[6] or "",
     }
 
 

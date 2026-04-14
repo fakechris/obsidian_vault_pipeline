@@ -211,7 +211,7 @@ Remaining work inside this milestone:
 
 ### Milestone 3: Review Workbench Completion
 
-Status: **Not Started**
+Status: **Complete**
 
 Goal:
 
@@ -234,7 +234,7 @@ Exit condition:
 
 ### Milestone 4: Event And Contradiction Model Hardening
 
-Status: **Not Started**
+Status: **In Progress**
 
 Goal:
 
@@ -372,6 +372,18 @@ So the honest product statement is:
 > OVP is already a usable local truth browser and partial review workbench, but it is not yet a fully mature local knowledge workbench.
 
 That remaining gap is now specific and manageable. It is no longer architectural uncertainty; it is milestone execution.
+
+## PR Review Gate
+
+Every milestone PR must now pass an explicit review-wait step before merge. The sequence is:
+
+1. fix all known blocking review findings,
+2. run fresh verification on the exact branch head,
+3. wait for review automation and comments to settle,
+4. re-check PR comments and mergeability after that wait,
+5. merge only if no new blocking feedback appears.
+
+This is a required completion gate, not an informal judgment call. A green local test run is necessary but not sufficient if review automation is still actively producing new findings.
 
 ## External Reference Projects And What To Borrow
 
