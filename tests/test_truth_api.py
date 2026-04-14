@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 
 
@@ -257,6 +260,108 @@ Alpha one does not support local-first execution.
     detail = get_object_detail(temp_vault, "alpha")
 
     assert detail["contradictions"] == []
+
+
+def test_truth_api_searches_objects_and_notes(temp_vault):
+    from openclaw_pipeline.truth_api import search_vault_surface
+
+    vault = _seed_truth_vault(temp_vault)
+    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+title: Agent Harness Deep Dive
+source: https://example.com/agent-harness
+date: 2026-04-13
+type: deep_dive
+---
+
+# Agent Harness Deep Dive
+
+Mentions [[source-note]].
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    payload = search_vault_surface(vault, query="agent harness")
+
+    assert payload["query"] == "agent harness"
+    assert {item["object_id"] for item in payload["objects"]} == {"negative-note", "source-note"}
+    assert any(item["note_type"] == "deep_dive" for item in payload["notes"])
+    assert any(
+        item["path"] == "20-Areas/AI-Research/Topics/2026-04/Agent Harness_深度解读.md"
+        for item in payload["notes"]
+    )
+
+
+def test_truth_api_resolves_deep_dive_source_note_from_frontmatter_and_logs(temp_vault):
+    from openclaw_pipeline.truth_api import get_note_provenance
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: "The Harness Wars Begin"
+source: "https://x.com/0xJsum/status/2039198679815565508"
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "2026-04-09_The Harness Wars Begin_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """```yaml
+---
+title: "The Harness Wars Begin"
+source: "https://x.com/0xJsum/status/2039198679815565508"
+date: "2026-04-09"
+type: "ai"
+---
+```
+
+# One-liner
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event_type": "article_processed",
+                        "file": "2026-04-01_The_Harness_Wars_Begin.md",
+                        "output": str(deep_dive),
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "event_type": "source_archived_to_processed",
+                        "source": str(temp_vault / "50-Inbox" / "02-Processing" / "2026-04-01_The_Harness_Wars_Begin.md"),
+                        "archived": str(processed),
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    provenance = get_note_provenance(
+        temp_vault,
+        note_path="20-Areas/AI-Research/Topics/2026-04/2026-04-09_The Harness Wars Begin_深度解读.md",
+    )
+
+    assert provenance["original_source_note"] == {
+        "title": "The Harness Wars Begin",
+        "path": "50-Inbox/03-Processed/2026-04/2026-04-01_The_Harness_Wars_Begin.md",
+    }
 
 
 def test_truth_api_returns_object_provenance_and_moc_membership(temp_vault):

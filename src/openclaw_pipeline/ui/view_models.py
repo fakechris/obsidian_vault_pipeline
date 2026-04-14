@@ -9,6 +9,7 @@ from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_api import (
     count_objects,
     get_object_detail,
+    get_note_provenance,
     get_object_provenance_map,
     get_topic_neighborhood,
     list_atlas_memberships,
@@ -16,6 +17,7 @@ from ..truth_api import (
     list_deep_dive_derivations,
     list_objects,
     list_stale_summaries,
+    search_vault_surface,
 )
 
 
@@ -334,4 +336,23 @@ def build_stale_summary_browser_payload(vault_dir: Path | str, *, query: str | N
             "Stale summary review flags compiled summaries that are weak and have no outgoing supporting relations.",
             "This queue is deterministic and favors false negatives over false positives.",
         ],
+    }
+
+
+def build_search_payload(vault_dir: Path | str, *, query: str) -> dict[str, Any]:
+    results = search_vault_surface(vault_dir, query=query)
+    return {
+        "screen": "search/results",
+        **results,
+        "object_count": len(results["objects"]),
+        "note_count": len(results["notes"]),
+    }
+
+
+def build_note_page_payload(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+    provenance = get_note_provenance(vault_dir, note_path=note_path)
+    return {
+        "screen": "note/page",
+        "note_path": note_path,
+        "provenance": provenance,
     }

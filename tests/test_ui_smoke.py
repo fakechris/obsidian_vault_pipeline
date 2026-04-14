@@ -379,9 +379,9 @@ date: 2026-04-13
     assert '🔍 AI-Agent' in body
     assert '🎯 Prompt-Engineering' in body
     assert '🔍 AI-Workflow' in body
-    assert '/objects?q=ai-agent' in body
+    assert '/search?q=ai-agent' in body
     assert '/object?id=prompt-engineering' in body
-    assert '/objects?q=AI-Workflow' in body
+    assert '/search?q=AI-Workflow' in body
 
 
 def test_ui_note_page_smart_renders_reference_tables_and_keywords(temp_vault):
@@ -431,8 +431,119 @@ github: "https://github.com/example/repo"
     assert '<table>' in body
     assert 'href="https://github.com/example/repo"' in body
     assert 'href="https://github.com/example/repo/blob/main/docs/RELEASING.md"' in body
-    assert '/objects?q=OpenCove' in body
-    assert '/objects?q=Claude%20Code' in body
+    assert '/search?q=OpenCove' in body
+    assert '/search?q=Claude%20Code' in body
+
+
+def test_ui_note_page_shows_original_source_note_for_deep_dive(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: "The Harness Wars Begin"
+source: "https://x.com/0xJsum/status/2039198679815565508"
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    note = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "2026-04-09_The Harness Wars Begin_深度解读.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        """```yaml
+---
+title: "The Harness Wars Begin"
+source: "https://x.com/0xJsum/status/2039198679815565508"
+date: "2026-04-09"
+type: "ai"
+---
+```
+
+# One-liner
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        '\n'.join(
+            [
+                '{"event_type":"article_processed","file":"2026-04-01_The_Harness_Wars_Begin.md","output":"'
+                + str(note)
+                + '"}',
+                '{"event_type":"source_archived_to_processed","source":"'
+                + str(temp_vault / "50-Inbox" / "02-Processing" / "2026-04-01_The_Harness_Wars_Begin.md")
+                + '","archived":"'
+                + str(processed)
+                + '"}',
+            ]
+        )
+        + '\n',
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(
+            port,
+            f"/note?path={quote('20-Areas/AI-Research/Topics/2026-04/2026-04-09_The Harness Wars Begin_深度解读.md', safe='')}",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Original Source Note" in body
+    assert f'/note?path={quote("50-Inbox/03-Processed/2026-04/2026-04-01_The_Harness_Wars_Begin.md", safe="")}' in body
+
+
+def test_ui_search_page_combines_objects_and_notes(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+title: Agent Harness Deep Dive
+source: https://example.com/agent-harness
+date: 2026-04-13
+type: deep_dive
+---
+
+# Agent Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/search?q=alpha")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Search" in body
+    assert "Objects" in body
+    assert "Notes" in body
+    assert "/object?id=alpha" in body
+    assert f'/note?path={quote("20-Areas/AI-Research/Topics/2026-04/Agent Harness_深度解读.md", safe="")}' in body
 
 
 def test_ui_root_dashboard_renders_db_summary(temp_vault):

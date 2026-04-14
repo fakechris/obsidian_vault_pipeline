@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .runtime import VaultLayout, resolve_vault_dir
 
 MAX_PAGE_SIZE = 500
+_FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 
 
 def _db_path(vault_dir: Path | str) -> Path:
@@ -36,6 +40,40 @@ def _validate_page_args(*, limit: int, offset: int = 0) -> tuple[int, int]:
 
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _parse_frontmatter(markdown: str) -> dict[str, Any]:
+    fenced_match = _FENCED_FRONTMATTER_RE.match(markdown)
+    if fenced_match:
+        raw_frontmatter = fenced_match.group(1)
+        try:
+            parsed = yaml.safe_load(raw_frontmatter) or {}
+        except yaml.YAMLError:
+            parsed = {}
+        return parsed if isinstance(parsed, dict) else {}
+    if not markdown.startswith("---\n"):
+        return {}
+    end = markdown.find("\n---\n", 4)
+    if end == -1:
+        return {}
+    raw_frontmatter = markdown[4:end]
+    try:
+        parsed = yaml.safe_load(raw_frontmatter) or {}
+    except yaml.YAMLError:
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _read_note_frontmatter(vault_dir: Path | str, relative_path: str) -> dict[str, Any]:
+    resolved = resolve_vault_dir(vault_dir)
+    note_path = (resolved / relative_path).resolve()
+    try:
+        note_path.relative_to(resolved.resolve())
+    except ValueError:
+        return {}
+    if not note_path.is_file():
+        return {}
+    return _parse_frontmatter(note_path.read_text(encoding="utf-8"))
 
 
 def _is_moc_row(note_type: str, path: str) -> bool:
@@ -158,6 +196,102 @@ def list_objects(
         }
         for row in rows
     ]
+
+
+def search_vault_surface(
+    vault_dir: Path | str,
+    *,
+    query: str,
+    object_limit: int = 25,
+    note_limit: int = 25,
+) -> dict[str, Any]:
+    normalized_query = query.strip()
+    object_limit, _ = _validate_page_args(limit=object_limit, offset=0)
+    note_limit, _ = _validate_page_args(limit=note_limit, offset=0)
+    if not normalized_query:
+        return {
+            "query": "",
+            "objects": [],
+            "notes": [],
+        }
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    escaped_query = _escape_like(normalized_query.lower())
+    with sqlite3.connect(db_path) as conn:
+        object_rows = conn.execute(
+            """
+            SELECT DISTINCT objects.object_id, objects.object_kind, objects.title, objects.canonical_path, objects.source_slug
+            FROM objects
+            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+            LEFT JOIN claims ON claims.object_id = objects.object_id
+            WHERE lower(objects.object_id) LIKE ? ESCAPE '\\'
+               OR lower(objects.title) LIKE ? ESCAPE '\\'
+               OR lower(objects.source_slug) LIKE ? ESCAPE '\\'
+               OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
+               OR lower(claims.claim_text) LIKE ? ESCAPE '\\'
+            ORDER BY objects.object_id
+            LIMIT ?
+            """,
+            (
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                object_limit,
+            ),
+        ).fetchall()
+        note_rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE lower(slug) LIKE ? ESCAPE '\\'
+               OR lower(title) LIKE ? ESCAPE '\\'
+               OR lower(path) LIKE ? ESCAPE '\\'
+               OR lower(body) LIKE ? ESCAPE '\\'
+            ORDER BY
+              CASE note_type
+                WHEN 'evergreen' THEN 0
+                WHEN 'deep_dive' THEN 1
+                WHEN 'moc' THEN 2
+                ELSE 3
+              END,
+              slug
+            LIMIT ?
+            """,
+            (
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                note_limit,
+            ),
+        ).fetchall()
+
+    objects = [
+        {
+            "object_id": row[0],
+            "object_kind": row[1],
+            "title": row[2],
+            "canonical_path": _vault_relative_path(resolved_vault, row[3]),
+            "source_slug": row[4],
+        }
+        for row in object_rows
+    ]
+    notes = [
+        {
+            "slug": row[0],
+            "title": row[1],
+            "note_type": row[2],
+            "path": _vault_relative_path(resolved_vault, row[3]),
+        }
+        for row in note_rows
+    ]
+    return {
+        "query": normalized_query,
+        "objects": objects,
+        "notes": notes,
+    }
 
 
 def count_objects(vault_dir: Path | str, *, query: str | None = None) -> int:
@@ -417,6 +551,87 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             "source_notes": source_notes,
             "mocs": mocs,
         },
+    }
+
+
+def _find_note_by_source(vault_dir: Path, *, source_url: str, exclude_path: str) -> dict[str, str] | None:
+    search_roots = [
+        vault_dir / "50-Inbox" / "03-Processed",
+        vault_dir / "50-Inbox" / "02-Processing",
+        vault_dir / "50-Inbox" / "01-Raw",
+    ]
+    resolved_exclude = str((vault_dir / exclude_path).resolve())
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for candidate in sorted(root.rglob("*.md")):
+            if str(candidate.resolve()) == resolved_exclude:
+                continue
+            frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+            if str(frontmatter.get("source", "")).strip() != source_url:
+                continue
+            title = str(frontmatter.get("title") or candidate.stem).strip()
+            return {
+                "title": title,
+                "path": str(candidate.resolve().relative_to(vault_dir.resolve())),
+            }
+    return None
+
+
+def _find_note_from_pipeline_log(vault_dir: Path, *, note_path: str) -> dict[str, str] | None:
+    log_path = VaultLayout.from_vault(vault_dir).logs_dir / "pipeline.jsonl"
+    if not log_path.exists():
+        return None
+    article_file: str | None = None
+    archived_path: str | None = None
+    target_absolute = str((vault_dir / note_path).resolve())
+    for raw_line in log_path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            event = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("event_type") == "article_processed":
+            output = str(event.get("output", "")).strip()
+            if output == target_absolute or output.endswith(note_path):
+                article_file = str(event.get("file", "")).strip()
+                continue
+        if event.get("event_type") == "source_archived_to_processed":
+            archived = str(event.get("archived", "")).strip()
+            source = str(event.get("source", "")).strip()
+            if article_file and (archived.endswith(article_file) or source.endswith(article_file)):
+                archived_path = archived
+    if not archived_path:
+        return None
+    candidate = Path(archived_path)
+    if not candidate.is_absolute():
+        candidate = (vault_dir / archived_path).resolve()
+    if not candidate.is_file():
+        return None
+    frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+    return {
+        "title": str(frontmatter.get("title") or candidate.stem).strip(),
+        "path": str(candidate.resolve().relative_to(vault_dir.resolve())),
+    }
+
+
+def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    frontmatter = _read_note_frontmatter(resolved_vault, note_path)
+    source_url = str(frontmatter.get("source", "")).strip()
+    original_source_note = None
+    if source_url:
+        original_source_note = _find_note_by_source(
+            resolved_vault,
+            source_url=source_url,
+            exclude_path=note_path,
+        )
+    if original_source_note is None:
+        original_source_note = _find_note_from_pipeline_log(resolved_vault, note_path=note_path)
+    return {
+        "note_path": note_path,
+        "original_source_note": original_source_note,
     }
 
 

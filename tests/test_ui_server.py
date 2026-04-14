@@ -106,6 +106,47 @@ def test_ui_server_objects_endpoint_returns_json(temp_vault):
     assert [item["object_id"] for item in payload["items"]] == ["alpha", "beta", "conflict"]
 
 
+def test_ui_server_search_endpoint_returns_objects_and_notes(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+title: Agent Harness Deep Dive
+source: https://example.com/agent-harness
+date: 2026-04-13
+type: deep_dive
+---
+
+# Agent Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/search?q=alpha")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["objects"]
+    assert payload["notes"]
+    assert any(item["note_type"] == "deep_dive" for item in payload["notes"])
+
+
 def test_ui_server_object_endpoint_returns_detail_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 

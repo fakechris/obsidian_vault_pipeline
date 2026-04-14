@@ -21,8 +21,10 @@ from ..ui.view_models import (
     build_contradiction_browser_payload,
     build_derivation_browser_payload,
     build_event_dossier_payload,
+    build_note_page_payload,
     build_object_page_payload,
     build_objects_index_payload,
+    build_search_payload,
     build_stale_summary_browser_payload,
     build_truth_dashboard_payload,
     build_topic_overview_payload,
@@ -94,6 +96,7 @@ def _layout(title: str, body: str) -> str:
           <nav>
             <a href="/">Home</a>
             <a href="/objects">Objects</a>
+            <a href="/search">Search</a>
             <a href="/atlas">Atlas</a>
             <a href="/deep-dives">Deep Dives</a>
             <a href="/events">Event Dossier</a>
@@ -115,8 +118,8 @@ def _note_href(path: str) -> str:
     return f"/note?path={quote(path, safe='')}"
 
 
-def _objects_search_href(query: str) -> str:
-    return f"/objects?q={quote(query, safe='')}"
+def _search_href(query: str) -> str:
+    return f"/search?q={quote(query, safe='')}"
 
 
 def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
@@ -209,7 +212,7 @@ def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | N
 
 
 def _is_search_href(href: str) -> bool:
-    return href.startswith("/objects?q=")
+    return href.startswith("/search?q=")
 
 
 def _strip_frontmatter(markdown: str) -> str:
@@ -280,7 +283,7 @@ def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str) -> st
         target_part, _, label_part = raw_inner.partition("|")
         label = label_part.strip() or target_part.split("#", 1)[0].strip()
         resolved = _lookup_wikilink_target(vault_dir, target_part)
-        href = resolved[0] if resolved else _objects_search_href(target_part.split("#", 1)[0].strip() or label)
+        href = resolved[0] if resolved else _search_href(target_part.split("#", 1)[0].strip() or label)
         emoji = "🔍" if _is_search_href(href) else "🎯"
         safe_label = label.replace("[", "\\[").replace("]", "\\]")
         return f"[{emoji} {safe_label}]({href})"
@@ -379,7 +382,7 @@ def _linkify_keywords(markdown: str) -> str:
             keyword = raw.strip()
             if not keyword:
                 continue
-            rendered.append(_smart_markdown_link(keyword, _objects_search_href(keyword)))
+            rendered.append(_smart_markdown_link(keyword, _search_href(keyword)))
         output.append(f"{prefix}：{'，'.join(rendered)}")
     return "\n".join(output)
 
@@ -398,7 +401,7 @@ def _linkify_related_knowledge_section(vault_dir: Path, markdown: str) -> str:
             concept, sep, remainder = stripped[2:].partition(" — ")
             concept = concept.strip()
             resolved = _lookup_wikilink_target(vault_dir, concept)
-            href = resolved[0] if resolved else _objects_search_href(concept)
+            href = resolved[0] if resolved else _search_href(concept)
             emoji = "🔍" if _is_search_href(href) else "🎯"
             output_lines.append(f'- [{emoji} {concept}]({href}) — {remainder}')
             continue
@@ -421,8 +424,24 @@ def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
     return _render_frontmatter(frontmatter), html_body
 
 
-def _render_note_page(vault_dir: Path, relative_path: str, markdown: str) -> str:
+def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payload: dict | None = None) -> str:
     frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown)
+    source_note = None
+    if payload:
+        source_note = payload.get("provenance", {}).get("original_source_note")
+    provenance_html = ""
+    if source_note:
+        provenance_html = (
+            "<section class='card'>"
+            "<h2>Provenance</h2>"
+            "<dl class='meta-list'>"
+            "<div><dt>Original Source Note</dt><dd>"
+            f'<a href="{escape(_note_href(source_note["path"]))}">{escape(source_note["title"])}</a>'
+            f"<div class='muted'>{escape(source_note['path'])}</div>"
+            "</dd></div>"
+            "</dl>"
+            "</section>"
+        )
     return _layout(
         f"Markdown Note: {relative_path}",
         (
@@ -431,7 +450,37 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str) -> str
             f"<p class='muted'>{escape(relative_path)}</p>"
             "</section>"
             f"{frontmatter_html}"
+            f"{provenance_html}"
             f"<section class='card'>{note_html}</section>"
+        ),
+    )
+
+
+def _render_search_page(payload: dict) -> str:
+    query = payload["query"]
+    object_items = "".join(
+        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f'<span class="muted">({escape(item["object_id"])})</span></li>'
+        for item in payload["objects"]
+    ) or "<li class='muted'>No object hits.</li>"
+    note_items = "".join(
+        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a> '
+        f'<span class="pill">{escape(item["note_type"])}</span></li>'
+        for item in payload["notes"]
+    ) or "<li class='muted'>No note hits.</li>"
+    return _layout(
+        f"Search: {query}",
+        (
+            "<h1>Search</h1>"
+            "<form method='get' action='/search'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> "
+            "<button type='submit'>Search</button>"
+            "</form>"
+            f"<p class='muted'>{payload['object_count']} object hits, {payload['note_count']} note hits.</p>"
+            "<section class='grid two-col'>"
+            f"<section class='card'><h2>Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
+            f"<section class='card'><h2>Notes</h2><ul class='list-tight'>{note_items}</ul></section>"
+            "</section>"
         ),
     )
 
@@ -871,6 +920,15 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     )
                     self._write_html(_render_objects_index(payload))
                     return
+                if path == "/api/search":
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_search_payload(resolved_vault, query=q))
+                    return
+                if path == "/search":
+                    q = query.get("q", [""])[0]
+                    payload = build_search_payload(resolved_vault, query=q)
+                    self._write_html(_render_search_page(payload))
+                    return
                 if path == "/api/object":
                     object_id = self._required(query, "id")
                     self._write_json(build_object_page_payload(resolved_vault, object_id))
@@ -928,7 +986,8 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/note":
                     relative_path = self._required(query, "path")
                     _, markdown = _read_vault_note(resolved_vault, relative_path)
-                    self._write_html(_render_note_page(resolved_vault, relative_path, markdown))
+                    payload = build_note_page_payload(resolved_vault, note_path=relative_path)
+                    self._write_html(_render_note_page(resolved_vault, relative_path, markdown, payload))
                     return
                 if path == "/api/contradictions":
                     status = query.get("status", [""])[0] or None
