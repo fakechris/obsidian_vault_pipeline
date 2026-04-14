@@ -109,8 +109,8 @@ def count_objects(vault_dir: Path | str, *, query: str | None = None) -> int:
 
 
 def _surface_page_query_clauses(*, note_type: str, normalized_query: str) -> tuple[str, list[Any]]:
-    where = [f"pages_index.note_type = '{note_type}'"]
-    params: list[Any] = []
+    where = ["pages_index.note_type = ?"]
+    params: list[Any] = [note_type]
     if normalized_query:
         where.append(
             """

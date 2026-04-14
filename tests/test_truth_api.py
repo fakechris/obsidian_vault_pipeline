@@ -475,3 +475,15 @@ date: 2026-04-13
         "beta",
         "gamma",
     ]
+
+
+def test_surface_page_query_clauses_parameterizes_note_type():
+    from openclaw_pipeline.truth_api import _surface_page_query_clauses
+
+    where_sql, params = _surface_page_query_clauses(
+        note_type="moc",
+        normalized_query="alpha",
+    )
+
+    assert "pages_index.note_type = ?" in where_sql
+    assert params[0] == "moc"
