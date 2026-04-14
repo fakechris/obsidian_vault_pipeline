@@ -119,3 +119,80 @@ def test_truth_api_builds_topic_neighborhood(temp_vault):
             "evidence_source_slug": "source-note",
         }
     ]
+
+
+def test_truth_api_rejects_negative_pagination_inputs(temp_vault):
+    from openclaw_pipeline.truth_api import list_contradictions, list_objects
+
+    vault = _seed_truth_vault(temp_vault)
+
+    for kwargs in ({"limit": -1}, {"offset": -1}, {"limit": -1, "offset": -1}):
+        try:
+            list_objects(vault, **kwargs)
+        except ValueError as exc:
+            assert "must be >= 0" in str(exc)
+        else:
+            raise AssertionError(f"Expected ValueError for {kwargs}")
+
+    try:
+        list_contradictions(vault, limit=-1)
+    except ValueError as exc:
+        assert "must be >= 0" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for negative contradiction limit")
+
+
+def test_truth_api_matches_contradictions_by_exact_object_id_prefix(temp_vault):
+    from openclaw_pipeline.truth_api import get_object_detail
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha_one = temp_vault / "10-Knowledge" / "Evergreen" / "AlphaOne.md"
+    alpha_neg = temp_vault / "10-Knowledge" / "Evergreen" / "AlphaNeg.md"
+
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    alpha_one.write_text(
+        """---
+note_id: alpha-one
+title: Alpha One
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha One
+
+Alpha one supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    alpha_neg.write_text(
+        """---
+note_id: alpha-one-negative
+title: Alpha One Negative
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha One Negative
+
+Alpha one does not support local-first execution.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    detail = get_object_detail(temp_vault, "alpha")
+
+    assert detail["contradictions"] == []

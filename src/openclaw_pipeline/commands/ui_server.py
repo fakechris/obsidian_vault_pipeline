@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -256,8 +257,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8787)
     args = parser.parse_args(argv)
 
-    server = create_server(resolve_vault_dir(args.vault_dir), host=args.host, port=args.port)
-    print(json.dumps({"host": args.host, "port": args.port, "vault_dir": str(resolve_vault_dir(args.vault_dir))}))
+    resolved_vault = resolve_vault_dir(args.vault_dir)
+    server = create_server(resolved_vault, host=args.host, port=args.port)
+    try:
+        build_objects_index_payload(resolved_vault, limit=1, offset=0)
+    except Exception as exc:
+        print(f"ui server preflight failed: {exc}", file=sys.stderr)
+        server.server_close()
+        return 1
+
+    print(json.dumps({"host": args.host, "port": args.port, "vault_dir": str(resolved_vault)}), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:  # pragma: no cover

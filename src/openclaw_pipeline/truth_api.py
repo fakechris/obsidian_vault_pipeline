@@ -7,13 +7,24 @@ from typing import Any
 
 from .runtime import VaultLayout, resolve_vault_dir
 
+MAX_PAGE_SIZE = 500
+
 
 def _db_path(vault_dir: Path | str) -> Path:
     resolved = resolve_vault_dir(vault_dir)
     return VaultLayout.from_vault(resolved).knowledge_db
 
 
+def _validate_page_args(*, limit: int, offset: int = 0) -> tuple[int, int]:
+    if limit < 0 or offset < 0:
+        raise ValueError("limit and offset must be >= 0")
+    if limit > MAX_PAGE_SIZE:
+        raise ValueError(f"limit must be <= {MAX_PAGE_SIZE}")
+    return limit, offset
+
+
 def list_objects(vault_dir: Path | str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    limit, offset = _validate_page_args(limit=limit, offset=offset)
     db_path = _db_path(vault_dir)
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
@@ -98,7 +109,7 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             WHERE positive_claim_ids_json LIKE ? ESCAPE '\\' OR negative_claim_ids_json LIKE ? ESCAPE '\\'
             ORDER BY subject_key
             """,
-            (f"%{escaped}::%", f"%{escaped}::%"),
+            (f'%"{escaped}::%', f'%"{escaped}::%'),
         ).fetchall()
 
     return {
@@ -161,6 +172,7 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
 
 
 def list_contradictions(vault_dir: Path | str, *, limit: int = 100, status: str | None = None) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     query = """
         SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at

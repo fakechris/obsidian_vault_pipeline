@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import threading
-from contextlib import closing
 from http.client import HTTPConnection
-from socket import socket
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 
@@ -58,14 +56,6 @@ Alpha does not support local-first execution.
         encoding="utf-8",
     )
     rebuild_knowledge_index(temp_vault)
-
-
-def _free_port() -> int:
-    with closing(socket()) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
 def _get(port: int, path: str) -> tuple[int, str]:
     conn = HTTPConnection("127.0.0.1", port, timeout=5)
     conn.request("GET", path)
@@ -77,8 +67,8 @@ def test_ui_smoke_pages_render_truth_views(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
-    port = _free_port()
-    server = create_server(temp_vault, host="127.0.0.1", port=port)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

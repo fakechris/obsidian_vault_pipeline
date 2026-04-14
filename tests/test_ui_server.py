@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from contextlib import closing
 from http.client import HTTPConnection
-from socket import socket
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 
@@ -59,20 +57,12 @@ Alpha does not support local-first execution.
         encoding="utf-8",
     )
     rebuild_knowledge_index(temp_vault)
-
-
-def _free_port() -> int:
-    with closing(socket()) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
 def test_ui_server_root_serves_html_shell(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
-    port = _free_port()
-    server = create_server(temp_vault, host="127.0.0.1", port=port)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -94,8 +84,8 @@ def test_ui_server_objects_endpoint_returns_json(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
-    port = _free_port()
-    server = create_server(temp_vault, host="127.0.0.1", port=port)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -116,8 +106,8 @@ def test_ui_server_object_endpoint_returns_detail_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
-    port = _free_port()
-    server = create_server(temp_vault, host="127.0.0.1", port=port)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -139,8 +129,8 @@ def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
-    port = _free_port()
-    server = create_server(temp_vault, host="127.0.0.1", port=port)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -162,8 +152,8 @@ def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
-    port = _free_port()
-    server = create_server(temp_vault, host="127.0.0.1", port=port)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -206,6 +196,10 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         return FakeServer()
 
     monkeypatch.setattr("openclaw_pipeline.commands.ui_server.create_server", fake_create_server)
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server.build_objects_index_payload",
+        lambda vault_dir, *, limit, offset: {"items": []},
+    )
 
     exit_code = main(["--vault-dir", str(temp_vault), "--host", "127.0.0.1", "--port", "9999"])
     payload = json.loads(capsys.readouterr().out)
@@ -218,3 +212,31 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         "port": 9999,
         "closed": True,
     }
+
+
+def test_ui_server_main_exits_nonzero_when_preflight_fails(temp_vault, capsys, monkeypatch):
+    from openclaw_pipeline.commands.ui_server import main
+
+    class FakeServer:
+        def serve_forever(self):
+            raise AssertionError("serve_forever should not run when preflight fails")
+
+        def server_close(self):
+            return None
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server.create_server",
+        lambda vault_dir, *, host, port: FakeServer(),
+    )
+
+    def boom(vault_dir, *, limit, offset):
+        raise ValueError("broken knowledge db")
+
+    monkeypatch.setattr("openclaw_pipeline.commands.ui_server.build_objects_index_payload", boom)
+
+    exit_code = main(["--vault-dir", str(temp_vault)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "broken knowledge db" in captured.err
