@@ -151,6 +151,7 @@ def _render_topic_page(payload: dict) -> str:
 
 
 def _render_events_page(payload: dict) -> str:
+    query = payload.get("query", "")
     events = "".join(
         f"<li>{escape(item['event_date'])} - "
         f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
@@ -159,7 +160,11 @@ def _render_events_page(payload: dict) -> str:
     return _layout(
         "Event Dossier",
         (
-            f"<h1>Event Dossier</h1>"
+            "<h1>Event Dossier</h1>"
+            "<form method='get' action='/events'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> "
+            "<button type='submit'>Search</button>"
+            "</form>"
             f"<p class='muted'>{payload['event_count']} events across {len(payload['dates'])} dates.</p>"
             f"<section class='card'><ul>{events}</ul></section>"
         ),
@@ -167,6 +172,7 @@ def _render_events_page(payload: dict) -> str:
 
 
 def _render_contradictions_page(payload: dict) -> str:
+    status = payload.get("status", "")
     items = "".join(
         f"<li><span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}</li>"
         for item in payload["items"]
@@ -174,7 +180,15 @@ def _render_contradictions_page(payload: dict) -> str:
     return _layout(
         "Contradictions",
         (
-            f"<h1>Contradictions</h1>"
+            "<h1>Contradictions</h1>"
+            "<form method='get' action='/contradictions'>"
+            "<select name='status'>"
+            f"<option value=''{' selected' if not status else ''}>all</option>"
+            f"<option value='open'{' selected' if status == 'open' else ''}>open</option>"
+            f"<option value='resolved'{' selected' if status == 'resolved' else ''}>resolved</option>"
+            "</select> "
+            "<button type='submit'>Filter</button>"
+            "</form>"
             f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.</p>"
             f"<section class='card'><ul>{items}</ul></section>"
         ),
@@ -234,17 +248,21 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     self._write_html(_render_topic_page(payload))
                     return
                 if path == "/api/events":
-                    self._write_json(build_event_dossier_payload(resolved_vault))
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_event_dossier_payload(resolved_vault, query=q))
                     return
                 if path == "/events":
-                    payload = build_event_dossier_payload(resolved_vault)
+                    q = query.get("q", [""])[0]
+                    payload = build_event_dossier_payload(resolved_vault, query=q)
                     self._write_html(_render_events_page(payload))
                     return
                 if path == "/api/contradictions":
-                    self._write_json(build_contradiction_browser_payload(resolved_vault))
+                    status = query.get("status", [""])[0] or None
+                    self._write_json(build_contradiction_browser_payload(resolved_vault, status=status))
                     return
                 if path == "/contradictions":
-                    payload = build_contradiction_browser_payload(resolved_vault)
+                    status = query.get("status", [""])[0] or None
+                    payload = build_contradiction_browser_payload(resolved_vault, status=status)
                     self._write_html(_render_contradictions_page(payload))
                     return
                 self.send_error(404, "Not Found")

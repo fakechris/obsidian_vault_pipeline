@@ -46,18 +46,36 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
     }
 
 
-def build_event_dossier_payload(vault_dir: Path | str) -> dict[str, Any]:
+def build_event_dossier_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
     db_path = _db_path(vault_dir)
+    normalized_query = query.strip().lower() if query else ""
     with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT timeline_events.event_date, timeline_events.event_type, objects.object_id, objects.title, compiled_summaries.summary_text
-            FROM timeline_events
-            JOIN objects ON objects.object_id = timeline_events.slug
-            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
-            ORDER BY timeline_events.event_date, objects.object_id
-            """
-        ).fetchall()
+        if normalized_query:
+            rows = conn.execute(
+                """
+                SELECT timeline_events.event_date, timeline_events.event_type, objects.object_id, objects.title, compiled_summaries.summary_text
+                FROM timeline_events
+                JOIN objects ON objects.object_id = timeline_events.slug
+                LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+                WHERE lower(objects.object_id) LIKE ? OR lower(objects.title) LIKE ? OR lower(compiled_summaries.summary_text) LIKE ?
+                ORDER BY timeline_events.event_date, objects.object_id
+                """,
+                (
+                    f"%{normalized_query}%",
+                    f"%{normalized_query}%",
+                    f"%{normalized_query}%",
+                ),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT timeline_events.event_date, timeline_events.event_type, objects.object_id, objects.title, compiled_summaries.summary_text
+                FROM timeline_events
+                JOIN objects ON objects.object_id = timeline_events.slug
+                LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+                ORDER BY timeline_events.event_date, objects.object_id
+                """
+            ).fetchall()
 
     events = [
         {
@@ -75,11 +93,12 @@ def build_event_dossier_payload(vault_dir: Path | str) -> dict[str, Any]:
         "events": events,
         "event_count": len(events),
         "dates": dates,
+        "query": query or "",
     }
 
 
-def build_contradiction_browser_payload(vault_dir: Path | str) -> dict[str, Any]:
-    items = list_contradictions(vault_dir)
+def build_contradiction_browser_payload(vault_dir: Path | str, *, status: str | None = None) -> dict[str, Any]:
+    items = list_contradictions(vault_dir, status=status)
     status_counts = Counter(item["status"] for item in items)
     return {
         "screen": "truth/contradictions",
@@ -87,6 +106,7 @@ def build_contradiction_browser_payload(vault_dir: Path | str) -> dict[str, Any]
         "count": len(items),
         "open_count": status_counts.get("open", 0),
         "resolved_count": sum(count for status, count in status_counts.items() if status != "open"),
+        "status": status or "",
     }
 
 

@@ -57,6 +57,22 @@ Alpha does not support local-first execution.
     rebuild_knowledge_index(temp_vault)
 
 
+def _resolve_all_contradictions(temp_vault):
+    from openclaw_pipeline.runtime import VaultLayout
+
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE contradictions
+            SET status = 'resolved',
+                resolution_note = 'reviewed',
+                resolved_at = '2026-04-14T00:00:00Z'
+            """
+        )
+        conn.commit()
+
+
 def test_build_object_page_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_object_page_payload
 
@@ -111,6 +127,19 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["open_count"] == 1
 
 
+def test_build_contradiction_browser_payload_filters_by_status(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+
+    _seed_truth_store(temp_vault)
+    _resolve_all_contradictions(temp_vault)
+
+    payload = build_contradiction_browser_payload(temp_vault, status="resolved")
+
+    assert payload["count"] == 1
+    assert payload["open_count"] == 0
+    assert payload["items"][0]["status"] == "resolved"
+
+
 def test_build_truth_dashboard_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
 
@@ -123,6 +152,17 @@ def test_build_truth_dashboard_payload(temp_vault):
     assert payload["contradictions"]["count"] == 1
     assert payload["events"]["count"] == 3
     assert payload["objects"]["items"][0]["object_id"] == "alpha"
+
+
+def test_build_event_dossier_payload_filters_by_query(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault, query="beta")
+
+    assert payload["event_count"] == 1
+    assert [item["object_id"] for item in payload["events"]] == ["beta"]
 
 
 def test_build_object_page_payload_handles_missing_summary(temp_vault):
