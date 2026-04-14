@@ -142,6 +142,16 @@ def test_truth_api_rejects_negative_pagination_inputs(temp_vault):
         raise AssertionError("Expected ValueError for negative contradiction limit")
 
 
+def test_truth_api_filters_objects_by_query(temp_vault):
+    from openclaw_pipeline.truth_api import list_objects
+
+    vault = _seed_truth_vault(temp_vault)
+
+    objects = list_objects(vault, query="target")
+
+    assert [item["object_id"] for item in objects] == ["target-note"]
+
+
 def test_truth_api_matches_contradictions_by_exact_object_id_prefix(temp_vault):
     from openclaw_pipeline.truth_api import get_object_detail
 

@@ -124,3 +124,23 @@ def test_ui_root_dashboard_renders_db_summary(temp_vault):
     assert "Contradictions Open" in root_body
     assert "Recent Events" in root_body
     assert "Alpha" in root_body
+
+
+def test_ui_objects_page_filters_by_query(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/objects?q=bet")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Beta" in body
+    assert "Alpha" not in body

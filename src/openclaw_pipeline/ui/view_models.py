@@ -113,12 +113,19 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
     }
 
 
-def build_objects_index_payload(vault_dir: Path | str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
-    items = list_objects(vault_dir, limit=limit, offset=offset)
+def build_objects_index_payload(
+    vault_dir: Path | str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    query: str | None = None,
+) -> dict[str, Any]:
+    items = list_objects(vault_dir, limit=limit, offset=offset, query=query)
     return {
         "screen": "objects/index",
         "items": items,
         "count": len(items),
         "limit": limit,
         "offset": offset,
+        "query": query or "",
     }

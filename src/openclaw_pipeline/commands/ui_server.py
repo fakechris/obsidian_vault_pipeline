@@ -90,6 +90,7 @@ def _render_dashboard(payload: dict) -> str:
 
 
 def _render_objects_index(payload: dict) -> str:
+    query = payload.get("query", "")
     items = "".join(
         f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
         f'<span class="muted">({escape(item["object_id"])})</span></li>'
@@ -97,7 +98,15 @@ def _render_objects_index(payload: dict) -> str:
     )
     return _layout(
         "Objects",
-        f"<h1>Objects</h1><p class='muted'>{payload['count']} objects in current page.</p><ul>{items}</ul>",
+        (
+            "<h1>Objects</h1>"
+            "<form method='get' action='/objects'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
+            "<button type='submit'>Search</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} objects in current page.</p>"
+            f"<ul>{items}</ul>"
+        ),
     )
 
 
@@ -192,12 +201,18 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/objects":
                     limit = int(query.get("limit", ["100"])[0])
                     offset = int(query.get("offset", ["0"])[0])
-                    self._write_json(build_objects_index_payload(resolved_vault, limit=limit, offset=offset))
+                    q = query.get("q", [""])[0]
+                    self._write_json(
+                        build_objects_index_payload(resolved_vault, limit=limit, offset=offset, query=q)
+                    )
                     return
                 if path == "/objects":
                     limit = int(query.get("limit", ["100"])[0])
                     offset = int(query.get("offset", ["0"])[0])
-                    payload = build_objects_index_payload(resolved_vault, limit=limit, offset=offset)
+                    q = query.get("q", [""])[0]
+                    payload = build_objects_index_payload(
+                        resolved_vault, limit=limit, offset=offset, query=q
+                    )
                     self._write_html(_render_objects_index(payload))
                     return
                 if path == "/api/object":

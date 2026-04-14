@@ -23,19 +23,44 @@ def _validate_page_args(*, limit: int, offset: int = 0) -> tuple[int, int]:
     return limit, offset
 
 
-def list_objects(vault_dir: Path | str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+def list_objects(
+    vault_dir: Path | str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    query: str | None = None,
+) -> list[dict[str, Any]]:
     limit, offset = _validate_page_args(limit=limit, offset=offset)
     db_path = _db_path(vault_dir)
+    normalized_query = query.strip().lower() if query else ""
     with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT object_id, object_kind, title, canonical_path, source_slug
-            FROM objects
-            ORDER BY object_id
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        ).fetchall()
+        if normalized_query:
+            rows = conn.execute(
+                """
+                SELECT object_id, object_kind, title, canonical_path, source_slug
+                FROM objects
+                WHERE lower(object_id) LIKE ? OR lower(title) LIKE ? OR lower(source_slug) LIKE ?
+                ORDER BY object_id
+                LIMIT ? OFFSET ?
+                """,
+                (
+                    f"%{normalized_query}%",
+                    f"%{normalized_query}%",
+                    f"%{normalized_query}%",
+                    limit,
+                    offset,
+                ),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT object_id, object_kind, title, canonical_path, source_slug
+                FROM objects
+                ORDER BY object_id
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
 
     return [
         {

@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     objects_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
     objects_parser.add_argument("--limit", type=int, default=100)
     objects_parser.add_argument("--offset", type=int, default=0)
+    objects_parser.add_argument("--query", default=None, help="Case-insensitive object search")
 
     object_parser = subparsers.add_parser("object", help="Fetch object detail")
     object_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
@@ -45,7 +46,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "objects":
-            payload = {"items": list_objects(vault_dir, limit=args.limit, offset=args.offset)}
+            payload = {
+                "items": list_objects(vault_dir, limit=args.limit, offset=args.offset, query=args.query)
+            }
         elif args.command == "object":
             payload = get_object_detail(vault_dir, args.id)
         elif args.command == "contradictions":

@@ -70,6 +70,18 @@ def test_truth_api_command_lists_objects(temp_vault, capsys):
     assert [item["object_id"] for item in payload["items"]] == ["alpha", "beta", "conflict"]
 
 
+def test_truth_api_command_filters_objects_by_query(temp_vault, capsys):
+    from openclaw_pipeline.commands.truth_api import main
+
+    _seed_truth_store(temp_vault)
+
+    exit_code = main(["objects", "--vault-dir", str(temp_vault), "--query", "bet"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert [item["object_id"] for item in payload["items"]] == ["beta"]
+
+
 def test_truth_api_command_returns_object_detail(temp_vault, capsys):
     from openclaw_pipeline.commands.truth_api import main
 
