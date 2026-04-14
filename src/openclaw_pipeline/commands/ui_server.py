@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import sqlite3
 import re
 import sys
@@ -14,14 +15,18 @@ import yaml
 from markdown_it import MarkdownIt
 
 from ..identity import canonicalize_note_id
+from ..knowledge_index import contradiction_object_ids, rebuild_compiled_summaries, resolve_contradictions
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import (
     build_atlas_browser_payload,
     build_contradiction_browser_payload,
     build_derivation_browser_payload,
     build_event_dossier_payload,
+    build_note_page_payload,
     build_object_page_payload,
     build_objects_index_payload,
+    build_search_payload,
+    build_stale_summary_browser_payload,
     build_truth_dashboard_payload,
     build_topic_overview_payload,
 )
@@ -58,6 +63,7 @@ def _layout(title: str, body: str) -> str:
       h1, h2, h3 {{ margin-bottom: 0.5rem; line-height: 1.2; }}
       ul {{ padding-left: 1.2rem; }}
       pre {{ background: #f4f4f5; padding: 1rem; border-radius: 8px; overflow-x: auto; }}
+      img {{ max-width: 100%; height: auto; display: block; border-radius: 12px; }}
       input, select, button {{ font: inherit; }}
       input, select {{ padding: 0.55rem 0.7rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }}
       button {{ padding: 0.55rem 0.8rem; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }}
@@ -92,10 +98,12 @@ def _layout(title: str, body: str) -> str:
           <nav>
             <a href="/">Home</a>
             <a href="/objects">Objects</a>
+            <a href="/search">Search</a>
             <a href="/atlas">Atlas</a>
             <a href="/deep-dives">Deep Dives</a>
             <a href="/events">Event Dossier</a>
             <a href="/contradictions">Contradictions</a>
+            <a href="/summaries">Stale Summaries</a>
           </nav>
         </div>
         <div class="shell-body">
@@ -112,8 +120,12 @@ def _note_href(path: str) -> str:
     return f"/note?path={quote(path, safe='')}"
 
 
-def _objects_search_href(query: str) -> str:
-    return f"/objects?q={quote(query, safe='')}"
+def _asset_href(path: str) -> str:
+    return f"/asset?path={quote(path, safe='')}"
+
+
+def _search_href(query: str) -> str:
+    return f"/search?q={quote(query, safe='')}"
 
 
 def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
@@ -125,6 +137,17 @@ def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
     if not candidate.is_file():
         raise ValueError(f"note not found: {relative_path}")
     return candidate, candidate.read_text(encoding="utf-8")
+
+
+def _read_vault_asset(vault_dir: Path, relative_path: str) -> tuple[bytes, str]:
+    candidate = (vault_dir / relative_path).resolve()
+    try:
+        candidate.relative_to(vault_dir.resolve())
+    except ValueError as exc:
+        raise ValueError("invalid asset path") from exc
+    if not candidate.is_file():
+        raise ValueError(f"asset not found: {relative_path}")
+    return candidate.read_bytes(), mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
 
 
 def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | None:
@@ -206,7 +229,7 @@ def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | N
 
 
 def _is_search_href(href: str) -> bool:
-    return href.startswith("/objects?q=")
+    return href.startswith("/search?q=")
 
 
 def _strip_frontmatter(markdown: str) -> str:
@@ -277,7 +300,7 @@ def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str) -> st
         target_part, _, label_part = raw_inner.partition("|")
         label = label_part.strip() or target_part.split("#", 1)[0].strip()
         resolved = _lookup_wikilink_target(vault_dir, target_part)
-        href = resolved[0] if resolved else _objects_search_href(target_part.split("#", 1)[0].strip() or label)
+        href = resolved[0] if resolved else _search_href(target_part.split("#", 1)[0].strip() or label)
         emoji = "🔍" if _is_search_href(href) else "🎯"
         safe_label = label.replace("[", "\\[").replace("]", "\\]")
         return f"[{emoji} {safe_label}]({href})"
@@ -315,6 +338,24 @@ def _infer_github_repo_base(frontmatter: dict[str, object], markdown: str) -> st
 def _smart_markdown_link(label: str, href: str) -> str:
     safe_label = label.replace("[", "\\[").replace("]", "\\]")
     return f"[{safe_label}]({href})"
+
+
+def _rewrite_local_image_links(vault_dir: Path, markdown: str) -> str:
+    def replace_match(match: re.Match[str]) -> str:
+        alt_text = match.group(1)
+        raw_target = match.group(2).strip()
+        if raw_target.startswith(("http://", "https://", "data:", "/asset?")):
+            return match.group(0)
+        candidate = (vault_dir / raw_target).resolve()
+        try:
+            relative_path = str(candidate.relative_to(vault_dir.resolve()))
+        except ValueError:
+            return match.group(0)
+        if not candidate.is_file():
+            return match.group(0)
+        return f"![{alt_text}]({_asset_href(relative_path)})"
+
+    return re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", replace_match, markdown)
 
 
 def _convert_box_table_fences(markdown: str, *, github_repo_base: str | None) -> str:
@@ -376,7 +417,7 @@ def _linkify_keywords(markdown: str) -> str:
             keyword = raw.strip()
             if not keyword:
                 continue
-            rendered.append(_smart_markdown_link(keyword, _objects_search_href(keyword)))
+            rendered.append(_smart_markdown_link(keyword, _search_href(keyword)))
         output.append(f"{prefix}：{'，'.join(rendered)}")
     return "\n".join(output)
 
@@ -395,7 +436,7 @@ def _linkify_related_knowledge_section(vault_dir: Path, markdown: str) -> str:
             concept, sep, remainder = stripped[2:].partition(" — ")
             concept = concept.strip()
             resolved = _lookup_wikilink_target(vault_dir, concept)
-            href = resolved[0] if resolved else _objects_search_href(concept)
+            href = resolved[0] if resolved else _search_href(concept)
             emoji = "🔍" if _is_search_href(href) else "🎯"
             output_lines.append(f'- [{emoji} {concept}]({href}) — {remainder}')
             continue
@@ -408,6 +449,7 @@ def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
     frontmatter, body = _parse_frontmatter(markdown)
     github_repo_base = _infer_github_repo_base(frontmatter, body)
     rendered_body = _convert_box_table_fences(body, github_repo_base=github_repo_base)
+    rendered_body = _rewrite_local_image_links(vault_dir, rendered_body)
     rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, rendered_body)
     rendered_body = _linkify_related_knowledge_section(vault_dir, rendered_body)
     rendered_body = _linkify_keywords(rendered_body).strip()
@@ -418,8 +460,38 @@ def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
     return _render_frontmatter(frontmatter), html_body
 
 
-def _render_note_page(vault_dir: Path, relative_path: str, markdown: str) -> str:
+def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payload: dict | None = None) -> str:
     frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown)
+    source_note = None
+    derived_notes: list[dict[str, str]] = []
+    if payload:
+        source_note = payload.get("provenance", {}).get("original_source_note")
+        derived_notes = payload.get("provenance", {}).get("derived_deep_dives", [])
+    provenance_html = ""
+    if source_note:
+        provenance_html = (
+            "<section class='card'>"
+            "<h2>Provenance</h2>"
+            "<dl class='meta-list'>"
+            "<div><dt>Original Source Note</dt><dd>"
+            f'<a href="{escape(_note_href(source_note["path"]))}">{escape(source_note["title"])}</a>'
+            f"<div class='muted'>{escape(source_note['path'])}</div>"
+            "</dd></div>"
+            "</dl>"
+            "</section>"
+        )
+    if derived_notes:
+        derived_list = "".join(
+            f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+            f"<div class='muted'>{escape(item['path'])}</div></li>"
+            for item in derived_notes
+        )
+        provenance_html += (
+            "<section class='card'>"
+            "<h2>Derived Deep Dives</h2>"
+            f"<ul class='list-tight'>{derived_list}</ul>"
+            "</section>"
+        )
     return _layout(
         f"Markdown Note: {relative_path}",
         (
@@ -428,8 +500,69 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str) -> str
             f"<p class='muted'>{escape(relative_path)}</p>"
             "</section>"
             f"{frontmatter_html}"
+            f"{provenance_html}"
             f"<section class='card'>{note_html}</section>"
         ),
+    )
+
+
+def _render_search_page(payload: dict) -> str:
+    query = payload["query"]
+    object_items = "".join(
+        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f'<span class="muted">({escape(item["object_id"])})</span></li>'
+        for item in payload["objects"]
+    ) or "<li class='muted'>No object hits.</li>"
+    note_items = "".join(
+        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a> '
+        f'<span class="pill">{escape(item["note_type"])}</span></li>'
+        for item in payload["notes"]
+    ) or "<li class='muted'>No note hits.</li>"
+    return _layout(
+        f"Search: {query}",
+        (
+            "<h1>Search</h1>"
+            "<form method='get' action='/search'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> "
+            "<button type='submit'>Search</button>"
+            "</form>"
+            f"<p class='muted'>{payload['object_count']} object hits, {payload['note_count']} note hits.</p>"
+            "<section class='grid two-col'>"
+            f"<section class='card'><h2>Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
+            f"<section class='card'><h2>Notes</h2><ul class='list-tight'>{note_items}</ul></section>"
+            "</section>"
+        ),
+    )
+
+
+def _render_named_note_links(items: list[dict[str, str]]) -> str:
+    if not items:
+        return "<span class='muted'>None</span>"
+    return ", ".join(
+        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>' for item in items
+    )
+
+
+def _render_review_context_card(context: dict[str, object], *, title: str = "Review Context") -> str:
+    latest_event_date = str(context.get("latest_event_date") or "")
+    latest_event_html = escape(latest_event_date) if latest_event_date else "<span class='muted'>None</span>"
+    stale_summary_ids = ", ".join(str(item) for item in context.get("stale_summary_object_ids", [])) or "None"
+    contradiction_object_ids = ", ".join(str(item) for item in context.get("contradiction_object_ids", [])) or "None"
+    return (
+        "<section class='card'>"
+        f"<h2>{escape(title)}</h2>"
+        "<dl class='meta-list'>"
+        f"<div><dt>Objects in scope</dt><dd>{int(context.get('object_count', 0))}</dd></div>"
+        f"<div><dt>Source notes</dt><dd>{int(context.get('source_note_count', 0))}</dd></div>"
+        f"<div><dt>Atlas / MOC pages</dt><dd>{int(context.get('moc_count', 0))}</dd></div>"
+        f"<div><dt>Open contradictions</dt><dd>{int(context.get('open_contradiction_count', 0))}</dd></div>"
+        f"<div><dt>Total contradictions</dt><dd>{int(context.get('contradiction_count', 0))}</dd></div>"
+        f"<div><dt>Stale summaries</dt><dd>{int(context.get('stale_summary_count', 0))}</dd></div>"
+        f"<div><dt>Latest event date</dt><dd>{latest_event_html}</dd></div>"
+        f"<div><dt>Contradiction objects</dt><dd>{escape(contradiction_object_ids)}</dd></div>"
+        f"<div><dt>Stale summary objects</dt><dd>{escape(stale_summary_ids)}</dd></div>"
+        "</dl>"
+        "</section>"
     )
 
 
@@ -447,6 +580,11 @@ def _render_dashboard(payload: dict) -> str:
         f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
         for item in payload["events"]["items"]
     ) or "<li>None</li>"
+    stale_summary_items = "".join(
+        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
+        for item in payload["stale_summaries"]["items"]
+    ) or "<li>None</li>"
     return _layout(
         "OpenClaw Truth UI",
         (
@@ -461,11 +599,14 @@ def _render_dashboard(payload: dict) -> str:
             f"<p>{payload['contradictions']['open_count']}</p></div>"
             "<div class='card'><h2>Recent Events</h2>"
             f"<p>{payload['events']['count']}</p></div>"
+            "<div class='card'><h2>Stale Summaries</h2>"
+            f"<p>{payload['stale_summaries']['count']}</p></div>"
             "</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
             f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
             f"<section class='card'><h2>Recent Events</h2><ul class='list-tight'>{event_items}</ul></section>"
+            f"<section class='card'><h2><a href='/summaries'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
             "</div>"
             f"<section class='card'><h2>Contradiction Queue</h2><ul class='list-tight'>{contradiction_items}</ul></section>"
             "</section>"
@@ -539,6 +680,7 @@ def _render_object_page(payload: dict) -> str:
             f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>"
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
+            f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
             f"<a href='/deep-dives?q={escape(payload['object']['object_id'])}'>Source deep dives</a>"
             f"<a href='/atlas?q={escape(payload['object']['object_id'])}'>Atlas / MOC</a>"
             "</div></section>"
@@ -554,6 +696,7 @@ def _render_object_page(payload: dict) -> str:
             f"<section id='claims' class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
+            f"{_render_review_context_card(payload['review_context'])}"
             "<section class='card'><h2>Context</h2><dl class='meta-list'>"
             f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
             f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
@@ -589,6 +732,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>"
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
+            f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
             f"<a href='/deep-dives?q={escape(payload['center']['object_id'])}'>Source deep dives</a>"
             f"<a href='/atlas?q={escape(payload['center']['object_id'])}'>Atlas / MOC</a>"
             "</div></section>"
@@ -596,6 +740,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
             f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
+            f"{_render_review_context_card(payload['review_context'])}"
             "</section>"
         ),
     )
@@ -603,6 +748,11 @@ def _render_topic_page(payload: dict) -> str:
 
 def _render_events_page(payload: dict) -> str:
     query = payload.get("query", "")
+    type_breakdown = "".join(
+        f"<span class='pill'>{escape(kind.replace('_', ' '))}: {count}</span>"
+        for kind, count in payload["event_type_counts"].items()
+    )
+    model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     date_nav = "".join(
         f"<a href='#date-{escape(section['date'])}'>{escape(section['date'])}</a>"
         for section in payload["date_sections"]
@@ -611,10 +761,22 @@ def _render_events_page(payload: dict) -> str:
         f'<section id="date-{escape(section["date"])}" class="card"><h2>{escape(section["date"])}</h2><ul class="list-tight">'
         + "".join(
             (
-                f"<li>{escape(item['event_type'])} - "
-                f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
-                if item["event_type"] != "page_date"
-                else f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+                "<li>"
+                + f"<span class='pill'>{escape(item['event_label'])}</span> "
+                + f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a>'
+                + (
+                    f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
+                    if item["provenance"]["evergreen_path"]
+                    else "<div class='muted'>Evergreen: <span class='muted'>None</span></div>"
+                )
+                + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
+                + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+                + "<div class='link-row'>"
+                + f"<a href='{escape(item['review_links']['topic_path'])}'>Topic</a>"
+                + f"<a href='{escape(item['review_links']['contradictions_path'])}'>Contradictions</a>"
+                + f"<a href='{escape(item['review_links']['summaries_path'])}'>Stale summaries</a>"
+                + "</div>"
+                + "</li>"
             )
             for item in section["events"]
         )
@@ -631,6 +793,9 @@ def _render_events_page(payload: dict) -> str:
             "<button type='submit'>Search</button>"
             "</form>"
             f"<p class='muted'>{payload['event_count']} events across {len(payload['dates'])} dates.</p>"
+            f"<div class='link-row'>{type_breakdown}</div>"
+            f"{_render_review_context_card(payload['review_context'])}"
+            f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
             f"<nav class='subnav'>{date_nav}</nav>"
             f"{events}"
         ),
@@ -642,6 +807,7 @@ def _render_atlas_page(payload: dict) -> str:
     items = "".join(
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        + f" <span class='pill'>{item['member_count']} objects</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -649,6 +815,11 @@ def _render_atlas_page(payload: dict) -> str:
                 for member in item["members"]
             )
             + "</span>"
+        )
+        + (
+            f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
+            if item["preview_titles"]
+            else ""
         )
         + "</li>"
         for item in payload["items"]
@@ -672,6 +843,7 @@ def _render_derivations_page(payload: dict) -> str:
     items = "".join(
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        + f" <span class='pill'>{item['derived_object_count']} derived objects</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -679,6 +851,11 @@ def _render_derivations_page(payload: dict) -> str:
                 for member in item["derived_objects"]
             )
             + "</span>"
+        )
+        + (
+            f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
+            if item["preview_titles"]
+            else ""
         )
         + "</li>"
         for item in payload["items"]
@@ -700,21 +877,56 @@ def _render_derivations_page(payload: dict) -> str:
 def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
+    detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     items = "".join(
         "<li>"
-        f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
+        + (
+            f"<label><input type='checkbox' form='contradiction-batch-form' name='contradiction_id' value='{escape(item['contradiction_id'])}' /> batch</label> "
+            if item["status"] == "open"
+            else ""
+        )
+        + f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
         + (
             " <span class='muted'>"
             + ", ".join(
-                f'<a href="{escape(link["path"])}">{escape(link["object_id"])}</a>' for link in item["object_links"]
+                f'<a href="{escape(link["path"])}">{escape(item["object_titles"].get(link["object_id"], link["object_id"]))}</a>'
+                for link in item["object_links"]
             )
             + "</span>"
             if item["object_links"]
             else ""
         )
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
+        + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+        + (
+            f"<div class='muted'>Resolution Note: {escape(item['resolution_note'])}</div>"
+            if item.get("resolution_note")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Resolved At: {escape(item['resolved_at'])}</div>"
+            if item.get("resolved_at")
+            else ""
+        )
+        + (
+            "<form method='post' action='/contradictions/resolve' class='link-row'>"
+            f"<input type='hidden' name='contradiction_id' value='{escape(item['contradiction_id'])}' />"
+            "<select name='status'>"
+            "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
+            "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
+            "<option value='dismissed'>dismissed</option>"
+            "<option value='needs_human'>needs_human</option>"
+            "</select>"
+            "<input type='text' name='note' placeholder='Resolution note' />"
+            "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>"
+            "<button type='submit'>Resolve</button>"
+            "</form>"
+            if item["status"] == "open"
+            else ""
+        )
         + "</li>"
         for item in payload["items"]
-    ) or "<li>None</li>"
+    ) or f"<li>{escape(payload['empty_state'])}</li>"
     return _layout(
         "Contradictions",
         (
@@ -729,6 +941,60 @@ def _render_contradictions_page(payload: dict) -> str:
             "<button type='submit'>Filter</button>"
             "</form>"
             f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.</p>"
+            f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
+            "<section class='card'>"
+            "<h2>Batch Resolve</h2>"
+            "<form id='contradiction-batch-form' method='post' action='/contradictions/resolve' class='link-row'>"
+            "<select name='status'>"
+            "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
+            "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
+            "<option value='dismissed'>dismissed</option>"
+            "<option value='needs_human'>needs_human</option>"
+            "</select>"
+            "<input type='text' name='note' placeholder='Resolution note for selected rows' />"
+            "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>"
+            "<button type='submit'>Resolve Selected</button>"
+            "</form>"
+            "</section>"
+            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        ),
+    )
+
+
+def _render_stale_summaries_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
+    items = "".join(
+        "<li>"
+        f"<label><input type='checkbox' form='summary-batch-form' name='object_id' value='{escape(item['object_id'])}' /> batch</label> "
+        f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a> '
+        f"<span class='muted'>({escape(item['object_id'])})</span>"
+        f"<div class='muted'>Summary: {escape(item['summary_text'])}</div>"
+        f"<div class='muted'>Outgoing relations: {item['outgoing_relation_count']}</div>"
+        "<form method='post' action='/summaries/rebuild' class='link-row'>"
+        f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
+        "<button type='submit'>Rebuild Summary</button>"
+        "</form>"
+        "</li>"
+        for item in payload["items"]
+    ) or "<li class='muted'>No stale summaries detected.</li>"
+    return _layout(
+        "Stale Summaries",
+        (
+            "<h1>Stale Summaries</h1>"
+            "<form method='get' action='/summaries'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter stale summaries' /> "
+            "<button type='submit'>Filter</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} stale summary candidates.</p>"
+            f"{_render_review_context_card(payload['review_context'])}"
+            f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
+            "<section class='card'>"
+            "<h2>Batch Rebuild</h2>"
+            "<form id='summary-batch-form' method='post' action='/summaries/rebuild' class='link-row'>"
+            "<button type='submit'>Rebuild Selected</button>"
+            "</form>"
+            "</section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
@@ -767,6 +1033,15 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                         resolved_vault, limit=limit, offset=offset, query=q
                     )
                     self._write_html(_render_objects_index(payload))
+                    return
+                if path == "/api/search":
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_search_payload(resolved_vault, query=q))
+                    return
+                if path == "/search":
+                    q = query.get("q", [""])[0]
+                    payload = build_search_payload(resolved_vault, query=q)
+                    self._write_html(_render_search_page(payload))
                     return
                 if path == "/api/object":
                     object_id = self._required(query, "id")
@@ -813,10 +1088,25 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     payload = build_derivation_browser_payload(resolved_vault, query=q)
                     self._write_html(_render_derivations_page(payload))
                     return
+                if path == "/api/summaries":
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_stale_summary_browser_payload(resolved_vault, query=q))
+                    return
+                if path == "/summaries":
+                    q = query.get("q", [""])[0]
+                    payload = build_stale_summary_browser_payload(resolved_vault, query=q)
+                    self._write_html(_render_stale_summaries_page(payload))
+                    return
                 if path == "/note":
                     relative_path = self._required(query, "path")
                     _, markdown = _read_vault_note(resolved_vault, relative_path)
-                    self._write_html(_render_note_page(resolved_vault, relative_path, markdown))
+                    payload = build_note_page_payload(resolved_vault, note_path=relative_path)
+                    self._write_html(_render_note_page(resolved_vault, relative_path, markdown, payload))
+                    return
+                if path == "/asset":
+                    relative_path = self._required(query, "path")
+                    body, content_type = _read_vault_asset(resolved_vault, relative_path)
+                    self._write_bytes(body, content_type)
                     return
                 if path == "/api/contradictions":
                     status = query.get("status", [""])[0] or None
@@ -835,11 +1125,81 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             except ValueError as exc:
                 self.send_error(400, str(exc))
 
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            path = parsed.path
+            try:
+                form = self._read_form()
+                if path == "/api/contradictions/resolve":
+                    self._write_json(self._resolve_contradiction_action(form))
+                    return
+                if path == "/contradictions/resolve":
+                    self._resolve_contradiction_action(form)
+                    self._redirect("/contradictions?status=resolved")
+                    return
+                if path == "/api/summaries/rebuild":
+                    self._write_json(self._rebuild_summary_action(form))
+                    return
+                if path == "/summaries/rebuild":
+                    self._rebuild_summary_action(form)
+                    self._redirect("/summaries")
+                    return
+                self.send_error(404, "Not Found")
+            except ValueError as exc:
+                self.send_error(400, str(exc))
+
         def _required(self, query: dict[str, list[str]], key: str) -> str:
             values = query.get(key)
             if not values or not values[0]:
                 raise ValueError(f"missing required query param: {key}")
             return values[0]
+
+        def _read_form(self) -> dict[str, list[str]]:
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8")
+            return parse_qs(raw, keep_blank_values=True)
+
+        def _form_first(self, form: dict[str, list[str]], key: str) -> str:
+            values = form.get(key, [])
+            return values[0] if values else ""
+
+        def _form_all(self, form: dict[str, list[str]], key: str) -> list[str]:
+            return form.get(key, [])
+
+        def _resolve_contradiction_action(self, form: dict[str, list[str]]) -> dict[str, object]:
+            contradiction_ids = [item.strip() for item in self._form_all(form, "contradiction_id") if item.strip()]
+            status = self._form_first(form, "status").strip()
+            note = self._form_first(form, "note").strip()
+            if not contradiction_ids:
+                raise ValueError("missing contradiction_id")
+            if status not in {
+                "resolved_keep_positive",
+                "resolved_keep_negative",
+                "dismissed",
+                "needs_human",
+            }:
+                raise ValueError("invalid contradiction status")
+            payload = resolve_contradictions(
+                resolved_vault,
+                contradiction_ids,
+                status=status,
+                note=note,
+            )
+            if payload["resolved_count"] and self._form_first(form, "rebuild_summaries") == "1":
+                affected_object_ids = contradiction_object_ids(resolved_vault, payload["contradiction_ids"])
+                rebuild_payload = rebuild_compiled_summaries(resolved_vault, object_ids=affected_object_ids)
+                payload["rebuilt_summary_count"] = rebuild_payload["objects_rebuilt"]
+                payload["rebuilt_object_ids"] = rebuild_payload["object_ids"]
+            else:
+                payload["rebuilt_summary_count"] = 0
+                payload["rebuilt_object_ids"] = []
+            return payload
+
+        def _rebuild_summary_action(self, form: dict[str, list[str]]) -> dict[str, object]:
+            object_ids = [item.strip() for item in self._form_all(form, "object_id") if item.strip()]
+            if not object_ids:
+                raise ValueError("missing object_id")
+            return rebuild_compiled_summaries(resolved_vault, object_ids=object_ids)
 
         def _write_json(self, payload: dict) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -856,6 +1216,19 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _write_bytes(self, body: bytes, content_type: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _redirect(self, location: str) -> None:
+            self.send_response(303)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
     return ThreadingHTTPServer((host, port), Handler)
 

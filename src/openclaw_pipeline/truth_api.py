@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .runtime import VaultLayout, resolve_vault_dir
 
 MAX_PAGE_SIZE = 500
+_FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 
 
 def _db_path(vault_dir: Path | str) -> Path:
@@ -36,6 +40,228 @@ def _validate_page_args(*, limit: int, offset: int = 0) -> tuple[int, int]:
 
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _parse_frontmatter(markdown: str) -> dict[str, Any]:
+    fenced_match = _FENCED_FRONTMATTER_RE.match(markdown)
+    if fenced_match:
+        raw_frontmatter = fenced_match.group(1)
+        try:
+            parsed = yaml.safe_load(raw_frontmatter) or {}
+        except yaml.YAMLError:
+            parsed = {}
+        return parsed if isinstance(parsed, dict) else {}
+    if not markdown.startswith("---\n"):
+        return {}
+    end = markdown.find("\n---\n", 4)
+    if end == -1:
+        return {}
+    raw_frontmatter = markdown[4:end]
+    try:
+        parsed = yaml.safe_load(raw_frontmatter) or {}
+    except yaml.YAMLError:
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _read_note_frontmatter(vault_dir: Path | str, relative_path: str) -> dict[str, Any]:
+    resolved = resolve_vault_dir(vault_dir)
+    note_path = (resolved / relative_path).resolve()
+    try:
+        note_path.relative_to(resolved.resolve())
+    except ValueError:
+        return {}
+    if not note_path.is_file():
+        return {}
+    return _parse_frontmatter(note_path.read_text(encoding="utf-8"))
+
+
+def _is_moc_row(note_type: str, path: str) -> bool:
+    return note_type == "moc" or "/10-Knowledge/Atlas/" in path or Path(path).name.startswith("MOC")
+
+
+def _batch_object_rows(vault_dir: Path | str, object_ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not object_ids:
+        return {}
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    placeholders = ",".join("?" for _ in object_ids)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT object_id, object_kind, title, canonical_path, source_slug
+            FROM objects
+            WHERE object_id IN ({placeholders})
+            ORDER BY object_id
+            """,
+            tuple(object_ids),
+        ).fetchall()
+    return {
+        row[0]: {
+            "object_id": row[0],
+            "object_kind": row[1],
+            "title": row[2],
+            "canonical_path": _vault_relative_path(resolved_vault, row[3]),
+            "source_slug": row[4],
+        }
+        for row in rows
+    }
+
+
+def get_object_provenance_map(vault_dir: Path | str, object_ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not object_ids:
+        return {}
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    ordered_object_ids = list(dict.fromkeys(object_ids))
+    object_rows = _batch_object_rows(vault_dir, ordered_object_ids)
+    placeholders = ",".join("?" for _ in ordered_object_ids)
+    with sqlite3.connect(db_path) as conn:
+        mention_rows = conn.execute(
+            f"""
+            SELECT page_links.target_slug, pages_index.slug, pages_index.title, pages_index.note_type, pages_index.path
+            FROM page_links
+            JOIN pages_index ON pages_index.slug = page_links.source_slug
+            WHERE page_links.target_slug IN ({placeholders})
+              AND pages_index.slug != page_links.target_slug
+            ORDER BY page_links.target_slug, pages_index.slug
+            """,
+            tuple(ordered_object_ids),
+        ).fetchall()
+
+    provenance = {
+        object_id: {
+            "title": object_rows.get(object_id, {}).get("title", object_id),
+            "evergreen_path": object_rows.get(object_id, {}).get("canonical_path", ""),
+            "source_notes": [],
+            "mocs": [],
+        }
+        for object_id in ordered_object_ids
+    }
+    for target_slug, slug, title, note_type, path in mention_rows:
+        item = {
+            "slug": slug,
+            "title": title,
+            "note_type": note_type,
+            "path": _vault_relative_path(resolved_vault, path),
+        }
+        if _is_moc_row(note_type, path):
+            provenance[target_slug]["mocs"].append(item)
+        elif note_type != "evergreen":
+            provenance[target_slug]["source_notes"].append(item)
+    return provenance
+
+
+def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
+    normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
+    if not normalized_object_ids:
+        return {
+            "object_count": 0,
+            "source_note_count": 0,
+            "moc_count": 0,
+            "contradiction_count": 0,
+            "open_contradiction_count": 0,
+            "stale_summary_count": 0,
+            "latest_event_date": "",
+            "source_notes": [],
+            "mocs": [],
+            "stale_summary_object_ids": [],
+            "contradiction_object_ids": [],
+        }
+
+    provenance_map = get_object_provenance_map(vault_dir, normalized_object_ids)
+    source_notes: dict[str, dict[str, Any]] = {}
+    mocs: dict[str, dict[str, Any]] = {}
+    for provenance in provenance_map.values():
+        for note in provenance["source_notes"]:
+            source_notes.setdefault(note["slug"], note)
+        for moc in provenance["mocs"]:
+            mocs.setdefault(moc["slug"], moc)
+
+    db_path = _db_path(vault_dir)
+    placeholders = ",".join("?" for _ in normalized_object_ids)
+    with sqlite3.connect(db_path) as conn:
+        stale_rows = conn.execute(
+            f"""
+            SELECT objects.object_id, objects.title, compiled_summaries.summary_text,
+                   COALESCE(rel.outgoing_count, 0) AS outgoing_count
+            FROM objects
+            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+            LEFT JOIN (
+                SELECT source_object_id, COUNT(*) AS outgoing_count
+                FROM relations
+                GROUP BY source_object_id
+            ) AS rel ON rel.source_object_id = objects.object_id
+            WHERE objects.object_id IN ({placeholders})
+            ORDER BY objects.object_id
+            """,
+            tuple(normalized_object_ids),
+        ).fetchall()
+        event_row = conn.execute(
+            f"""
+            SELECT MAX(event_date)
+            FROM timeline_events
+            WHERE slug IN ({placeholders})
+            """,
+            tuple(normalized_object_ids),
+        ).fetchone()
+        contradiction_rows = conn.execute(
+            """
+            SELECT contradiction_id, positive_claim_ids_json, negative_claim_ids_json, status
+            FROM contradictions
+            ORDER BY contradiction_id
+            """
+        ).fetchall()
+
+    stale_summaries: list[dict[str, Any]] = []
+    for object_id, title, summary_text, outgoing_count in stale_rows:
+        summary = str(summary_text or "").strip()
+        if outgoing_count > 0:
+            continue
+        if len(summary) >= 40 and summary.lower() != str(title).strip().lower():
+            continue
+        stale_summaries.append(
+            {
+                "object_id": str(object_id),
+                "title": str(title),
+                "summary_text": summary,
+                "outgoing_relation_count": int(outgoing_count or 0),
+                "object_path": f"/object?id={object_id}",
+            }
+        )
+    stale_summary_object_ids = [item["object_id"] for item in stale_summaries]
+
+    contradiction_ids: list[str] = []
+    open_contradiction_ids: list[str] = []
+    contradiction_object_ids: set[str] = set()
+    object_id_set = set(normalized_object_ids)
+    for contradiction_id, positive_json, negative_json, status in contradiction_rows:
+        claim_ids = json.loads(positive_json) + json.loads(negative_json)
+        matched_object_ids = {
+            claim_id.split("::", 1)[0]
+            for claim_id in claim_ids
+            if claim_id.split("::", 1)[0] in object_id_set
+        }
+        if not matched_object_ids:
+            continue
+        contradiction_ids.append(str(contradiction_id))
+        contradiction_object_ids.update(matched_object_ids)
+        if status == "open":
+            open_contradiction_ids.append(str(contradiction_id))
+
+    return {
+        "object_count": len(normalized_object_ids),
+        "source_note_count": len(source_notes),
+        "moc_count": len(mocs),
+        "contradiction_count": len(contradiction_ids),
+        "open_contradiction_count": len(open_contradiction_ids),
+        "stale_summary_count": len(stale_summaries),
+        "latest_event_date": str(event_row[0] or ""),
+        "source_notes": list(source_notes.values()),
+        "mocs": list(mocs.values()),
+        "stale_summary_object_ids": stale_summary_object_ids,
+        "contradiction_object_ids": sorted(contradiction_object_ids),
+    }
 
 
 def list_objects(
@@ -82,6 +308,102 @@ def list_objects(
         }
         for row in rows
     ]
+
+
+def search_vault_surface(
+    vault_dir: Path | str,
+    *,
+    query: str,
+    object_limit: int = 25,
+    note_limit: int = 25,
+) -> dict[str, Any]:
+    normalized_query = query.strip()
+    object_limit, _ = _validate_page_args(limit=object_limit, offset=0)
+    note_limit, _ = _validate_page_args(limit=note_limit, offset=0)
+    if not normalized_query:
+        return {
+            "query": "",
+            "objects": [],
+            "notes": [],
+        }
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    escaped_query = _escape_like(normalized_query.lower())
+    with sqlite3.connect(db_path) as conn:
+        object_rows = conn.execute(
+            """
+            SELECT DISTINCT objects.object_id, objects.object_kind, objects.title, objects.canonical_path, objects.source_slug
+            FROM objects
+            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+            LEFT JOIN claims ON claims.object_id = objects.object_id
+            WHERE lower(objects.object_id) LIKE ? ESCAPE '\\'
+               OR lower(objects.title) LIKE ? ESCAPE '\\'
+               OR lower(objects.source_slug) LIKE ? ESCAPE '\\'
+               OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
+               OR lower(claims.claim_text) LIKE ? ESCAPE '\\'
+            ORDER BY objects.object_id
+            LIMIT ?
+            """,
+            (
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                object_limit,
+            ),
+        ).fetchall()
+        note_rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE lower(slug) LIKE ? ESCAPE '\\'
+               OR lower(title) LIKE ? ESCAPE '\\'
+               OR lower(path) LIKE ? ESCAPE '\\'
+               OR lower(body) LIKE ? ESCAPE '\\'
+            ORDER BY
+              CASE note_type
+                WHEN 'evergreen' THEN 0
+                WHEN 'deep_dive' THEN 1
+                WHEN 'moc' THEN 2
+                ELSE 3
+              END,
+              slug
+            LIMIT ?
+            """,
+            (
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                f"%{escaped_query}%",
+                note_limit,
+            ),
+        ).fetchall()
+
+    objects = [
+        {
+            "object_id": row[0],
+            "object_kind": row[1],
+            "title": row[2],
+            "canonical_path": _vault_relative_path(resolved_vault, row[3]),
+            "source_slug": row[4],
+        }
+        for row in object_rows
+    ]
+    notes = [
+        {
+            "slug": row[0],
+            "title": row[1],
+            "note_type": row[2],
+            "path": _vault_relative_path(resolved_vault, row[3]),
+        }
+        for row in note_rows
+    ]
+    return {
+        "query": normalized_query,
+        "objects": objects,
+        "notes": notes,
+    }
 
 
 def count_objects(vault_dir: Path | str, *, query: str | None = None) -> int:
@@ -272,7 +594,7 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             "note_type": note_type,
             "path": _vault_relative_path(resolved_vault, path),
         }
-        if note_type == "moc" or "/10-Knowledge/Atlas/" in path or Path(path).name.startswith("MOC"):
+        if _is_moc_row(note_type, path):
             mocs.append(item)
             continue
         if slug == object_id:
@@ -344,6 +666,130 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     }
 
 
+def _find_note_by_source(vault_dir: Path, *, source_url: str, exclude_path: str) -> dict[str, str] | None:
+    search_roots = [
+        vault_dir / "50-Inbox" / "03-Processed",
+        vault_dir / "50-Inbox" / "02-Processing",
+        vault_dir / "50-Inbox" / "01-Raw",
+    ]
+    resolved_exclude = str((vault_dir / exclude_path).resolve())
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for candidate in sorted(root.rglob("*.md")):
+            if str(candidate.resolve()) == resolved_exclude:
+                continue
+            frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+            if str(frontmatter.get("source", "")).strip() != source_url:
+                continue
+            title = str(frontmatter.get("title") or candidate.stem).strip()
+            return {
+                "title": title,
+                "path": str(candidate.resolve().relative_to(vault_dir.resolve())),
+            }
+    return None
+
+
+def _find_note_from_pipeline_log(vault_dir: Path, *, note_path: str) -> dict[str, str] | None:
+    log_path = VaultLayout.from_vault(vault_dir).logs_dir / "pipeline.jsonl"
+    if not log_path.exists():
+        return None
+    article_file: str | None = None
+    archived_path: str | None = None
+    target_absolute = str((vault_dir / note_path).resolve())
+    for raw_line in log_path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            event = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("event_type") == "article_processed":
+            output = str(event.get("output", "")).strip()
+            if output == target_absolute or output.endswith(note_path):
+                article_file = str(event.get("file", "")).strip()
+                continue
+        if event.get("event_type") == "source_archived_to_processed":
+            archived = str(event.get("archived", "")).strip()
+            source = str(event.get("source", "")).strip()
+            if article_file and (archived.endswith(article_file) or source.endswith(article_file)):
+                archived_path = archived
+    if not archived_path:
+        return None
+    candidate = Path(archived_path)
+    if not candidate.is_absolute():
+        candidate = (vault_dir / archived_path).resolve()
+    if not candidate.is_file():
+        return None
+    frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+    return {
+        "title": str(frontmatter.get("title") or candidate.stem).strip(),
+        "path": str(candidate.resolve().relative_to(vault_dir.resolve())),
+    }
+
+
+def _find_derived_notes_from_pipeline_log(vault_dir: Path, *, note_path: str) -> list[dict[str, str]]:
+    log_path = VaultLayout.from_vault(vault_dir).logs_dir / "pipeline.jsonl"
+    if not log_path.exists():
+        return []
+    target_name = Path(note_path).name
+    derived: list[dict[str, str]] = []
+    seen_paths: set[str] = set()
+    for raw_line in log_path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            event = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("event_type") != "article_processed":
+            continue
+        file_name = str(event.get("file", "")).strip()
+        if file_name != target_name:
+            continue
+        output = str(event.get("output", "")).strip()
+        if not output:
+            continue
+        candidate = Path(output)
+        if not candidate.is_absolute():
+            candidate = (vault_dir / output).resolve()
+        if not candidate.is_file():
+            continue
+        relative_path = str(candidate.resolve().relative_to(vault_dir.resolve()))
+        if relative_path in seen_paths:
+            continue
+        seen_paths.add(relative_path)
+        frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+        derived.append(
+            {
+                "title": str(frontmatter.get("title") or candidate.stem).strip(),
+                "path": relative_path,
+            }
+        )
+    return derived
+
+
+def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    frontmatter = _read_note_frontmatter(resolved_vault, note_path)
+    source_url = str(frontmatter.get("source", "")).strip()
+    original_source_note = None
+    if source_url:
+        original_source_note = _find_note_by_source(
+            resolved_vault,
+            source_url=source_url,
+            exclude_path=note_path,
+        )
+    if original_source_note is None:
+        original_source_note = _find_note_from_pipeline_log(resolved_vault, note_path=note_path)
+    derived_deep_dives = _find_derived_notes_from_pipeline_log(resolved_vault, note_path=note_path)
+    return {
+        "note_path": note_path,
+        "original_source_note": original_source_note,
+        "derived_deep_dives": derived_deep_dives,
+    }
+
+
 def list_contradictions(
     vault_dir: Path | str,
     *,
@@ -361,8 +807,12 @@ def list_contradictions(
     params: list[Any] = []
     where_clauses: list[str] = []
     if status:
-        where_clauses.append("status = ?")
-        params.append(status)
+        if status == "resolved":
+            where_clauses.append("status != ?")
+            params.append("open")
+        else:
+            where_clauses.append("status = ?")
+            params.append(status)
     if normalized_query:
         where_clauses.append("lower(subject_key) LIKE ? ESCAPE '\\'")
         params.append(f"%{normalized_query}%")
@@ -490,20 +940,147 @@ def list_deep_dive_derivations(
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    items = _list_surface_groups(
-        vault_dir,
-        note_type="deep_dive",
-        query=query,
-        limit=limit,
-        object_list_key="derived_objects",
-    )
-    return [
-        {
-            "slug": item["slug"],
-            "title": item["title"],
-            "note_type": item["note_type"],
-            "path": item["path"],
-            "derived_objects": item["derived_objects"],
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_query = (query or "").strip().lower()
+
+    with sqlite3.connect(db_path) as conn:
+        deep_dive_rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE note_type = 'deep_dive'
+            ORDER BY slug
+            """
+        ).fetchall()
+        object_rows = conn.execute(
+            """
+            SELECT object_id, title
+            FROM objects
+            ORDER BY object_id
+            """
+        ).fetchall()
+        audit_rows = conn.execute(
+            """
+            SELECT payload_json
+            FROM audit_events
+            WHERE event_type = 'evergreen_auto_promoted'
+            """
+        ).fetchall()
+
+    object_titles = {row[0]: row[1] for row in object_rows}
+    grouped_promotions: dict[str, dict[str, dict[str, str]]] = {}
+    for (payload_json,) in audit_rows:
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError:
+            continue
+        source_name = str(payload.get("source") or "").strip()
+        object_id = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
+        if not source_name or not object_id:
+            continue
+        title = object_titles.get(object_id, object_id)
+        grouped_promotions.setdefault(source_name, {})[object_id] = {
+            "object_id": object_id,
+            "title": title,
         }
-        for item in items
-    ]
+
+    items: list[dict[str, Any]] = []
+    for slug, title, note_type, path in deep_dive_rows:
+        relative_path = _vault_relative_path(resolved_vault, path)
+        source_name = Path(relative_path).name
+        derived_objects = list(grouped_promotions.get(source_name, {}).values())
+        if normalized_query:
+            haystacks = [
+                slug.lower(),
+                title.lower(),
+                relative_path.lower(),
+                *(
+                    value.lower()
+                    for item in derived_objects
+                    for value in (item["object_id"], item["title"])
+                ),
+            ]
+            if not any(normalized_query in haystack for haystack in haystacks):
+                continue
+        items.append(
+            {
+                "slug": slug,
+                "title": title,
+                "note_type": note_type,
+                "path": relative_path,
+                "derived_objects": sorted(derived_objects, key=lambda item: item["object_id"]),
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+def list_stale_summaries(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    object_ids: list[str] | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    sql = """
+        SELECT objects.object_id, objects.title, compiled_summaries.summary_text,
+               COALESCE(rel.outgoing_count, 0) AS outgoing_count
+        FROM objects
+        LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+        LEFT JOIN (
+            SELECT source_object_id, COUNT(*) AS outgoing_count
+            FROM relations
+            GROUP BY source_object_id
+        ) AS rel ON rel.source_object_id = objects.object_id
+    """
+    params: list[Any] = []
+    where_clauses: list[str] = []
+    if object_ids:
+        normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
+        if not normalized_object_ids:
+            return []
+        placeholders = ",".join("?" for _ in normalized_object_ids)
+        where_clauses.append(f"objects.object_id IN ({placeholders})")
+        params.extend(normalized_object_ids)
+    if normalized_query:
+        where_clauses.append(
+            """
+            (
+                lower(objects.object_id) LIKE ? ESCAPE '\\'
+                OR lower(objects.title) LIKE ? ESCAPE '\\'
+                OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
+            )
+            """.strip()
+        )
+        params.extend([f"%{normalized_query}%"] * 3)
+    if where_clauses:
+        sql += " WHERE " + " AND ".join(where_clauses)
+    sql += " ORDER BY objects.object_id LIMIT ?"
+    params.append(limit)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    items: list[dict[str, Any]] = []
+    for object_id, title, summary_text, outgoing_count in rows:
+        summary = str(summary_text or "").strip()
+        if outgoing_count > 0:
+            continue
+        if len(summary) >= 40 and summary.lower() != str(title).strip().lower():
+            continue
+        items.append(
+            {
+                "object_id": str(object_id),
+                "title": str(title),
+                "summary_text": summary,
+                "outgoing_relation_count": int(outgoing_count or 0),
+                "object_path": f"/object?id={object_id}",
+            }
+        )
+    return items
