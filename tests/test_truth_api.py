@@ -163,6 +163,46 @@ def test_truth_api_filters_objects_by_query(temp_vault):
     assert [item["object_id"] for item in objects] == ["target-note"]
 
 
+def test_truth_api_escapes_like_wildcards_in_object_queries(temp_vault):
+    from openclaw_pipeline.truth_api import list_objects
+
+    percent = temp_vault / "10-Knowledge" / "Evergreen" / "Percent.md"
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    percent.write_text(
+        """---
+note_id: percent%note
+title: Percent % Note
+type: evergreen
+date: 2026-04-13
+---
+
+# Percent % Note
+
+Literal percent id.
+""",
+        encoding="utf-8",
+    )
+    alpha.write_text(
+        """---
+note_id: alpha-note
+title: Alpha Note
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha Note
+
+Regular note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    objects = list_objects(temp_vault, query="%")
+
+    assert [item["title"] for item in objects] == ["Percent % Note"]
+
+
 def test_truth_api_matches_contradictions_by_exact_object_id_prefix(temp_vault):
     from openclaw_pipeline.truth_api import get_object_detail
 

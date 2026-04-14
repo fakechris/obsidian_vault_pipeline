@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..runtime import VaultLayout, resolve_vault_dir
-from ..truth_api import get_object_detail, get_topic_neighborhood, list_contradictions, list_objects
+from ..truth_api import count_objects, get_object_detail, get_topic_neighborhood, list_contradictions, list_objects
 
 
 def _db_path(vault_dir: Path | str) -> Path:
@@ -81,36 +81,44 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
     }
 
 
-def build_event_dossier_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def build_event_dossier_payload(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
     db_path = _db_path(vault_dir)
-    normalized_query = query.strip().lower() if query else ""
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
     with sqlite3.connect(db_path) as conn:
+        sql = """
+            SELECT timeline_events.event_date, timeline_events.event_type, objects.object_id, objects.title, compiled_summaries.summary_text
+            FROM timeline_events
+            JOIN objects ON objects.object_id = timeline_events.slug
+            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+        """
+        params: list[Any] = []
         if normalized_query:
-            rows = conn.execute(
-                """
-                SELECT timeline_events.event_date, timeline_events.event_type, objects.object_id, objects.title, compiled_summaries.summary_text
-                FROM timeline_events
-                JOIN objects ON objects.object_id = timeline_events.slug
-                LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
-                WHERE lower(objects.object_id) LIKE ? OR lower(objects.title) LIKE ? OR lower(compiled_summaries.summary_text) LIKE ?
-                ORDER BY timeline_events.event_date, objects.object_id
-                """,
-                (
+            sql += """
+                WHERE lower(objects.object_id) LIKE ? ESCAPE '\\'
+                   OR lower(objects.title) LIKE ? ESCAPE '\\'
+                   OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
+            """
+            params.extend(
+                [
                     f"%{normalized_query}%",
                     f"%{normalized_query}%",
                     f"%{normalized_query}%",
-                ),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT timeline_events.event_date, timeline_events.event_type, objects.object_id, objects.title, compiled_summaries.summary_text
-                FROM timeline_events
-                JOIN objects ON objects.object_id = timeline_events.slug
-                LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
-                ORDER BY timeline_events.event_date, objects.object_id
-                """
-            ).fetchall()
+                ]
+            )
+        sql += " ORDER BY timeline_events.event_date, objects.object_id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = conn.execute(sql, tuple(params)).fetchall()
 
     events = [
         {
@@ -123,10 +131,10 @@ def build_event_dossier_payload(vault_dir: Path | str, *, query: str | None = No
         for row in rows
     ]
     dates = sorted({event["event_date"] for event in events})
-    date_sections = [
-        {"date": date, "events": [event for event in events if event["event_date"] == date]}
-        for date in dates
-    ]
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        grouped.setdefault(event["event_date"], []).append(event)
+    date_sections = [{"date": date, "events": grouped[date]} for date in dates]
     return {
         "screen": "event/dossier",
         "events": events,
@@ -171,11 +179,11 @@ def build_contradiction_browser_payload(
 def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
     objects = build_objects_index_payload(vault_dir, limit=12, offset=0)
     contradictions = build_contradiction_browser_payload(vault_dir)
-    events = build_event_dossier_payload(vault_dir)
+    events = build_event_dossier_payload(vault_dir, limit=8)
     return {
         "screen": "truth/dashboard",
         "objects": {
-            "count": objects["count"],
+            "count": objects["total_count"],
             "items": objects["items"],
         },
         "contradictions": {
@@ -199,10 +207,12 @@ def build_objects_index_payload(
     query: str | None = None,
 ) -> dict[str, Any]:
     items = list_objects(vault_dir, limit=limit, offset=offset, query=query)
+    total_count = count_objects(vault_dir, query=query)
     return {
         "screen": "objects/index",
         "items": items,
         "count": len(items),
+        "total_count": total_count,
         "limit": limit,
         "offset": offset,
         "query": query or "",

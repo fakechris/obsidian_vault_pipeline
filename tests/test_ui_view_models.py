@@ -175,6 +175,34 @@ def test_build_truth_dashboard_payload(temp_vault):
     assert payload["objects"]["items"][0]["object_id"] == "alpha"
 
 
+def test_build_truth_dashboard_payload_uses_total_object_count(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
+
+    _seed_truth_store(temp_vault)
+    for index in range(20):
+        extra = temp_vault / "10-Knowledge" / "Evergreen" / f"Extra-{index}.md"
+        extra.write_text(
+            f"""---
+note_id: extra-{index}
+title: Extra {index}
+type: evergreen
+date: 2026-04-13
+---
+
+# Extra {index}
+
+Filler note.
+""",
+            encoding="utf-8",
+        )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_truth_dashboard_payload(temp_vault)
+
+    assert payload["objects"]["count"] == 23
+    assert len(payload["objects"]["items"]) == 12
+
+
 def test_build_event_dossier_payload_filters_by_query(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 
@@ -184,6 +212,17 @@ def test_build_event_dossier_payload_filters_by_query(temp_vault):
 
     assert payload["event_count"] == 1
     assert [item["object_id"] for item in payload["events"]] == ["beta"]
+
+
+def test_build_event_dossier_payload_applies_limit_before_materializing(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault, limit=2)
+
+    assert payload["event_count"] == 2
+    assert len(payload["events"]) == 2
 
 
 def test_build_object_page_payload_handles_missing_summary(temp_vault):
