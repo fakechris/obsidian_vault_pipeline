@@ -174,6 +174,35 @@ date: 2026-04-13
 def test_ui_note_page_renders_markdown_note(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    beta = temp_vault / "10-Knowledge" / "Evergreen" / "Beta.md"
+    beta.write_text(
+        """---
+note_id: beta
+title: Beta
+type: evergreen
+date: 2026-04-13
+---
+
+# Beta
+""",
+        encoding="utf-8",
+    )
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     note.write_text(
         """---
@@ -189,6 +218,21 @@ Alpha supports local-first execution.
 
 - First point
 - Second point
+
+## 关联概念
+
+[[beta]]
+
+📚 来源
+[[Source Deep Dive_深度解读]]
+
+| Name | Value |
+| --- | --- |
+| mode | local-first |
+
+```text
+raw block
+```
 """,
         encoding="utf-8",
     )
@@ -207,8 +251,60 @@ Alpha supports local-first execution.
 
     assert status == 200
     assert "Markdown Note" in body
+    assert "Frontmatter" in body
+    assert "published" not in body
     assert "Alpha supports local-first execution." in body
     assert "<li>First point</li>" in body
+    assert '/object?id=beta' in body
+    assert f'/note?path={quote("20-Areas/Tools/Topics/2026-04/Source Deep Dive_深度解读.md", safe="")}' in body
+    assert "<table>" in body
+    assert "raw block" in body
+    assert "language-text" in body
+
+
+def test_ui_note_page_formats_fenced_yaml_frontmatter(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    note = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Fenced Source_深度解读.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        """```yaml
+---
+title: "Fenced Source"
+source: "https://example.com/post"
+author: "@author"
+date: "2026-01-28"
+type: "tutorial"
+tags: ["AI-Agent", "workflow"]
+status: "published"
+---
+```
+
+## Summary
+
+Body paragraph.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, f"/note?path={quote('20-Areas/AI-Research/Topics/2026-04/Fenced Source_深度解读.md', safe='')}")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Frontmatter" in body
+    assert "https://example.com/post" in body
+    assert "published" in body
+    assert "```yaml" not in body
+    assert "Body paragraph." in body
 
 
 def test_ui_root_dashboard_renders_db_summary(temp_vault):

@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
+import re
 import sys
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from ..runtime import resolve_vault_dir
+import yaml
+from markdown_it import MarkdownIt
+
+from ..identity import canonicalize_note_id
+from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import (
     build_atlas_browser_payload,
     build_contradiction_browser_payload,
@@ -19,6 +25,9 @@ from ..ui.view_models import (
     build_truth_dashboard_payload,
     build_topic_overview_payload,
 )
+
+_MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
+_FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 
 
 def _layout(title: str, body: str) -> str:
@@ -113,6 +122,84 @@ def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
     return candidate, candidate.read_text(encoding="utf-8")
 
 
+def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | None:
+    db_path = VaultLayout.from_vault(vault_dir).knowledge_db
+    if not db_path.exists():
+        return None
+
+    raw_target = target.split("|", 1)[0].split("#", 1)[0].strip()
+    if not raw_target:
+        return None
+
+    exact_path = raw_target
+    stem = Path(raw_target).stem
+    normalized = canonicalize_note_id(raw_target)
+    normalized_stem = canonicalize_note_id(stem)
+    suffixes = [f"%/{stem.lower()}.md"]
+    if raw_target.lower().endswith(".md"):
+        suffixes.append(f"%/{raw_target.lower()}")
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE lower(slug) = ?
+               OR lower(title) = ?
+               OR lower(path) = ?
+               OR lower(path) LIKE ?
+               OR lower(path) LIKE ?
+            LIMIT 25
+            """,
+            (
+                normalized,
+                raw_target.lower(),
+                exact_path.lower(),
+                suffixes[0],
+                suffixes[-1],
+            ),
+        ).fetchall()
+
+    def rank(row: tuple[str, str, str, str]) -> tuple[int, str]:
+        slug, title, _note_type, path = row
+        path_lower = path.lower()
+        title_lower = title.lower()
+        if slug == normalized:
+            return (0, path)
+        if normalized_stem and slug == normalized_stem:
+            return (1, path)
+        if title_lower == raw_target.lower():
+            return (2, path)
+        if path_lower.endswith(f"/{raw_target.lower()}"):
+            return (3, path)
+        if path_lower.endswith(f"/{stem.lower()}.md"):
+            return (4, path)
+        return (10, path)
+
+    if not rows:
+        for candidate in vault_dir.rglob("*.md"):
+            if candidate.stem.lower() != stem.lower():
+                continue
+            relative_path = str(candidate.resolve().relative_to(vault_dir.resolve()))
+            if "10-Knowledge/Evergreen/" in relative_path:
+                return (f"/object?id={quote(canonicalize_note_id(stem), safe='')}", canonicalize_note_id(stem))
+            return (_note_href(relative_path), relative_path)
+        return None
+
+    slug, _title, note_type, path = sorted(rows, key=rank)[0]
+    relative_path = path
+    candidate = Path(path)
+    if candidate.is_absolute():
+        try:
+            relative_path = str(candidate.resolve().relative_to(vault_dir.resolve()))
+        except ValueError:
+            relative_path = path
+
+    if note_type == "evergreen":
+        return (f"/object?id={quote(slug, safe='')}", slug)
+    return (_note_href(relative_path), relative_path)
+
+
 def _strip_frontmatter(markdown: str) -> str:
     if not markdown.startswith("---\n"):
         return markdown
@@ -122,55 +209,89 @@ def _strip_frontmatter(markdown: str) -> str:
     return markdown[end + 5 :]
 
 
-def _render_markdown_note(markdown: str) -> str:
-    body = _strip_frontmatter(markdown).strip()
-    if not body:
-        return "<p class='muted'>Empty note.</p>"
+def _parse_frontmatter(markdown: str) -> tuple[dict[str, object], str]:
+    fenced_match = _FENCED_FRONTMATTER_RE.match(markdown)
+    if fenced_match:
+        raw_frontmatter = fenced_match.group(1)
+        body = markdown[fenced_match.end() :]
+        try:
+            parsed = yaml.safe_load(raw_frontmatter) or {}
+        except yaml.YAMLError:
+            parsed = {}
+        return parsed if isinstance(parsed, dict) else {}, body
+    if not markdown.startswith("---\n"):
+        return {}, markdown
+    end = markdown.find("\n---\n", 4)
+    if end == -1:
+        return {}, markdown
+    raw_frontmatter = markdown[4:end]
+    body = markdown[end + 5 :]
+    try:
+        parsed = yaml.safe_load(raw_frontmatter) or {}
+    except yaml.YAMLError:
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}, body
 
-    chunks: list[str] = []
-    paragraph_lines: list[str] = []
-    list_items: list[str] = []
 
-    def flush_paragraph() -> None:
-        nonlocal paragraph_lines
-        if paragraph_lines:
-            text = " ".join(line.strip() for line in paragraph_lines if line.strip())
-            chunks.append(f"<p>{escape(text)}</p>")
-            paragraph_lines = []
+def _render_frontmatter(frontmatter: dict[str, object]) -> str:
+    if not frontmatter:
+        return ""
+    rows = "".join(
+        "<tr>"
+        f"<th>{escape(str(key))}</th>"
+        f"<td>{escape(json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else str(value))}</td>"
+        "</tr>"
+        for key, value in frontmatter.items()
+    )
+    return (
+        "<section class='card'>"
+        "<h2>Frontmatter</h2>"
+        "<table><tbody>"
+        f"{rows}"
+        "</tbody></table>"
+        "</section>"
+    )
 
-    def flush_list() -> None:
-        nonlocal list_items
-        if list_items:
-            chunks.append("<ul>" + "".join(f"<li>{escape(item)}</li>" for item in list_items) + "</ul>")
-            list_items = []
 
-    for raw_line in body.splitlines():
-        line = raw_line.rstrip()
-        stripped = line.strip()
-        if not stripped:
-            flush_paragraph()
-            flush_list()
+def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str) -> str:
+    def replace_match(match: re.Match[str]) -> str:
+        raw_inner = match.group(1)
+        target_part, _, label_part = raw_inner.partition("|")
+        label = label_part.strip() or target_part.split("#", 1)[0].strip()
+        resolved = _lookup_wikilink_target(vault_dir, target_part)
+        if not resolved:
+            return match.group(0)
+        href, _resolved_target = resolved
+        safe_label = label.replace("[", "\\[").replace("]", "\\]")
+        return f"[{safe_label}]({href})"
+
+    output_lines: list[str] = []
+    in_fence = False
+    for line in markdown.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            output_lines.append(line)
             continue
-        if stripped.startswith("#"):
-            flush_paragraph()
-            flush_list()
-            level = min(len(stripped) - len(stripped.lstrip("#")), 6)
-            heading = stripped[level:].strip()
-            chunks.append(f"<h{level}>{escape(heading)}</h{level}>")
+        if in_fence:
+            output_lines.append(line)
             continue
-        if stripped.startswith("- "):
-            flush_paragraph()
-            list_items.append(stripped[2:].strip())
-            continue
-        flush_list()
-        paragraph_lines.append(stripped)
-
-    flush_paragraph()
-    flush_list()
-    return "".join(chunks)
+        output_lines.append(re.sub(r"\[\[([^\]]+)\]\]", replace_match, line))
+    return "\n".join(output_lines)
 
 
-def _render_note_page(relative_path: str, markdown: str) -> str:
+def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
+    frontmatter, body = _parse_frontmatter(markdown)
+    rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, body).strip()
+    if not rendered_body:
+        html_body = "<p class='muted'>Empty note.</p>"
+    else:
+        html_body = _MARKDOWN_RENDERER.render(rendered_body)
+    return _render_frontmatter(frontmatter), html_body
+
+
+def _render_note_page(vault_dir: Path, relative_path: str, markdown: str) -> str:
+    frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown)
     return _layout(
         f"Markdown Note: {relative_path}",
         (
@@ -178,7 +299,8 @@ def _render_note_page(relative_path: str, markdown: str) -> str:
             "<h1>Markdown Note</h1>"
             f"<p class='muted'>{escape(relative_path)}</p>"
             "</section>"
-            f"<section class='card'>{_render_markdown_note(markdown)}</section>"
+            f"{frontmatter_html}"
+            f"<section class='card'>{note_html}</section>"
         ),
     )
 
@@ -557,7 +679,7 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/note":
                     relative_path = self._required(query, "path")
                     _, markdown = _read_vault_note(resolved_vault, relative_path)
-                    self._write_html(_render_note_page(relative_path, markdown))
+                    self._write_html(_render_note_page(resolved_vault, relative_path, markdown))
                     return
                 if path == "/api/contradictions":
                     status = query.get("status", [""])[0] or None
