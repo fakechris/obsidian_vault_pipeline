@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
 import re
 import sqlite3
@@ -12,6 +13,7 @@ from .runtime import VaultLayout, resolve_vault_dir
 
 MAX_PAGE_SIZE = 500
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
+_REVIEW_AUDIT_LOG_NAME = "review-actions"
 
 
 def _db_path(vault_dir: Path | str) -> Path:
@@ -74,6 +76,51 @@ def _read_note_frontmatter(vault_dir: Path | str, relative_path: str) -> dict[st
     if not note_path.is_file():
         return {}
     return _parse_frontmatter(note_path.read_text(encoding="utf-8"))
+
+
+def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def record_review_action(
+    vault_dir: Path | str,
+    *,
+    event_type: str,
+    payload: dict[str, Any],
+    slug: str = "",
+    session_id: str = "ovp-ui",
+) -> dict[str, Any]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    event = {
+        "timestamp": timestamp,
+        "session_id": session_id,
+        "event_type": event_type,
+        "slug": slug,
+        **payload,
+    }
+    _append_jsonl(layout.logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl", event)
+    if layout.knowledge_db.exists():
+        with sqlite3.connect(layout.knowledge_db) as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _REVIEW_AUDIT_LOG_NAME,
+                    event_type,
+                    slug,
+                    session_id,
+                    timestamp,
+                    json.dumps(event, ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+    return event
 
 
 def _is_moc_row(note_type: str, path: str) -> bool:
@@ -167,6 +214,7 @@ def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str
             "mocs": [],
             "stale_summary_object_ids": [],
             "contradiction_object_ids": [],
+            "recent_review_actions": [],
         }
 
     provenance_map = get_object_provenance_map(vault_dir, normalized_object_ids)
@@ -261,7 +309,66 @@ def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str
         "mocs": list(mocs.values()),
         "stale_summary_object_ids": stale_summary_object_ids,
         "contradiction_object_ids": sorted(contradiction_object_ids),
+        "recent_review_actions": list_review_actions(vault_dir, object_ids=normalized_object_ids, limit=5),
     }
+
+
+def _claim_details_map(vault_dir: Path | str, claim_ids: list[str]) -> dict[str, dict[str, Any]]:
+    normalized_claim_ids = list(dict.fromkeys(claim_id for claim_id in claim_ids if claim_id))
+    if not normalized_claim_ids:
+        return {}
+    db_path = _db_path(vault_dir)
+    placeholders = ",".join("?" for _ in normalized_claim_ids)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT claims.claim_id, claims.object_id, objects.title, claims.claim_kind, claims.claim_text, claims.confidence
+            FROM claims
+            JOIN objects ON objects.object_id = claims.object_id
+            WHERE claims.claim_id IN ({placeholders})
+            ORDER BY claims.claim_id
+            """,
+            tuple(normalized_claim_ids),
+        ).fetchall()
+    return {
+        row[0]: {
+            "claim_id": row[0],
+            "object_id": row[1],
+            "object_title": row[2],
+            "claim_kind": row[3],
+            "claim_text": row[4],
+            "confidence": row[5],
+        }
+        for row in rows
+    }
+
+
+def _claim_evidence_map(vault_dir: Path | str, claim_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    normalized_claim_ids = list(dict.fromkeys(claim_id for claim_id in claim_ids if claim_id))
+    if not normalized_claim_ids:
+        return {}
+    db_path = _db_path(vault_dir)
+    placeholders = ",".join("?" for _ in normalized_claim_ids)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT claim_id, source_slug, evidence_kind, quote_text
+            FROM claim_evidence
+            WHERE claim_id IN ({placeholders})
+            ORDER BY claim_id, source_slug, evidence_kind
+            """,
+            tuple(normalized_claim_ids),
+        ).fetchall()
+    evidence_map: dict[str, list[dict[str, Any]]] = {}
+    for claim_id, source_slug, evidence_kind, quote_text in rows:
+        evidence_map.setdefault(claim_id, []).append(
+            {
+                "source_slug": source_slug,
+                "evidence_kind": evidence_kind,
+                "quote_text": quote_text or "",
+            }
+        )
+    return evidence_map
 
 
 def list_objects(
@@ -769,6 +876,67 @@ def _find_derived_notes_from_pipeline_log(vault_dir: Path, *, note_path: str) ->
     return derived
 
 
+def list_review_actions(
+    vault_dir: Path | str,
+    *,
+    object_ids: list[str] | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    normalized_object_ids = set(object_id for object_id in (object_ids or []) if object_id)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT source_log, event_type, slug, session_id, timestamp, payload_json
+            FROM audit_events
+            WHERE source_log = ?
+            ORDER BY timestamp DESC
+            LIMIT 200
+            """,
+            (_REVIEW_AUDIT_LOG_NAME,),
+        ).fetchall()
+    items: list[dict[str, Any]] = []
+    for source_log, event_type, slug, session_id, timestamp, payload_json in rows:
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError:
+            payload = {}
+        action_object_ids = [
+            str(value)
+            for value in payload.get("object_ids", [])
+            if isinstance(value, str) and value
+        ]
+        if normalized_object_ids and not normalized_object_ids.intersection(action_object_ids):
+            continue
+        items.append(
+            {
+                "source_log": source_log,
+                "event_type": event_type,
+                "slug": slug,
+                "session_id": session_id,
+                "timestamp": timestamp,
+                "object_ids": action_object_ids,
+                "contradiction_ids": [
+                    str(value)
+                    for value in payload.get("contradiction_ids", [])
+                    if isinstance(value, str) and value
+                ],
+                "status": str(payload.get("status") or ""),
+                "note": str(payload.get("note") or ""),
+                "rebuilt_object_ids": [
+                    str(value)
+                    for value in payload.get("rebuilt_object_ids", [])
+                    if isinstance(value, str) and value
+                ],
+                "objects_rebuilt": int(payload.get("objects_rebuilt") or 0),
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
 def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
     resolved_vault = resolve_vault_dir(vault_dir)
     frontmatter = _read_note_frontmatter(resolved_vault, note_path)
@@ -824,7 +992,7 @@ def list_contradictions(
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(query, tuple(params)).fetchall()
 
-    return [
+    items = [
         {
             "contradiction_id": row[0],
             "subject_key": row[1],
@@ -836,6 +1004,47 @@ def list_contradictions(
         }
         for row in rows
     ]
+    claim_map = _claim_details_map(
+        vault_dir,
+        [
+            claim_id
+            for item in items
+            for claim_id in (item["positive_claim_ids"] + item["negative_claim_ids"])
+        ],
+    )
+    evidence_map = _claim_evidence_map(
+        vault_dir,
+        [
+            claim_id
+            for item in items
+            for claim_id in (item["positive_claim_ids"] + item["negative_claim_ids"])
+        ],
+    )
+    for item in items:
+        object_ids = list(
+            dict.fromkeys(
+                claim_id.split("::", 1)[0]
+                for claim_id in (item["positive_claim_ids"] + item["negative_claim_ids"])
+            )
+        )
+        item["positive_claims"] = [
+            {
+                **claim_map[claim_id],
+                "evidence": evidence_map.get(claim_id, []),
+            }
+            for claim_id in item["positive_claim_ids"]
+            if claim_id in claim_map
+        ]
+        item["negative_claims"] = [
+            {
+                **claim_map[claim_id],
+                "evidence": evidence_map.get(claim_id, []),
+            }
+            for claim_id in item["negative_claim_ids"]
+            if claim_id in claim_map
+        ]
+        item["review_history"] = list_review_actions(vault_dir, object_ids=object_ids, limit=5)
+    return items
 
 
 def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int = 1) -> dict[str, Any]:
@@ -1066,6 +1275,14 @@ def list_stale_summaries(
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
+        latest_event_rows = conn.execute(
+            """
+            SELECT slug, MAX(event_date)
+            FROM timeline_events
+            GROUP BY slug
+            """
+        ).fetchall()
+    latest_event_map = {str(slug): str(event_date or "") for slug, event_date in latest_event_rows}
 
     items: list[dict[str, Any]] = []
     for object_id, title, summary_text, outgoing_count in rows:
@@ -1074,6 +1291,17 @@ def list_stale_summaries(
             continue
         if len(summary) >= 40 and summary.lower() != str(title).strip().lower():
             continue
+        reason_codes: list[str] = ["no_outgoing_relations"]
+        reason_texts: list[str] = ["No outgoing relations currently support this summary."]
+        if not summary:
+            reason_codes.append("summary_missing")
+            reason_texts.append("Compiled summary is empty.")
+        elif len(summary) < 40:
+            reason_codes.append("summary_too_short")
+            reason_texts.append("Compiled summary is too short to stand on its own.")
+        if summary and summary.lower() == str(title).strip().lower():
+            reason_codes.append("summary_repeats_title")
+            reason_texts.append("Compiled summary repeats the title instead of adding substance.")
         items.append(
             {
                 "object_id": str(object_id),
@@ -1081,6 +1309,10 @@ def list_stale_summaries(
                 "summary_text": summary,
                 "outgoing_relation_count": int(outgoing_count or 0),
                 "object_path": f"/object?id={object_id}",
+                "reason_codes": reason_codes,
+                "reason_texts": reason_texts,
+                "review_history": list_review_actions(vault_dir, object_ids=[str(object_id)], limit=5),
+                "latest_event_date": latest_event_map.get(str(object_id), ""),
             }
         )
     return items

@@ -13,6 +13,7 @@ from ..truth_api import (
     get_object_provenance_map,
     get_review_context,
     get_topic_neighborhood,
+    list_review_actions,
     list_atlas_memberships,
     list_contradictions,
     list_deep_dive_derivations,
@@ -66,6 +67,11 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
         },
         "provenance": detail["provenance"],
         "review_context": review_context,
+        "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8),
+        "stale_summary_details": list_stale_summaries(vault_dir, object_ids=[object_id], limit=10),
+        "open_contradiction_ids": [
+            item["contradiction_id"] for item in detail["contradictions"] if item["status"] == "open"
+        ],
         "links": {
             "topic_path": f"/topic?id={object_id}",
             "events_path": f"/events?q={object_id}",
@@ -84,10 +90,19 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
 def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     neighborhood = get_topic_neighborhood(vault_dir, object_id)
     detail = get_object_detail(vault_dir, object_id)
+    scoped_object_ids = [object_id, *[item["object_id"] for item in neighborhood["neighbors"]]]
     review_context = get_review_context(
         vault_dir,
-        [object_id, *[item["object_id"] for item in neighborhood["neighbors"]]],
+        scoped_object_ids,
     )
+    scoped_stale_summaries = list_stale_summaries(vault_dir, object_ids=scoped_object_ids, limit=50)
+    scoped_contradictions = [
+        item
+        for item in list_contradictions(vault_dir, limit=100)
+        if set(item["positive_claim_ids"] + item["negative_claim_ids"])
+        and any(claim_id.split("::", 1)[0] in set(scoped_object_ids) for claim_id in item["positive_claim_ids"] + item["negative_claim_ids"])
+        and item["status"] == "open"
+    ]
     return {
         "screen": "overview/topic",
         **neighborhood,
@@ -96,6 +111,14 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
         "center_summary": detail["summary"]["summary_text"] if detail["summary"] else "",
         "provenance": detail["provenance"],
         "review_context": review_context,
+        "review_history": list_review_actions(
+            vault_dir,
+            object_ids=scoped_object_ids,
+            limit=8,
+        ),
+        "scoped_object_ids": scoped_object_ids,
+        "scoped_stale_summary_ids": [item["object_id"] for item in scoped_stale_summaries],
+        "scoped_open_contradiction_ids": [item["contradiction_id"] for item in scoped_contradictions],
         "links": {
             "center_object_path": f"/object?id={object_id}",
             "events_path": f"/events?q={object_id}",
@@ -157,7 +180,15 @@ def build_event_dossier_payload(
         for row in rows
     ]
     provenance_map = get_object_provenance_map(vault_dir, [event["object_id"] for event in events])
-    review_context = get_review_context(vault_dir, [event["object_id"] for event in events])
+    scoped_object_ids = [event["object_id"] for event in events]
+    review_context = get_review_context(vault_dir, scoped_object_ids)
+    scoped_stale_summaries = list_stale_summaries(vault_dir, object_ids=scoped_object_ids, limit=100)
+    scoped_contradictions = [
+        item
+        for item in list_contradictions(vault_dir, limit=200)
+        if any(claim_id.split("::", 1)[0] in set(scoped_object_ids) for claim_id in item["positive_claim_ids"] + item["negative_claim_ids"])
+        and item["status"] == "open"
+    ]
     for event in events:
         event["object_path"] = f"/object?id={event['object_id']}"
         event["review_links"] = {
@@ -184,6 +215,10 @@ def build_event_dossier_payload(
         "date_sections": date_sections,
         "event_type_counts": dict(event_type_counts),
         "review_context": review_context,
+        "review_history": list_review_actions(vault_dir, object_ids=scoped_object_ids, limit=8),
+        "scoped_object_ids": list(dict.fromkeys(scoped_object_ids)),
+        "scoped_stale_summary_ids": [item["object_id"] for item in scoped_stale_summaries],
+        "scoped_open_contradiction_ids": [item["contradiction_id"] for item in scoped_contradictions],
         "model_notes": [
             "Event Dossier is a timeline over dated notes projected from indexed pages, not a separate event entity system.",
             "page_date rows come from note-level dates; heading_date rows come from dated section headings.",
@@ -260,6 +295,25 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
     contradictions = build_contradiction_browser_payload(vault_dir)
     events = build_event_dossier_payload(vault_dir, limit=8)
     stale_summaries = build_stale_summary_browser_payload(vault_dir)
+    priorities: list[dict[str, Any]] = []
+    for item in contradictions["items"][:4]:
+        priorities.append(
+            {
+                "kind": "contradiction",
+                "label": item["subject_key"],
+                "path": f"/contradictions?q={item['subject_key']}",
+                "detail": f"{len(item['object_ids'])} objects in scope",
+            }
+        )
+    for item in stale_summaries["items"][:4]:
+        priorities.append(
+            {
+                "kind": "stale_summary",
+                "label": item["title"],
+                "path": item["object_path"],
+                "detail": ", ".join(item["reason_codes"]),
+            }
+        )
     return {
         "screen": "truth/dashboard",
         "objects": {
@@ -280,6 +334,8 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
             "count": stale_summaries["count"],
             "items": stale_summaries["items"][:8],
         },
+        "recent_review_actions": list_review_actions(vault_dir, limit=8),
+        "priorities": priorities[:8],
     }
 
 
@@ -352,6 +408,7 @@ def build_stale_summary_browser_payload(vault_dir: Path | str, *, query: str | N
         "count": len(items),
         "query": query or "",
         "review_context": review_context,
+        "review_history": list_review_actions(vault_dir, object_ids=[item["object_id"] for item in items], limit=8),
         "detection_notes": [
             "Stale summary review flags compiled summaries that are weak and have no outgoing supporting relations.",
             "This queue is deterministic and favors false negatives over false positives.",

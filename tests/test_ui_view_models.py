@@ -95,6 +95,8 @@ def test_build_object_page_payload(temp_vault):
     assert payload["review_context"]["object_count"] == 1
     assert payload["review_context"]["open_contradiction_count"] == 1
     assert payload["review_context"]["latest_event_date"] == "2026-04-13"
+    assert payload["review_history"] == []
+    assert payload["stale_summary_details"] == []
 
 
 def test_build_object_page_payload_includes_provenance(temp_vault):
@@ -172,6 +174,9 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["links"]["summaries_path"] == "/summaries?q=alpha"
     assert payload["review_context"]["object_count"] == 2
     assert payload["review_context"]["open_contradiction_count"] == 1
+    assert payload["review_history"] == []
+    assert payload["scoped_open_contradiction_ids"]
+    assert payload["scoped_stale_summary_ids"] == ["beta"]
 
 
 def test_build_event_dossier_payload(temp_vault):
@@ -194,6 +199,8 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["review_context"]["open_contradiction_count"] == 1
     assert payload["events"][0]["review_links"]["contradictions_path"] == "/contradictions?q=alpha"
     assert payload["events"][0]["review_links"]["summaries_path"] == "/summaries?q=alpha"
+    assert payload["review_history"] == []
+    assert payload["scoped_open_contradiction_ids"]
 
 
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
@@ -348,6 +355,7 @@ date: 2026-04-13
     assert item["object_titles"] == {"alpha": "Alpha", "conflict": "Conflict"}
     assert item["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
     assert item["provenance"]["mocs"][0]["slug"] == "atlas-index"
+    assert item["positive_claims"][0]["evidence"]
 
 
 def test_build_truth_dashboard_payload(temp_vault):
@@ -380,6 +388,8 @@ Thin note.
     assert payload["stale_summaries"]["count"] >= 1
     assert "thin-note" in [item["object_id"] for item in payload["stale_summaries"]["items"]]
     assert payload["objects"]["items"][0]["object_id"] == "alpha"
+    assert payload["priorities"]
+    assert payload["recent_review_actions"] == []
 
 
 def test_build_truth_dashboard_payload_uses_total_object_count(temp_vault):
@@ -543,8 +553,44 @@ Thin note.
     assert payload["screen"] == "truth/stale-summaries"
     assert payload["count"] == 1
     assert payload["items"][0]["object_id"] == "thin-note"
-    assert payload["items"][0]["summary_text"] == "Thin note."
-    assert "compiled summaries that are weak" in payload["detection_notes"][0]
+    assert "summary_too_short" in payload["items"][0]["reason_codes"]
+    assert payload["items"][0]["latest_event_date"] == "2026-04-10"
+    assert payload["review_history"] == []
+
+
+def test_build_object_page_payload_includes_review_history(temp_vault):
+    from openclaw_pipeline.truth_api import record_review_action
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+    record_review_action(
+        temp_vault,
+        event_type="ui_contradictions_resolved",
+        slug="alpha",
+        payload={
+            "object_ids": ["alpha"],
+            "contradiction_ids": ["contradiction::alpha"],
+            "status": "resolved_keep_positive",
+            "note": "Reviewed in UI",
+            "rebuilt_object_ids": ["alpha"],
+        },
+    )
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    assert payload["review_history"][0]["event_type"] == "ui_contradictions_resolved"
+    assert payload["review_history"][0]["note"] == "Reviewed in UI"
+
+
+def test_build_object_page_payload_exposes_quick_maintenance_state(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    assert payload["open_contradiction_ids"]
+    assert payload["stale_summary_details"] == []
 
 
 def test_build_stale_summary_browser_payload_includes_review_context(temp_vault):
