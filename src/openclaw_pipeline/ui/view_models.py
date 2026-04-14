@@ -12,7 +12,9 @@ from ..truth_api import (
     CONTRADICTION_STATUS_EXPLANATIONS,
     count_objects,
     get_object_detail,
+    get_object_traceability,
     get_note_provenance,
+    get_note_traceability,
     get_object_provenance_map,
     get_review_context,
     get_topic_neighborhood,
@@ -58,6 +60,7 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
     return {
         "screen": "object/page",
         **detail,
+        "production_chain": get_object_traceability(vault_dir, object_id),
         "relations": relations,
         "claim_count": len(detail["claims"]),
         "relation_count": len(relations),
@@ -531,4 +534,5 @@ def build_note_page_payload(vault_dir: Path | str, *, note_path: str) -> dict[st
         "screen": "note/page",
         "note_path": note_path,
         "provenance": provenance,
+        "production_chain": get_note_traceability(vault_dir, note_path=note_path),
     }

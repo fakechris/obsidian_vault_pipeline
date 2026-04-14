@@ -987,6 +987,112 @@ def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, A
     }
 
 
+def _page_row_by_path(vault_dir: Path | str, note_path: str) -> dict[str, str]:
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE path = ?
+            LIMIT 1
+            """,
+            (str((resolved_vault / note_path).resolve()),),
+        ).fetchone()
+    if row:
+        return {
+            "slug": row[0],
+            "title": row[1],
+            "note_type": row[2],
+            "path": _vault_relative_path(resolved_vault, row[3]),
+        }
+    return {
+        "slug": Path(note_path).stem,
+        "title": Path(note_path).stem,
+        "note_type": "note",
+        "path": note_path,
+    }
+
+
+def _deep_dive_objects_for_path(vault_dir: Path | str, note_path: str) -> list[dict[str, str]]:
+    source_name = Path(note_path).name
+    items = list_deep_dive_derivations(vault_dir, limit=MAX_PAGE_SIZE)
+    for item in items:
+        if Path(item["path"]).name == source_name:
+            return item["derived_objects"]
+    return []
+
+
+def _atlas_pages_for_object_ids(vault_dir: Path | str, object_ids: list[str]) -> list[dict[str, str]]:
+    atlas_pages: dict[str, dict[str, str]] = {}
+    for provenance in get_object_provenance_map(vault_dir, object_ids).values():
+        for item in provenance["mocs"]:
+            atlas_pages.setdefault(item["slug"], item)
+    return list(atlas_pages.values())
+
+
+def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+    note = _page_row_by_path(vault_dir, note_path)
+    provenance = get_note_provenance(vault_dir, note_path=note_path)
+    deep_dives: list[dict[str, str]] = []
+    source_notes: list[dict[str, str]] = []
+
+    if note["note_type"] == "deep_dive":
+        deep_dives = [note]
+        if provenance["original_source_note"]:
+            source_notes = [provenance["original_source_note"]]
+    else:
+        deep_dives = provenance["derived_deep_dives"]
+        if provenance["original_source_note"]:
+            source_notes = [provenance["original_source_note"]]
+
+    object_map: dict[str, dict[str, str]] = {}
+    for deep_dive in deep_dives:
+        for item in _deep_dive_objects_for_path(vault_dir, deep_dive["path"]):
+            object_map.setdefault(item["object_id"], item)
+    objects = list(object_map.values())
+    atlas_pages = _atlas_pages_for_object_ids(vault_dir, [item["object_id"] for item in objects])
+    return {
+        "note": note,
+        "source_notes": source_notes,
+        "deep_dives": deep_dives,
+        "objects": objects,
+        "atlas_pages": atlas_pages,
+        "counts": {
+            "source_notes": len(source_notes),
+            "deep_dives": len(deep_dives),
+            "objects": len(objects),
+            "atlas_pages": len(atlas_pages),
+        },
+    }
+
+
+def get_object_traceability(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
+    detail = get_object_detail(vault_dir, object_id)
+    deep_dives = [item for item in detail["provenance"]["source_notes"] if item["note_type"] == "deep_dive"]
+    source_note_map: dict[str, dict[str, str]] = {}
+    for deep_dive in deep_dives:
+        original = get_note_provenance(vault_dir, note_path=deep_dive["path"])["original_source_note"]
+        if original:
+            source_note_map.setdefault(original["path"], original)
+    return {
+        "object": detail["object"],
+        "evergreen_note": {
+            "title": detail["object"]["title"],
+            "path": detail["provenance"]["evergreen_path"],
+        },
+        "source_notes": list(source_note_map.values()),
+        "deep_dives": deep_dives,
+        "atlas_pages": detail["provenance"]["mocs"],
+        "counts": {
+            "source_notes": len(source_note_map),
+            "deep_dives": len(deep_dives),
+            "atlas_pages": len(detail["provenance"]["mocs"]),
+        },
+    }
+
+
 def list_contradictions(
     vault_dir: Path | str,
     *,

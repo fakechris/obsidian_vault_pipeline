@@ -248,7 +248,7 @@ Exit condition:
 
 ### Milestone 5: Knowledge Production Traceability
 
-Status: **Not Started**
+Status: **In Progress**
 
 Goal:
 
@@ -485,7 +485,7 @@ As of this plan:
 - Milestone 2: complete
 - Milestone 3: complete
 - Milestone 4: in progress
-- Milestone 5: not started
+- Milestone 5: in progress
 - Milestone 6: not started
 - Milestone 7+: not started
 

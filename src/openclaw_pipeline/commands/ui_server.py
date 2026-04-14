@@ -465,9 +465,11 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
     frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown)
     source_note = None
     derived_notes: list[dict[str, str]] = []
+    production_chain = None
     if payload:
         source_note = payload.get("provenance", {}).get("original_source_note")
         derived_notes = payload.get("provenance", {}).get("derived_deep_dives", [])
+        production_chain = payload.get("production_chain")
     provenance_html = ""
     if source_note:
         provenance_html = (
@@ -493,6 +495,20 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             f"<ul class='list-tight'>{derived_list}</ul>"
             "</section>"
         )
+    production_chain_html = ""
+    if production_chain:
+        production_chain_html = (
+            "<section class='card'>"
+            "<h2>Production Chain</h2>"
+            "<dl class='meta-list'>"
+            f"<div><dt>Current Note</dt><dd>{escape(production_chain['note']['title'])}<div class='muted'>{escape(production_chain['note']['path'])}</div></dd></div>"
+            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'])}</dd></div>"
+            f"<div><dt>Deep Dives</dt><dd>{_render_named_note_links(production_chain['deep_dives'])}</dd></div>"
+            f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'])}</dd></div>"
+            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(production_chain['atlas_pages'])}</dd></div>"
+            "</dl>"
+            "</section>"
+        )
     return _layout(
         f"Markdown Note: {relative_path}",
         (
@@ -502,6 +518,7 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             "</section>"
             f"{frontmatter_html}"
             f"{provenance_html}"
+            f"{production_chain_html}"
             f"<section class='card'>{note_html}</section>"
         ),
     )
@@ -541,6 +558,15 @@ def _render_named_note_links(items: list[dict[str, str]]) -> str:
         return "<span class='muted'>None</span>"
     return ", ".join(
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>' for item in items
+    )
+
+
+def _render_object_links(items: list[dict[str, str]]) -> str:
+    if not items:
+        return "<span class='muted'>None</span>"
+    return ", ".join(
+        f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a>'
+        for item in items
     )
 
 
@@ -797,6 +823,12 @@ def _render_object_page(payload: dict) -> str:
             f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
             f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
             f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
+            "</dl></section>"
+            "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
+            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'])}</dd></div>"
+            f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'])}</dd></div>"
+            f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
+            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'])}</dd></div>"
             "</dl></section>"
             f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>"
             f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>"
