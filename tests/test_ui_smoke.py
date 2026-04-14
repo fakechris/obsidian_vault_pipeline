@@ -222,6 +222,7 @@ date: 2026-04-13
     assert production_status == 200
     assert "Production Browser" in production_body
     assert "Chain Model" in production_body
+    assert "Weak Points" in production_body
     assert "Source Deep Dive" in production_body
     assert "deep dive" in production_body
 
@@ -973,6 +974,7 @@ Thin note.
     assert "Alpha" in root_body
     assert "Thin Note" in root_body
     assert "/summaries" in root_body
+    assert "Production Weak Points" in root_body
 
 
 def test_ui_contradictions_and_summaries_support_batch_actions(temp_vault):

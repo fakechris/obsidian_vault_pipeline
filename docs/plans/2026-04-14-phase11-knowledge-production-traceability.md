@@ -107,8 +107,8 @@ Completed so far:
 - a new `/production` browser for source/deep-dive chain traversal,
 - `Production Contribution` summaries on `/topic` and `/events`,
 - aggregate chain-gap signals such as missing source notes, missing deep dives, and missing Atlas reach.
+- dashboard and `/production` now surface vault-wide production weak points so users can prioritize which chains to repair first.
 
 Remaining work in Phase 11:
 
-- stronger prioritization around which chains are incomplete or weak across the whole vault,
 - eventual promotion from traceability browser to full production intelligence.

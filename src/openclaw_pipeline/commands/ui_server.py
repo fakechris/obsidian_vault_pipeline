@@ -684,6 +684,12 @@ def _render_dashboard(payload: dict) -> str:
         f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
         for item in payload["stale_summaries"]["items"]
     ) or "<li>None</li>"
+    production_gap_items = "".join(
+        f'<li><span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
+        f'<a href="{escape(_note_href(item["note_path"]))}">{escape(item["title"])}</a>'
+        f"<div class='muted'>Missing: {escape(item['detail'])}</div></li>"
+        for item in payload["production"]["weak_points"]
+    ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
     priority_items = "".join(
         f'<li><span class="pill">{escape(item["kind"].replace("_", " "))}</span> '
         f'<a href="{escape(item["path"])}">{escape(item["label"])}</a>'
@@ -715,6 +721,7 @@ def _render_dashboard(payload: dict) -> str:
             f"<section class='card'><h2><a href='/summaries'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
+            f"<section class='card'><h2><a href='/production'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>"
             f"<section class='card'><h2>Contradiction Queue</h2><ul class='list-tight'>{contradiction_items}</ul></section>"
             f"{_render_review_history(payload['recent_review_actions'], title='Recent Review Actions')}"
             "</div>"
@@ -1126,6 +1133,14 @@ def _render_production_browser_page(payload: dict) -> str:
         + "</li>"
         for item in payload["items"]
     ) or "<li class='muted'>No production chains found.</li>"
+    weak_points = "".join(
+        "<li>"
+        f'<span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
+        f'<a href="{escape(_note_href(item["note_path"]))}">{escape(item["title"])}</a>'
+        f"<div class='muted'>Missing: {escape(item['detail'])}</div>"
+        "</li>"
+        for item in payload["weak_points"]
+    ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
     return _layout(
         "Production Browser",
         (
@@ -1136,6 +1151,7 @@ def _render_production_browser_page(payload: dict) -> str:
             "</form>"
             f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.</p>"
             "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>"
+            f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )

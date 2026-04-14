@@ -469,6 +469,18 @@ def test_build_truth_dashboard_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
 
     _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
     thin = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     thin.write_text(
         """---
@@ -496,6 +508,8 @@ Thin note.
     assert "thin-note" in [item["object_id"] for item in payload["stale_summaries"]["items"]]
     assert payload["objects"]["items"][0]["object_id"] == "alpha"
     assert payload["priorities"]
+    assert payload["production"]["weak_point_count"] >= 1
+    assert any(item["kind"] == "production_gap" for item in payload["priorities"])
     assert payload["recent_review_actions"] == []
 
 
@@ -900,6 +914,30 @@ Mentions [[alpha]].
     assert payload["counts"]["deep_dives"] == 1
     assert any(item["stage_label"] == "source_note" for item in payload["items"])
     assert any(item["stage_label"] == "deep_dive" for item in payload["items"])
+
+
+def test_build_production_browser_payload_surfaces_weak_points(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_production_browser_payload
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_production_browser_payload(temp_vault)
+
+    assert payload["weak_points"]
+    assert payload["weak_points"][0]["title"] == "Loose Source"
+    assert "deep dives" in payload["weak_points"][0]["missing"]
 
 
 def test_build_stale_summary_browser_payload(temp_vault):

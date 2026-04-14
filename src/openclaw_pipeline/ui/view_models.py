@@ -137,6 +137,47 @@ def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> d
     }
 
 
+def _build_production_weak_points(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    items = list_production_chains(vault_dir, query=query, limit=200)
+    weak_points: list[dict[str, Any]] = []
+    for item in items:
+        traceability = item["traceability"]
+        missing: list[str] = []
+        if item["stage_label"] == "source_note":
+            if not traceability["deep_dives"]:
+                missing.append("deep dives")
+            if not traceability["objects"]:
+                missing.append("objects")
+            if not traceability["atlas_pages"]:
+                missing.append("Atlas / MOC reach")
+        else:
+            if not traceability["source_notes"]:
+                missing.append("source notes")
+            if not traceability["objects"]:
+                missing.append("objects")
+            if not traceability["atlas_pages"]:
+                missing.append("Atlas / MOC reach")
+        if not missing:
+            continue
+        weak_points.append(
+            {
+                "title": item["title"],
+                "note_path": item["path"],
+                "stage_label": item["stage_label"],
+                "missing": missing,
+                "severity": len(missing),
+                "detail": ", ".join(missing),
+            }
+        )
+    weak_points.sort(key=lambda item: (-item["severity"], item["stage_label"], item["title"].lower()))
+    return weak_points[:limit]
+
+
 def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     detail = get_object_detail(vault_dir, object_id)
     neighborhood = get_topic_neighborhood(vault_dir, object_id)
@@ -491,6 +532,7 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
     contradictions = build_contradiction_browser_payload(vault_dir)
     events = build_event_dossier_payload(vault_dir, limit=8)
     stale_summaries = build_stale_summary_browser_payload(vault_dir)
+    production_weak_points = _build_production_weak_points(vault_dir)
     priorities: list[dict[str, Any]] = []
     for item in contradictions["items"][:4]:
         priorities.append(
@@ -508,6 +550,15 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
                 "label": item["title"],
                 "path": item["object_path"],
                 "detail": ", ".join(item["reason_codes"]),
+            }
+        )
+    for item in production_weak_points[:4]:
+        priorities.append(
+            {
+                "kind": "production_gap",
+                "label": item["title"],
+                "path": f"/note?path={item['note_path']}",
+                "detail": item["detail"],
             }
         )
     return {
@@ -529,6 +580,10 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
         "stale_summaries": {
             "count": stale_summaries["count"],
             "items": stale_summaries["items"][:8],
+        },
+        "production": {
+            "weak_points": production_weak_points,
+            "weak_point_count": len(production_weak_points),
         },
         "recent_review_actions": list_review_actions(vault_dir, limit=8),
         "priorities": priorities[:8],
@@ -623,11 +678,13 @@ def build_production_browser_payload(vault_dir: Path | str, *, query: str | None
     items = list_production_chains(vault_dir, query=query)
     source_items = [item for item in items if item["stage_label"] == "source_note"]
     deep_dive_items = [item for item in items if item["stage_label"] == "deep_dive"]
+    weak_points = _build_production_weak_points(vault_dir, query=query)
     return {
         "screen": "production/browser",
         "items": items,
         "source_items": source_items,
         "deep_dive_items": deep_dive_items,
+        "weak_points": weak_points,
         "count": len(items),
         "query": query or "",
         "counts": {
