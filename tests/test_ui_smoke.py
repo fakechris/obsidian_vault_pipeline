@@ -106,10 +106,15 @@ def test_ui_smoke_pages_render_truth_views(temp_vault):
     assert "Object: Alpha" in object_body
     assert "Relations" in object_body
     assert "Beta" in object_body
+    assert '/topic?id=alpha' in object_body
+    assert '/events?q=alpha' in object_body
+    assert '/contradictions?q=alpha' in object_body
 
     assert topic_status == 200
     assert "Topic: Alpha" in topic_body
     assert "Neighbors" in topic_body
+    assert '/object?id=alpha' in topic_body
+    assert '/events?q=alpha' in topic_body
 
     assert events_status == 200
     assert "Event Dossier" in events_body
@@ -182,6 +187,25 @@ def test_ui_contradictions_page_filters_by_status(temp_vault):
     assert "resolved" in body
     assert "<span class='pill'>resolved</span>" in body
     assert "<span class='pill'>open</span>" not in body
+
+
+def test_ui_contradictions_page_filters_by_query(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/contradictions?q=alp")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "alpha" in body
 
 
 def test_ui_events_page_filters_by_query(temp_vault):

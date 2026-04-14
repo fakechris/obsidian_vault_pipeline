@@ -32,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     contradictions_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
     contradictions_parser.add_argument("--limit", type=int, default=100)
     contradictions_parser.add_argument("--status", default=None)
+    contradictions_parser.add_argument("--query", default=None, help="Case-insensitive contradiction search")
 
     neighborhood_parser = subparsers.add_parser("neighborhood", help="Fetch topic neighborhood")
     neighborhood_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
@@ -52,7 +53,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "object":
             payload = get_object_detail(vault_dir, args.id)
         elif args.command == "contradictions":
-            payload = {"items": list_contradictions(vault_dir, limit=args.limit, status=args.status)}
+            payload = {
+                "items": list_contradictions(
+                    vault_dir,
+                    limit=args.limit,
+                    status=args.status,
+                    query=args.query,
+                )
+            }
         elif args.command == "neighborhood":
             payload = get_topic_neighborhood(vault_dir, args.id, depth=args.depth)
         else:  # pragma: no cover - argparse enforces commands

@@ -108,6 +108,19 @@ def test_truth_api_command_lists_contradictions(temp_vault, capsys):
     assert payload["items"][0]["subject_key"] == "alpha"
 
 
+def test_truth_api_command_filters_contradictions_by_query(temp_vault, capsys):
+    from openclaw_pipeline.commands.truth_api import main
+
+    _seed_truth_store(temp_vault)
+
+    exit_code = main(["contradictions", "--vault-dir", str(temp_vault), "--query", "alp"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["subject_key"] == "alpha"
+
+
 def test_truth_api_command_returns_neighborhood(temp_vault, capsys):
     from openclaw_pipeline.commands.truth_api import main
 

@@ -33,6 +33,11 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
         "relation_count": len(relations),
         "contradiction_count": len(detail["contradictions"]),
         "evidence_count": len(detail["evidence"]),
+        "links": {
+            "topic_path": f"/topic?id={object_id}",
+            "events_path": f"/events?q={object_id}",
+            "contradictions_path": f"/contradictions?q={object_id}",
+        },
     }
 
 
@@ -43,6 +48,11 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
         **neighborhood,
         "edge_count": len(neighborhood["edges"]),
         "neighbor_count": len(neighborhood["neighbors"]),
+        "links": {
+            "center_object_path": f"/object?id={object_id}",
+            "events_path": f"/events?q={object_id}",
+            "contradictions_path": f"/contradictions?q={object_id}",
+        },
     }
 
 
@@ -97,8 +107,13 @@ def build_event_dossier_payload(vault_dir: Path | str, *, query: str | None = No
     }
 
 
-def build_contradiction_browser_payload(vault_dir: Path | str, *, status: str | None = None) -> dict[str, Any]:
-    items = list_contradictions(vault_dir, status=status)
+def build_contradiction_browser_payload(
+    vault_dir: Path | str,
+    *,
+    status: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    items = list_contradictions(vault_dir, status=status, query=query)
     status_counts = Counter(item["status"] for item in items)
     return {
         "screen": "truth/contradictions",
@@ -107,6 +122,7 @@ def build_contradiction_browser_payload(vault_dir: Path | str, *, status: str | 
         "open_count": status_counts.get("open", 0),
         "resolved_count": sum(count for status, count in status_counts.items() if status != "open"),
         "status": status or "",
+        "query": query or "",
     }
 
 

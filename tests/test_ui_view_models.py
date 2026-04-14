@@ -86,6 +86,9 @@ def test_build_object_page_payload(temp_vault):
     assert payload["claim_count"] == 1
     assert payload["relation_count"] == 1
     assert payload["contradiction_count"] == 1
+    assert payload["links"]["topic_path"] == "/topic?id=alpha"
+    assert payload["links"]["events_path"] == "/events?q=alpha"
+    assert payload["links"]["contradictions_path"] == "/contradictions?q=alpha"
 
 
 def test_build_topic_overview_payload(temp_vault):
@@ -99,6 +102,8 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["center"]["object_id"] == "alpha"
     assert [item["object_id"] for item in payload["neighbors"]] == ["beta"]
     assert payload["edge_count"] == 1
+    assert payload["links"]["center_object_path"] == "/object?id=alpha"
+    assert payload["links"]["events_path"] == "/events?q=alpha"
 
 
 def test_build_event_dossier_payload(temp_vault):
@@ -138,6 +143,17 @@ def test_build_contradiction_browser_payload_filters_by_status(temp_vault):
     assert payload["count"] == 1
     assert payload["open_count"] == 0
     assert payload["items"][0]["status"] == "resolved"
+
+
+def test_build_contradiction_browser_payload_filters_by_query(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_contradiction_browser_payload(temp_vault, query="alp")
+
+    assert payload["count"] == 1
+    assert payload["items"][0]["subject_key"] == "alpha"
 
 
 def test_build_truth_dashboard_payload(temp_vault):

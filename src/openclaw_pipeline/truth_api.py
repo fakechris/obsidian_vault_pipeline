@@ -196,17 +196,30 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     }
 
 
-def list_contradictions(vault_dir: Path | str, *, limit: int = 100, status: str | None = None) -> list[dict[str, Any]]:
+def list_contradictions(
+    vault_dir: Path | str,
+    *,
+    limit: int = 100,
+    status: str | None = None,
+    query: str | None = None,
+) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
+    normalized_query = query.strip().lower() if query else ""
     query = """
         SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
         FROM contradictions
     """
     params: list[Any] = []
+    where_clauses: list[str] = []
     if status:
-        query += " WHERE status = ?"
+        where_clauses.append("status = ?")
         params.append(status)
+    if normalized_query:
+        where_clauses.append("lower(subject_key) LIKE ?")
+        params.append(f"%{normalized_query}%")
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY subject_key LIMIT ?"
     params.append(limit)
 

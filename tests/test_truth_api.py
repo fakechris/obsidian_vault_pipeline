@@ -102,6 +102,17 @@ def test_truth_api_lists_contradictions(temp_vault):
     assert items[0]["negative_claim_ids"]
 
 
+def test_truth_api_filters_contradictions_by_query(temp_vault):
+    from openclaw_pipeline.truth_api import list_contradictions
+
+    vault = _seed_truth_vault(temp_vault)
+
+    items = list_contradictions(vault, query="agent")
+
+    assert len(items) == 1
+    assert items[0]["subject_key"] == "agent harness"
+
+
 def test_truth_api_builds_topic_neighborhood(temp_vault):
     from openclaw_pipeline.truth_api import get_topic_neighborhood
 
