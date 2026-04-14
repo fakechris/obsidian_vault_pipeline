@@ -1042,6 +1042,12 @@ def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
+    scope_summary = payload["scope_summary"]
+    scope_summary_items = (
+        f"<li>Items: {scope_summary['item_count']}</li>"
+        f"<li>Objects in scope: {scope_summary['object_count']}</li>"
+        f"<li>Source notes in scope: {scope_summary['source_note_count']}</li>"
+    )
     detection_contract = payload["detection_contract"]
     detection_contract_items = (
         f"<li>Model: {escape(detection_contract['model'])}</li>"
@@ -1049,6 +1055,10 @@ def _render_contradictions_page(payload: dict) -> str:
         + "".join(
             f"<li>Status bucket {escape(str(bucket))}: {count}</li>"
             for bucket, count in detection_contract["status_buckets"].items()
+        )
+        + "".join(
+            f"<li>Status {escape(str(status_name))}: {escape(text)}</li>"
+            for status_name, text in detection_contract["status_explanations"].items()
         )
     )
     items = "".join(
@@ -1060,6 +1070,15 @@ def _render_contradictions_page(payload: dict) -> str:
         )
         + f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
         + f" <span class='muted'>[{escape(item['detection_model'])} / {escape(item['detection_confidence'])} / {escape(item['status_bucket'])}]</span>"
+        + f"<div class='muted'>Status Meaning: {escape(item['status_explanation'])}</div>"
+        + (
+            "<div class='muted'>Scope Summary: "
+            + f"{item['scope_summary']['object_count']} objects, "
+            + f"{item['scope_summary']['positive_claim_count']} positive claims, "
+            + f"{item['scope_summary']['negative_claim_count']} negative claims, "
+            + f"{item['scope_summary']['source_note_count']} source notes"
+            + "</div>"
+        )
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -1072,6 +1091,17 @@ def _render_contradictions_page(payload: dict) -> str:
         )
         + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
         + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+        + (
+            "<details><summary>Ranked Evidence</summary><ol class='list-tight'>"
+            + "".join(
+                f"<li>#{evidence['rank']} {escape(evidence['polarity'])}: {escape(evidence['quote_text'])} "
+                + f"<span class='muted'>({escape(evidence['object_title'])} / {escape(evidence['source_slug'])} / {escape(evidence['evidence_kind'])})</span></li>"
+                for evidence in item["ranked_evidence"]
+            )
+            + "</ol></details>"
+            if item["ranked_evidence"]
+            else ""
+        )
         + (
             "<details><summary>Claim Evidence</summary><ul class='list-tight'>"
             + "".join(
@@ -1187,6 +1217,7 @@ def _render_contradictions_page(payload: dict) -> str:
             "<button type='submit'>Resolve Selected</button>"
             "</form>"
             "</section>"
+            f"<section class='card'><h2>Scope Summary</h2><ul class='list-tight'>{scope_summary_items}</ul></section>"
             f"<section class='card'><h2>Detection Contract</h2><ul class='list-tight'>{detection_contract_items}</ul></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),

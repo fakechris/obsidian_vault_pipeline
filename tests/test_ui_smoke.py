@@ -211,6 +211,9 @@ date: 2026-04-13
     assert "Atlas Index" in contradictions_body
     assert "Detection Notes" in contradictions_body
     assert "Detection Contract" in contradictions_body
+    assert "Scope Summary" in contradictions_body
+    assert "Status Meaning" in contradictions_body
+    assert "Ranked Evidence" in contradictions_body
     assert "Claim Evidence" in contradictions_body
 
 

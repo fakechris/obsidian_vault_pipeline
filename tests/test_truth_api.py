@@ -101,6 +101,11 @@ def test_truth_api_lists_contradictions(temp_vault):
     assert len(items) == 1
     assert items[0]["subject_key"] == "agent harness"
     assert items[0]["status"] == "open"
+    assert items[0]["status_explanation"] == "Active contradiction awaiting review."
+    assert items[0]["scope_summary"]["object_count"] == 2
+    assert items[0]["scope_summary"]["positive_claim_count"] == 1
+    assert items[0]["scope_summary"]["negative_claim_count"] == 1
+    assert items[0]["ranked_evidence"][0]["rank"] == 1
     assert items[0]["positive_claim_ids"]
     assert items[0]["negative_claim_ids"]
 

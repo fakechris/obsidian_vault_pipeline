@@ -291,12 +291,30 @@ def build_contradiction_browser_payload(
         "count": len(items),
         "open_count": status_counts.get("open", 0),
         "resolved_count": sum(count for status, count in status_counts.items() if status != "open"),
+        "scope_summary": {
+            "item_count": len(items),
+            "object_count": len({object_id for item in items for object_id in item["object_ids"]}),
+            "source_note_count": len(
+                {
+                    note["slug"]
+                    for item in items
+                    for note in item["provenance"]["source_notes"]
+                }
+            ),
+        },
         "detection_contract": {
             "model": "page_summary_polarity",
             "confidence": "heuristic",
             "status_buckets": {
                 "open": status_counts.get("open", 0),
                 "reviewed": sum(count for row_status, count in status_counts.items() if row_status != "open"),
+            },
+            "status_explanations": {
+                "open": "Active contradiction awaiting review.",
+                "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
+                "resolved_keep_negative": "Reviewed and the negative claim set remains the preferred interpretation.",
+                "dismissed": "Reviewed and dismissed as not worth keeping in the active contradiction queue.",
+                "needs_human": "Requires deeper human judgment before the contradiction can be considered closed.",
             },
         },
         "detection_notes": [

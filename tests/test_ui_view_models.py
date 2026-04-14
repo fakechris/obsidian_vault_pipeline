@@ -269,8 +269,12 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["items"][0]["detection_model"] == "page_summary_polarity"
     assert payload["items"][0]["detection_confidence"] == "heuristic"
     assert payload["items"][0]["status_bucket"] == "open"
+    assert payload["items"][0]["scope_summary"]["object_count"] == 2
+    assert payload["items"][0]["status_explanation"] == "Active contradiction awaiting review."
+    assert payload["items"][0]["ranked_evidence"][0]["rank"] == 1
     assert payload["detection_contract"]["model"] == "page_summary_polarity"
     assert payload["detection_contract"]["confidence"] == "heuristic"
+    assert payload["detection_contract"]["status_explanations"]["resolved_keep_positive"].startswith("Reviewed")
     assert "page_summary claim polarity" in payload["detection_notes"][0]
 
 

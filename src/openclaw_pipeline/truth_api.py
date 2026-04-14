@@ -14,6 +14,13 @@ from .runtime import VaultLayout, resolve_vault_dir
 MAX_PAGE_SIZE = 500
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _REVIEW_AUDIT_LOG_NAME = "review-actions"
+_CONTRADICTION_STATUS_EXPLANATIONS = {
+    "open": "Active contradiction awaiting review.",
+    "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
+    "resolved_keep_negative": "Reviewed and the negative claim set remains the preferred interpretation.",
+    "dismissed": "Reviewed and dismissed as not worth keeping in the active contradiction queue.",
+    "needs_human": "Requires deeper human judgment before the contradiction can be considered closed.",
+}
 
 
 def _db_path(vault_dir: Path | str) -> Path:
@@ -369,6 +376,28 @@ def _claim_evidence_map(vault_dir: Path | str, claim_ids: list[str]) -> dict[str
             }
         )
     return evidence_map
+
+
+def _rank_contradiction_evidence(item: dict[str, Any]) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    rank = 1
+    for polarity, claims in (("positive", item["positive_claims"]), ("negative", item["negative_claims"])):
+        for claim in claims:
+            for evidence in claim["evidence"]:
+                ranked.append(
+                    {
+                        "rank": rank,
+                        "polarity": polarity,
+                        "claim_id": claim["claim_id"],
+                        "object_id": claim["object_id"],
+                        "object_title": claim["object_title"],
+                        "evidence_kind": evidence["evidence_kind"],
+                        "quote_text": evidence["quote_text"],
+                        "source_slug": evidence["source_slug"],
+                    }
+                )
+                rank += 1
+    return ranked
 
 
 def list_objects(
@@ -1046,6 +1075,23 @@ def list_contradictions(
         item["detection_model"] = "page_summary_polarity"
         item["detection_confidence"] = "heuristic"
         item["status_bucket"] = "open" if item["status"] == "open" else "reviewed"
+        item["status_explanation"] = _CONTRADICTION_STATUS_EXPLANATIONS.get(
+            item["status"],
+            "Reviewed contradiction state.",
+        )
+        item["scope_summary"] = {
+            "object_count": len(object_ids),
+            "positive_claim_count": len(item["positive_claims"]),
+            "negative_claim_count": len(item["negative_claims"]),
+            "source_note_count": len(
+                {
+                    evidence["source_slug"]
+                    for claim in item["positive_claims"] + item["negative_claims"]
+                    for evidence in claim["evidence"]
+                }
+            ),
+        }
+        item["ranked_evidence"] = _rank_contradiction_evidence(item)
         item["review_history"] = list_review_actions(vault_dir, object_ids=object_ids, limit=5)
     return items
 
