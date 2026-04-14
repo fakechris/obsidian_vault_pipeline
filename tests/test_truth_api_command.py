@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 
@@ -106,3 +107,29 @@ def test_truth_api_command_returns_neighborhood(temp_vault, capsys):
     assert exit_code == 0
     assert payload["center"]["object_id"] == "alpha"
     assert [item["object_id"] for item in payload["neighbors"]] == ["beta"]
+
+
+def test_truth_api_command_reports_unknown_object_as_cli_error(temp_vault, capsys):
+    from openclaw_pipeline.commands.truth_api import main
+
+    _seed_truth_store(temp_vault)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["object", "--vault-dir", str(temp_vault), "--id", "missing"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "Unknown object_id: missing" in captured.err
+
+
+def test_truth_api_command_rejects_unsupported_depth(temp_vault, capsys):
+    from openclaw_pipeline.commands.truth_api import main
+
+    _seed_truth_store(temp_vault)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["neighborhood", "--vault-dir", str(temp_vault), "--id", "alpha", "--depth", "2"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "Only depth=1 is currently supported" in captured.err

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from ..runtime import resolve_vault_dir
@@ -39,16 +40,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     vault_dir = resolve_vault_dir(getattr(args, "vault_dir", None))
 
-    if args.command == "objects":
-        payload = {"items": list_objects(vault_dir, limit=args.limit, offset=args.offset)}
-    elif args.command == "object":
-        payload = get_object_detail(vault_dir, args.id)
-    elif args.command == "contradictions":
-        payload = {"items": list_contradictions(vault_dir, limit=args.limit, status=args.status)}
-    elif args.command == "neighborhood":
-        payload = get_topic_neighborhood(vault_dir, args.id, depth=args.depth)
-    else:  # pragma: no cover - argparse enforces commands
-        parser.error(f"unknown command: {args.command}")
+    if args.command == "neighborhood" and args.depth != 1:
+        parser.error("Only depth=1 is currently supported")
+
+    try:
+        if args.command == "objects":
+            payload = {"items": list_objects(vault_dir, limit=args.limit, offset=args.offset)}
+        elif args.command == "object":
+            payload = get_object_detail(vault_dir, args.id)
+        elif args.command == "contradictions":
+            payload = {"items": list_contradictions(vault_dir, limit=args.limit, status=args.status)}
+        elif args.command == "neighborhood":
+            payload = get_topic_neighborhood(vault_dir, args.id, depth=args.depth)
+        else:  # pragma: no cover - argparse enforces commands
+            parser.error(f"unknown command: {args.command}")
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
 
     print(json.dumps(payload, ensure_ascii=False))
     return 0

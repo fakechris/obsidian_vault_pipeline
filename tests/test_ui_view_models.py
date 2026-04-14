@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 
 
@@ -107,3 +109,19 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["count"] == 1
     assert payload["items"][0]["subject_key"] == "alpha"
     assert payload["open_count"] == 1
+
+
+def test_build_object_page_payload_handles_missing_summary(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+    from openclaw_pipeline.runtime import VaultLayout
+
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM compiled_summaries WHERE object_id = ?", ("alpha",))
+        conn.commit()
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    assert payload["summary"] is None
+    assert payload["claim_count"] == 1

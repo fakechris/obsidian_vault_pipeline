@@ -103,12 +103,13 @@ def _render_object_page(payload: dict) -> str:
         f'<li><span class="pill">{escape(item["status"])}</span>{escape(item["subject_key"])}</li>'
         for item in payload["contradictions"]
     ) or "<li>None</li>"
+    summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
     return _layout(
         f"Object: {payload['object']['title']}",
         (
             f"<h1>Object: {escape(payload['object']['title'])}</h1>"
             f"<p class='muted'>{escape(payload['object']['object_id'])}</p>"
-            f"<section class='card'><h2>Compiled Summary</h2><p>{escape(payload['summary']['summary_text'])}</p></section>"
+            f"<section class='card'><h2>Compiled Summary</h2><p>{escape(summary_text)}</p></section>"
             f"<section class='card'><h2>Claims</h2><ul>{claims}</ul></section>"
             f"<section class='card'><h2>Relations</h2><ul>{relations}</ul></section>"
             f"<section class='card'><h2>Contradictions</h2><ul>{contradictions}</ul></section>"
