@@ -192,8 +192,14 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["events"][0]["object_id"] == "alpha"
     assert payload["events"][0]["event_kind"] == "dated_note"
     assert payload["events"][0]["event_label"] == "Dated Note"
-    assert payload["date_sections"][0]["date"] == "2026-04-13"
+    assert payload["events"][0]["timeline_anchor_kind"] == "note"
+    assert payload["events"][0]["timeline_anchor_label"] == "Alpha"
+    assert payload["events"][0]["semantic_role"] == "note_date_projection"
+    assert payload["cluster_sections"][0]["date"] == "2026-04-13"
     assert payload["event_type_counts"] == {"dated_note": 3}
+    assert payload["timeline_contract"]["timeline_kind"] == "dated_note_projection"
+    assert payload["timeline_contract"]["row_type_counts"] == {"page_date": 3}
+    assert payload["timeline_contract"]["semantic_roles"] == {"note_date_projection": 3}
     assert "dated notes projected from indexed pages" in payload["model_notes"][0]
     assert payload["review_context"]["object_count"] == 3
     assert payload["review_context"]["open_contradiction_count"] == 1
@@ -260,6 +266,15 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["items"][0]["subject_key"] == "alpha"
     assert payload["open_count"] == 1
     assert payload["items"][0]["object_ids"] == ["alpha", "conflict"]
+    assert payload["items"][0]["detection_model"] == "page_summary_polarity"
+    assert payload["items"][0]["detection_confidence"] == "heuristic"
+    assert payload["items"][0]["status_bucket"] == "open"
+    assert payload["items"][0]["scope_summary"]["object_count"] == 2
+    assert payload["items"][0]["status_explanation"] == "Active contradiction awaiting review."
+    assert payload["items"][0]["ranked_evidence"][0]["rank"] == 1
+    assert payload["detection_contract"]["model"] == "page_summary_polarity"
+    assert payload["detection_contract"]["confidence"] == "heuristic"
+    assert payload["detection_contract"]["status_explanations"]["resolved_keep_positive"].startswith("Reviewed")
     assert "page_summary claim polarity" in payload["detection_notes"][0]
 
 
@@ -429,6 +444,39 @@ def test_build_event_dossier_payload_filters_by_query(temp_vault):
 
     assert payload["event_count"] == 1
     assert [item["object_id"] for item in payload["events"]] == ["beta"]
+
+
+def test_build_event_dossier_payload_groups_rows_into_event_clusters(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+
+## 2026-04-13
+
+Shipped the local-first harness update.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault, query="alpha")
+
+    assert payload["event_count"] == 2
+    assert payload["cluster_count"] == 1
+    assert payload["cluster_sections"][0]["clusters"][0]["object_id"] == "alpha"
+    assert payload["cluster_sections"][0]["clusters"][0]["row_count"] == 2
+    assert payload["cluster_sections"][0]["clusters"][0]["row_types"] == ["heading_date", "page_date"]
 
 
 def test_build_atlas_browser_payload(temp_vault):

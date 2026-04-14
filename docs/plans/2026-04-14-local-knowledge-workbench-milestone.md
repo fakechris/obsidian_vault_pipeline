@@ -184,7 +184,7 @@ Exit condition:
 
 ### Milestone 2: Provenance-Aware Review Workbench
 
-Status: **In Progress**
+Status: **Complete**
 
 Includes:
 
@@ -203,15 +203,9 @@ Exit condition:
 2. The user can perform the two current truth maintenance loops from the UI.
 3. The UI no longer feels like a raw DB viewer.
 
-Remaining work inside this milestone:
-
-- tighten queue evidence and review explanation
-- expose review history / audit visibility
-- improve dashboard and page-level next-action context
-
 ### Milestone 3: Review Workbench Completion
 
-Status: **Not Started**
+Status: **Complete**
 
 Goal:
 
@@ -234,7 +228,7 @@ Exit condition:
 
 ### Milestone 4: Event And Contradiction Model Hardening
 
-Status: **Not Started**
+Status: **In Progress**
 
 Goal:
 
@@ -296,43 +290,167 @@ Exit condition:
 
 - first-time users can understand how to navigate and operate the system without reading code or plan docs
 
+## From Local Knowledge Workbench To Active Knowledge System
+
+The next transition is not “add more pages.” It is a mode change:
+
+- a **local knowledge workbench** lets a user inspect, trace, and maintain knowledge,
+- an **active knowledge system** keeps improving what the user can see, recall, and act on even when the user is not manually driving every step.
+
+That transition should stay constrained by a few hard product rules:
+
+1. **Thin harness, fat skills.**
+   The central runtime should stay small. New intelligence should land as explicit extraction, maintenance, synthesis, and briefing layers, not as an opaque monolith.
+2. **Brain-first lookup before external lookup.**
+   The product should prefer the user’s own vault and truth store before searching the web or re-deriving context from scratch.
+3. **Compiled truth plus evidence trail.**
+   Every “smart” synthesis must keep a visible path back to source notes, deep dives, evergreen objects, and review history.
+4. **Async intelligence, synchronous trust.**
+   Detection, linking, clustering, and briefing can run in the background, but the user-facing product must show what changed and why.
+5. **First useful sign before broad rollout.**
+   New intelligence layers must prove one non-obvious, source-cited win before expanding scope.
+
+### Milestone 7: Active Signal Loop
+
+Status: **Not Started**
+
+Goal:
+
+Turn new notes, updated notes, and review actions into first-class signals that can enrich the system automatically without blocking the main user flow.
+
+Core deliverables:
+
+- signal detection on every meaningful inbound note/save/update,
+- explicit capture of notable entities, concepts, projects, and original observations,
+- mandatory back-links from extracted entities/objects to the triggering source,
+- brain-first lookup rules before creating new objects or links,
+- signal audit entries showing what was detected, created, linked, or skipped.
+
+Exit condition:
+
+- saving or updating a note can improve future retrieval and navigation without requiring a manual full pipeline run every time.
+
+### Milestone 8: Knowledge Evolution Layer
+
+Status: **Not Started**
+
+Goal:
+
+Model how understanding changes over time instead of only surfacing “contradiction” and “stale” as isolated maintenance states.
+
+Core deliverables:
+
+- typed evolution links:
+  - `replaces`
+  - `enriches`
+  - `confirms`
+  - `challenges`
+- richer typed entity and semantic relation extraction for `research-tech`,
+- evolution views on object/topic pages,
+- explicit explanations for “what changed” and “what stayed stable”.
+
+Exit condition:
+
+- users can trace how a topic evolved across notes and reviews, not just detect isolated conflicts.
+
+### Milestone 9: Background Intelligence
+
+Status: **Not Started**
+
+Goal:
+
+Make the product proactively surface useful findings instead of waiting for the user to open every queue manually.
+
+Core deliverables:
+
+- source-cited insights surfaced from the graph and timeline,
+- working-memory style briefings:
+  - active topics
+  - unresolved flags
+  - recent changes
+  - priority items
+- explicit “first useful sign” checks proving the layer is adding value,
+- controls for enabling, throttling, and verifying background processing.
+
+Exit condition:
+
+- the system can surface at least one relevant contradiction, one useful synthesis, or one actionable priority the user likely would not have found unaided.
+
+### Milestone 10: Graph Intelligence And Synthesis
+
+Status: **Not Started**
+
+Goal:
+
+Use the existing truth graph as a substrate for topic clustering, cross-domain discovery, and higher-order synthesis.
+
+Core deliverables:
+
+- community detection over objects and relations,
+- cluster labels and topic maps,
+- cross-domain connection surfacing,
+- “crystal”-style synthesized reference views that update when related knowledge changes,
+- visual and query surfaces that explain why items belong together.
+
+Exit condition:
+
+- users can see coherent topic clusters, cross-domain links, and evolving synthesized references grounded in source-cited knowledge.
+
 ## Recommended Next Sequence
 
-### Phase 9: Review Workbench Completion
+### Finish Phase 10: Event + Contradiction Hardening
+
+Do first.
+
+Reason:
+
+- the review workbench is now strong enough that model weaknesses are visible,
+- event and contradiction semantics need to become trustworthy before we add more intelligence on top.
+
+### Phase 11: Knowledge Production Traceability
 
 Do next.
 
 Reason:
 
-- it deepens the surfaces that already exist,
-- it improves user trust immediately,
-- and it avoids moving to more speculative model work too early.
+- this is still the most legible product-value surface,
+- it closes the source -> deep dive -> evergreen -> Atlas chain,
+- it prepares the evidence trail required for later active intelligence.
 
-Recommended scope:
+### Phase 12: Active Signal Loop
 
-1. review history / audit panels,
-2. contradiction evidence context,
-3. stale summary explanation panels,
-4. action entry points from object/topic/event pages,
-5. dashboard prioritization for review work.
-
-### Phase 10: Event + Contradiction Hardening
-
-Do after Phase 9.
+Do after Phase 11.
 
 Reason:
 
-- once the workbench is operational, semantic weaknesses become more visible,
-- then it is worth hardening the underlying model.
+- once production traceability is strong, asynchronous signal capture can safely create backlinks, entities, and updates,
+- this is the first real step from “workbench” to “active system.”
 
-### Phase 11: Knowledge Production Traceability
+### Phase 13: Knowledge Evolution Layer
 
-Do after Phase 10 or in parallel if product pressure is stronger than model pressure.
+Do after Phase 12.
 
 Reason:
 
-- this is the most legible “value surface” for users,
-- but it depends on the earlier provenance and review foundation being stable.
+- evolution links depend on better signal capture and graph linking,
+- they turn the current maintenance model into a more complete model of changing understanding.
+
+### Phase 14: Background Intelligence
+
+Do after Phase 13.
+
+Reason:
+
+- briefings, insights, and proactive flags should sit on top of a stable evolution layer,
+- otherwise they become noisy product theater instead of useful intelligence.
+
+### Phase 15: Graph Intelligence And Synthesis
+
+Do after Phase 14.
+
+Reason:
+
+- community detection, clusters, and crystal-like synthesis become much more useful once the graph and evolution layers are already trustworthy.
 
 ## Non-Recommended Paths Right Now
 
@@ -364,14 +482,34 @@ As of this plan:
 
 - Milestone 0: complete
 - Milestone 1: complete
-- Milestone 2: mostly complete, but not fully closed
-- Milestone 3+: not started
+- Milestone 2: complete
+- Milestone 3: complete
+- Milestone 4: in progress
+- Milestone 5: not started
+- Milestone 6: not started
+- Milestone 7+: not started
 
 So the honest product statement is:
 
-> OVP is already a usable local truth browser and partial review workbench, but it is not yet a fully mature local knowledge workbench.
+> OVP is already a usable local knowledge workbench core with a real review console, but it is not yet an active knowledge system.
 
-That remaining gap is now specific and manageable. It is no longer architectural uncertainty; it is milestone execution.
+The remaining gap is no longer “can this architecture support it?” It is now a sequence problem:
+
+- finish semantic hardening,
+- make the production chain legible,
+- then add signal capture, evolution, and background intelligence in that order.
+
+## PR Review Gate
+
+Every milestone PR must now pass an explicit review-wait step before merge. The sequence is:
+
+1. fix all known blocking review findings,
+2. run fresh verification on the exact branch head,
+3. wait for review automation and comments to settle,
+4. re-check PR comments and mergeability after that wait,
+5. merge only if no new blocking feedback appears.
+
+This is a required completion gate, not an informal judgment call. A green local test run is necessary but not sufficient if review automation is still actively producing new findings.
 
 ## External Reference Projects And What To Borrow
 
@@ -385,15 +523,19 @@ Reference:
 
 What matters:
 
-- knowledge system framed as an operator workflow, not just a storage engine,
-- strong maintenance / recipe / skillpack story,
-- clear “the system keeps working after you save” mental model.
+- `THIN_HARNESS_FAT_SKILLS`: keep the orchestration layer small and push domain behavior into explicit skills and operating rules,
+- `brain-agent-loop`: the agent should repeatedly check the brain first, then enrich it, then sync it back into future use,
+- `compiled-truth`: pages should feel like stable synthesized truth with an evidence/history layer underneath,
+- `brain-first-lookup`: lookup order is a product invariant, not an implementation detail,
+- `entity-detection`: every inbound signal can update the brain asynchronously,
+- `source-attribution`: every claim should be auditable back to origin.
 
 What OVP should borrow:
 
-- stronger operator protocol for recurring maintenance,
-- clearer ongoing maintenance narratives beyond one-shot commands,
-- more productized workflows around curation and upkeep.
+- stronger brain-first lookup and write-back protocol,
+- active signal detection that compounds the vault over time,
+- clearer separation between thin runtime harness and richer maintenance/synthesis skills,
+- compiled-truth page contracts that keep synthesis and evidence visibly paired.
 
 ### Nia Vault
 
@@ -465,6 +607,21 @@ What OVP should borrow:
   - what changed since last run,
 - eventually a richer ranking / relevance story for unified search instead of raw matching alone.
 
+What OVP should additionally borrow from its advanced-features model:
+
+- explicit extraction targets:
+  - entities
+  - relationships
+  - links to existing knowledge
+- explicit knowledge-evolution links:
+  - `replaces`
+  - `enriches`
+  - `confirms`
+  - `challenges`
+- clear “first useful sign” acceptance criteria for new intelligence,
+- briefings and insights that are source-cited and intentionally sparse,
+- graph intelligence as a later layer on top of a trusted graph, not as the first feature.
+
 ## Cross-Project Product Principles
 
 Across `gbrain`, `Nia Vault`, `agentmemory`, and `Nowledge Mem`, the consistent lessons are:
@@ -474,6 +631,8 @@ Across `gbrain`, `Nia Vault`, `agentmemory`, and `Nowledge Mem`, the consistent 
 3. Maintenance and background processing must feel like first-class product behavior.
 4. Search and browsing are not enough by themselves; the user must also see what changed and why.
 5. Integration quality must be visible and testable from the product surface.
+6. Active intelligence should arrive in layers:
+   signal capture first, evolution second, briefing/insight third, graph synthesis last.
 
 OVP should treat these as milestone guardrails, not optional polish.
 
@@ -522,3 +681,50 @@ Add:
 - more explicit product-level integration and automation surfaces.
 
 This is reinforced by agentmemory’s observability and Nowledge Mem’s onboarding / browse-now packaging.
+
+### Milestone 7: Active Signal Loop
+
+Add:
+
+- async signal detection on note create/update and selected review actions,
+- brain-first lookup before object creation,
+- mandatory backlinks from detected entities/concepts to source notes,
+- signal audit logs showing what changed and why.
+
+This is reinforced by GBrain’s `brain-agent-loop`, `brain-first-lookup`, and `entity-detection` guides.
+
+### Milestone 8: Knowledge Evolution Layer
+
+Add:
+
+- typed evolution links:
+  - `replaces`
+  - `enriches`
+  - `confirms`
+  - `challenges`
+- richer semantic relation extraction for the `research-tech` pack,
+- object/topic views that show how understanding changed over time.
+
+This is reinforced by Nowledge Mem’s knowledge-evolution model and Nia’s stronger page contracts.
+
+### Milestone 9: Background Intelligence
+
+Add:
+
+- working-memory briefings,
+- sparse source-cited insights,
+- explicit “first useful sign” checks,
+- queue and graph-derived priority surfacing.
+
+This is reinforced by Nowledge Mem’s background-intelligence model and GBrain’s ongoing maintenance framing.
+
+### Milestone 10: Graph Intelligence And Synthesis
+
+Add:
+
+- community detection,
+- cluster labeling,
+- crystal-like synthesized reference pages,
+- cross-domain connection surfacing.
+
+This is reinforced by Nowledge Mem’s graph features and Nia’s graph/product page ambitions.
