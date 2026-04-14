@@ -111,6 +111,20 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["open_count"] == 1
 
 
+def test_build_truth_dashboard_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_truth_dashboard_payload(temp_vault)
+
+    assert payload["screen"] == "truth/dashboard"
+    assert payload["objects"]["count"] == 3
+    assert payload["contradictions"]["count"] == 1
+    assert payload["events"]["count"] == 3
+    assert payload["objects"]["items"][0]["object_id"] == "alpha"
+
+
 def test_build_object_page_payload_handles_missing_summary(temp_vault):
     from openclaw_pipeline.ui.view_models import build_object_page_payload
     from openclaw_pipeline.runtime import VaultLayout

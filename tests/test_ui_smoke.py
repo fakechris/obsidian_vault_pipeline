@@ -102,3 +102,25 @@ def test_ui_smoke_pages_render_truth_views(temp_vault):
     assert contradictions_status == 200
     assert "Contradictions" in contradictions_body
     assert "alpha" in contradictions_body
+
+
+def test_ui_root_dashboard_renders_db_summary(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        root_status, root_body = _get(port, "/")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert root_status == 200
+    assert "Objects Indexed" in root_body
+    assert "Contradictions Open" in root_body
+    assert "Recent Events" in root_body
+    assert "Alpha" in root_body

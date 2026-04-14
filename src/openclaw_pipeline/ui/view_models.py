@@ -90,6 +90,29 @@ def build_contradiction_browser_payload(vault_dir: Path | str) -> dict[str, Any]
     }
 
 
+def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
+    objects = build_objects_index_payload(vault_dir, limit=12, offset=0)
+    contradictions = build_contradiction_browser_payload(vault_dir)
+    events = build_event_dossier_payload(vault_dir)
+    return {
+        "screen": "truth/dashboard",
+        "objects": {
+            "count": objects["count"],
+            "items": objects["items"],
+        },
+        "contradictions": {
+            "count": contradictions["count"],
+            "open_count": contradictions["open_count"],
+            "items": contradictions["items"][:8],
+        },
+        "events": {
+            "count": events["event_count"],
+            "items": events["events"][:8],
+            "dates": events["dates"],
+        },
+    }
+
+
 def build_objects_index_payload(vault_dir: Path | str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
     items = list_objects(vault_dir, limit=limit, offset=offset)
     return {

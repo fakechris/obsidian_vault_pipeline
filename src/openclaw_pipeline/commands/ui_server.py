@@ -14,38 +14,9 @@ from ..ui.view_models import (
     build_event_dossier_payload,
     build_object_page_payload,
     build_objects_index_payload,
+    build_truth_dashboard_payload,
     build_topic_overview_payload,
 )
-
-
-HTML_SHELL = """<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OpenClaw Truth UI</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; line-height: 1.5; max-width: 980px; }
-      code { background: #f4f4f5; padding: 0.1rem 0.3rem; border-radius: 4px; }
-      ul { padding-left: 1.2rem; }
-      nav { margin-bottom: 1.5rem; }
-      nav a { margin-right: 1rem; }
-      section { margin-top: 1.5rem; }
-      .muted { color: #52525b; }
-    </style>
-  </head>
-  <body>
-    <h1>OpenClaw Truth UI</h1>
-    <p>Minimal read-only shell over <code>knowledge.db</code>.</p>
-    <nav>
-      <a href="/objects">Objects</a>
-      <a href="/events">Event Dossier</a>
-      <a href="/contradictions">Contradictions</a>
-    </nav>
-    <p class="muted">JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.</p>
-  </body>
-</html>
-"""
 
 
 def _layout(title: str, body: str) -> str:
@@ -78,6 +49,44 @@ def _layout(title: str, body: str) -> str:
   </body>
 </html>
 """
+
+
+def _render_dashboard(payload: dict) -> str:
+    object_items = "".join(
+        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+        for item in payload["objects"]["items"]
+    ) or "<li>None</li>"
+    contradiction_items = "".join(
+        f'<li><span class="pill">{escape(item["status"])}</span>{escape(item["subject_key"])}</li>'
+        for item in payload["contradictions"]["items"]
+    ) or "<li>None</li>"
+    event_items = "".join(
+        f"<li>{escape(item['event_date'])} - "
+        f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+        for item in payload["events"]["items"]
+    ) or "<li>None</li>"
+    return _layout(
+        "OpenClaw Truth UI",
+        (
+            "<h1>OpenClaw Truth UI</h1>"
+            "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.</p>"
+            "<section class='card'>"
+            "<h2>Objects Indexed</h2>"
+            f"<p>{payload['objects']['count']}</p>"
+            f"<ul>{object_items}</ul>"
+            "</section>"
+            "<section class='card'>"
+            "<h2>Contradictions Open</h2>"
+            f"<p>{payload['contradictions']['open_count']}</p>"
+            f"<ul>{contradiction_items}</ul>"
+            "</section>"
+            "<section class='card'>"
+            "<h2>Recent Events</h2>"
+            f"<p>{payload['events']['count']}</p>"
+            f"<ul>{event_items}</ul>"
+            "</section>"
+        ),
+    )
 
 
 def _render_objects_index(payload: dict) -> str:
@@ -177,7 +186,8 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
 
             try:
                 if path == "/":
-                    self._write_html(HTML_SHELL)
+                    payload = build_truth_dashboard_payload(resolved_vault)
+                    self._write_html(_render_dashboard(payload))
                     return
                 if path == "/api/objects":
                     limit = int(query.get("limit", ["100"])[0])
