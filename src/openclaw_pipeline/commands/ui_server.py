@@ -10,7 +10,9 @@ from urllib.parse import parse_qs, urlparse
 
 from ..runtime import resolve_vault_dir
 from ..ui.view_models import (
+    build_atlas_browser_payload,
     build_contradiction_browser_payload,
+    build_derivation_browser_payload,
     build_event_dossier_payload,
     build_object_page_payload,
     build_objects_index_payload,
@@ -80,6 +82,8 @@ def _layout(title: str, body: str) -> str:
           <nav>
             <a href="/">Home</a>
             <a href="/objects">Objects</a>
+            <a href="/atlas">Atlas</a>
+            <a href="/deep-dives">Deep Dives</a>
             <a href="/events">Event Dossier</a>
             <a href="/contradictions">Contradictions</a>
           </nav>
@@ -166,6 +170,14 @@ def _render_object_page(payload: dict) -> str:
         f'<li><span class="pill">{escape(item["status"])}</span>{escape(item["subject_key"])}</li>'
         for item in payload["contradictions"]
     ) or "<li>None</li>"
+    source_notes = "".join(
+        f"<li>{escape(item['title'])} <span class='muted'>({escape(item['note_type'])})</span></li>"
+        for item in payload["provenance"]["source_notes"]
+    ) or "<li>None</li>"
+    mocs = "".join(
+        f"<li>{escape(item['title'])}</li>"
+        for item in payload["provenance"]["mocs"]
+    ) or "<li>None</li>"
     summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
     section_nav = "".join(
         f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>' for item in payload["section_nav"]
@@ -179,6 +191,8 @@ def _render_object_page(payload: dict) -> str:
             f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>"
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
+            f"<a href='/deep-dives?q={escape(payload['object']['object_id'])}'>Source deep dives</a>"
+            f"<a href='/atlas?q={escape(payload['object']['object_id'])}'>Atlas / MOC</a>"
             "</div></section>"
             f"<nav class='subnav'>{section_nav}</nav>"
             "<section class='grid stats'>"
@@ -196,6 +210,11 @@ def _render_object_page(payload: dict) -> str:
             f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
             f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
             f"<div><dt>Canonical Path</dt><dd>{escape(payload['context']['canonical_path'])}</dd></div>"
+            "</dl></section>"
+            "<section class='card'><h2>Provenance</h2><dl class='meta-list'>"
+            f"<div><dt>Evergreen Markdown</dt><dd>{escape(payload['provenance']['evergreen_path'])}</dd></div>"
+            f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
+            f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
             "</dl></section>"
             f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>"
             f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>"
@@ -219,10 +238,13 @@ def _render_topic_page(payload: dict) -> str:
             f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>"
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
+            f"<a href='/deep-dives?q={escape(payload['center']['object_id'])}'>Source deep dives</a>"
+            f"<a href='/atlas?q={escape(payload['center']['object_id'])}'>Atlas / MOC</a>"
             "</div></section>"
             "<section class='grid two-col'>"
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
+            f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{''.join(f'<li>{escape(item['title'])}</li>' for item in payload['provenance']['mocs']) or '<li>None</li>'}</ul></section>"
             "</section>"
         ),
     )
@@ -237,8 +259,12 @@ def _render_events_page(payload: dict) -> str:
     events = "".join(
         f'<section id="date-{escape(section["date"])}" class="card"><h2>{escape(section["date"])}</h2><ul class="list-tight">'
         + "".join(
-            f"<li>{escape(item['event_type'])} - "
-            f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+            (
+                f"<li>{escape(item['event_type'])} - "
+                f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+                if item["event_type"] != "page_date"
+                else f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+            )
             for item in section["events"]
         )
         + "</ul></section>"
@@ -248,6 +274,7 @@ def _render_events_page(payload: dict) -> str:
         "Event Dossier",
         (
             "<h1>Event Dossier</h1>"
+            "<p class='muted'>A timeline-oriented view over dated truth objects, not a separate event object model.</p>"
             "<form method='get' action='/events'>"
             f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> "
             "<button type='submit'>Search</button>"
@@ -255,6 +282,66 @@ def _render_events_page(payload: dict) -> str:
             f"<p class='muted'>{payload['event_count']} events across {len(payload['dates'])} dates.</p>"
             f"<nav class='subnav'>{date_nav}</nav>"
             f"{events}"
+        ),
+    )
+
+
+def _render_atlas_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    items = "".join(
+        "<li>"
+        f"{escape(item['title'])}"
+        + (
+            " <span class='muted'>"
+            + ", ".join(
+                f'<a href="/object?id={escape(member["object_id"])}">{escape(member["title"])}</a>'
+                for member in item["members"]
+            )
+            + "</span>"
+        )
+        + "</li>"
+        for item in payload["items"]
+    ) or "<li>None</li>"
+    return _layout(
+        "Atlas / MOC Browser",
+        (
+            "<h1>Atlas / MOC Browser</h1>"
+            "<form method='get' action='/atlas'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter MOCs or objects' /> "
+            "<button type='submit'>Search</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} atlas/moc pages linked to indexed objects.</p>"
+            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        ),
+    )
+
+
+def _render_derivations_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    items = "".join(
+        "<li>"
+        f"{escape(item['title'])}"
+        + (
+            " <span class='muted'>"
+            + ", ".join(
+                f'<a href="/object?id={escape(member["object_id"])}">{escape(member["title"])}</a>'
+                for member in item["derived_objects"]
+            )
+            + "</span>"
+        )
+        + "</li>"
+        for item in payload["items"]
+    ) or "<li>None</li>"
+    return _layout(
+        "Deep Dive Derivations",
+        (
+            "<h1>Deep Dive Derivations</h1>"
+            "<form method='get' action='/deep-dives'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter deep dives or objects' /> "
+            "<button type='submit'>Search</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.</p>"
+            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
 
@@ -356,6 +443,24 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     payload = build_event_dossier_payload(resolved_vault, query=q)
                     self._write_html(_render_events_page(payload))
+                    return
+                if path == "/api/atlas":
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_atlas_browser_payload(resolved_vault, query=q))
+                    return
+                if path == "/atlas":
+                    q = query.get("q", [""])[0]
+                    payload = build_atlas_browser_payload(resolved_vault, query=q)
+                    self._write_html(_render_atlas_page(payload))
+                    return
+                if path == "/api/deep-dives":
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_derivation_browser_payload(resolved_vault, query=q))
+                    return
+                if path == "/deep-dives":
+                    q = query.get("q", [""])[0]
+                    payload = build_derivation_browser_payload(resolved_vault, query=q)
+                    self._write_html(_render_derivations_page(payload))
                     return
                 if path == "/api/contradictions":
                     status = query.get("status", [""])[0] or None

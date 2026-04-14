@@ -6,7 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from ..runtime import VaultLayout, resolve_vault_dir
-from ..truth_api import count_objects, get_object_detail, get_topic_neighborhood, list_contradictions, list_objects
+from ..truth_api import (
+    count_objects,
+    get_object_detail,
+    get_topic_neighborhood,
+    list_atlas_memberships,
+    list_contradictions,
+    list_deep_dive_derivations,
+    list_objects,
+)
 
 
 def _db_path(vault_dir: Path | str) -> Path:
@@ -50,6 +58,7 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
             "source_slug": detail["object"]["source_slug"],
             "canonical_path": detail["object"]["canonical_path"],
         },
+        "provenance": detail["provenance"],
         "links": {
             "topic_path": f"/topic?id={object_id}",
             "events_path": f"/events?q={object_id}",
@@ -73,6 +82,7 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
         "edge_count": len(neighborhood["edges"]),
         "neighbor_count": len(neighborhood["neighbors"]),
         "center_summary": detail["summary"]["summary_text"] if detail["summary"] else "",
+        "provenance": detail["provenance"],
         "links": {
             "center_object_path": f"/object?id={object_id}",
             "events_path": f"/events?q={object_id}",
@@ -215,5 +225,25 @@ def build_objects_index_payload(
         "total_count": total_count,
         "limit": limit,
         "offset": offset,
+        "query": query or "",
+    }
+
+
+def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
+    items = list_atlas_memberships(vault_dir, query=query)
+    return {
+        "screen": "atlas/browser",
+        "items": items,
+        "count": len(items),
+        "query": query or "",
+    }
+
+
+def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
+    items = list_deep_dive_derivations(vault_dir, query=query)
+    return {
+        "screen": "derivations/browser",
+        "items": items,
+        "count": len(items),
         "query": query or "",
     }

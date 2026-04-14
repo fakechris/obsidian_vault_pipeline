@@ -93,6 +93,64 @@ def test_build_object_page_payload(temp_vault):
     assert payload["section_nav"][0]["href"] == "#summary"
 
 
+def test_build_object_page_payload_includes_provenance(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    assert payload["provenance"]["evergreen_path"].endswith("10-Knowledge/Evergreen/Alpha.md")
+    assert payload["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
+    assert payload["provenance"]["mocs"][0]["slug"] == "atlas-index"
+
+
 def test_build_topic_overview_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_topic_overview_payload
 
@@ -212,6 +270,93 @@ def test_build_event_dossier_payload_filters_by_query(temp_vault):
 
     assert payload["event_count"] == 1
     assert [item["object_id"] for item in payload["events"]] == ["beta"]
+
+
+def test_build_atlas_browser_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_atlas_browser_payload
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_atlas_browser_payload(temp_vault)
+
+    assert payload["screen"] == "atlas/browser"
+    assert payload["count"] == 1
+    assert payload["items"][0]["slug"] == "atlas-index"
+    assert payload["items"][0]["members"][0]["object_id"] == "alpha"
+
+
+def test_build_derivation_browser_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_derivation_browser_payload
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: deep-dive
+title: Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_derivation_browser_payload(temp_vault)
+
+    assert payload["screen"] == "derivations/browser"
+    assert payload["count"] == 1
+    assert payload["items"][0]["slug"] == "deep-dive"
+    assert payload["items"][0]["derived_objects"][0]["object_id"] == "alpha"
 
 
 def test_build_event_dossier_payload_applies_limit_before_materializing(temp_vault):

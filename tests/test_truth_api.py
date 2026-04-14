@@ -257,3 +257,67 @@ Alpha one does not support local-first execution.
     detail = get_object_detail(temp_vault, "alpha")
 
     assert detail["contradictions"] == []
+
+
+def test_truth_api_returns_object_provenance_and_moc_membership(temp_vault):
+    from openclaw_pipeline.truth_api import get_object_detail
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    detail = get_object_detail(temp_vault, "alpha")
+
+    assert detail["object"]["canonical_path"].endswith("10-Knowledge/Evergreen/Alpha.md")
+    assert detail["provenance"]["evergreen_path"].endswith("10-Knowledge/Evergreen/Alpha.md")
+    assert detail["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
+    assert detail["provenance"]["source_notes"][0]["note_type"] == "deep_dive"
+    assert detail["provenance"]["mocs"][0]["slug"] == "atlas-index"
+    assert detail["provenance"]["mocs"][0]["title"] == "Atlas Index"

@@ -82,6 +82,37 @@ def _get(port: int, path: str) -> tuple[int, str]:
 def test_ui_smoke_pages_render_truth_views(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
     port = server.server_address[1]
@@ -111,6 +142,9 @@ def test_ui_smoke_pages_render_truth_views(temp_vault):
     assert '/contradictions?q=alpha' in object_body
     assert 'href="#claims"' in object_body
     assert "Source Slug" in object_body
+    assert "Evergreen Markdown" in object_body
+    assert "Source Deep Dive" in object_body
+    assert "Atlas Index" in object_body
 
     assert topic_status == 200
     assert "Topic: Alpha" in topic_body
@@ -118,11 +152,14 @@ def test_ui_smoke_pages_render_truth_views(temp_vault):
     assert '/object?id=alpha' in topic_body
     assert '/events?q=alpha' in topic_body
     assert "Center Summary" in topic_body
+    assert "Atlas / MOC" in topic_body
 
     assert events_status == 200
     assert "Event Dossier" in events_body
     assert "2026-04-13" in events_body
     assert 'id="date-2026-04-13"' in events_body
+    assert "timeline-oriented" in events_body
+    assert "page_date -" not in events_body
 
     assert contradictions_status == 200
     assert "Contradictions" in contradictions_body
@@ -231,3 +268,77 @@ def test_ui_events_page_filters_by_query(temp_vault):
     assert status == 200
     assert "Beta" in body
     assert "Alpha" not in body
+
+
+def test_ui_smoke_atlas_and_deep_dive_pages_render_bridge_views(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: deep-dive
+title: Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        atlas_status, atlas_body = _get(port, "/atlas")
+        derivations_status, derivations_body = _get(port, "/deep-dives")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert atlas_status == 200
+    assert "Atlas / MOC Browser" in atlas_body
+    assert "Atlas Index" in atlas_body
+    assert "Alpha" in atlas_body
+
+    assert derivations_status == 200
+    assert "Deep Dive Derivations" in derivations_body
+    assert "Deep Dive" in derivations_body
+    assert "Alpha" in derivations_body

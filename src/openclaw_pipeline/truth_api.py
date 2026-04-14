@@ -158,6 +158,42 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             """,
             (f'%"{escaped}::%', f'%"{escaped}::%'),
         ).fetchall()
+        mention_rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE slug != ?
+              AND (
+                body LIKE ?
+                OR body LIKE ?
+                OR body LIKE ?
+              )
+            ORDER BY slug
+            """,
+            (
+                object_id,
+                f"%[[{object_id}]]%",
+                f"%[[{object_id}|%",
+                f"%[[{object_id}#%",
+            ),
+        ).fetchall()
+
+    mocs: list[dict[str, Any]] = []
+    source_notes: list[dict[str, Any]] = []
+    for slug, title, note_type, path in mention_rows:
+        item = {
+            "slug": slug,
+            "title": title,
+            "note_type": note_type,
+            "path": path,
+        }
+        if note_type == "moc" or "/10-Knowledge/Atlas/" in path or Path(path).name.startswith("MOC"):
+            mocs.append(item)
+            continue
+        if slug == object_id:
+            continue
+        if note_type != "evergreen":
+            source_notes.append(item)
 
     return {
         "object": {
@@ -215,6 +251,11 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             }
             for row in contradiction_rows
         ],
+        "provenance": {
+            "evergreen_path": object_row[3],
+            "source_notes": source_notes,
+            "mocs": mocs,
+        },
     }
 
 
@@ -331,3 +372,100 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
             for row in edge_rows
         ],
     }
+
+
+def list_atlas_memberships(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    sql = """
+        SELECT pages_index.slug, pages_index.title, pages_index.path, objects.object_id, objects.title
+        FROM pages_index
+        JOIN page_links ON page_links.source_slug = pages_index.slug
+        JOIN objects ON objects.object_id = page_links.target_slug
+        WHERE pages_index.note_type = 'moc'
+    """
+    params: list[Any] = []
+    if normalized_query:
+        sql += """
+          AND (
+            lower(pages_index.slug) LIKE ? ESCAPE '\\'
+            OR lower(pages_index.title) LIKE ? ESCAPE '\\'
+            OR lower(objects.object_id) LIKE ? ESCAPE '\\'
+            OR lower(objects.title) LIKE ? ESCAPE '\\'
+          )
+        """
+        params.extend([f"%{normalized_query}%"] * 4)
+    sql += " ORDER BY pages_index.slug, objects.object_id LIMIT ?"
+    params.append(limit)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for slug, title, path, object_id, object_title in rows:
+        item = grouped.setdefault(
+            slug,
+            {
+                "slug": slug,
+                "title": title,
+                "path": path,
+                "members": [],
+            },
+        )
+        item["members"].append({"object_id": object_id, "title": object_title})
+    return list(grouped.values())
+
+
+def list_deep_dive_derivations(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    sql = """
+        SELECT pages_index.slug, pages_index.title, pages_index.note_type, pages_index.path, objects.object_id, objects.title
+        FROM pages_index
+        JOIN page_links ON page_links.source_slug = pages_index.slug
+        JOIN objects ON objects.object_id = page_links.target_slug
+        WHERE pages_index.note_type = 'deep_dive'
+    """
+    params: list[Any] = []
+    if normalized_query:
+        sql += """
+          AND (
+            lower(pages_index.slug) LIKE ? ESCAPE '\\'
+            OR lower(pages_index.title) LIKE ? ESCAPE '\\'
+            OR lower(objects.object_id) LIKE ? ESCAPE '\\'
+            OR lower(objects.title) LIKE ? ESCAPE '\\'
+          )
+        """
+        params.extend([f"%{normalized_query}%"] * 4)
+    sql += " ORDER BY pages_index.slug, objects.object_id LIMIT ?"
+    params.append(limit)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for slug, title, note_type, path, object_id, object_title in rows:
+        item = grouped.setdefault(
+            slug,
+            {
+                "slug": slug,
+                "title": title,
+                "note_type": note_type,
+                "path": path,
+                "derived_objects": [],
+            },
+        )
+        item["derived_objects"].append({"object_id": object_id, "title": object_title})
+    return list(grouped.values())
