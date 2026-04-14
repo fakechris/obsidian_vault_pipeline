@@ -138,6 +138,9 @@ date: 2026-04-13
         object_status, object_body = _get(port, "/object?id=alpha")
         topic_status, topic_body = _get(port, "/topic?id=alpha")
         events_status, events_body = _get(port, "/events")
+        atlas_status, atlas_body = _get(port, "/atlas")
+        deep_dives_status, deep_dives_body = _get(port, "/deep-dives")
+        production_status, production_body = _get(port, "/production")
         contradictions_status, contradictions_body = _get(port, "/contradictions")
     finally:
         server.shutdown()
@@ -201,6 +204,22 @@ date: 2026-04-13
     assert "Atlas Index" in events_body
     assert f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Source Deep Dive_深度解读.md', safe='')}" in events_body
     assert f"/note?path={quote('10-Knowledge/Atlas/Atlas-Index.md', safe='')}" in events_body
+
+    assert atlas_status == 200
+    assert "Atlas / MOC Browser" in atlas_body
+    assert "Contribution Summary" in atlas_body
+    assert "Source Deep Dive" in atlas_body
+
+    assert deep_dives_status == 200
+    assert "Deep Dive Derivations" in deep_dives_body
+    assert "Contribution Summary" in deep_dives_body
+    assert "Source Deep Dive" in deep_dives_body
+
+    assert production_status == 200
+    assert "Production Browser" in production_body
+    assert "Chain Model" in production_body
+    assert "Source Deep Dive" in production_body
+    assert "deep dive" in production_body
 
     assert contradictions_status == 200
     assert "Contradictions" in contradictions_body

@@ -1093,6 +1093,89 @@ def get_object_traceability(vault_dir: Path | str, object_id: str) -> dict[str, 
     }
 
 
+def list_production_chains(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_query = (query or "").strip().lower()
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE note_type = 'deep_dive'
+            ORDER BY note_type, slug
+            """
+        ).fetchall()
+
+    candidates: list[dict[str, str]] = []
+    seen_paths: set[str] = set()
+    for slug, title, note_type, path in rows:
+        relative_path = _vault_relative_path(resolved_vault, path)
+        seen_paths.add(relative_path)
+        candidates.append(
+            {
+                "slug": str(slug),
+                "title": str(title),
+                "note_type": str(note_type),
+                "path": relative_path,
+                "stage_label": "deep_dive",
+            }
+        )
+
+    processed_root = resolved_vault / "50-Inbox" / "03-Processed"
+    if processed_root.exists():
+        for candidate in sorted(processed_root.rglob("*.md")):
+            relative_path = str(candidate.resolve().relative_to(resolved_vault.resolve()))
+            if relative_path in seen_paths:
+                continue
+            frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+            candidates.append(
+                {
+                    "slug": candidate.stem,
+                    "title": str(frontmatter.get("title") or candidate.stem).strip(),
+                    "note_type": "note",
+                    "path": relative_path,
+                    "stage_label": "source_note",
+                }
+            )
+
+    items: list[dict[str, Any]] = []
+    for candidate in candidates:
+        relative_path = candidate["path"]
+        chain = get_note_traceability(vault_dir, note_path=relative_path)
+        if normalized_query:
+            haystacks = [
+                str(candidate["title"]).lower(),
+                str(candidate["slug"]).lower(),
+                relative_path.lower(),
+                *(item["title"].lower() for item in chain["deep_dives"]),
+                *(item["title"].lower() for item in chain["objects"]),
+                *(item["title"].lower() for item in chain["atlas_pages"]),
+                *(item["title"].lower() for item in chain["source_notes"]),
+            ]
+            if not any(normalized_query in haystack for haystack in haystacks):
+                continue
+        items.append(
+            {
+                "slug": candidate["slug"],
+                "title": candidate["title"],
+                "note_type": candidate["note_type"],
+                "path": relative_path,
+                "stage_label": candidate["stage_label"],
+                "traceability": chain,
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
 def list_contradictions(
     vault_dir: Path | str,
     *,

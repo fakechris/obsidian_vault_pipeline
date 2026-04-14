@@ -23,6 +23,7 @@ from ..truth_api import (
     list_contradictions,
     list_deep_dive_derivations,
     list_objects,
+    list_production_chains,
     list_stale_summaries,
     search_vault_surface,
 )
@@ -466,11 +467,24 @@ def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = No
     enriched_items = []
     for item in items:
         preview_titles = [member["title"] for member in item["members"][:5]]
+        member_object_ids = [member["object_id"] for member in item["members"]]
+        review_context = get_review_context(vault_dir, member_object_ids)
+        source_note_map: dict[str, dict[str, str]] = {}
+        deep_dive_map: dict[str, dict[str, str]] = {}
+        for member_object_id in member_object_ids:
+            traceability = get_object_traceability(vault_dir, member_object_id)
+            for source in traceability["source_notes"]:
+                source_note_map.setdefault(source["path"], source)
+            for deep_dive in traceability["deep_dives"]:
+                deep_dive_map.setdefault(deep_dive["slug"], deep_dive)
         enriched_items.append(
             {
                 **item,
                 "member_count": len(item["members"]),
                 "preview_titles": preview_titles,
+                "source_notes": list(source_note_map.values()),
+                "deep_dives": list(deep_dive_map.values()),
+                "review_context": review_context,
             }
         )
     return {
@@ -486,11 +500,22 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
     enriched_items = []
     for item in items:
         preview_titles = [member["title"] for member in item["derived_objects"][:5]]
+        object_ids = [member["object_id"] for member in item["derived_objects"]]
+        review_context = get_review_context(vault_dir, object_ids)
+        atlas_page_map: dict[str, dict[str, str]] = {}
+        for member_object_id in object_ids:
+            traceability = get_object_traceability(vault_dir, member_object_id)
+            for atlas_page in traceability["atlas_pages"]:
+                atlas_page_map.setdefault(atlas_page["slug"], atlas_page)
+        source_notes = get_note_traceability(vault_dir, note_path=item["path"])["source_notes"]
         enriched_items.append(
             {
                 **item,
                 "derived_object_count": len(item["derived_objects"]),
                 "preview_titles": preview_titles,
+                "atlas_pages": list(atlas_page_map.values()),
+                "source_notes": source_notes,
+                "review_context": review_context,
             }
         )
     return {
@@ -498,6 +523,24 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
         "items": enriched_items,
         "count": len(enriched_items),
         "query": query or "",
+    }
+
+
+def build_production_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
+    items = list_production_chains(vault_dir, query=query)
+    source_items = [item for item in items if item["stage_label"] == "source_note"]
+    deep_dive_items = [item for item in items if item["stage_label"] == "deep_dive"]
+    return {
+        "screen": "production/browser",
+        "items": items,
+        "source_items": source_items,
+        "deep_dive_items": deep_dive_items,
+        "count": len(items),
+        "query": query or "",
+        "counts": {
+            "source_notes": len(source_items),
+            "deep_dives": len(deep_dive_items),
+        },
     }
 
 

@@ -267,6 +267,12 @@ Core deliverables:
 - object derivation summaries
 - Atlas/topic rollups that explain knowledge contribution, not just membership
 
+Current progress:
+
+- `Production Chain` is visible on `note` and `object` pages
+- `/atlas` and `/deep-dives` show contribution summaries
+- `/production` exists as a provenance-first aggregate browser over source notes and deep dives
+
 Exit condition:
 
 - users can answer “where did this knowledge come from?” and “what did this note produce?” from the product itself

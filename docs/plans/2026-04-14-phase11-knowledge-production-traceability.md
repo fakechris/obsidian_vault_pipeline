@@ -58,9 +58,17 @@ The user should not need to learn a new route before they can understand product
 
 ### Slice C: Traceability Browser Follow-Up
 
-After stable payloads exist on note/object pages, add a dedicated traceability browser only if the embedded views prove insufficient.
+After stable payloads exist on note/object pages, add dedicated aggregate browsers where they materially improve operator understanding:
 
-This is explicitly later. The first job is to make the production chain visible where users already are.
+- Atlas contribution summaries
+- Deep-dive contribution summaries
+- a production browser spanning:
+  - source note
+  - deep dive
+  - downstream objects
+  - downstream Atlas/MOC reach
+
+This browser should stay provenance-first. It is not a graph view and it should not invent links from loose mentions.
 
 ## Non-Goals
 
@@ -85,5 +93,21 @@ Phase 11 reaches its first checkpoint when:
 1. Add failing tests for note/object production-chain payloads.
 2. Implement minimal `truth_api` helpers over current data sources.
 3. Surface the chain on `/note` and `/object`.
-4. Run focused UI tests.
-5. Run full `pytest` and `compileall`.
+4. Add aggregate browsers for `/atlas`, `/deep-dives`, and `/production`.
+5. Run focused UI tests.
+6. Run full `pytest` and `compileall`.
+
+## Current Checkpoint
+
+Completed so far:
+
+- stable `get_note_traceability()` and `get_object_traceability()` payloads,
+- `Production Chain` sections on `/note` and `/object`,
+- contribution summaries on `/atlas` and `/deep-dives`,
+- a new `/production` browser for source/deep-dive chain traversal.
+
+Remaining work in Phase 11:
+
+- richer chain summaries on topic/event surfaces,
+- stronger prioritization around which chains are incomplete or weak,
+- eventual promotion from traceability browser to full production intelligence.

@@ -25,6 +25,7 @@ from ..ui.view_models import (
     build_note_page_payload,
     build_object_page_payload,
     build_objects_index_payload,
+    build_production_browser_payload,
     build_search_payload,
     build_stale_summary_browser_payload,
     build_truth_dashboard_payload,
@@ -100,6 +101,7 @@ def _layout(title: str, body: str) -> str:
             <a href="/">Home</a>
             <a href="/objects">Objects</a>
             <a href="/search">Search</a>
+            <a href="/production">Production</a>
             <a href="/atlas">Atlas</a>
             <a href="/deep-dives">Deep Dives</a>
             <a href="/events">Event Dossier</a>
@@ -1004,6 +1006,8 @@ def _render_atlas_page(payload: dict) -> str:
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{item['member_count']} objects</span>"
+        + f" <span class='pill'>{len(item['deep_dives'])} deep dives</span>"
+        + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -1017,6 +1021,8 @@ def _render_atlas_page(payload: dict) -> str:
             if item["preview_titles"]
             else ""
         )
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'])}</div>"
+        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['deep_dives'])}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"
@@ -1029,6 +1035,7 @@ def _render_atlas_page(payload: dict) -> str:
             "<button type='submit'>Search</button>"
             "</form>"
             f"<p class='muted'>{payload['count']} atlas/moc pages linked to indexed objects.</p>"
+            "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each Atlas page now shows the source notes and deep dives that feed the objects it organizes.</p></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
@@ -1040,6 +1047,8 @@ def _render_derivations_page(payload: dict) -> str:
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{item['derived_object_count']} derived objects</span>"
+        + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
+        + f" <span class='pill'>{len(item['atlas_pages'])} atlas pages</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -1053,6 +1062,8 @@ def _render_derivations_page(payload: dict) -> str:
             if item["preview_titles"]
             else ""
         )
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'])}</div>"
+        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['atlas_pages'])}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"
@@ -1065,6 +1076,37 @@ def _render_derivations_page(payload: dict) -> str:
             "<button type='submit'>Search</button>"
             "</form>"
             f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.</p>"
+            "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each deep dive now shows upstream source notes and downstream Atlas reach, not just derived objects.</p></section>"
+            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        ),
+    )
+
+
+def _render_production_browser_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    items = "".join(
+        "<li>"
+        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        + f" <span class='pill'>{escape(item['stage_label'].replace('_', ' '))}</span>"
+        + f" <span class='pill'>{item['traceability']['counts']['deep_dives']} deep dives</span>"
+        + f" <span class='pill'>{item['traceability']['counts']['objects']} objects</span>"
+        + f" <span class='pill'>{item['traceability']['counts']['atlas_pages']} atlas pages</span>"
+        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'])}</div>"
+        + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'])}</div>"
+        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'])}</div>"
+        + "</li>"
+        for item in payload["items"]
+    ) or "<li class='muted'>No production chains found.</li>"
+    return _layout(
+        "Production Browser",
+        (
+            "<h1>Production Browser</h1>"
+            "<form method='get' action='/production'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter source notes, deep dives, objects, or atlas' /> "
+            "<button type='submit'>Search</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.</p>"
+            "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
@@ -1407,6 +1449,15 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     payload = build_derivation_browser_payload(resolved_vault, query=q)
                     self._write_html(_render_derivations_page(payload))
+                    return
+                if path == "/api/production":
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_production_browser_payload(resolved_vault, query=q))
+                    return
+                if path == "/production":
+                    q = query.get("q", [""])[0]
+                    payload = build_production_browser_payload(resolved_vault, query=q)
+                    self._write_html(_render_production_browser_page(payload))
                     return
                 if path == "/api/summaries":
                     q = query.get("q", [""])[0]
