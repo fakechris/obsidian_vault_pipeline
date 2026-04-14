@@ -641,7 +641,7 @@ def _render_atlas_page(payload: dict) -> str:
     query = payload.get("query", "")
     items = "".join(
         "<li>"
-        f"{escape(item['title'])}"
+        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -671,7 +671,7 @@ def _render_derivations_page(payload: dict) -> str:
     query = payload.get("query", "")
     items = "".join(
         "<li>"
-        f"{escape(item['title'])}"
+        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
         + (
             " <span class='muted'>"
             + ", ".join(

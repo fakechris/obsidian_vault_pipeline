@@ -582,8 +582,13 @@ date: 2026-04-13
     assert "Atlas / MOC Browser" in atlas_body
     assert "Atlas Index" in atlas_body
     assert "Alpha" in atlas_body
+    assert f"/note?path={quote('10-Knowledge/Atlas/Atlas-Index.md', safe='')}" in atlas_body
 
     assert derivations_status == 200
     assert "Deep Dive Derivations" in derivations_body
     assert "Deep Dive" in derivations_body
     assert "Alpha" in derivations_body
+    assert (
+        f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Deep Dive_深度解读.md', safe='')}"
+        in derivations_body
+    )
