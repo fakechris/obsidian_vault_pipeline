@@ -882,16 +882,25 @@ def _render_events_page(payload: dict) -> str:
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     date_nav = "".join(
         f"<a href='#date-{escape(section['date'])}'>{escape(section['date'])}</a>"
-        for section in payload["date_sections"]
+        for section in payload["cluster_sections"]
     )
     events = "".join(
         f'<section id="date-{escape(section["date"])}" class="card"><h2>{escape(section["date"])}</h2><ul class="list-tight">'
         + "".join(
             (
                 "<li>"
-                + f"<span class='pill'>{escape(item['event_label'])}</span> "
                 + f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a>'
-                + f" <span class='muted'>({escape(item['timeline_anchor_kind'])}: {escape(item['timeline_anchor_label'])})</span>"
+                + f" <span class='pill'>{item['row_count']} timeline rows</span>"
+                + (
+                    f" <span class='muted'>({escape(', '.join(item['event_labels']))})</span>"
+                    if item["event_labels"]
+                    else ""
+                )
+                + (
+                    f"<div class='muted'>Anchors: {escape(', '.join(item['timeline_anchor_labels']))}</div>"
+                    if item["timeline_anchor_labels"]
+                    else ""
+                )
                 + (
                     f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
                     if item["provenance"]["evergreen_path"]
@@ -906,10 +915,10 @@ def _render_events_page(payload: dict) -> str:
                 + "</div>"
                 + "</li>"
             )
-            for item in section["events"]
+            for item in section["clusters"]
         )
         + "</ul></section>"
-        for section in payload["date_sections"]
+        for section in payload["cluster_sections"]
     ) or "<li>None</li>"
     summary_form = (
         "<form method='post' action='/summaries/rebuild' class='link-row'>"
@@ -940,7 +949,7 @@ def _render_events_page(payload: dict) -> str:
             f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> "
             "<button type='submit'>Search</button>"
             "</form>"
-            f"<p class='muted'>{payload['event_count']} events across {len(payload['dates'])} dates.</p>"
+            f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.</p>"
             f"<div class='link-row'>{type_breakdown}</div>"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
@@ -948,6 +957,7 @@ def _render_events_page(payload: dict) -> str:
             f"{contradiction_entry}"
             f"{summary_form}"
             "</section>"
+            "<section class='card'><h2>Event Clusters</h2><p class='muted'>Rows for the same object and date are grouped into a single cluster so the dossier reads as an object timeline instead of raw timeline rows.</p></section>"
             f"<section class='card'><h2>Timeline Contract</h2><ul class='list-tight'>{timeline_contract_items}</ul></section>"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
             f"<nav class='subnav'>{date_nav}</nav>"

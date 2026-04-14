@@ -442,6 +442,39 @@ def test_build_event_dossier_payload_filters_by_query(temp_vault):
     assert [item["object_id"] for item in payload["events"]] == ["beta"]
 
 
+def test_build_event_dossier_payload_groups_rows_into_event_clusters(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+
+## 2026-04-13
+
+Shipped the local-first harness update.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault, query="alpha")
+
+    assert payload["event_count"] == 2
+    assert payload["cluster_count"] == 1
+    assert payload["cluster_sections"][0]["clusters"][0]["object_id"] == "alpha"
+    assert payload["cluster_sections"][0]["clusters"][0]["row_count"] == 2
+    assert payload["cluster_sections"][0]["clusters"][0]["row_types"] == ["heading_date", "page_date"]
+
+
 def test_build_atlas_browser_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_atlas_browser_payload
 

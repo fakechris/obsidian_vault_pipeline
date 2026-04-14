@@ -191,6 +191,7 @@ date: 2026-04-13
     assert "Dated Note" in events_body
     assert "Model Notes" in events_body
     assert "Timeline Contract" in events_body
+    assert "Event Clusters" in events_body
     assert "Review Context" in events_body
     assert "/summaries?q=alpha" in events_body
     assert "Quick Maintenance" in events_body

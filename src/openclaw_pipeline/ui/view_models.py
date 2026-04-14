@@ -201,6 +201,13 @@ def build_event_dossier_payload(
     for event in events:
         grouped.setdefault(event["event_date"], []).append(event)
     date_sections = [{"date": date, "events": grouped[date]} for date in dates]
+    cluster_sections = [
+        {
+            "date": date,
+            "clusters": _cluster_timeline_events(grouped[date]),
+        }
+        for date in dates
+    ]
     event_type_counts = Counter(event["event_kind"] for event in events)
     row_type_counts = Counter(event["row_type"] for event in events)
     semantic_roles = Counter(event["semantic_role"] for event in events)
@@ -208,8 +215,10 @@ def build_event_dossier_payload(
         "screen": "event/dossier",
         "events": events,
         "event_count": len(events),
+        "cluster_count": sum(len(section["clusters"]) for section in cluster_sections),
         "dates": dates,
         "date_sections": date_sections,
+        "cluster_sections": cluster_sections,
         "event_type_counts": dict(event_type_counts),
         "timeline_contract": {
             "timeline_kind": "dated_note_projection",
@@ -331,6 +340,42 @@ def _build_timeline_event_item(row: tuple[Any, ...]) -> dict[str, Any]:
         "title": title,
         "summary_text": row[6] or "",
     }
+
+
+def _cluster_timeline_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    clusters: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in events:
+        key = (str(event["event_date"]), str(event["object_id"]))
+        cluster = clusters.setdefault(
+            key,
+            {
+                "event_date": event["event_date"],
+                "object_id": event["object_id"],
+                "title": event["title"],
+                "object_path": event["object_path"],
+                "summary_text": event["summary_text"],
+                "review_links": event["review_links"],
+                "provenance": event["provenance"],
+                "row_count": 0,
+                "row_types": [],
+                "event_labels": [],
+                "semantic_roles": [],
+                "timeline_anchor_labels": [],
+            },
+        )
+        cluster["row_count"] += 1
+        for field, value in (
+            ("row_types", event["row_type"]),
+            ("event_labels", event["event_label"]),
+            ("semantic_roles", event["semantic_role"]),
+            ("timeline_anchor_labels", event["timeline_anchor_label"]),
+        ):
+            if value not in cluster[field]:
+                cluster[field].append(value)
+    for cluster in clusters.values():
+        cluster["row_types"] = sorted(cluster["row_types"])
+        cluster["semantic_roles"] = sorted(cluster["semantic_roles"])
+    return sorted(clusters.values(), key=lambda item: (str(item["event_date"]), str(item["object_id"])))
 
 
 def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
