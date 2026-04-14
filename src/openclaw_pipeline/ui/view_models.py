@@ -9,6 +9,7 @@ from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_api import (
     count_objects,
     get_object_detail,
+    get_object_provenance_map,
     get_topic_neighborhood,
     list_atlas_memberships,
     list_contradictions,
@@ -140,6 +141,13 @@ def build_event_dossier_payload(
         }
         for row in rows
     ]
+    provenance_map = get_object_provenance_map(vault_dir, [event["object_id"] for event in events])
+    for event in events:
+        event["object_path"] = f"/object?id={event['object_id']}"
+        event["provenance"] = provenance_map.get(
+            event["object_id"],
+            {"evergreen_path": "", "source_notes": [], "mocs": []},
+        )
     dates = sorted({event["event_date"] for event in events})
     grouped: dict[str, list[dict[str, Any]]] = {}
     for event in events:
@@ -162,16 +170,43 @@ def build_contradiction_browser_payload(
     query: str | None = None,
 ) -> dict[str, Any]:
     raw_items = list_contradictions(vault_dir, status=status, query=query)
+    provenance_map = get_object_provenance_map(
+        vault_dir,
+        _object_ids_from_claim_ids(
+            *(
+                item["positive_claim_ids"] + item["negative_claim_ids"]
+                for item in raw_items
+            )
+        ),
+    )
     items = []
     for item in raw_items:
         object_ids = _object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"])
+        source_notes: dict[str, dict[str, Any]] = {}
+        mocs: dict[str, dict[str, Any]] = {}
+        object_titles: dict[str, str] = {}
+        for object_id in object_ids:
+            provenance = provenance_map.get(
+                object_id,
+                {"title": object_id, "evergreen_path": "", "source_notes": [], "mocs": []},
+            )
+            object_titles[object_id] = provenance["title"]
+            for note in provenance["source_notes"]:
+                source_notes.setdefault(note["slug"], note)
+            for moc in provenance["mocs"]:
+                mocs.setdefault(moc["slug"], moc)
         items.append(
             {
                 **item,
                 "object_ids": object_ids,
+                "object_titles": object_titles,
                 "object_links": [
                     {"object_id": object_id, "path": f"/object?id={object_id}"} for object_id in object_ids
                 ],
+                "provenance": {
+                    "source_notes": list(source_notes.values()),
+                    "mocs": list(mocs.values()),
+                },
             }
         )
     status_counts = Counter(item["status"] for item in items)
@@ -231,19 +266,39 @@ def build_objects_index_payload(
 
 def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
     items = list_atlas_memberships(vault_dir, query=query)
+    enriched_items = []
+    for item in items:
+        preview_titles = [member["title"] for member in item["members"][:5]]
+        enriched_items.append(
+            {
+                **item,
+                "member_count": len(item["members"]),
+                "preview_titles": preview_titles,
+            }
+        )
     return {
         "screen": "atlas/browser",
-        "items": items,
-        "count": len(items),
+        "items": enriched_items,
+        "count": len(enriched_items),
         "query": query or "",
     }
 
 
 def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
     items = list_deep_dive_derivations(vault_dir, query=query)
+    enriched_items = []
+    for item in items:
+        preview_titles = [member["title"] for member in item["derived_objects"][:5]]
+        enriched_items.append(
+            {
+                **item,
+                "derived_object_count": len(item["derived_objects"]),
+                "preview_titles": preview_titles,
+            }
+        )
     return {
         "screen": "derivations/browser",
-        "items": items,
-        "count": len(items),
+        "items": enriched_items,
+        "count": len(enriched_items),
         "query": query or "",
     }

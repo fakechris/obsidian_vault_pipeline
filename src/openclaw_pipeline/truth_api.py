@@ -38,6 +38,82 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _is_moc_row(note_type: str, path: str) -> bool:
+    return note_type == "moc" or "/10-Knowledge/Atlas/" in path or Path(path).name.startswith("MOC")
+
+
+def _batch_object_rows(vault_dir: Path | str, object_ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not object_ids:
+        return {}
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    placeholders = ",".join("?" for _ in object_ids)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT object_id, object_kind, title, canonical_path, source_slug
+            FROM objects
+            WHERE object_id IN ({placeholders})
+            ORDER BY object_id
+            """,
+            tuple(object_ids),
+        ).fetchall()
+    return {
+        row[0]: {
+            "object_id": row[0],
+            "object_kind": row[1],
+            "title": row[2],
+            "canonical_path": _vault_relative_path(resolved_vault, row[3]),
+            "source_slug": row[4],
+        }
+        for row in rows
+    }
+
+
+def get_object_provenance_map(vault_dir: Path | str, object_ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not object_ids:
+        return {}
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    ordered_object_ids = list(dict.fromkeys(object_ids))
+    object_rows = _batch_object_rows(vault_dir, ordered_object_ids)
+    placeholders = ",".join("?" for _ in ordered_object_ids)
+    with sqlite3.connect(db_path) as conn:
+        mention_rows = conn.execute(
+            f"""
+            SELECT page_links.target_slug, pages_index.slug, pages_index.title, pages_index.note_type, pages_index.path
+            FROM page_links
+            JOIN pages_index ON pages_index.slug = page_links.source_slug
+            WHERE page_links.target_slug IN ({placeholders})
+              AND pages_index.slug != page_links.target_slug
+            ORDER BY page_links.target_slug, pages_index.slug
+            """,
+            tuple(ordered_object_ids),
+        ).fetchall()
+
+    provenance = {
+        object_id: {
+            "title": object_rows.get(object_id, {}).get("title", object_id),
+            "evergreen_path": object_rows.get(object_id, {}).get("canonical_path", ""),
+            "source_notes": [],
+            "mocs": [],
+        }
+        for object_id in ordered_object_ids
+    }
+    for target_slug, slug, title, note_type, path in mention_rows:
+        item = {
+            "slug": slug,
+            "title": title,
+            "note_type": note_type,
+            "path": _vault_relative_path(resolved_vault, path),
+        }
+        if _is_moc_row(note_type, path):
+            provenance[target_slug]["mocs"].append(item)
+        elif note_type != "evergreen":
+            provenance[target_slug]["source_notes"].append(item)
+    return provenance
+
+
 def list_objects(
     vault_dir: Path | str,
     *,
@@ -272,7 +348,7 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             "note_type": note_type,
             "path": _vault_relative_path(resolved_vault, path),
         }
-        if note_type == "moc" or "/10-Knowledge/Atlas/" in path or Path(path).name.startswith("MOC"):
+        if _is_moc_row(note_type, path):
             mocs.append(item)
             continue
         if slug == object_id:

@@ -433,6 +433,14 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str) -> str
     )
 
 
+def _render_named_note_links(items: list[dict[str, str]]) -> str:
+    if not items:
+        return "<span class='muted'>None</span>"
+    return ", ".join(
+        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>' for item in items
+    )
+
+
 def _render_dashboard(payload: dict) -> str:
     object_items = "".join(
         f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
@@ -611,10 +619,17 @@ def _render_events_page(payload: dict) -> str:
         f'<section id="date-{escape(section["date"])}" class="card"><h2>{escape(section["date"])}</h2><ul class="list-tight">'
         + "".join(
             (
-                f"<li>{escape(item['event_type'])} - "
-                f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
-                if item["event_type"] != "page_date"
-                else f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+                "<li>"
+                + (
+                    f"{escape(item['event_type'])} - "
+                    if item["event_type"] != "page_date"
+                    else ""
+                )
+                + f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a>'
+                + f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
+                + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
+                + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+                + "</li>"
             )
             for item in section["events"]
         )
@@ -642,6 +657,7 @@ def _render_atlas_page(payload: dict) -> str:
     items = "".join(
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        + f" <span class='pill'>{item['member_count']} objects</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -649,6 +665,11 @@ def _render_atlas_page(payload: dict) -> str:
                 for member in item["members"]
             )
             + "</span>"
+        )
+        + (
+            f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
+            if item["preview_titles"]
+            else ""
         )
         + "</li>"
         for item in payload["items"]
@@ -672,6 +693,7 @@ def _render_derivations_page(payload: dict) -> str:
     items = "".join(
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        + f" <span class='pill'>{item['derived_object_count']} derived objects</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -679,6 +701,11 @@ def _render_derivations_page(payload: dict) -> str:
                 for member in item["derived_objects"]
             )
             + "</span>"
+        )
+        + (
+            f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
+            if item["preview_titles"]
+            else ""
         )
         + "</li>"
         for item in payload["items"]
@@ -706,12 +733,15 @@ def _render_contradictions_page(payload: dict) -> str:
         + (
             " <span class='muted'>"
             + ", ".join(
-                f'<a href="{escape(link["path"])}">{escape(link["object_id"])}</a>' for link in item["object_links"]
+                f'<a href="{escape(link["path"])}">{escape(item["object_titles"].get(link["object_id"], link["object_id"]))}</a>'
+                for link in item["object_links"]
             )
             + "</span>"
             if item["object_links"]
             else ""
         )
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
+        + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"

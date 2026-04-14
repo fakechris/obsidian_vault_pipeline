@@ -166,11 +166,17 @@ date: 2026-04-13
     assert 'id="date-2026-04-13"' in events_body
     assert "timeline-oriented" in events_body
     assert "page_date -" not in events_body
+    assert "Source Deep Dive" in events_body
+    assert "Atlas Index" in events_body
+    assert f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Source Deep Dive_深度解读.md', safe='')}" in events_body
+    assert f"/note?path={quote('10-Knowledge/Atlas/Atlas-Index.md', safe='')}" in events_body
 
     assert contradictions_status == 200
     assert "Contradictions" in contradictions_body
     assert "alpha" in contradictions_body
     assert '/object?id=alpha' in contradictions_body
+    assert "Source Deep Dive" in contradictions_body
+    assert "Atlas Index" in contradictions_body
 
 
 def test_ui_note_page_renders_markdown_note(temp_vault):
@@ -582,12 +588,14 @@ date: 2026-04-13
     assert "Atlas / MOC Browser" in atlas_body
     assert "Atlas Index" in atlas_body
     assert "Alpha" in atlas_body
+    assert "1 objects" in atlas_body
     assert f"/note?path={quote('10-Knowledge/Atlas/Atlas-Index.md', safe='')}" in atlas_body
 
     assert derivations_status == 200
     assert "Deep Dive Derivations" in derivations_body
     assert "Deep Dive" in derivations_body
     assert "Alpha" in derivations_body
+    assert "1 derived objects" in derivations_body
     assert (
         f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Deep Dive_深度解读.md', safe='')}"
         in derivations_body

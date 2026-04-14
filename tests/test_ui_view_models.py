@@ -181,6 +181,51 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["date_sections"][0]["date"] == "2026-04-13"
 
 
+def test_build_event_dossier_payload_includes_provenance(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault, query="alpha")
+
+    event = next(item for item in payload["events"] if item["object_id"] == "alpha")
+    assert event["object_path"] == "/object?id=alpha"
+    assert event["provenance"]["evergreen_path"] == "10-Knowledge/Evergreen/Alpha.md"
+    assert event["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
+    assert event["provenance"]["mocs"][0]["slug"] == "atlas-index"
+
+
 def test_build_contradiction_browser_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
 
@@ -217,6 +262,50 @@ def test_build_contradiction_browser_payload_filters_by_query(temp_vault):
 
     assert payload["count"] == 1
     assert payload["items"][0]["subject_key"] == "alpha"
+
+
+def test_build_contradiction_browser_payload_includes_provenance(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+
+    payload = build_contradiction_browser_payload(temp_vault)
+
+    item = payload["items"][0]
+    assert item["object_titles"] == {"alpha": "Alpha", "conflict": "Conflict"}
+    assert item["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
+    assert item["provenance"]["mocs"][0]["slug"] == "atlas-index"
 
 
 def test_build_truth_dashboard_payload(temp_vault):
@@ -313,6 +402,8 @@ date: 2026-04-13
     assert payload["count"] == 1
     assert payload["items"][0]["slug"] == "atlas-index"
     assert payload["items"][0]["members"][0]["object_id"] == "alpha"
+    assert payload["items"][0]["member_count"] == 1
+    assert payload["items"][0]["preview_titles"] == ["Alpha"]
 
 
 def test_build_derivation_browser_payload(temp_vault):
@@ -357,6 +448,8 @@ Mentions [[alpha]].
     assert payload["count"] == 1
     assert payload["items"][0]["slug"] == "deep-dive"
     assert payload["items"][0]["derived_objects"][0]["object_id"] == "alpha"
+    assert payload["items"][0]["derived_object_count"] == 1
+    assert payload["items"][0]["preview_titles"] == ["Alpha"]
 
 
 def test_build_event_dossier_payload_applies_limit_before_materializing(temp_vault):
