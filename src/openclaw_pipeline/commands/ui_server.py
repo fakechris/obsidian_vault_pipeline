@@ -1041,11 +1041,35 @@ def _render_contradictions_page(payload: dict) -> str:
         + (
             "<details><summary>Claim Evidence</summary><ul class='list-tight'>"
             + "".join(
-                f"<li>Positive: {escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span></li>"
+                "<li>Positive: "
+                + f"{escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span>"
+                + (
+                    "<ul class='list-tight'>"
+                    + "".join(
+                        f"<li>{escape(evidence['evidence_kind'])}: {escape(evidence['quote_text'])} <span class='muted'>({escape(evidence['source_slug'])})</span></li>"
+                        for evidence in claim["evidence"]
+                    )
+                    + "</ul>"
+                    if claim["evidence"]
+                    else ""
+                )
+                + "</li>"
                 for claim in item["positive_claims"]
             )
             + "".join(
-                f"<li>Negative: {escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span></li>"
+                "<li>Negative: "
+                + f"{escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span>"
+                + (
+                    "<ul class='list-tight'>"
+                    + "".join(
+                        f"<li>{escape(evidence['evidence_kind'])}: {escape(evidence['quote_text'])} <span class='muted'>({escape(evidence['source_slug'])})</span></li>"
+                        for evidence in claim["evidence"]
+                    )
+                    + "</ul>"
+                    if claim["evidence"]
+                    else ""
+                )
+                + "</li>"
                 for claim in item["negative_claims"]
             )
             + "</ul></details>"
@@ -1144,6 +1168,11 @@ def _render_stale_summaries_page(payload: dict) -> str:
         f"<span class='muted'>({escape(item['object_id'])})</span>"
         f"<div class='muted'>Summary: {escape(item['summary_text'])}</div>"
         f"<div class='muted'>Outgoing relations: {item['outgoing_relation_count']}</div>"
+        + (
+            f"<div class='muted'>Latest event date: {escape(item['latest_event_date'])}</div>"
+            if item["latest_event_date"]
+            else ""
+        )
         + "<ul class='list-tight'>"
         + "".join(f"<li>{escape(reason)}</li>" for reason in item["reason_texts"])
         + "</ul>"

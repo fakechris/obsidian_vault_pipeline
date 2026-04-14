@@ -355,6 +355,7 @@ date: 2026-04-13
     assert item["object_titles"] == {"alpha": "Alpha", "conflict": "Conflict"}
     assert item["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
     assert item["provenance"]["mocs"][0]["slug"] == "atlas-index"
+    assert item["positive_claims"][0]["evidence"]
 
 
 def test_build_truth_dashboard_payload(temp_vault):
@@ -553,6 +554,7 @@ Thin note.
     assert payload["count"] == 1
     assert payload["items"][0]["object_id"] == "thin-note"
     assert "summary_too_short" in payload["items"][0]["reason_codes"]
+    assert payload["items"][0]["latest_event_date"] == "2026-04-10"
     assert payload["review_history"] == []
 
 

@@ -208,6 +208,7 @@ date: 2026-04-13
     assert "Source Deep Dive" in contradictions_body
     assert "Atlas Index" in contradictions_body
     assert "Detection Notes" in contradictions_body
+    assert "Claim Evidence" in contradictions_body
 
 
 def test_ui_note_page_renders_markdown_note(temp_vault):

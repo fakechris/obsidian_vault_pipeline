@@ -343,6 +343,34 @@ def _claim_details_map(vault_dir: Path | str, claim_ids: list[str]) -> dict[str,
     }
 
 
+def _claim_evidence_map(vault_dir: Path | str, claim_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    normalized_claim_ids = list(dict.fromkeys(claim_id for claim_id in claim_ids if claim_id))
+    if not normalized_claim_ids:
+        return {}
+    db_path = _db_path(vault_dir)
+    placeholders = ",".join("?" for _ in normalized_claim_ids)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT claim_id, source_slug, evidence_kind, quote_text
+            FROM claim_evidence
+            WHERE claim_id IN ({placeholders})
+            ORDER BY claim_id, source_slug, evidence_kind
+            """,
+            tuple(normalized_claim_ids),
+        ).fetchall()
+    evidence_map: dict[str, list[dict[str, Any]]] = {}
+    for claim_id, source_slug, evidence_kind, quote_text in rows:
+        evidence_map.setdefault(claim_id, []).append(
+            {
+                "source_slug": source_slug,
+                "evidence_kind": evidence_kind,
+                "quote_text": quote_text or "",
+            }
+        )
+    return evidence_map
+
+
 def list_objects(
     vault_dir: Path | str,
     *,
@@ -984,6 +1012,14 @@ def list_contradictions(
             for claim_id in (item["positive_claim_ids"] + item["negative_claim_ids"])
         ],
     )
+    evidence_map = _claim_evidence_map(
+        vault_dir,
+        [
+            claim_id
+            for item in items
+            for claim_id in (item["positive_claim_ids"] + item["negative_claim_ids"])
+        ],
+    )
     for item in items:
         object_ids = list(
             dict.fromkeys(
@@ -991,8 +1027,22 @@ def list_contradictions(
                 for claim_id in (item["positive_claim_ids"] + item["negative_claim_ids"])
             )
         )
-        item["positive_claims"] = [claim_map[claim_id] for claim_id in item["positive_claim_ids"] if claim_id in claim_map]
-        item["negative_claims"] = [claim_map[claim_id] for claim_id in item["negative_claim_ids"] if claim_id in claim_map]
+        item["positive_claims"] = [
+            {
+                **claim_map[claim_id],
+                "evidence": evidence_map.get(claim_id, []),
+            }
+            for claim_id in item["positive_claim_ids"]
+            if claim_id in claim_map
+        ]
+        item["negative_claims"] = [
+            {
+                **claim_map[claim_id],
+                "evidence": evidence_map.get(claim_id, []),
+            }
+            for claim_id in item["negative_claim_ids"]
+            if claim_id in claim_map
+        ]
         item["review_history"] = list_review_actions(vault_dir, object_ids=object_ids, limit=5)
     return items
 
@@ -1225,6 +1275,14 @@ def list_stale_summaries(
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
+        latest_event_rows = conn.execute(
+            """
+            SELECT slug, MAX(event_date)
+            FROM timeline_events
+            GROUP BY slug
+            """
+        ).fetchall()
+    latest_event_map = {str(slug): str(event_date or "") for slug, event_date in latest_event_rows}
 
     items: list[dict[str, Any]] = []
     for object_id, title, summary_text, outgoing_count in rows:
@@ -1254,6 +1312,7 @@ def list_stale_summaries(
                 "reason_codes": reason_codes,
                 "reason_texts": reason_texts,
                 "review_history": list_review_actions(vault_dir, object_ids=[str(object_id)], limit=5),
+                "latest_event_date": latest_event_map.get(str(object_id), ""),
             }
         )
     return items
