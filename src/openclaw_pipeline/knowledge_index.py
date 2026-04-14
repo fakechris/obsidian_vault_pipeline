@@ -309,17 +309,37 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
     evergreen_dir = layout.evergreen_dir
+    atlas_dir = layout.atlas_dir
+    areas_dir = resolved_vault / "20-Areas"
     parser = FrontmatterParser(resolved_vault)
     link_parser = LinkParser(resolved_vault)
     registry = ConceptRegistry(resolved_vault).load()
 
-    metadata_items = [
+    object_metadata_items = [
         meta
         for meta in parser.parse_directory(evergreen_dir, recursive=True)
         if "_Candidates" not in Path(meta.path).parts
     ]
-    surface_map = _build_surface_map(metadata_items)
-    known_slugs = {meta.note_id for meta in metadata_items}
+    page_metadata_items = list(object_metadata_items)
+    for extra_dir in (atlas_dir, areas_dir):
+        if not extra_dir.exists():
+            continue
+        for meta in parser.parse_directory(extra_dir, recursive=True):
+            if "_Candidates" in Path(meta.path).parts:
+                continue
+            page_metadata_items.append(meta)
+
+    deduped_page_metadata_items: list[NoteMetadata] = []
+    seen_page_keys: set[str] = set()
+    for meta in page_metadata_items:
+        key = meta.note_id
+        if key in seen_page_keys:
+            continue
+        seen_page_keys.add(key)
+        deduped_page_metadata_items.append(meta)
+
+    surface_map = _build_surface_map(object_metadata_items)
+    known_slugs = {meta.note_id for meta in object_metadata_items}
 
     temp_db_path = layout.knowledge_db.with_name(f"{layout.knowledge_db.name}.tmp")
     _remove_sqlite_artifacts(temp_db_path)
@@ -330,7 +350,7 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
         page_rows = []
         timeline_rows = []
         embedding_rows = []
-        for meta in metadata_items:
+        for meta in deduped_page_metadata_items:
             file_path = Path(meta.path)
             body = _split_frontmatter_body(file_path.read_text(encoding="utf-8"))
             page_rows.append(
@@ -370,9 +390,8 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
         )
 
         link_rows = []
-        for file_path in sorted(evergreen_dir.rglob("*.md")):
-            if "_Candidates" in file_path.parts:
-                continue
+        for meta in deduped_page_metadata_items:
+            file_path = Path(meta.path)
             for link in link_parser.parse_file(file_path):
                 target_slug = _resolve_target_slug(link.target_raw or link.target, registry, surface_map)
                 if not target_slug or target_slug not in known_slugs:
@@ -395,7 +414,9 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
             link_rows,
         )
 
-        truth_projection = build_truth_store_projection(page_rows, link_rows)
+        object_page_rows = [row for row in page_rows if row[0] in known_slugs]
+        object_link_rows = [row for row in link_rows if row[0] in known_slugs]
+        truth_projection = build_truth_store_projection(object_page_rows, object_link_rows)
         conn.executemany(
             """
             INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
