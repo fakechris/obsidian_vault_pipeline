@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 from http.client import HTTPConnection
+from urllib.parse import quote
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 from openclaw_pipeline.runtime import VaultLayout
@@ -145,6 +146,9 @@ date: 2026-04-13
     assert "Evergreen Markdown" in object_body
     assert "Source Deep Dive" in object_body
     assert "Atlas Index" in object_body
+    assert f"/note?path={quote('10-Knowledge/Evergreen/Alpha.md', safe='')}" in object_body
+    assert f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Source Deep Dive_深度解读.md', safe='')}" in object_body
+    assert f"/note?path={quote('10-Knowledge/Atlas/Atlas-Index.md', safe='')}" in object_body
 
     assert topic_status == 200
     assert "Topic: Alpha" in topic_body
@@ -165,6 +169,46 @@ date: 2026-04-13
     assert "Contradictions" in contradictions_body
     assert "alpha" in contradictions_body
     assert '/object?id=alpha' in contradictions_body
+
+
+def test_ui_note_page_renders_markdown_note(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    note.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+
+- First point
+- Second point
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, f"/note?path={quote('10-Knowledge/Evergreen/Alpha.md', safe='')}")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Markdown Note" in body
+    assert "Alpha supports local-first execution." in body
+    assert "<li>First point</li>" in body
 
 
 def test_ui_root_dashboard_renders_db_summary(temp_vault):

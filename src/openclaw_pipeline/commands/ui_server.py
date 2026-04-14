@@ -6,7 +6,7 @@ import sys
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from ..runtime import resolve_vault_dir
 from ..ui.view_models import (
@@ -98,6 +98,91 @@ def _layout(title: str, body: str) -> str:
 """
 
 
+def _note_href(path: str) -> str:
+    return f"/note?path={quote(path, safe='')}"
+
+
+def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
+    candidate = (vault_dir / relative_path).resolve()
+    try:
+        candidate.relative_to(vault_dir.resolve())
+    except ValueError as exc:
+        raise ValueError("invalid note path") from exc
+    if not candidate.is_file():
+        raise ValueError(f"note not found: {relative_path}")
+    return candidate, candidate.read_text(encoding="utf-8")
+
+
+def _strip_frontmatter(markdown: str) -> str:
+    if not markdown.startswith("---\n"):
+        return markdown
+    end = markdown.find("\n---\n", 4)
+    if end == -1:
+        return markdown
+    return markdown[end + 5 :]
+
+
+def _render_markdown_note(markdown: str) -> str:
+    body = _strip_frontmatter(markdown).strip()
+    if not body:
+        return "<p class='muted'>Empty note.</p>"
+
+    chunks: list[str] = []
+    paragraph_lines: list[str] = []
+    list_items: list[str] = []
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph_lines
+        if paragraph_lines:
+            text = " ".join(line.strip() for line in paragraph_lines if line.strip())
+            chunks.append(f"<p>{escape(text)}</p>")
+            paragraph_lines = []
+
+    def flush_list() -> None:
+        nonlocal list_items
+        if list_items:
+            chunks.append("<ul>" + "".join(f"<li>{escape(item)}</li>" for item in list_items) + "</ul>")
+            list_items = []
+
+    for raw_line in body.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            flush_paragraph()
+            flush_list()
+            continue
+        if stripped.startswith("#"):
+            flush_paragraph()
+            flush_list()
+            level = min(len(stripped) - len(stripped.lstrip("#")), 6)
+            heading = stripped[level:].strip()
+            chunks.append(f"<h{level}>{escape(heading)}</h{level}>")
+            continue
+        if stripped.startswith("- "):
+            flush_paragraph()
+            list_items.append(stripped[2:].strip())
+            continue
+        flush_list()
+        paragraph_lines.append(stripped)
+
+    flush_paragraph()
+    flush_list()
+    return "".join(chunks)
+
+
+def _render_note_page(relative_path: str, markdown: str) -> str:
+    return _layout(
+        f"Markdown Note: {relative_path}",
+        (
+            "<section class='hero'>"
+            "<h1>Markdown Note</h1>"
+            f"<p class='muted'>{escape(relative_path)}</p>"
+            "</section>"
+            f"<section class='card'>{_render_markdown_note(markdown)}</section>"
+        ),
+    )
+
+
 def _render_dashboard(payload: dict) -> str:
     object_items = "".join(
         f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
@@ -160,6 +245,12 @@ def _render_objects_index(payload: dict) -> str:
 
 
 def _render_object_page(payload: dict) -> str:
+    evergreen_path = payload["provenance"]["evergreen_path"]
+    evergreen_html = (
+        f'<a href="{escape(_note_href(evergreen_path))}">{escape(evergreen_path)}</a>'
+        if evergreen_path
+        else "<span class='muted'>None</span>"
+    )
     claims = "".join(f"<li>{escape(item['claim_text'])}</li>" for item in payload["claims"]) or "<li>None</li>"
     relations = "".join(
         f'<li><a href="/object?id={escape(item["target_object_id"])}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
@@ -171,11 +262,12 @@ def _render_object_page(payload: dict) -> str:
         for item in payload["contradictions"]
     ) or "<li>None</li>"
     source_notes = "".join(
-        f"<li>{escape(item['title'])} <span class='muted'>({escape(item['note_type'])})</span></li>"
+        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a> '
+        f"<span class='muted'>({escape(item['note_type'])})</span></li>"
         for item in payload["provenance"]["source_notes"]
     ) or "<li>None</li>"
     mocs = "".join(
-        f"<li>{escape(item['title'])}</li>"
+        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a></li>'
         for item in payload["provenance"]["mocs"]
     ) or "<li>None</li>"
     summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
@@ -212,7 +304,7 @@ def _render_object_page(payload: dict) -> str:
             f"<div><dt>Canonical Path</dt><dd>{escape(payload['context']['canonical_path'])}</dd></div>"
             "</dl></section>"
             "<section class='card'><h2>Provenance</h2><dl class='meta-list'>"
-            f"<div><dt>Evergreen Markdown</dt><dd>{escape(payload['provenance']['evergreen_path'])}</dd></div>"
+            f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
             f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
             f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
             "</dl></section>"
@@ -461,6 +553,11 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     payload = build_derivation_browser_payload(resolved_vault, query=q)
                     self._write_html(_render_derivations_page(payload))
+                    return
+                if path == "/note":
+                    relative_path = self._required(query, "path")
+                    _, markdown = _read_vault_note(resolved_vault, relative_path)
+                    self._write_html(_render_note_page(relative_path, markdown))
                     return
                 if path == "/api/contradictions":
                     status = query.get("status", [""])[0] or None

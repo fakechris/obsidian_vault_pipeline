@@ -15,6 +15,17 @@ def _db_path(vault_dir: Path | str) -> Path:
     return VaultLayout.from_vault(resolved).knowledge_db
 
 
+def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
+    resolved = resolve_vault_dir(vault_dir).resolve()
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        return path
+    try:
+        return str(candidate.resolve().relative_to(resolved))
+    except ValueError:
+        return path
+
+
 def _validate_page_args(*, limit: int, offset: int = 0) -> tuple[int, int]:
     if limit < 0 or offset < 0:
         raise ValueError("limit and offset must be >= 0")
@@ -98,6 +109,7 @@ def count_objects(vault_dir: Path | str, *, query: str | None = None) -> int:
 
 def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
     escaped = _escape_like(object_id)
 
     with sqlite3.connect(db_path) as conn:
@@ -185,7 +197,7 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             "slug": slug,
             "title": title,
             "note_type": note_type,
-            "path": path,
+            "path": _vault_relative_path(resolved_vault, path),
         }
         if note_type == "moc" or "/10-Knowledge/Atlas/" in path or Path(path).name.startswith("MOC"):
             mocs.append(item)
@@ -252,7 +264,7 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             for row in contradiction_rows
         ],
         "provenance": {
-            "evergreen_path": object_row[3],
+            "evergreen_path": _vault_relative_path(resolved_vault, object_row[3]),
             "source_notes": source_notes,
             "mocs": mocs,
         },
