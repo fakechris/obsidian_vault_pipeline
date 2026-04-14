@@ -27,6 +27,8 @@
 - `ovp-build-views --pack research-tech --view overview/topic`
 - `ovp-export --pack research-tech --target topic-overview --output-path out/topic.md`
 - `ovp-doctor --pack research-tech --json`
+- `ovp-truth objects --vault-dir /path/to/vault`
+- `ovp-ui --vault-dir /path/to/vault --port 8787`
 
 ## What This Pack Is Not
 

@@ -104,6 +104,8 @@ ovp-packs = "openclaw_pipeline.commands.list_packs:main"
 ovp-migrate-pack-provenance = "openclaw_pipeline.commands.migrate_pack_provenance:main"
 ovp-doctor = "openclaw_pipeline.commands.doctor:main"
 ovp-export = "openclaw_pipeline.commands.export_artifact:main"
+ovp-truth = "openclaw_pipeline.commands.truth_api:main"
+ovp-ui = "openclaw_pipeline.commands.ui_server:main"
 
 [project.entry-points."openclaw_pipeline.packs"]
 default-knowledge = "openclaw_pipeline.packs.default_knowledge:get_pack"
