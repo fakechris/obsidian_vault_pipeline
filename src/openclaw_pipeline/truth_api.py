@@ -828,23 +828,82 @@ def list_deep_dive_derivations(
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    items = _list_surface_groups(
-        vault_dir,
-        note_type="deep_dive",
-        query=query,
-        limit=limit,
-        object_list_key="derived_objects",
-    )
-    return [
-        {
-            "slug": item["slug"],
-            "title": item["title"],
-            "note_type": item["note_type"],
-            "path": item["path"],
-            "derived_objects": item["derived_objects"],
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_query = (query or "").strip().lower()
+
+    with sqlite3.connect(db_path) as conn:
+        deep_dive_rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE note_type = 'deep_dive'
+            ORDER BY slug
+            """
+        ).fetchall()
+        object_rows = conn.execute(
+            """
+            SELECT object_id, title
+            FROM objects
+            ORDER BY object_id
+            """
+        ).fetchall()
+        audit_rows = conn.execute(
+            """
+            SELECT payload_json
+            FROM audit_events
+            WHERE event_type = 'evergreen_auto_promoted'
+            """
+        ).fetchall()
+
+    object_titles = {row[0]: row[1] for row in object_rows}
+    grouped_promotions: dict[str, dict[str, dict[str, str]]] = {}
+    for (payload_json,) in audit_rows:
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError:
+            continue
+        source_name = str(payload.get("source") or "").strip()
+        object_id = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
+        if not source_name or not object_id:
+            continue
+        title = object_titles.get(object_id, object_id)
+        grouped_promotions.setdefault(source_name, {})[object_id] = {
+            "object_id": object_id,
+            "title": title,
         }
-        for item in items
-    ]
+
+    items: list[dict[str, Any]] = []
+    for slug, title, note_type, path in deep_dive_rows:
+        relative_path = _vault_relative_path(resolved_vault, path)
+        source_name = Path(relative_path).name
+        derived_objects = list(grouped_promotions.get(source_name, {}).values())
+        if normalized_query:
+            haystacks = [
+                slug.lower(),
+                title.lower(),
+                relative_path.lower(),
+                *(
+                    value.lower()
+                    for item in derived_objects
+                    for value in (item["object_id"], item["title"])
+                ),
+            ]
+            if not any(normalized_query in haystack for haystack in haystacks):
+                continue
+        items.append(
+            {
+                "slug": slug,
+                "title": title,
+                "note_type": note_type,
+                "path": relative_path,
+                "derived_objects": sorted(derived_objects, key=lambda item: item["object_id"]),
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
 
 
 def list_stale_summaries(

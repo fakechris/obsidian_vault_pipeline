@@ -489,6 +489,12 @@ Mentions [[alpha]].
 """,
         encoding="utf-8",
     )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}\n',
+        encoding="utf-8",
+    )
     rebuild_knowledge_index(temp_vault)
 
     payload = build_derivation_browser_payload(temp_vault)

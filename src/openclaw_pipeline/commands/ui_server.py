@@ -63,6 +63,7 @@ def _layout(title: str, body: str) -> str:
       h1, h2, h3 {{ margin-bottom: 0.5rem; line-height: 1.2; }}
       ul {{ padding-left: 1.2rem; }}
       pre {{ background: #f4f4f5; padding: 1rem; border-radius: 8px; overflow-x: auto; }}
+      img {{ max-width: 100%; height: auto; display: block; border-radius: 12px; }}
       input, select, button {{ font: inherit; }}
       input, select {{ padding: 0.55rem 0.7rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }}
       button {{ padding: 0.55rem 0.8rem; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }}

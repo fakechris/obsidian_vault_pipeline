@@ -611,6 +611,58 @@ def test_ui_note_page_rewrites_local_images_to_asset_route(temp_vault):
     assert asset_body.startswith(b"\x89PNG")
 
 
+def test_ui_deep_dive_browser_uses_promoted_objects_not_incidental_mentions(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    prompt = temp_vault / "10-Knowledge" / "Evergreen" / "Prompt Engineering.md"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text(
+        """---
+note_id: prompt-engineering
+title: Prompt Engineering
+type: evergreen
+date: 2026-04-13
+---
+
+# Prompt Engineering
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Weekly Build_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: weekly-build
+title: Weekly Build
+type: deep_dive
+date: 2026-04-13
+---
+
+# Weekly Build
+
+- [[prompt-engineering]] — mentioned as related knowledge
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/deep-dives")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Weekly Build" in body
+    assert "0 derived objects" in body
+    assert "Prompt Engineering" not in body
+
+
 def test_ui_search_page_combines_objects_and_notes(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -931,6 +983,12 @@ date: 2026-04-13
 
 Mentions [[alpha]].
 """,
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}\n',
         encoding="utf-8",
     )
     atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"

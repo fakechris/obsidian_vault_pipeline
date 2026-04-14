@@ -620,11 +620,44 @@ date: 2026-04-13
 ---
 
 # Deep Dive
-
-- [[alpha]]
-- [[beta]]
-- [[gamma]]
 """,
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event_type": "evergreen_auto_promoted",
+                        "concept": "alpha",
+                        "source": "Deep Dive_深度解读.md",
+                        "mutation": {"target_slug": "alpha"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "event_type": "evergreen_auto_promoted",
+                        "concept": "beta",
+                        "source": "Deep Dive_深度解读.md",
+                        "mutation": {"target_slug": "beta"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "event_type": "evergreen_auto_promoted",
+                        "concept": "gamma",
+                        "source": "Deep Dive_深度解读.md",
+                        "mutation": {"target_slug": "gamma"},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
         encoding="utf-8",
     )
 
