@@ -30,6 +30,7 @@ from ..ui.view_models import (
     build_truth_dashboard_payload,
     build_topic_overview_payload,
 )
+from ..truth_api import record_review_action
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
@@ -566,6 +567,49 @@ def _render_review_context_card(context: dict[str, object], *, title: str = "Rev
     )
 
 
+def _render_review_history(items: list[dict[str, object]], *, title: str = "Review History") -> str:
+    if not items:
+        return (
+            "<section class='card'>"
+            f"<h2>{escape(title)}</h2>"
+            "<p class='muted'>No recent review actions recorded for this scope.</p>"
+            "</section>"
+        )
+    rows = "".join(
+        "<li>"
+        f"<span class='pill'>{escape(str(item['event_type']))}</span> "
+        f"{escape(str(item['timestamp']))}"
+        + (
+            f"<div class='muted'>Status: {escape(str(item['status']))}</div>"
+            if item.get("status")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Note: {escape(str(item['note']))}</div>"
+            if item.get("note")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Objects: {escape(', '.join(str(v) for v in item['object_ids']))}</div>"
+            if item.get("object_ids")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Rebuilt: {escape(', '.join(str(v) for v in item['rebuilt_object_ids']))}</div>"
+            if item.get("rebuilt_object_ids")
+            else ""
+        )
+        + "</li>"
+        for item in items
+    )
+    return (
+        "<section class='card'>"
+        f"<h2>{escape(title)}</h2>"
+        f"<ul class='list-tight'>{rows}</ul>"
+        "</section>"
+    )
+
+
 def _render_dashboard(payload: dict) -> str:
     object_items = "".join(
         f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
@@ -658,6 +702,11 @@ def _render_object_page(payload: dict) -> str:
         f'<li><span class="pill">{escape(item["status"])}</span>{escape(item["subject_key"])}</li>'
         for item in payload["contradictions"]
     ) or "<li>None</li>"
+    stale_summary_signals = "".join(
+        f"<li>{escape(reason)}</li>"
+        for item in payload["stale_summary_details"]
+        for reason in item["reason_texts"]
+    ) or "<li class='muted'>No stale summary signals for this object.</li>"
     source_notes = "".join(
         f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a> '
         f"<span class='muted'>({escape(item['note_type'])})</span></li>"
@@ -697,6 +746,7 @@ def _render_object_page(payload: dict) -> str:
             "</div>"
             "<div class='section-stack'>"
             f"{_render_review_context_card(payload['review_context'])}"
+            f"{_render_review_history(payload['review_history'])}"
             "<section class='card'><h2>Context</h2><dl class='meta-list'>"
             f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
             f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
@@ -709,6 +759,7 @@ def _render_object_page(payload: dict) -> str:
             "</dl></section>"
             f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>"
             f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>"
+            f"<section class='card'><h2>Stale Summary Signals</h2><ul class='list-tight'>{stale_summary_signals}</ul></section>"
             "</div>"
             "</section>"
         ),
@@ -741,6 +792,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
             f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
             f"{_render_review_context_card(payload['review_context'])}"
+            f"{_render_review_history(payload['review_history'])}"
             "</section>"
         ),
     )
@@ -795,6 +847,7 @@ def _render_events_page(payload: dict) -> str:
             f"<p class='muted'>{payload['event_count']} events across {len(payload['dates'])} dates.</p>"
             f"<div class='link-row'>{type_breakdown}</div>"
             f"{_render_review_context_card(payload['review_context'])}"
+            f"{_render_review_history(payload['review_history'])}"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
             f"<nav class='subnav'>{date_nav}</nav>"
             f"{events}"
@@ -899,6 +952,39 @@ def _render_contradictions_page(payload: dict) -> str:
         + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
         + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
         + (
+            "<details><summary>Claim Evidence</summary><ul class='list-tight'>"
+            + "".join(
+                f"<li>Positive: {escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span></li>"
+                for claim in item["positive_claims"]
+            )
+            + "".join(
+                f"<li>Negative: {escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span></li>"
+                for claim in item["negative_claims"]
+            )
+            + "</ul></details>"
+        )
+        + (
+            "<details><summary>Review History</summary><ul class='list-tight'>"
+            + "".join(
+                f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
+                + (
+                    f"<div class='muted'>Status: {escape(str(history['status']))}</div>"
+                    if history.get("status")
+                    else ""
+                )
+                + (
+                    f"<div class='muted'>Note: {escape(str(history['note']))}</div>"
+                    if history.get("note")
+                    else ""
+                )
+                + "</li>"
+                for history in item["review_history"]
+            )
+            + "</ul></details>"
+            if item["review_history"]
+            else ""
+        )
+        + (
             f"<div class='muted'>Resolution Note: {escape(item['resolution_note'])}</div>"
             if item.get("resolution_note")
             else ""
@@ -971,11 +1057,30 @@ def _render_stale_summaries_page(payload: dict) -> str:
         f"<span class='muted'>({escape(item['object_id'])})</span>"
         f"<div class='muted'>Summary: {escape(item['summary_text'])}</div>"
         f"<div class='muted'>Outgoing relations: {item['outgoing_relation_count']}</div>"
-        "<form method='post' action='/summaries/rebuild' class='link-row'>"
-        f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
-        "<button type='submit'>Rebuild Summary</button>"
-        "</form>"
-        "</li>"
+        + "<ul class='list-tight'>"
+        + "".join(f"<li>{escape(reason)}</li>" for reason in item["reason_texts"])
+        + "</ul>"
+        + (
+            "<details><summary>Review History</summary><ul class='list-tight'>"
+            + "".join(
+                f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
+                + (
+                    f"<div class='muted'>Rebuilt: {escape(', '.join(str(v) for v in history['rebuilt_object_ids']))}</div>"
+                    if history.get("rebuilt_object_ids")
+                    else ""
+                )
+                + "</li>"
+                for history in item["review_history"]
+            )
+            + "</ul></details>"
+            if item["review_history"]
+            else ""
+        )
+        + "<form method='post' action='/summaries/rebuild' class='link-row'>"
+        + f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
+        + "<button type='submit'>Rebuild Summary</button>"
+        + "</form>"
+        + "</li>"
         for item in payload["items"]
     ) or "<li class='muted'>No stale summaries detected.</li>"
     return _layout(
@@ -988,6 +1093,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
             "</form>"
             f"<p class='muted'>{payload['count']} stale summary candidates.</p>"
             f"{_render_review_context_card(payload['review_context'])}"
+            f"{_render_review_history(payload['review_history'])}"
             f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
             "<section class='card'>"
             "<h2>Batch Rebuild</h2>"
@@ -1191,15 +1297,42 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 payload["rebuilt_summary_count"] = rebuild_payload["objects_rebuilt"]
                 payload["rebuilt_object_ids"] = rebuild_payload["object_ids"]
             else:
+                affected_object_ids = contradiction_object_ids(resolved_vault, payload["contradiction_ids"])
                 payload["rebuilt_summary_count"] = 0
                 payload["rebuilt_object_ids"] = []
+            if payload["resolved_count"]:
+                payload["object_ids"] = affected_object_ids
+                record_review_action(
+                    resolved_vault,
+                    event_type="ui_contradictions_resolved",
+                    slug=affected_object_ids[0] if affected_object_ids else "",
+                    payload={
+                        "object_ids": affected_object_ids,
+                        "contradiction_ids": payload["contradiction_ids"],
+                        "status": status,
+                        "note": note,
+                        "rebuilt_object_ids": payload["rebuilt_object_ids"],
+                    },
+                )
             return payload
 
         def _rebuild_summary_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             object_ids = [item.strip() for item in self._form_all(form, "object_id") if item.strip()]
             if not object_ids:
                 raise ValueError("missing object_id")
-            return rebuild_compiled_summaries(resolved_vault, object_ids=object_ids)
+            payload = rebuild_compiled_summaries(resolved_vault, object_ids=object_ids)
+            if payload["objects_rebuilt"]:
+                record_review_action(
+                    resolved_vault,
+                    event_type="ui_summaries_rebuilt",
+                    slug=payload["object_ids"][0] if payload["object_ids"] else "",
+                    payload={
+                        "object_ids": payload["object_ids"],
+                        "objects_rebuilt": payload["objects_rebuilt"],
+                        "rebuilt_object_ids": payload["object_ids"],
+                    },
+                )
+            return payload
 
         def _write_json(self, payload: dict) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

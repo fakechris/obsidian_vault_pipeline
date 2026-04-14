@@ -239,7 +239,18 @@ def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
             "SELECT status, resolution_note FROM contradictions WHERE contradiction_id = ?",
             (contradiction_id,),
         ).fetchone()
+        audit_row = conn.execute(
+            """
+            SELECT event_type, payload_json
+            FROM audit_events
+            WHERE source_log = 'review-actions'
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+        ).fetchone()
     assert row == ("resolved_keep_positive", "Reviewed in UI")
+    assert audit_row is not None
+    assert audit_row[0] == "ui_contradictions_resolved"
 
 
 def test_ui_server_can_bulk_resolve_contradictions_via_api(temp_vault):
@@ -358,6 +369,18 @@ Thin note.
     assert response.status == 200
     assert payload["objects_rebuilt"] == 1
     assert payload["object_ids"] == ["thin-note"]
+    with sqlite3.connect(VaultLayout.from_vault(temp_vault).knowledge_db) as conn:
+        audit_row = conn.execute(
+            """
+            SELECT event_type, payload_json
+            FROM audit_events
+            WHERE source_log = 'review-actions'
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert audit_row is not None
+    assert audit_row[0] == "ui_summaries_rebuilt"
 
 
 def test_ui_server_can_bulk_rebuild_summaries_via_api(temp_vault):

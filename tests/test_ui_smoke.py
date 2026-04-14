@@ -913,6 +913,7 @@ def test_ui_contradictions_page_can_resolve_item(temp_vault):
             },
         )
         page_status, page_body = _get(port, "/contradictions?status=resolved")
+        object_status, object_body = _get(port, "/object?id=alpha")
     finally:
         server.shutdown()
         server.server_close()
@@ -923,6 +924,9 @@ def test_ui_contradictions_page_can_resolve_item(temp_vault):
     assert page_status == 200
     assert "resolved_keep_positive" in page_body
     assert "Reviewed in browser" in page_body
+    assert object_status == 200
+    assert "Review History" in object_body
+    assert "ui_contradictions_resolved" in object_body
 
 
 def test_ui_summaries_page_can_rebuild_item(temp_vault):
@@ -965,6 +969,7 @@ Thin note.
             {"object_id": "thin-note"},
         )
         after_status, after_body = _get(port, "/summaries")
+        object_status, object_body = _get(port, "/object?id=thin-note")
     finally:
         server.shutdown()
         server.server_close()
@@ -977,6 +982,10 @@ Thin note.
     assert headers["location"] == "/summaries"
     assert after_status == 200
     assert "Thin note." in after_body
+    assert "No outgoing relations currently support this summary." in before_body
+    assert object_status == 200
+    assert "Review History" in object_body
+    assert "ui_summaries_rebuilt" in object_body
 
 
 def test_ui_events_page_filters_by_query(temp_vault):

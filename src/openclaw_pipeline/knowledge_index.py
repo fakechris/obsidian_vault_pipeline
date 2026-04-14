@@ -201,6 +201,7 @@ def _collect_audit_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, s
     log_specs = [
         ("pipeline", layout.pipeline_log),
         ("refine", layout.logs_dir / "refine-mutations.jsonl"),
+        ("review-actions", layout.logs_dir / "review-actions.jsonl"),
     ]
     for source_log, path in log_specs:
         if not path.exists():

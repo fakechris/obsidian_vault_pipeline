@@ -13,6 +13,7 @@ from ..truth_api import (
     get_object_provenance_map,
     get_review_context,
     get_topic_neighborhood,
+    list_review_actions,
     list_atlas_memberships,
     list_contradictions,
     list_deep_dive_derivations,
@@ -66,6 +67,8 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
         },
         "provenance": detail["provenance"],
         "review_context": review_context,
+        "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8),
+        "stale_summary_details": list_stale_summaries(vault_dir, object_ids=[object_id], limit=10),
         "links": {
             "topic_path": f"/topic?id={object_id}",
             "events_path": f"/events?q={object_id}",
@@ -96,6 +99,11 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
         "center_summary": detail["summary"]["summary_text"] if detail["summary"] else "",
         "provenance": detail["provenance"],
         "review_context": review_context,
+        "review_history": list_review_actions(
+            vault_dir,
+            object_ids=[object_id, *[item["object_id"] for item in neighborhood["neighbors"]]],
+            limit=8,
+        ),
         "links": {
             "center_object_path": f"/object?id={object_id}",
             "events_path": f"/events?q={object_id}",
@@ -184,6 +192,7 @@ def build_event_dossier_payload(
         "date_sections": date_sections,
         "event_type_counts": dict(event_type_counts),
         "review_context": review_context,
+        "review_history": list_review_actions(vault_dir, object_ids=[event["object_id"] for event in events], limit=8),
         "model_notes": [
             "Event Dossier is a timeline over dated notes projected from indexed pages, not a separate event entity system.",
             "page_date rows come from note-level dates; heading_date rows come from dated section headings.",
@@ -352,6 +361,7 @@ def build_stale_summary_browser_payload(vault_dir: Path | str, *, query: str | N
         "count": len(items),
         "query": query or "",
         "review_context": review_context,
+        "review_history": list_review_actions(vault_dir, object_ids=[item["object_id"] for item in items], limit=8),
         "detection_notes": [
             "Stale summary review flags compiled summaries that are weak and have no outgoing supporting relations.",
             "This queue is deterministic and favors false negatives over false positives.",
