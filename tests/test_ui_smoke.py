@@ -999,6 +999,32 @@ def test_ui_events_page_filters_by_query(temp_vault):
     assert "Alpha" not in body
 
 
+def test_ui_events_page_handles_missing_evergreen_path(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.runtime import VaultLayout
+
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE objects SET canonical_path = '' WHERE object_id = ?", ("alpha",))
+        conn.commit()
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/events?q=alpha")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Evergreen: <span class='muted'>None</span>" in body
+    assert 'href="/note?path="' not in body
+
+
 def test_ui_smoke_atlas_and_deep_dive_pages_render_bridge_views(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 

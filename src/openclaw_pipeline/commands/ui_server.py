@@ -764,7 +764,11 @@ def _render_events_page(payload: dict) -> str:
                 "<li>"
                 + f"<span class='pill'>{escape(item['event_label'])}</span> "
                 + f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a>'
-                + f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
+                + (
+                    f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
+                    if item["provenance"]["evergreen_path"]
+                    else "<div class='muted'>Evergreen: <span class='muted'>None</span></div>"
+                )
                 + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
                 + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
                 + "<div class='link-row'>"
