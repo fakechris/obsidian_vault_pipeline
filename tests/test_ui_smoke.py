@@ -182,6 +182,8 @@ date: 2026-04-13
     assert "Center Summary" in topic_body
     assert "Atlas / MOC" in topic_body
     assert "Review Context" in topic_body
+    assert "Production Contribution" in topic_body
+    assert "Missing source notes" in topic_body
     assert "/summaries?q=alpha" in topic_body
     assert "Quick Maintenance" in topic_body
     assert "Review scoped contradictions" in topic_body
@@ -196,6 +198,8 @@ date: 2026-04-13
     assert "Timeline Contract" in events_body
     assert "Event Clusters" in events_body
     assert "Review Context" in events_body
+    assert "Production Contribution" in events_body
+    assert "Top Source Notes" in events_body
     assert "/summaries?q=alpha" in events_body
     assert "Quick Maintenance" in events_body
     assert "Review visible contradictions" in events_body

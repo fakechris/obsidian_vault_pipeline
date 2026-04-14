@@ -46,6 +46,97 @@ def _object_ids_from_claim_ids(*claim_id_lists: list[str]) -> list[str]:
     return ordered
 
 
+def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
+    normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
+    object_traceability = [get_object_traceability(vault_dir, object_id) for object_id in normalized_object_ids]
+    source_note_counts: Counter[str] = Counter()
+    deep_dive_counts: Counter[str] = Counter()
+    atlas_page_counts: Counter[str] = Counter()
+    source_note_items: dict[str, dict[str, str]] = {}
+    deep_dive_items: dict[str, dict[str, str]] = {}
+    atlas_page_items: dict[str, dict[str, str]] = {}
+    missing_source_object_ids: list[str] = []
+    missing_deep_dive_object_ids: list[str] = []
+    missing_atlas_object_ids: list[str] = []
+
+    for traceability in object_traceability:
+        object_id = traceability["object"]["object_id"]
+        if not traceability["source_notes"]:
+            missing_source_object_ids.append(object_id)
+        if not traceability["deep_dives"]:
+            missing_deep_dive_object_ids.append(object_id)
+        if not traceability["atlas_pages"]:
+            missing_atlas_object_ids.append(object_id)
+        for item in traceability["source_notes"]:
+            source_note_items.setdefault(item["path"], item)
+            source_note_counts[item["path"]] += 1
+        for item in traceability["deep_dives"]:
+            deep_dive_items.setdefault(item["slug"], item)
+            deep_dive_counts[item["slug"]] += 1
+        for item in traceability["atlas_pages"]:
+            atlas_page_items.setdefault(item["slug"], item)
+            atlas_page_counts[item["slug"]] += 1
+
+    def _top_items(
+        counts: Counter[str],
+        item_map: dict[str, dict[str, str]],
+    ) -> list[dict[str, Any]]:
+        ordered = sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+        return [
+            {
+                **item_map[key],
+                "object_count": count,
+            }
+            for key, count in ordered
+            if key in item_map
+        ][:5]
+
+    signals: list[dict[str, Any]] = []
+    if missing_source_object_ids:
+        signals.append(
+            {
+                "code": "missing_source_notes",
+                "count": len(missing_source_object_ids),
+                "label": "Missing source notes",
+                "object_ids": missing_source_object_ids,
+            }
+        )
+    if missing_deep_dive_object_ids:
+        signals.append(
+            {
+                "code": "missing_deep_dives",
+                "count": len(missing_deep_dive_object_ids),
+                "label": "Missing deep dives",
+                "object_ids": missing_deep_dive_object_ids,
+            }
+        )
+    if missing_atlas_object_ids:
+        signals.append(
+            {
+                "code": "missing_atlas_reach",
+                "count": len(missing_atlas_object_ids),
+                "label": "Missing Atlas / MOC reach",
+                "object_ids": missing_atlas_object_ids,
+            }
+        )
+
+    return {
+        "object_count": len(normalized_object_ids),
+        "counts": {
+            "source_notes": len(source_note_items),
+            "deep_dives": len(deep_dive_items),
+            "atlas_pages": len(atlas_page_items),
+        },
+        "top_source_notes": _top_items(source_note_counts, source_note_items),
+        "top_deep_dives": _top_items(deep_dive_counts, deep_dive_items),
+        "top_atlas_pages": _top_items(atlas_page_counts, atlas_page_items),
+        "signals": signals,
+    }
+
+
 def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     detail = get_object_detail(vault_dir, object_id)
     neighborhood = get_topic_neighborhood(vault_dir, object_id)
@@ -117,6 +208,7 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
         "neighbor_count": len(neighborhood["neighbors"]),
         "center_summary": detail["summary"]["summary_text"] if detail["summary"] else "",
         "provenance": detail["provenance"],
+        "production_summary": _build_production_summary(vault_dir, scoped_object_ids),
         "review_context": review_context,
         "review_history": list_review_actions(
             vault_dir,
@@ -228,6 +320,7 @@ def build_event_dossier_payload(
             "row_type_counts": dict(row_type_counts),
             "semantic_roles": dict(semantic_roles),
         },
+        "production_summary": _build_production_summary(vault_dir, scoped_object_ids),
         "review_context": review_context,
         "review_history": list_review_actions(vault_dir, object_ids=scoped_object_ids, limit=8),
         "scoped_object_ids": list(dict.fromkeys(scoped_object_ids)),

@@ -104,10 +104,11 @@ Completed so far:
 - stable `get_note_traceability()` and `get_object_traceability()` payloads,
 - `Production Chain` sections on `/note` and `/object`,
 - contribution summaries on `/atlas` and `/deep-dives`,
-- a new `/production` browser for source/deep-dive chain traversal.
+- a new `/production` browser for source/deep-dive chain traversal,
+- `Production Contribution` summaries on `/topic` and `/events`,
+- aggregate chain-gap signals such as missing source notes, missing deep dives, and missing Atlas reach.
 
 Remaining work in Phase 11:
 
-- richer chain summaries on topic/event surfaces,
-- stronger prioritization around which chains are incomplete or weak,
+- stronger prioritization around which chains are incomplete or weak across the whole vault,
 - eventual promotion from traceability browser to full production intelligence.

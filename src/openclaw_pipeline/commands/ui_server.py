@@ -638,6 +638,33 @@ def _render_review_history(items: list[dict[str, object]], *, title: str = "Revi
     )
 
 
+def _render_production_summary_card(summary: dict[str, object], *, title: str = "Production Contribution") -> str:
+    signal_items = "".join(
+        f"<li>{escape(str(signal['label']))}: {int(signal['count'])}</li>"
+        for signal in summary["signals"]
+    ) or "<li class='muted'>No production-chain gaps surfaced for this scope.</li>"
+    count_items = "".join(
+        f"<li>{escape(label)}: {int(summary['counts'][key])}</li>"
+        for key, label in (
+            ("source_notes", "Source notes"),
+            ("deep_dives", "Deep dives"),
+            ("atlas_pages", "Atlas / MOC pages"),
+        )
+    )
+    return (
+        "<section class='card'>"
+        f"<h2>{escape(title)}</h2>"
+        "<dl class='meta-list'>"
+        f"<div><dt>Objects in scope</dt><dd>{int(summary['object_count'])}</dd></div>"
+        f"<div><dt>Top Source Notes</dt><dd>{_render_named_note_links(summary['top_source_notes'])}</dd></div>"
+        f"<div><dt>Top Deep Dives</dt><dd>{_render_named_note_links(summary['top_deep_dives'])}</dd></div>"
+        f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(summary['top_atlas_pages'])}</dd></div>"
+        "</dl>"
+        f"<ul class='list-tight'>{count_items}{signal_items}</ul>"
+        "</section>"
+    )
+
+
 def _render_dashboard(payload: dict) -> str:
     object_items = "".join(
         f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
@@ -884,6 +911,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
             f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
+            f"{_render_production_summary_card(payload['production_summary'])}"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
             "<section class='card'><h2>Quick Maintenance</h2>"
@@ -985,6 +1013,7 @@ def _render_events_page(payload: dict) -> str:
             "</form>"
             f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.</p>"
             f"<div class='link-row'>{type_breakdown}</div>"
+            f"{_render_production_summary_card(payload['production_summary'])}"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
             "<section class='card'><h2>Quick Maintenance</h2>"

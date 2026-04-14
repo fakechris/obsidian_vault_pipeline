@@ -179,6 +179,52 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["scoped_stale_summary_ids"] == ["beta"]
 
 
+def test_build_topic_overview_payload_includes_production_summary(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+
+    payload = build_topic_overview_payload(temp_vault, "alpha")
+
+    assert payload["production_summary"]["object_count"] == 2
+    assert payload["production_summary"]["counts"]["deep_dives"] == 1
+    assert payload["production_summary"]["counts"]["atlas_pages"] == 1
+    assert payload["production_summary"]["counts"]["source_notes"] == 0
+    assert payload["production_summary"]["top_deep_dives"][0]["title"] == "Source Deep Dive"
+    assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
+
+
 def test_build_event_dossier_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 
@@ -252,6 +298,52 @@ date: 2026-04-13
     assert event["provenance"]["evergreen_path"] == "10-Knowledge/Evergreen/Alpha.md"
     assert event["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
     assert event["provenance"]["mocs"][0]["slug"] == "atlas-index"
+
+
+def test_build_event_dossier_payload_includes_production_summary(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault)
+
+    assert payload["production_summary"]["object_count"] == 3
+    assert payload["production_summary"]["counts"]["deep_dives"] == 1
+    assert payload["production_summary"]["counts"]["atlas_pages"] == 1
+    assert payload["production_summary"]["counts"]["source_notes"] == 0
+    assert payload["production_summary"]["top_deep_dives"][0]["title"] == "Source Deep Dive"
+    assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
 
 
 def test_build_contradiction_browser_payload(temp_vault):
