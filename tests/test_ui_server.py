@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import threading
 from http.client import HTTPConnection
+from pathlib import Path
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 
@@ -240,3 +242,15 @@ def test_ui_server_main_exits_nonzero_when_preflight_fails(temp_vault, capsys, m
     assert exit_code == 1
     assert captured.out == ""
     assert "broken knowledge db" in captured.err
+
+
+def test_ui_server_module_compiles_on_python311():
+    module_path = Path("src/openclaw_pipeline/commands/ui_server.py")
+    result = subprocess.run(
+        ["python3.11", "-m", "py_compile", str(module_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

@@ -321,3 +321,157 @@ date: 2026-04-13
     assert detail["provenance"]["source_notes"][0]["note_type"] == "deep_dive"
     assert detail["provenance"]["mocs"][0]["slug"] == "atlas-index"
     assert detail["provenance"]["mocs"][0]["title"] == "Atlas Index"
+
+
+def test_truth_api_uses_page_links_for_provenance_resolution(temp_vault):
+    from openclaw_pipeline.truth_api import get_object_detail
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Alias Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: alias-deep-dive
+title: Alias Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Alias Deep Dive
+
+Mentions [[Alpha Concept]].
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+aliases: [Alpha Concept]
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Alias Atlas.md"
+    atlas.write_text(
+        """---
+note_id: alias-atlas
+title: Alias Atlas
+type: moc
+date: 2026-04-13
+---
+
+# Alias Atlas
+
+- [[Alpha Concept]]
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    detail = get_object_detail(temp_vault, "alpha")
+
+    assert [item["slug"] for item in detail["provenance"]["source_notes"]] == ["alias-deep-dive"]
+    assert [item["slug"] for item in detail["provenance"]["mocs"]] == ["alias-atlas"]
+
+
+def test_truth_api_limits_atlas_memberships_by_page_not_join_rows(temp_vault):
+    from openclaw_pipeline.truth_api import list_atlas_memberships
+
+    for note_id, title in (("alpha", "Alpha"), ("beta", "Beta"), ("gamma", "Gamma")):
+        note = temp_vault / "10-Knowledge" / "Evergreen" / f"{title}.md"
+        note.write_text(
+            f"""---
+note_id: {note_id}
+title: {title}
+type: evergreen
+date: 2026-04-13
+---
+
+# {title}
+""",
+            encoding="utf-8",
+        )
+
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+- [[beta]]
+- [[gamma]]
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    items = list_atlas_memberships(temp_vault, limit=1)
+
+    assert len(items) == 1
+    assert items[0]["slug"] == "atlas-index"
+    assert [member["object_id"] for member in items[0]["members"]] == ["alpha", "beta", "gamma"]
+
+
+def test_truth_api_limits_deep_dive_derivations_by_page_not_join_rows(temp_vault):
+    from openclaw_pipeline.truth_api import list_deep_dive_derivations
+
+    for note_id, title in (("alpha", "Alpha"), ("beta", "Beta"), ("gamma", "Gamma")):
+        note = temp_vault / "10-Knowledge" / "Evergreen" / f"{title}.md"
+        note.write_text(
+            f"""---
+note_id: {note_id}
+title: {title}
+type: evergreen
+date: 2026-04-13
+---
+
+# {title}
+""",
+            encoding="utf-8",
+        )
+
+    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: deep-dive
+title: Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Deep Dive
+
+- [[alpha]]
+- [[beta]]
+- [[gamma]]
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    items = list_deep_dive_derivations(temp_vault, limit=1)
+
+    assert len(items) == 1
+    assert items[0]["slug"] == "deep-dive"
+    assert [member["object_id"] for member in items[0]["derived_objects"]] == [
+        "alpha",
+        "beta",
+        "gamma",
+    ]

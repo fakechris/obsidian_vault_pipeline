@@ -577,6 +577,9 @@ def _render_topic_page(payload: dict) -> str:
         f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
         for item in payload["neighbors"]
     ) or "<li>None</li>"
+    mocs = "".join(
+        f"<li>{escape(item['title'])}</li>" for item in payload["provenance"]["mocs"]
+    ) or "<li>None</li>"
     return _layout(
         f"Topic: {payload['center']['title']}",
         (
@@ -592,7 +595,7 @@ def _render_topic_page(payload: dict) -> str:
             "<section class='grid two-col'>"
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
-            f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{''.join(f'<li>{escape(item['title'])}</li>' for item in payload['provenance']['mocs']) or '<li>None</li>'}</ul></section>"
+            f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
             "</section>"
         ),
     )

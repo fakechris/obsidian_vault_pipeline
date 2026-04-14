@@ -190,6 +190,49 @@ date: 2026-04-07
     ]
 
 
+def test_rebuild_knowledge_index_dedupes_duplicate_slugs_across_surfaces(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha Evergreen
+type: evergreen
+date: 2026-04-07
+---
+
+# Alpha Evergreen
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Alpha.md"
+    atlas.write_text(
+        """---
+note_id: alpha
+title: Alpha Atlas
+type: moc
+date: 2026-04-07
+---
+
+# Alpha Atlas
+""",
+        encoding="utf-8",
+    )
+
+    result = rebuild_knowledge_index(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+
+    assert result["pages_indexed"] == 1
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT slug, title, note_type, path FROM pages_index ORDER BY slug"
+        ).fetchall()
+
+    assert rows == [("alpha", "Alpha Evergreen", "evergreen", str(evergreen))]
+
+
 def test_knowledge_index_help_includes_expected_arguments(capsys):
     from openclaw_pipeline.commands.knowledge_index import main
 

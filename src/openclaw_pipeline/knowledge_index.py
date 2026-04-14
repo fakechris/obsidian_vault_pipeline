@@ -330,9 +330,9 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
             page_metadata_items.append(meta)
 
     deduped_page_metadata_items: list[NoteMetadata] = []
-    seen_page_keys: set[tuple[str, str]] = set()
+    seen_page_keys: set[str] = set()
     for meta in page_metadata_items:
-        key = (meta.note_id, meta.path)
+        key = meta.note_id
         if key in seen_page_keys:
             continue
         seen_page_keys.add(key)
