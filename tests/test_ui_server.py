@@ -242,6 +242,71 @@ def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
     assert row == ("resolved_keep_positive", "Reviewed in UI")
 
 
+def test_ui_server_can_bulk_resolve_contradictions_via_api(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.runtime import VaultLayout
+
+    _seed_truth_store(temp_vault)
+    delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
+    delta.write_text(
+        """---
+note_id: delta
+title: Delta
+type: evergreen
+date: 2026-04-13
+---
+
+# Delta
+
+Delta supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    delta_conflict = temp_vault / "10-Knowledge" / "Evergreen" / "Delta Conflict.md"
+    delta_conflict.write_text(
+        """---
+note_id: delta-conflict
+title: Delta Conflict
+type: evergreen
+date: 2026-04-13
+---
+
+# Delta Conflict
+
+Delta does not support local-first execution.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    layout = VaultLayout.from_vault(temp_vault)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        contradiction_ids = [row[0] for row in conn.execute("SELECT contradiction_id FROM contradictions ORDER BY contradiction_id").fetchall()]
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = "contradiction_id=" + "&contradiction_id=".join(contradiction_ids) + "&status=dismissed&note=Batch+reviewed"
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/contradictions/resolve",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["resolved_count"] == 2
+    assert sorted(payload["contradiction_ids"]) == contradiction_ids
+
+
 def test_ui_server_can_rebuild_stale_summary_via_api(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
     from openclaw_pipeline.runtime import VaultLayout
@@ -293,6 +358,52 @@ Thin note.
     assert response.status == 200
     assert payload["objects_rebuilt"] == 1
     assert payload["object_ids"] == ["thin-note"]
+
+
+def test_ui_server_can_bulk_rebuild_summaries_via_api(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    for object_id, title in (("thin-note", "Thin Note"), ("fragile-note", "Fragile Note")):
+        note = temp_vault / "10-Knowledge" / "Evergreen" / f"{title}.md"
+        note.write_text(
+            f"""---
+note_id: {object_id}
+title: {title}
+type: evergreen
+date: 2026-04-10
+---
+
+# {title}
+
+Thin note.
+""",
+            encoding="utf-8",
+        )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = "object_id=thin-note&object_id=fragile-note"
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/summaries/rebuild",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["objects_rebuilt"] == 2
+    assert payload["object_ids"] == ["fragile-note", "thin-note"]
 
 
 def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):

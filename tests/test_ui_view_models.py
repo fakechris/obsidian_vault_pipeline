@@ -89,8 +89,12 @@ def test_build_object_page_payload(temp_vault):
     assert payload["links"]["topic_path"] == "/topic?id=alpha"
     assert payload["links"]["events_path"] == "/events?q=alpha"
     assert payload["links"]["contradictions_path"] == "/contradictions?q=alpha"
+    assert payload["links"]["summaries_path"] == "/summaries?q=alpha"
     assert payload["context"]["source_slug"] == "alpha"
     assert payload["section_nav"][0]["href"] == "#summary"
+    assert payload["review_context"]["object_count"] == 1
+    assert payload["review_context"]["open_contradiction_count"] == 1
+    assert payload["review_context"]["latest_event_date"] == "2026-04-13"
 
 
 def test_build_object_page_payload_includes_provenance(temp_vault):
@@ -165,6 +169,9 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["links"]["center_object_path"] == "/object?id=alpha"
     assert payload["links"]["events_path"] == "/events?q=alpha"
     assert payload["center_summary"] == "Alpha supports local-first execution."
+    assert payload["links"]["summaries_path"] == "/summaries?q=alpha"
+    assert payload["review_context"]["object_count"] == 2
+    assert payload["review_context"]["open_contradiction_count"] == 1
 
 
 def test_build_event_dossier_payload(temp_vault):
@@ -183,6 +190,10 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["date_sections"][0]["date"] == "2026-04-13"
     assert payload["event_type_counts"] == {"dated_note": 3}
     assert "dated notes projected from indexed pages" in payload["model_notes"][0]
+    assert payload["review_context"]["object_count"] == 3
+    assert payload["review_context"]["open_contradiction_count"] == 1
+    assert payload["events"][0]["review_links"]["contradictions_path"] == "/contradictions?q=alpha"
+    assert payload["events"][0]["review_links"]["summaries_path"] == "/summaries?q=alpha"
 
 
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
@@ -534,6 +545,32 @@ Thin note.
     assert payload["items"][0]["object_id"] == "thin-note"
     assert payload["items"][0]["summary_text"] == "Thin note."
     assert "compiled summaries that are weak" in payload["detection_notes"][0]
+
+
+def test_build_stale_summary_browser_payload_includes_review_context(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_stale_summary_browser_payload
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    note.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_stale_summary_browser_payload(temp_vault)
+
+    assert payload["review_context"]["object_count"] == 1
+    assert payload["review_context"]["stale_summary_count"] == 1
 
 
 def test_build_event_dossier_payload_applies_limit_before_materializing(temp_vault):

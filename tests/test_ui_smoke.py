@@ -162,6 +162,9 @@ date: 2026-04-13
     assert "/private/" not in object_body
     assert "Source Deep Dive" in object_body
     assert "Atlas Index" in object_body
+    assert "Review Context" in object_body
+    assert "Open contradictions" in object_body
+    assert "/summaries?q=alpha" in object_body
     assert f"/note?path={quote('10-Knowledge/Evergreen/Alpha.md', safe='')}" in object_body
     assert f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Source Deep Dive_深度解读.md', safe='')}" in object_body
     assert f"/note?path={quote('10-Knowledge/Atlas/Atlas-Index.md', safe='')}" in object_body
@@ -173,6 +176,8 @@ date: 2026-04-13
     assert '/events?q=alpha' in topic_body
     assert "Center Summary" in topic_body
     assert "Atlas / MOC" in topic_body
+    assert "Review Context" in topic_body
+    assert "/summaries?q=alpha" in topic_body
 
     assert events_status == 200
     assert "Event Dossier" in events_body
@@ -181,6 +186,8 @@ date: 2026-04-13
     assert "timeline-oriented" in events_body
     assert "Dated Note" in events_body
     assert "Model Notes" in events_body
+    assert "Review Context" in events_body
+    assert "/summaries?q=alpha" in events_body
     assert "page_date -" not in events_body
     assert "Source Deep Dive" in events_body
     assert "Atlas Index" in events_body
@@ -191,6 +198,7 @@ date: 2026-04-13
     assert "Contradictions" in contradictions_body
     assert "alpha" in contradictions_body
     assert '/object?id=alpha' in contradictions_body
+    assert "Resolve Selected" in contradictions_body
     assert "Source Deep Dive" in contradictions_body
     assert "Atlas Index" in contradictions_body
     assert "Detection Notes" in contradictions_body
@@ -743,6 +751,46 @@ Thin note.
     assert "Alpha" in root_body
     assert "Thin Note" in root_body
     assert "/summaries" in root_body
+
+
+def test_ui_contradictions_and_summaries_support_batch_actions(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    thin = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    thin.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        contradictions_status, contradictions_body = _get(port, "/contradictions")
+        summaries_status, summaries_body = _get(port, "/summaries")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert contradictions_status == 200
+    assert "Resolve Selected" in contradictions_body
+    assert "name='contradiction_id'" in contradictions_body
+    assert summaries_status == 200
+    assert "Rebuild Selected" in summaries_body
+    assert "name='object_id'" in summaries_body
 
 
 def test_ui_objects_page_filters_by_query(temp_vault):

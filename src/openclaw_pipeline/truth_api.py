@@ -152,6 +152,118 @@ def get_object_provenance_map(vault_dir: Path | str, object_ids: list[str]) -> d
     return provenance
 
 
+def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
+    normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
+    if not normalized_object_ids:
+        return {
+            "object_count": 0,
+            "source_note_count": 0,
+            "moc_count": 0,
+            "contradiction_count": 0,
+            "open_contradiction_count": 0,
+            "stale_summary_count": 0,
+            "latest_event_date": "",
+            "source_notes": [],
+            "mocs": [],
+            "stale_summary_object_ids": [],
+            "contradiction_object_ids": [],
+        }
+
+    provenance_map = get_object_provenance_map(vault_dir, normalized_object_ids)
+    source_notes: dict[str, dict[str, Any]] = {}
+    mocs: dict[str, dict[str, Any]] = {}
+    for provenance in provenance_map.values():
+        for note in provenance["source_notes"]:
+            source_notes.setdefault(note["slug"], note)
+        for moc in provenance["mocs"]:
+            mocs.setdefault(moc["slug"], moc)
+
+    db_path = _db_path(vault_dir)
+    placeholders = ",".join("?" for _ in normalized_object_ids)
+    with sqlite3.connect(db_path) as conn:
+        stale_rows = conn.execute(
+            f"""
+            SELECT objects.object_id, objects.title, compiled_summaries.summary_text,
+                   COALESCE(rel.outgoing_count, 0) AS outgoing_count
+            FROM objects
+            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+            LEFT JOIN (
+                SELECT source_object_id, COUNT(*) AS outgoing_count
+                FROM relations
+                GROUP BY source_object_id
+            ) AS rel ON rel.source_object_id = objects.object_id
+            WHERE objects.object_id IN ({placeholders})
+            ORDER BY objects.object_id
+            """,
+            tuple(normalized_object_ids),
+        ).fetchall()
+        event_row = conn.execute(
+            f"""
+            SELECT MAX(event_date)
+            FROM timeline_events
+            WHERE slug IN ({placeholders})
+            """,
+            tuple(normalized_object_ids),
+        ).fetchone()
+        contradiction_rows = conn.execute(
+            """
+            SELECT contradiction_id, positive_claim_ids_json, negative_claim_ids_json, status
+            FROM contradictions
+            ORDER BY contradiction_id
+            """
+        ).fetchall()
+
+    stale_summaries: list[dict[str, Any]] = []
+    for object_id, title, summary_text, outgoing_count in stale_rows:
+        summary = str(summary_text or "").strip()
+        if outgoing_count > 0:
+            continue
+        if len(summary) >= 40 and summary.lower() != str(title).strip().lower():
+            continue
+        stale_summaries.append(
+            {
+                "object_id": str(object_id),
+                "title": str(title),
+                "summary_text": summary,
+                "outgoing_relation_count": int(outgoing_count or 0),
+                "object_path": f"/object?id={object_id}",
+            }
+        )
+    stale_summary_object_ids = [item["object_id"] for item in stale_summaries]
+
+    contradiction_ids: list[str] = []
+    open_contradiction_ids: list[str] = []
+    contradiction_object_ids: set[str] = set()
+    object_id_set = set(normalized_object_ids)
+    for contradiction_id, positive_json, negative_json, status in contradiction_rows:
+        claim_ids = json.loads(positive_json) + json.loads(negative_json)
+        matched_object_ids = {
+            claim_id.split("::", 1)[0]
+            for claim_id in claim_ids
+            if claim_id.split("::", 1)[0] in object_id_set
+        }
+        if not matched_object_ids:
+            continue
+        contradiction_ids.append(str(contradiction_id))
+        contradiction_object_ids.update(matched_object_ids)
+        if status == "open":
+            open_contradiction_ids.append(str(contradiction_id))
+
+    return {
+        "object_count": len(normalized_object_ids),
+        "source_note_count": len(source_notes),
+        "moc_count": len(mocs),
+        "contradiction_count": len(contradiction_ids),
+        "open_contradiction_count": len(open_contradiction_ids),
+        "stale_summary_count": len(stale_summaries),
+        "latest_event_date": str(event_row[0] or ""),
+        "source_notes": list(source_notes.values()),
+        "mocs": list(mocs.values()),
+        "stale_summary_object_ids": stale_summary_object_ids,
+        "contradiction_object_ids": sorted(contradiction_object_ids),
+    }
+
+
 def list_objects(
     vault_dir: Path | str,
     *,
@@ -910,6 +1022,7 @@ def list_stale_summaries(
     vault_dir: Path | str,
     *,
     query: str | None = None,
+    object_ids: list[str] | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
@@ -927,13 +1040,27 @@ def list_stale_summaries(
         ) AS rel ON rel.source_object_id = objects.object_id
     """
     params: list[Any] = []
+    where_clauses: list[str] = []
+    if object_ids:
+        normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
+        if not normalized_object_ids:
+            return []
+        placeholders = ",".join("?" for _ in normalized_object_ids)
+        where_clauses.append(f"objects.object_id IN ({placeholders})")
+        params.extend(normalized_object_ids)
     if normalized_query:
-        sql += """
-            WHERE lower(objects.object_id) LIKE ? ESCAPE '\\'
-               OR lower(objects.title) LIKE ? ESCAPE '\\'
-               OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
-        """
+        where_clauses.append(
+            """
+            (
+                lower(objects.object_id) LIKE ? ESCAPE '\\'
+                OR lower(objects.title) LIKE ? ESCAPE '\\'
+                OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
+            )
+            """.strip()
+        )
         params.extend([f"%{normalized_query}%"] * 3)
+    if where_clauses:
+        sql += " WHERE " + " AND ".join(where_clauses)
     sql += " ORDER BY objects.object_id LIMIT ?"
     params.append(limit)
 

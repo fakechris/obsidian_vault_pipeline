@@ -11,6 +11,7 @@ from ..truth_api import (
     get_object_detail,
     get_note_provenance,
     get_object_provenance_map,
+    get_review_context,
     get_topic_neighborhood,
     list_atlas_memberships,
     list_contradictions,
@@ -41,6 +42,7 @@ def _object_ids_from_claim_ids(*claim_id_lists: list[str]) -> list[str]:
 def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     detail = get_object_detail(vault_dir, object_id)
     neighborhood = get_topic_neighborhood(vault_dir, object_id)
+    review_context = get_review_context(vault_dir, [object_id])
     neighbor_titles = {item["object_id"]: item["title"] for item in neighborhood["neighbors"]}
     relations = [
         {
@@ -63,10 +65,12 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
             "canonical_path": detail["object"]["canonical_path"],
         },
         "provenance": detail["provenance"],
+        "review_context": review_context,
         "links": {
             "topic_path": f"/topic?id={object_id}",
             "events_path": f"/events?q={object_id}",
             "contradictions_path": f"/contradictions?q={object_id}",
+            "summaries_path": f"/summaries?q={object_id}",
         },
         "section_nav": [
             {"href": "#summary", "label": "Summary"},
@@ -80,6 +84,10 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
 def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     neighborhood = get_topic_neighborhood(vault_dir, object_id)
     detail = get_object_detail(vault_dir, object_id)
+    review_context = get_review_context(
+        vault_dir,
+        [object_id, *[item["object_id"] for item in neighborhood["neighbors"]]],
+    )
     return {
         "screen": "overview/topic",
         **neighborhood,
@@ -87,10 +95,12 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
         "neighbor_count": len(neighborhood["neighbors"]),
         "center_summary": detail["summary"]["summary_text"] if detail["summary"] else "",
         "provenance": detail["provenance"],
+        "review_context": review_context,
         "links": {
             "center_object_path": f"/object?id={object_id}",
             "events_path": f"/events?q={object_id}",
             "contradictions_path": f"/contradictions?q={object_id}",
+            "summaries_path": f"/summaries?q={object_id}",
         },
     }
 
@@ -147,8 +157,15 @@ def build_event_dossier_payload(
         for row in rows
     ]
     provenance_map = get_object_provenance_map(vault_dir, [event["object_id"] for event in events])
+    review_context = get_review_context(vault_dir, [event["object_id"] for event in events])
     for event in events:
         event["object_path"] = f"/object?id={event['object_id']}"
+        event["review_links"] = {
+            "object_path": event["object_path"],
+            "topic_path": f"/topic?id={event['object_id']}",
+            "contradictions_path": f"/contradictions?q={event['object_id']}",
+            "summaries_path": f"/summaries?q={event['object_id']}",
+        }
         event["provenance"] = provenance_map.get(
             event["object_id"],
             {"evergreen_path": "", "source_notes": [], "mocs": []},
@@ -166,6 +183,7 @@ def build_event_dossier_payload(
         "dates": dates,
         "date_sections": date_sections,
         "event_type_counts": dict(event_type_counts),
+        "review_context": review_context,
         "model_notes": [
             "Event Dossier is a timeline over dated notes projected from indexed pages, not a separate event entity system.",
             "page_date rows come from note-level dates; heading_date rows come from dated section headings.",
@@ -327,11 +345,13 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
 
 def build_stale_summary_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
     items = list_stale_summaries(vault_dir, query=query)
+    review_context = get_review_context(vault_dir, [item["object_id"] for item in items])
     return {
         "screen": "truth/stale-summaries",
         "items": items,
         "count": len(items),
         "query": query or "",
+        "review_context": review_context,
         "detection_notes": [
             "Stale summary review flags compiled summaries that are weak and have no outgoing supporting relations.",
             "This queue is deterministic and favors false negatives over false positives.",

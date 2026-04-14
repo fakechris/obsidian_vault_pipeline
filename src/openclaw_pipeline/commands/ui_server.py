@@ -543,6 +543,29 @@ def _render_named_note_links(items: list[dict[str, str]]) -> str:
     )
 
 
+def _render_review_context_card(context: dict[str, object], *, title: str = "Review Context") -> str:
+    latest_event_date = str(context.get("latest_event_date") or "")
+    latest_event_html = escape(latest_event_date) if latest_event_date else "<span class='muted'>None</span>"
+    stale_summary_ids = ", ".join(str(item) for item in context.get("stale_summary_object_ids", [])) or "None"
+    contradiction_object_ids = ", ".join(str(item) for item in context.get("contradiction_object_ids", [])) or "None"
+    return (
+        "<section class='card'>"
+        f"<h2>{escape(title)}</h2>"
+        "<dl class='meta-list'>"
+        f"<div><dt>Objects in scope</dt><dd>{int(context.get('object_count', 0))}</dd></div>"
+        f"<div><dt>Source notes</dt><dd>{int(context.get('source_note_count', 0))}</dd></div>"
+        f"<div><dt>Atlas / MOC pages</dt><dd>{int(context.get('moc_count', 0))}</dd></div>"
+        f"<div><dt>Open contradictions</dt><dd>{int(context.get('open_contradiction_count', 0))}</dd></div>"
+        f"<div><dt>Total contradictions</dt><dd>{int(context.get('contradiction_count', 0))}</dd></div>"
+        f"<div><dt>Stale summaries</dt><dd>{int(context.get('stale_summary_count', 0))}</dd></div>"
+        f"<div><dt>Latest event date</dt><dd>{latest_event_html}</dd></div>"
+        f"<div><dt>Contradiction objects</dt><dd>{escape(contradiction_object_ids)}</dd></div>"
+        f"<div><dt>Stale summary objects</dt><dd>{escape(stale_summary_ids)}</dd></div>"
+        "</dl>"
+        "</section>"
+    )
+
+
 def _render_dashboard(payload: dict) -> str:
     object_items = "".join(
         f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
@@ -657,6 +680,7 @@ def _render_object_page(payload: dict) -> str:
             f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>"
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
+            f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
             f"<a href='/deep-dives?q={escape(payload['object']['object_id'])}'>Source deep dives</a>"
             f"<a href='/atlas?q={escape(payload['object']['object_id'])}'>Atlas / MOC</a>"
             "</div></section>"
@@ -672,6 +696,7 @@ def _render_object_page(payload: dict) -> str:
             f"<section id='claims' class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
+            f"{_render_review_context_card(payload['review_context'])}"
             "<section class='card'><h2>Context</h2><dl class='meta-list'>"
             f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
             f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
@@ -707,6 +732,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>"
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
+            f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
             f"<a href='/deep-dives?q={escape(payload['center']['object_id'])}'>Source deep dives</a>"
             f"<a href='/atlas?q={escape(payload['center']['object_id'])}'>Atlas / MOC</a>"
             "</div></section>"
@@ -714,6 +740,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
             f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
+            f"{_render_review_context_card(payload['review_context'])}"
             "</section>"
         ),
     )
@@ -740,6 +767,11 @@ def _render_events_page(payload: dict) -> str:
                 + f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
                 + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
                 + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+                + "<div class='link-row'>"
+                + f"<a href='{escape(item['review_links']['topic_path'])}'>Topic</a>"
+                + f"<a href='{escape(item['review_links']['contradictions_path'])}'>Contradictions</a>"
+                + f"<a href='{escape(item['review_links']['summaries_path'])}'>Stale summaries</a>"
+                + "</div>"
                 + "</li>"
             )
             for item in section["events"]
@@ -758,6 +790,7 @@ def _render_events_page(payload: dict) -> str:
             "</form>"
             f"<p class='muted'>{payload['event_count']} events across {len(payload['dates'])} dates.</p>"
             f"<div class='link-row'>{type_breakdown}</div>"
+            f"{_render_review_context_card(payload['review_context'])}"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
             f"<nav class='subnav'>{date_nav}</nav>"
             f"{events}"
@@ -843,7 +876,12 @@ def _render_contradictions_page(payload: dict) -> str:
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     items = "".join(
         "<li>"
-        f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
+        + (
+            f"<label><input type='checkbox' form='contradiction-batch-form' name='contradiction_id' value='{escape(item['contradiction_id'])}' /> batch</label> "
+            if item["status"] == "open"
+            else ""
+        )
+        + f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -900,6 +938,20 @@ def _render_contradictions_page(payload: dict) -> str:
             "</form>"
             f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.</p>"
             f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
+            "<section class='card'>"
+            "<h2>Batch Resolve</h2>"
+            "<form id='contradiction-batch-form' method='post' action='/contradictions/resolve' class='link-row'>"
+            "<select name='status'>"
+            "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
+            "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
+            "<option value='dismissed'>dismissed</option>"
+            "<option value='needs_human'>needs_human</option>"
+            "</select>"
+            "<input type='text' name='note' placeholder='Resolution note for selected rows' />"
+            "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>"
+            "<button type='submit'>Resolve Selected</button>"
+            "</form>"
+            "</section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
@@ -910,6 +962,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     items = "".join(
         "<li>"
+        f"<label><input type='checkbox' form='summary-batch-form' name='object_id' value='{escape(item['object_id'])}' /> batch</label> "
         f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a> '
         f"<span class='muted'>({escape(item['object_id'])})</span>"
         f"<div class='muted'>Summary: {escape(item['summary_text'])}</div>"
@@ -930,7 +983,14 @@ def _render_stale_summaries_page(payload: dict) -> str:
             "<button type='submit'>Filter</button>"
             "</form>"
             f"<p class='muted'>{payload['count']} stale summary candidates.</p>"
+            f"{_render_review_context_card(payload['review_context'])}"
             f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
+            "<section class='card'>"
+            "<h2>Batch Rebuild</h2>"
+            "<form id='summary-batch-form' method='post' action='/summaries/rebuild' class='link-row'>"
+            "<button type='submit'>Rebuild Selected</button>"
+            "</form>"
+            "</section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
@@ -1090,17 +1150,23 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 raise ValueError(f"missing required query param: {key}")
             return values[0]
 
-        def _read_form(self) -> dict[str, str]:
+        def _read_form(self) -> dict[str, list[str]]:
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length).decode("utf-8")
-            parsed = parse_qs(raw, keep_blank_values=True)
-            return {key: values[0] for key, values in parsed.items()}
+            return parse_qs(raw, keep_blank_values=True)
 
-        def _resolve_contradiction_action(self, form: dict[str, str]) -> dict[str, object]:
-            contradiction_id = form.get("contradiction_id", "").strip()
-            status = form.get("status", "").strip()
-            note = form.get("note", "").strip()
-            if not contradiction_id:
+        def _form_first(self, form: dict[str, list[str]], key: str) -> str:
+            values = form.get(key, [])
+            return values[0] if values else ""
+
+        def _form_all(self, form: dict[str, list[str]], key: str) -> list[str]:
+            return form.get(key, [])
+
+        def _resolve_contradiction_action(self, form: dict[str, list[str]]) -> dict[str, object]:
+            contradiction_ids = [item.strip() for item in self._form_all(form, "contradiction_id") if item.strip()]
+            status = self._form_first(form, "status").strip()
+            note = self._form_first(form, "note").strip()
+            if not contradiction_ids:
                 raise ValueError("missing contradiction_id")
             if status not in {
                 "resolved_keep_positive",
@@ -1111,11 +1177,11 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 raise ValueError("invalid contradiction status")
             payload = resolve_contradictions(
                 resolved_vault,
-                [contradiction_id],
+                contradiction_ids,
                 status=status,
                 note=note,
             )
-            if payload["resolved_count"] and form.get("rebuild_summaries") == "1":
+            if payload["resolved_count"] and self._form_first(form, "rebuild_summaries") == "1":
                 affected_object_ids = contradiction_object_ids(resolved_vault, payload["contradiction_ids"])
                 rebuild_payload = rebuild_compiled_summaries(resolved_vault, object_ids=affected_object_ids)
                 payload["rebuilt_summary_count"] = rebuild_payload["objects_rebuilt"]
@@ -1125,11 +1191,11 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 payload["rebuilt_object_ids"] = []
             return payload
 
-        def _rebuild_summary_action(self, form: dict[str, str]) -> dict[str, object]:
-            object_id = form.get("object_id", "").strip()
-            if not object_id:
+        def _rebuild_summary_action(self, form: dict[str, list[str]]) -> dict[str, object]:
+            object_ids = [item.strip() for item in self._form_all(form, "object_id") if item.strip()]
+            if not object_ids:
                 raise ValueError("missing object_id")
-            return rebuild_compiled_summaries(resolved_vault, object_ids=[object_id])
+            return rebuild_compiled_summaries(resolved_vault, object_ids=object_ids)
 
         def _write_json(self, payload: dict) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
