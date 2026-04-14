@@ -201,6 +201,59 @@ def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
     assert row == ("resolved_keep_positive", "Reviewed in UI")
 
 
+def test_ui_server_can_rebuild_stale_summary_via_api(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.runtime import VaultLayout
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    note.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    layout = VaultLayout.from_vault(temp_vault)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        conn.execute(
+            "UPDATE compiled_summaries SET summary_text = ? WHERE object_id = ?",
+            ("Thin.", "thin-note"),
+        )
+        conn.commit()
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode({"object_id": "thin-note"})
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/summaries/rebuild",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["objects_rebuilt"] == 1
+    assert payload["object_ids"] == ["thin-note"]
+
+
 def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 

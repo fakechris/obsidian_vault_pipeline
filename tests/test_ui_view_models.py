@@ -483,6 +483,35 @@ Mentions [[alpha]].
     assert payload["items"][0]["preview_titles"] == ["Alpha"]
 
 
+def test_build_stale_summary_browser_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_stale_summary_browser_payload
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    note.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_stale_summary_browser_payload(temp_vault)
+
+    assert payload["screen"] == "truth/stale-summaries"
+    assert payload["count"] == 1
+    assert payload["items"][0]["object_id"] == "thin-note"
+    assert payload["items"][0]["summary_text"] == "Thin note."
+    assert "compiled summaries that are weak" in payload["detection_notes"][0]
+
+
 def test_build_event_dossier_payload_applies_limit_before_materializing(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 

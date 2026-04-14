@@ -589,6 +589,60 @@ def test_ui_contradictions_page_can_resolve_item(temp_vault):
     assert "Reviewed in browser" in page_body
 
 
+def test_ui_summaries_page_can_rebuild_item(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.runtime import VaultLayout
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    note.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    layout = VaultLayout.from_vault(temp_vault)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        conn.execute(
+            "UPDATE compiled_summaries SET summary_text = ? WHERE object_id = ?",
+            ("Thin.", "thin-note"),
+        )
+        conn.commit()
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, before_body = _get(port, "/summaries")
+        rebuild_status, _body, headers = _post(
+            port,
+            "/summaries/rebuild",
+            {"object_id": "thin-note"},
+        )
+        after_status, after_body = _get(port, "/summaries")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Stale Summaries" in before_body
+    assert "thin-note" in before_body
+    assert rebuild_status == 303
+    assert headers["location"] == "/summaries"
+    assert after_status == 200
+    assert "Thin note." in after_body
+
+
 def test_ui_events_page_filters_by_query(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 

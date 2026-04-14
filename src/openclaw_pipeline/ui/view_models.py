@@ -15,6 +15,7 @@ from ..truth_api import (
     list_contradictions,
     list_deep_dive_derivations,
     list_objects,
+    list_stale_summaries,
 )
 
 
@@ -314,4 +315,18 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
         "items": enriched_items,
         "count": len(enriched_items),
         "query": query or "",
+    }
+
+
+def build_stale_summary_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
+    items = list_stale_summaries(vault_dir, query=query)
+    return {
+        "screen": "truth/stale-summaries",
+        "items": items,
+        "count": len(items),
+        "query": query or "",
+        "detection_notes": [
+            "Stale summary review flags compiled summaries that are weak and have no outgoing supporting relations.",
+            "This queue is deterministic and favors false negatives over false positives.",
+        ],
     }

@@ -23,6 +23,7 @@ from ..ui.view_models import (
     build_event_dossier_payload,
     build_object_page_payload,
     build_objects_index_payload,
+    build_stale_summary_browser_payload,
     build_truth_dashboard_payload,
     build_topic_overview_payload,
 )
@@ -97,6 +98,7 @@ def _layout(title: str, body: str) -> str:
             <a href="/deep-dives">Deep Dives</a>
             <a href="/events">Event Dossier</a>
             <a href="/contradictions">Contradictions</a>
+            <a href="/summaries">Stale Summaries</a>
           </nav>
         </div>
         <div class="shell-body">
@@ -796,6 +798,37 @@ def _render_contradictions_page(payload: dict) -> str:
     )
 
 
+def _render_stale_summaries_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
+    items = "".join(
+        "<li>"
+        f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a> '
+        f"<span class='muted'>({escape(item['object_id'])})</span>"
+        f"<div class='muted'>Summary: {escape(item['summary_text'])}</div>"
+        f"<div class='muted'>Outgoing relations: {item['outgoing_relation_count']}</div>"
+        "<form method='post' action='/summaries/rebuild' class='link-row'>"
+        f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
+        "<button type='submit'>Rebuild Summary</button>"
+        "</form>"
+        "</li>"
+        for item in payload["items"]
+    ) or "<li class='muted'>No stale summaries detected.</li>"
+    return _layout(
+        "Stale Summaries",
+        (
+            "<h1>Stale Summaries</h1>"
+            "<form method='get' action='/summaries'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter stale summaries' /> "
+            "<button type='submit'>Filter</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} stale summary candidates.</p>"
+            f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
+            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        ),
+    )
+
+
 def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int = 8787) -> ThreadingHTTPServer:
     resolved_vault = resolve_vault_dir(vault_dir)
 
@@ -875,6 +908,15 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     payload = build_derivation_browser_payload(resolved_vault, query=q)
                     self._write_html(_render_derivations_page(payload))
                     return
+                if path == "/api/summaries":
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_stale_summary_browser_payload(resolved_vault, query=q))
+                    return
+                if path == "/summaries":
+                    q = query.get("q", [""])[0]
+                    payload = build_stale_summary_browser_payload(resolved_vault, query=q)
+                    self._write_html(_render_stale_summaries_page(payload))
+                    return
                 if path == "/note":
                     relative_path = self._required(query, "path")
                     _, markdown = _read_vault_note(resolved_vault, relative_path)
@@ -908,6 +950,13 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/contradictions/resolve":
                     self._resolve_contradiction_action(form)
                     self._redirect("/contradictions?status=resolved")
+                    return
+                if path == "/api/summaries/rebuild":
+                    self._write_json(self._rebuild_summary_action(form))
+                    return
+                if path == "/summaries/rebuild":
+                    self._rebuild_summary_action(form)
+                    self._redirect("/summaries")
                     return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
@@ -953,6 +1002,12 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 payload["rebuilt_summary_count"] = 0
                 payload["rebuilt_object_ids"] = []
             return payload
+
+        def _rebuild_summary_action(self, form: dict[str, str]) -> dict[str, object]:
+            object_id = form.get("object_id", "").strip()
+            if not object_id:
+                raise ValueError("missing object_id")
+            return rebuild_compiled_summaries(resolved_vault, object_ids=[object_id])
 
         def _write_json(self, payload: dict) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

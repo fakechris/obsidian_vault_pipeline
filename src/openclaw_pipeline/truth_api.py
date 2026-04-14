@@ -587,3 +587,56 @@ def list_deep_dive_derivations(
         }
         for item in items
     ]
+
+
+def list_stale_summaries(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    sql = """
+        SELECT objects.object_id, objects.title, compiled_summaries.summary_text,
+               COALESCE(rel.outgoing_count, 0) AS outgoing_count
+        FROM objects
+        LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+        LEFT JOIN (
+            SELECT source_object_id, COUNT(*) AS outgoing_count
+            FROM relations
+            GROUP BY source_object_id
+        ) AS rel ON rel.source_object_id = objects.object_id
+    """
+    params: list[Any] = []
+    if normalized_query:
+        sql += """
+            WHERE lower(objects.object_id) LIKE ? ESCAPE '\\'
+               OR lower(objects.title) LIKE ? ESCAPE '\\'
+               OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
+        """
+        params.extend([f"%{normalized_query}%"] * 3)
+    sql += " ORDER BY objects.object_id LIMIT ?"
+    params.append(limit)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    items: list[dict[str, Any]] = []
+    for object_id, title, summary_text, outgoing_count in rows:
+        summary = str(summary_text or "").strip()
+        if outgoing_count > 0:
+            continue
+        if len(summary) >= 40 and summary.lower() != str(title).strip().lower():
+            continue
+        items.append(
+            {
+                "object_id": str(object_id),
+                "title": str(title),
+                "summary_text": summary,
+                "outgoing_relation_count": int(outgoing_count or 0),
+                "object_path": f"/object?id={object_id}",
+            }
+        )
+    return items
