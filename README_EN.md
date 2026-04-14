@@ -430,7 +430,9 @@ Default discovery now routes through this layer:
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fakechris/obsidian_vault_pipeline/main/scripts/install-user.sh | bash
+curl -fsSLO https://raw.githubusercontent.com/fakechris/obsidian_vault_pipeline/main/scripts/install-user.sh
+less install-user.sh
+bash install-user.sh
 
 mkdir -p my-vault
 cd my-vault
@@ -444,6 +446,12 @@ If you prefer the explicit PyPI two-step flow:
 ```bash
 python3 -m pip install --user obsidian-vault-pipeline
 python3 -m openclaw_pipeline.installer
+```
+
+If your Python installation enforces PEP 668, prefer:
+
+```bash
+pipx install obsidian-vault-pipeline
 ```
 
 The installer prefers a writable, safe bin directory that is already on `PATH`; if none is available, it falls back to `~/.local/bin`. It does not edit your shell configuration.

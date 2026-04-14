@@ -34,9 +34,28 @@ def test_installer_writes_executable_shims(tmp_path):
     wrapper = target_dir / "ovp-ui"
     body = wrapper.read_text(encoding="utf-8")
     assert body.startswith("#!/usr/bin/env bash")
-    assert 'exec "/opt/homebrew/opt/python@3.13/bin/python3.13"' in body
+    assert "sys.argv[0]" in body
+    assert "ovp-ui" in body
+    assert "exec /opt/homebrew/opt/python@3.13/bin/python3.13" in body
     assert "from openclaw_pipeline.commands.ui_server import main" in body
     assert os.access(wrapper, os.X_OK)
+
+
+def test_installer_shell_escapes_python_executable(tmp_path):
+    from openclaw_pipeline.installer import write_shims
+
+    target_dir = tmp_path / "bin"
+    scripts = {"ovp-ui": "openclaw_pipeline.commands.ui_server:main"}
+
+    created = write_shims(
+        target_dir=target_dir,
+        scripts=scripts,
+        python_executable="/tmp/python $HOME/bin/python3",
+    )
+
+    assert len(created) == 1
+    body = (target_dir / "ovp-ui").read_text(encoding="utf-8")
+    assert "exec '/tmp/python $HOME/bin/python3'" in body
 
 
 def test_choose_install_bin_dir_prefers_user_path_entry(tmp_path):

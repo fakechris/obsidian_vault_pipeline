@@ -67,6 +67,7 @@ def write_shims(
         module_name, func_name = _split_entry_point(entry_point)
         wrapper_path = target_dir / script_name
         wrapper_body = _build_wrapper(
+            script_name=script_name,
             python_executable=python_executable,
             module_name=module_name,
             func_name=func_name,
@@ -120,7 +121,10 @@ def main(argv: list[str] | None = None) -> int:
         python_executable=args.python_executable,
     )
     print(f"Installed {len(created)} OVP command shims into {target_dir}")
-    if str(target_dir) not in os.environ.get("PATH", "").split(os.pathsep):
+    path_entries = _parse_path_entries(os.environ.get("PATH", ""))
+    if target_dir.resolve(strict=False) not in {
+        entry.resolve(strict=False) for entry in path_entries
+    }:
         print(f"Note: {target_dir} is not currently on PATH.")
     return 0
 
@@ -159,8 +163,6 @@ def _curated_path_candidates(path_entries: list[Path], home_dir: Path) -> list[P
         if home_dir in resolved.parents and candidate.name == "bin":
             candidates.append(candidate)
             continue
-        if candidate in preferred_system_bins:
-            candidates.append(candidate)
     return candidates
 
 
@@ -181,15 +183,21 @@ def _split_entry_point(entry_point: str) -> tuple[str, str]:
     return module_name, func_name
 
 
-def _build_wrapper(python_executable: str, module_name: str, func_name: str) -> str:
+def _build_wrapper(
+    script_name: str,
+    python_executable: str,
+    module_name: str,
+    func_name: str,
+) -> str:
     python_code = (
+        f"import sys; sys.argv[0] = {script_name!r}; "
         f"from {module_name} import {func_name} as _entry; "
         "raise SystemExit(_entry())"
     )
     return (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        f'exec "{python_executable}" -c {shlex.quote(python_code)} "$@"\n'
+        f'exec {shlex.quote(python_executable)} -c {shlex.quote(python_code)} "$@"\n'
     )
 
 

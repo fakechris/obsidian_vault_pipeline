@@ -428,7 +428,9 @@ vault/
 ## 快速开始
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fakechris/obsidian_vault_pipeline/main/scripts/install-user.sh | bash
+curl -fsSLO https://raw.githubusercontent.com/fakechris/obsidian_vault_pipeline/main/scripts/install-user.sh
+less install-user.sh
+bash install-user.sh
 
 mkdir -p my-vault
 cd my-vault
@@ -442,6 +444,12 @@ ovp --full
 ```bash
 python3 -m pip install --user obsidian-vault-pipeline
 python3 -m openclaw_pipeline.installer
+```
+
+如果你的 Python 环境启用了 PEP 668，优先使用：
+
+```bash
+pipx install obsidian-vault-pipeline
 ```
 
 安装器会优先把 `ovp*` 命令写入当前 `PATH` 里可写的安全 bin 目录；如果找不到，则退回 `~/.local/bin`，不会修改你的 shell 配置。

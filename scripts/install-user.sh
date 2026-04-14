@@ -15,7 +15,22 @@ install_package() {
   if "$PYTHON_BIN" -m pip install --user "$1"; then
     return 0
   fi
-  "$PYTHON_BIN" -m pip install --user --break-system-packages "$1"
+  if [ "${OVP_ALLOW_BREAK_SYSTEM_PACKAGES:-0}" = "1" ]; then
+    "$PYTHON_BIN" -m pip install --user --break-system-packages "$1"
+    return 0
+  fi
+  cat >&2 <<EOF
+User-scoped pip install failed for $1.
+
+Recommended options:
+  1. Use pipx:
+     pipx install $1
+  2. Re-run this installer with explicit opt-in:
+     OVP_ALLOW_BREAK_SYSTEM_PACKAGES=1 ./scripts/install-user.sh
+
+This script does not force --break-system-packages by default.
+EOF
+  return 1
 }
 
 install_package "$OVP_PACKAGE_SPEC"
