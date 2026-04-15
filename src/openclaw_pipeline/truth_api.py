@@ -1081,7 +1081,7 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
                 "note_paths": [],
                 "downstream_effects": [
                     {"label": "Open object", "path": item["object_path"]},
-                    {"label": "Review stale summary", "path": f"/summaries?q={item['object_id']}"},
+                    {"label": "Review stale summary", "path": f"/summaries?q={quote(item['object_id'], safe='')}"},
                 ],
                 "payload": {
                     "reason_codes": item["reason_codes"],

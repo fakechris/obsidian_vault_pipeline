@@ -1821,8 +1821,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
-    limit_note = (
-        f" Showing the most recent {payload['limit']} timeline rows in this dossier window."
-        if payload.get("is_limited")
-        else ""
-    )
