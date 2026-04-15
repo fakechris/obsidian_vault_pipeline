@@ -791,6 +791,52 @@ def test_ui_server_main_can_start_action_dispatcher_when_enabled(temp_vault, cap
     assert calls["dispatcher_stopped"] is True
 
 
+def test_ui_server_action_dispatcher_runs_actions_in_subprocess(temp_vault, monkeypatch):
+    from openclaw_pipeline.commands import ui_server
+
+    calls = {}
+
+    class FakeStopEvent:
+        def __init__(self):
+            self._is_set = False
+
+        def is_set(self):
+            return self._is_set
+
+        def wait(self, timeout):
+            calls["wait_timeout"] = timeout
+            self._is_set = True
+            return True
+
+    def fake_run(cmd, *, capture_output, text, timeout):
+        calls["cmd"] = cmd
+        calls["capture_output"] = capture_output
+        calls["text"] = text
+        calls["timeout"] = timeout
+
+        class Result:
+            returncode = 0
+            stdout = '{"status":"idle"}'
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(ui_server.subprocess, "run", fake_run)
+
+    ui_server._action_dispatcher_loop(
+        temp_vault,
+        stop_event=FakeStopEvent(),
+        interval_seconds=3.5,
+    )
+
+    assert calls["cmd"][1:4] == ["-m", "openclaw_pipeline.commands.run_actions", "--vault-dir"]
+    assert calls["cmd"][-1] == "--once"
+    assert calls["capture_output"] is True
+    assert calls["text"] is True
+    assert calls["timeout"] == 1800
+    assert calls["wait_timeout"] == 3.5
+
+
 def test_ui_server_main_exits_nonzero_when_preflight_fails(temp_vault, capsys, monkeypatch):
     from openclaw_pipeline.commands.ui_server import main
 

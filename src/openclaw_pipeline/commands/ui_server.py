@@ -5,6 +5,7 @@ import json
 import mimetypes
 import sqlite3
 import re
+import subprocess
 import sys
 import threading
 from html import escape
@@ -2168,7 +2169,19 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
 def _action_dispatcher_loop(vault_dir: Path | str, *, stop_event: threading.Event, interval_seconds: float) -> None:
     while not stop_event.is_set():
         try:
-            run_next_action_queue_item(vault_dir)
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "openclaw_pipeline.commands.run_actions",
+                    "--vault-dir",
+                    str(resolve_vault_dir(vault_dir)),
+                    "--once",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=1800,
+            )
         except Exception:
             pass
         stop_event.wait(interval_seconds)
