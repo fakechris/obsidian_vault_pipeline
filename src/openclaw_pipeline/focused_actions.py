@@ -7,7 +7,6 @@ from .runtime import VaultLayout, resolve_vault_dir
 
 
 def run_deep_dive_workflow_action(
-    *,
     vault_dir: Path | str,
     action: dict[str, Any],
     **_: Any,
@@ -33,7 +32,6 @@ def run_deep_dive_workflow_action(
 
 
 def run_object_extraction_workflow_action(
-    *,
     vault_dir: Path | str,
     action: dict[str, Any],
     **_: Any,

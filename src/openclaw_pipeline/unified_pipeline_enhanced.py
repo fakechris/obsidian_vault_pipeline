@@ -1568,72 +1568,78 @@ class EnhancedPipeline:
 
         print(f"\nPipeline steps to run: {', '.join(steps_to_run)}")
 
+        original_pack_name = self.workflow_pack_name
+        original_profile_name = self.workflow_profile_name
         if pack_name:
             self.workflow_pack_name = pack_name
         if profile_name:
             self.workflow_profile_name = profile_name
 
-        # 获取执行前的文件计数
-        before_counts = self._get_before_counts()
+        try:
+            # 获取执行前的文件计数
+            before_counts = self._get_before_counts()
 
-        for step in steps_to_run:
-            self.txn.step(self.txn_id, step, "in_progress")
+            for step in steps_to_run:
+                self.txn.step(self.txn_id, step, "in_progress")
 
-            try:
-                cmd_result = execute_profile_stage_handler(
-                    self,
-                    step,
-                    pack_name=self.workflow_pack_name,
-                    batch_size=batch_size,
-                    dry_run=dry_run,
-                    pinboard_days=pinboard_days,
-                    pinboard_start=pinboard_start,
-                    pinboard_end=pinboard_end,
-                    results=results,
-                )
-            except ValueError as exc:
-                if "Unknown stage handler" not in str(exc):
-                    raise
-                cmd_result = {"success": False, "error": f"Unknown step: {step}"}
+                try:
+                    cmd_result = execute_profile_stage_handler(
+                        self,
+                        step,
+                        pack_name=self.workflow_pack_name,
+                        batch_size=batch_size,
+                        dry_run=dry_run,
+                        pinboard_days=pinboard_days,
+                        pinboard_start=pinboard_start,
+                        pinboard_end=pinboard_end,
+                        results=results,
+                    )
+                except ValueError as exc:
+                    if "Unknown stage handler" not in str(exc):
+                        raise
+                    cmd_result = {"success": False, "error": f"Unknown step: {step}"}
 
-            # 基于实际产出判断状态（非dry_run模式）
-            if not dry_run and cmd_result.get("success"):
-                output_check = self._count_output_files(step, before_counts, cmd_result)
-                produced = output_check.get("produced", 0)
+                # 基于实际产出判断状态（非dry_run模式）
+                if not dry_run and cmd_result.get("success"):
+                    output_check = self._count_output_files(step, before_counts, cmd_result)
+                    produced = output_check.get("produced", 0)
 
-                # 更新结果信息
-                cmd_result.update(output_check)
-                cmd_result["output"] = f"Produced {produced} items"
+                    # 更新结果信息
+                    cmd_result.update(output_check)
+                    cmd_result["output"] = f"Produced {produced} items"
 
-                # 有产出即视为成功（不再依赖超时导致的退出码）
-                if produced > 0:
-                    cmd_result["success"] = True
-                    # 更新 before_counts 为下次检查做准备
-                    if step == "clippings":
-                        before_counts["processed"] += produced
-                    elif step == "pinboard":
-                        before_counts["pinboard"] += produced
-                    elif step == "pinboard_process":
-                        before_counts["pinboard_archived"] += produced
-                    elif step == "articles":
-                        before_counts["interpretations"] += produced
-                    elif step == "absorb":
-                        before_counts["evergreen"] += produced
-                    elif step == "refine":
-                        before_counts["refine_log_mtime"] = (self.layout.logs_dir / "refine-mutations.jsonl").stat().st_mtime if (self.layout.logs_dir / "refine-mutations.jsonl").exists() else before_counts.get("refine_log_mtime", 0.0)
+                    # 有产出即视为成功（不再依赖超时导致的退出码）
+                    if produced > 0:
+                        cmd_result["success"] = True
+                        # 更新 before_counts 为下次检查做准备
+                        if step == "clippings":
+                            before_counts["processed"] += produced
+                        elif step == "pinboard":
+                            before_counts["pinboard"] += produced
+                        elif step == "pinboard_process":
+                            before_counts["pinboard_archived"] += produced
+                        elif step == "articles":
+                            before_counts["interpretations"] += produced
+                        elif step == "absorb":
+                            before_counts["evergreen"] += produced
+                        elif step == "refine":
+                            before_counts["refine_log_mtime"] = (self.layout.logs_dir / "refine-mutations.jsonl").stat().st_mtime if (self.layout.logs_dir / "refine-mutations.jsonl").exists() else before_counts.get("refine_log_mtime", 0.0)
 
-            results[step] = cmd_result
-            self.step_results[step] = cmd_result
+                results[step] = cmd_result
+                self.step_results[step] = cmd_result
 
-            if cmd_result["success"]:
-                self.txn.step(self.txn_id, step, "completed", cmd_result.get("output", ""))
-            else:
-                self.txn.step(self.txn_id, step, "failed", cmd_result.get("error", ""))
-                print(f"\nPipeline stopped at step: {step}")
-                self.txn.fail(self.txn_id, f"Failed at step: {step}")
-                break
+                if cmd_result["success"]:
+                    self.txn.step(self.txn_id, step, "completed", cmd_result.get("output", ""))
+                else:
+                    self.txn.step(self.txn_id, step, "failed", cmd_result.get("error", ""))
+                    print(f"\nPipeline stopped at step: {step}")
+                    self.txn.fail(self.txn_id, f"Failed at step: {step}")
+                    break
 
-        return results
+            return results
+        finally:
+            self.workflow_pack_name = original_pack_name
+            self.workflow_profile_name = original_profile_name
 
     def generate_report(self, results: dict) -> str:
         """生成Pipeline报告"""

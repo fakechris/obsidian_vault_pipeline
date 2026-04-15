@@ -1264,9 +1264,16 @@ def _signal_id(signal_type: str, key: str) -> str:
     return f"{signal_type}::{hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]}"
 
 
-def _action_id(signal_id: str, action_kind: str, target_ref: str, payload: dict[str, Any]) -> str:
+def _action_id(
+    signal_id: str,
+    action_kind: str,
+    target_ref: str,
+    payload: dict[str, Any],
+    *,
+    pack_name: str,
+) -> str:
     payload_key = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    key = f"{signal_id}::{action_kind}::{target_ref}::{payload_key}"
+    key = f"{pack_name}::{signal_id}::{action_kind}::{target_ref}::{payload_key}"
     return f"action::{hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]}"
 
 
@@ -1413,7 +1420,14 @@ def _enqueue_action_from_signal(
         "note_paths": list(signal.get("note_paths", [])),
         "object_ids": list(signal.get("object_ids", [])),
     }
-    action_id = _action_id(signal_id, str(recommended_action["kind"]), target_ref, payload)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    action_id = _action_id(
+        signal_id,
+        str(recommended_action["kind"]),
+        target_ref,
+        payload,
+        pack_name=normalized_pack,
+    )
     existing = next((item for item in existing_actions if item.get("action_id") == action_id), None)
     if existing is not None:
         return False, existing
@@ -1421,7 +1435,7 @@ def _enqueue_action_from_signal(
     action = {
         "action_id": action_id,
         "action_kind": str(recommended_action["kind"]),
-        "pack": str(pack_name or DEFAULT_WORKFLOW_PACK_NAME),
+        "pack": normalized_pack,
         "source_signal_id": signal_id,
         "title": str(recommended_action.get("label") or signal.get("title") or signal_id),
         "target_ref": target_ref,
@@ -1436,7 +1450,7 @@ def _enqueue_action_from_signal(
         "retry_count": 0,
         "safe_to_run": _is_safe_action_kind(
             str(recommended_action["kind"]),
-            pack_name=pack_name,
+            pack_name=normalized_pack,
         ),
         "payload": payload,
         "session_id": session_id,
@@ -1579,11 +1593,19 @@ def _run_object_extraction_workflow_action(vault_dir: Path | str, action: dict[s
     return run_object_extraction_workflow_action(vault_dir=vault_dir, action=action)
 
 
-def _refresh_truth_after_action(vault_dir: Path | str, *, pack_name: str | None = None) -> None:
+def _refresh_truth_after_action(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    requires_truth_refresh: bool = False,
+    requires_signal_resync: bool = False,
+) -> None:
     from .knowledge_index import rebuild_knowledge_index
 
-    rebuild_knowledge_index(resolve_vault_dir(vault_dir), pack_name=pack_name)
-    sync_signal_ledger(vault_dir, pack_name=pack_name)
+    if requires_truth_refresh:
+        rebuild_knowledge_index(resolve_vault_dir(vault_dir), pack_name=pack_name)
+    if requires_signal_resync:
+        sync_signal_ledger(vault_dir, pack_name=pack_name)
 
 
 def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False) -> dict[str, Any]:
@@ -1640,6 +1662,8 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
             _refresh_truth_after_action(
                 vault_dir,
                 pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+                requires_truth_refresh=bool(getattr(spec, "requires_truth_refresh", False)),
+                requires_signal_resync=bool(getattr(spec, "requires_signal_resync", False)),
             )
         with action_queue_write_lock(vault_dir):
             action["status"] = "succeeded"
@@ -1760,8 +1784,13 @@ def _production_gap_items_from_chains(
     return weak_points[:limit]
 
 
-def _research_tech_build_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
+def _research_tech_build_signal_entries(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, Any]]:
     resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
     timestamp = _utc_now_text()
     signals: list[dict[str, Any]] = []
 
@@ -1840,7 +1869,11 @@ def _research_tech_build_signal_entries(vault_dir: Path | str) -> list[dict[str,
             }
         )
 
-    production_chains = _research_tech_list_production_chains(resolved_vault, limit=MAX_PAGE_SIZE)
+    production_chains = list_production_chains(
+        resolved_vault,
+        pack_name=normalized_pack,
+        limit=MAX_PAGE_SIZE,
+    )
     for item in _production_gap_items_from_chains(production_chains, limit=MAX_PAGE_SIZE):
         object_ids = [entry["object_id"] for entry in item["traceability"]["objects"]]
         signals.append(

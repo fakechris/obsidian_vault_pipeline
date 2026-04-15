@@ -572,15 +572,15 @@ def rebuild_knowledge_index(
                 "pages_indexed": len(page_rows),
                 "links_indexed": len(link_rows),
                 "raw_records_indexed": len(raw_rows),
-            "timeline_events_indexed": len(timeline_rows),
-            "audit_events_indexed": len(audit_rows),
-            "embedding_chunks_indexed": len(embedding_rows),
-            "objects_indexed": len(truth_projection.objects),
-            "claims_indexed": len(truth_projection.claims),
-            "relations_indexed": len(truth_projection.relations),
-            "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
-            "contradictions_indexed": len(truth_projection.contradictions),
-        }
+                "timeline_events_indexed": len(timeline_rows),
+                "audit_events_indexed": len(audit_rows),
+                "embedding_chunks_indexed": len(embedding_rows),
+                "objects_indexed": len(truth_projection.objects),
+                "claims_indexed": len(truth_projection.claims),
+                "relations_indexed": len(truth_projection.relations),
+                "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
+                "contradictions_indexed": len(truth_projection.contradictions),
+            }
 
 
 def query_knowledge_index(vault_dir: Path, query: str, limit: int = 5) -> list[dict[str, str | int | float]]:

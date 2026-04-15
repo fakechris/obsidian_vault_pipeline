@@ -175,6 +175,42 @@ def test_run_pipeline_dispatches_profile_stages_via_handler_registry(tmp_path, m
     assert results["articles"]["success"] is True
 
 
+def test_run_pipeline_restores_pack_and_profile_after_override(tmp_path, monkeypatch):
+    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_source
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+    original_pack = pipeline.workflow_pack_name
+    original_profile = pipeline.workflow_profile_name
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(
+        pipeline,
+        "_count_output_files",
+        lambda step, before_counts, cmd_result: {"produced": 1},
+    )
+    monkeypatch.setattr(
+        pipeline_source,
+        "execute_profile_stage_handler",
+        lambda *args, **kwargs: {"success": True},
+        raising=False,
+    )
+
+    pipeline.run_pipeline(
+        steps=["articles"],
+        dry_run=True,
+        pack_name="default-knowledge",
+        profile_name="full",
+    )
+
+    assert pipeline.workflow_pack_name == original_pack
+    assert pipeline.workflow_profile_name == original_profile
+
+
 def test_detect_pinboard_processor_routes_gist_to_article_stack():
     content = """---
 title: "GBrain.md"

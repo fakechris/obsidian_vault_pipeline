@@ -39,8 +39,8 @@ def build_signals(
     pack_name: str | None = None,
     spec: ObservationSurfaceSpec | None = None,
 ) -> list[dict[str, Any]]:
-    _ = pack_name, spec
-    return truth_api._research_tech_build_signal_entries(vault_dir)
+    _ = spec
+    return truth_api._research_tech_build_signal_entries(vault_dir, pack_name=pack_name)
 
 
 def build_briefing(

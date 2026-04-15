@@ -92,6 +92,11 @@ class BaseDomainPack:
                 f"Pack '{self.name}' declares truth projection for "
                 f"'{self._truth_projection.pack}'"
             )
+        for spec in self._stage_handlers:
+            if spec.pack != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares stage handler for '{spec.pack}'"
+                )
         for spec in self._observation_surfaces:
             if spec.pack != self.name:
                 raise ValueError(

@@ -2478,11 +2478,64 @@ def test_truth_api_refresh_truth_after_action_uses_pack_override(temp_vault, mon
         lambda vault_dir, **kwargs: captured.update({"synced": vault_dir, "synced_pack": kwargs.get("pack_name")}),
     )
 
-    truth_api_source._refresh_truth_after_action(temp_vault, pack_name="default-knowledge")
+    truth_api_source._refresh_truth_after_action(
+        temp_vault,
+        pack_name="default-knowledge",
+        requires_truth_refresh=True,
+        requires_signal_resync=True,
+    )
 
     assert captured["pack_name"] == "default-knowledge"
     assert captured["synced"] == temp_vault
     assert captured["synced_pack"] == "default-knowledge"
+
+
+def test_truth_api_refresh_truth_after_action_respects_independent_flags(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api_source
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.knowledge_index.rebuild_knowledge_index",
+        lambda vault_dir, *, pack_name=None: calls.append(f"rebuild:{pack_name}"),
+    )
+    monkeypatch.setattr(
+        truth_api_source,
+        "sync_signal_ledger",
+        lambda vault_dir, **kwargs: calls.append(f"sync:{kwargs.get('pack_name')}"),
+    )
+
+    truth_api_source._refresh_truth_after_action(
+        temp_vault,
+        pack_name="default-knowledge",
+        requires_truth_refresh=False,
+        requires_signal_resync=True,
+    )
+
+    assert calls == ["sync:default-knowledge"]
+
+
+def test_action_id_includes_pack_to_avoid_cross_pack_collisions():
+    from openclaw_pipeline.truth_api import _action_id
+
+    payload = {"recommended_action": {"kind": "deep_dive_workflow"}}
+
+    research = _action_id(
+        "signal::demo",
+        "deep_dive_workflow",
+        "50-Inbox/03-Processed/Demo.md",
+        payload,
+        pack_name="research-tech",
+    )
+    media = _action_id(
+        "signal::demo",
+        "deep_dive_workflow",
+        "50-Inbox/03-Processed/Demo.md",
+        payload,
+        pack_name="media-editorial",
+    )
+
+    assert research != media
 
 
 def test_truth_api_list_signals_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
@@ -2523,6 +2576,28 @@ def test_truth_api_list_signals_dispatches_via_observation_surface_registry(temp
 
     assert items[0]["signal_id"] == "signal::1"
     assert calls == [("signals", "default-knowledge")]
+
+
+def test_research_tech_build_signal_entries_uses_pack_aware_production_chains(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api_source
+
+    calls: list[str | None] = []
+
+    monkeypatch.setattr(truth_api_source, "list_contradictions", lambda *args, **kwargs: [])
+    monkeypatch.setattr(truth_api_source, "list_stale_summaries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        truth_api_source,
+        "list_production_chains",
+        lambda vault_dir, *, pack_name=None, **kwargs: calls.append(pack_name) or [],
+    )
+
+    items = truth_api_source._research_tech_build_signal_entries(
+        temp_vault,
+        pack_name="default-knowledge",
+    )
+
+    assert items == []
+    assert calls == ["default-knowledge"]
 
 
 def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):

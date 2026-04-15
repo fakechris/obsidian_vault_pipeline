@@ -72,7 +72,7 @@ def execute_profile_stage_handler(
         pinboard_days=pinboard_days,
         pinboard_start=pinboard_start,
         pinboard_end=pinboard_end,
-        results=results or {},
+        results=results if results is not None else {},
         spec=spec,
     )
 
@@ -93,7 +93,7 @@ def execute_autopilot_stage_handler(
     return handler(
         daemon=daemon,
         task=task,
-        result=result or {},
+        result=result if result is not None else {},
         spec=spec,
     )
 

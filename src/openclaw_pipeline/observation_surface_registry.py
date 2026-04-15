@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .pack_resolution import coerce_pack, iter_compatible_packs, load_entrypoint
+from .pack_resolution import iter_compatible_packs, load_entrypoint
 from .packs.base import BaseDomainPack, ObservationSurfaceSpec
 
 
@@ -12,11 +12,12 @@ def resolve_observation_surface_builder(
     pack_name: str | BaseDomainPack | None,
     surface_kind: str,
 ) -> ObservationSurfaceSpec:
-    for pack in iter_compatible_packs(pack_name):
+    compatible_packs = iter_compatible_packs(pack_name)
+    resolved = compatible_packs[0]
+    for pack in compatible_packs:
         for spec in pack.observation_surfaces():
             if spec.surface_kind == surface_kind:
                 return spec
-    resolved = coerce_pack(pack_name)
     raise ValueError(
         f"Unknown observation surface builder '{surface_kind}' for pack '{resolved.name}'"
     )
