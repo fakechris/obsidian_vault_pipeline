@@ -1719,6 +1719,121 @@ Processed source note without any derived deep dive.
     assert actions[0]["status"] == "obsolete"
 
 
+def test_truth_api_can_retry_failed_action_queue_item(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+    truth_api.sync_signal_ledger(vault)
+
+    monkeypatch.setattr(
+        truth_api,
+        "_run_deep_dive_workflow_action",
+        lambda vault_dir, action: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    truth_api.run_next_action_queue_item(vault)
+    failed_action = truth_api.list_action_queue(vault)[0]
+
+    payload = truth_api.retry_action_queue_item(vault, action_id=failed_action["action_id"])
+    retried_action = truth_api.list_action_queue(vault)[0]
+
+    assert payload["retried"] is True
+    assert payload["action"]["status"] == "queued"
+    assert payload["action"]["error"] == ""
+    assert payload["action"]["started_at"] == ""
+    assert payload["action"]["finished_at"] == ""
+    assert retried_action["status"] == "queued"
+
+
+def test_truth_api_can_dismiss_queued_action_queue_item(temp_vault):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+    truth_api.sync_signal_ledger(vault)
+    queued_action = truth_api.list_action_queue(vault)[0]
+
+    payload = truth_api.dismiss_action_queue_item(vault, action_id=queued_action["action_id"])
+    dismissed_action = truth_api.list_action_queue(vault)[0]
+
+    assert payload["dismissed"] is True
+    assert payload["action"]["status"] == "dismissed"
+    assert payload["action"]["finished_at"]
+    assert dismissed_action["status"] == "dismissed"
+
+
+def test_truth_api_run_action_queue_processes_multiple_queued_items(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/another-harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[source-note]] but has not produced any evergreen objects yet.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+    truth_api.sync_signal_ledger(vault)
+
+    monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", lambda vault_dir, action: {"ok": "deep_dive"})
+    monkeypatch.setattr(truth_api, "_run_object_extraction_workflow_action", lambda vault_dir, action: {"ok": "objects"})
+    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir: None)
+
+    payload = truth_api.run_action_queue(vault, limit=5)
+    actions = truth_api.list_action_queue(vault)
+
+    assert payload["ran_count"] == 2
+    assert payload["stopped_reason"] == "no_queued_actions"
+    assert {item["status"] for item in actions} == {"succeeded"}
+
+
 def test_truth_api_builds_briefing_snapshot(temp_vault):
     from openclaw_pipeline.truth_api import get_briefing_snapshot, record_review_action, sync_signal_ledger
 

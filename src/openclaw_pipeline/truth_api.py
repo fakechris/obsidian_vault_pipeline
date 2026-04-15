@@ -1401,12 +1401,46 @@ def _replace_action_queue_item(vault_dir: Path | str, action: dict[str, Any]) ->
     return action
 
 
+def _action_by_id(vault_dir: Path | str, action_id: str) -> dict[str, Any] | None:
+    for item in _read_action_queue_rows(vault_dir):
+        if item.get("action_id") == action_id:
+            return dict(item)
+    return None
+
+
 def _next_queued_action(vault_dir: Path | str) -> dict[str, Any] | None:
     queued = [item for item in _read_action_queue_rows(vault_dir) if item.get("status") == "queued"]
     if not queued:
         return None
     queued.sort(key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))))
     return dict(queued[0])
+
+
+def retry_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[str, Any]:
+    action = _action_by_id(vault_dir, action_id)
+    if action is None:
+        raise ValueError("unknown action_id")
+    if str(action.get("status") or "") not in {"failed", "obsolete"}:
+        raise ValueError("action is not retryable")
+    action["status"] = "queued"
+    action["started_at"] = ""
+    action["finished_at"] = ""
+    action["error"] = ""
+    action["result"] = {}
+    _replace_action_queue_item(vault_dir, action)
+    return {"retried": True, "action": action}
+
+
+def dismiss_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[str, Any]:
+    action = _action_by_id(vault_dir, action_id)
+    if action is None:
+        raise ValueError("unknown action_id")
+    if str(action.get("status") or "") in {"succeeded", "dismissed"}:
+        raise ValueError("action is not dismissible")
+    action["status"] = "dismissed"
+    action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _replace_action_queue_item(vault_dir, action)
+    return {"dismissed": True, "action": action}
 
 
 def _run_deep_dive_workflow_action(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
@@ -1499,6 +1533,24 @@ def run_next_action_queue_item(vault_dir: Path | str) -> dict[str, Any]:
         action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         _replace_action_queue_item(vault_dir, action)
         return {"ran": False, "reason": "execution_failed", "action": action}
+
+
+def run_action_queue(vault_dir: Path | str, *, limit: int = 5) -> dict[str, Any]:
+    limit = max(1, min(int(limit), MAX_PAGE_SIZE))
+    results: list[dict[str, Any]] = []
+    stopped_reason = "limit_reached"
+    for _ in range(limit):
+        payload = run_next_action_queue_item(vault_dir)
+        results.append(payload)
+        if not payload.get("ran"):
+            stopped_reason = str(payload.get("reason") or "stopped")
+            break
+    return {
+        "limit": limit,
+        "ran_count": sum(1 for item in results if item.get("ran")),
+        "stopped_reason": stopped_reason,
+        "results": results,
+    }
 
 
 def _action_queue_state_map(vault_dir: Path | str) -> dict[str, dict[str, Any]]:

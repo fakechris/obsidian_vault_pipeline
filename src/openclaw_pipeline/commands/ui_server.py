@@ -38,10 +38,13 @@ from ..ui.view_models import (
     build_topic_overview_payload,
 )
 from ..truth_api import (
+    dismiss_action_queue_item,
     enqueue_signal_action,
     ensure_signal_ledger_synced,
     record_review_action,
+    retry_action_queue_item,
     review_evolution_candidate,
+    run_action_queue,
     run_next_action_queue_item,
 )
 
@@ -1542,6 +1545,22 @@ def _render_actions_page(payload: dict) -> str:
             if item.get("created_at")
             else ""
         )
+        + (
+            "<form method='post' action='/actions/retry' class='link-row'>"
+            + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
+            + "<button type='submit'>Retry</button>"
+            + "</form>"
+            if item.get("status") in {"failed", "obsolete"}
+            else ""
+        )
+        + (
+            "<form method='post' action='/actions/dismiss' class='link-row'>"
+            + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
+            + "<button type='submit'>Dismiss</button>"
+            + "</form>"
+            if item.get("status") in {"queued", "failed", "obsolete", "running"}
+            else ""
+        )
         + "</li>"
         for item in payload["items"]
     ) or "<li class='muted'>No queued actions yet.</li>"
@@ -1552,6 +1571,10 @@ def _render_actions_page(payload: dict) -> str:
             "<p class='muted'>Asynchronous queue consumption is opt-in. Start the UI with <code>--with-action-worker</code> to let a background dispatcher run queued actions outside the request thread.</p>"
             "<form method='post' action='/actions/run-next' class='link-row'>"
             "<button type='submit'>Run next queued action</button>"
+            "</form>"
+            "<form method='post' action='/actions/run-batch' class='link-row'>"
+            "<input type='hidden' name='limit' value='5' />"
+            "<button type='submit'>Run 5 queued actions</button>"
             "</form>"
             "<form method='get' action='/actions' class='link-row'>"
             f"<input type='text' name='q' value='{escape(query)}' placeholder='Search actions' />"
@@ -2029,6 +2052,29 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     run_next_action_queue_item(resolved_vault)
                     self._redirect("/actions")
                     return
+                if path == "/api/actions/run-batch":
+                    limit = int(self._form_first(form, "limit").strip() or "5")
+                    self._write_json(run_action_queue(resolved_vault, limit=limit))
+                    return
+                if path == "/actions/run-batch":
+                    limit = int(self._form_first(form, "limit").strip() or "5")
+                    run_action_queue(resolved_vault, limit=limit)
+                    self._redirect("/actions")
+                    return
+                if path == "/api/actions/retry":
+                    self._write_json(self._retry_action(form))
+                    return
+                if path == "/actions/retry":
+                    self._retry_action(form)
+                    self._redirect("/actions")
+                    return
+                if path == "/api/actions/dismiss":
+                    self._write_json(self._dismiss_action(form))
+                    return
+                if path == "/actions/dismiss":
+                    self._dismiss_action(form)
+                    self._redirect("/actions")
+                    return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
                 self.send_error(400, str(exc))
@@ -2133,6 +2179,18 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             payload = enqueue_signal_action(resolved_vault, signal_id=signal_id)
             payload["next_path"] = self._form_first(form, "next").strip() or "/actions"
             return payload
+
+        def _retry_action(self, form: dict[str, list[str]]) -> dict[str, object]:
+            action_id = self._form_first(form, "action_id").strip()
+            if not action_id:
+                raise ValueError("missing action_id")
+            return retry_action_queue_item(resolved_vault, action_id=action_id)
+
+        def _dismiss_action(self, form: dict[str, list[str]]) -> dict[str, object]:
+            action_id = self._form_first(form, "action_id").strip()
+            if not action_id:
+                raise ValueError("missing action_id")
+            return dismiss_action_queue_item(resolved_vault, action_id=action_id)
 
         def _write_json(self, payload: dict) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

@@ -411,6 +411,122 @@ def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
     assert payload["action"]["status"] == "succeeded"
 
 
+def test_ui_server_can_run_action_batch_via_api(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "run_action_queue",
+        lambda vault_dir, *, limit: {
+            "ran_count": 2,
+            "stopped_reason": "no_queued_actions",
+            "results": [],
+            "limit": limit,
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode({"limit": "5"})
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/actions/run-batch",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["ran_count"] == 2
+    assert payload["limit"] == 5
+
+
+def test_ui_server_can_retry_action_via_api(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "retry_action_queue_item",
+        lambda vault_dir, *, action_id: {
+            "retried": True,
+            "action": {"action_id": action_id, "status": "queued"},
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode({"action_id": "action::demo"})
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/actions/retry",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["retried"] is True
+    assert payload["action"]["status"] == "queued"
+
+
+def test_ui_server_can_dismiss_action_via_api(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "dismiss_action_queue_item",
+        lambda vault_dir, *, action_id: {
+            "dismissed": True,
+            "action": {"action_id": action_id, "status": "dismissed"},
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode({"action_id": "action::demo"})
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/actions/dismiss",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["dismissed"] is True
+    assert payload["action"]["status"] == "dismissed"
+
+
 def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
     from openclaw_pipeline.runtime import VaultLayout
