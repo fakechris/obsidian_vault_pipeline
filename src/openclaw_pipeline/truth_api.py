@@ -18,6 +18,10 @@ MAX_PAGE_SIZE = 500
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _REVIEW_AUDIT_LOG_NAME = "review-actions"
 _SIGNAL_LOG_NAME = "signals"
+_SOURCE_NOTE_INDEX_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dict[str, list[dict[str, str]]]] = {}
+_PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
+_DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
+_SIGNAL_LEDGER_SYNC_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dict[str, Any]] = {}
 CONTRADICTION_STATUS_EXPLANATIONS = {
     "open": "Active contradiction awaiting review.",
     "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
@@ -39,6 +43,41 @@ SIGNAL_TYPE_EXPLANATIONS = {
 def _db_path(vault_dir: Path | str) -> Path:
     resolved = resolve_vault_dir(vault_dir)
     return VaultLayout.from_vault(resolved).knowledge_db
+
+
+def _path_signature(path: Path) -> tuple[str, int, int]:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return (str(path), -1, -1)
+    return (str(path), stat.st_mtime_ns, stat.st_size)
+
+
+def _search_root_signatures(vault_dir: Path) -> tuple[tuple[str, int, int], ...]:
+    roots = [
+        vault_dir / "50-Inbox" / "03-Processed",
+        vault_dir / "50-Inbox" / "02-Processing",
+        vault_dir / "50-Inbox" / "01-Raw",
+    ]
+    signatures: list[tuple[str, int, int]] = []
+    for root in roots:
+        signatures.append(_path_signature(root))
+        if not root.exists():
+            continue
+        for child in sorted(root.iterdir(), key=lambda item: item.name):
+            signatures.append(_path_signature(child))
+    return tuple(signatures)
+
+
+def _signal_dependency_signature(vault_dir: Path) -> tuple[tuple[str, int, int], ...]:
+    layout = VaultLayout.from_vault(vault_dir)
+    signatures = [
+        _path_signature(layout.knowledge_db),
+        _path_signature(layout.logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"),
+        _path_signature(layout.logs_dir / "pipeline.jsonl"),
+    ]
+    signatures.extend(_search_root_signatures(vault_dir))
+    return tuple(signatures)
 
 
 def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
@@ -823,26 +862,38 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
 
 
 def _find_note_by_source(vault_dir: Path, *, source_url: str, exclude_path: str) -> dict[str, str] | None:
-    search_roots = [
-        vault_dir / "50-Inbox" / "03-Processed",
-        vault_dir / "50-Inbox" / "02-Processing",
-        vault_dir / "50-Inbox" / "01-Raw",
-    ]
-    resolved_exclude = str((vault_dir / exclude_path).resolve())
-    for root in search_roots:
-        if not root.exists():
+    cache_key = (str(vault_dir.resolve()), _search_root_signatures(vault_dir))
+    source_index = _SOURCE_NOTE_INDEX_CACHE.get(cache_key)
+    if source_index is None:
+        search_roots = [
+            vault_dir / "50-Inbox" / "03-Processed",
+            vault_dir / "50-Inbox" / "02-Processing",
+            vault_dir / "50-Inbox" / "01-Raw",
+        ]
+        source_index = {}
+        for root in search_roots:
+            if not root.exists():
+                continue
+            for candidate in sorted(root.rglob("*.md")):
+                frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+                candidate_source = str(frontmatter.get("source", "")).strip()
+                if not candidate_source:
+                    continue
+                title = str(frontmatter.get("title") or candidate.stem).strip()
+                source_index.setdefault(candidate_source, []).append(
+                    {
+                        "title": title,
+                        "path": str(candidate.resolve().relative_to(vault_dir.resolve())),
+                    }
+                )
+        _SOURCE_NOTE_INDEX_CACHE.clear()
+        _SOURCE_NOTE_INDEX_CACHE[cache_key] = source_index
+
+    resolved_exclude = str((vault_dir / exclude_path).resolve().relative_to(vault_dir.resolve()))
+    for item in source_index.get(source_url, []):
+        if item["path"] == resolved_exclude:
             continue
-        for candidate in sorted(root.rglob("*.md")):
-            if str(candidate.resolve()) == resolved_exclude:
-                continue
-            frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
-            if str(frontmatter.get("source", "")).strip() != source_url:
-                continue
-            title = str(frontmatter.get("title") or candidate.stem).strip()
-            return {
-                "title": title,
-                "path": str(candidate.resolve().relative_to(vault_dir.resolve())),
-            }
+        return item
     return None
 
 
@@ -850,79 +901,15 @@ def _find_note_from_pipeline_log(vault_dir: Path, *, note_path: str) -> dict[str
     log_path = VaultLayout.from_vault(vault_dir).logs_dir / "pipeline.jsonl"
     if not log_path.exists():
         return None
-    article_file: str | None = None
-    archived_path: str | None = None
-    target_absolute = str((vault_dir / note_path).resolve())
-    for raw_line in log_path.read_text(encoding="utf-8").splitlines():
-        if not raw_line.strip():
-            continue
-        try:
-            event = json.loads(raw_line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("event_type") == "article_processed":
-            output = str(event.get("output", "")).strip()
-            if output == target_absolute or output.endswith(note_path):
-                article_file = str(event.get("file", "")).strip()
-                continue
-        if event.get("event_type") == "source_archived_to_processed":
-            archived = str(event.get("archived", "")).strip()
-            source = str(event.get("source", "")).strip()
-            if article_file and (archived.endswith(article_file) or source.endswith(article_file)):
-                archived_path = archived
-    if not archived_path:
-        return None
-    candidate = Path(archived_path)
-    if not candidate.is_absolute():
-        candidate = (vault_dir / archived_path).resolve()
-    if not candidate.is_file():
-        return None
-    frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
-    return {
-        "title": str(frontmatter.get("title") or candidate.stem).strip(),
-        "path": str(candidate.resolve().relative_to(vault_dir.resolve())),
-    }
+    index = _pipeline_log_index(vault_dir)
+    return index["original_source_by_output"].get(str((vault_dir / note_path).resolve().relative_to(vault_dir.resolve())))
 
 
 def _find_derived_notes_from_pipeline_log(vault_dir: Path, *, note_path: str) -> list[dict[str, str]]:
     log_path = VaultLayout.from_vault(vault_dir).logs_dir / "pipeline.jsonl"
     if not log_path.exists():
         return []
-    target_name = Path(note_path).name
-    derived: list[dict[str, str]] = []
-    seen_paths: set[str] = set()
-    for raw_line in log_path.read_text(encoding="utf-8").splitlines():
-        if not raw_line.strip():
-            continue
-        try:
-            event = json.loads(raw_line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("event_type") != "article_processed":
-            continue
-        file_name = str(event.get("file", "")).strip()
-        if file_name != target_name:
-            continue
-        output = str(event.get("output", "")).strip()
-        if not output:
-            continue
-        candidate = Path(output)
-        if not candidate.is_absolute():
-            candidate = (vault_dir / output).resolve()
-        if not candidate.is_file():
-            continue
-        relative_path = str(candidate.resolve().relative_to(vault_dir.resolve()))
-        if relative_path in seen_paths:
-            continue
-        seen_paths.add(relative_path)
-        frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
-        derived.append(
-            {
-                "title": str(frontmatter.get("title") or candidate.stem).strip(),
-                "path": relative_path,
-            }
-        )
-    return derived
+    return list(_pipeline_log_index(vault_dir)["derived_by_source_file"].get(Path(note_path).name, []))
 
 
 def list_review_actions(
@@ -1273,10 +1260,26 @@ def sync_signal_ledger(vault_dir: Path | str) -> dict[str, Any]:
             )
             conn.commit()
     type_counts = Counter(item["signal_type"] for item in signals)
-    return {
+    result = {
         "signal_count": len(signals),
         "type_counts": dict(type_counts),
     }
+    cache_key = (str(resolved_vault.resolve()), _signal_dependency_signature(resolved_vault))
+    _SIGNAL_LEDGER_SYNC_CACHE.clear()
+    _SIGNAL_LEDGER_SYNC_CACHE[cache_key] = result
+    return result
+
+
+def ensure_signal_ledger_synced(vault_dir: Path | str) -> dict[str, Any]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    cache_key = (str(resolved_vault.resolve()), _signal_dependency_signature(resolved_vault))
+    cached = _SIGNAL_LEDGER_SYNC_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    result = sync_signal_ledger(resolved_vault)
+    _SIGNAL_LEDGER_SYNC_CACHE.clear()
+    _SIGNAL_LEDGER_SYNC_CACHE[cache_key] = result
+    return result
 
 
 def list_signals(
@@ -1287,7 +1290,7 @@ def list_signals(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
-    sync_signal_ledger(vault_dir)
+    ensure_signal_ledger_synced(vault_dir)
     db_path = _db_path(vault_dir)
     normalized_query = (query or "").strip().lower()
     with sqlite3.connect(db_path) as conn:
@@ -1436,13 +1439,8 @@ def _page_row_by_path(vault_dir: Path | str, note_path: str) -> dict[str, str]:
 
 def _deep_dive_objects_for_path(vault_dir: Path | str, note_path: str) -> list[dict[str, str]]:
     resolved_vault = resolve_vault_dir(vault_dir)
-    normalized_target = (resolved_vault / note_path).resolve().as_posix()
-    items = list_deep_dive_derivations(vault_dir, limit=MAX_PAGE_SIZE)
-    for item in items:
-        candidate_path = (resolved_vault / item["path"]).resolve().as_posix()
-        if candidate_path == normalized_target:
-            return item["derived_objects"]
-    return []
+    normalized_target = str((resolved_vault / note_path).resolve().relative_to(resolved_vault.resolve()))
+    return list(_deep_dive_object_map(vault_dir).get(normalized_target, []))
 
 
 def _atlas_pages_for_object_ids(vault_dir: Path | str, object_ids: list[str]) -> list[dict[str, str]]:
@@ -1451,6 +1449,142 @@ def _atlas_pages_for_object_ids(vault_dir: Path | str, object_ids: list[str]) ->
         for item in provenance["mocs"]:
             atlas_pages.setdefault(item["slug"], item)
     return list(atlas_pages.values())
+
+
+def _pipeline_log_index(vault_dir: Path) -> dict[str, Any]:
+    log_path = VaultLayout.from_vault(vault_dir).logs_dir / "pipeline.jsonl"
+    cache_key = (str(vault_dir.resolve()), *(_path_signature(log_path)[1:]))
+    cached = _PIPELINE_LOG_INDEX_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    article_outputs: dict[str, str] = {}
+    derived_by_source_file: dict[str, list[dict[str, str]]] = {}
+    archived_by_article_file: dict[str, str] = {}
+    if log_path.exists():
+        for raw_line in log_path.read_text(encoding="utf-8").splitlines():
+            if not raw_line.strip():
+                continue
+            try:
+                event = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event_type") == "article_processed":
+                file_name = str(event.get("file", "")).strip()
+                output = str(event.get("output", "")).strip()
+                if not file_name or not output:
+                    continue
+                candidate = Path(output)
+                if not candidate.is_absolute():
+                    candidate = (vault_dir / output).resolve()
+                if not candidate.is_file():
+                    continue
+                relative_path = str(candidate.resolve().relative_to(vault_dir.resolve()))
+                article_outputs[relative_path] = file_name
+                frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+                derived_by_source_file.setdefault(file_name, [])
+                if not any(item["path"] == relative_path for item in derived_by_source_file[file_name]):
+                    derived_by_source_file[file_name].append(
+                        {
+                            "title": str(frontmatter.get("title") or candidate.stem).strip(),
+                            "path": relative_path,
+                        }
+                    )
+            elif event.get("event_type") == "source_archived_to_processed":
+                archived = str(event.get("archived", "")).strip()
+                source = str(event.get("source", "")).strip()
+                if not archived and not source:
+                    continue
+                target = archived or source
+                article_file = Path(target).name
+                candidate = Path(target)
+                if not candidate.is_absolute():
+                    candidate = (vault_dir / target).resolve()
+                if candidate.is_file():
+                    archived_by_article_file[article_file] = str(candidate.resolve().relative_to(vault_dir.resolve()))
+
+    original_source_by_output: dict[str, dict[str, str]] = {}
+    for output_path, article_file in article_outputs.items():
+        archived_path = archived_by_article_file.get(article_file)
+        if not archived_path:
+            continue
+        candidate = (vault_dir / archived_path).resolve()
+        if not candidate.is_file():
+            continue
+        frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+        original_source_by_output[output_path] = {
+            "title": str(frontmatter.get("title") or candidate.stem).strip(),
+            "path": archived_path,
+        }
+
+    result = {
+        "original_source_by_output": original_source_by_output,
+        "derived_by_source_file": derived_by_source_file,
+    }
+    _PIPELINE_LOG_INDEX_CACHE.clear()
+    _PIPELINE_LOG_INDEX_CACHE[cache_key] = result
+    return result
+
+
+def _deep_dive_object_map(vault_dir: Path | str) -> dict[str, list[dict[str, str]]]:
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    cache_key = (str(resolved_vault.resolve()), *(_path_signature(db_path)[1:]))
+    cached = _DEEP_DIVE_OBJECT_MAP_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    with sqlite3.connect(db_path) as conn:
+        deep_dive_rows = conn.execute(
+            """
+            SELECT path
+            FROM pages_index
+            WHERE note_type = 'deep_dive'
+            ORDER BY slug
+            """
+        ).fetchall()
+        object_rows = conn.execute(
+            """
+            SELECT object_id, title
+            FROM objects
+            ORDER BY object_id
+            """
+        ).fetchall()
+        audit_rows = conn.execute(
+            """
+            SELECT payload_json
+            FROM audit_events
+            WHERE event_type = 'evergreen_auto_promoted'
+            """
+        ).fetchall()
+
+    object_titles = {row[0]: row[1] for row in object_rows}
+    grouped_promotions: dict[str, dict[str, dict[str, str]]] = {}
+    for (payload_json,) in audit_rows:
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError:
+            continue
+        source_name = str(payload.get("source") or "").strip()
+        object_id = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
+        if not source_name or not object_id:
+            continue
+        grouped_promotions.setdefault(source_name, {})[object_id] = {
+            "object_id": object_id,
+            "title": object_titles.get(object_id, object_id),
+        }
+
+    result: dict[str, list[dict[str, str]]] = {}
+    for (path,) in deep_dive_rows:
+        relative_path = _vault_relative_path(resolved_vault, path)
+        result[relative_path] = sorted(
+            grouped_promotions.get(Path(relative_path).name, {}).values(),
+            key=lambda item: item["object_id"],
+        )
+
+    _DEEP_DIVE_OBJECT_MAP_CACHE.clear()
+    _DEEP_DIVE_OBJECT_MAP_CACHE[cache_key] = result
+    return result
 
 
 def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> list[dict[str, str]]:
@@ -1888,43 +2022,13 @@ def list_deep_dive_derivations(
             ORDER BY slug
             """
         ).fetchall()
-        object_rows = conn.execute(
-            """
-            SELECT object_id, title
-            FROM objects
-            ORDER BY object_id
-            """
-        ).fetchall()
-        audit_rows = conn.execute(
-            """
-            SELECT payload_json
-            FROM audit_events
-            WHERE event_type = 'evergreen_auto_promoted'
-            """
-        ).fetchall()
 
-    object_titles = {row[0]: row[1] for row in object_rows}
-    grouped_promotions: dict[str, dict[str, dict[str, str]]] = {}
-    for (payload_json,) in audit_rows:
-        try:
-            payload = json.loads(payload_json)
-        except json.JSONDecodeError:
-            continue
-        source_name = str(payload.get("source") or "").strip()
-        object_id = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
-        if not source_name or not object_id:
-            continue
-        title = object_titles.get(object_id, object_id)
-        grouped_promotions.setdefault(source_name, {})[object_id] = {
-            "object_id": object_id,
-            "title": title,
-        }
+    derivation_map = _deep_dive_object_map(vault_dir)
 
     items: list[dict[str, Any]] = []
     for slug, title, note_type, path in deep_dive_rows:
         relative_path = _vault_relative_path(resolved_vault, path)
-        source_name = Path(relative_path).name
-        derived_objects = list(grouped_promotions.get(source_name, {}).values())
+        derived_objects = list(derivation_map.get(relative_path, []))
         if normalized_query:
             haystacks = [
                 slug.lower(),

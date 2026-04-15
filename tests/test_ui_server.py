@@ -552,6 +552,10 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         "openclaw_pipeline.commands.ui_server.build_objects_index_payload",
         lambda vault_dir, *, limit, offset: {"items": []},
     )
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server.ensure_signal_ledger_synced",
+        lambda vault_dir: {"signal_count": 0, "type_counts": {}},
+    )
 
     exit_code = main(["--vault-dir", str(temp_vault), "--host", "127.0.0.1", "--port", "9999"])
     payload = json.loads(capsys.readouterr().out)

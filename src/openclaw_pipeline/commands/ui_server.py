@@ -33,7 +33,7 @@ from ..ui.view_models import (
     build_truth_dashboard_payload,
     build_topic_overview_payload,
 )
-from ..truth_api import record_review_action
+from ..truth_api import ensure_signal_ledger_synced, record_review_action
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
@@ -1798,6 +1798,7 @@ def main(argv: list[str] | None = None) -> int:
     server = create_server(resolved_vault, host=args.host, port=args.port)
     try:
         build_objects_index_payload(resolved_vault, limit=1, offset=0)
+        ensure_signal_ledger_synced(resolved_vault)
     except Exception as exc:
         print(f"ui server preflight failed: {exc}", file=sys.stderr)
         server.server_close()

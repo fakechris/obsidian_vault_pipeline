@@ -1132,6 +1132,29 @@ Processed source note with no downstream chain.
     assert all("agent harness" in f"{item['title']} {item['detail']}".lower() for item in searched)
 
 
+def test_truth_api_reuses_signal_ledger_when_dependencies_unchanged(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    truth_api.sync_signal_ledger(vault)
+
+    calls = 0
+    original = truth_api._compute_signal_entries
+
+    def counted(vault_dir):
+        nonlocal calls
+        calls += 1
+        return original(vault_dir)
+
+    monkeypatch.setattr(truth_api, "_compute_signal_entries", counted)
+
+    first = truth_api.list_signals(vault)
+    second = truth_api.list_signals(vault)
+
+    assert first == second
+    assert calls == 0
+
+
 def test_truth_api_includes_extraction_trigger_signals(temp_vault):
     from openclaw_pipeline.truth_api import list_signals, sync_signal_ledger
 
