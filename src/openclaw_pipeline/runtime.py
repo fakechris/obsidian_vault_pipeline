@@ -74,6 +74,22 @@ class VaultLayout:
         return self.logs_dir / "knowledge.db.lock"
 
     @property
+    def signals_log(self) -> Path:
+        return self.logs_dir / "signals.jsonl"
+
+    @property
+    def signals_log_lock(self) -> Path:
+        return self.logs_dir / "signals.jsonl.lock"
+
+    @property
+    def actions_log(self) -> Path:
+        return self.logs_dir / "actions.jsonl"
+
+    @property
+    def actions_log_lock(self) -> Path:
+        return self.logs_dir / "actions.jsonl.lock"
+
+    @property
     def action_worker_lock(self) -> Path:
         return self.logs_dir / "action-worker.lock"
 
@@ -204,4 +220,26 @@ def knowledge_db_write_lock(
 ) -> Iterator[None]:
     layout = VaultLayout.from_vault(vault_dir)
     with advisory_file_lock(layout.knowledge_db_lock, timeout_seconds=timeout_seconds):
+        yield
+
+
+@contextmanager
+def signal_ledger_write_lock(
+    vault_dir: Path | str | None = None,
+    *,
+    timeout_seconds: float | None = 300.0,
+) -> Iterator[None]:
+    layout = VaultLayout.from_vault(vault_dir)
+    with advisory_file_lock(layout.signals_log_lock, timeout_seconds=timeout_seconds):
+        yield
+
+
+@contextmanager
+def action_queue_write_lock(
+    vault_dir: Path | str | None = None,
+    *,
+    timeout_seconds: float | None = 300.0,
+) -> Iterator[None]:
+    layout = VaultLayout.from_vault(vault_dir)
+    with advisory_file_lock(layout.actions_log_lock, timeout_seconds=timeout_seconds):
         yield

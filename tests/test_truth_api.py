@@ -132,6 +132,18 @@ def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vau
     assert actions[0]["action_id"] == "action::demo"
 
 
+def test_truth_api_avoids_datetime_utc_import_for_python_310_compatibility():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "openclaw_pipeline"
+        / "truth_api.py"
+    ).read_text(encoding="utf-8")
+
+    assert "from datetime import UTC" not in source
+    assert "datetime.now(UTC)" not in source
+
+
 def test_truth_api_reads_review_actions_from_jsonl_without_knowledge_db(temp_vault):
     from openclaw_pipeline.truth_api import list_evolution_review_actions, list_review_actions
 
@@ -2246,6 +2258,31 @@ Processed source note without any derived deep dive.
     assert refreshed_signal["recommended_action"]["action_id"] == actions[0]["action_id"]
 
 
+def test_truth_api_enqueue_signal_action_uses_action_queue_lock(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    rebuild_knowledge_index(vault)
+    truth_api.sync_signal_ledger(vault)
+    contradiction_signal = next(
+        item for item in truth_api.list_signals(vault) if item["signal_type"] == "contradiction_open"
+    )
+    calls: list[str] = []
+
+    @contextmanager
+    def fake_lock(vault_dir, *, timeout_seconds=300.0):
+        calls.append(f"enter:{vault_dir == vault}")
+        yield
+        calls.append("exit")
+
+    monkeypatch.setattr(truth_api, "action_queue_write_lock", fake_lock, raising=False)
+
+    payload = truth_api.enqueue_signal_action(vault, signal_id=contradiction_signal["signal_id"])
+
+    assert payload["created"] is True
+    assert calls == [f"enter:{True}", "exit"]
+
+
 def test_truth_api_includes_review_action_signals(temp_vault):
     from openclaw_pipeline.truth_api import list_signals, record_review_action, sync_signal_ledger
 
@@ -2303,6 +2340,201 @@ def test_truth_api_sync_signal_ledger_writes_jsonl_without_db_lock(temp_vault, m
     signals_path = vault / "60-Logs" / "signals.jsonl"
     assert signals_path.exists()
     assert summary["signal_count"] >= 1
+
+
+def test_truth_api_sync_signal_ledger_uses_signal_ledger_lock(temp_vault, monkeypatch):
+    from openclaw_pipeline import truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    calls: list[str] = []
+
+    @contextmanager
+    def fake_lock(vault_dir, *, timeout_seconds=300.0):
+        calls.append(f"enter:{vault_dir == vault}")
+        yield
+        calls.append("exit")
+
+    monkeypatch.setattr(truth_api, "signal_ledger_write_lock", fake_lock, raising=False)
+    monkeypatch.setattr(
+        truth_api,
+        "_backfill_auto_queue_actions",
+        lambda vault_dir, *, signals=None: {"created_count": 0, "created_action_ids": []},
+    )
+
+    truth_api.sync_signal_ledger(vault)
+
+    assert calls == [f"enter:{True}", "exit"]
+
+
+def test_truth_api_run_next_action_queue_item_uses_action_queue_lock(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        json.dumps(
+            {
+                "action_id": "action::safe",
+                "action_kind": "deep_dive_workflow",
+                "source_signal_id": "signal::safe",
+                "title": "Safe action",
+                "target_ref": "50-Inbox/03-Processed/Harness.md",
+                "status": "queued",
+                "created_at": "2026-04-15T00:00:01Z",
+                "retry_count": 0,
+                "failure_bucket": "",
+                "safe_to_run": True,
+                "payload": {},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    @contextmanager
+    def fake_lock(vault_dir, *, timeout_seconds=300.0):
+        calls.append(f"enter:{vault_dir == temp_vault}")
+        yield
+        calls.append("exit")
+
+    monkeypatch.setattr(truth_api, "action_queue_write_lock", fake_lock, raising=False)
+    monkeypatch.setattr(truth_api, "_signal_by_id", lambda vault_dir, signal_id: {"signal_id": signal_id})
+    monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", lambda vault_dir, action: {"ok": True})
+    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir: None)
+
+    payload = truth_api.run_next_action_queue_item(temp_vault, safe_only=True)
+
+    assert payload["ran"] is True
+    assert calls == [f"enter:{True}", "exit", f"enter:{True}", "exit"]
+
+
+def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    calls = {"chains": 0}
+
+    monkeypatch.setattr(truth_api, "list_contradictions", lambda *args, **kwargs: [])
+    monkeypatch.setattr(truth_api, "list_stale_summaries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(truth_api, "list_review_actions", lambda *args, **kwargs: [])
+
+    def fake_chains(vault_dir, *, query=None, limit=100):
+        calls["chains"] += 1
+        return [
+            {
+                "title": "Loose Source",
+                "path": "50-Inbox/03-Processed/2026-04/Loose Source.md",
+                "stage_label": "source_note",
+                "traceability": {
+                    "deep_dives": [],
+                    "objects": [],
+                    "atlas_pages": [],
+                    "source_notes": [],
+                    "counts": {
+                        "source_notes": 0,
+                        "deep_dives": 0,
+                        "objects": 0,
+                        "atlas_pages": 0,
+                    },
+                },
+            },
+            {
+                "title": "Loose Deep Dive",
+                "path": "20-Areas/AI-Research/Topics/2026-04/Loose Deep Dive_深度解读.md",
+                "stage_label": "deep_dive",
+                "traceability": {
+                    "deep_dives": [],
+                    "objects": [],
+                    "atlas_pages": [],
+                    "source_notes": [{"path": "50-Inbox/03-Processed/2026-04/Loose Source.md"}],
+                    "counts": {
+                        "source_notes": 1,
+                        "deep_dives": 0,
+                        "objects": 0,
+                        "atlas_pages": 0,
+                    },
+                },
+            },
+        ]
+
+    monkeypatch.setattr(truth_api, "list_production_chains", fake_chains)
+    monkeypatch.setattr(
+        truth_api,
+        "list_production_gaps",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not call list_production_gaps")),
+    )
+
+    items = truth_api._compute_signal_entries(temp_vault)
+
+    assert calls["chains"] == 1
+    assert {item["signal_type"] for item in items} >= {
+        "production_gap",
+        "source_needs_deep_dive",
+        "deep_dive_needs_objects",
+    }
+
+
+def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        truth_api,
+        "list_signals",
+        lambda vault_dir, limit=8: [
+            {
+                "signal_id": "signal::a",
+                "signal_type": "source_needs_deep_dive",
+                "title": "Topic A",
+                "detail": "Needs work.",
+                "source_path": "/note?path=a",
+                "note_paths": ["a"],
+                "object_ids": ["source-note"],
+                "recommended_action": None,
+            },
+            {
+                "signal_id": "signal::b",
+                "signal_type": "deep_dive_needs_objects",
+                "title": "Topic B",
+                "detail": "Needs objects.",
+                "source_path": "/note?path=b",
+                "note_paths": ["b"],
+                "object_ids": ["target-note"],
+                "recommended_action": None,
+            },
+        ],
+    )
+    monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24: [])
+    monkeypatch.setattr(truth_api, "list_action_queue", lambda vault_dir, limit=100: [])
+
+    def fake_batch(vault_dir, object_ids):
+        calls.append(tuple(object_ids))
+        return {
+            object_id: {"title": f"title:{object_id}"}
+            for object_id in object_ids
+        }
+
+    monkeypatch.setattr(truth_api, "_batch_object_rows", fake_batch)
+
+    payload = truth_api.get_briefing_snapshot(temp_vault, limit=8)
+
+    assert payload["active_topics"] == [
+        {
+            "object_id": "source-note",
+            "title": "title:source-note",
+            "signal_count": 1,
+            "path": "/topic?id=source-note",
+        },
+        {
+            "object_id": "target-note",
+            "title": "title:target-note",
+            "signal_count": 1,
+            "path": "/topic?id=target-note",
+        },
+    ]
+    non_empty_calls = [set(call) for call in calls if call]
+    assert non_empty_calls == [{"source-note", "target-note"}]
 
 
 def test_truth_api_record_review_action_writes_jsonl_without_db_lock(temp_vault, monkeypatch):
