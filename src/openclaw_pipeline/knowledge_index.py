@@ -14,7 +14,8 @@ from .graph.frontmatter import FrontmatterParser, NoteMetadata
 from .graph.link_parser import LinkParser
 from .identity import canonicalize_note_id
 from .runtime import VaultLayout, knowledge_db_write_lock, resolve_vault_dir
-from .truth_store import TRUTH_STORE_SCHEMA, build_truth_store_projection
+from .truth_projection_registry import execute_truth_projection_builder
+from .truth_store import TRUTH_STORE_SCHEMA
 
 SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
@@ -348,7 +349,11 @@ def _latest_contradiction_review_overrides(vault_dir: Path) -> dict[str, dict[st
     return overrides
 
 
-def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
+def rebuild_knowledge_index(
+    vault_dir: Path,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, int | str]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
     with knowledge_db_write_lock(resolved_vault):
@@ -460,7 +465,12 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
 
             object_page_rows = [row for row in page_rows if row[0] in known_slugs]
             object_link_rows = [row for row in link_rows if row[0] in known_slugs]
-            truth_projection = build_truth_store_projection(object_page_rows, object_link_rows)
+            projection_spec, truth_projection = execute_truth_projection_builder(
+                vault_dir=resolved_vault,
+                page_rows=object_page_rows,
+                link_rows=object_link_rows,
+                pack_name=pack_name,
+            )
             conn.executemany(
                 """
                 INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
@@ -556,20 +566,21 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
             _remove_sqlite_artifacts(layout.knowledge_db)
             temp_db_path.replace(layout.knowledge_db)
 
-        return {
-            "db_path": str(layout.knowledge_db),
-            "pages_indexed": len(page_rows),
-            "links_indexed": len(link_rows),
-            "raw_records_indexed": len(raw_rows),
-            "timeline_events_indexed": len(timeline_rows),
-            "audit_events_indexed": len(audit_rows),
-            "embedding_chunks_indexed": len(embedding_rows),
-            "objects_indexed": len(truth_projection.objects),
-            "claims_indexed": len(truth_projection.claims),
-            "relations_indexed": len(truth_projection.relations),
-            "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
-            "contradictions_indexed": len(truth_projection.contradictions),
-        }
+            return {
+                "db_path": str(layout.knowledge_db),
+                "projection_pack": projection_spec.pack,
+                "pages_indexed": len(page_rows),
+                "links_indexed": len(link_rows),
+                "raw_records_indexed": len(raw_rows),
+                "timeline_events_indexed": len(timeline_rows),
+                "audit_events_indexed": len(audit_rows),
+                "embedding_chunks_indexed": len(embedding_rows),
+                "objects_indexed": len(truth_projection.objects),
+                "claims_indexed": len(truth_projection.claims),
+                "relations_indexed": len(truth_projection.relations),
+                "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
+                "contradictions_indexed": len(truth_projection.contradictions),
+            }
 
 
 def query_knowledge_index(vault_dir: Path, query: str, limit: int = 5) -> list[dict[str, str | int | float]]:

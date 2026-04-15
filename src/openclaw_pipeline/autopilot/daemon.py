@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
 from .queue import TaskQueue, Task
+from ..handler_registry import execute_autopilot_stage_handler
 from ..llm_defaults import (
     DEFAULT_LITELLM_TIMEOUT_SECONDS,
     DEFAULT_MINIMAX_API_BASE,
@@ -214,6 +215,54 @@ class AutoPilotDaemon:
     def _profile_has_stage(self, stage: str) -> bool:
         return stage in self.workflow_profile.stages
 
+    def _run_interpretation(self, task: Task) -> dict:
+        if task.source == "pinboard":
+            url_type = self._get_pinboard_url_type(task.file_path)
+
+            if url_type == "github":
+                cmd = [
+                    sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
+                    "--process-single", task.file_path,
+                    "--vault-dir", str(self.vault_dir),
+                ]
+            elif url_type == "paper":
+                cmd = [
+                    sys.executable, "-m", "openclaw_pipeline.auto_paper_processor",
+                    "--process-single", task.file_path,
+                    "--vault-dir", str(self.vault_dir),
+                ]
+            elif url_type in ("article", "website"):
+                cmd = [
+                    sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+                    "--process-single", task.file_path,
+                    "--vault-dir", str(self.vault_dir),
+                ]
+            else:
+                self.log(f"⏭️ 跳过 social 类型: {task.file_path}")
+                return {"skipped": True, "reason": "unsupported_pinboard_type"}
+        else:
+            cmd = [
+                sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+                "--process-single", task.file_path,
+                "--vault-dir", str(self.vault_dir),
+            ]
+
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(self.vault_dir),
+            timeout=300,
+        )
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"处理失败: {proc.stderr[:200]}")
+        return {"skipped": False}
+
+    def _run_quality_stage(self, task: Task) -> tuple[float, dict]:
+        quality, dimensions = self._check_quality(task)
+        return quality, dimensions
+
     def _signal_handler(self, signum, frame):
         """优雅关闭"""
         self.log("🛑 收到关闭信号，正在优雅退出...")
@@ -275,55 +324,15 @@ class AutoPilotDaemon:
             # Stage 1: 根据source和url_type选择处理器
             self.log(f"📝 处理 [{task.source}] [#{task.id}] {Path(task.file_path).name}")
 
-            if task.source == "pinboard":
-                # 读取 pinboard 文件的 frontmatter 获取 url_type
-                url_type = self._get_pinboard_url_type(task.file_path)
+            interpretation_result = execute_autopilot_stage_handler(self, "interpretation", task=task, result=result)
+            if interpretation_result.get("skipped"):
+                result["stages"].append("skipped")
+                return result
+            result["stages"].append("interpretation")
 
-                if url_type == "github":
-                    cmd = [
-                        sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
-                        "--process-single", task.file_path,
-                        "--vault-dir", str(self.vault_dir),
-                    ]
-                elif url_type == "paper":
-                    cmd = [
-                        sys.executable, "-m", "openclaw_pipeline.auto_paper_processor",
-                        "--process-single", task.file_path,
-                        "--vault-dir", str(self.vault_dir),
-                    ]
-                elif url_type in ("article", "website"):
-                    cmd = [
-                        sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
-                        "--process-single", task.file_path,
-                        "--vault-dir", str(self.vault_dir),
-                    ]
-                else:
-                    self.log(f"⏭️ 跳过 social 类型: {task.file_path}")
-                    result['stages'].append('skipped')
-                    return result
-            else:
-                # Raw/Clippings 使用 ovp-article
-                cmd = [
-                    sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
-                    "--process-single", task.file_path,
-                    "--vault-dir", str(self.vault_dir),
-                ]
-
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=str(self.vault_dir),
-                timeout=300  # 5分钟超时
-            )
-
-            if proc.returncode != 0:
-                raise RuntimeError(f"处理失败: {proc.stderr[:200]}")
-
-            result['stages'].append('interpretation')
-
-            # Stage 2: 质量评分
-            quality, dimensions = self._check_quality(task)
+            quality_result = execute_autopilot_stage_handler(self, "quality", task=task, result=result)
+            quality = float(quality_result.get("quality", 0.0))
+            dimensions = quality_result.get("quality_dimensions", {})
             result['quality'] = quality
             result['quality_dimensions'] = dimensions
 
@@ -334,21 +343,18 @@ class AutoPilotDaemon:
                 result['quality'] = quality
 
             if quality >= self.quality_threshold:
-                if self._profile_has_stage('absorb'):
-                    self._run_absorb()
-                    result['stages'].append('absorb')
-
-                if self._profile_has_stage('moc'):
-                    self._run_moc_update()
-                    result['stages'].append('moc')
-
+                follow_up_stages = [stage for stage in self.workflow_profile.stages if stage not in {"interpretation", "quality"}]
                 if self.with_refine:
-                    self._run_refine()
-                    result['stages'].append('refine')
-
-                if self._profile_has_stage('knowledge_index'):
-                    self._run_knowledge_index_refresh()
-                    result['stages'].append('knowledge_index')
+                    if "knowledge_index" in follow_up_stages:
+                        insert_at = follow_up_stages.index("knowledge_index")
+                        follow_up_stages.insert(insert_at, "refine")
+                    else:
+                        follow_up_stages.append("refine")
+                for stage in follow_up_stages:
+                    if stage == "refine" and not self.with_refine:
+                        continue
+                    execute_autopilot_stage_handler(self, stage, task=task, result=result)
+                    result['stages'].append(stage)
 
                 # Stage 7: 自动提交
                 if self.auto_commit:
@@ -479,6 +485,7 @@ class AutoPilotDaemon:
         cmd = [
             sys.executable, "-m", "openclaw_pipeline.commands.knowledge_index",
             "--vault-dir", str(self.vault_dir),
+            "--pack", self.pack.name,
             "--json",
         ]
         subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))

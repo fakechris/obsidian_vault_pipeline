@@ -23,6 +23,27 @@ def test_base_domain_pack_rejects_incompatible_compatibility_base():
         )
 
 
+def test_base_domain_pack_rejects_stage_handler_from_other_pack():
+    from openclaw_pipeline.packs.base import BaseDomainPack, StageHandlerSpec
+
+    with pytest.raises(ValueError, match="declares stage handler"):
+        BaseDomainPack(
+            name="broken",
+            version="0.1.0",
+            api_version=1,
+            _stage_handlers=[
+                StageHandlerSpec(
+                    name="articles",
+                    pack="other-pack",
+                    handler_kind="profile_stage",
+                    runtime_adapter="pipeline_step",
+                    entrypoint="tests.fake:handler",
+                    stage="articles",
+                )
+            ],
+        )
+
+
 def test_load_default_pack_returns_pack_contract():
     from openclaw_pipeline.packs.base import BaseDomainPack
     from openclaw_pipeline.packs.loader import load_default_pack

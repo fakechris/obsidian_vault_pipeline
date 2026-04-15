@@ -290,6 +290,92 @@ date: 2026-04-07
     assert payload["audit_events_indexed"] == 0
 
 
+def test_knowledge_index_cli_rebuild_passes_pack_override(temp_vault, capsys, monkeypatch):
+    from openclaw_pipeline.commands.knowledge_index import main
+
+    captured: dict[str, object] = {}
+
+    def fake_rebuild(vault_dir, *, pack_name=None):
+        captured["vault_dir"] = vault_dir
+        captured["pack_name"] = pack_name
+        return {
+            "pages_indexed": 0,
+            "links_indexed": 0,
+            "raw_records_indexed": 0,
+            "timeline_events_indexed": 0,
+            "audit_events_indexed": 0,
+            "db_path": str(temp_vault / "60-Logs" / "knowledge.db"),
+        }
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.knowledge_index.rebuild_knowledge_index",
+        fake_rebuild,
+    )
+
+    result = main(["--vault-dir", str(temp_vault), "--pack", "default-knowledge", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert result == 0
+    assert payload["pages_indexed"] == 0
+    assert captured["pack_name"] == "default-knowledge"
+
+
+def test_rebuild_knowledge_index_dispatches_truth_projection_via_registry(temp_vault, monkeypatch):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_store import TruthStoreProjection
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-07
+---
+
+# Source Note
+""",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    class Spec:
+        pack = "media-pack"
+
+    def fake_execute_truth_projection_builder(*, vault_dir, page_rows, link_rows, pack_name=None):
+        captured["vault_dir"] = vault_dir
+        captured["pack_name"] = pack_name
+        captured["page_rows"] = list(page_rows)
+        captured["link_rows"] = list(link_rows)
+        return (
+            Spec(),
+            TruthStoreProjection(
+                objects=[],
+                claims=[],
+                claim_evidence=[],
+                relations=[],
+                compiled_summaries=[],
+                contradictions=[],
+            ),
+        )
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.knowledge_index.execute_truth_projection_builder",
+        fake_execute_truth_projection_builder,
+    )
+
+    result = rebuild_knowledge_index(temp_vault, pack_name="media-pack")
+
+    assert result["pages_indexed"] == 1
+    assert result["projection_pack"] == "media-pack"
+    assert captured["pack_name"] == "media-pack"
+    assert captured["page_rows"]
+    assert captured["link_rows"] == []
+    assert VaultLayout.from_vault(temp_vault).knowledge_db.exists()
+
+
 def test_rebuild_knowledge_index_mirrors_structured_sidecars_timeline_and_audit(temp_vault):
     from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
     from openclaw_pipeline.runtime import VaultLayout

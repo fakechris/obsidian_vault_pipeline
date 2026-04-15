@@ -42,10 +42,12 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .handler_registry import execute_profile_stage_handler
     from .runtime import VaultLayout, resolve_vault_dir
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
 except ImportError:  # pragma: no cover - script mode fallback
+    from handler_registry import execute_profile_stage_handler
     from runtime import VaultLayout, resolve_vault_dir
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
@@ -586,6 +588,8 @@ class EnhancedPipeline:
         self.txn = txn
         self.step_results = {}
         self.txn_id = None
+        self.workflow_pack_name = DEFAULT_WORKFLOW_PACK_NAME
+        self.workflow_profile_name = "full"
 
     def _get_before_counts(self) -> dict:
         """获取执行前的文件计数（用于基于产出的检测）"""
@@ -1525,6 +1529,7 @@ class EnhancedPipeline:
         cmd = [
             sys.executable, "-m", "openclaw_pipeline.commands.knowledge_index",
             "--vault-dir", str(self.vault_dir),
+            "--pack", self.workflow_pack_name,
             "--json",
         ]
 
@@ -1545,7 +1550,9 @@ class EnhancedPipeline:
         pinboard_end: str | None = None,
         batch_size: int | None = None,
         dry_run: bool = False,
-        from_step: str | None = None
+        from_step: str | None = None,
+        pack_name: str | None = None,
+        profile_name: str | None = None,
     ) -> dict:
         """运行Pipeline（基于实际产出检测状态）"""
         results = {}
@@ -1561,90 +1568,78 @@ class EnhancedPipeline:
 
         print(f"\nPipeline steps to run: {', '.join(steps_to_run)}")
 
-        # 获取执行前的文件计数
-        before_counts = self._get_before_counts()
+        original_pack_name = self.workflow_pack_name
+        original_profile_name = self.workflow_profile_name
+        if pack_name:
+            self.workflow_pack_name = pack_name
+        if profile_name:
+            self.workflow_profile_name = profile_name
 
-        for step in steps_to_run:
-            self.txn.step(self.txn_id, step, "in_progress")
+        try:
+            # 获取执行前的文件计数
+            before_counts = self._get_before_counts()
 
-            # 执行步骤
-            if step == "pinboard":
-                cmd_result = self.step_pinboard(
-                    days=pinboard_days,
-                    start_date=pinboard_start,
-                    end_date=pinboard_end,
-                    dry_run=dry_run
-                )
-            elif step == "pinboard_process":
-                cmd_result = self.step_pinboard_process(dry_run)
-            elif step == "clippings":
-                cmd_result = self.step_clippings(batch_size, dry_run)
-            elif step == "articles":
-                cmd_result = self.step_articles(batch_size, dry_run)
-            elif step == "quality":
-                cmd_result = self.step_quality(batch_size=batch_size, dry_run=dry_run)
-            elif step == "fix_links":
-                cmd_result = self.step_fix_links(dry_run)
-            elif step == "absorb":
-                # 从 quality 步骤获取质量分数
-                quality_score = results.get("quality", {}).get("quality_score", -1.0)
-                qualified_files = results.get("quality", {}).get("quality_qualified_files")
-                cmd_result = self.step_absorb(
-                    7,
-                    dry_run,
-                    quality_score=quality_score,
-                    qualified_files=qualified_files,
-                    batch_size=batch_size,
-                )
-            elif step == "registry_sync":
-                cmd_result = self.step_registry_sync(dry_run)
-            elif step == "moc":
-                cmd_result = self.step_moc(dry_run)
-            elif step == "refine":
-                cmd_result = self.step_refine(dry_run)
-            elif step == "knowledge_index":
-                cmd_result = self.step_knowledge_index(dry_run)
-            else:
-                cmd_result = {"success": False, "error": f"Unknown step: {step}"}
+            for step in steps_to_run:
+                self.txn.step(self.txn_id, step, "in_progress")
 
-            # 基于实际产出判断状态（非dry_run模式）
-            if not dry_run and cmd_result.get("success"):
-                output_check = self._count_output_files(step, before_counts, cmd_result)
-                produced = output_check.get("produced", 0)
+                try:
+                    cmd_result = execute_profile_stage_handler(
+                        self,
+                        step,
+                        pack_name=self.workflow_pack_name,
+                        batch_size=batch_size,
+                        dry_run=dry_run,
+                        pinboard_days=pinboard_days,
+                        pinboard_start=pinboard_start,
+                        pinboard_end=pinboard_end,
+                        results=results,
+                    )
+                except ValueError as exc:
+                    if "Unknown stage handler" not in str(exc):
+                        raise
+                    cmd_result = {"success": False, "error": f"Unknown step: {step}"}
 
-                # 更新结果信息
-                cmd_result.update(output_check)
-                cmd_result["output"] = f"Produced {produced} items"
+                # 基于实际产出判断状态（非dry_run模式）
+                if not dry_run and cmd_result.get("success"):
+                    output_check = self._count_output_files(step, before_counts, cmd_result)
+                    produced = output_check.get("produced", 0)
 
-                # 有产出即视为成功（不再依赖超时导致的退出码）
-                if produced > 0:
-                    cmd_result["success"] = True
-                    # 更新 before_counts 为下次检查做准备
-                    if step == "clippings":
-                        before_counts["processed"] += produced
-                    elif step == "pinboard":
-                        before_counts["pinboard"] += produced
-                    elif step == "pinboard_process":
-                        before_counts["pinboard_archived"] += produced
-                    elif step == "articles":
-                        before_counts["interpretations"] += produced
-                    elif step == "absorb":
-                        before_counts["evergreen"] += produced
-                    elif step == "refine":
-                        before_counts["refine_log_mtime"] = (self.layout.logs_dir / "refine-mutations.jsonl").stat().st_mtime if (self.layout.logs_dir / "refine-mutations.jsonl").exists() else before_counts.get("refine_log_mtime", 0.0)
+                    # 更新结果信息
+                    cmd_result.update(output_check)
+                    cmd_result["output"] = f"Produced {produced} items"
 
-            results[step] = cmd_result
-            self.step_results[step] = cmd_result
+                    # 有产出即视为成功（不再依赖超时导致的退出码）
+                    if produced > 0:
+                        cmd_result["success"] = True
+                        # 更新 before_counts 为下次检查做准备
+                        if step == "clippings":
+                            before_counts["processed"] += produced
+                        elif step == "pinboard":
+                            before_counts["pinboard"] += produced
+                        elif step == "pinboard_process":
+                            before_counts["pinboard_archived"] += produced
+                        elif step == "articles":
+                            before_counts["interpretations"] += produced
+                        elif step == "absorb":
+                            before_counts["evergreen"] += produced
+                        elif step == "refine":
+                            before_counts["refine_log_mtime"] = (self.layout.logs_dir / "refine-mutations.jsonl").stat().st_mtime if (self.layout.logs_dir / "refine-mutations.jsonl").exists() else before_counts.get("refine_log_mtime", 0.0)
 
-            if cmd_result["success"]:
-                self.txn.step(self.txn_id, step, "completed", cmd_result.get("output", ""))
-            else:
-                self.txn.step(self.txn_id, step, "failed", cmd_result.get("error", ""))
-                print(f"\nPipeline stopped at step: {step}")
-                self.txn.fail(self.txn_id, f"Failed at step: {step}")
-                break
+                results[step] = cmd_result
+                self.step_results[step] = cmd_result
 
-        return results
+                if cmd_result["success"]:
+                    self.txn.step(self.txn_id, step, "completed", cmd_result.get("output", ""))
+                else:
+                    self.txn.step(self.txn_id, step, "failed", cmd_result.get("error", ""))
+                    print(f"\nPipeline stopped at step: {step}")
+                    self.txn.fail(self.txn_id, f"Failed at step: {step}")
+                    break
+
+            return results
+        finally:
+            self.workflow_pack_name = original_pack_name
+            self.workflow_profile_name = original_profile_name
 
     def generate_report(self, results: dict) -> str:
         """生成Pipeline报告"""
@@ -1834,7 +1829,9 @@ def main():
         pinboard_end=pinboard_end,
         batch_size=args.batch_size,
         dry_run=args.dry_run,
-        from_step=args.from_step
+        from_step=args.from_step,
+        pack_name=execution_plan["pack"],
+        profile_name=execution_plan["profile"],
     )
 
     # 生成和保存报告

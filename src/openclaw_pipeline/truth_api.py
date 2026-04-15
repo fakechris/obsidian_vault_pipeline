@@ -12,6 +12,9 @@ from urllib.parse import quote
 
 import yaml
 
+from .handler_registry import execute_focused_action_handler, resolve_focused_action_handler
+from .observation_surface_registry import execute_observation_surface_builder
+from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from .runtime import (
     VaultLayout,
     action_queue_write_lock,
@@ -28,7 +31,7 @@ _ACTION_LOG_NAME = "actions"
 _SOURCE_NOTE_INDEX_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dict[str, list[dict[str, str]]]] = {}
 _PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
-_SIGNAL_LEDGER_SYNC_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dict[str, Any]] = {}
+_SIGNAL_LEDGER_SYNC_CACHE: dict[tuple[str, str, tuple[tuple[str, int, int], ...]], dict[str, Any]] = {}
 _EVOLUTION_CANDIDATE_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...], tuple[str, ...]], list[dict[str, Any]]] = {}
 CONTRADICTION_STATUS_EXPLANATIONS = {
     "open": "Active contradiction awaiting review.",
@@ -87,9 +90,14 @@ def _action_queue_path(vault_dir: Path | str) -> Path:
     return VaultLayout.from_vault(resolved).actions_log
 
 
-def _signal_ledger_path(vault_dir: Path | str) -> Path:
+def _signal_ledger_path(vault_dir: Path | str, *, pack_name: str | None = None) -> Path:
     resolved = resolve_vault_dir(vault_dir)
-    return VaultLayout.from_vault(resolved).signals_log
+    layout = VaultLayout.from_vault(resolved)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    if normalized_pack == DEFAULT_WORKFLOW_PACK_NAME:
+        return layout.signals_log
+    safe_pack = re.sub(r"[^a-z0-9._-]+", "-", normalized_pack.lower()).strip("-") or "pack"
+    return layout.logs_dir / f"signals.{safe_pack}.jsonl"
 
 
 def _read_jsonl_items(path: Path) -> list[dict[str, Any]]:
@@ -1256,9 +1264,16 @@ def _signal_id(signal_type: str, key: str) -> str:
     return f"{signal_type}::{hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]}"
 
 
-def _action_id(signal_id: str, action_kind: str, target_ref: str, payload: dict[str, Any]) -> str:
+def _action_id(
+    signal_id: str,
+    action_kind: str,
+    target_ref: str,
+    payload: dict[str, Any],
+    *,
+    pack_name: str,
+) -> str:
     payload_key = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    key = f"{signal_id}::{action_kind}::{target_ref}::{payload_key}"
+    key = f"{pack_name}::{signal_id}::{action_kind}::{target_ref}::{payload_key}"
     return f"action::{hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]}"
 
 
@@ -1271,14 +1286,15 @@ def _recommended_action(*, kind: str, label: str, path: str, executable: bool) -
     }
 
 
-SAFE_AUTO_RUN_ACTION_KINDS = {
-    "deep_dive_workflow",
-    "object_extraction_workflow",
-}
-
-
-def _is_safe_action_kind(action_kind: str) -> bool:
-    return action_kind in SAFE_AUTO_RUN_ACTION_KINDS
+def _is_safe_action_kind(action_kind: str, *, pack_name: str | None = None) -> bool:
+    try:
+        spec = resolve_focused_action_handler(
+            pack_name=pack_name or DEFAULT_WORKFLOW_PACK_NAME,
+            action_kind=action_kind,
+        )
+    except ValueError:
+        return False
+    return bool(spec.safe_to_run)
 
 
 def _classify_action_error(error: str) -> str:
@@ -1334,10 +1350,16 @@ def list_action_queue(
     return items
 
 
-def _signal_by_id(vault_dir: Path | str, signal_id: str) -> dict[str, Any] | None:
-    ledger_path = _signal_ledger_path(vault_dir)
+def _signal_by_id(
+    vault_dir: Path | str,
+    signal_id: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    ledger_path = _signal_ledger_path(vault_dir, pack_name=normalized_pack)
     if not ledger_path.exists():
-        ensure_signal_ledger_synced(vault_dir)
+        ensure_signal_ledger_synced(vault_dir, pack_name=normalized_pack)
     with signal_ledger_write_lock(vault_dir):
         for item in _read_jsonl_items(ledger_path):
             if item.get("signal_id") == signal_id:
@@ -1349,9 +1371,11 @@ def enqueue_signal_action(
     vault_dir: Path | str,
     *,
     signal_id: str,
+    pack_name: str | None = None,
     session_id: str = "ovp-ui",
 ) -> dict[str, Any]:
-    signal = _signal_by_id(vault_dir, signal_id)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    signal = _signal_by_id(vault_dir, signal_id, pack_name=normalized_pack)
     if signal is None:
         raise ValueError("unknown signal_id")
     with action_queue_write_lock(vault_dir):
@@ -1360,6 +1384,7 @@ def enqueue_signal_action(
             signal,
             existing_actions=existing_actions,
             session_id=session_id,
+            pack_name=normalized_pack,
         )
         if created:
             existing_actions.append(action)
@@ -1376,6 +1401,7 @@ def _enqueue_action_from_signal(
     *,
     existing_actions: list[dict[str, Any]],
     session_id: str,
+    pack_name: str | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     signal_id = str(signal.get("signal_id") or "")
     if not signal_id:
@@ -1394,7 +1420,14 @@ def _enqueue_action_from_signal(
         "note_paths": list(signal.get("note_paths", [])),
         "object_ids": list(signal.get("object_ids", [])),
     }
-    action_id = _action_id(signal_id, str(recommended_action["kind"]), target_ref, payload)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    action_id = _action_id(
+        signal_id,
+        str(recommended_action["kind"]),
+        target_ref,
+        payload,
+        pack_name=normalized_pack,
+    )
     existing = next((item for item in existing_actions if item.get("action_id") == action_id), None)
     if existing is not None:
         return False, existing
@@ -1402,6 +1435,7 @@ def _enqueue_action_from_signal(
     action = {
         "action_id": action_id,
         "action_kind": str(recommended_action["kind"]),
+        "pack": normalized_pack,
         "source_signal_id": signal_id,
         "title": str(recommended_action.get("label") or signal.get("title") or signal_id),
         "target_ref": target_ref,
@@ -1414,7 +1448,10 @@ def _enqueue_action_from_signal(
         "error": "",
         "failure_bucket": "",
         "retry_count": 0,
-        "safe_to_run": _is_safe_action_kind(str(recommended_action["kind"])),
+        "safe_to_run": _is_safe_action_kind(
+            str(recommended_action["kind"]),
+            pack_name=normalized_pack,
+        ),
         "payload": payload,
         "session_id": session_id,
     }
@@ -1424,9 +1461,14 @@ def _enqueue_action_from_signal(
 def _backfill_auto_queue_actions(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     signals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    active_signals = signals if signals is not None else list_signals(vault_dir, limit=MAX_PAGE_SIZE)
+    active_signals = (
+        signals
+        if signals is not None
+        else list_signals(vault_dir, pack_name=pack_name, limit=MAX_PAGE_SIZE)
+    )
     candidates = [
         item
         for item in active_signals
@@ -1442,6 +1484,7 @@ def _backfill_auto_queue_actions(
                 item,
                 existing_actions=existing_actions,
                 session_id="action-backfill",
+                pack_name=pack_name,
             )
             if created:
                 existing_actions.append(action)
@@ -1539,50 +1582,30 @@ def dismiss_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[
 
 
 def _run_deep_dive_workflow_action(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
-    from .auto_article_processor import AutoArticleProcessor, PipelineLogger, TransactionManager
+    from .focused_actions import run_deep_dive_workflow_action
 
-    resolved_vault = resolve_vault_dir(vault_dir)
-    note_paths = [path for path in action.get("note_paths", []) if path]
-    if not note_paths:
-        raise ValueError("deep_dive_workflow action missing note_paths")
-    source_path = resolved_vault / note_paths[0]
-    if not source_path.exists():
-        raise FileNotFoundError(f"source note not found: {note_paths[0]}")
-    layout = VaultLayout.from_vault(resolved_vault)
-    logger = PipelineLogger(layout.pipeline_log)
-    txn = TransactionManager(layout.transactions_dir)
-    processor = AutoArticleProcessor(resolved_vault, logger, txn)
-    processor.init_llm()
-    result = processor.process_single_file(source_path, dry_run=False)
-    if result.get("status") != "completed":
-        raise RuntimeError(str(result.get("error") or "deep_dive_workflow_failed"))
-    return result
+    return run_deep_dive_workflow_action(vault_dir=vault_dir, action=action)
 
 
 def _run_object_extraction_workflow_action(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
-    from .auto_evergreen_extractor import run_absorb_workflow
+    from .focused_actions import run_object_extraction_workflow_action
 
-    resolved_vault = resolve_vault_dir(vault_dir)
-    note_paths = [path for path in action.get("note_paths", []) if path]
-    if not note_paths:
-        raise ValueError("object_extraction_workflow action missing note_paths")
-    deep_dive_path = resolved_vault / note_paths[0]
-    if not deep_dive_path.exists():
-        raise FileNotFoundError(f"deep dive not found: {note_paths[0]}")
-    return run_absorb_workflow(
-        resolved_vault,
-        file_path=deep_dive_path,
-        dry_run=False,
-        auto_promote=True,
-        promote_threshold=1,
-    )
+    return run_object_extraction_workflow_action(vault_dir=vault_dir, action=action)
 
 
-def _refresh_truth_after_action(vault_dir: Path | str) -> None:
+def _refresh_truth_after_action(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    requires_truth_refresh: bool = False,
+    requires_signal_resync: bool = False,
+) -> None:
     from .knowledge_index import rebuild_knowledge_index
 
-    rebuild_knowledge_index(resolve_vault_dir(vault_dir))
-    sync_signal_ledger(vault_dir)
+    if requires_truth_refresh:
+        rebuild_knowledge_index(resolve_vault_dir(vault_dir), pack_name=pack_name)
+    if requires_signal_resync:
+        sync_signal_ledger(vault_dir, pack_name=pack_name)
 
 
 def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False) -> dict[str, Any]:
@@ -1602,7 +1625,11 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
         action["failure_bucket"] = ""
         _replace_action_queue_item_unlocked(vault_dir, action)
 
-    if _signal_by_id(vault_dir, str(action.get("source_signal_id") or "")) is None:
+    if _signal_by_id(
+        vault_dir,
+        str(action.get("source_signal_id") or ""),
+        pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+    ) is None:
         with action_queue_write_lock(vault_dir):
             action["status"] = "obsolete"
             action["finished_at"] = _utc_now_text()
@@ -1610,12 +1637,12 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
             _replace_action_queue_item_unlocked(vault_dir, action)
         return {"ran": False, "reason": "obsolete_signal", "action": action, "safe_only": safe_only}
 
-    handlers = {
-        "deep_dive_workflow": _run_deep_dive_workflow_action,
-        "object_extraction_workflow": _run_object_extraction_workflow_action,
-    }
-    handler = handlers.get(str(action.get("action_kind") or ""))
-    if handler is None:
+    try:
+        spec = resolve_focused_action_handler(
+            pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+            action_kind=str(action.get("action_kind") or ""),
+        )
+    except ValueError:
         with action_queue_write_lock(vault_dir):
             action["status"] = "failed"
             action["error"] = f"unsupported_action_kind:{action.get('action_kind')}"
@@ -1626,8 +1653,18 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
         return {"ran": False, "reason": "unsupported_action_kind", "action": action, "safe_only": safe_only}
 
     try:
-        result = handler(vault_dir, action)
-        _refresh_truth_after_action(vault_dir)
+        _, result = execute_focused_action_handler(
+            vault_dir,
+            action,
+            pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+        )
+        if getattr(spec, "requires_truth_refresh", False) or getattr(spec, "requires_signal_resync", False):
+            _refresh_truth_after_action(
+                vault_dir,
+                pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+                requires_truth_refresh=bool(getattr(spec, "requires_truth_refresh", False)),
+                requires_signal_resync=bool(getattr(spec, "requires_signal_resync", False)),
+            )
         with action_queue_write_lock(vault_dir):
             action["status"] = "succeeded"
             action["finished_at"] = _utc_now_text()
@@ -1695,12 +1732,13 @@ def _attach_action_queue_state(vault_dir: Path | str, items: list[dict[str, Any]
 def list_production_gaps(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     candidate_limit = min(MAX_PAGE_SIZE, max(limit * 5, limit))
-    items = list_production_chains(vault_dir, query=query, limit=candidate_limit)
+    items = list_production_chains(vault_dir, pack_name=pack_name, query=query, limit=candidate_limit)
     return _production_gap_items_from_chains(items, limit=limit)
 
 
@@ -1746,8 +1784,13 @@ def _production_gap_items_from_chains(
     return weak_points[:limit]
 
 
-def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
+def _research_tech_build_signal_entries(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, Any]]:
     resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
     timestamp = _utc_now_text()
     signals: list[dict[str, Any]] = []
 
@@ -1826,7 +1869,11 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
             }
         )
 
-    production_chains = list_production_chains(resolved_vault, limit=MAX_PAGE_SIZE)
+    production_chains = list_production_chains(
+        resolved_vault,
+        pack_name=normalized_pack,
+        limit=MAX_PAGE_SIZE,
+    )
     for item in _production_gap_items_from_chains(production_chains, limit=MAX_PAGE_SIZE):
         object_ids = [entry["object_id"] for entry in item["traceability"]["objects"]]
         signals.append(
@@ -2000,31 +2047,51 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
     return signals
 
 
-def sync_signal_ledger(vault_dir: Path | str) -> dict[str, Any]:
+def _compute_signal_entries(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, Any]]:
+    _, signals = execute_observation_surface_builder(
+        surface_kind="signals",
+        vault_dir=resolve_vault_dir(vault_dir),
+        pack_name=pack_name,
+    )
+    return signals
+
+
+def sync_signal_ledger(vault_dir: Path | str, *, pack_name: str | None = None) -> dict[str, Any]:
     resolved_vault = resolve_vault_dir(vault_dir)
-    signals = _compute_signal_entries(resolved_vault)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    signals = _compute_signal_entries(resolved_vault, pack_name=normalized_pack)
     with signal_ledger_write_lock(resolved_vault):
-        _rewrite_jsonl(_signal_ledger_path(resolved_vault), signals)
+        _rewrite_jsonl(_signal_ledger_path(resolved_vault, pack_name=normalized_pack), signals)
     type_counts = Counter(item["signal_type"] for item in signals)
     result = {
         "signal_count": len(signals),
         "type_counts": dict(type_counts),
+        "pack": normalized_pack,
     }
-    backfill = _backfill_auto_queue_actions(resolved_vault, signals=signals)
+    backfill = _backfill_auto_queue_actions(
+        resolved_vault,
+        pack_name=normalized_pack,
+        signals=signals,
+    )
     result["auto_queued_action_count"] = backfill["created_count"]
-    cache_key = (str(resolved_vault.resolve()), _signal_dependency_signature(resolved_vault))
+    cache_key = (str(resolved_vault.resolve()), normalized_pack, _signal_dependency_signature(resolved_vault))
     _SIGNAL_LEDGER_SYNC_CACHE.clear()
     _SIGNAL_LEDGER_SYNC_CACHE[cache_key] = result
     return result
 
 
-def ensure_signal_ledger_synced(vault_dir: Path | str) -> dict[str, Any]:
+def ensure_signal_ledger_synced(vault_dir: Path | str, *, pack_name: str | None = None) -> dict[str, Any]:
     resolved_vault = resolve_vault_dir(vault_dir)
-    cache_key = (str(resolved_vault.resolve()), _signal_dependency_signature(resolved_vault))
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    cache_key = (str(resolved_vault.resolve()), normalized_pack, _signal_dependency_signature(resolved_vault))
     cached = _SIGNAL_LEDGER_SYNC_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    result = sync_signal_ledger(resolved_vault)
+    result = sync_signal_ledger(resolved_vault, pack_name=normalized_pack)
     _SIGNAL_LEDGER_SYNC_CACHE.clear()
     _SIGNAL_LEDGER_SYNC_CACHE[cache_key] = result
     return result
@@ -2033,15 +2100,35 @@ def ensure_signal_ledger_synced(vault_dir: Path | str) -> dict[str, Any]:
 def list_signals(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     signal_type: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     resolved_vault = resolve_vault_dir(vault_dir)
-    ledger_path = _signal_ledger_path(resolved_vault)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    ledger_path = _signal_ledger_path(resolved_vault, pack_name=normalized_pack)
     if not ledger_path.exists():
-        ensure_signal_ledger_synced(resolved_vault)
+        ensure_signal_ledger_synced(resolved_vault, pack_name=normalized_pack)
+    return _list_signals_from_ledger(
+        resolved_vault,
+        ledger_path=ledger_path,
+        signal_type=signal_type,
+        query=query,
+        limit=limit,
+    )
+
+
+def _list_signals_from_ledger(
+    vault_dir: Path | str,
+    *,
+    ledger_path: Path,
+    signal_type: str | None = None,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    resolved_vault = resolve_vault_dir(vault_dir)
     normalized_query = (query or "").strip().lower()
     items: list[dict[str, Any]] = []
     with signal_ledger_write_lock(resolved_vault):
@@ -2062,9 +2149,22 @@ def list_signals(
     return _attach_action_queue_state(vault_dir, items)
 
 
-def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str, Any]:
+def _research_tech_build_briefing_snapshot(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    limit: int = 8,
+) -> dict[str, Any]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
-    recent_signals = list_signals(vault_dir, limit=limit)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    recent_signals = _list_signals_from_ledger(
+        resolved_vault,
+        ledger_path=_signal_ledger_path(
+            resolved_vault,
+            pack_name=str(pack_name or DEFAULT_WORKFLOW_PACK_NAME),
+        ),
+        limit=limit,
+    )
     unresolved_signal_types = {
         "contradiction_open",
         "stale_summary",
@@ -2244,6 +2344,23 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
         "first_useful_sign": first_useful_sign,
         "queue_summary": queue_summary,
     }
+
+
+def get_briefing_snapshot(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    limit: int = 8,
+) -> dict[str, Any]:
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    ensure_signal_ledger_synced(vault_dir, pack_name=normalized_pack)
+    _, payload = execute_observation_surface_builder(
+        surface_kind="briefing",
+        vault_dir=resolve_vault_dir(vault_dir),
+        pack_name=normalized_pack,
+        limit=limit,
+    )
+    return payload
 
 
 def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
@@ -2572,7 +2689,7 @@ def get_object_traceability(vault_dir: Path | str, object_id: str) -> dict[str, 
     }
 
 
-def list_production_chains(
+def _research_tech_list_production_chains(
     vault_dir: Path | str,
     *,
     query: str | None = None,
@@ -2652,6 +2769,23 @@ def list_production_chains(
         )
         if len(items) >= limit:
             break
+    return items
+
+
+def list_production_chains(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    _, items = execute_observation_surface_builder(
+        surface_kind="production_chains",
+        vault_dir=resolve_vault_dir(vault_dir),
+        pack_name=pack_name,
+        query=query,
+        limit=limit,
+    )
     return items
 
 

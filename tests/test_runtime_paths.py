@@ -134,6 +134,83 @@ def test_build_execution_plan_full_respects_from_step():
     assert plan["steps"][-2:] == ["refine", "knowledge_index"]
 
 
+def test_run_pipeline_dispatches_profile_stages_via_handler_registry(tmp_path, monkeypatch):
+    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_source
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(
+        pipeline,
+        "_count_output_files",
+        lambda step, before_counts, cmd_result: {"produced": 1},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "step_articles",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("direct step dispatch")),
+    )
+
+    calls: list[str] = []
+
+    def fake_execute_profile_stage_handler(pipeline_runtime, stage, **kwargs):
+        calls.append(stage)
+        return {"success": True}
+
+    monkeypatch.setattr(
+        pipeline_source,
+        "execute_profile_stage_handler",
+        fake_execute_profile_stage_handler,
+        raising=False,
+    )
+
+    results = pipeline.run_pipeline(steps=["articles"], dry_run=True)
+
+    assert calls == ["articles"]
+    assert results["articles"]["success"] is True
+
+
+def test_run_pipeline_restores_pack_and_profile_after_override(tmp_path, monkeypatch):
+    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_source
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+    original_pack = pipeline.workflow_pack_name
+    original_profile = pipeline.workflow_profile_name
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(
+        pipeline,
+        "_count_output_files",
+        lambda step, before_counts, cmd_result: {"produced": 1},
+    )
+    monkeypatch.setattr(
+        pipeline_source,
+        "execute_profile_stage_handler",
+        lambda *args, **kwargs: {"success": True},
+        raising=False,
+    )
+
+    pipeline.run_pipeline(
+        steps=["articles"],
+        dry_run=True,
+        pack_name="default-knowledge",
+        profile_name="full",
+    )
+
+    assert pipeline.workflow_pack_name == original_pack
+    assert pipeline.workflow_profile_name == original_profile
+
+
 def test_detect_pinboard_processor_routes_gist_to_article_stack():
     content = """---
 title: "GBrain.md"
@@ -171,6 +248,8 @@ def test_step_knowledge_index_invokes_rebuild_command(tmp_path, monkeypatch):
     assert captured["step_name"] == "knowledge_index"
     assert "openclaw_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
     assert "--vault-dir" in captured["cmd"]
+    assert "--pack" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--pack") + 1] == pipeline.workflow_pack_name
 
 
 def test_step_absorb_invokes_absorb_command(tmp_path, monkeypatch):
