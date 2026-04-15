@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from collections import Counter
 import hashlib
 import json
@@ -12,7 +12,13 @@ from urllib.parse import quote
 
 import yaml
 
-from .runtime import VaultLayout, knowledge_db_write_lock, resolve_vault_dir
+from .runtime import (
+    VaultLayout,
+    action_queue_write_lock,
+    knowledge_db_write_lock,
+    resolve_vault_dir,
+    signal_ledger_write_lock,
+)
 
 MAX_PAGE_SIZE = 500
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
@@ -70,6 +76,20 @@ _BRIEFING_EVOLUTION_PRIORITY = {
 def _db_path(vault_dir: Path | str) -> Path:
     resolved = resolve_vault_dir(vault_dir)
     return VaultLayout.from_vault(resolved).knowledge_db
+
+
+def _utc_now_text() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _action_queue_path(vault_dir: Path | str) -> Path:
+    resolved = resolve_vault_dir(vault_dir)
+    return VaultLayout.from_vault(resolved).actions_log
+
+
+def _signal_ledger_path(vault_dir: Path | str) -> Path:
+    resolved = resolve_vault_dir(vault_dir)
+    return VaultLayout.from_vault(resolved).signals_log
 
 
 def _read_jsonl_items(path: Path) -> list[dict[str, Any]]:
@@ -224,7 +244,7 @@ def record_review_action(
 ) -> dict[str, Any]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
-    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = _utc_now_text()
     event = {
         "timestamp": timestamp,
         "session_id": session_id,
@@ -1278,16 +1298,12 @@ def _classify_action_error(error: str) -> str:
     return "workflow_failed"
 
 
-def _read_action_queue_rows(vault_dir: Path | str) -> list[dict[str, Any]]:
-    resolved_vault = resolve_vault_dir(vault_dir)
-    layout = VaultLayout.from_vault(resolved_vault)
-    return _read_jsonl_items(layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl")
+def _read_action_queue_rows_unlocked(vault_dir: Path | str) -> list[dict[str, Any]]:
+    return _read_jsonl_items(_action_queue_path(vault_dir))
 
 
-def _write_action_queue_rows(vault_dir: Path | str, actions: list[dict[str, Any]]) -> None:
-    resolved_vault = resolve_vault_dir(vault_dir)
-    layout = VaultLayout.from_vault(resolved_vault)
-    _rewrite_jsonl(layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl", actions)
+def _write_action_queue_rows_unlocked(vault_dir: Path | str, actions: list[dict[str, Any]]) -> None:
+    _rewrite_jsonl(_action_queue_path(vault_dir), actions)
 
 
 def list_action_queue(
@@ -1300,31 +1316,32 @@ def list_action_queue(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     normalized_query = (query or "").strip().lower()
     items: list[dict[str, Any]] = []
-    for item in _read_action_queue_rows(vault_dir):
-        if status and item.get("status") != status:
-            continue
-        if normalized_query:
-            haystacks = [
-                str(item.get("title") or "").lower(),
-                str(item.get("action_kind") or "").lower(),
-                str(item.get("target_ref") or "").lower(),
-            ]
-            if not any(normalized_query in haystack for haystack in haystacks):
+    with action_queue_write_lock(vault_dir):
+        for item in _read_action_queue_rows_unlocked(vault_dir):
+            if status and item.get("status") != status:
                 continue
-        items.append(item)
-        if len(items) >= limit:
-            break
+            if normalized_query:
+                haystacks = [
+                    str(item.get("title") or "").lower(),
+                    str(item.get("action_kind") or "").lower(),
+                    str(item.get("target_ref") or "").lower(),
+                ]
+                if not any(normalized_query in haystack for haystack in haystacks):
+                    continue
+            items.append(item)
+            if len(items) >= limit:
+                break
     return items
 
 
 def _signal_by_id(vault_dir: Path | str, signal_id: str) -> dict[str, Any] | None:
-    layout = VaultLayout.from_vault(resolve_vault_dir(vault_dir))
-    ledger_path = layout.logs_dir / f"{_SIGNAL_LOG_NAME}.jsonl"
+    ledger_path = _signal_ledger_path(vault_dir)
     if not ledger_path.exists():
         ensure_signal_ledger_synced(vault_dir)
-    for item in _read_jsonl_items(ledger_path):
-        if item.get("signal_id") == signal_id:
-            return item
+    with signal_ledger_write_lock(vault_dir):
+        for item in _read_jsonl_items(ledger_path):
+            if item.get("signal_id") == signal_id:
+                return item
     return None
 
 
@@ -1337,19 +1354,20 @@ def enqueue_signal_action(
     signal = _signal_by_id(vault_dir, signal_id)
     if signal is None:
         raise ValueError("unknown signal_id")
-    existing_actions = _read_action_queue_rows(vault_dir)
-    created, action = _enqueue_action_from_signal(
-        signal,
-        existing_actions=existing_actions,
-        session_id=session_id,
-    )
-    if created:
-        existing_actions.append(action)
-        existing_actions.sort(
-            key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))),
-            reverse=True,
+    with action_queue_write_lock(vault_dir):
+        existing_actions = _read_action_queue_rows_unlocked(vault_dir)
+        created, action = _enqueue_action_from_signal(
+            signal,
+            existing_actions=existing_actions,
+            session_id=session_id,
         )
-        _write_action_queue_rows(vault_dir, existing_actions)
+        if created:
+            existing_actions.append(action)
+            existing_actions.sort(
+                key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))),
+                reverse=True,
+            )
+            _write_action_queue_rows_unlocked(vault_dir, existing_actions)
     return {"created": created, "action": action}
 
 
@@ -1380,7 +1398,7 @@ def _enqueue_action_from_signal(
     existing = next((item for item in existing_actions if item.get("action_id") == action_id), None)
     if existing is not None:
         return False, existing
-    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = _utc_now_text()
     action = {
         "action_id": action_id,
         "action_kind": str(recommended_action["kind"]),
@@ -1416,31 +1434,32 @@ def _backfill_auto_queue_actions(
     ]
     if not candidates:
         return {"created_count": 0, "created_action_ids": []}
-    existing_actions = _read_action_queue_rows(vault_dir)
-    created_actions: list[dict[str, Any]] = []
-    for item in candidates:
-        created, action = _enqueue_action_from_signal(
-            item,
-            existing_actions=existing_actions,
-            session_id="action-backfill",
-        )
-        if created:
-            existing_actions.append(action)
-            created_actions.append(action)
-    if created_actions:
-        existing_actions.sort(
-            key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))),
-            reverse=True,
-        )
-        _write_action_queue_rows(vault_dir, existing_actions)
+    with action_queue_write_lock(vault_dir):
+        existing_actions = _read_action_queue_rows_unlocked(vault_dir)
+        created_actions: list[dict[str, Any]] = []
+        for item in candidates:
+            created, action = _enqueue_action_from_signal(
+                item,
+                existing_actions=existing_actions,
+                session_id="action-backfill",
+            )
+            if created:
+                existing_actions.append(action)
+                created_actions.append(action)
+        if created_actions:
+            existing_actions.sort(
+                key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))),
+                reverse=True,
+            )
+            _write_action_queue_rows_unlocked(vault_dir, existing_actions)
     return {
         "created_count": len(created_actions),
         "created_action_ids": [item["action_id"] for item in created_actions],
     }
 
 
-def _replace_action_queue_item(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
-    existing_actions = _read_action_queue_rows(vault_dir)
+def _replace_action_queue_item_unlocked(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
+    existing_actions = _read_action_queue_rows_unlocked(vault_dir)
     replaced = False
     for index, item in enumerate(existing_actions):
         if item.get("action_id") == action.get("action_id"):
@@ -1453,29 +1472,34 @@ def _replace_action_queue_item(vault_dir: Path | str, action: dict[str, Any]) ->
         key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))),
         reverse=True,
     )
-    _write_action_queue_rows(vault_dir, existing_actions)
+    _write_action_queue_rows_unlocked(vault_dir, existing_actions)
     return action
 
 
-def _action_by_id(vault_dir: Path | str, action_id: str) -> dict[str, Any] | None:
-    for item in _read_action_queue_rows(vault_dir):
+def _action_by_id_unlocked(vault_dir: Path | str, action_id: str) -> dict[str, Any] | None:
+    for item in _read_action_queue_rows_unlocked(vault_dir):
         if item.get("action_id") == action_id:
             return dict(item)
     return None
 
 
-def _next_queued_action(vault_dir: Path | str) -> dict[str, Any] | None:
-    queued = [item for item in _read_action_queue_rows(vault_dir) if item.get("status") == "queued"]
+def _action_by_id(vault_dir: Path | str, action_id: str) -> dict[str, Any] | None:
+    with action_queue_write_lock(vault_dir):
+        return _action_by_id_unlocked(vault_dir, action_id)
+
+
+def _next_queued_action_unlocked(vault_dir: Path | str) -> dict[str, Any] | None:
+    queued = [item for item in _read_action_queue_rows_unlocked(vault_dir) if item.get("status") == "queued"]
     if not queued:
         return None
     queued.sort(key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))))
     return dict(queued[0])
 
 
-def _next_safe_queued_action(vault_dir: Path | str) -> dict[str, Any] | None:
+def _next_safe_queued_action_unlocked(vault_dir: Path | str) -> dict[str, Any] | None:
     queued = [
         item
-        for item in _read_action_queue_rows(vault_dir)
+        for item in _read_action_queue_rows_unlocked(vault_dir)
         if item.get("status") == "queued" and bool(item.get("safe_to_run"))
     ]
     if not queued:
@@ -1485,30 +1509,32 @@ def _next_safe_queued_action(vault_dir: Path | str) -> dict[str, Any] | None:
 
 
 def retry_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[str, Any]:
-    action = _action_by_id(vault_dir, action_id)
-    if action is None:
-        raise ValueError("unknown action_id")
-    if str(action.get("status") or "") not in {"failed", "obsolete"}:
-        raise ValueError("action is not retryable")
-    action["status"] = "queued"
-    action["started_at"] = ""
-    action["finished_at"] = ""
-    action["error"] = ""
-    action["failure_bucket"] = ""
-    action["result"] = {}
-    _replace_action_queue_item(vault_dir, action)
+    with action_queue_write_lock(vault_dir):
+        action = _action_by_id_unlocked(vault_dir, action_id)
+        if action is None:
+            raise ValueError("unknown action_id")
+        if str(action.get("status") or "") not in {"failed", "obsolete"}:
+            raise ValueError("action is not retryable")
+        action["status"] = "queued"
+        action["started_at"] = ""
+        action["finished_at"] = ""
+        action["error"] = ""
+        action["failure_bucket"] = ""
+        action["result"] = {}
+        _replace_action_queue_item_unlocked(vault_dir, action)
     return {"retried": True, "action": action}
 
 
 def dismiss_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[str, Any]:
-    action = _action_by_id(vault_dir, action_id)
-    if action is None:
-        raise ValueError("unknown action_id")
-    if str(action.get("status") or "") in {"succeeded", "dismissed"}:
-        raise ValueError("action is not dismissible")
-    action["status"] = "dismissed"
-    action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _replace_action_queue_item(vault_dir, action)
+    with action_queue_write_lock(vault_dir):
+        action = _action_by_id_unlocked(vault_dir, action_id)
+        if action is None:
+            raise ValueError("unknown action_id")
+        if str(action.get("status") or "") in {"running", "succeeded", "dismissed"}:
+            raise ValueError("action is not dismissible")
+        action["status"] = "dismissed"
+        action["finished_at"] = _utc_now_text()
+        _replace_action_queue_item_unlocked(vault_dir, action)
     return {"dismissed": True, "action": action}
 
 
@@ -1560,22 +1586,28 @@ def _refresh_truth_after_action(vault_dir: Path | str) -> None:
 
 
 def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False) -> dict[str, Any]:
-    action = _next_safe_queued_action(vault_dir) if safe_only else _next_queued_action(vault_dir)
-    if action is None:
-        return {"ran": False, "reason": "no_queued_actions", "safe_only": safe_only}
+    with action_queue_write_lock(vault_dir):
+        action = (
+            _next_safe_queued_action_unlocked(vault_dir)
+            if safe_only
+            else _next_queued_action_unlocked(vault_dir)
+        )
+        if action is None:
+            return {"ran": False, "reason": "no_queued_actions", "safe_only": safe_only}
 
-    started_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    action["status"] = "running"
-    action["started_at"] = started_at
-    action["error"] = ""
-    action["failure_bucket"] = ""
-    _replace_action_queue_item(vault_dir, action)
+        started_at = _utc_now_text()
+        action["status"] = "running"
+        action["started_at"] = started_at
+        action["error"] = ""
+        action["failure_bucket"] = ""
+        _replace_action_queue_item_unlocked(vault_dir, action)
 
     if _signal_by_id(vault_dir, str(action.get("source_signal_id") or "")) is None:
-        action["status"] = "obsolete"
-        action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        action["failure_bucket"] = "obsolete_signal"
-        _replace_action_queue_item(vault_dir, action)
+        with action_queue_write_lock(vault_dir):
+            action["status"] = "obsolete"
+            action["finished_at"] = _utc_now_text()
+            action["failure_bucket"] = "obsolete_signal"
+            _replace_action_queue_item_unlocked(vault_dir, action)
         return {"ran": False, "reason": "obsolete_signal", "action": action, "safe_only": safe_only}
 
     handlers = {
@@ -1584,29 +1616,32 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
     }
     handler = handlers.get(str(action.get("action_kind") or ""))
     if handler is None:
-        action["status"] = "failed"
-        action["error"] = f"unsupported_action_kind:{action.get('action_kind')}"
-        action["failure_bucket"] = "unsupported_action_kind"
-        action["retry_count"] = int(action.get("retry_count") or 0) + 1
-        action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _replace_action_queue_item(vault_dir, action)
+        with action_queue_write_lock(vault_dir):
+            action["status"] = "failed"
+            action["error"] = f"unsupported_action_kind:{action.get('action_kind')}"
+            action["failure_bucket"] = "unsupported_action_kind"
+            action["retry_count"] = int(action.get("retry_count") or 0) + 1
+            action["finished_at"] = _utc_now_text()
+            _replace_action_queue_item_unlocked(vault_dir, action)
         return {"ran": False, "reason": "unsupported_action_kind", "action": action, "safe_only": safe_only}
 
     try:
         result = handler(vault_dir, action)
         _refresh_truth_after_action(vault_dir)
-        action["status"] = "succeeded"
-        action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        action["result"] = result
-        _replace_action_queue_item(vault_dir, action)
+        with action_queue_write_lock(vault_dir):
+            action["status"] = "succeeded"
+            action["finished_at"] = _utc_now_text()
+            action["result"] = result
+            _replace_action_queue_item_unlocked(vault_dir, action)
         return {"ran": True, "action": action, "safe_only": safe_only}
     except Exception as exc:
-        action["status"] = "failed"
-        action["error"] = str(exc)
-        action["failure_bucket"] = _classify_action_error(str(exc))
-        action["retry_count"] = int(action.get("retry_count") or 0) + 1
-        action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _replace_action_queue_item(vault_dir, action)
+        with action_queue_write_lock(vault_dir):
+            action["status"] = "failed"
+            action["error"] = str(exc)
+            action["failure_bucket"] = _classify_action_error(str(exc))
+            action["retry_count"] = int(action.get("retry_count") or 0) + 1
+            action["finished_at"] = _utc_now_text()
+            _replace_action_queue_item_unlocked(vault_dir, action)
         return {"ran": False, "reason": "execution_failed", "action": action, "safe_only": safe_only}
 
 
@@ -1666,6 +1701,14 @@ def list_production_gaps(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     candidate_limit = min(MAX_PAGE_SIZE, max(limit * 5, limit))
     items = list_production_chains(vault_dir, query=query, limit=candidate_limit)
+    return _production_gap_items_from_chains(items, limit=limit)
+
+
+def _production_gap_items_from_chains(
+    items: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
     weak_points: list[dict[str, Any]] = []
     for item in items:
         traceability = item["traceability"]
@@ -1705,7 +1748,7 @@ def list_production_gaps(
 
 def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
     resolved_vault = resolve_vault_dir(vault_dir)
-    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = _utc_now_text()
     signals: list[dict[str, Any]] = []
 
     for item in list_contradictions(resolved_vault, status="open", limit=MAX_PAGE_SIZE):
@@ -1783,7 +1826,8 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
             }
         )
 
-    for item in list_production_gaps(resolved_vault, limit=MAX_PAGE_SIZE):
+    production_chains = list_production_chains(resolved_vault, limit=MAX_PAGE_SIZE)
+    for item in _production_gap_items_from_chains(production_chains, limit=MAX_PAGE_SIZE):
         object_ids = [entry["object_id"] for entry in item["traceability"]["objects"]]
         signals.append(
             {
@@ -1816,7 +1860,7 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
             }
         )
 
-    for item in list_production_chains(resolved_vault, limit=MAX_PAGE_SIZE):
+    for item in production_chains:
         traceability = item["traceability"]
         if item["stage_label"] == "source_note" and not traceability["deep_dives"]:
             signals.append(
@@ -1958,9 +2002,9 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
 
 def sync_signal_ledger(vault_dir: Path | str) -> dict[str, Any]:
     resolved_vault = resolve_vault_dir(vault_dir)
-    layout = VaultLayout.from_vault(resolved_vault)
     signals = _compute_signal_entries(resolved_vault)
-    _rewrite_jsonl(layout.logs_dir / f"{_SIGNAL_LOG_NAME}.jsonl", signals)
+    with signal_ledger_write_lock(resolved_vault):
+        _rewrite_jsonl(_signal_ledger_path(resolved_vault), signals)
     type_counts = Counter(item["signal_type"] for item in signals)
     result = {
         "signal_count": len(signals),
@@ -1995,25 +2039,26 @@ def list_signals(
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     resolved_vault = resolve_vault_dir(vault_dir)
-    ledger_path = VaultLayout.from_vault(resolved_vault).logs_dir / f"{_SIGNAL_LOG_NAME}.jsonl"
+    ledger_path = _signal_ledger_path(resolved_vault)
     if not ledger_path.exists():
         ensure_signal_ledger_synced(resolved_vault)
     normalized_query = (query or "").strip().lower()
     items: list[dict[str, Any]] = []
-    for item in _read_jsonl_items(ledger_path):
-        if signal_type and item.get("signal_type") != signal_type:
-            continue
-        if normalized_query:
-            haystacks = [
-                str(item.get("title") or "").lower(),
-                str(item.get("detail") or "").lower(),
-                str(item.get("source_label") or "").lower(),
-            ]
-            if not any(normalized_query in haystack for haystack in haystacks):
+    with signal_ledger_write_lock(resolved_vault):
+        for item in _read_jsonl_items(ledger_path):
+            if signal_type and item.get("signal_type") != signal_type:
                 continue
-        items.append(item)
-        if len(items) >= limit:
-            break
+            if normalized_query:
+                haystacks = [
+                    str(item.get("title") or "").lower(),
+                    str(item.get("detail") or "").lower(),
+                    str(item.get("source_label") or "").lower(),
+                ]
+                if not any(normalized_query in haystack for haystack in haystacks):
+                    continue
+            items.append(item)
+            if len(items) >= limit:
+                break
     return _attach_action_queue_state(vault_dir, items)
 
 
@@ -2050,7 +2095,15 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
             if object_id
         )
     )
-    object_rows = _batch_object_rows(vault_dir, changed_object_ids)
+    topic_counts: Counter[str] = Counter()
+    for item in recent_signals:
+        for object_id in item.get("object_ids", []):
+            topic_counts[object_id] += 1
+    active_topic_ids = [object_id for object_id, _ in topic_counts.most_common(limit)]
+    object_rows = _batch_object_rows(
+        vault_dir,
+        list(dict.fromkeys([*changed_object_ids, *active_topic_ids])),
+    )
     changed_objects = [
         {
             "object_id": object_id,
@@ -2059,17 +2112,10 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
         }
         for object_id in changed_object_ids[:limit]
     ]
-
-    topic_counts: Counter[str] = Counter()
-    for item in recent_signals:
-        for object_id in item.get("object_ids", []):
-            topic_counts[object_id] += 1
     active_topics = [
         {
             "object_id": object_id,
-            "title": object_rows.get(object_id, {}).get("title")
-            or _batch_object_rows(vault_dir, [object_id]).get(object_id, {}).get("title")
-            or object_id,
+            "title": object_rows.get(object_id, {}).get("title") or object_id,
             "signal_count": count,
             "path": f"/topic?id={object_id}",
         }
@@ -2182,7 +2228,7 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
     }
 
     return {
-        "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": _utc_now_text(),
         "recent_signal_count": len(recent_signals),
         "unresolved_issue_count": len(unresolved_issues),
         "changed_object_count": len(changed_objects),
