@@ -18,6 +18,7 @@ MAX_PAGE_SIZE = 500
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _REVIEW_AUDIT_LOG_NAME = "review-actions"
 _SIGNAL_LOG_NAME = "signals"
+_ACTION_LOG_NAME = "actions"
 _SOURCE_NOTE_INDEX_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dict[str, list[dict[str, str]]]] = {}
 _PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
@@ -1147,6 +1148,12 @@ def _signal_id(signal_type: str, key: str) -> str:
     return f"{signal_type}::{hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]}"
 
 
+def _action_id(signal_id: str, action_kind: str, target_ref: str, payload: dict[str, Any]) -> str:
+    payload_key = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    key = f"{signal_id}::{action_kind}::{target_ref}::{payload_key}"
+    return f"action::{hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]}"
+
+
 def _recommended_action(*, kind: str, label: str, path: str, executable: bool) -> dict[str, Any]:
     return {
         "kind": kind,
@@ -1154,6 +1161,190 @@ def _recommended_action(*, kind: str, label: str, path: str, executable: bool) -
         "path": path,
         "executable": executable,
     }
+
+
+def _read_action_queue_rows(vault_dir: Path | str) -> list[dict[str, Any]]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    rows: list[tuple[str]] = []
+    if layout.knowledge_db.exists():
+        with sqlite3.connect(layout.knowledge_db) as conn:
+            rows = conn.execute(
+                """
+                SELECT payload_json
+                FROM audit_events
+                WHERE source_log = ?
+                ORDER BY timestamp DESC, slug
+                """,
+                (_ACTION_LOG_NAME,),
+            ).fetchall()
+    elif (layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl").exists():
+        rows = [
+            (line,)
+            for line in (layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    items: list[dict[str, Any]] = []
+    for (payload_json,) in rows:
+        try:
+            items.append(json.loads(payload_json))
+        except json.JSONDecodeError:
+            continue
+    return items
+
+
+def _write_action_queue_rows(vault_dir: Path | str, actions: list[dict[str, Any]]) -> None:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    _rewrite_jsonl(layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl", actions)
+    if layout.knowledge_db.exists():
+        with sqlite3.connect(layout.knowledge_db) as conn:
+            conn.execute("DELETE FROM audit_events WHERE source_log = ?", (_ACTION_LOG_NAME,))
+            conn.executemany(
+                """
+                INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        _ACTION_LOG_NAME,
+                        action["action_kind"],
+                        action["action_id"],
+                        action.get("session_id", "action-queue"),
+                        action["created_at"],
+                        json.dumps(action, ensure_ascii=False),
+                    )
+                    for action in actions
+                ],
+            )
+            conn.commit()
+
+
+def list_action_queue(
+    vault_dir: Path | str,
+    *,
+    status: str | None = None,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    normalized_query = (query or "").strip().lower()
+    items: list[dict[str, Any]] = []
+    for item in _read_action_queue_rows(vault_dir):
+        if status and item.get("status") != status:
+            continue
+        if normalized_query:
+            haystacks = [
+                str(item.get("title") or "").lower(),
+                str(item.get("action_kind") or "").lower(),
+                str(item.get("target_ref") or "").lower(),
+            ]
+            if not any(normalized_query in haystack for haystack in haystacks):
+                continue
+        items.append(item)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _signal_by_id(vault_dir: Path | str, signal_id: str) -> dict[str, Any] | None:
+    ensure_signal_ledger_synced(vault_dir)
+    db_path = _db_path(vault_dir)
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT payload_json
+            FROM audit_events
+            WHERE source_log = ? AND slug = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (_SIGNAL_LOG_NAME, signal_id),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row[0])
+    except json.JSONDecodeError:
+        return None
+
+
+def enqueue_signal_action(
+    vault_dir: Path | str,
+    *,
+    signal_id: str,
+    session_id: str = "ovp-ui",
+) -> dict[str, Any]:
+    signal = _signal_by_id(vault_dir, signal_id)
+    if signal is None:
+        raise ValueError("unknown signal_id")
+    recommended_action = signal.get("recommended_action")
+    if not isinstance(recommended_action, dict) or not recommended_action.get("kind"):
+        raise ValueError("signal has no recommended action")
+    target_ref = (
+        next((path for path in signal.get("note_paths", []) if path), "")
+        or next((object_id for object_id in signal.get("object_ids", []) if object_id), "")
+        or str(signal.get("source_path") or "")
+    )
+    payload = {
+        "recommended_action": recommended_action,
+        "source_path": signal.get("source_path", ""),
+        "note_paths": list(signal.get("note_paths", [])),
+        "object_ids": list(signal.get("object_ids", [])),
+    }
+    action_id = _action_id(signal_id, str(recommended_action["kind"]), target_ref, payload)
+    existing_actions = _read_action_queue_rows(vault_dir)
+    existing = next((item for item in existing_actions if item.get("action_id") == action_id), None)
+    if existing is not None:
+        return {"created": False, "action": existing}
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    action = {
+        "action_id": action_id,
+        "action_kind": str(recommended_action["kind"]),
+        "source_signal_id": signal_id,
+        "title": str(recommended_action.get("label") or signal.get("title") or signal_id),
+        "target_ref": target_ref,
+        "object_ids": list(signal.get("object_ids", [])),
+        "note_paths": list(signal.get("note_paths", [])),
+        "status": "queued",
+        "created_at": timestamp,
+        "started_at": "",
+        "finished_at": "",
+        "error": "",
+        "payload": payload,
+        "session_id": session_id,
+    }
+    existing_actions.append(action)
+    existing_actions.sort(key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))), reverse=True)
+    _write_action_queue_rows(vault_dir, existing_actions)
+    return {"created": True, "action": action}
+
+
+def _action_queue_state_map(vault_dir: Path | str) -> dict[str, dict[str, Any]]:
+    state_map: dict[str, dict[str, Any]] = {}
+    for item in list_action_queue(vault_dir, limit=MAX_PAGE_SIZE):
+        signal_id = str(item.get("source_signal_id") or "")
+        if signal_id and signal_id not in state_map:
+            state_map[signal_id] = item
+    return state_map
+
+
+def _attach_action_queue_state(vault_dir: Path | str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    queue_state = _action_queue_state_map(vault_dir)
+    annotated: list[dict[str, Any]] = []
+    for item in items:
+        enriched = dict(item)
+        recommended_action = item.get("recommended_action")
+        if isinstance(recommended_action, dict):
+            action = queue_state.get(str(item.get("signal_id") or ""))
+            recommended = dict(recommended_action)
+            if action is not None:
+                recommended["queue_status"] = action.get("status", "")
+                recommended["action_id"] = action.get("action_id", "")
+                recommended["queue_path"] = "/actions"
+            enriched["recommended_action"] = recommended
+        annotated.append(enriched)
+    return annotated
 
 
 def list_production_gaps(
@@ -1544,7 +1735,7 @@ def list_signals(
         items.append(item)
         if len(items) >= limit:
             break
-    return items
+    return _attach_action_queue_state(vault_dir, items)
 
 
 def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str, Any]:
@@ -1646,6 +1837,7 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
     for item in unresolved_issues:
         priority_items.append(
             {
+                "signal_id": item["signal_id"],
                 "kind": item["signal_type"],
                 "title": item["title"],
                 "detail": item["detail"],

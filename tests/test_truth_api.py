@@ -1642,6 +1642,40 @@ Thin.
     assert any(item.get("recommended_action") for item in payload["priority_items"])
 
 
+def test_truth_api_enqueues_signal_actions_idempotently(temp_vault):
+    from openclaw_pipeline.truth_api import enqueue_signal_action, list_action_queue, list_signals, sync_signal_ledger
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+    sync_signal_ledger(vault)
+    source_signal = next(item for item in list_signals(vault) if item["signal_type"] == "source_needs_deep_dive")
+
+    first = enqueue_signal_action(vault, signal_id=source_signal["signal_id"])
+    second = enqueue_signal_action(vault, signal_id=source_signal["signal_id"])
+    actions = list_action_queue(vault)
+    refreshed_signal = next(item for item in list_signals(vault) if item["signal_id"] == source_signal["signal_id"])
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert first["action"]["action_id"] == second["action"]["action_id"]
+    assert len(actions) == 1
+    assert actions[0]["status"] == "queued"
+    assert refreshed_signal["recommended_action"]["queue_status"] == "queued"
+    assert refreshed_signal["recommended_action"]["action_id"] == actions[0]["action_id"]
+
+
 def test_truth_api_includes_review_action_signals(temp_vault):
     from openclaw_pipeline.truth_api import list_signals, record_review_action, sync_signal_ledger
 

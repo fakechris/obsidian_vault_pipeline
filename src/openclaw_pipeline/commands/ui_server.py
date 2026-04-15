@@ -18,6 +18,7 @@ from ..identity import canonicalize_note_id
 from ..knowledge_index import contradiction_object_ids, rebuild_compiled_summaries, resolve_contradictions
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import (
+    build_action_queue_payload,
     build_atlas_browser_payload,
     build_briefing_payload,
     build_contradiction_browser_payload,
@@ -34,7 +35,12 @@ from ..ui.view_models import (
     build_truth_dashboard_payload,
     build_topic_overview_payload,
 )
-from ..truth_api import ensure_signal_ledger_synced, record_review_action, review_evolution_candidate
+from ..truth_api import (
+    enqueue_signal_action,
+    ensure_signal_ledger_synced,
+    record_review_action,
+    review_evolution_candidate,
+)
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
@@ -107,6 +113,7 @@ def _layout(title: str, body: str) -> str:
             <a href="/search">Search</a>
             <a href="/signals">Signals</a>
             <a href="/briefing">Briefing</a>
+            <a href="/actions">Actions</a>
             <a href="/evolution">Evolution</a>
             <a href="/production">Production</a>
             <a href="/atlas">Atlas</a>
@@ -1356,12 +1363,25 @@ def _render_signals_page(payload: dict) -> str:
             "<div class='muted'>Recommended Action: "
             + f'<a href="{escape(item["recommended_action"]["path"])}">{escape(item["recommended_action"]["label"])}</a>'
             + (
-                " <span class='pill'>executable</span>"
-                if item["recommended_action"].get("executable")
-                else " <span class='pill'>manual</span>"
+                f" <span class='pill'>{escape(str(item['recommended_action']['queue_status']))}</span>"
+                if item["recommended_action"].get("queue_status")
+                else (
+                    " <span class='pill'>executable</span>"
+                    if item["recommended_action"].get("executable")
+                    else " <span class='pill'>manual</span>"
+                )
             )
             + "</div>"
             if item.get("recommended_action")
+            else ""
+        )
+        + (
+            "<form method='post' action='/actions/enqueue' class='link-row'>"
+            + f"<input type='hidden' name='signal_id' value='{escape(item['signal_id'])}' />"
+            + "<input type='hidden' name='next' value='/signals' />"
+            + "<button type='submit'>Queue action</button>"
+            + "</form>"
+            if item.get("recommended_action") and not item["recommended_action"].get("queue_status")
             else ""
         )
         + (
@@ -1435,12 +1455,25 @@ def _render_briefing_page(payload: dict) -> str:
             "<div class='muted'>Recommended Action: "
             + f'<a href="{escape(str(item["recommended_action"]["path"]))}">{escape(str(item["recommended_action"]["label"]))}</a>'
             + (
-                " <span class='pill'>executable</span>"
-                if item["recommended_action"].get("executable")
-                else " <span class='pill'>manual</span>"
+                f" <span class='pill'>{escape(str(item['recommended_action']['queue_status']))}</span>"
+                if item["recommended_action"].get("queue_status")
+                else (
+                    " <span class='pill'>executable</span>"
+                    if item["recommended_action"].get("executable")
+                    else " <span class='pill'>manual</span>"
+                )
             )
             + "</div>"
             if item.get("recommended_action")
+            else ""
+        )
+        + (
+            "<form method='post' action='/actions/enqueue' class='link-row'>"
+            + f"<input type='hidden' name='signal_id' value='{escape(str(item['signal_id']))}' />"
+            + "<input type='hidden' name='next' value='/briefing' />"
+            + "<button type='submit'>Queue action</button>"
+            + "</form>"
+            if item.get("signal_id") and item.get("recommended_action") and not item["recommended_action"].get("queue_status")
             else ""
         )
         + "</li>"
@@ -1478,6 +1511,48 @@ def _render_briefing_page(payload: dict) -> str:
             f"<section class='card'><h2>Unresolved Issues</h2><ul class='list-tight'>{unresolved}</ul></section>"
             f"<section class='card'><h2>Changed Objects</h2><ul class='list-tight'>{changed_objects}</ul></section>"
             f"<section class='card'><h2>Active Topics</h2><ul class='list-tight'>{active_topics}</ul></section>"
+        ),
+    )
+
+
+def _render_actions_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    selected_status = payload.get("status", "")
+    options = ["", "queued", "running", "succeeded", "failed", "dismissed", "obsolete"]
+    option_html = "".join(
+        f"<option value='{escape(option)}' {'selected' if option == selected_status else ''}>"
+        f"{escape(option or 'all statuses')}</option>"
+        for option in options
+    )
+    items = "".join(
+        "<li>"
+        f"<span class='pill'>{escape(str(item['status']))}</span> "
+        f"<span class='pill'>{escape(str(item['action_kind']))}</span> "
+        f"{escape(str(item['title']))}"
+        + (
+            f"<div class='muted'>Target: {escape(str(item['target_ref']))}</div>"
+            if item.get("target_ref")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Created at {escape(str(item['created_at']))}</div>"
+            if item.get("created_at")
+            else ""
+        )
+        + "</li>"
+        for item in payload["items"]
+    ) or "<li class='muted'>No queued actions yet.</li>"
+    return _layout(
+        "Action Queue",
+        (
+            "<h1>Action Queue</h1>"
+            "<form method='get' action='/actions' class='link-row'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search actions' />"
+            f"<select name='status'>{option_html}</select>"
+            "<button type='submit'>Filter</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} actions in the current execution surface.</p>"
+            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
 
@@ -1859,6 +1934,17 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     payload = build_production_browser_payload(resolved_vault, query=q)
                     self._write_html(_render_production_browser_page(payload))
                     return
+                if path == "/api/actions":
+                    status = query.get("status", [""])[0] or None
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_action_queue_payload(resolved_vault, status=status, query=q))
+                    return
+                if path == "/actions":
+                    status = query.get("status", [""])[0] or None
+                    q = query.get("q", [""])[0]
+                    payload = build_action_queue_payload(resolved_vault, status=status, query=q)
+                    self._write_html(_render_actions_page(payload))
+                    return
                 if path == "/api/summaries":
                     q = query.get("q", [""])[0]
                     self._write_json(build_stale_summary_browser_payload(resolved_vault, query=q))
@@ -1921,6 +2007,13 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/evolution/review":
                     self._review_evolution_action(form)
                     self._redirect("/evolution")
+                    return
+                if path == "/api/actions/enqueue":
+                    self._write_json(self._enqueue_signal_action(form))
+                    return
+                if path == "/actions/enqueue":
+                    payload = self._enqueue_signal_action(form)
+                    self._redirect(str(payload["next_path"]))
                     return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
@@ -2018,6 +2111,14 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 note=note,
                 link_type=link_type,
             )
+
+        def _enqueue_signal_action(self, form: dict[str, list[str]]) -> dict[str, object]:
+            signal_id = self._form_first(form, "signal_id").strip()
+            if not signal_id:
+                raise ValueError("missing signal_id")
+            payload = enqueue_signal_action(resolved_vault, signal_id=signal_id)
+            payload["next_path"] = self._form_first(form, "next").strip() or "/actions"
+            return payload
 
         def _write_json(self, payload: dict) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

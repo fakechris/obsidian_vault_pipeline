@@ -25,6 +25,7 @@ from ..truth_api import (
     list_evolution_links,
     list_review_actions,
     list_atlas_memberships,
+    list_action_queue,
     list_contradictions,
     list_deep_dive_derivations,
     list_objects,
@@ -290,6 +291,23 @@ def build_signal_browser_payload(
         "signal_type": signal_type or "",
         "type_counts": dict(Counter(item["signal_type"] for item in items)),
         "signal_type_explanations": SIGNAL_TYPE_EXPLANATIONS,
+    }
+
+
+def build_action_queue_payload(
+    vault_dir: Path | str,
+    *,
+    status: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    items = list_action_queue(vault_dir, status=status, query=query)
+    return {
+        "screen": "actions/browser",
+        "items": items,
+        "count": len(items),
+        "query": query or "",
+        "status": status or "",
+        "status_counts": dict(Counter(str(item["status"]) for item in items)),
     }
 
 

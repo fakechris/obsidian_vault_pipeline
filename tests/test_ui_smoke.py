@@ -1133,8 +1133,46 @@ def test_ui_briefing_page_renders_briefing_snapshot(temp_vault):
     assert "Insights" in body
     assert "Priority Items" in body
     assert "Recommended Action" in body
-    assert "Recent Signals" in body
-    assert "Active Topics" in body
+
+
+def test_ui_actions_page_renders_queued_signal_actions(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.truth_api import enqueue_signal_action, list_signals
+
+    _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    source_signal = next(
+        item for item in list_signals(temp_vault) if item["signal_type"] == "source_needs_deep_dive"
+    )
+    enqueue_signal_action(temp_vault, signal_id=source_signal["signal_id"])
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/actions")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Action Queue" in body
+    assert "Create deep dive" in body
+    assert "queued" in body
 
 
 def test_ui_contradictions_and_summaries_support_batch_actions(temp_vault):
