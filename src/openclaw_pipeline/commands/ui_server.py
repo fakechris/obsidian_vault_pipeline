@@ -945,6 +945,11 @@ def _render_topic_page(payload: dict) -> str:
 
 def _render_events_page(payload: dict) -> str:
     query = payload.get("query", "")
+    limit_note = (
+        f" Showing the most recent {payload['limit']} timeline rows in this dossier window."
+        if payload.get("is_limited")
+        else ""
+    )
     type_breakdown = "".join(
         f"<span class='pill'>{escape(kind.replace('_', ' '))}: {count}</span>"
         for kind, count in payload["event_type_counts"].items()
@@ -1031,7 +1036,7 @@ def _render_events_page(payload: dict) -> str:
             f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> "
             "<button type='submit'>Search</button>"
             "</form>"
-            f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.</p>"
+            f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.{escape(limit_note)}</p>"
             f"<div class='link-row'>{type_breakdown}</div>"
             f"{_render_production_summary_card(payload['production_summary'])}"
             f"{_render_review_context_card(payload['review_context'])}"
@@ -1816,3 +1821,8 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+    limit_note = (
+        f" Showing the most recent {payload['limit']} timeline rows in this dossier window."
+        if payload.get("is_limited")
+        else ""
+    )

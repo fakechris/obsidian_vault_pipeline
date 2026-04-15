@@ -244,6 +244,8 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["events"][0]["semantic_role"] == "note_date_projection"
     assert payload["cluster_sections"][0]["date"] == "2026-04-13"
     assert payload["event_type_counts"] == {"dated_note": 3}
+    assert payload["limit"] == 50
+    assert payload["is_limited"] is True
     assert payload["timeline_contract"]["timeline_kind"] == "dated_note_projection"
     assert payload["timeline_contract"]["row_type_counts"] == {"page_date": 3}
     assert payload["timeline_contract"]["semantic_roles"] == {"note_date_projection": 3}
@@ -1095,6 +1097,47 @@ def test_build_event_dossier_payload_applies_limit_before_materializing(temp_vau
 
     assert payload["event_count"] == 2
     assert len(payload["events"]) == 2
+
+
+def test_build_event_dossier_payload_orders_latest_first(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    older = temp_vault / "10-Knowledge" / "Evergreen" / "Older.md"
+    newer = temp_vault / "10-Knowledge" / "Evergreen" / "Newer.md"
+    older.write_text(
+        """---
+note_id: older
+title: Older
+type: evergreen
+date: 2026-04-10
+---
+
+# Older
+
+Older event.
+""",
+        encoding="utf-8",
+    )
+    newer.write_text(
+        """---
+note_id: newer
+title: Newer
+type: evergreen
+date: 2026-04-13
+---
+
+# Newer
+
+Newer event.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault)
+
+    assert payload["dates"][0] == "2026-04-13"
+    assert payload["events"][0]["object_id"] == "newer"
 
 
 def test_build_object_page_payload_handles_missing_summary(temp_vault):

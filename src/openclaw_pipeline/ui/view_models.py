@@ -33,6 +33,8 @@ from ..truth_api import (
     search_vault_surface,
 )
 
+DEFAULT_EVENT_DOSSIER_LIMIT = 50
+
 
 def _db_path(vault_dir: Path | str) -> Path:
     resolved = resolve_vault_dir(vault_dir)
@@ -278,6 +280,7 @@ def build_event_dossier_payload(
 ) -> dict[str, Any]:
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
+    effective_limit = DEFAULT_EVENT_DOSSIER_LIMIT if limit is None else limit
     with sqlite3.connect(db_path) as conn:
         sql = """
             SELECT timeline_events.event_date, timeline_events.event_type, timeline_events.heading,
@@ -300,10 +303,10 @@ def build_event_dossier_payload(
                     f"%{normalized_query}%",
                 ]
             )
-        sql += " ORDER BY timeline_events.event_date, objects.object_id"
-        if limit is not None:
+        sql += " ORDER BY timeline_events.event_date DESC, objects.object_id"
+        if effective_limit is not None:
             sql += " LIMIT ?"
-            params.append(limit)
+            params.append(effective_limit)
         rows = conn.execute(sql, tuple(params)).fetchall()
 
     events = [
@@ -332,7 +335,7 @@ def build_event_dossier_payload(
             event["object_id"],
             {"evergreen_path": "", "source_notes": [], "mocs": []},
         )
-    dates = sorted({event["event_date"] for event in events})
+    dates = sorted({event["event_date"] for event in events}, reverse=True)
     grouped: dict[str, list[dict[str, Any]]] = {}
     for event in events:
         grouped.setdefault(event["event_date"], []).append(event)
@@ -354,6 +357,8 @@ def build_event_dossier_payload(
         "dates": dates,
         "cluster_sections": cluster_sections,
         "event_type_counts": dict(event_type_counts),
+        "limit": effective_limit,
+        "is_limited": effective_limit is not None,
         "timeline_contract": {
             "timeline_kind": "dated_note_projection",
             "row_type_counts": dict(row_type_counts),

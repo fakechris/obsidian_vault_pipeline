@@ -199,6 +199,7 @@ date: 2026-04-13
     assert "Event Clusters" in events_body
     assert "Review Context" in events_body
     assert "Production Contribution" in events_body
+    assert "Showing the most recent 50 timeline rows" in events_body
     assert "Top Source Notes" in events_body
     assert "/summaries?q=alpha" in events_body
     assert "Quick Maintenance" in events_body
