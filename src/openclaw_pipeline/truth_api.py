@@ -40,6 +40,10 @@ SIGNAL_TYPE_EXPLANATIONS = {
     "source_needs_deep_dive": "A processed source note exists without any derived deep dive, so the next extraction step is still missing.",
     "deep_dive_needs_objects": "A deep dive exists without any derived evergreen objects, so absorb-style extraction has not completed yet.",
 }
+AUTO_QUEUE_SIGNAL_TYPES = {
+    "source_needs_deep_dive",
+    "deep_dive_needs_objects",
+}
 EVOLUTION_LINK_EXPLANATIONS = {
     "challenges": "Newer evidence is challenging the current interpretation.",
     "replaces": "A newer interpretation appears to supersede the older one.",
@@ -1278,6 +1282,31 @@ def enqueue_signal_action(
     signal = _signal_by_id(vault_dir, signal_id)
     if signal is None:
         raise ValueError("unknown signal_id")
+    existing_actions = _read_action_queue_rows(vault_dir)
+    created, action = _enqueue_action_from_signal(
+        signal,
+        existing_actions=existing_actions,
+        session_id=session_id,
+    )
+    if created:
+        existing_actions.append(action)
+        existing_actions.sort(
+            key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))),
+            reverse=True,
+        )
+        _write_action_queue_rows(vault_dir, existing_actions)
+    return {"created": created, "action": action}
+
+
+def _enqueue_action_from_signal(
+    signal: dict[str, Any],
+    *,
+    existing_actions: list[dict[str, Any]],
+    session_id: str,
+) -> tuple[bool, dict[str, Any]]:
+    signal_id = str(signal.get("signal_id") or "")
+    if not signal_id:
+        raise ValueError("signal is missing signal_id")
     recommended_action = signal.get("recommended_action")
     if not isinstance(recommended_action, dict) or not recommended_action.get("kind"):
         raise ValueError("signal has no recommended action")
@@ -1293,10 +1322,9 @@ def enqueue_signal_action(
         "object_ids": list(signal.get("object_ids", [])),
     }
     action_id = _action_id(signal_id, str(recommended_action["kind"]), target_ref, payload)
-    existing_actions = _read_action_queue_rows(vault_dir)
     existing = next((item for item in existing_actions if item.get("action_id") == action_id), None)
     if existing is not None:
-        return {"created": False, "action": existing}
+        return False, existing
     timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     action = {
         "action_id": action_id,
@@ -1314,10 +1342,43 @@ def enqueue_signal_action(
         "payload": payload,
         "session_id": session_id,
     }
-    existing_actions.append(action)
-    existing_actions.sort(key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))), reverse=True)
-    _write_action_queue_rows(vault_dir, existing_actions)
-    return {"created": True, "action": action}
+    return True, action
+
+
+def _backfill_auto_queue_actions(
+    vault_dir: Path | str,
+    *,
+    signals: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    active_signals = signals if signals is not None else list_signals(vault_dir, limit=MAX_PAGE_SIZE)
+    candidates = [
+        item
+        for item in active_signals
+        if str(item.get("signal_type") or "") in AUTO_QUEUE_SIGNAL_TYPES
+    ]
+    if not candidates:
+        return {"created_count": 0, "created_action_ids": []}
+    existing_actions = _read_action_queue_rows(vault_dir)
+    created_actions: list[dict[str, Any]] = []
+    for item in candidates:
+        created, action = _enqueue_action_from_signal(
+            item,
+            existing_actions=existing_actions,
+            session_id="action-backfill",
+        )
+        if created:
+            existing_actions.append(action)
+            created_actions.append(action)
+    if created_actions:
+        existing_actions.sort(
+            key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))),
+            reverse=True,
+        )
+        _write_action_queue_rows(vault_dir, existing_actions)
+    return {
+        "created_count": len(created_actions),
+        "created_action_ids": [item["action_id"] for item in created_actions],
+    }
 
 
 def _action_queue_state_map(vault_dir: Path | str) -> dict[str, dict[str, Any]]:
@@ -1677,6 +1738,8 @@ def sync_signal_ledger(vault_dir: Path | str) -> dict[str, Any]:
         "signal_count": len(signals),
         "type_counts": dict(type_counts),
     }
+    backfill = _backfill_auto_queue_actions(resolved_vault, signals=signals)
+    result["auto_queued_action_count"] = backfill["created_count"]
     cache_key = (str(resolved_vault.resolve()), _signal_dependency_signature(resolved_vault))
     _SIGNAL_LEDGER_SYNC_CACHE.clear()
     _SIGNAL_LEDGER_SYNC_CACHE[cache_key] = result

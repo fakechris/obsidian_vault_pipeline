@@ -366,7 +366,7 @@ Processed source note without downstream chain.
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert payload["created"] is True
+    assert payload["created"] is False
     assert payload["action"]["status"] == "queued"
 
 

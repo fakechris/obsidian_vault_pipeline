@@ -1582,18 +1582,72 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
     deep_dive_signal = next(item for item in items if item["signal_type"] == "deep_dive_needs_objects")
     assert source_signal["note_paths"] == ["50-Inbox/03-Processed/2026-04/Harness Source.md"]
     assert deep_dive_signal["note_paths"] == ["20-Areas/AI-Research/Topics/2026-04/Harness Deep Dive_深度解读.md"]
-    assert source_signal["recommended_action"] == {
-        "kind": "deep_dive_workflow",
-        "label": "Create deep dive",
-        "path": "/note?path=50-Inbox%2F03-Processed%2F2026-04%2FHarness%20Source.md",
-        "executable": False,
+    assert source_signal["recommended_action"]["kind"] == "deep_dive_workflow"
+    assert source_signal["recommended_action"]["label"] == "Create deep dive"
+    assert source_signal["recommended_action"]["executable"] is False
+    assert source_signal["recommended_action"]["queue_status"] == "queued"
+    assert source_signal["recommended_action"]["action_id"]
+    assert deep_dive_signal["recommended_action"]["kind"] == "object_extraction_workflow"
+    assert deep_dive_signal["recommended_action"]["label"] == "Extract evergreen objects"
+    assert deep_dive_signal["recommended_action"]["executable"] is False
+    assert deep_dive_signal["recommended_action"]["queue_status"] == "queued"
+    assert deep_dive_signal["recommended_action"]["action_id"]
+
+
+def test_truth_api_backfills_active_auto_queue_signals_without_duplicates(temp_vault):
+    from openclaw_pipeline.truth_api import list_action_queue, list_signals, sync_signal_ledger
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/another-harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[source-note]] but has not produced any evergreen objects yet.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    sync_signal_ledger(vault)
+    first_actions = list_action_queue(vault)
+    sync_signal_ledger(vault)
+    second_actions = list_action_queue(vault)
+    items = list_signals(vault)
+
+    assert len(first_actions) == 2
+    assert len(second_actions) == 2
+    assert {item["action_kind"] for item in second_actions} == {
+        "deep_dive_workflow",
+        "object_extraction_workflow",
     }
-    assert deep_dive_signal["recommended_action"] == {
-        "kind": "object_extraction_workflow",
-        "label": "Extract evergreen objects",
-        "path": "/note?path=20-Areas%2FAI-Research%2FTopics%2F2026-04%2FHarness%20Deep%20Dive_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md",
-        "executable": False,
-    }
+    assert {item["status"] for item in second_actions} == {"queued"}
+    assert not any(item["action_kind"] == "review_contradiction" for item in second_actions)
+    assert all(
+        item["recommended_action"].get("queue_status") == "queued"
+        for item in items
+        if item["signal_type"] in {"source_needs_deep_dive", "deep_dive_needs_objects"}
+    )
 
 
 def test_truth_api_builds_briefing_snapshot(temp_vault):
@@ -1667,7 +1721,7 @@ Processed source note without any derived deep dive.
     actions = list_action_queue(vault)
     refreshed_signal = next(item for item in list_signals(vault) if item["signal_id"] == source_signal["signal_id"])
 
-    assert first["created"] is True
+    assert first["created"] is False
     assert second["created"] is False
     assert first["action"]["action_id"] == second["action"]["action_id"]
     assert len(actions) == 1
