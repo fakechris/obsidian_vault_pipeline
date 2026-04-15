@@ -443,6 +443,13 @@ Reference plan:
 
 - [2026-04-15-phase14-orchestration-integration-plan.md](2026-04-15-phase14-orchestration-integration-plan.md)
 
+Architecture follow-up:
+
+- [2026-04-15-ovp-layer-contract.md](2026-04-15-ovp-layer-contract.md)
+  OVP now needs a deeper separation between core runtime, pack surfaces, domain execution hooks,
+  domain truth projection, and domain UI semantics so the product does not remain implicitly bound
+  to `research-tech` while it grows beyond the first in-repo pack.
+
 ### Milestone 10: Graph Intelligence And Synthesis
 
 Status: **Not Started**
