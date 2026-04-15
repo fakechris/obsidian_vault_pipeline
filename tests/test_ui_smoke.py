@@ -1047,6 +1047,7 @@ Processed source note without downstream chain.
     assert "contradiction_open" in body
     assert "production_gap" in body
     assert "summary_rebuilt" in body
+    assert "Recommended Action" in body
 
 
 def test_ui_signals_page_renders_extraction_trigger_signals(temp_vault):
@@ -1095,6 +1096,8 @@ date: 2026-04-13
     assert status == 200
     assert "source_needs_deep_dive" in body
     assert "deep_dive_needs_objects" in body
+    assert "Create deep dive" in body
+    assert "Extract evergreen objects" in body
 
 
 def test_ui_briefing_page_renders_briefing_snapshot(temp_vault):
@@ -1129,6 +1132,7 @@ def test_ui_briefing_page_renders_briefing_snapshot(temp_vault):
     assert "First Useful Sign" in body
     assert "Insights" in body
     assert "Priority Items" in body
+    assert "Recommended Action" in body
     assert "Recent Signals" in body
     assert "Active Topics" in body
 

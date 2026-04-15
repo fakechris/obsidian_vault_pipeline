@@ -1147,6 +1147,15 @@ def _signal_id(signal_type: str, key: str) -> str:
     return f"{signal_type}::{hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]}"
 
 
+def _recommended_action(*, kind: str, label: str, path: str, executable: bool) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "label": label,
+        "path": path,
+        "executable": executable,
+    }
+
+
 def list_production_gaps(
     vault_dir: Path | str,
     *,
@@ -1228,6 +1237,12 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
                         for claim in item["positive_claims"][:1] + item["negative_claims"][:1]
                     ],
                 ],
+                "recommended_action": _recommended_action(
+                    kind="review_contradiction",
+                    label="Review contradiction",
+                    path=f"/contradictions?q={quote(item['subject_key'], safe='')}",
+                    executable=True,
+                ),
                 "payload": {
                     "contradiction_id": item["contradiction_id"],
                     "scope_summary": item["scope_summary"],
@@ -1254,6 +1269,12 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
                     {"label": "Open object", "path": item["object_path"]},
                     {"label": "Review stale summary", "path": f"/summaries?q={quote(item['object_id'], safe='')}"},
                 ],
+                "recommended_action": _recommended_action(
+                    kind="rebuild_summary",
+                    label="Rebuild summary",
+                    path=f"/summaries?q={quote(item['object_id'], safe='')}",
+                    executable=True,
+                ),
                 "payload": {
                     "reason_codes": item["reason_codes"],
                     "latest_event_date": item["latest_event_date"],
@@ -1280,6 +1301,12 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
                     {"label": "Open note", "path": f"/note?path={quote(item['note_path'], safe='')}"},
                     {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
                 ],
+                "recommended_action": _recommended_action(
+                    kind="inspect_production_gap",
+                    label="Inspect production gap",
+                    path=f"/production?q={quote(item['title'], safe='')}",
+                    executable=False,
+                ),
                 "payload": {
                     "stage_label": item["stage_label"],
                     "missing": item["missing"],
@@ -1308,6 +1335,12 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
                         {"label": "Open source note", "path": f"/note?path={quote(item['path'], safe='')}"},
                         {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
                     ],
+                    "recommended_action": _recommended_action(
+                        kind="deep_dive_workflow",
+                        label="Create deep dive",
+                        path=f"/note?path={quote(item['path'], safe='')}",
+                        executable=False,
+                    ),
                     "payload": {
                         "stage_label": item["stage_label"],
                         "traceability_counts": traceability["counts"],
@@ -1332,6 +1365,12 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
                         {"label": "Open deep dive", "path": f"/note?path={quote(item['path'], safe='')}"},
                         {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
                     ],
+                    "recommended_action": _recommended_action(
+                        kind="object_extraction_workflow",
+                        label="Extract evergreen objects",
+                        path=f"/note?path={quote(item['path'], safe='')}",
+                        executable=False,
+                    ),
                     "payload": {
                         "stage_label": item["stage_label"],
                         "traceability_counts": traceability["counts"],
@@ -1362,6 +1401,12 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
                             for object_id in item["object_ids"][:2]
                         ],
                     ],
+                    "recommended_action": _recommended_action(
+                        kind="review_resolution",
+                        label="Inspect resolved contradictions",
+                        path="/contradictions?status=resolved",
+                        executable=False,
+                    ),
                     "payload": {
                         "event_type": item["event_type"],
                         "contradiction_ids": item["contradiction_ids"],
@@ -1392,6 +1437,12 @@ def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
                             for object_id in item["rebuilt_object_ids"][:2]
                         ],
                     ],
+                    "recommended_action": _recommended_action(
+                        kind="review_rebuilt_summary",
+                        label="Inspect rebuilt summaries",
+                        path="/summaries",
+                        executable=False,
+                    ),
                     "payload": {
                         "event_type": item["event_type"],
                         "objects_rebuilt": rebuilt_count,
@@ -1577,6 +1628,15 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
                 + quote(str(primary_title), safe=""),
                 "source_paths": [path for path in item.get("source_paths", []) if path][:3],
                 "object_ids": list(item.get("object_ids", [])),
+                "recommended_action": _recommended_action(
+                    kind="review_evolution",
+                    label="Review evolution",
+                    path="/evolution?link_type="
+                    + quote(str(item["link_type"]), safe="")
+                    + "&q="
+                    + quote(str(primary_title), safe=""),
+                    executable=True,
+                ),
             }
         )
         if len(insights) >= limit:
@@ -1592,6 +1652,7 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
                 "path": item["source_path"],
                 "source_paths": list(item.get("note_paths", [])),
                 "object_ids": list(item.get("object_ids", [])),
+                "recommended_action": item.get("recommended_action"),
             }
         )
         if len(priority_items) >= limit:

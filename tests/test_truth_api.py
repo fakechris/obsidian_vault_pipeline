@@ -1479,9 +1479,11 @@ Processed source note with no downstream chain.
     contradiction = next(item for item in items if item["signal_type"] == "contradiction_open")
     assert contradiction["source_path"] == "/contradictions"
     assert contradiction["downstream_effects"]
+    assert contradiction["recommended_action"]["executable"] is True
     stale = next(item for item in items if item["signal_type"] == "stale_summary")
     assert stale["object_ids"] == ["thin-note"]
     assert stale["source_path"] == "/summaries?q=thin-note"
+    assert stale["recommended_action"]["executable"] is True
 
 
 def test_truth_api_filters_signal_ledger_by_type_and_query(temp_vault):
@@ -1580,6 +1582,18 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
     deep_dive_signal = next(item for item in items if item["signal_type"] == "deep_dive_needs_objects")
     assert source_signal["note_paths"] == ["50-Inbox/03-Processed/2026-04/Harness Source.md"]
     assert deep_dive_signal["note_paths"] == ["20-Areas/AI-Research/Topics/2026-04/Harness Deep Dive_深度解读.md"]
+    assert source_signal["recommended_action"] == {
+        "kind": "deep_dive_workflow",
+        "label": "Create deep dive",
+        "path": "/note?path=50-Inbox%2F03-Processed%2F2026-04%2FHarness%20Source.md",
+        "executable": False,
+    }
+    assert deep_dive_signal["recommended_action"] == {
+        "kind": "object_extraction_workflow",
+        "label": "Extract evergreen objects",
+        "path": "/note?path=20-Areas%2FAI-Research%2FTopics%2F2026-04%2FHarness%20Deep%20Dive_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md",
+        "executable": False,
+    }
 
 
 def test_truth_api_builds_briefing_snapshot(temp_vault):
@@ -1625,6 +1639,7 @@ Thin.
     assert payload["insights"]
     assert payload["priority_items"]
     assert payload["first_useful_sign"] in payload["insights"]
+    assert any(item.get("recommended_action") for item in payload["priority_items"])
 
 
 def test_truth_api_includes_review_action_signals(temp_vault):

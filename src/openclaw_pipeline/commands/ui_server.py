@@ -1353,6 +1353,18 @@ def _render_signals_page(payload: dict) -> str:
         f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
         f"<div class='muted'>{escape(item['detail'])}</div>"
         + (
+            "<div class='muted'>Recommended Action: "
+            + f'<a href="{escape(item["recommended_action"]["path"])}">{escape(item["recommended_action"]["label"])}</a>'
+            + (
+                " <span class='pill'>executable</span>"
+                if item["recommended_action"].get("executable")
+                else " <span class='pill'>manual</span>"
+            )
+            + "</div>"
+            if item.get("recommended_action")
+            else ""
+        )
+        + (
             "<div class='muted'>Downstream: "
             + ", ".join(
                 f'<a href="{escape(effect["path"])}">{escape(effect["label"])}</a>'
@@ -1419,6 +1431,18 @@ def _render_briefing_page(payload: dict) -> str:
         + f"<span class='pill'>{escape(str(item['kind']))}</span> "
         + f"<a href=\"{escape(str(item['path']))}\">{escape(str(item['title']))}</a>"
         + f"<div class='muted'>{escape(str(item['detail']))}</div>"
+        + (
+            "<div class='muted'>Recommended Action: "
+            + f'<a href="{escape(str(item["recommended_action"]["path"]))}">{escape(str(item["recommended_action"]["label"]))}</a>'
+            + (
+                " <span class='pill'>executable</span>"
+                if item["recommended_action"].get("executable")
+                else " <span class='pill'>manual</span>"
+            )
+            + "</div>"
+            if item.get("recommended_action")
+            else ""
+        )
         + "</li>"
         for item in payload["priority_items"]
     ) or "<li class='muted'>No priority items surfaced.</li>"
