@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from collections import Counter
+import hashlib
 import json
 import re
 import sqlite3
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import yaml
 
@@ -14,12 +17,22 @@ from .runtime import VaultLayout, resolve_vault_dir
 MAX_PAGE_SIZE = 500
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _REVIEW_AUDIT_LOG_NAME = "review-actions"
+_SIGNAL_LOG_NAME = "signals"
 CONTRADICTION_STATUS_EXPLANATIONS = {
     "open": "Active contradiction awaiting review.",
     "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
     "resolved_keep_negative": "Reviewed and the negative claim set remains the preferred interpretation.",
     "dismissed": "Reviewed and dismissed as not worth keeping in the active contradiction queue.",
     "needs_human": "Requires deeper human judgment before the contradiction can be considered closed.",
+}
+SIGNAL_TYPE_EXPLANATIONS = {
+    "contradiction_open": "Open contradiction detected from the current truth store and awaiting review.",
+    "stale_summary": "Compiled summary is currently weak enough to justify targeted rebuild review.",
+    "production_gap": "Knowledge production chain is missing an expected downstream stage or reach surface.",
+    "contradiction_reviewed": "A contradiction review action recently changed the maintenance state for one or more objects.",
+    "summary_rebuilt": "A summary rebuild action recently refreshed one or more compiled summaries.",
+    "source_needs_deep_dive": "A processed source note exists without any derived deep dive, so the next extraction step is still missing.",
+    "deep_dive_needs_objects": "A deep dive exists without any derived evergreen objects, so absorb-style extraction has not completed yet.",
 }
 
 
@@ -89,6 +102,13 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _rewrite_jsonl(path: Path, payloads: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for payload in payloads:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def record_review_action(
@@ -964,6 +984,405 @@ def list_review_actions(
         if len(items) >= limit:
             break
     return items
+
+
+def _signal_id(signal_type: str, key: str) -> str:
+    return f"{signal_type}::{hashlib.sha1(key.encode('utf-8')).hexdigest()[:12]}"
+
+
+def list_production_gaps(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    items = list_production_chains(vault_dir, query=query, limit=MAX_PAGE_SIZE)
+    weak_points: list[dict[str, Any]] = []
+    for item in items:
+        traceability = item["traceability"]
+        missing: list[str] = []
+        if item["stage_label"] == "source_note":
+            if not traceability["deep_dives"]:
+                missing.append("deep dives")
+            if not traceability["objects"]:
+                missing.append("objects")
+            if not traceability["atlas_pages"]:
+                missing.append("Atlas / MOC reach")
+        else:
+            if not traceability["source_notes"]:
+                missing.append("source notes")
+            if not traceability["objects"]:
+                missing.append("objects")
+            if not traceability["atlas_pages"]:
+                missing.append("Atlas / MOC reach")
+        if not missing:
+            continue
+        weak_points.append(
+            {
+                "signal_id": _signal_id("production_gap", item["path"]),
+                "signal_type": "production_gap",
+                "title": item["title"],
+                "detail": ", ".join(missing),
+                "stage_label": item["stage_label"],
+                "note_path": item["path"],
+                "missing": missing,
+                "severity": len(missing),
+                "traceability": item["traceability"],
+            }
+        )
+    weak_points.sort(key=lambda item: (-item["severity"], item["stage_label"], item["title"].lower()))
+    return weak_points[:limit]
+
+
+def _compute_signal_entries(vault_dir: Path | str) -> list[dict[str, Any]]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    signals: list[dict[str, Any]] = []
+
+    for item in list_contradictions(resolved_vault, status="open", limit=MAX_PAGE_SIZE):
+        object_ids = list(
+            dict.fromkeys(
+                claim_id.split("::", 1)[0]
+                for claim_id in (item["positive_claim_ids"] + item["negative_claim_ids"])
+            )
+        )
+        signals.append(
+            {
+                "signal_id": _signal_id("contradiction_open", item["contradiction_id"]),
+                "signal_type": "contradiction_open",
+                "detected_at": timestamp,
+                "status": "active",
+                "title": item["subject_key"],
+                "detail": (
+                    f"{item['scope_summary']['object_count']} objects, "
+                    f"{len(item['ranked_evidence'])} ranked evidence rows"
+                ),
+                "explanation": SIGNAL_TYPE_EXPLANATIONS["contradiction_open"],
+                "source_path": "/contradictions",
+                "source_label": "Contradictions",
+                "object_ids": object_ids,
+                "note_paths": [],
+                "downstream_effects": [
+                    {"label": "Review contradiction", "path": f"/contradictions?q={quote(item['subject_key'], safe='')}"},
+                    *[
+                        {"label": f"Object: {claim['object_title']}", "path": f"/object?id={claim['object_id']}"}
+                        for claim in item["positive_claims"][:1] + item["negative_claims"][:1]
+                    ],
+                ],
+                "payload": {
+                    "contradiction_id": item["contradiction_id"],
+                    "scope_summary": item["scope_summary"],
+                    "status_bucket": item["status_bucket"],
+                },
+            }
+        )
+
+    for item in list_stale_summaries(resolved_vault, limit=MAX_PAGE_SIZE):
+        signals.append(
+            {
+                "signal_id": _signal_id("stale_summary", item["object_id"]),
+                "signal_type": "stale_summary",
+                "detected_at": timestamp,
+                "status": "active",
+                "title": item["title"],
+                "detail": ", ".join(item["reason_texts"]),
+                "explanation": SIGNAL_TYPE_EXPLANATIONS["stale_summary"],
+                "source_path": f"/summaries?q={quote(item['object_id'], safe='')}",
+                "source_label": "Stale Summaries",
+                "object_ids": [item["object_id"]],
+                "note_paths": [],
+                "downstream_effects": [
+                    {"label": "Open object", "path": item["object_path"]},
+                    {"label": "Review stale summary", "path": f"/summaries?q={item['object_id']}"},
+                ],
+                "payload": {
+                    "reason_codes": item["reason_codes"],
+                    "latest_event_date": item["latest_event_date"],
+                },
+            }
+        )
+
+    for item in list_production_gaps(resolved_vault, limit=MAX_PAGE_SIZE):
+        object_ids = [entry["object_id"] for entry in item["traceability"]["objects"]]
+        signals.append(
+            {
+                "signal_id": item["signal_id"],
+                "signal_type": "production_gap",
+                "detected_at": timestamp,
+                "status": "active",
+                "title": item["title"],
+                "detail": item["detail"],
+                "explanation": SIGNAL_TYPE_EXPLANATIONS["production_gap"],
+                "source_path": f"/note?path={quote(item['note_path'], safe='')}",
+                "source_label": "Production",
+                "object_ids": object_ids,
+                "note_paths": [item["note_path"]],
+                "downstream_effects": [
+                    {"label": "Open note", "path": f"/note?path={quote(item['note_path'], safe='')}"},
+                    {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
+                ],
+                "payload": {
+                    "stage_label": item["stage_label"],
+                    "missing": item["missing"],
+                    "traceability_counts": item["traceability"]["counts"],
+                },
+            }
+        )
+
+    for item in list_production_chains(resolved_vault, limit=MAX_PAGE_SIZE):
+        traceability = item["traceability"]
+        if item["stage_label"] == "source_note" and not traceability["deep_dives"]:
+            signals.append(
+                {
+                    "signal_id": _signal_id("source_needs_deep_dive", item["path"]),
+                    "signal_type": "source_needs_deep_dive",
+                    "detected_at": timestamp,
+                    "status": "active",
+                    "title": item["title"],
+                    "detail": "Processed source note has no derived deep dive yet.",
+                    "explanation": SIGNAL_TYPE_EXPLANATIONS["source_needs_deep_dive"],
+                    "source_path": f"/note?path={quote(item['path'], safe='')}",
+                    "source_label": "Production",
+                    "object_ids": [],
+                    "note_paths": [item["path"]],
+                    "downstream_effects": [
+                        {"label": "Open source note", "path": f"/note?path={quote(item['path'], safe='')}"},
+                        {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
+                    ],
+                    "payload": {
+                        "stage_label": item["stage_label"],
+                        "traceability_counts": traceability["counts"],
+                    },
+                }
+            )
+        if item["stage_label"] == "deep_dive" and not traceability["objects"]:
+            signals.append(
+                {
+                    "signal_id": _signal_id("deep_dive_needs_objects", item["path"]),
+                    "signal_type": "deep_dive_needs_objects",
+                    "detected_at": timestamp,
+                    "status": "active",
+                    "title": item["title"],
+                    "detail": "Deep dive has not produced any evergreen objects yet.",
+                    "explanation": SIGNAL_TYPE_EXPLANATIONS["deep_dive_needs_objects"],
+                    "source_path": f"/note?path={quote(item['path'], safe='')}",
+                    "source_label": "Production",
+                    "object_ids": [],
+                    "note_paths": [item["path"]],
+                    "downstream_effects": [
+                        {"label": "Open deep dive", "path": f"/note?path={quote(item['path'], safe='')}"},
+                        {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
+                    ],
+                    "payload": {
+                        "stage_label": item["stage_label"],
+                        "traceability_counts": traceability["counts"],
+                    },
+                }
+            )
+
+    for item in list_review_actions(resolved_vault, limit=MAX_PAGE_SIZE):
+        if item["event_type"] == "ui_contradictions_resolved":
+            status = item["status"] or "reviewed"
+            signals.append(
+                {
+                    "signal_id": _signal_id("contradiction_reviewed", f"{item['timestamp']}::{','.join(item['contradiction_ids'])}"),
+                    "signal_type": "contradiction_reviewed",
+                    "detected_at": item["timestamp"],
+                    "status": "active",
+                    "title": "Contradiction reviewed",
+                    "detail": f"{len(item['contradiction_ids'])} contradictions moved to {status}.",
+                    "explanation": SIGNAL_TYPE_EXPLANATIONS["contradiction_reviewed"],
+                    "source_path": "/contradictions?status=resolved",
+                    "source_label": "Review Actions",
+                    "object_ids": item["object_ids"],
+                    "note_paths": [],
+                    "downstream_effects": [
+                        {"label": "Open resolved contradictions", "path": "/contradictions?status=resolved"},
+                        *[
+                            {"label": f"Object: {object_id}", "path": f"/object?id={object_id}"}
+                            for object_id in item["object_ids"][:2]
+                        ],
+                    ],
+                    "payload": {
+                        "event_type": item["event_type"],
+                        "contradiction_ids": item["contradiction_ids"],
+                        "status": status,
+                        "rebuilt_object_ids": item["rebuilt_object_ids"],
+                    },
+                }
+            )
+        elif item["event_type"] == "ui_summaries_rebuilt":
+            rebuilt_count = item["objects_rebuilt"] or len(item["rebuilt_object_ids"])
+            signals.append(
+                {
+                    "signal_id": _signal_id("summary_rebuilt", f"{item['timestamp']}::{','.join(item['rebuilt_object_ids'])}"),
+                    "signal_type": "summary_rebuilt",
+                    "detected_at": item["timestamp"],
+                    "status": "active",
+                    "title": "Summary rebuilt",
+                    "detail": f"{rebuilt_count} summaries rebuilt.",
+                    "explanation": SIGNAL_TYPE_EXPLANATIONS["summary_rebuilt"],
+                    "source_path": "/summaries",
+                    "source_label": "Review Actions",
+                    "object_ids": item["object_ids"],
+                    "note_paths": [],
+                    "downstream_effects": [
+                        {"label": "Open stale summaries", "path": "/summaries"},
+                        *[
+                            {"label": f"Object: {object_id}", "path": f"/object?id={object_id}"}
+                            for object_id in item["rebuilt_object_ids"][:2]
+                        ],
+                    ],
+                    "payload": {
+                        "event_type": item["event_type"],
+                        "objects_rebuilt": rebuilt_count,
+                        "rebuilt_object_ids": item["rebuilt_object_ids"],
+                    },
+                }
+            )
+
+    signals.sort(key=lambda item: (item["signal_type"], item["title"].lower(), item["signal_id"]))
+    return signals
+
+
+def sync_signal_ledger(vault_dir: Path | str) -> dict[str, Any]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    signals = _compute_signal_entries(resolved_vault)
+    _rewrite_jsonl(layout.logs_dir / f"{_SIGNAL_LOG_NAME}.jsonl", signals)
+    if layout.knowledge_db.exists():
+        with sqlite3.connect(layout.knowledge_db) as conn:
+            conn.execute("DELETE FROM audit_events WHERE source_log = ?", (_SIGNAL_LOG_NAME,))
+            conn.executemany(
+                """
+                INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        _SIGNAL_LOG_NAME,
+                        item["signal_type"],
+                        item["signal_id"],
+                        "signal-ledger",
+                        item["detected_at"],
+                        json.dumps(item, ensure_ascii=False),
+                    )
+                    for item in signals
+                ],
+            )
+            conn.commit()
+    type_counts = Counter(item["signal_type"] for item in signals)
+    return {
+        "signal_count": len(signals),
+        "type_counts": dict(type_counts),
+    }
+
+
+def list_signals(
+    vault_dir: Path | str,
+    *,
+    signal_type: str | None = None,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    sync_signal_ledger(vault_dir)
+    db_path = _db_path(vault_dir)
+    normalized_query = (query or "").strip().lower()
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT payload_json
+            FROM audit_events
+            WHERE source_log = ?
+            ORDER BY timestamp DESC, slug
+            """,
+            (_SIGNAL_LOG_NAME,),
+        ).fetchall()
+    items: list[dict[str, Any]] = []
+    for (payload_json,) in rows:
+        try:
+            item = json.loads(payload_json)
+        except json.JSONDecodeError:
+            continue
+        if signal_type and item.get("signal_type") != signal_type:
+            continue
+        if normalized_query:
+            haystacks = [
+                str(item.get("title") or "").lower(),
+                str(item.get("detail") or "").lower(),
+                str(item.get("source_label") or "").lower(),
+            ]
+            if not any(normalized_query in haystack for haystack in haystacks):
+                continue
+        items.append(item)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str, Any]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    recent_signals = list_signals(vault_dir, limit=limit)
+    unresolved_signal_types = {
+        "contradiction_open",
+        "stale_summary",
+        "production_gap",
+        "source_needs_deep_dive",
+        "deep_dive_needs_objects",
+    }
+    unresolved_issues = [item for item in recent_signals if item["signal_type"] in unresolved_signal_types][:limit]
+    changed_signals = [
+        item
+        for item in recent_signals
+        if item["signal_type"] in {"contradiction_reviewed", "summary_rebuilt"}
+    ]
+    changed_object_ids = list(
+        dict.fromkeys(
+            object_id
+            for item in changed_signals
+            for object_id in item.get("object_ids", [])
+            if object_id
+        )
+    )
+    object_rows = _batch_object_rows(vault_dir, changed_object_ids)
+    changed_objects = [
+        {
+            "object_id": object_id,
+            "title": object_rows.get(object_id, {}).get("title", object_id),
+            "path": f"/object?id={object_id}",
+        }
+        for object_id in changed_object_ids[:limit]
+    ]
+
+    topic_counts: Counter[str] = Counter()
+    for item in recent_signals:
+        for object_id in item.get("object_ids", []):
+            topic_counts[object_id] += 1
+    active_topics = [
+        {
+            "object_id": object_id,
+            "title": object_rows.get(object_id, {}).get("title")
+            or _batch_object_rows(vault_dir, [object_id]).get(object_id, {}).get("title")
+            or object_id,
+            "signal_count": count,
+            "path": f"/topic?id={object_id}",
+        }
+        for object_id, count in topic_counts.most_common(limit)
+    ]
+
+    return {
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "recent_signal_count": len(recent_signals),
+        "unresolved_issue_count": len(unresolved_issues),
+        "changed_object_count": len(changed_objects),
+        "active_topic_count": len(active_topics),
+        "recent_signals": recent_signals,
+        "unresolved_issues": unresolved_issues,
+        "changed_objects": changed_objects,
+        "active_topics": active_topics,
+    }
 
 
 def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:

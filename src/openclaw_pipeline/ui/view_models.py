@@ -11,7 +11,9 @@ from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
 from ..truth_api import (
     CONTRADICTION_STATUS_EXPLANATIONS,
+    SIGNAL_TYPE_EXPLANATIONS,
     count_objects,
+    get_briefing_snapshot,
     get_object_detail,
     get_object_traceability,
     get_note_provenance,
@@ -24,7 +26,9 @@ from ..truth_api import (
     list_contradictions,
     list_deep_dive_derivations,
     list_objects,
+    list_production_gaps,
     list_production_chains,
+    list_signals,
     list_stale_summaries,
     search_vault_surface,
 )
@@ -144,39 +148,32 @@ def _build_production_weak_points(
     query: str | None = None,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
-    items = list_production_chains(vault_dir, query=query, limit=200)
-    weak_points: list[dict[str, Any]] = []
-    for item in items:
-        traceability = item["traceability"]
-        missing: list[str] = []
-        if item["stage_label"] == "source_note":
-            if not traceability["deep_dives"]:
-                missing.append("deep dives")
-            if not traceability["objects"]:
-                missing.append("objects")
-            if not traceability["atlas_pages"]:
-                missing.append("Atlas / MOC reach")
-        else:
-            if not traceability["source_notes"]:
-                missing.append("source notes")
-            if not traceability["objects"]:
-                missing.append("objects")
-            if not traceability["atlas_pages"]:
-                missing.append("Atlas / MOC reach")
-        if not missing:
-            continue
-        weak_points.append(
-            {
-                "title": item["title"],
-                "note_path": item["path"],
-                "stage_label": item["stage_label"],
-                "missing": missing,
-                "severity": len(missing),
-                "detail": ", ".join(missing),
-            }
-        )
-    weak_points.sort(key=lambda item: (-item["severity"], item["stage_label"], item["title"].lower()))
-    return weak_points[:limit]
+    return list_production_gaps(vault_dir, query=query, limit=limit)
+
+
+def build_signal_browser_payload(
+    vault_dir: Path | str,
+    *,
+    signal_type: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    items = list_signals(vault_dir, signal_type=signal_type, query=query)
+    return {
+        "screen": "signals/browser",
+        "items": items,
+        "count": len(items),
+        "query": query or "",
+        "signal_type": signal_type or "",
+        "type_counts": dict(Counter(item["signal_type"] for item in items)),
+        "signal_type_explanations": SIGNAL_TYPE_EXPLANATIONS,
+    }
+
+
+def build_briefing_payload(vault_dir: Path | str) -> dict[str, Any]:
+    return {
+        "screen": "briefing/snapshot",
+        **get_briefing_snapshot(vault_dir),
+    }
 
 
 def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
@@ -533,6 +530,7 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
     contradictions = build_contradiction_browser_payload(vault_dir)
     events = build_event_dossier_payload(vault_dir, limit=8)
     stale_summaries = build_stale_summary_browser_payload(vault_dir)
+    signals = build_signal_browser_payload(vault_dir)
     production_weak_points = _build_production_weak_points(vault_dir)
     priorities: list[dict[str, Any]] = []
     for item in contradictions["items"][:4]:
@@ -585,6 +583,11 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
         "production": {
             "weak_points": production_weak_points,
             "weak_point_count": len(production_weak_points),
+        },
+        "signals": {
+            "count": signals["count"],
+            "items": signals["items"][:8],
+            "type_counts": signals["type_counts"],
         },
         "recent_review_actions": list_review_actions(vault_dir, limit=8),
         "priorities": priorities[:8],

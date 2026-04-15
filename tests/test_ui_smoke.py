@@ -937,6 +937,18 @@ def test_ui_root_dashboard_renders_db_summary(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
     thin = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     thin.write_text(
         """---
@@ -974,6 +986,134 @@ Thin note.
     assert "Thin Note" in root_body
     assert "/summaries" in root_body
     assert "Production Weak Points" in root_body
+    assert "Signals" in root_body
+
+
+def test_ui_signals_page_renders_active_signal_ledger(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.truth_api import record_review_action
+
+    _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    record_review_action(
+        temp_vault,
+        event_type="ui_summaries_rebuilt",
+        slug="alpha",
+        payload={
+            "object_ids": ["alpha"],
+            "objects_rebuilt": 1,
+            "rebuilt_object_ids": ["alpha"],
+        },
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/signals")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Active Signals" in body
+    assert "contradiction_open" in body
+    assert "production_gap" in body
+    assert "summary_rebuilt" in body
+
+
+def test_ui_signals_page_renders_extraction_trigger_signals(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/another-harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/signals")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "source_needs_deep_dive" in body
+    assert "deep_dive_needs_objects" in body
+
+
+def test_ui_briefing_page_renders_briefing_snapshot(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.truth_api import record_review_action
+
+    _seed_truth_store(temp_vault)
+    record_review_action(
+        temp_vault,
+        event_type="ui_summaries_rebuilt",
+        slug="alpha",
+        payload={
+            "object_ids": ["alpha"],
+            "objects_rebuilt": 1,
+            "rebuilt_object_ids": ["alpha"],
+        },
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/briefing")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Working Memory Snapshot" in body
+    assert "Recent Signals" in body
+    assert "Active Topics" in body
 
 
 def test_ui_contradictions_and_summaries_support_batch_actions(temp_vault):

@@ -19,6 +19,7 @@ from ..knowledge_index import contradiction_object_ids, rebuild_compiled_summari
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import (
     build_atlas_browser_payload,
+    build_briefing_payload,
     build_contradiction_browser_payload,
     build_derivation_browser_payload,
     build_event_dossier_payload,
@@ -27,6 +28,7 @@ from ..ui.view_models import (
     build_objects_index_payload,
     build_production_browser_payload,
     build_search_payload,
+    build_signal_browser_payload,
     build_stale_summary_browser_payload,
     build_truth_dashboard_payload,
     build_topic_overview_payload,
@@ -101,6 +103,8 @@ def _layout(title: str, body: str) -> str:
             <a href="/">Home</a>
             <a href="/objects">Objects</a>
             <a href="/search">Search</a>
+            <a href="/signals">Signals</a>
+            <a href="/briefing">Briefing</a>
             <a href="/production">Production</a>
             <a href="/atlas">Atlas</a>
             <a href="/deep-dives">Deep Dives</a>
@@ -690,6 +694,12 @@ def _render_dashboard(payload: dict) -> str:
         f"<div class='muted'>Missing: {escape(item['detail'])}</div></li>"
         for item in payload["production"]["weak_points"]
     ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
+    signal_items = "".join(
+        f'<li><span class="pill">{escape(item["signal_type"])}</span> '
+        f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
+        f"<div class='muted'>{escape(item['detail'])}</div></li>"
+        for item in payload["signals"]["items"]
+    ) or "<li class='muted'>No active signals surfaced.</li>"
     priority_items = "".join(
         f'<li><span class="pill">{escape(item["kind"].replace("_", " "))}</span> '
         f'<a href="{escape(item["path"])}">{escape(item["label"])}</a>'
@@ -712,6 +722,8 @@ def _render_dashboard(payload: dict) -> str:
             f"<p>{payload['events']['count']}</p></div>"
             "<div class='card'><h2>Stale Summaries</h2>"
             f"<p>{payload['stale_summaries']['count']}</p></div>"
+            "<div class='card'><h2>Signals</h2>"
+            f"<p>{payload['signals']['count']}</p></div>"
             "</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
@@ -721,6 +733,7 @@ def _render_dashboard(payload: dict) -> str:
             f"<section class='card'><h2><a href='/summaries'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
+            f"<section class='card'><h2><a href='/signals'>Signals</a></h2><ul class='list-tight'>{signal_items}</ul></section>"
             f"<section class='card'><h2><a href='/production'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>"
             f"<section class='card'><h2>Contradiction Queue</h2><ul class='list-tight'>{contradiction_items}</ul></section>"
             f"{_render_review_history(payload['recent_review_actions'], title='Recent Review Actions')}"
@@ -1157,6 +1170,87 @@ def _render_production_browser_page(payload: dict) -> str:
     )
 
 
+def _render_signals_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    selected_type = payload.get("signal_type", "")
+    options = ["", *sorted(payload["signal_type_explanations"].keys())]
+    option_html = "".join(
+        f"<option value='{escape(option)}' {'selected' if option == selected_type else ''}>"
+        f"{escape(option or 'all signal types')}</option>"
+        for option in options
+    )
+    items = "".join(
+        "<li>"
+        f'<span class="pill">{escape(item["signal_type"])}</span> '
+        f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
+        f"<div class='muted'>{escape(item['detail'])}</div>"
+        + (
+            "<div class='muted'>Downstream: "
+            + ", ".join(
+                f'<a href="{escape(effect["path"])}">{escape(effect["label"])}</a>'
+                for effect in item["downstream_effects"]
+            )
+            + "</div>"
+            if item["downstream_effects"]
+            else ""
+        )
+        + "</li>"
+        for item in payload["items"]
+    ) or "<li class='muted'>No active signals found.</li>"
+    explanations = "".join(
+        f"<li><span class='pill'>{escape(signal_type)}</span> {escape(text)}</li>"
+        for signal_type, text in payload["signal_type_explanations"].items()
+    )
+    return _layout(
+        "Active Signals",
+        (
+            "<h1>Active Signals</h1>"
+            "<form method='get' action='/signals' class='link-row'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search signals' />"
+            f"<select name='type'>{option_html}</select>"
+            "<button type='submit'>Filter</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} active signals.</p>"
+            f"<section class='card'><h2>Signal Types</h2><ul class='list-tight'>{explanations}</ul></section>"
+            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        ),
+    )
+
+
+def _render_briefing_page(payload: dict) -> str:
+    recent_signals = "".join(
+        f'<li><span class="pill">{escape(item["signal_type"])}</span> '
+        f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
+        f"<div class='muted'>{escape(item['detail'])}</div></li>"
+        for item in payload["recent_signals"]
+    ) or "<li class='muted'>No recent signals.</li>"
+    unresolved = "".join(
+        f'<li><span class="pill">{escape(item["signal_type"])}</span> '
+        f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a></li>'
+        for item in payload["unresolved_issues"]
+    ) or "<li class='muted'>No unresolved issues.</li>"
+    changed_objects = "".join(
+        f'<li><a href="{escape(item["path"])}">{escape(item["title"])}</a></li>'
+        for item in payload["changed_objects"]
+    ) or "<li class='muted'>No recent changed objects.</li>"
+    active_topics = "".join(
+        f'<li><a href="{escape(item["path"])}">{escape(item["title"])}</a> '
+        f"<span class='muted'>({item['signal_count']} signals)</span></li>"
+        for item in payload["active_topics"]
+    ) or "<li class='muted'>No active topics surfaced.</li>"
+    return _layout(
+        "Working Memory Snapshot",
+        (
+            "<h1>Working Memory Snapshot</h1>"
+            f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.</p>"
+            f"<section class='card'><h2>Recent Signals</h2><ul class='list-tight'>{recent_signals}</ul></section>"
+            f"<section class='card'><h2>Unresolved Issues</h2><ul class='list-tight'>{unresolved}</ul></section>"
+            f"<section class='card'><h2>Changed Objects</h2><ul class='list-tight'>{changed_objects}</ul></section>"
+            f"<section class='card'><h2>Active Topics</h2><ul class='list-tight'>{active_topics}</ul></section>"
+        ),
+    )
+
+
 def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
@@ -1449,6 +1543,23 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     payload = build_search_payload(resolved_vault, query=q)
                     self._write_html(_render_search_page(payload))
+                    return
+                if path == "/api/briefing":
+                    self._write_json(build_briefing_payload(resolved_vault))
+                    return
+                if path == "/briefing":
+                    self._write_html(_render_briefing_page(build_briefing_payload(resolved_vault)))
+                    return
+                if path == "/api/signals":
+                    q = query.get("q", [""])[0]
+                    signal_type = query.get("type", [""])[0] or None
+                    self._write_json(build_signal_browser_payload(resolved_vault, signal_type=signal_type, query=q))
+                    return
+                if path == "/signals":
+                    q = query.get("q", [""])[0]
+                    signal_type = query.get("type", [""])[0] or None
+                    payload = build_signal_browser_payload(resolved_vault, signal_type=signal_type, query=q)
+                    self._write_html(_render_signals_page(payload))
                     return
                 if path == "/api/object":
                     object_id = self._required(query, "id")

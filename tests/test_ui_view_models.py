@@ -545,6 +545,57 @@ Filler note.
     assert len(payload["objects"]["items"]) == 12
 
 
+def test_build_signal_browser_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_signal_browser_payload
+
+    _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_signal_browser_payload(temp_vault)
+
+    assert payload["screen"] == "signals/browser"
+    assert payload["count"] >= 2
+    assert payload["type_counts"]["contradiction_open"] >= 1
+    assert any(item["signal_type"] == "production_gap" for item in payload["items"])
+
+
+def test_build_briefing_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_briefing_payload
+    from openclaw_pipeline.truth_api import record_review_action
+
+    _seed_truth_store(temp_vault)
+    record_review_action(
+        temp_vault,
+        event_type="ui_summaries_rebuilt",
+        slug="alpha",
+        payload={
+            "object_ids": ["alpha"],
+            "objects_rebuilt": 1,
+            "rebuilt_object_ids": ["alpha"],
+        },
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_briefing_payload(temp_vault)
+
+    assert payload["screen"] == "briefing/snapshot"
+    assert payload["recent_signal_count"] >= 1
+    assert payload["recent_signals"]
+    assert payload["active_topics"]
+
+
 def test_build_event_dossier_payload_filters_by_query(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 

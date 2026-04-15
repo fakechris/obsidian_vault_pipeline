@@ -1053,3 +1053,205 @@ def test_surface_page_query_clauses_parameterizes_note_type():
 
     assert "pages_index.note_type = ?" in where_sql
     assert params[0] == "moc"
+
+
+def test_truth_api_syncs_and_lists_active_signals(temp_vault):
+    from openclaw_pipeline.truth_api import list_signals, sync_signal_ledger
+
+    vault = _seed_truth_vault(temp_vault)
+    thin = vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    thin.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-13
+---
+
+# Thin Note
+
+Thin.
+""",
+        encoding="utf-8",
+    )
+    loose_source = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note with no downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    summary = sync_signal_ledger(vault)
+    items = list_signals(vault)
+
+    assert summary["signal_count"] >= 3
+    assert any(item["signal_type"] == "contradiction_open" for item in items)
+    assert any(item["signal_type"] == "stale_summary" for item in items)
+    assert any(item["signal_type"] == "production_gap" for item in items)
+    contradiction = next(item for item in items if item["signal_type"] == "contradiction_open")
+    assert contradiction["source_path"] == "/contradictions"
+    assert contradiction["downstream_effects"]
+    stale = next(item for item in items if item["signal_type"] == "stale_summary")
+    assert stale["object_ids"] == ["thin-note"]
+    assert stale["source_path"] == "/summaries?q=thin-note"
+
+
+def test_truth_api_filters_signal_ledger_by_type_and_query(temp_vault):
+    from openclaw_pipeline.truth_api import list_signals, sync_signal_ledger
+
+    vault = _seed_truth_vault(temp_vault)
+    loose_source = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note with no downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    sync_signal_ledger(vault)
+
+    production_only = list_signals(vault, signal_type="production_gap")
+    searched = list_signals(vault, query="agent harness")
+
+    assert production_only
+    assert {item["signal_type"] for item in production_only} == {"production_gap"}
+    assert searched
+    assert all("agent harness" in f"{item['title']} {item['detail']}".lower() for item in searched)
+
+
+def test_truth_api_includes_extraction_trigger_signals(temp_vault):
+    from openclaw_pipeline.truth_api import list_signals, sync_signal_ledger
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/another-harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[source-note]] but has not produced any evergreen objects yet.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    sync_signal_ledger(vault)
+    items = list_signals(vault)
+
+    assert any(item["signal_type"] == "source_needs_deep_dive" for item in items)
+    assert any(item["signal_type"] == "deep_dive_needs_objects" for item in items)
+    source_signal = next(item for item in items if item["signal_type"] == "source_needs_deep_dive")
+    deep_dive_signal = next(item for item in items if item["signal_type"] == "deep_dive_needs_objects")
+    assert source_signal["note_paths"] == ["50-Inbox/03-Processed/2026-04/Harness Source.md"]
+    assert deep_dive_signal["note_paths"] == ["20-Areas/AI-Research/Topics/2026-04/Harness Deep Dive_深度解读.md"]
+
+
+def test_truth_api_builds_briefing_snapshot(temp_vault):
+    from openclaw_pipeline.truth_api import get_briefing_snapshot, record_review_action, sync_signal_ledger
+
+    vault = _seed_truth_vault(temp_vault)
+    thin = vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    thin.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-13
+---
+
+# Thin Note
+
+Thin.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+    record_review_action(
+        vault,
+        event_type="ui_summaries_rebuilt",
+        slug="source-note",
+        payload={
+            "object_ids": ["source-note"],
+            "objects_rebuilt": 1,
+            "rebuilt_object_ids": ["source-note"],
+        },
+    )
+    sync_signal_ledger(vault)
+
+    payload = get_briefing_snapshot(vault)
+
+    assert payload["recent_signal_count"] >= 1
+    assert payload["unresolved_issue_count"] >= 1
+    assert payload["recent_signals"]
+    assert payload["unresolved_issues"]
+    assert any(item["object_id"] == "source-note" for item in payload["changed_objects"])
+    assert payload["active_topics"]
+
+
+def test_truth_api_includes_review_action_signals(temp_vault):
+    from openclaw_pipeline.truth_api import list_signals, record_review_action, sync_signal_ledger
+
+    vault = _seed_truth_vault(temp_vault)
+    record_review_action(
+        vault,
+        event_type="ui_contradictions_resolved",
+        slug="source-note",
+        payload={
+            "object_ids": ["source-note"],
+            "contradiction_ids": ["contradiction::alpha"],
+            "status": "dismissed",
+            "note": "Reviewed",
+            "rebuilt_object_ids": ["source-note"],
+        },
+    )
+    record_review_action(
+        vault,
+        event_type="ui_summaries_rebuilt",
+        slug="source-note",
+        payload={
+            "object_ids": ["source-note"],
+            "objects_rebuilt": 1,
+            "rebuilt_object_ids": ["source-note"],
+        },
+    )
+
+    sync_signal_ledger(vault)
+    items = list_signals(vault)
+
+    assert any(item["signal_type"] == "contradiction_reviewed" for item in items)
+    assert any(item["signal_type"] == "summary_rebuilt" for item in items)
+    reviewed = next(item for item in items if item["signal_type"] == "contradiction_reviewed")
+    assert reviewed["object_ids"] == ["source-note"]
+    assert reviewed["source_path"] == "/contradictions?status=resolved"
