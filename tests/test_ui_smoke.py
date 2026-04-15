@@ -138,6 +138,9 @@ date: 2026-04-13
         object_status, object_body = _get(port, "/object?id=alpha")
         topic_status, topic_body = _get(port, "/topic?id=alpha")
         events_status, events_body = _get(port, "/events")
+        atlas_status, atlas_body = _get(port, "/atlas")
+        deep_dives_status, deep_dives_body = _get(port, "/deep-dives")
+        production_status, production_body = _get(port, "/production")
         contradictions_status, contradictions_body = _get(port, "/contradictions")
     finally:
         server.shutdown()
@@ -179,6 +182,8 @@ date: 2026-04-13
     assert "Center Summary" in topic_body
     assert "Atlas / MOC" in topic_body
     assert "Review Context" in topic_body
+    assert "Production Contribution" in topic_body
+    assert "Missing source notes" in topic_body
     assert "/summaries?q=alpha" in topic_body
     assert "Quick Maintenance" in topic_body
     assert "Review scoped contradictions" in topic_body
@@ -193,6 +198,8 @@ date: 2026-04-13
     assert "Timeline Contract" in events_body
     assert "Event Clusters" in events_body
     assert "Review Context" in events_body
+    assert "Production Contribution" in events_body
+    assert "Top Source Notes" in events_body
     assert "/summaries?q=alpha" in events_body
     assert "Quick Maintenance" in events_body
     assert "Review visible contradictions" in events_body
@@ -201,6 +208,22 @@ date: 2026-04-13
     assert "Atlas Index" in events_body
     assert f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Source Deep Dive_深度解读.md', safe='')}" in events_body
     assert f"/note?path={quote('10-Knowledge/Atlas/Atlas-Index.md', safe='')}" in events_body
+
+    assert atlas_status == 200
+    assert "Atlas / MOC Browser" in atlas_body
+    assert "Contribution Summary" in atlas_body
+
+    assert deep_dives_status == 200
+    assert "Deep Dive Derivations" in deep_dives_body
+    assert "Contribution Summary" in deep_dives_body
+    assert "Source Deep Dive" in deep_dives_body
+
+    assert production_status == 200
+    assert "Production Browser" in production_body
+    assert "Chain Model" in production_body
+    assert "Weak Points" in production_body
+    assert "Source Deep Dive" in production_body
+    assert "deep dive" in production_body
 
     assert contradictions_status == 200
     assert "Contradictions" in contradictions_body
@@ -586,6 +609,191 @@ type: "ai"
     assert f'/note?path={quote("20-Areas/AI-Research/Topics/2026-04/2026-04-09_The Harness Wars Begin_深度解读.md", safe="")}' in body
 
 
+def test_ui_note_page_shows_production_chain(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event_type":"article_processed","file":"Harness.md","output":"'
+                + str(deep_dive)
+                + '"}',
+                '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Harness_深度解读.md","mutation":{"target_slug":"alpha"}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(
+            port,
+            f"/note?path={quote('50-Inbox/03-Processed/2026-04/Harness.md', safe='')}",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Production Chain" in body
+    assert "Derived Objects" in body
+    assert "Atlas / MOC Reach" in body
+    assert "/object?id=alpha" in body
+
+
+def test_ui_object_page_shows_production_chain(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Harness_深度解读.md","mutation":{"target_slug":"alpha"}}\n',
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _get(port, "/object?id=alpha")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "Production Chain" in body
+    assert "Source Notes" in body
+    assert "Source Deep Dives" in body
+    assert "Atlas / MOC Reach" in body
+
+
 def test_ui_note_page_rewrites_local_images_to_asset_route(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -765,6 +973,7 @@ Thin note.
     assert "Alpha" in root_body
     assert "Thin Note" in root_body
     assert "/summaries" in root_body
+    assert "Production Weak Points" in root_body
 
 
 def test_ui_contradictions_and_summaries_support_batch_actions(temp_vault):

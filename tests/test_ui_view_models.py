@@ -179,6 +179,53 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["scoped_stale_summary_ids"] == ["beta"]
 
 
+def test_build_topic_overview_payload_includes_production_summary(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+
+    payload = build_topic_overview_payload(temp_vault, "alpha")
+
+    assert payload["production_summary"]["object_count"] == 2
+    assert payload["production_summary"]["counts"]["deep_dives"] == 0
+    assert payload["production_summary"]["counts"]["atlas_pages"] == 1
+    assert payload["production_summary"]["counts"]["source_notes"] == 0
+    assert payload["production_summary"]["top_deep_dives"] == []
+    assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
+    assert any(signal["code"] == "missing_deep_dives" for signal in payload["production_summary"]["signals"])
+
+
 def test_build_event_dossier_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 
@@ -252,6 +299,53 @@ date: 2026-04-13
     assert event["provenance"]["evergreen_path"] == "10-Knowledge/Evergreen/Alpha.md"
     assert event["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
     assert event["provenance"]["mocs"][0]["slug"] == "atlas-index"
+
+
+def test_build_event_dossier_payload_includes_production_summary(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault)
+
+    assert payload["production_summary"]["object_count"] == 3
+    assert payload["production_summary"]["counts"]["deep_dives"] == 0
+    assert payload["production_summary"]["counts"]["atlas_pages"] == 1
+    assert payload["production_summary"]["counts"]["source_notes"] == 0
+    assert payload["production_summary"]["top_deep_dives"] == []
+    assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
+    assert any(signal["code"] == "missing_deep_dives" for signal in payload["production_summary"]["signals"])
 
 
 def test_build_contradiction_browser_payload(temp_vault):
@@ -377,6 +471,18 @@ def test_build_truth_dashboard_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
 
     _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
     thin = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     thin.write_text(
         """---
@@ -404,6 +510,10 @@ Thin note.
     assert "thin-note" in [item["object_id"] for item in payload["stale_summaries"]["items"]]
     assert payload["objects"]["items"][0]["object_id"] == "alpha"
     assert payload["priorities"]
+    assert payload["production"]["weak_point_count"] >= 1
+    assert any(item["kind"] == "production_gap" for item in payload["priorities"])
+    production_gap = next(item for item in payload["priorities"] if item["kind"] == "production_gap")
+    assert production_gap["path"].startswith("/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md")
     assert payload["recent_review_actions"] == []
 
 
@@ -574,6 +684,264 @@ Mentions [[alpha]].
     assert payload["items"][0]["derived_objects"][0]["object_id"] == "alpha"
     assert payload["items"][0]["derived_object_count"] == 1
     assert payload["items"][0]["preview_titles"] == ["Alpha"]
+    assert payload["items"][0]["source_notes"] == []
+
+
+def test_build_derivation_browser_payload_includes_chain_context(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_derivation_browser_payload
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: deep-dive
+title: Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}\n',
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_derivation_browser_payload(temp_vault)
+
+    assert payload["items"][0]["source_notes"][0]["path"] == "50-Inbox/03-Processed/2026-04/Harness.md"
+    assert payload["items"][0]["atlas_pages"][0]["slug"] == "atlas-index"
+
+
+def test_build_atlas_browser_payload_includes_chain_context(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_atlas_browser_payload
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: deep-dive
+title: Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}\n',
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_atlas_browser_payload(temp_vault)
+
+    assert payload["items"][0]["source_notes"][0]["path"] == "50-Inbox/03-Processed/2026-04/Harness.md"
+    assert payload["items"][0]["deep_dives"][0]["slug"] == "deep-dive"
+
+
+def test_build_production_browser_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_production_browser_payload
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: deep-dive
+title: Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event_type":"article_processed","file":"Harness.md","output":"'
+                + str(deep_dive)
+                + '"}',
+                '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_production_browser_payload(temp_vault)
+
+    assert payload["screen"] == "production/browser"
+    assert payload["counts"]["source_notes"] == 1
+    assert payload["counts"]["deep_dives"] == 1
+    assert any(item["stage_label"] == "source_note" for item in payload["items"])
+    assert any(item["stage_label"] == "deep_dive" for item in payload["items"])
+
+
+def test_build_production_browser_payload_surfaces_weak_points(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_production_browser_payload
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_production_browser_payload(temp_vault)
+
+    assert payload["weak_points"]
+    assert payload["weak_points"][0]["title"] == "Loose Source"
+    assert "deep dives" in payload["weak_points"][0]["missing"]
 
 
 def test_build_stale_summary_browser_payload(temp_vault):
@@ -692,3 +1060,167 @@ def test_build_object_page_payload_handles_missing_summary(temp_vault):
 
     assert payload["summary"] is None
     assert payload["claim_count"] == 1
+
+
+def test_build_note_page_payload_includes_production_chain(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_note_page_payload
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event_type":"article_processed","file":"Harness.md","output":"'
+                + str(deep_dive)
+                + '"}',
+                '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Harness_深度解读.md","mutation":{"target_slug":"alpha"}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_note_page_payload(
+        temp_vault,
+        note_path="50-Inbox/03-Processed/2026-04/Harness.md",
+    )
+
+    assert payload["production_chain"]["note"]["path"] == "50-Inbox/03-Processed/2026-04/Harness.md"
+    assert [item["title"] for item in payload["production_chain"]["deep_dives"]] == ["Harness Deep Dive"]
+    assert [item["object_id"] for item in payload["production_chain"]["objects"]] == ["alpha"]
+    assert [item["slug"] for item in payload["production_chain"]["atlas_pages"]] == ["atlas-index"]
+
+
+def test_build_object_page_payload_includes_production_chain(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Harness_深度解读.md","mutation":{"target_slug":"alpha"}}\n',
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    assert [item["slug"] for item in payload["production_chain"]["deep_dives"]] == ["harness-deep-dive"]
+    assert [item["path"] for item in payload["production_chain"]["source_notes"]] == ["50-Inbox/03-Processed/2026-04/Harness.md"]
+    assert [item["slug"] for item in payload["production_chain"]["atlas_pages"]] == ["atlas-index"]

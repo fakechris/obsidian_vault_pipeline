@@ -5,6 +5,7 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
@@ -12,7 +13,9 @@ from ..truth_api import (
     CONTRADICTION_STATUS_EXPLANATIONS,
     count_objects,
     get_object_detail,
+    get_object_traceability,
     get_note_provenance,
+    get_note_traceability,
     get_object_provenance_map,
     get_review_context,
     get_topic_neighborhood,
@@ -21,6 +24,7 @@ from ..truth_api import (
     list_contradictions,
     list_deep_dive_derivations,
     list_objects,
+    list_production_chains,
     list_stale_summaries,
     search_vault_surface,
 )
@@ -43,6 +47,138 @@ def _object_ids_from_claim_ids(*claim_id_lists: list[str]) -> list[str]:
     return ordered
 
 
+def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
+    normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
+    object_traceability = [get_object_traceability(vault_dir, object_id) for object_id in normalized_object_ids]
+    source_note_counts: Counter[str] = Counter()
+    deep_dive_counts: Counter[str] = Counter()
+    atlas_page_counts: Counter[str] = Counter()
+    source_note_items: dict[str, dict[str, str]] = {}
+    deep_dive_items: dict[str, dict[str, str]] = {}
+    atlas_page_items: dict[str, dict[str, str]] = {}
+    missing_source_object_ids: list[str] = []
+    missing_deep_dive_object_ids: list[str] = []
+    missing_atlas_object_ids: list[str] = []
+
+    for traceability in object_traceability:
+        object_id = traceability["object"]["object_id"]
+        if not traceability["source_notes"]:
+            missing_source_object_ids.append(object_id)
+        if not traceability["deep_dives"]:
+            missing_deep_dive_object_ids.append(object_id)
+        if not traceability["atlas_pages"]:
+            missing_atlas_object_ids.append(object_id)
+        for item in traceability["source_notes"]:
+            source_note_items.setdefault(item["path"], item)
+            source_note_counts[item["path"]] += 1
+        for item in traceability["deep_dives"]:
+            deep_dive_items.setdefault(item["slug"], item)
+            deep_dive_counts[item["slug"]] += 1
+        for item in traceability["atlas_pages"]:
+            atlas_page_items.setdefault(item["slug"], item)
+            atlas_page_counts[item["slug"]] += 1
+
+    def _top_items(
+        counts: Counter[str],
+        item_map: dict[str, dict[str, str]],
+    ) -> list[dict[str, Any]]:
+        ordered = sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+        return [
+            {
+                **item_map[key],
+                "object_count": count,
+            }
+            for key, count in ordered
+            if key in item_map
+        ][:5]
+
+    signals: list[dict[str, Any]] = []
+    if missing_source_object_ids:
+        signals.append(
+            {
+                "code": "missing_source_notes",
+                "count": len(missing_source_object_ids),
+                "label": "Missing source notes",
+                "object_ids": missing_source_object_ids,
+            }
+        )
+    if missing_deep_dive_object_ids:
+        signals.append(
+            {
+                "code": "missing_deep_dives",
+                "count": len(missing_deep_dive_object_ids),
+                "label": "Missing deep dives",
+                "object_ids": missing_deep_dive_object_ids,
+            }
+        )
+    if missing_atlas_object_ids:
+        signals.append(
+            {
+                "code": "missing_atlas_reach",
+                "count": len(missing_atlas_object_ids),
+                "label": "Missing Atlas / MOC reach",
+                "object_ids": missing_atlas_object_ids,
+            }
+        )
+
+    return {
+        "object_count": len(normalized_object_ids),
+        "counts": {
+            "source_notes": len(source_note_items),
+            "deep_dives": len(deep_dive_items),
+            "atlas_pages": len(atlas_page_items),
+        },
+        "top_source_notes": _top_items(source_note_counts, source_note_items),
+        "top_deep_dives": _top_items(deep_dive_counts, deep_dive_items),
+        "top_atlas_pages": _top_items(atlas_page_counts, atlas_page_items),
+        "signals": signals,
+    }
+
+
+def _build_production_weak_points(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    items = list_production_chains(vault_dir, query=query, limit=200)
+    weak_points: list[dict[str, Any]] = []
+    for item in items:
+        traceability = item["traceability"]
+        missing: list[str] = []
+        if item["stage_label"] == "source_note":
+            if not traceability["deep_dives"]:
+                missing.append("deep dives")
+            if not traceability["objects"]:
+                missing.append("objects")
+            if not traceability["atlas_pages"]:
+                missing.append("Atlas / MOC reach")
+        else:
+            if not traceability["source_notes"]:
+                missing.append("source notes")
+            if not traceability["objects"]:
+                missing.append("objects")
+            if not traceability["atlas_pages"]:
+                missing.append("Atlas / MOC reach")
+        if not missing:
+            continue
+        weak_points.append(
+            {
+                "title": item["title"],
+                "note_path": item["path"],
+                "stage_label": item["stage_label"],
+                "missing": missing,
+                "severity": len(missing),
+                "detail": ", ".join(missing),
+            }
+        )
+    weak_points.sort(key=lambda item: (-item["severity"], item["stage_label"], item["title"].lower()))
+    return weak_points[:limit]
+
+
 def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     detail = get_object_detail(vault_dir, object_id)
     neighborhood = get_topic_neighborhood(vault_dir, object_id)
@@ -58,6 +194,7 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
     return {
         "screen": "object/page",
         **detail,
+        "production_chain": get_object_traceability(vault_dir, object_id),
         "relations": relations,
         "claim_count": len(detail["claims"]),
         "relation_count": len(relations),
@@ -113,6 +250,7 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
         "neighbor_count": len(neighborhood["neighbors"]),
         "center_summary": detail["summary"]["summary_text"] if detail["summary"] else "",
         "provenance": detail["provenance"],
+        "production_summary": _build_production_summary(vault_dir, scoped_object_ids),
         "review_context": review_context,
         "review_history": list_review_actions(
             vault_dir,
@@ -224,6 +362,7 @@ def build_event_dossier_payload(
             "row_type_counts": dict(row_type_counts),
             "semantic_roles": dict(semantic_roles),
         },
+        "production_summary": _build_production_summary(vault_dir, scoped_object_ids),
         "review_context": review_context,
         "review_history": list_review_actions(vault_dir, object_ids=scoped_object_ids, limit=8),
         "scoped_object_ids": list(dict.fromkeys(scoped_object_ids)),
@@ -394,6 +533,7 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
     contradictions = build_contradiction_browser_payload(vault_dir)
     events = build_event_dossier_payload(vault_dir, limit=8)
     stale_summaries = build_stale_summary_browser_payload(vault_dir)
+    production_weak_points = _build_production_weak_points(vault_dir)
     priorities: list[dict[str, Any]] = []
     for item in contradictions["items"][:4]:
         priorities.append(
@@ -411,6 +551,15 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
                 "label": item["title"],
                 "path": item["object_path"],
                 "detail": ", ".join(item["reason_codes"]),
+            }
+        )
+    for item in production_weak_points[:4]:
+        priorities.append(
+            {
+                "kind": "production_gap",
+                "label": item["title"],
+                "path": f"/note?path={quote(item['note_path'], safe='')}",
+                "detail": item["detail"],
             }
         )
     return {
@@ -432,6 +581,10 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
         "stale_summaries": {
             "count": stale_summaries["count"],
             "items": stale_summaries["items"][:8],
+        },
+        "production": {
+            "weak_points": production_weak_points,
+            "weak_point_count": len(production_weak_points),
         },
         "recent_review_actions": list_review_actions(vault_dir, limit=8),
         "priorities": priorities[:8],
@@ -463,11 +616,24 @@ def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = No
     enriched_items = []
     for item in items:
         preview_titles = [member["title"] for member in item["members"][:5]]
+        member_object_ids = [member["object_id"] for member in item["members"]]
+        review_context = get_review_context(vault_dir, member_object_ids)
+        source_note_map: dict[str, dict[str, str]] = {}
+        deep_dive_map: dict[str, dict[str, str]] = {}
+        for member_object_id in member_object_ids:
+            traceability = get_object_traceability(vault_dir, member_object_id)
+            for source in traceability["source_notes"]:
+                source_note_map.setdefault(source["path"], source)
+            for deep_dive in traceability["deep_dives"]:
+                deep_dive_map.setdefault(deep_dive["slug"], deep_dive)
         enriched_items.append(
             {
                 **item,
                 "member_count": len(item["members"]),
                 "preview_titles": preview_titles,
+                "source_notes": list(source_note_map.values()),
+                "deep_dives": list(deep_dive_map.values()),
+                "review_context": review_context,
             }
         )
     return {
@@ -483,11 +649,22 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
     enriched_items = []
     for item in items:
         preview_titles = [member["title"] for member in item["derived_objects"][:5]]
+        object_ids = [member["object_id"] for member in item["derived_objects"]]
+        review_context = get_review_context(vault_dir, object_ids)
+        atlas_page_map: dict[str, dict[str, str]] = {}
+        for member_object_id in object_ids:
+            traceability = get_object_traceability(vault_dir, member_object_id)
+            for atlas_page in traceability["atlas_pages"]:
+                atlas_page_map.setdefault(atlas_page["slug"], atlas_page)
+        source_notes = get_note_traceability(vault_dir, note_path=item["path"])["source_notes"]
         enriched_items.append(
             {
                 **item,
                 "derived_object_count": len(item["derived_objects"]),
                 "preview_titles": preview_titles,
+                "atlas_pages": list(atlas_page_map.values()),
+                "source_notes": source_notes,
+                "review_context": review_context,
             }
         )
     return {
@@ -495,6 +672,26 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
         "items": enriched_items,
         "count": len(enriched_items),
         "query": query or "",
+    }
+
+
+def build_production_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
+    items = list_production_chains(vault_dir, query=query)
+    source_items = [item for item in items if item["stage_label"] == "source_note"]
+    deep_dive_items = [item for item in items if item["stage_label"] == "deep_dive"]
+    weak_points = _build_production_weak_points(vault_dir, query=query)
+    return {
+        "screen": "production/browser",
+        "items": items,
+        "source_items": source_items,
+        "deep_dive_items": deep_dive_items,
+        "weak_points": weak_points,
+        "count": len(items),
+        "query": query or "",
+        "counts": {
+            "source_notes": len(source_items),
+            "deep_dives": len(deep_dive_items),
+        },
     }
 
 
@@ -531,4 +728,5 @@ def build_note_page_payload(vault_dir: Path | str, *, note_path: str) -> dict[st
         "screen": "note/page",
         "note_path": note_path,
         "provenance": provenance,
+        "production_chain": get_note_traceability(vault_dir, note_path=note_path),
     }

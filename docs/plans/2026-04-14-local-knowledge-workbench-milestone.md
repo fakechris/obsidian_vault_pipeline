@@ -248,7 +248,7 @@ Exit condition:
 
 ### Milestone 5: Knowledge Production Traceability
 
-Status: **Not Started**
+Status: **In Progress**
 
 Goal:
 
@@ -266,6 +266,12 @@ Core deliverables:
 - deep-dive production summaries
 - object derivation summaries
 - Atlas/topic rollups that explain knowledge contribution, not just membership
+
+Current progress:
+
+- `Production Chain` is visible on `note` and `object` pages
+- `/atlas` and `/deep-dives` show contribution summaries
+- `/production` exists as a provenance-first aggregate browser over source notes and deep dives
 
 Exit condition:
 
@@ -485,7 +491,7 @@ As of this plan:
 - Milestone 2: complete
 - Milestone 3: complete
 - Milestone 4: in progress
-- Milestone 5: not started
+- Milestone 5: in progress
 - Milestone 6: not started
 - Milestone 7+: not started
 

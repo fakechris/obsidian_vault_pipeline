@@ -25,6 +25,7 @@ from ..ui.view_models import (
     build_note_page_payload,
     build_object_page_payload,
     build_objects_index_payload,
+    build_production_browser_payload,
     build_search_payload,
     build_stale_summary_browser_payload,
     build_truth_dashboard_payload,
@@ -100,6 +101,7 @@ def _layout(title: str, body: str) -> str:
             <a href="/">Home</a>
             <a href="/objects">Objects</a>
             <a href="/search">Search</a>
+            <a href="/production">Production</a>
             <a href="/atlas">Atlas</a>
             <a href="/deep-dives">Deep Dives</a>
             <a href="/events">Event Dossier</a>
@@ -465,9 +467,11 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
     frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown)
     source_note = None
     derived_notes: list[dict[str, str]] = []
+    production_chain = None
     if payload:
         source_note = payload.get("provenance", {}).get("original_source_note")
         derived_notes = payload.get("provenance", {}).get("derived_deep_dives", [])
+        production_chain = payload.get("production_chain")
     provenance_html = ""
     if source_note:
         provenance_html = (
@@ -493,6 +497,20 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             f"<ul class='list-tight'>{derived_list}</ul>"
             "</section>"
         )
+    production_chain_html = ""
+    if production_chain:
+        production_chain_html = (
+            "<section class='card'>"
+            "<h2>Production Chain</h2>"
+            "<dl class='meta-list'>"
+            f"<div><dt>Current Note</dt><dd>{escape(production_chain['note']['title'])}<div class='muted'>{escape(production_chain['note']['path'])}</div></dd></div>"
+            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'])}</dd></div>"
+            f"<div><dt>Deep Dives</dt><dd>{_render_named_note_links(production_chain['deep_dives'])}</dd></div>"
+            f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'])}</dd></div>"
+            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(production_chain['atlas_pages'])}</dd></div>"
+            "</dl>"
+            "</section>"
+        )
     return _layout(
         f"Markdown Note: {relative_path}",
         (
@@ -502,6 +520,7 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             "</section>"
             f"{frontmatter_html}"
             f"{provenance_html}"
+            f"{production_chain_html}"
             f"<section class='card'>{note_html}</section>"
         ),
     )
@@ -541,6 +560,15 @@ def _render_named_note_links(items: list[dict[str, str]]) -> str:
         return "<span class='muted'>None</span>"
     return ", ".join(
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>' for item in items
+    )
+
+
+def _render_object_links(items: list[dict[str, str]]) -> str:
+    if not items:
+        return "<span class='muted'>None</span>"
+    return ", ".join(
+        f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a>'
+        for item in items
     )
 
 
@@ -610,6 +638,33 @@ def _render_review_history(items: list[dict[str, object]], *, title: str = "Revi
     )
 
 
+def _render_production_summary_card(summary: dict[str, object], *, title: str = "Production Contribution") -> str:
+    signal_items = "".join(
+        f"<li>{escape(str(signal['label']))}: {int(signal['count'])}</li>"
+        for signal in summary["signals"]
+    ) or "<li class='muted'>No production-chain gaps surfaced for this scope.</li>"
+    count_items = "".join(
+        f"<li>{escape(label)}: {int(summary['counts'][key])}</li>"
+        for key, label in (
+            ("source_notes", "Source notes"),
+            ("deep_dives", "Deep dives"),
+            ("atlas_pages", "Atlas / MOC pages"),
+        )
+    )
+    return (
+        "<section class='card'>"
+        f"<h2>{escape(title)}</h2>"
+        "<dl class='meta-list'>"
+        f"<div><dt>Objects in scope</dt><dd>{int(summary['object_count'])}</dd></div>"
+        f"<div><dt>Top Source Notes</dt><dd>{_render_named_note_links(summary['top_source_notes'])}</dd></div>"
+        f"<div><dt>Top Deep Dives</dt><dd>{_render_named_note_links(summary['top_deep_dives'])}</dd></div>"
+        f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(summary['top_atlas_pages'])}</dd></div>"
+        "</dl>"
+        f"<ul class='list-tight'>{count_items}{signal_items}</ul>"
+        "</section>"
+    )
+
+
 def _render_dashboard(payload: dict) -> str:
     object_items = "".join(
         f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
@@ -629,6 +684,12 @@ def _render_dashboard(payload: dict) -> str:
         f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
         for item in payload["stale_summaries"]["items"]
     ) or "<li>None</li>"
+    production_gap_items = "".join(
+        f'<li><span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
+        f'<a href="{escape(_note_href(item["note_path"]))}">{escape(item["title"])}</a>'
+        f"<div class='muted'>Missing: {escape(item['detail'])}</div></li>"
+        for item in payload["production"]["weak_points"]
+    ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
     priority_items = "".join(
         f'<li><span class="pill">{escape(item["kind"].replace("_", " "))}</span> '
         f'<a href="{escape(item["path"])}">{escape(item["label"])}</a>'
@@ -660,6 +721,7 @@ def _render_dashboard(payload: dict) -> str:
             f"<section class='card'><h2><a href='/summaries'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
+            f"<section class='card'><h2><a href='/production'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>"
             f"<section class='card'><h2>Contradiction Queue</h2><ul class='list-tight'>{contradiction_items}</ul></section>"
             f"{_render_review_history(payload['recent_review_actions'], title='Recent Review Actions')}"
             "</div>"
@@ -798,6 +860,12 @@ def _render_object_page(payload: dict) -> str:
             f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
             f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
             "</dl></section>"
+            "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
+            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'])}</dd></div>"
+            f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'])}</dd></div>"
+            f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
+            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'])}</dd></div>"
+            "</dl></section>"
             f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>"
             f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>"
             f"<section class='card'><h2>Stale Summary Signals</h2><ul class='list-tight'>{stale_summary_signals}</ul></section>"
@@ -850,6 +918,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
             f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
+            f"{_render_production_summary_card(payload['production_summary'])}"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
             "<section class='card'><h2>Quick Maintenance</h2>"
@@ -951,6 +1020,7 @@ def _render_events_page(payload: dict) -> str:
             "</form>"
             f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.</p>"
             f"<div class='link-row'>{type_breakdown}</div>"
+            f"{_render_production_summary_card(payload['production_summary'])}"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
             "<section class='card'><h2>Quick Maintenance</h2>"
@@ -972,6 +1042,8 @@ def _render_atlas_page(payload: dict) -> str:
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{item['member_count']} objects</span>"
+        + f" <span class='pill'>{len(item['deep_dives'])} deep dives</span>"
+        + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -985,6 +1057,8 @@ def _render_atlas_page(payload: dict) -> str:
             if item["preview_titles"]
             else ""
         )
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'])}</div>"
+        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['deep_dives'])}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"
@@ -997,6 +1071,7 @@ def _render_atlas_page(payload: dict) -> str:
             "<button type='submit'>Search</button>"
             "</form>"
             f"<p class='muted'>{payload['count']} atlas/moc pages linked to indexed objects.</p>"
+            "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each Atlas page now shows the source notes and deep dives that feed the objects it organizes.</p></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
@@ -1008,6 +1083,8 @@ def _render_derivations_page(payload: dict) -> str:
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{item['derived_object_count']} derived objects</span>"
+        + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
+        + f" <span class='pill'>{len(item['atlas_pages'])} atlas pages</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
@@ -1021,6 +1098,8 @@ def _render_derivations_page(payload: dict) -> str:
             if item["preview_titles"]
             else ""
         )
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'])}</div>"
+        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['atlas_pages'])}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"
@@ -1033,6 +1112,46 @@ def _render_derivations_page(payload: dict) -> str:
             "<button type='submit'>Search</button>"
             "</form>"
             f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.</p>"
+            "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each deep dive now shows upstream source notes and downstream Atlas reach, not just derived objects.</p></section>"
+            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        ),
+    )
+
+
+def _render_production_browser_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    items = "".join(
+        "<li>"
+        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        + f" <span class='pill'>{escape(item['stage_label'].replace('_', ' '))}</span>"
+        + f" <span class='pill'>{item['traceability']['counts']['deep_dives']} deep dives</span>"
+        + f" <span class='pill'>{item['traceability']['counts']['objects']} objects</span>"
+        + f" <span class='pill'>{item['traceability']['counts']['atlas_pages']} atlas pages</span>"
+        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'])}</div>"
+        + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'])}</div>"
+        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'])}</div>"
+        + "</li>"
+        for item in payload["items"]
+    ) or "<li class='muted'>No production chains found.</li>"
+    weak_points = "".join(
+        "<li>"
+        f'<span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
+        f'<a href="{escape(_note_href(item["note_path"]))}">{escape(item["title"])}</a>'
+        f"<div class='muted'>Missing: {escape(item['detail'])}</div>"
+        "</li>"
+        for item in payload["weak_points"]
+    ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
+    return _layout(
+        "Production Browser",
+        (
+            "<h1>Production Browser</h1>"
+            "<form method='get' action='/production'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter source notes, deep dives, objects, or atlas' /> "
+            "<button type='submit'>Search</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.</p>"
+            "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>"
+            f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
@@ -1375,6 +1494,15 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     payload = build_derivation_browser_payload(resolved_vault, query=q)
                     self._write_html(_render_derivations_page(payload))
+                    return
+                if path == "/api/production":
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_production_browser_payload(resolved_vault, query=q))
+                    return
+                if path == "/production":
+                    q = query.get("q", [""])[0]
+                    payload = build_production_browser_payload(resolved_vault, query=q)
+                    self._write_html(_render_production_browser_page(payload))
                     return
                 if path == "/api/summaries":
                     q = query.get("q", [""])[0]

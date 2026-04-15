@@ -987,6 +987,263 @@ def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, A
     }
 
 
+def _page_row_by_path(vault_dir: Path | str, note_path: str) -> dict[str, str]:
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE path = ?
+            LIMIT 1
+            """,
+            (str((resolved_vault / note_path).resolve()),),
+        ).fetchone()
+    if row:
+        return {
+            "slug": row[0],
+            "title": row[1],
+            "note_type": row[2],
+            "path": _vault_relative_path(resolved_vault, row[3]),
+        }
+    return {
+        "slug": Path(note_path).stem,
+        "title": Path(note_path).stem,
+        "note_type": "note",
+        "path": note_path,
+    }
+
+
+def _deep_dive_objects_for_path(vault_dir: Path | str, note_path: str) -> list[dict[str, str]]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_target = (resolved_vault / note_path).resolve().as_posix()
+    items = list_deep_dive_derivations(vault_dir, limit=MAX_PAGE_SIZE)
+    for item in items:
+        candidate_path = (resolved_vault / item["path"]).resolve().as_posix()
+        if candidate_path == normalized_target:
+            return item["derived_objects"]
+    return []
+
+
+def _atlas_pages_for_object_ids(vault_dir: Path | str, object_ids: list[str]) -> list[dict[str, str]]:
+    atlas_pages: dict[str, dict[str, str]] = {}
+    for provenance in get_object_provenance_map(vault_dir, object_ids).values():
+        for item in provenance["mocs"]:
+            atlas_pages.setdefault(item["slug"], item)
+    return list(atlas_pages.values())
+
+
+def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> list[dict[str, str]]:
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    with sqlite3.connect(db_path) as conn:
+        deep_dive_rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE note_type = 'deep_dive'
+            ORDER BY slug
+            """
+        ).fetchall()
+        audit_rows = conn.execute(
+            """
+            SELECT payload_json
+            FROM audit_events
+            WHERE event_type = 'evergreen_auto_promoted'
+            """
+        ).fetchall()
+
+    promoted_source_names: set[str] = set()
+    for (payload_json,) in audit_rows:
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError:
+            continue
+        target_slug = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
+        source_name = str(payload.get("source") or "").strip()
+        if target_slug == object_id and source_name:
+            promoted_source_names.add(source_name)
+
+    items: list[dict[str, str]] = []
+    seen_slugs: set[str] = set()
+    for slug, title, _note_type, path in deep_dive_rows:
+        relative_path = _vault_relative_path(resolved_vault, path)
+        if Path(relative_path).name not in promoted_source_names:
+            continue
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        items.append(
+            {
+                "slug": str(slug),
+                "title": str(title),
+                "note_type": "deep_dive",
+                "path": relative_path,
+            }
+        )
+    return items
+
+
+def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+    note = _page_row_by_path(vault_dir, note_path)
+    provenance = get_note_provenance(vault_dir, note_path=note_path)
+    deep_dives: list[dict[str, str]] = []
+    source_notes: list[dict[str, str]] = []
+    objects: list[dict[str, str]] = []
+    atlas_pages: list[dict[str, str]] = []
+
+    if note["note_type"] == "deep_dive":
+        deep_dives = [note]
+        if provenance["original_source_note"]:
+            source_notes = [provenance["original_source_note"]]
+    elif note["note_type"] == "evergreen":
+        object_traceability = get_object_traceability(vault_dir, note["slug"])
+        deep_dives = object_traceability["deep_dives"]
+        source_notes = object_traceability["source_notes"]
+        objects = [
+            {
+                "object_id": object_traceability["object"]["object_id"],
+                "title": object_traceability["object"]["title"],
+            }
+        ]
+        atlas_pages = object_traceability["atlas_pages"]
+    else:
+        deep_dives = provenance["derived_deep_dives"]
+        if provenance["original_source_note"]:
+            source_notes = [provenance["original_source_note"]]
+
+    if not objects:
+        object_map: dict[str, dict[str, str]] = {}
+        for deep_dive in deep_dives:
+            for item in _deep_dive_objects_for_path(vault_dir, deep_dive["path"]):
+                object_map.setdefault(item["object_id"], item)
+        objects = list(object_map.values())
+    if not atlas_pages:
+        atlas_pages = _atlas_pages_for_object_ids(vault_dir, [item["object_id"] for item in objects])
+    return {
+        "note": note,
+        "source_notes": source_notes,
+        "deep_dives": deep_dives,
+        "objects": objects,
+        "atlas_pages": atlas_pages,
+        "counts": {
+            "source_notes": len(source_notes),
+            "deep_dives": len(deep_dives),
+            "objects": len(objects),
+            "atlas_pages": len(atlas_pages),
+        },
+    }
+
+
+def get_object_traceability(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
+    detail = get_object_detail(vault_dir, object_id)
+    deep_dives = _promoted_deep_dives_for_object(vault_dir, object_id)
+    source_note_map: dict[str, dict[str, str]] = {}
+    for deep_dive in deep_dives:
+        original = get_note_provenance(vault_dir, note_path=deep_dive["path"])["original_source_note"]
+        if original:
+            source_note_map.setdefault(original["path"], original)
+    return {
+        "object": detail["object"],
+        "evergreen_note": {
+            "title": detail["object"]["title"],
+            "path": detail["provenance"]["evergreen_path"],
+        },
+        "source_notes": list(source_note_map.values()),
+        "deep_dives": deep_dives,
+        "atlas_pages": detail["provenance"]["mocs"],
+        "counts": {
+            "source_notes": len(source_note_map),
+            "deep_dives": len(deep_dives),
+            "atlas_pages": len(detail["provenance"]["mocs"]),
+        },
+    }
+
+
+def list_production_chains(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_query = (query or "").strip().lower()
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE note_type = 'deep_dive'
+            ORDER BY note_type, slug
+            """
+        ).fetchall()
+
+    candidates: list[dict[str, str]] = []
+    seen_paths: set[str] = set()
+    for slug, title, note_type, path in rows:
+        relative_path = _vault_relative_path(resolved_vault, path)
+        seen_paths.add(relative_path)
+        candidates.append(
+            {
+                "slug": str(slug),
+                "title": str(title),
+                "note_type": str(note_type),
+                "path": relative_path,
+                "stage_label": "deep_dive",
+            }
+        )
+
+    processed_root = resolved_vault / "50-Inbox" / "03-Processed"
+    if processed_root.exists():
+        for candidate in sorted(processed_root.rglob("*.md")):
+            relative_path = str(candidate.resolve().relative_to(resolved_vault.resolve()))
+            if relative_path in seen_paths:
+                continue
+            frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
+            candidates.append(
+                {
+                    "slug": candidate.stem,
+                    "title": str(frontmatter.get("title") or candidate.stem).strip(),
+                    "note_type": "note",
+                    "path": relative_path,
+                    "stage_label": "source_note",
+                }
+            )
+
+    items: list[dict[str, Any]] = []
+    for candidate in candidates:
+        relative_path = candidate["path"]
+        chain = get_note_traceability(vault_dir, note_path=relative_path)
+        if normalized_query:
+            haystacks = [
+                str(candidate["title"]).lower(),
+                str(candidate["slug"]).lower(),
+                relative_path.lower(),
+                *(item["title"].lower() for item in chain["deep_dives"]),
+                *(item["title"].lower() for item in chain["objects"]),
+                *(item["title"].lower() for item in chain["atlas_pages"]),
+                *(item["title"].lower() for item in chain["source_notes"]),
+            ]
+            if not any(normalized_query in haystack for haystack in haystacks):
+                continue
+        items.append(
+            {
+                "slug": candidate["slug"],
+                "title": candidate["title"],
+                "note_type": candidate["note_type"],
+                "path": relative_path,
+                "stage_label": candidate["stage_label"],
+                "traceability": chain,
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
 def list_contradictions(
     vault_dir: Path | str,
     *,
