@@ -1880,6 +1880,83 @@ Thin.
     assert any(item.get("recommended_action") for item in payload["priority_items"])
 
 
+def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    monkeypatch.setattr(truth_api, "list_signals", lambda vault_dir, limit=8: [])
+    monkeypatch.setattr(
+        truth_api,
+        "list_evolution_candidates",
+        lambda vault_dir, limit=24: [
+            {
+                "link_type": "challenges",
+                "subject_id": "agent harness",
+                "object_ids": ["source-note"],
+                "source_paths": ["10-Knowledge/Evergreen/Source.md"],
+            },
+            {
+                "link_type": "challenges",
+                "subject_id": "agent harness",
+                "object_ids": ["source-note"],
+                "source_paths": ["10-Knowledge/Evergreen/Source.md"],
+            },
+        ],
+    )
+
+    payload = truth_api.get_briefing_snapshot(vault, limit=8)
+
+    assert len(payload["insights"]) == 1
+    assert len(payload["priority_items"]) == 1
+
+
+def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    monkeypatch.setattr(
+        truth_api,
+        "list_signals",
+        lambda vault_dir, limit=8: [
+            {
+                "signal_id": "signal::source",
+                "signal_type": "source_needs_deep_dive",
+                "title": "Manual extraction gap",
+                "detail": "Needs deep dive.",
+                "source_path": "/note?path=50-Inbox/03-Processed/2026-04/Manual.md",
+                "note_paths": ["50-Inbox/03-Processed/2026-04/Manual.md"],
+                "object_ids": [],
+                "recommended_action": {
+                    "kind": "deep_dive_workflow",
+                    "label": "Create deep dive",
+                    "path": "/note?path=50-Inbox/03-Processed/2026-04/Manual.md",
+                    "executable": False,
+                },
+            },
+            {
+                "signal_id": "signal::contradiction",
+                "signal_type": "contradiction_open",
+                "title": "Agent harness contradiction",
+                "detail": "Open contradiction.",
+                "source_path": "/contradictions?q=agent%20harness",
+                "note_paths": [],
+                "object_ids": ["source-note"],
+                "recommended_action": {
+                    "kind": "review_contradiction",
+                    "label": "Review contradiction",
+                    "path": "/contradictions?q=agent%20harness",
+                    "executable": True,
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24: [])
+
+    payload = truth_api.get_briefing_snapshot(vault, limit=8)
+
+    assert payload["priority_items"][0]["kind"] == "contradiction_open"
+
+
 def test_truth_api_enqueues_signal_actions_idempotently(temp_vault):
     from openclaw_pipeline.truth_api import enqueue_signal_action, list_action_queue, list_signals, sync_signal_ledger
 

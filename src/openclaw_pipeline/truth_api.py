@@ -50,11 +50,43 @@ EVOLUTION_LINK_EXPLANATIONS = {
     "confirms": "Independent evidence is reinforcing the current interpretation.",
     "enriches": "Newer material is adding depth without overturning the core idea.",
 }
+_BRIEFING_SIGNAL_PRIORITY = {
+    "contradiction_open": 100,
+    "stale_summary": 90,
+    "production_gap": 80,
+    "source_needs_deep_dive": 70,
+    "deep_dive_needs_objects": 60,
+    "contradiction_reviewed": 40,
+    "summary_rebuilt": 30,
+}
+_BRIEFING_EVOLUTION_PRIORITY = {
+    "challenges": 100,
+    "replaces": 90,
+    "confirms": 70,
+    "enriches": 60,
+}
 
 
 def _db_path(vault_dir: Path | str) -> Path:
     resolved = resolve_vault_dir(vault_dir)
     return VaultLayout.from_vault(resolved).knowledge_db
+
+
+def _briefing_priority_score(item: dict[str, Any]) -> tuple[int, int, int]:
+    signal_type = str(item.get("signal_type") or item.get("kind") or "")
+    recommended_action = item.get("recommended_action")
+    executable = 0
+    if isinstance(recommended_action, dict) and recommended_action.get("executable"):
+        executable = 1
+    object_count = len([value for value in item.get("object_ids", []) if value])
+    return (_BRIEFING_SIGNAL_PRIORITY.get(signal_type, 0), executable, object_count)
+
+
+def _briefing_evolution_score(item: dict[str, Any]) -> tuple[int, int]:
+    return (
+        _BRIEFING_EVOLUTION_PRIORITY.get(str(item.get("link_type") or ""), 0),
+        len([value for value in item.get("object_ids", []) if value]),
+    )
 
 
 def _path_signature(path: Path) -> tuple[str, int, int]:
@@ -1984,7 +2016,16 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
         "source_needs_deep_dive",
         "deep_dive_needs_objects",
     }
-    unresolved_issues = [item for item in recent_signals if item["signal_type"] in unresolved_signal_types][:limit]
+    unresolved_issues = [item for item in recent_signals if item["signal_type"] in unresolved_signal_types]
+    unresolved_issues.sort(
+        key=lambda item: (
+            _briefing_priority_score(item),
+            str(item.get("title") or "").lower(),
+            str(item.get("signal_id") or ""),
+        ),
+        reverse=True,
+    )
+    unresolved_issues = unresolved_issues[:limit]
     changed_signals = [
         item
         for item in recent_signals
@@ -2033,7 +2074,7 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
         )
     )
     evolution_rows = _batch_object_rows(vault_dir, evolution_object_ids)
-    insights: list[dict[str, Any]] = []
+    merged_insights: dict[tuple[str, str, str], dict[str, Any]] = {}
     for item in evolution_candidates:
         primary_object_id = next((object_id for object_id in item.get("object_ids", []) if object_id), "")
         primary_title = (
@@ -2041,33 +2082,50 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
             or object_rows.get(primary_object_id, {}).get("title")
             or str(item.get("subject_id") or primary_object_id)
         )
-        insights.append(
-            {
-                "kind": f"evolution_{item['link_type']}",
-                "link_type": item["link_type"],
-                "title": str(primary_title),
-                "detail": EVOLUTION_LINK_EXPLANATIONS.get(
-                    item["link_type"], "Knowledge evolution was detected."
-                ),
-                "path": "/evolution?link_type="
-                + quote(str(item["link_type"]), safe="")
-                + "&q="
-                + quote(str(primary_title), safe=""),
-                "source_paths": [path for path in item.get("source_paths", []) if path][:3],
-                "object_ids": list(item.get("object_ids", [])),
-                "recommended_action": _recommended_action(
-                    kind="review_evolution",
-                    label="Review evolution",
-                    path="/evolution?link_type="
-                    + quote(str(item["link_type"]), safe="")
-                    + "&q="
-                    + quote(str(primary_title), safe=""),
-                    executable=True,
-                ),
-            }
+        path = (
+            "/evolution?link_type="
+            + quote(str(item["link_type"]), safe="")
+            + "&q="
+            + quote(str(primary_title), safe="")
         )
-        if len(insights) >= limit:
-            break
+        insight = {
+            "kind": f"evolution_{item['link_type']}",
+            "link_type": item["link_type"],
+            "title": str(primary_title),
+            "detail": EVOLUTION_LINK_EXPLANATIONS.get(
+                item["link_type"], "Knowledge evolution was detected."
+            ),
+            "path": path,
+            "source_paths": [path for path in item.get("source_paths", []) if path][:3],
+            "object_ids": list(item.get("object_ids", [])),
+            "recommended_action": _recommended_action(
+                kind="review_evolution",
+                label="Review evolution",
+                path=path,
+                executable=True,
+            ),
+        }
+        key = (str(insight["kind"]), str(insight["title"]), str(insight["path"]))
+        existing = merged_insights.get(key)
+        if existing is None:
+            merged_insights[key] = insight
+        else:
+            existing["source_paths"] = list(
+                dict.fromkeys([*existing.get("source_paths", []), *insight.get("source_paths", [])])
+            )[:3]
+            existing["object_ids"] = list(
+                dict.fromkeys([*existing.get("object_ids", []), *insight.get("object_ids", [])])
+            )
+    insights = list(merged_insights.values())
+    insights.sort(
+        key=lambda item: (
+            _briefing_evolution_score(item),
+            str(item.get("title") or "").lower(),
+            str(item.get("path") or ""),
+        ),
+        reverse=True,
+    )
+    insights = insights[:limit]
 
     priority_items: list[dict[str, Any]] = []
     for item in unresolved_issues:
