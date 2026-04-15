@@ -227,6 +227,111 @@ Source note builds on [[source-note]] with more deployment detail.
     assert any(item["link_type"] in {"enriches", "confirms"} and item["subject_id"] == "source-note" for item in items)
 
 
+def test_truth_api_expresses_all_four_evolution_link_types(temp_vault):
+    from openclaw_pipeline.truth_api import list_evolution_candidates
+
+    vault = _seed_truth_vault(temp_vault)
+    legacy = vault / "10-Knowledge" / "Evergreen" / "Legacy.md"
+    legacy.write_text(
+        """---
+note_id: legacy-note
+title: Legacy Note
+type: evergreen
+date: 2026-04-01
+---
+
+# Legacy Note
+
+Legacy note.
+""",
+        encoding="utf-8",
+    )
+    replace_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Legacy Replace_深度解读.md"
+    replace_dive.parent.mkdir(parents=True, exist_ok=True)
+    replace_dive.write_text(
+        """---
+note_id: legacy-replace
+title: Legacy Replace
+type: deep_dive
+date: 2026-04-10
+---
+
+# Legacy Replace
+
+This note supersedes [[legacy-note]] and instead recommends the new path.
+""",
+        encoding="utf-8",
+    )
+    enrich_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Source Enrichment_深度解读.md"
+    enrich_dive.write_text(
+        """---
+note_id: source-enrichment
+title: Source Enrichment
+type: deep_dive
+date: 2026-04-20
+---
+
+Source note builds on [[source-note]] with more deployment detail.
+""",
+        encoding="utf-8",
+    )
+    confirm_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Source Confirmation_深度解读.md"
+    confirm_dive.write_text(
+        """---
+note_id: source-confirmation
+title: Source Confirmation
+type: deep_dive
+date: 2026-04-22
+---
+
+Source note confirms the local-first rollout guidance from independent testing.
+""",
+        encoding="utf-8",
+    )
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    (vault / "60-Logs" / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event_type": "evergreen_auto_promoted",
+                        "concept": "legacy-note",
+                        "source": "Legacy Replace_深度解读.md",
+                        "mutation": {"target_slug": "legacy-note"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "event_type": "evergreen_auto_promoted",
+                        "concept": "source-note",
+                        "source": "Source Enrichment_深度解读.md",
+                        "mutation": {"target_slug": "source-note"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "event_type": "evergreen_auto_promoted",
+                        "concept": "source-note",
+                        "source": "Source Confirmation_深度解读.md",
+                        "mutation": {"target_slug": "source-note"},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    items = list_evolution_candidates(vault)
+    link_types = {item["link_type"] for item in items}
+
+    assert {"replaces", "enriches", "confirms", "challenges"}.issubset(link_types)
+
+
 def test_truth_api_reviews_evolution_candidate_and_lists_links(temp_vault):
     from openclaw_pipeline.truth_api import list_evolution_candidates, list_evolution_links, review_evolution_candidate
 
