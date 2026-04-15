@@ -1386,6 +1386,42 @@ def _render_signals_page(payload: dict) -> str:
 
 
 def _render_briefing_page(payload: dict) -> str:
+    first_useful_sign = payload.get("first_useful_sign")
+    first_useful_sign_html = (
+        "<li>"
+        + f"<span class='pill'>{escape(str(first_useful_sign['kind']))}</span> "
+        + f"<a href=\"{escape(str(first_useful_sign['path']))}\">{escape(str(first_useful_sign['title']))}</a>"
+        + f"<div class='muted'>{escape(str(first_useful_sign['detail']))}</div>"
+        + (
+            f"<div class='muted'>Sources: {escape(', '.join(first_useful_sign.get('source_paths', [])))}</div>"
+            if first_useful_sign.get("source_paths")
+            else ""
+        )
+        + "</li>"
+        if first_useful_sign
+        else "<li class='muted'>No useful sign surfaced yet.</li>"
+    )
+    insights = "".join(
+        "<li>"
+        + f"<span class='pill'>{escape(str(item['link_type']))}</span> "
+        + f"<a href=\"{escape(str(item['path']))}\">{escape(str(item['title']))}</a>"
+        + f"<div class='muted'>{escape(str(item['detail']))}</div>"
+        + (
+            f"<div class='muted'>Sources: {escape(', '.join(item.get('source_paths', [])))}</div>"
+            if item.get("source_paths")
+            else ""
+        )
+        + "</li>"
+        for item in payload["insights"]
+    ) or "<li class='muted'>No evolution insights surfaced.</li>"
+    priority_items = "".join(
+        "<li>"
+        + f"<span class='pill'>{escape(str(item['kind']))}</span> "
+        + f"<a href=\"{escape(str(item['path']))}\">{escape(str(item['title']))}</a>"
+        + f"<div class='muted'>{escape(str(item['detail']))}</div>"
+        + "</li>"
+        for item in payload["priority_items"]
+    ) or "<li class='muted'>No priority items surfaced.</li>"
     recent_signals = "".join(
         f'<li><span class="pill">{escape(item["signal_type"])}</span> '
         f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
@@ -1411,6 +1447,9 @@ def _render_briefing_page(payload: dict) -> str:
         (
             "<h1>Working Memory Snapshot</h1>"
             f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.</p>"
+            f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>"
+            f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>"
+            f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>"
             f"<section class='card'><h2>Recent Signals</h2><ul class='list-tight'>{recent_signals}</ul></section>"
             f"<section class='card'><h2>Unresolved Issues</h2><ul class='list-tight'>{unresolved}</ul></section>"
             f"<section class='card'><h2>Changed Objects</h2><ul class='list-tight'>{changed_objects}</ul></section>"
@@ -1988,6 +2027,17 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
     return ThreadingHTTPServer((host, port), Handler)
 
 
+def _prewarm_ui_caches(vault_dir: Path | str) -> None:
+    try:
+        build_evolution_browser_payload(vault_dir, status="all")
+    except Exception:
+        return
+
+
+def _start_ui_prewarm(vault_dir: Path | str) -> None:
+    _prewarm_ui_caches(vault_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a minimal local UI over knowledge.db")
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
@@ -2000,6 +2050,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         build_objects_index_payload(resolved_vault, limit=1, offset=0)
         ensure_signal_ledger_synced(resolved_vault)
+        _start_ui_prewarm(resolved_vault)
     except Exception as exc:
         print(f"ui server preflight failed: {exc}", file=sys.stderr)
         server.server_close()

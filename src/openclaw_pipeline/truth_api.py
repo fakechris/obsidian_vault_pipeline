@@ -22,6 +22,7 @@ _SOURCE_NOTE_INDEX_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dic
 _PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
 _SIGNAL_LEDGER_SYNC_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dict[str, Any]] = {}
+_EVOLUTION_CANDIDATE_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...], tuple[str, ...]], list[dict[str, Any]]] = {}
 CONTRADICTION_STATUS_EXPLANATIONS = {
     "open": "Active contradiction awaiting review.",
     "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
@@ -37,6 +38,12 @@ SIGNAL_TYPE_EXPLANATIONS = {
     "summary_rebuilt": "A summary rebuild action recently refreshed one or more compiled summaries.",
     "source_needs_deep_dive": "A processed source note exists without any derived deep dive, so the next extraction step is still missing.",
     "deep_dive_needs_objects": "A deep dive exists without any derived evergreen objects, so absorb-style extraction has not completed yet.",
+}
+EVOLUTION_LINK_EXPLANATIONS = {
+    "challenges": "Newer evidence is challenging the current interpretation.",
+    "replaces": "A newer interpretation appears to supersede the older one.",
+    "confirms": "Independent evidence is reinforcing the current interpretation.",
+    "enriches": "Newer material is adding depth without overturning the core idea.",
 }
 
 
@@ -78,6 +85,10 @@ def _signal_dependency_signature(vault_dir: Path) -> tuple[tuple[str, int, int],
     ]
     signatures.extend(_search_root_signatures(vault_dir))
     return tuple(signatures)
+
+
+def _evolution_dependency_signature(vault_dir: Path) -> tuple[tuple[str, int, int], ...]:
+    return _signal_dependency_signature(vault_dir)
 
 
 def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
@@ -1534,6 +1545,67 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
         }
         for object_id, count in topic_counts.most_common(limit)
     ]
+    evolution_candidates = list_evolution_candidates(vault_dir, limit=min(MAX_PAGE_SIZE, limit * 3))
+    evolution_object_ids = list(
+        dict.fromkeys(
+            object_id
+            for item in evolution_candidates
+            for object_id in item.get("object_ids", [])
+            if object_id
+        )
+    )
+    evolution_rows = _batch_object_rows(vault_dir, evolution_object_ids)
+    insights: list[dict[str, Any]] = []
+    for item in evolution_candidates:
+        primary_object_id = next((object_id for object_id in item.get("object_ids", []) if object_id), "")
+        primary_title = (
+            evolution_rows.get(primary_object_id, {}).get("title")
+            or object_rows.get(primary_object_id, {}).get("title")
+            or str(item.get("subject_id") or primary_object_id)
+        )
+        insights.append(
+            {
+                "kind": f"evolution_{item['link_type']}",
+                "link_type": item["link_type"],
+                "title": str(primary_title),
+                "detail": EVOLUTION_LINK_EXPLANATIONS.get(
+                    item["link_type"], "Knowledge evolution was detected."
+                ),
+                "path": "/evolution?link_type="
+                + quote(str(item["link_type"]), safe="")
+                + "&q="
+                + quote(str(primary_title), safe=""),
+                "source_paths": [path for path in item.get("source_paths", []) if path][:3],
+                "object_ids": list(item.get("object_ids", [])),
+            }
+        )
+        if len(insights) >= limit:
+            break
+
+    priority_items: list[dict[str, Any]] = []
+    for item in unresolved_issues:
+        priority_items.append(
+            {
+                "kind": item["signal_type"],
+                "title": item["title"],
+                "detail": item["detail"],
+                "path": item["source_path"],
+                "source_paths": list(item.get("note_paths", [])),
+                "object_ids": list(item.get("object_ids", [])),
+            }
+        )
+        if len(priority_items) >= limit:
+            break
+    seen_priority_keys = {(item["kind"], item["title"], item["path"]) for item in priority_items}
+    for item in insights:
+        key = (item["kind"], item["title"], item["path"])
+        if key in seen_priority_keys:
+            continue
+        priority_items.append(item)
+        seen_priority_keys.add(key)
+        if len(priority_items) >= limit:
+            break
+    first_useful_sign = insights[0] if insights else (priority_items[0] if priority_items else None)
 
     return {
         "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1545,6 +1617,11 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
         "unresolved_issues": unresolved_issues,
         "changed_objects": changed_objects,
         "active_topics": active_topics,
+        "insight_count": len(insights),
+        "priority_item_count": len(priority_items),
+        "insights": insights,
+        "priority_items": priority_items,
+        "first_useful_sign": first_useful_sign,
     }
 
 
@@ -2066,16 +2143,36 @@ def list_contradictions(
     return items
 
 
-def _all_evolution_candidates(
+def _eligible_evolution_object_ids(vault_dir: Path | str) -> list[str]:
+    promoted_object_ids = {
+        item["object_id"]
+        for objects in _deep_dive_object_map(vault_dir).values()
+        for item in objects
+        if item.get("object_id")
+    }
+    existing_object_ids = {item["object_id"] for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE)}
+    return sorted(promoted_object_ids.intersection(existing_object_ids))
+
+
+def _compute_evolution_candidates(
     vault_dir: Path | str,
     *,
-    query: str | None = None,
-    link_type: str | None = None,
+    object_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    normalized_query = (query or "").strip().lower()
     candidates: list[dict[str, Any]] = []
+    normalized_object_ids = list(dict.fromkeys(object_id for object_id in (object_ids or []) if object_id))
+    scoped_object_id_set = set(normalized_object_ids)
 
     open_contradictions = list_contradictions(vault_dir, limit=MAX_PAGE_SIZE, status="open")
+    if scoped_object_id_set:
+        open_contradictions = [
+            item
+            for item in open_contradictions
+            if scoped_object_id_set.intersection(
+                claim["object_id"]
+                for claim in (item["positive_claims"] + item["negative_claims"])
+            )
+        ]
     contradiction_object_ids = sorted(
         {
             claim["object_id"]
@@ -2181,13 +2278,13 @@ def _all_evolution_candidates(
                 if path
             ],
         }
-        if link_type and record["link_type"] != link_type:
-            continue
-        if normalized_query and not _evolution_candidate_matches_query(record, normalized_query):
-            continue
         candidates.append(record)
 
-    stale_summaries = list_stale_summaries(vault_dir, limit=MAX_PAGE_SIZE)
+    stale_summaries = list_stale_summaries(
+        vault_dir,
+        object_ids=normalized_object_ids or None,
+        limit=MAX_PAGE_SIZE,
+    )
     for item in stale_summaries:
         traceability = get_object_traceability(vault_dir, item["object_id"])
         earlier_path = traceability["object"]["canonical_path"]
@@ -2252,14 +2349,11 @@ def _all_evolution_candidates(
                 if path
             ],
         }
-        if link_type and record["link_type"] != link_type:
-            continue
-        if normalized_query and not _evolution_candidate_matches_query(record, normalized_query):
-            continue
         candidates.append(record)
 
-    for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE):
-        traceability = get_object_traceability(vault_dir, item["object_id"])
+    candidate_object_ids = normalized_object_ids or _eligible_evolution_object_ids(vault_dir)
+    for object_id in candidate_object_ids:
+        traceability = get_object_traceability(vault_dir, object_id)
         earlier_path = traceability["object"]["canonical_path"]
         earlier_date = _note_date_text(vault_dir, earlier_path)
         earlier_key = _note_date_sort_key(earlier_date)
@@ -2275,16 +2369,16 @@ def _all_evolution_candidates(
                 "evolution_id": _candidate_evolution_id(
                     link_type=inferred_link_type,
                     subject_kind="object",
-                    subject_id=item["object_id"],
-                    earlier_ref=f"object://{item['object_id']}",
+                    subject_id=object_id,
+                    earlier_ref=f"object://{object_id}",
                     later_ref=f"{note.get('note_type') or 'note'}://{note['path']}",
                 ),
                 "status": "candidate",
                 "link_type": inferred_link_type,
                 "subject_kind": "object",
-                "subject_id": item["object_id"],
-                "object_ids": [item["object_id"]],
-                "earlier_ref": f"object://{item['object_id']}",
+                "subject_id": object_id,
+                "object_ids": [object_id],
+                "earlier_ref": f"object://{object_id}",
                 "later_ref": f"{note.get('note_type') or 'note'}://{note['path']}",
                 "earlier_date": earlier_date,
                 "later_date": later_date,
@@ -2300,10 +2394,6 @@ def _all_evolution_candidates(
                 ],
                 "source_paths": [path for path in dict.fromkeys([earlier_path, note["path"]]) if path],
             }
-            if link_type and record["link_type"] != link_type:
-                continue
-            if normalized_query and not _evolution_candidate_matches_query(record, normalized_query):
-                continue
             candidates.append(record)
 
     candidates.sort(
@@ -2325,9 +2415,30 @@ def _all_evolution_candidates(
     return unique_candidates
 
 
+def _all_evolution_candidates(
+    vault_dir: Path | str,
+    *,
+    object_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_object_ids = tuple(dict.fromkeys(object_id for object_id in (object_ids or []) if object_id))
+    cache_key = (
+        str(resolved_vault.resolve()),
+        _evolution_dependency_signature(resolved_vault),
+        normalized_object_ids,
+    )
+    cached = _EVOLUTION_CANDIDATE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    result = _compute_evolution_candidates(resolved_vault, object_ids=list(normalized_object_ids))
+    _EVOLUTION_CANDIDATE_CACHE[cache_key] = result
+    return result
+
+
 def list_evolution_candidates(
     vault_dir: Path | str,
     *,
+    object_ids: list[str] | None = None,
     query: str | None = None,
     link_type: str | None = None,
     status: str = "candidate",
@@ -2337,7 +2448,13 @@ def list_evolution_candidates(
     limit, offset = _validate_page_args(limit=limit, offset=offset)
     if status != "candidate":
         return []
-    unique_candidates = _all_evolution_candidates(vault_dir, query=query, link_type=link_type)
+    normalized_query = (query or "").strip().lower()
+    unique_candidates = [
+        item
+        for item in _all_evolution_candidates(vault_dir, object_ids=object_ids)
+        if (not link_type or item["link_type"] == link_type)
+        and (not normalized_query or _evolution_candidate_matches_query(item, normalized_query))
+    ]
     return unique_candidates[offset : offset + limit]
 
 

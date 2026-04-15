@@ -213,7 +213,13 @@ def _build_evolution_section(
     rejected_links = [item for item in reviewed_links if item["status"] == "rejected"]
     candidate_items = [
         item
-        for item in list_evolution_candidates(vault_dir, query=query, link_type=link_type, status="candidate")
+        for item in list_evolution_candidates(
+            vault_dir,
+            object_ids=normalized_object_ids or None,
+            query=query,
+            link_type=link_type,
+            status="candidate",
+        )
         if item["evolution_id"] not in reviewed_evolution_ids
     ]
     if normalized_object_ids:
@@ -289,7 +295,7 @@ def build_signal_browser_payload(
 
 def build_briefing_payload(vault_dir: Path | str) -> dict[str, Any]:
     return {
-        "screen": "briefing/snapshot",
+        "screen": "briefing/intelligence",
         **get_briefing_snapshot(vault_dir),
     }
 

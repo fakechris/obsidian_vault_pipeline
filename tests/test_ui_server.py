@@ -616,6 +616,10 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         "openclaw_pipeline.commands.ui_server.ensure_signal_ledger_synced",
         lambda vault_dir: {"signal_count": 0, "type_counts": {}},
     )
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server._start_ui_prewarm",
+        lambda vault_dir: calls.setdefault("prewarm_vault_dir", str(vault_dir)),
+    )
 
     exit_code = main(["--vault-dir", str(temp_vault), "--host", "127.0.0.1", "--port", "9999"])
     payload = json.loads(capsys.readouterr().out)
@@ -626,6 +630,7 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         "vault_dir": str(temp_vault),
         "host": "127.0.0.1",
         "port": 9999,
+        "prewarm_vault_dir": str(temp_vault),
         "closed": True,
     }
 

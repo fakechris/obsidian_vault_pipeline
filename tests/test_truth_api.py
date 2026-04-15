@@ -351,6 +351,65 @@ Source note confirms the local-first rollout guidance from independent testing.
     assert {"replaces", "enriches", "confirms", "challenges"}.issubset(link_types)
 
 
+def test_truth_api_scopes_evolution_candidate_traceability_to_requested_objects(temp_vault, monkeypatch):
+    from openclaw_pipeline import truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    observed_object_ids: list[str] = []
+    original = truth_api.get_object_traceability
+
+    def counted_get_object_traceability(vault_dir, object_id):
+        observed_object_ids.append(object_id)
+        return original(vault_dir, object_id)
+
+    monkeypatch.setattr(truth_api, "get_object_traceability", counted_get_object_traceability)
+
+    items = truth_api.list_evolution_candidates(vault, object_ids=["source-note"])
+
+    assert items
+    assert set(observed_object_ids) == {"source-note"}
+    assert all("source-note" in item["object_ids"] for item in items)
+
+
+def test_truth_api_ignores_missing_objects_in_evolution_object_pool(temp_vault):
+    from openclaw_pipeline.truth_api import list_evolution_candidates
+
+    vault = _seed_truth_vault(temp_vault)
+    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Ghost Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: ghost-dive
+title: Ghost Dive
+type: deep_dive
+date: 2026-04-14
+---
+
+# Ghost Dive
+""",
+        encoding="utf-8",
+    )
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    (vault / "60-Logs" / "pipeline.jsonl").write_text(
+        json.dumps(
+            {
+                "event_type": "evergreen_auto_promoted",
+                "concept": "ghost-object",
+                "source": "Ghost Dive_深度解读.md",
+                "mutation": {"target_slug": "ghost-object"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    items = list_evolution_candidates(vault)
+
+    assert all("ghost-object" not in item["object_ids"] for item in items)
+
+
 def test_truth_api_reviews_evolution_candidate_and_lists_links(temp_vault):
     from openclaw_pipeline.truth_api import list_evolution_candidates, list_evolution_links, review_evolution_candidate
 
@@ -1563,6 +1622,9 @@ Thin.
     assert payload["unresolved_issues"]
     assert any(item["object_id"] == "source-note" for item in payload["changed_objects"])
     assert payload["active_topics"]
+    assert payload["insights"]
+    assert payload["priority_items"]
+    assert payload["first_useful_sign"] in payload["insights"]
 
 
 def test_truth_api_includes_review_action_signals(temp_vault):

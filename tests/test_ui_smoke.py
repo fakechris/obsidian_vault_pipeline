@@ -1126,6 +1126,9 @@ def test_ui_briefing_page_renders_briefing_snapshot(temp_vault):
 
     assert status == 200
     assert "Working Memory Snapshot" in body
+    assert "First Useful Sign" in body
+    assert "Insights" in body
+    assert "Priority Items" in body
     assert "Recent Signals" in body
     assert "Active Topics" in body
 
