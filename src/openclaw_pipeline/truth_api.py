@@ -99,11 +99,26 @@ def _materialized_truth_packs(
     candidates = _truth_pack_candidates(pack_name)
     requested_pack = candidates[0]
     db_path = _db_path(vault_dir)
-    with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            f"SELECT 1 FROM {table_name} WHERE pack = ? LIMIT 1",
-            (requested_pack,),
-        ).fetchone()
+    row = None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM truth_projections WHERE pack = ? LIMIT 1",
+                (requested_pack,),
+            ).fetchone()
+            if row is None:
+                row = conn.execute(
+                    f"SELECT 1 FROM {table_name} WHERE pack = ? LIMIT 1",
+                    (requested_pack,),
+                ).fetchone()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                f"SELECT 1 FROM {table_name} WHERE pack = ? LIMIT 1",
+                (requested_pack,),
+            ).fetchone()
     if row is not None:
         return [requested_pack]
     return candidates
@@ -979,7 +994,7 @@ def get_object_detail(
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     escaped = _escape_like(object_id)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="graph_clusters")
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
 
     truth_pack = ""
     with sqlite3.connect(db_path) as conn:
@@ -1159,7 +1174,7 @@ def list_graph_clusters(
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
-    pack_candidates = _truth_pack_candidates(pack_name)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="graph_clusters")
     normalized_query = _escape_like(query.strip().lower()) if query else ""
 
     sql = """

@@ -312,6 +312,71 @@ def test_truth_api_lists_research_graph_clusters(temp_vault):
     assert "target-note" in clusters[0]["member_object_ids"]
 
 
+def test_truth_api_does_not_fallback_when_requested_pack_is_materialized(temp_vault, monkeypatch):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.truth_api import get_object_detail, list_graph_clusters, list_objects
+    from openclaw_pipeline.truth_store import TruthStoreProjection
+
+    vault = _seed_truth_vault(temp_vault)
+
+    class Spec:
+        pack = "research-tech"
+        name = "research-tech-default"
+
+    def fake_execute_truth_projection_builder(*, vault_dir, page_rows, link_rows, pack_name=None):
+        assert vault_dir == vault
+        assert pack_name == "default-knowledge"
+        return (
+            Spec(),
+            TruthStoreProjection(
+                objects=[
+                    (
+                        "default-knowledge",
+                        "source-note",
+                        "evergreen",
+                        "Default Source Note",
+                        "10-Knowledge/Evergreen/Source.md",
+                        "source-note",
+                    )
+                ],
+                claims=[],
+                claim_evidence=[],
+                relations=[],
+                compiled_summaries=[],
+                contradictions=[],
+                graph_edges=[],
+                graph_clusters=[],
+            ),
+        )
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.knowledge_index.execute_truth_projection_builder",
+        fake_execute_truth_projection_builder,
+    )
+
+    rebuild_knowledge_index(vault, pack_name="default-knowledge")
+
+    research_clusters = list_graph_clusters(vault, pack_name="research-tech")
+    default_clusters = list_graph_clusters(vault, pack_name="default-knowledge")
+    default_objects = list_objects(vault, pack_name="default-knowledge")
+    default_detail = get_object_detail(vault, "source-note", pack_name="default-knowledge")
+
+    assert research_clusters
+    assert default_clusters == []
+    assert default_objects == [
+        {
+            "object_id": "source-note",
+            "object_kind": "evergreen",
+            "title": "Default Source Note",
+            "canonical_path": "10-Knowledge/Evergreen/Source.md",
+            "source_slug": "source-note",
+            "pack": "default-knowledge",
+        }
+    ]
+    assert default_detail["object"]["title"] == "Default Source Note"
+    assert default_detail["object"]["pack"] == "default-knowledge"
+
+
 def test_truth_api_lists_contradictions(temp_vault):
     from openclaw_pipeline.truth_api import list_contradictions
 

@@ -286,6 +286,69 @@ date: 2026-04-15
     assert graph_packs == [("default-knowledge",)]
 
 
+def test_rebuild_knowledge_index_preserves_other_materialized_pack_projections(temp_vault):
+    from openclaw_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-15
+---
+
+# Source Note
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-15
+---
+
+# Target Note
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault, pack_name="research-tech")
+    rebuild_knowledge_index(temp_vault, pack_name="default-knowledge")
+
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        object_packs = conn.execute(
+            "SELECT DISTINCT pack FROM objects ORDER BY pack"
+        ).fetchall()
+        graph_packs = conn.execute(
+            "SELECT DISTINCT pack FROM graph_clusters ORDER BY pack"
+        ).fetchall()
+        projection_packs = conn.execute(
+            "SELECT pack, owner_pack FROM truth_projections ORDER BY pack"
+        ).fetchall()
+
+    assert object_packs == [("default-knowledge",), ("research-tech",)]
+    assert graph_packs == [("default-knowledge",), ("research-tech",)]
+    assert projection_packs == [
+        ("default-knowledge", "research-tech"),
+        ("research-tech", "research-tech"),
+    ]
+
+    research_stats = knowledge_index_stats(temp_vault, pack_name="research-tech")
+    default_stats = knowledge_index_stats(temp_vault, pack_name="default-knowledge")
+
+    assert research_stats["objects"] == 2
+    assert default_stats["objects"] == 2
+
+
 def test_knowledge_index_help_includes_expected_arguments(capsys):
     from openclaw_pipeline.commands.knowledge_index import main
 

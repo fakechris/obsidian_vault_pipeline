@@ -98,6 +98,13 @@ CREATE TABLE graph_clusters (
 );
 
 CREATE INDEX idx_graph_clusters_pack_kind ON graph_clusters(pack, cluster_kind);
+
+CREATE TABLE truth_projections (
+  pack TEXT PRIMARY KEY,
+  owner_pack TEXT NOT NULL,
+  builder_name TEXT NOT NULL DEFAULT '',
+  built_at TEXT NOT NULL DEFAULT ''
+);
 """
 
 CONTRADICTION_HEURISTIC_NOTE = (

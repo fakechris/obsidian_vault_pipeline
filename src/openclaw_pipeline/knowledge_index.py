@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from array import array
+from datetime import datetime, timezone
 import hashlib
 from io import TextIOBase
 import json
@@ -15,7 +16,7 @@ from .graph.link_parser import LinkParser
 from .identity import canonicalize_note_id
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from .runtime import VaultLayout, knowledge_db_write_lock, resolve_vault_dir
-from .truth_projection_registry import execute_truth_projection_builder
+from .truth_projection_registry import execute_truth_projection_builder, resolve_truth_projection_builder
 from .truth_store import TRUTH_STORE_SCHEMA
 
 SUMMARY_MAX_LEN = 320
@@ -101,10 +102,126 @@ SCHEMA += "\n" + TRUTH_STORE_SCHEMA
 
 EMBEDDING_DIMENSIONS = 128
 EMBEDDING_MODEL = "local-hash-v1"
+TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug"),
+    "claims": ("pack", "claim_id", "object_id", "claim_kind", "claim_text", "confidence"),
+    "claim_evidence": ("pack", "claim_id", "source_slug", "evidence_kind", "quote_text"),
+    "relations": ("pack", "source_object_id", "target_object_id", "relation_type", "evidence_source_slug"),
+    "compiled_summaries": ("pack", "object_id", "summary_text", "source_slug"),
+    "contradictions": (
+        "pack",
+        "contradiction_id",
+        "subject_key",
+        "positive_claim_ids_json",
+        "negative_claim_ids_json",
+        "status",
+        "resolution_note",
+        "resolved_at",
+    ),
+    "graph_edges": (
+        "pack",
+        "edge_id",
+        "source_object_id",
+        "target_object_id",
+        "edge_kind",
+        "weight",
+        "evidence_source_slug",
+    ),
+    "graph_clusters": (
+        "pack",
+        "cluster_id",
+        "cluster_kind",
+        "label",
+        "center_object_id",
+        "member_object_ids_json",
+        "score",
+    ),
+}
 
 
 def _truth_pack_name(pack_name: str | None = None) -> str:
     return str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+
+
+def _utc_now_text() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _projection_metadata(pack_name: str) -> tuple[str, str]:
+    try:
+        spec = resolve_truth_projection_builder(pack_name=pack_name)
+    except Exception:
+        return pack_name, ""
+    return spec.pack, getattr(spec, "name", "")
+
+
+def _preserve_existing_truth_rows(
+    source_db_path: Path,
+    dest_conn: sqlite3.Connection,
+    *,
+    exclude_pack: str,
+) -> None:
+    if not source_db_path.exists():
+        return
+    preserved_packs: set[str] = set()
+    preserved_metadata_packs: set[str] = set()
+    try:
+        with sqlite3.connect(source_db_path) as source_conn:
+            for table_name, columns in TRUTH_PROJECTION_TABLE_COLUMNS.items():
+                column_sql = ", ".join(columns)
+                rows = source_conn.execute(
+                    f"SELECT {column_sql} FROM {table_name} WHERE pack != ? ORDER BY pack",
+                    (exclude_pack,),
+                ).fetchall()
+                if not rows:
+                    continue
+                placeholders = ", ".join("?" for _ in columns)
+                dest_conn.executemany(
+                    f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+                    rows,
+                )
+                preserved_packs.update(str(row[0]) for row in rows if row and row[0])
+
+            metadata_rows = source_conn.execute(
+                """
+                SELECT pack, owner_pack, builder_name, built_at
+                FROM truth_projections
+                WHERE pack != ?
+                ORDER BY pack
+                """,
+                (exclude_pack,),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        metadata_rows = []
+    except sqlite3.DatabaseError:
+        return
+
+    if metadata_rows:
+        dest_conn.executemany(
+            """
+            INSERT INTO truth_projections (pack, owner_pack, builder_name, built_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            metadata_rows,
+        )
+        preserved_metadata_packs.update(str(row[0]) for row in metadata_rows if row and row[0])
+
+    missing_metadata_packs = sorted(preserved_packs - preserved_metadata_packs)
+    if not missing_metadata_packs:
+        return
+
+    built_at = _utc_now_text()
+    for pack in missing_metadata_packs:
+        owner_pack, builder_name = _projection_metadata(pack)
+        dest_conn.execute(
+            """
+            INSERT INTO truth_projections (pack, owner_pack, builder_name, built_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (pack, owner_pack, builder_name, built_at),
+        )
 
 
 def _split_frontmatter_body(content: str) -> str:
@@ -361,6 +478,7 @@ def rebuild_knowledge_index(
 ) -> dict[str, int | str]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
+    truth_pack = _truth_pack_name(pack_name)
     with knowledge_db_write_lock(resolved_vault):
         evergreen_dir = layout.evergreen_dir
         atlas_dir = layout.atlas_dir
@@ -401,6 +519,7 @@ def rebuild_knowledge_index(
         conn = None
         try:
             conn = _initialize_database(temp_db_path)
+            _preserve_existing_truth_rows(layout.knowledge_db, conn, exclude_pack=truth_pack)
             page_rows = []
             timeline_rows = []
             embedding_rows = []
@@ -557,6 +676,18 @@ def rebuild_knowledge_index(
                 """,
                 truth_projection.graph_clusters,
             )
+            conn.execute(
+                """
+                INSERT INTO truth_projections (pack, owner_pack, builder_name, built_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    truth_pack,
+                    projection_spec.pack,
+                    getattr(projection_spec, "name", ""),
+                    _utc_now_text(),
+                ),
+            )
 
             raw_rows = _collect_raw_rows(layout)
             conn.executemany(
@@ -604,7 +735,7 @@ def rebuild_knowledge_index(
 
             return {
                 "db_path": str(layout.knowledge_db),
-                "projection_pack": _truth_pack_name(pack_name),
+                "projection_pack": truth_pack,
                 "pages_indexed": len(page_rows),
                 "links_indexed": len(link_rows),
                 "raw_records_indexed": len(raw_rows),
@@ -975,6 +1106,27 @@ def knowledge_index_stats(vault_dir: Path, *, pack_name: str | None = None) -> d
     with sqlite3.connect(layout.knowledge_db) as conn:
         for key, query in queries.items():
             stats[key] = int(conn.execute(query, (truth_pack,)).fetchone()[0]) if "pack = ?" in query else int(conn.execute(query).fetchone()[0])
+        try:
+            rows = conn.execute(
+                """
+                SELECT pack, owner_pack, builder_name, built_at
+                FROM truth_projections
+                ORDER BY pack
+                """
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            rows = []
+        stats["materialized_truth_packs"] = [
+            {
+                "pack": str(pack),
+                "owner_pack": str(owner_pack),
+                "builder_name": str(builder_name or ""),
+                "built_at": str(built_at or ""),
+            }
+            for pack, owner_pack, builder_name, built_at in rows
+        ]
     return stats
 
 
