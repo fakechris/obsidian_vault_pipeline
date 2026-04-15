@@ -925,3 +925,38 @@ aliases: [Target Note]
 
     assert result["pages_indexed"] == 2
     assert result["links_indexed"] == 1
+
+
+def test_rebuild_knowledge_index_acquires_single_writer_lock(temp_vault, monkeypatch):
+    from contextlib import contextmanager
+
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    evergreen.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+""",
+        encoding="utf-8",
+    )
+
+    calls: list[str] = []
+
+    @contextmanager
+    def fake_lock(vault_dir, *, timeout_seconds=300.0):
+        calls.append(f"enter:{temp_vault == vault_dir}")
+        yield
+        calls.append("exit")
+
+    monkeypatch.setattr("openclaw_pipeline.knowledge_index.knowledge_db_write_lock", fake_lock)
+
+    result = rebuild_knowledge_index(temp_vault)
+
+    assert result["pages_indexed"] == 1
+    assert calls == ["enter:True", "exit"]

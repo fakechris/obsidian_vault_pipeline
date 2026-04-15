@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 import yaml
 
-from .runtime import VaultLayout, resolve_vault_dir
+from .runtime import VaultLayout, knowledge_db_write_lock, resolve_vault_dir
 
 MAX_PAGE_SIZE = 500
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
@@ -186,22 +186,23 @@ def record_review_action(
     }
     _append_jsonl(layout.logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl", event)
     if layout.knowledge_db.exists():
-        with sqlite3.connect(layout.knowledge_db) as conn:
-            conn.execute(
-                """
-                INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    _REVIEW_AUDIT_LOG_NAME,
-                    event_type,
-                    slug,
-                    session_id,
-                    timestamp,
-                    json.dumps(event, ensure_ascii=False),
-                ),
-            )
-            conn.commit()
+        with knowledge_db_write_lock(resolved_vault):
+            with sqlite3.connect(layout.knowledge_db) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _REVIEW_AUDIT_LOG_NAME,
+                        event_type,
+                        slug,
+                        session_id,
+                        timestamp,
+                        json.dumps(event, ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
     return event
 
 
@@ -1202,26 +1203,27 @@ def _write_action_queue_rows(vault_dir: Path | str, actions: list[dict[str, Any]
     layout = VaultLayout.from_vault(resolved_vault)
     _rewrite_jsonl(layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl", actions)
     if layout.knowledge_db.exists():
-        with sqlite3.connect(layout.knowledge_db) as conn:
-            conn.execute("DELETE FROM audit_events WHERE source_log = ?", (_ACTION_LOG_NAME,))
-            conn.executemany(
-                """
-                INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        _ACTION_LOG_NAME,
-                        action["action_kind"],
-                        action["action_id"],
-                        action.get("session_id", "action-queue"),
-                        action["created_at"],
-                        json.dumps(action, ensure_ascii=False),
-                    )
-                    for action in actions
-                ],
-            )
-            conn.commit()
+        with knowledge_db_write_lock(resolved_vault):
+            with sqlite3.connect(layout.knowledge_db) as conn:
+                conn.execute("DELETE FROM audit_events WHERE source_log = ?", (_ACTION_LOG_NAME,))
+                conn.executemany(
+                    """
+                    INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            _ACTION_LOG_NAME,
+                            action["action_kind"],
+                            action["action_id"],
+                            action.get("session_id", "action-queue"),
+                            action["created_at"],
+                            json.dumps(action, ensure_ascii=False),
+                        )
+                        for action in actions
+                    ],
+                )
+                conn.commit()
 
 
 def list_action_queue(
@@ -1831,26 +1833,27 @@ def sync_signal_ledger(vault_dir: Path | str) -> dict[str, Any]:
     signals = _compute_signal_entries(resolved_vault)
     _rewrite_jsonl(layout.logs_dir / f"{_SIGNAL_LOG_NAME}.jsonl", signals)
     if layout.knowledge_db.exists():
-        with sqlite3.connect(layout.knowledge_db) as conn:
-            conn.execute("DELETE FROM audit_events WHERE source_log = ?", (_SIGNAL_LOG_NAME,))
-            conn.executemany(
-                """
-                INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        _SIGNAL_LOG_NAME,
-                        item["signal_type"],
-                        item["signal_id"],
-                        "signal-ledger",
-                        item["detected_at"],
-                        json.dumps(item, ensure_ascii=False),
-                    )
-                    for item in signals
-                ],
-            )
-            conn.commit()
+        with knowledge_db_write_lock(resolved_vault):
+            with sqlite3.connect(layout.knowledge_db) as conn:
+                conn.execute("DELETE FROM audit_events WHERE source_log = ?", (_SIGNAL_LOG_NAME,))
+                conn.executemany(
+                    """
+                    INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            _SIGNAL_LOG_NAME,
+                            item["signal_type"],
+                            item["signal_id"],
+                            "signal-ledger",
+                            item["detected_at"],
+                            json.dumps(item, ensure_ascii=False),
+                        )
+                        for item in signals
+                    ],
+                )
+                conn.commit()
     type_counts = Counter(item["signal_type"] for item in signals)
     result = {
         "signal_count": len(signals),

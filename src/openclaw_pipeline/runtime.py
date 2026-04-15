@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from contextlib import contextmanager
+import fcntl
+import time
 from typing import Iterator
 
 import yaml
@@ -65,6 +68,10 @@ class VaultLayout:
     @property
     def knowledge_db(self) -> Path:
         return self.logs_dir / "knowledge.db"
+
+    @property
+    def knowledge_db_lock(self) -> Path:
+        return self.logs_dir / "knowledge.db.lock"
 
     @property
     def transactions_dir(self) -> Path:
@@ -159,3 +166,38 @@ class VaultLayout:
         }
         area = mapping.get(classification, "AI-Research")
         return self.month_topics_dir(area, when=when)
+
+
+@contextmanager
+def advisory_file_lock(
+    path: Path,
+    *,
+    timeout_seconds: float | None = 300.0,
+    poll_interval_seconds: float = 0.1,
+) -> Iterator[None]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+    with path.open("a+", encoding="utf-8") as handle:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for lock: {path}")
+                time.sleep(poll_interval_seconds)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def knowledge_db_write_lock(
+    vault_dir: Path | str | None = None,
+    *,
+    timeout_seconds: float | None = 300.0,
+) -> Iterator[None]:
+    layout = VaultLayout.from_vault(vault_dir)
+    with advisory_file_lock(layout.knowledge_db_lock, timeout_seconds=timeout_seconds):
+        yield

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 from pathlib import Path
 
@@ -1833,3 +1834,50 @@ def test_truth_api_includes_review_action_signals(temp_vault):
     reviewed = next(item for item in items if item["signal_type"] == "contradiction_reviewed")
     assert reviewed["object_ids"] == ["source-note"]
     assert reviewed["source_path"] == "/contradictions?status=resolved"
+
+
+def test_truth_api_sync_signal_ledger_acquires_single_writer_lock(temp_vault, monkeypatch):
+    from openclaw_pipeline import truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    calls: list[str] = []
+
+    @contextmanager
+    def fake_lock(vault_dir, *, timeout_seconds=300.0):
+        calls.append(f"enter:{vault_dir == vault}")
+        yield
+        calls.append("exit")
+
+    monkeypatch.setattr(truth_api, "knowledge_db_write_lock", fake_lock)
+
+    truth_api.sync_signal_ledger(vault)
+
+    assert calls == ["enter:True", "exit"]
+
+
+def test_truth_api_record_review_action_acquires_single_writer_lock(temp_vault, monkeypatch):
+    from openclaw_pipeline import truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    calls: list[str] = []
+
+    @contextmanager
+    def fake_lock(vault_dir, *, timeout_seconds=300.0):
+        calls.append(f"enter:{vault_dir == vault}")
+        yield
+        calls.append("exit")
+
+    monkeypatch.setattr(truth_api, "knowledge_db_write_lock", fake_lock)
+
+    truth_api.record_review_action(
+        vault,
+        event_type="ui_summaries_rebuilt",
+        slug="source-note",
+        payload={
+            "object_ids": ["source-note"],
+            "objects_rebuilt": 1,
+            "rebuilt_object_ids": ["source-note"],
+        },
+    )
+
+    assert calls == ["enter:True", "exit"]

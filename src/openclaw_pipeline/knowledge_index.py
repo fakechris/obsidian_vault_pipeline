@@ -13,7 +13,7 @@ from .concept_registry import ConceptRegistry, ResolutionAction
 from .graph.frontmatter import FrontmatterParser, NoteMetadata
 from .graph.link_parser import LinkParser
 from .identity import canonicalize_note_id
-from .runtime import VaultLayout, resolve_vault_dir
+from .runtime import VaultLayout, knowledge_db_write_lock, resolve_vault_dir
 from .truth_store import TRUTH_STORE_SCHEMA, build_truth_store_projection
 
 SUMMARY_MAX_LEN = 320
@@ -309,223 +309,224 @@ def _ensure_knowledge_db(vault_dir: Path) -> tuple[Path, VaultLayout]:
 def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
-    evergreen_dir = layout.evergreen_dir
-    atlas_dir = layout.atlas_dir
-    areas_dir = resolved_vault / "20-Areas"
-    parser = FrontmatterParser(resolved_vault)
-    link_parser = LinkParser(resolved_vault)
-    registry = ConceptRegistry(resolved_vault).load()
+    with knowledge_db_write_lock(resolved_vault):
+        evergreen_dir = layout.evergreen_dir
+        atlas_dir = layout.atlas_dir
+        areas_dir = resolved_vault / "20-Areas"
+        parser = FrontmatterParser(resolved_vault)
+        link_parser = LinkParser(resolved_vault)
+        registry = ConceptRegistry(resolved_vault).load()
 
-    object_metadata_items = [
-        meta
-        for meta in parser.parse_directory(evergreen_dir, recursive=True)
-        if "_Candidates" not in Path(meta.path).parts
-    ]
-    page_metadata_items = list(object_metadata_items)
-    for extra_dir in (atlas_dir, areas_dir):
-        if not extra_dir.exists():
-            continue
-        for meta in parser.parse_directory(extra_dir, recursive=True):
-            if "_Candidates" in Path(meta.path).parts:
+        object_metadata_items = [
+            meta
+            for meta in parser.parse_directory(evergreen_dir, recursive=True)
+            if "_Candidates" not in Path(meta.path).parts
+        ]
+        page_metadata_items = list(object_metadata_items)
+        for extra_dir in (atlas_dir, areas_dir):
+            if not extra_dir.exists():
                 continue
-            page_metadata_items.append(meta)
+            for meta in parser.parse_directory(extra_dir, recursive=True):
+                if "_Candidates" in Path(meta.path).parts:
+                    continue
+                page_metadata_items.append(meta)
 
-    deduped_page_metadata_items: list[NoteMetadata] = []
-    seen_page_keys: set[str] = set()
-    for meta in page_metadata_items:
-        key = meta.note_id
-        if key in seen_page_keys:
-            continue
-        seen_page_keys.add(key)
-        deduped_page_metadata_items.append(meta)
+        deduped_page_metadata_items: list[NoteMetadata] = []
+        seen_page_keys: set[str] = set()
+        for meta in page_metadata_items:
+            key = meta.note_id
+            if key in seen_page_keys:
+                continue
+            seen_page_keys.add(key)
+            deduped_page_metadata_items.append(meta)
 
-    surface_map = _build_surface_map(object_metadata_items)
-    known_slugs = {meta.note_id for meta in object_metadata_items}
+        surface_map = _build_surface_map(object_metadata_items)
+        known_slugs = {meta.note_id for meta in object_metadata_items}
 
-    temp_db_path = layout.knowledge_db.with_name(f"{layout.knowledge_db.name}.tmp")
-    _remove_sqlite_artifacts(temp_db_path)
+        temp_db_path = layout.knowledge_db.with_name(f"{layout.knowledge_db.name}.tmp")
+        _remove_sqlite_artifacts(temp_db_path)
 
-    conn = None
-    try:
-        conn = _initialize_database(temp_db_path)
-        page_rows = []
-        timeline_rows = []
-        embedding_rows = []
-        for meta in deduped_page_metadata_items:
-            file_path = Path(meta.path)
-            body = _split_frontmatter_body(file_path.read_text(encoding="utf-8"))
-            page_rows.append(
-                (
-                    meta.note_id,
-                    meta.title,
-                    meta.note_type,
-                    str(file_path),
-                    meta.day_id,
-                    json.dumps(meta.to_dict(), ensure_ascii=False),
-                    body,
-                )
-            )
-            timeline_rows.extend(_extract_timeline_events(meta, body))
-            for chunk_index, (section_title, chunk_text) in enumerate(_chunk_page_body(body, meta.title)):
-                embedding_rows.append(
+        conn = None
+        try:
+            conn = _initialize_database(temp_db_path)
+            page_rows = []
+            timeline_rows = []
+            embedding_rows = []
+            for meta in deduped_page_metadata_items:
+                file_path = Path(meta.path)
+                body = _split_frontmatter_body(file_path.read_text(encoding="utf-8"))
+                page_rows.append(
                     (
                         meta.note_id,
-                        chunk_index,
-                        section_title,
-                        chunk_text,
-                        _embed_text(f"{section_title}\n{chunk_text}"),
-                        EMBEDDING_MODEL,
+                        meta.title,
+                        meta.note_type,
+                        str(file_path),
+                        meta.day_id,
+                        json.dumps(meta.to_dict(), ensure_ascii=False),
+                        body,
                     )
                 )
-
-        conn.executemany(
-            """
-            INSERT INTO pages_index (slug, title, note_type, path, day_id, frontmatter_json, body)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            page_rows,
-        )
-        conn.executemany(
-            "INSERT INTO page_fts (slug, title, body) VALUES (?, ?, ?)",
-            [(slug, title, body) for slug, title, _, _, _, _, body in page_rows],
-        )
-
-        link_rows = []
-        for meta in deduped_page_metadata_items:
-            file_path = Path(meta.path)
-            for link in link_parser.parse_file(file_path):
-                target_slug = _resolve_target_slug(link.target_raw or link.target, registry, surface_map)
-                if not target_slug or target_slug not in known_slugs:
-                    continue
-                link_rows.append(
-                    (
-                        link.source,
-                        target_slug,
-                        link.target_raw,
-                        link.link_type,
-                        link.line_number,
+                timeline_rows.extend(_extract_timeline_events(meta, body))
+                for chunk_index, (section_title, chunk_text) in enumerate(_chunk_page_body(body, meta.title)):
+                    embedding_rows.append(
+                        (
+                            meta.note_id,
+                            chunk_index,
+                            section_title,
+                            chunk_text,
+                            _embed_text(f"{section_title}\n{chunk_text}"),
+                            EMBEDDING_MODEL,
+                        )
                     )
-                )
 
-        conn.executemany(
-            """
-            INSERT INTO page_links (source_slug, target_slug, target_raw, link_type, line_number)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            link_rows,
-        )
-
-        object_page_rows = [row for row in page_rows if row[0] in known_slugs]
-        object_link_rows = [row for row in link_rows if row[0] in known_slugs]
-        truth_projection = build_truth_store_projection(object_page_rows, object_link_rows)
-        conn.executemany(
-            """
-            INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            truth_projection.objects,
-        )
-        conn.executemany(
-            """
-            INSERT INTO claims (claim_id, object_id, claim_kind, claim_text, confidence)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            truth_projection.claims,
-        )
-        conn.executemany(
-            """
-            INSERT INTO claim_evidence (claim_id, source_slug, evidence_kind, quote_text)
-            VALUES (?, ?, ?, ?)
-            """,
-            truth_projection.claim_evidence,
-        )
-        conn.executemany(
-            """
-            INSERT INTO relations (source_object_id, target_object_id, relation_type, evidence_source_slug)
-            VALUES (?, ?, ?, ?)
-            """,
-            truth_projection.relations,
-        )
-        conn.executemany(
-            """
-            INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
-            VALUES (?, ?, ?)
-            """,
-            truth_projection.compiled_summaries,
-        )
-        conn.executemany(
-            """
-            INSERT INTO contradictions (
-                contradiction_id,
-                subject_key,
-                positive_claim_ids_json,
-                negative_claim_ids_json,
-                status,
-                resolution_note,
-                resolved_at
+            conn.executemany(
+                """
+                INSERT INTO pages_index (slug, title, note_type, path, day_id, frontmatter_json, body)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                page_rows,
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            truth_projection.contradictions,
-        )
+            conn.executemany(
+                "INSERT INTO page_fts (slug, title, body) VALUES (?, ?, ?)",
+                [(slug, title, body) for slug, title, _, _, _, _, body in page_rows],
+            )
 
-        raw_rows = _collect_raw_rows(layout)
-        conn.executemany(
-            """
-            INSERT INTO raw_data (slug, source_name, payload_json, source_path)
-            VALUES (?, ?, ?, ?)
-            """,
-            raw_rows,
-        )
+            link_rows = []
+            for meta in deduped_page_metadata_items:
+                file_path = Path(meta.path)
+                for link in link_parser.parse_file(file_path):
+                    target_slug = _resolve_target_slug(link.target_raw or link.target, registry, surface_map)
+                    if not target_slug or target_slug not in known_slugs:
+                        continue
+                    link_rows.append(
+                        (
+                            link.source,
+                            target_slug,
+                            link.target_raw,
+                            link.link_type,
+                            link.line_number,
+                        )
+                    )
 
-        conn.executemany(
-            """
-            INSERT INTO timeline_events (slug, event_date, event_type, heading, payload_json)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            timeline_rows,
-        )
+            conn.executemany(
+                """
+                INSERT INTO page_links (source_slug, target_slug, target_raw, link_type, line_number)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                link_rows,
+            )
 
-        audit_rows = _collect_audit_rows(layout)
-        conn.executemany(
-            """
-            INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            audit_rows,
-        )
-        conn.executemany(
-            """
-            INSERT INTO page_embeddings (slug, chunk_index, section_title, chunk_text, embedding_blob, embedding_model)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            embedding_rows,
-        )
-        conn.commit()
-    except Exception:
-        if conn is not None:
+            object_page_rows = [row for row in page_rows if row[0] in known_slugs]
+            object_link_rows = [row for row in link_rows if row[0] in known_slugs]
+            truth_projection = build_truth_store_projection(object_page_rows, object_link_rows)
+            conn.executemany(
+                """
+                INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                truth_projection.objects,
+            )
+            conn.executemany(
+                """
+                INSERT INTO claims (claim_id, object_id, claim_kind, claim_text, confidence)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                truth_projection.claims,
+            )
+            conn.executemany(
+                """
+                INSERT INTO claim_evidence (claim_id, source_slug, evidence_kind, quote_text)
+                VALUES (?, ?, ?, ?)
+                """,
+                truth_projection.claim_evidence,
+            )
+            conn.executemany(
+                """
+                INSERT INTO relations (source_object_id, target_object_id, relation_type, evidence_source_slug)
+                VALUES (?, ?, ?, ?)
+                """,
+                truth_projection.relations,
+            )
+            conn.executemany(
+                """
+                INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
+                VALUES (?, ?, ?)
+                """,
+                truth_projection.compiled_summaries,
+            )
+            conn.executemany(
+                """
+                INSERT INTO contradictions (
+                    contradiction_id,
+                    subject_key,
+                    positive_claim_ids_json,
+                    negative_claim_ids_json,
+                    status,
+                    resolution_note,
+                    resolved_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                truth_projection.contradictions,
+            )
+
+            raw_rows = _collect_raw_rows(layout)
+            conn.executemany(
+                """
+                INSERT INTO raw_data (slug, source_name, payload_json, source_path)
+                VALUES (?, ?, ?, ?)
+                """,
+                raw_rows,
+            )
+
+            conn.executemany(
+                """
+                INSERT INTO timeline_events (slug, event_date, event_type, heading, payload_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                timeline_rows,
+            )
+
+            audit_rows = _collect_audit_rows(layout)
+            conn.executemany(
+                """
+                INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                audit_rows,
+            )
+            conn.executemany(
+                """
+                INSERT INTO page_embeddings (slug, chunk_index, section_title, chunk_text, embedding_blob, embedding_model)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                embedding_rows,
+            )
+            conn.commit()
+        except Exception:
+            if conn is not None:
+                conn.close()
+            _remove_sqlite_artifacts(temp_db_path)
+            raise
+        else:
+            assert conn is not None
             conn.close()
-        _remove_sqlite_artifacts(temp_db_path)
-        raise
-    else:
-        assert conn is not None
-        conn.close()
-        temp_db_path.replace(layout.knowledge_db)
+            temp_db_path.replace(layout.knowledge_db)
 
-    return {
-        "db_path": str(layout.knowledge_db),
-        "pages_indexed": len(page_rows),
-        "links_indexed": len(link_rows),
-        "raw_records_indexed": len(raw_rows),
-        "timeline_events_indexed": len(timeline_rows),
-        "audit_events_indexed": len(audit_rows),
-        "embedding_chunks_indexed": len(embedding_rows),
-        "objects_indexed": len(truth_projection.objects),
-        "claims_indexed": len(truth_projection.claims),
-        "relations_indexed": len(truth_projection.relations),
-        "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
-        "contradictions_indexed": len(truth_projection.contradictions),
-    }
+        return {
+            "db_path": str(layout.knowledge_db),
+            "pages_indexed": len(page_rows),
+            "links_indexed": len(link_rows),
+            "raw_records_indexed": len(raw_rows),
+            "timeline_events_indexed": len(timeline_rows),
+            "audit_events_indexed": len(audit_rows),
+            "embedding_chunks_indexed": len(embedding_rows),
+            "objects_indexed": len(truth_projection.objects),
+            "claims_indexed": len(truth_projection.claims),
+            "relations_indexed": len(truth_projection.relations),
+            "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
+            "contradictions_indexed": len(truth_projection.contradictions),
+        }
 
 
 def query_knowledge_index(vault_dir: Path, query: str, limit: int = 5) -> list[dict[str, str | int | float]]:
@@ -694,29 +695,30 @@ def resolve_contradictions(
         }
 
     placeholders = ",".join("?" for _ in resolved_ids)
-    with sqlite3.connect(layout.knowledge_db) as conn:
-        existing = conn.execute(
-            f"""
-            SELECT contradiction_id
-            FROM contradictions
-            WHERE contradiction_id IN ({placeholders})
-            ORDER BY contradiction_id
-            """,
-            tuple(resolved_ids),
-        ).fetchall()
-        found_ids = [row[0] for row in existing]
-        if found_ids:
-            now_value = conn.execute("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')").fetchone()[0]
-            found_placeholders = ",".join("?" for _ in found_ids)
-            conn.execute(
+    with knowledge_db_write_lock(vault_dir):
+        with sqlite3.connect(layout.knowledge_db) as conn:
+            existing = conn.execute(
                 f"""
-                UPDATE contradictions
-                SET status = ?, resolution_note = ?, resolved_at = ?
-                WHERE contradiction_id IN ({found_placeholders})
+                SELECT contradiction_id
+                FROM contradictions
+                WHERE contradiction_id IN ({placeholders})
+                ORDER BY contradiction_id
                 """,
-                (status, note, now_value, *found_ids),
-            )
-            conn.commit()
+                tuple(resolved_ids),
+            ).fetchall()
+            found_ids = [row[0] for row in existing]
+            if found_ids:
+                now_value = conn.execute("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')").fetchone()[0]
+                found_placeholders = ",".join("?" for _ in found_ids)
+                conn.execute(
+                    f"""
+                    UPDATE contradictions
+                    SET status = ?, resolution_note = ?, resolved_at = ?
+                    WHERE contradiction_id IN ({found_placeholders})
+                    """,
+                    (status, note, now_value, *found_ids),
+                )
+                conn.commit()
 
     return {
         "resolved_count": len(found_ids),
@@ -768,79 +770,80 @@ def contradiction_object_ids(vault_dir: Path, contradiction_ids: list[str]) -> l
 
 def rebuild_compiled_summaries(vault_dir: Path, object_ids: list[str] | None = None) -> dict[str, object]:
     _, layout = _ensure_knowledge_db(vault_dir)
-    with sqlite3.connect(layout.knowledge_db) as conn:
-        if object_ids:
-            placeholders = ",".join("?" for _ in object_ids)
-            object_rows = conn.execute(
-                f"""
-                SELECT objects.object_id, objects.title,
-                       COALESCE(rel.outgoing_count, 0) AS outgoing_count
-                FROM objects
-                LEFT JOIN (
-                    SELECT source_object_id, COUNT(*) AS outgoing_count
+    with knowledge_db_write_lock(vault_dir):
+        with sqlite3.connect(layout.knowledge_db) as conn:
+            if object_ids:
+                placeholders = ",".join("?" for _ in object_ids)
+                object_rows = conn.execute(
+                    f"""
+                    SELECT objects.object_id, objects.title,
+                           COALESCE(rel.outgoing_count, 0) AS outgoing_count
+                    FROM objects
+                    LEFT JOIN (
+                        SELECT source_object_id, COUNT(*) AS outgoing_count
+                        FROM relations
+                        GROUP BY source_object_id
+                    ) AS rel ON rel.source_object_id = objects.object_id
+                    WHERE objects.object_id IN ({placeholders})
+                    ORDER BY objects.object_id
+                    """,
+                    tuple(object_ids),
+                ).fetchall()
+            else:
+                object_rows = conn.execute(
+                    """
+                    SELECT objects.object_id, objects.title,
+                           COALESCE(rel.outgoing_count, 0) AS outgoing_count
+                    FROM objects
+                    LEFT JOIN (
+                        SELECT source_object_id, COUNT(*) AS outgoing_count
+                        FROM relations
+                        GROUP BY source_object_id
+                    ) AS rel ON rel.source_object_id = objects.object_id
+                    ORDER BY objects.object_id
+                    """
+                ).fetchall()
+
+            rebuilt_ids: list[str] = []
+            for object_id, title, _outgoing_count in object_rows:
+                claim_rows = conn.execute(
+                    """
+                    SELECT claim_text
+                    FROM claims
+                    WHERE object_id = ? AND claim_kind = 'page_summary'
+                    ORDER BY claim_id
+                    """,
+                    (object_id,),
+                ).fetchall()
+                base_summary = str(claim_rows[0][0]) if claim_rows else str(title)
+                related_rows = conn.execute(
+                    """
+                    SELECT target_object_id
                     FROM relations
-                    GROUP BY source_object_id
-                ) AS rel ON rel.source_object_id = objects.object_id
-                WHERE objects.object_id IN ({placeholders})
-                ORDER BY objects.object_id
-                """,
-                tuple(object_ids),
-            ).fetchall()
-        else:
-            object_rows = conn.execute(
-                """
-                SELECT objects.object_id, objects.title,
-                       COALESCE(rel.outgoing_count, 0) AS outgoing_count
-                FROM objects
-                LEFT JOIN (
-                    SELECT source_object_id, COUNT(*) AS outgoing_count
-                    FROM relations
-                    GROUP BY source_object_id
-                ) AS rel ON rel.source_object_id = objects.object_id
-                ORDER BY objects.object_id
-                """
-            ).fetchall()
+                    WHERE source_object_id = ?
+                    ORDER BY target_object_id
+                    LIMIT ?
+                    """,
+                    (object_id, SUMMARY_RELATED_LIMIT),
+                ).fetchall()
+                related_ids = [row[0] for row in related_rows]
+                summary = base_summary
+                if related_ids:
+                    summary = f"{base_summary} Related: {', '.join(related_ids)}."
+                if len(summary) > SUMMARY_MAX_LEN:
+                    summary = summary[: SUMMARY_MAX_LEN - 3].rstrip() + "..."
 
-        rebuilt_ids: list[str] = []
-        for object_id, title, _outgoing_count in object_rows:
-            claim_rows = conn.execute(
-                """
-                SELECT claim_text
-                FROM claims
-                WHERE object_id = ? AND claim_kind = 'page_summary'
-                ORDER BY claim_id
-                """,
-                (object_id,),
-            ).fetchall()
-            base_summary = str(claim_rows[0][0]) if claim_rows else str(title)
-            related_rows = conn.execute(
-                """
-                SELECT target_object_id
-                FROM relations
-                WHERE source_object_id = ?
-                ORDER BY target_object_id
-                LIMIT ?
-                """,
-                (object_id, SUMMARY_RELATED_LIMIT),
-            ).fetchall()
-            related_ids = [row[0] for row in related_rows]
-            summary = base_summary
-            if related_ids:
-                summary = f"{base_summary} Related: {', '.join(related_ids)}."
-            if len(summary) > SUMMARY_MAX_LEN:
-                summary = summary[: SUMMARY_MAX_LEN - 3].rstrip() + "..."
+                conn.execute(
+                    """
+                    INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(object_id) DO UPDATE SET summary_text = excluded.summary_text, source_slug = excluded.source_slug
+                    """,
+                    (object_id, summary, object_id),
+                )
+                rebuilt_ids.append(str(object_id))
 
-            conn.execute(
-                """
-                INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
-                VALUES (?, ?, ?)
-                ON CONFLICT(object_id) DO UPDATE SET summary_text = excluded.summary_text, source_slug = excluded.source_slug
-                """,
-                (object_id, summary, object_id),
-            )
-            rebuilt_ids.append(str(object_id))
-
-        conn.commit()
+            conn.commit()
 
     return {
         "objects_rebuilt": len(rebuilt_ids),
