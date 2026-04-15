@@ -1173,6 +1173,7 @@ Processed source note without downstream chain.
     assert "Action Queue" in body
     assert "Create deep dive" in body
     assert "queued" in body
+    assert "Run next queued action" in body
 
 
 def test_ui_contradictions_and_summaries_support_batch_actions(temp_vault):

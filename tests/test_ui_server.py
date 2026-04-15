@@ -370,6 +370,47 @@ Processed source note without downstream chain.
     assert payload["action"]["status"] == "queued"
 
 
+def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "run_next_action_queue_item",
+        lambda vault_dir: {
+            "ran": True,
+            "action": {
+                "action_id": "action::demo",
+                "action_kind": "deep_dive_workflow",
+                "status": "succeeded",
+            },
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/actions/run-next",
+            body="",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["ran"] is True
+    assert payload["action"]["status"] == "succeeded"
+
+
 def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
     from openclaw_pipeline.runtime import VaultLayout

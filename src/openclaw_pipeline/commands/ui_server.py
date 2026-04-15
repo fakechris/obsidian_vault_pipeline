@@ -40,6 +40,7 @@ from ..truth_api import (
     ensure_signal_ledger_synced,
     record_review_action,
     review_evolution_candidate,
+    run_next_action_queue_item,
 )
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
@@ -1546,6 +1547,9 @@ def _render_actions_page(payload: dict) -> str:
         "Action Queue",
         (
             "<h1>Action Queue</h1>"
+            "<form method='post' action='/actions/run-next' class='link-row'>"
+            "<button type='submit'>Run next queued action</button>"
+            "</form>"
             "<form method='get' action='/actions' class='link-row'>"
             f"<input type='text' name='q' value='{escape(query)}' placeholder='Search actions' />"
             f"<select name='status'>{option_html}</select>"
@@ -2014,6 +2018,13 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/actions/enqueue":
                     payload = self._enqueue_signal_action(form)
                     self._redirect(str(payload["next_path"]))
+                    return
+                if path == "/api/actions/run-next":
+                    self._write_json(run_next_action_queue_item(resolved_vault))
+                    return
+                if path == "/actions/run-next":
+                    run_next_action_queue_item(resolved_vault)
+                    self._redirect("/actions")
                     return
                 self.send_error(404, "Not Found")
             except ValueError as exc:

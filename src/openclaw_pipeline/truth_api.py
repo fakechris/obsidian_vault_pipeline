@@ -1381,6 +1381,124 @@ def _backfill_auto_queue_actions(
     }
 
 
+def _replace_action_queue_item(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
+    existing_actions = _read_action_queue_rows(vault_dir)
+    replaced = False
+    for index, item in enumerate(existing_actions):
+        if item.get("action_id") == action.get("action_id"):
+            existing_actions[index] = action
+            replaced = True
+            break
+    if not replaced:
+        existing_actions.append(action)
+    existing_actions.sort(
+        key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))),
+        reverse=True,
+    )
+    _write_action_queue_rows(vault_dir, existing_actions)
+    return action
+
+
+def _next_queued_action(vault_dir: Path | str) -> dict[str, Any] | None:
+    queued = [item for item in _read_action_queue_rows(vault_dir) if item.get("status") == "queued"]
+    if not queued:
+        return None
+    queued.sort(key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))))
+    return dict(queued[0])
+
+
+def _run_deep_dive_workflow_action(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
+    from .auto_article_processor import AutoArticleProcessor, PipelineLogger, TransactionManager
+
+    resolved_vault = resolve_vault_dir(vault_dir)
+    note_paths = [path for path in action.get("note_paths", []) if path]
+    if not note_paths:
+        raise ValueError("deep_dive_workflow action missing note_paths")
+    source_path = resolved_vault / note_paths[0]
+    if not source_path.exists():
+        raise FileNotFoundError(f"source note not found: {note_paths[0]}")
+    layout = VaultLayout.from_vault(resolved_vault)
+    logger = PipelineLogger(layout.pipeline_log)
+    txn = TransactionManager(layout.transactions_dir)
+    processor = AutoArticleProcessor(resolved_vault, logger, txn)
+    processor.init_llm()
+    result = processor.process_single_file(source_path, dry_run=False)
+    if result.get("status") != "completed":
+        raise RuntimeError(str(result.get("error") or "deep_dive_workflow_failed"))
+    return result
+
+
+def _run_object_extraction_workflow_action(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
+    from .auto_evergreen_extractor import run_absorb_workflow
+
+    resolved_vault = resolve_vault_dir(vault_dir)
+    note_paths = [path for path in action.get("note_paths", []) if path]
+    if not note_paths:
+        raise ValueError("object_extraction_workflow action missing note_paths")
+    deep_dive_path = resolved_vault / note_paths[0]
+    if not deep_dive_path.exists():
+        raise FileNotFoundError(f"deep dive not found: {note_paths[0]}")
+    return run_absorb_workflow(
+        resolved_vault,
+        file_path=deep_dive_path,
+        dry_run=False,
+        auto_promote=True,
+        promote_threshold=1,
+    )
+
+
+def _refresh_truth_after_action(vault_dir: Path | str) -> None:
+    from .knowledge_index import rebuild_knowledge_index
+
+    rebuild_knowledge_index(resolve_vault_dir(vault_dir))
+    sync_signal_ledger(vault_dir)
+
+
+def run_next_action_queue_item(vault_dir: Path | str) -> dict[str, Any]:
+    action = _next_queued_action(vault_dir)
+    if action is None:
+        return {"ran": False, "reason": "no_queued_actions"}
+
+    started_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    action["status"] = "running"
+    action["started_at"] = started_at
+    action["error"] = ""
+    _replace_action_queue_item(vault_dir, action)
+
+    if _signal_by_id(vault_dir, str(action.get("source_signal_id") or "")) is None:
+        action["status"] = "obsolete"
+        action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _replace_action_queue_item(vault_dir, action)
+        return {"ran": False, "reason": "obsolete_signal", "action": action}
+
+    handlers = {
+        "deep_dive_workflow": _run_deep_dive_workflow_action,
+        "object_extraction_workflow": _run_object_extraction_workflow_action,
+    }
+    handler = handlers.get(str(action.get("action_kind") or ""))
+    if handler is None:
+        action["status"] = "failed"
+        action["error"] = f"unsupported_action_kind:{action.get('action_kind')}"
+        action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _replace_action_queue_item(vault_dir, action)
+        return {"ran": False, "reason": "unsupported_action_kind", "action": action}
+
+    try:
+        result = handler(vault_dir, action)
+        _refresh_truth_after_action(vault_dir)
+        action["status"] = "succeeded"
+        action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        action["result"] = result
+        _replace_action_queue_item(vault_dir, action)
+        return {"ran": True, "action": action}
+    except Exception as exc:
+        action["status"] = "failed"
+        action["error"] = str(exc)
+        action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _replace_action_queue_item(vault_dir, action)
+        return {"ran": False, "reason": "execution_failed", "action": action}
+
+
 def _action_queue_state_map(vault_dir: Path | str) -> dict[str, dict[str, Any]]:
     state_map: dict[str, dict[str, Any]] = {}
     for item in list_action_queue(vault_dir, limit=MAX_PAGE_SIZE):

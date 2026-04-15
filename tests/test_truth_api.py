@@ -1650,6 +1650,74 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
     )
 
 
+def test_truth_api_run_next_action_queue_item_executes_deep_dive_workflow(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+    truth_api.sync_signal_ledger(vault)
+
+    calls: list[str] = []
+
+    def fake_run_deep_dive(vault_dir, action):
+        calls.append(action["action_kind"])
+        return {"output_path": "20-Areas/AI-Research/Topics/2026-04/Harness Source_深度解读.md"}
+
+    monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", fake_run_deep_dive)
+    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir: None)
+
+    payload = truth_api.run_next_action_queue_item(vault)
+    actions = truth_api.list_action_queue(vault)
+
+    assert payload["ran"] is True
+    assert payload["action"]["status"] == "succeeded"
+    assert payload["action"]["finished_at"]
+    assert calls == ["deep_dive_workflow"]
+    assert actions[0]["status"] == "succeeded"
+
+
+def test_truth_api_run_next_action_queue_item_marks_obsolete_when_signal_is_gone(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+    truth_api.sync_signal_ledger(vault)
+
+    monkeypatch.setattr(truth_api, "_signal_by_id", lambda vault_dir, signal_id: None)
+
+    payload = truth_api.run_next_action_queue_item(vault)
+    actions = truth_api.list_action_queue(vault)
+
+    assert payload["ran"] is False
+    assert payload["reason"] == "obsolete_signal"
+    assert payload["action"]["status"] == "obsolete"
+    assert actions[0]["status"] == "obsolete"
+
+
 def test_truth_api_builds_briefing_snapshot(temp_vault):
     from openclaw_pipeline.truth_api import get_briefing_snapshot, record_review_action, sync_signal_ledger
 
