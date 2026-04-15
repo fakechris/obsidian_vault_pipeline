@@ -22,6 +22,7 @@ from ..ui.view_models import (
     build_briefing_payload,
     build_contradiction_browser_payload,
     build_derivation_browser_payload,
+    build_evolution_browser_payload,
     build_event_dossier_payload,
     build_note_page_payload,
     build_object_page_payload,
@@ -33,11 +34,12 @@ from ..ui.view_models import (
     build_truth_dashboard_payload,
     build_topic_overview_payload,
 )
-from ..truth_api import ensure_signal_ledger_synced, record_review_action
+from ..truth_api import ensure_signal_ledger_synced, record_review_action, review_evolution_candidate
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
+_EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
 
 
 def _layout(title: str, body: str) -> str:
@@ -105,6 +107,7 @@ def _layout(title: str, body: str) -> str:
             <a href="/search">Search</a>
             <a href="/signals">Signals</a>
             <a href="/briefing">Briefing</a>
+            <a href="/evolution">Evolution</a>
             <a href="/production">Production</a>
             <a href="/atlas">Atlas</a>
             <a href="/deep-dives">Deep Dives</a>
@@ -576,6 +579,79 @@ def _render_object_links(items: list[dict[str, str]]) -> str:
     )
 
 
+def _render_evolution_link_type_select(selected: str) -> str:
+    return "<select name='link_type'>" + "".join(
+        f"<option value='{escape(option)}' {'selected' if option == selected else ''}>{escape(option)}</option>"
+        for option in _EVOLUTION_LINK_TYPES
+    ) + "</select>"
+
+
+def _render_evolution_review_form(item: dict[str, object]) -> str:
+    link_type = str(item.get("link_type") or "")
+    return (
+        "<form method='post' action='/evolution/review' class='link-row'>"
+        f"<input type='hidden' name='evolution_id' value='{escape(str(item['evolution_id']))}' />"
+        f"{_render_evolution_link_type_select(link_type)}"
+        "<input type='text' name='note' placeholder='Review note' />"
+        "<button type='submit' name='status' value='accepted'>Accept</button>"
+        "<button type='submit' name='status' value='rejected'>Reject</button>"
+        "</form>"
+    )
+
+
+def _render_evolution_links(items: list[dict[str, object]], *, empty_text: str) -> str:
+    if not items:
+        return f"<p class='muted'>{escape(empty_text)}</p>"
+    rows = []
+    for item in items:
+        rows.append(
+            "<li>"
+            f"<span class='pill'>{escape(str(item.get('link_type') or 'evolution'))}</span> "
+            f"{escape(str(item.get('subject_kind') or 'subject'))}: {escape(str(item.get('subject_id') or ''))}"
+            f"<div class='muted'>Earlier: {escape(str(item.get('earlier_ref') or ''))} | Later: {escape(str(item.get('later_ref') or ''))}</div>"
+            + (
+                f"<div class='muted'>Note: {escape(str(item.get('note') or ''))}</div>"
+                if item.get("note")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Reviewed at: {escape(str(item.get('timestamp') or ''))}</div>"
+                if item.get("timestamp")
+                else ""
+            )
+            + "</li>"
+        )
+    return "<ul class='list-tight'>" + "".join(rows) + "</ul>"
+
+
+def _render_evolution_candidates(items: list[dict[str, object]], *, compact: bool = False, reviewable: bool = False) -> str:
+    if not items:
+        return "<p class='muted'>No evolution candidates surfaced for this scope.</p>"
+    rows = []
+    for item in items[: 3 if compact else len(items)]:
+        source_paths = ", ".join(
+            f'<a href="{escape(_note_href(path))}">{escape(path)}</a>'
+            for path in item["source_paths"]
+        ) or "<span class='muted'>None</span>"
+        evidence = ", ".join(
+            escape(str(entry.get("source_slug") or entry.get("path") or entry.get("title") or ""))
+            for entry in item["evidence"][:2]
+            if isinstance(entry, dict)
+        )
+        rows.append(
+            "<li>"
+            f"<span class='pill'>{escape(str(item['link_type']))}</span> "
+            f"{escape(str(item['subject_kind']))}: {escape(str(item['subject_id']))}"
+            f"<div class='muted'>Earlier: {escape(str(item['earlier_ref']))} | Later: {escape(str(item['later_ref']))}</div>"
+            f"<div class='muted'>Reasons: {escape(', '.join(str(code) for code in item['reason_codes']))}</div>"
+            f"<div class='muted'>Sources: {source_paths}</div>"
+            + (f"<div class='muted'>Evidence: {evidence}</div>" if evidence else "")
+            + (_render_evolution_review_form(item) if reviewable else "")
+            + "</li>"
+        )
+    return "<ul class='list-tight'>" + "".join(rows) + "</ul>"
+
+
 def _render_review_context_card(context: dict[str, object], *, title: str = "Review Context") -> str:
     latest_event_date = str(context.get("latest_event_date") or "")
     latest_event_html = escape(latest_event_date) if latest_event_date else "<span class='muted'>None</span>"
@@ -688,6 +764,7 @@ def _render_dashboard(payload: dict) -> str:
         f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
         for item in payload["stale_summaries"]["items"]
     ) or "<li>None</li>"
+    evolution_items = _render_evolution_candidates(payload["evolution"]["items"], compact=False)
     production_gap_items = "".join(
         f'<li><span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
         f'<a href="{escape(_note_href(item["note_path"]))}">{escape(item["title"])}</a>'
@@ -722,12 +799,15 @@ def _render_dashboard(payload: dict) -> str:
             f"<p>{payload['events']['count']}</p></div>"
             "<div class='card'><h2>Stale Summaries</h2>"
             f"<p>{payload['stale_summaries']['count']}</p></div>"
+            "<div class='card'><h2>Evolution Candidates</h2>"
+            f"<p>{payload['evolution']['candidate_count']}</p></div>"
             "<div class='card'><h2>Signals</h2>"
             f"<p>{payload['signals']['count']}</p></div>"
             "</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
             f"<section class='card'><h2>Needs Attention Now</h2><ul class='list-tight'>{priority_items}</ul></section>"
+            f"<section class='card'><h2><a href='/evolution'>Evolution</a></h2>{evolution_items}</section>"
             f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
             f"<section class='card'><h2>Recent Events</h2><ul class='list-tight'>{event_items}</ul></section>"
             f"<section class='card'><h2><a href='/summaries'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
@@ -802,6 +882,10 @@ def _render_object_page(payload: dict) -> str:
         for item in payload["provenance"]["mocs"]
     ) or "<li>None</li>"
     summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
+    evolution = payload.get(
+        "evolution",
+        {"candidate_items": [], "accepted_links": [], "accepted_count": 0, "candidate_count": 0, "link_types": []},
+    )
     section_nav = "".join(
         f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>' for item in payload["section_nav"]
     )
@@ -873,6 +957,17 @@ def _render_object_page(payload: dict) -> str:
             f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
             f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
             "</dl></section>"
+            "<section class='card'><h2>Evolution</h2>"
+            f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
+            + (
+                f" Link types: {escape(', '.join(evolution['link_types']))}."
+                if evolution["link_types"]
+                else ""
+            )
+            + "</p>"
+            f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
+            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True)}"
+            "</section>"
             "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
             f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'])}</dd></div>"
             f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'])}</dd></div>"
@@ -896,6 +991,10 @@ def _render_topic_page(payload: dict) -> str:
     mocs = "".join(
         f"<li>{escape(item['title'])}</li>" for item in payload["provenance"]["mocs"]
     ) or "<li>None</li>"
+    evolution = payload.get(
+        "evolution",
+        {"candidate_items": [], "accepted_links": [], "accepted_count": 0, "candidate_count": 0, "link_types": []},
+    )
     summary_form = (
         "<form method='post' action='/summaries/rebuild' class='link-row'>"
         + "".join(
@@ -931,6 +1030,17 @@ def _render_topic_page(payload: dict) -> str:
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
             f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
+            "<section class='card'><h2>Evolution</h2>"
+            f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
+            + (
+                f" Link types: {escape(', '.join(evolution['link_types']))}."
+                if evolution["link_types"]
+                else ""
+            )
+            + "</p>"
+            f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
+            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True)}"
+            "</section>"
             f"{_render_production_summary_card(payload['production_summary'])}"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
@@ -1186,6 +1296,44 @@ def _render_production_browser_page(payload: dict) -> str:
             "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>"
             f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        ),
+    )
+
+
+def _render_evolution_browser_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    status = payload.get("status", "all")
+    selected_link_type = payload.get("link_type", "")
+    type_counts = "".join(
+        f"<span class='pill'>{escape(link_type)}: {count}</span>"
+        for link_type, count in payload["type_counts"].items()
+    ) or "<span class='muted'>None</span>"
+    return _layout(
+        "Evolution Browser",
+        (
+            "<h1>Evolution Browser</h1>"
+            "<form method='get' action='/evolution' class='link-row'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter evolution links' />"
+            "<select name='status'>"
+            + "".join(
+                f"<option value='{escape(option)}' {'selected' if status == option else ''}>{escape(option)}</option>"
+                for option in ("all", "candidate", "accepted", "rejected")
+            )
+            + "</select>"
+            "<select name='link_type'>"
+            "<option value=''>all link types</option>"
+            + "".join(
+                f"<option value='{escape(option)}' {'selected' if selected_link_type == option else ''}>{escape(option)}</option>"
+                for option in _EVOLUTION_LINK_TYPES
+            )
+            + "</select>"
+            "<button type='submit'>Search</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} evolution records in the current view.</p>"
+            f"<section class='card'><h2>Link Types</h2><div class='link-row'>{type_counts}</div></section>"
+            f"<section class='card'><h2>Accepted Links</h2>{_render_evolution_links(payload['accepted_links'], empty_text='No accepted evolution links yet.')}</section>"
+            f"<section class='card'><h2>Rejected Links</h2>{_render_evolution_links(payload['rejected_links'], empty_text='No rejected evolution links yet.')}</section>"
+            f"<section class='card'><h2>Candidate Links</h2>{_render_evolution_candidates(payload['candidate_items'], reviewable=True)}</section>"
         ),
     )
 
@@ -1581,6 +1729,19 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     payload = build_signal_browser_payload(resolved_vault, signal_type=signal_type, query=q)
                     self._write_html(_render_signals_page(payload))
                     return
+                if path == "/api/evolution":
+                    q = query.get("q", [""])[0]
+                    status = query.get("status", ["all"])[0] or "all"
+                    link_type = query.get("link_type", [""])[0] or None
+                    self._write_json(build_evolution_browser_payload(resolved_vault, query=q, status=status, link_type=link_type))
+                    return
+                if path == "/evolution":
+                    q = query.get("q", [""])[0]
+                    status = query.get("status", ["all"])[0] or "all"
+                    link_type = query.get("link_type", [""])[0] or None
+                    payload = build_evolution_browser_payload(resolved_vault, query=q, status=status, link_type=link_type)
+                    self._write_html(_render_evolution_browser_page(payload))
+                    return
                 if path == "/api/object":
                     object_id = self._required(query, "id")
                     self._write_json(build_object_page_payload(resolved_vault, object_id))
@@ -1691,6 +1852,13 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     self._rebuild_summary_action(form)
                     self._redirect("/summaries")
                     return
+                if path == "/api/evolution/review":
+                    self._write_json(self._review_evolution_action(form))
+                    return
+                if path == "/evolution/review":
+                    self._review_evolution_action(form)
+                    self._redirect("/evolution")
+                    return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
                 self.send_error(400, str(exc))
@@ -1774,6 +1942,19 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     },
                 )
             return payload
+
+        def _review_evolution_action(self, form: dict[str, list[str]]) -> dict[str, object]:
+            evolution_id = self._form_first(form, "evolution_id").strip()
+            status = self._form_first(form, "status").strip()
+            note = self._form_first(form, "note").strip()
+            link_type = self._form_first(form, "link_type").strip() or None
+            return review_evolution_candidate(
+                resolved_vault,
+                evolution_id=evolution_id,
+                status=status,
+                note=note,
+                link_type=link_type,
+            )
 
         def _write_json(self, payload: dict) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

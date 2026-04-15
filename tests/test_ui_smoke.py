@@ -140,6 +140,7 @@ date: 2026-04-13
         events_status, events_body = _get(port, "/events")
         atlas_status, atlas_body = _get(port, "/atlas")
         deep_dives_status, deep_dives_body = _get(port, "/deep-dives")
+        evolution_status, evolution_body = _get(port, "/evolution")
         production_status, production_body = _get(port, "/production")
         contradictions_status, contradictions_body = _get(port, "/contradictions")
     finally:
@@ -165,6 +166,7 @@ date: 2026-04-13
     assert "/private/" not in object_body
     assert "Source Deep Dive" in object_body
     assert "Atlas Index" in object_body
+    assert "Evolution" in object_body
     assert "Review Context" in object_body
     assert "Open contradictions" in object_body
     assert "/summaries?q=alpha" in object_body
@@ -181,6 +183,7 @@ date: 2026-04-13
     assert '/events?q=alpha' in topic_body
     assert "Center Summary" in topic_body
     assert "Atlas / MOC" in topic_body
+    assert "Evolution" in topic_body
     assert "Review Context" in topic_body
     assert "Production Contribution" in topic_body
     assert "Missing source notes" in topic_body
@@ -218,6 +221,11 @@ date: 2026-04-13
     assert deep_dives_status == 200
     assert "Deep Dive Derivations" in deep_dives_body
     assert "Contribution Summary" in deep_dives_body
+
+    assert evolution_status == 200
+    assert "Evolution Browser" in evolution_body
+    assert "Candidate Links" in evolution_body
+    assert "/evolution/review" in evolution_body
     assert "Showing the most recent 50 deep dives" in deep_dives_body
     assert "Source Deep Dive" in deep_dives_body
 
@@ -985,10 +993,12 @@ Thin note.
     assert "Contradictions Open" in root_body
     assert "Recent Events" in root_body
     assert "Stale Summaries" in root_body
+    assert "Evolution Candidates" in root_body
     assert "Needs Attention Now" in root_body
     assert "Alpha" in root_body
     assert "Thin Note" in root_body
     assert "/summaries" in root_body
+    assert "/evolution" in root_body
     assert "Production Weak Points" in root_body
     assert "Signals" in root_body
 

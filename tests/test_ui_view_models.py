@@ -598,6 +598,97 @@ def test_build_briefing_payload(temp_vault):
     assert payload["active_topics"]
 
 
+def test_build_evolution_browser_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_evolution_browser_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_evolution_browser_payload(temp_vault)
+
+    assert payload["screen"] == "evolution/browser"
+    assert payload["count"] >= 1
+    assert payload["candidate_items"]
+    assert payload["type_counts"]
+
+
+def test_build_evolution_browser_payload_filters_reviewed_links_by_link_type(temp_vault):
+    from openclaw_pipeline.truth_api import list_evolution_candidates, review_evolution_candidate
+    from openclaw_pipeline.ui.view_models import build_evolution_browser_payload
+
+    _seed_truth_store(temp_vault)
+    legacy = temp_vault / "10-Knowledge" / "Evergreen" / "Legacy.md"
+    legacy.write_text(
+        """---
+note_id: legacy-note
+title: Legacy Note
+type: evergreen
+date: 2026-04-01
+---
+
+# Legacy Note
+
+Legacy note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Legacy Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: legacy-dive
+title: Legacy Dive
+type: deep_dive
+date: 2026-04-10
+---
+
+# Legacy Dive
+
+This note supersedes [[legacy-note]] and confirms the migration path.
+""",
+        encoding="utf-8",
+    )
+    (temp_vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    (temp_vault / "60-Logs" / "pipeline.jsonl").write_text(
+        """{"event_type":"evergreen_auto_promoted","concept":"legacy-note","source":"Legacy Dive_深度解读.md","mutation":{"target_slug":"legacy-note"}}
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    items = list_evolution_candidates(temp_vault)
+    challenge = next(item for item in items if item["link_type"] == "challenges")
+    replace_item = next(item for item in items if item["link_type"] == "replaces")
+    review_evolution_candidate(temp_vault, evolution_id=challenge["evolution_id"], status="accepted")
+    review_evolution_candidate(temp_vault, evolution_id=replace_item["evolution_id"], status="accepted")
+
+    payload = build_evolution_browser_payload(temp_vault, status="all", link_type="challenges")
+
+    assert payload["accepted_links"]
+    assert {item["link_type"] for item in payload["accepted_links"]} == {"challenges"}
+
+
+def test_build_object_page_payload_includes_evolution_section(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    assert "evolution" in payload
+    assert payload["evolution"]["candidate_count"] >= 1
+
+
+def test_build_topic_overview_payload_includes_evolution_section(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_topic_overview_payload(temp_vault, "alpha")
+
+    assert "evolution" in payload
+    assert payload["evolution"]["candidate_count"] >= 1
+
+
 def test_build_event_dossier_payload_filters_by_query(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 

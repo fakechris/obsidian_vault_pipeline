@@ -21,6 +21,8 @@ from ..truth_api import (
     get_object_provenance_map,
     get_review_context,
     get_topic_neighborhood,
+    list_evolution_candidates,
+    list_evolution_links,
     list_review_actions,
     list_atlas_memberships,
     list_contradictions,
@@ -58,6 +60,24 @@ def _existing_object_rows(vault_dir: Path | str, object_ids: list[str]) -> dict[
             tuple(normalized_object_ids),
         ).fetchall()
     return {str(object_id): str(title) for object_id, title in rows}
+
+
+def _object_scope_paths(vault_dir: Path | str, object_ids: list[str]) -> dict[str, str]:
+    normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
+    if not normalized_object_ids:
+        return {}
+    db_path = _db_path(vault_dir)
+    placeholders = ",".join("?" for _ in normalized_object_ids)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT object_id, canonical_path
+            FROM objects
+            WHERE object_id IN ({placeholders})
+            """,
+            tuple(normalized_object_ids),
+        ).fetchall()
+    return {str(object_id): str(path or "") for object_id, path in rows}
 
 
 def _object_ids_from_claim_ids(*claim_id_lists: list[str]) -> list[str]:
@@ -172,6 +192,83 @@ def _build_production_weak_points(
     return list_production_gaps(vault_dir, query=query, limit=limit)
 
 
+def _build_evolution_section(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    link_type: str | None = None,
+    status: str = "candidate",
+    scoped_object_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    normalized_object_ids = list(dict.fromkeys(object_id for object_id in (scoped_object_ids or []) if object_id))
+    canonical_paths = {path for path in _object_scope_paths(vault_dir, normalized_object_ids).values() if path}
+    reviewed_links = list_evolution_links(
+        vault_dir,
+        object_ids=normalized_object_ids or None,
+        query=query,
+        link_type=link_type,
+    )
+    reviewed_evolution_ids = {str(item["evolution_id"]) for item in reviewed_links}
+    accepted_links = [item for item in reviewed_links if item["status"] == "accepted"]
+    rejected_links = [item for item in reviewed_links if item["status"] == "rejected"]
+    candidate_items = [
+        item
+        for item in list_evolution_candidates(vault_dir, query=query, link_type=link_type, status="candidate")
+        if item["evolution_id"] not in reviewed_evolution_ids
+    ]
+    if normalized_object_ids:
+        filtered_items: list[dict[str, Any]] = []
+        for item in candidate_items:
+            refs = (str(item["earlier_ref"]), str(item["later_ref"]))
+            if item["subject_kind"] == "object" and item["subject_id"] in normalized_object_ids:
+                filtered_items.append(item)
+                continue
+            if any(
+                ref.startswith(f"claim://{object_id}::") or ref == f"object://{object_id}"
+                for object_id in normalized_object_ids
+                for ref in refs
+            ):
+                filtered_items.append(item)
+                continue
+            if any(path in canonical_paths for path in item["source_paths"]):
+                filtered_items.append(item)
+        candidate_items = filtered_items
+        accepted_links = [
+            item for item in accepted_links
+            if set(item.get("object_ids", [])).intersection(normalized_object_ids)
+        ]
+        rejected_links = [
+            item for item in rejected_links
+            if set(item.get("object_ids", [])).intersection(normalized_object_ids)
+        ]
+    if status == "accepted":
+        candidate_items = []
+    elif status == "rejected":
+        candidate_items = []
+        accepted_links = []
+    elif status == "candidate":
+        pass
+    else:
+        # keep all sections visible on the default "all" view
+        status = "all"
+    return {
+        "accepted_links": accepted_links,
+        "rejected_links": rejected_links,
+        "candidate_items": candidate_items,
+        "candidate_count": len(candidate_items),
+        "accepted_count": len(accepted_links),
+        "rejected_count": len(rejected_links),
+        "link_types": sorted(
+            {
+                *(item["link_type"] for item in candidate_items),
+                *(str(item.get("link_type") or "") for item in accepted_links),
+                *(str(item.get("link_type") or "") for item in rejected_links),
+            }
+        ),
+        "status": status,
+    }
+
+
 def build_signal_browser_payload(
     vault_dir: Path | str,
     *,
@@ -226,6 +323,7 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
         "provenance": detail["provenance"],
         "review_context": review_context,
         "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8),
+        "evolution": _build_evolution_section(vault_dir, status="all", scoped_object_ids=[object_id]),
         "stale_summary_details": list_stale_summaries(vault_dir, object_ids=[object_id], limit=10),
         "open_contradiction_ids": [
             item["contradiction_id"] for item in detail["contradictions"] if item["status"] == "open"
@@ -275,6 +373,7 @@ def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[
             object_ids=scoped_object_ids,
             limit=8,
         ),
+        "evolution": _build_evolution_section(vault_dir, status="all", scoped_object_ids=scoped_object_ids),
         "scoped_object_ids": scoped_object_ids,
         "scoped_stale_summary_ids": [item["object_id"] for item in scoped_stale_summaries],
         "scoped_open_contradiction_ids": [item["contradiction_id"] for item in scoped_contradictions],
@@ -394,6 +493,40 @@ def build_event_dossier_payload(
             "page_date rows come from note-level dates; heading_date rows come from dated section headings.",
         ],
         "query": query or "",
+    }
+
+
+def build_evolution_browser_payload(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    status: str = "all",
+    link_type: str | None = None,
+) -> dict[str, Any]:
+    evolution = _build_evolution_section(vault_dir, query=query, link_type=link_type, status=status)
+    type_counts = Counter(
+        item["link_type"]
+        for item in [
+            *evolution["candidate_items"],
+            *evolution["accepted_links"],
+            *evolution["rejected_links"],
+        ]
+    )
+    return {
+        "screen": "evolution/browser",
+        "query": query or "",
+        "status": status,
+        "link_type": link_type or "",
+        "items": evolution["candidate_items"],
+        "candidate_items": evolution["candidate_items"],
+        "accepted_links": evolution["accepted_links"],
+        "rejected_links": evolution["rejected_links"],
+        "candidate_count": evolution["candidate_count"],
+        "accepted_count": evolution["accepted_count"],
+        "rejected_count": evolution["rejected_count"],
+        "count": evolution["candidate_count"] + evolution["accepted_count"] + evolution["rejected_count"],
+        "type_counts": dict(type_counts),
+        "link_types": evolution["link_types"],
     }
 
 
@@ -554,6 +687,7 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
     contradictions = build_contradiction_browser_payload(vault_dir)
     events = build_event_dossier_payload(vault_dir, limit=8)
     stale_summaries = build_stale_summary_browser_payload(vault_dir)
+    evolution = build_evolution_browser_payload(vault_dir, status="all")
     signals = build_signal_browser_payload(vault_dir)
     production_weak_points = _build_production_weak_points(vault_dir)
     priorities: list[dict[str, Any]] = []
@@ -603,6 +737,11 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
         "stale_summaries": {
             "count": stale_summaries["count"],
             "items": stale_summaries["items"][:8],
+        },
+        "evolution": {
+            "candidate_count": evolution["candidate_count"],
+            "accepted_count": evolution["accepted_count"],
+            "items": evolution["candidate_items"][:6],
         },
         "production": {
             "weak_points": production_weak_points,
