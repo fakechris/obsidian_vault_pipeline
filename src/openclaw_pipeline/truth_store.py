@@ -1,139 +1,120 @@
 from __future__ import annotations
 
-import json
+from dataclasses import dataclass, field
 import hashlib
+import json
 import re
-from dataclasses import dataclass
 
 
 TRUTH_STORE_SCHEMA = """
 CREATE TABLE objects (
-  object_id TEXT PRIMARY KEY,
+  pack TEXT NOT NULL DEFAULT 'research-tech',
+  object_id TEXT NOT NULL,
   object_kind TEXT NOT NULL,
   title TEXT NOT NULL,
   canonical_path TEXT NOT NULL,
-  source_slug TEXT NOT NULL
+  source_slug TEXT NOT NULL,
+  PRIMARY KEY (pack, object_id)
 );
 
 CREATE TABLE claims (
-  claim_id TEXT PRIMARY KEY,
+  pack TEXT NOT NULL DEFAULT 'research-tech',
+  claim_id TEXT NOT NULL,
   object_id TEXT NOT NULL,
   claim_kind TEXT NOT NULL,
   claim_text TEXT NOT NULL,
-  confidence REAL NOT NULL DEFAULT 1.0
+  confidence REAL NOT NULL DEFAULT 1.0,
+  PRIMARY KEY (pack, claim_id)
 );
 
-CREATE INDEX idx_claims_object ON claims(object_id);
+CREATE INDEX idx_claims_pack_object ON claims(pack, object_id);
 
 CREATE TABLE claim_evidence (
+  pack TEXT NOT NULL DEFAULT 'research-tech',
   claim_id TEXT NOT NULL,
   source_slug TEXT NOT NULL,
   evidence_kind TEXT NOT NULL,
   quote_text TEXT NOT NULL DEFAULT ''
 );
 
-CREATE INDEX idx_claim_evidence_claim ON claim_evidence(claim_id);
+CREATE INDEX idx_claim_evidence_pack_claim ON claim_evidence(pack, claim_id);
 
 CREATE TABLE relations (
+  pack TEXT NOT NULL DEFAULT 'research-tech',
   source_object_id TEXT NOT NULL,
   target_object_id TEXT NOT NULL,
   relation_type TEXT NOT NULL,
   evidence_source_slug TEXT NOT NULL DEFAULT ''
 );
 
-CREATE INDEX idx_relations_source ON relations(source_object_id);
-CREATE INDEX idx_relations_target ON relations(target_object_id);
+CREATE INDEX idx_relations_pack_source ON relations(pack, source_object_id);
+CREATE INDEX idx_relations_pack_target ON relations(pack, target_object_id);
 
 CREATE TABLE compiled_summaries (
-  object_id TEXT PRIMARY KEY,
+  pack TEXT NOT NULL DEFAULT 'research-tech',
+  object_id TEXT NOT NULL,
   summary_text TEXT NOT NULL,
-  source_slug TEXT NOT NULL
+  source_slug TEXT NOT NULL,
+  PRIMARY KEY (pack, object_id)
 );
 
 CREATE TABLE contradictions (
-  contradiction_id TEXT PRIMARY KEY,
+  pack TEXT NOT NULL DEFAULT 'research-tech',
+  contradiction_id TEXT NOT NULL,
   subject_key TEXT NOT NULL,
   positive_claim_ids_json TEXT NOT NULL,
   negative_claim_ids_json TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'open',
   resolution_note TEXT NOT NULL DEFAULT '',
-  resolved_at TEXT NOT NULL DEFAULT ''
+  resolved_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (pack, contradiction_id)
 );
+
+CREATE INDEX idx_contradictions_pack_subject ON contradictions(pack, subject_key);
+
+CREATE TABLE graph_edges (
+  pack TEXT NOT NULL DEFAULT 'research-tech',
+  edge_id TEXT NOT NULL,
+  source_object_id TEXT NOT NULL,
+  target_object_id TEXT NOT NULL,
+  edge_kind TEXT NOT NULL,
+  weight REAL NOT NULL DEFAULT 1.0,
+  evidence_source_slug TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (pack, edge_id)
+);
+
+CREATE INDEX idx_graph_edges_pack_source ON graph_edges(pack, source_object_id);
+CREATE INDEX idx_graph_edges_pack_target ON graph_edges(pack, target_object_id);
+
+CREATE TABLE graph_clusters (
+  pack TEXT NOT NULL DEFAULT 'research-tech',
+  cluster_id TEXT NOT NULL,
+  cluster_kind TEXT NOT NULL,
+  label TEXT NOT NULL,
+  center_object_id TEXT NOT NULL,
+  member_object_ids_json TEXT NOT NULL,
+  score REAL NOT NULL DEFAULT 0.0,
+  PRIMARY KEY (pack, cluster_id)
+);
+
+CREATE INDEX idx_graph_clusters_pack_kind ON graph_clusters(pack, cluster_kind);
 """
 
-_NEGATION_RE = re.compile(r"\b(?:does not|doesn't|do not|is not|isn't|are not|aren't|has not|hasn't|have not|haven't|cannot|can't|not)\b")
+CONTRADICTION_HEURISTIC_NOTE = (
+    "TODO: current contradiction rows are pack-owned heuristics, not core truth. "
+    "If contradiction quality is noisy, tighten the active pack's subject normalization, "
+    "claim grouping, and review semantics instead of teaching core one more domain rule."
+)
+
+_NEGATION_RE = re.compile(
+    r"\b(?:does not|doesn't|do not|is not|isn't|are not|aren't|has not|hasn't|have not|haven't|cannot|can't|not)\b"
+)
 _NEGATION_EXCLUSIONS = (
     "not only",
     "not necessarily",
     "not merely",
     "not just",
 )
-CONTRADICTION_HEURISTIC_NOTE = (
-    "TODO: _detect_contradictions uses a regex-based negation heuristic with exclusions. "
-    "If it still produces noisy rows, tighten subject_key() normalization and contradiction_id_for_subject() grouping."
-)
-
-
-@dataclass(frozen=True)
-class TruthStoreProjection:
-    objects: list[tuple[str, str, str, str, str]]
-    claims: list[tuple[str, str, str, str, float]]
-    claim_evidence: list[tuple[str, str, str, str]]
-    relations: list[tuple[str, str, str, str]]
-    compiled_summaries: list[tuple[str, str, str]]
-    contradictions: list[tuple[str, str, str, str, str, str, str]]
-
-
-def build_truth_store_projection(
-    page_rows: list[tuple[str, str, str, str, str, str, str]],
-    link_rows: list[tuple[str, str, str, str, int]],
-) -> TruthStoreProjection:
-    objects: list[tuple[str, str, str, str, str]] = []
-    claims: list[tuple[str, str, str, str, float]] = []
-    claim_evidence: list[tuple[str, str, str, str]] = []
-    compiled_summaries: list[tuple[str, str, str]] = []
-
-    for slug, title, note_type, path, _day_id, _frontmatter_json, body in page_rows:
-        objects.append((slug, note_type, title, path, slug))
-        summary = _page_summary(body, fallback=title)
-        claim_id = _claim_id(slug, summary)
-        claims.append((claim_id, slug, "page_summary", summary, 1.0))
-        claim_evidence.append((claim_id, slug, "body_summary", summary))
-        compiled_summaries.append((slug, summary, slug))
-
-    relations = [
-        (source_slug, target_slug, relation_type, source_slug)
-        for source_slug, target_slug, _target_raw, relation_type, _line_number in link_rows
-    ]
-    contradictions = _detect_contradictions(claims)
-
-    return TruthStoreProjection(
-        objects=objects,
-        claims=claims,
-        claim_evidence=claim_evidence,
-        relations=relations,
-        compiled_summaries=compiled_summaries,
-        contradictions=contradictions,
-    )
-
-
-def _claim_id(object_id: str, claim_text: str) -> str:
-    digest = hashlib.sha1(f"{object_id}:{claim_text}".encode("utf-8")).hexdigest()[:12]
-    return f"{object_id}::{digest}"
-
-
-def _page_summary(body: str, *, fallback: str) -> str:
-    content = body.strip()
-    if not content:
-        return fallback
-    lines = [line.strip() for line in content.splitlines() if line.strip() and not line.strip().startswith("#")]
-    text = " ".join(lines)
-    if not text:
-        return fallback
-    for marker in (". ", "! ", "? ", "。", "！", "？"):
-        if marker in text:
-            return text.split(marker, 1)[0].strip() + (marker.strip() if marker.strip() in "。！？" else ".")
-    return text[:220]
 
 
 def subject_key(claim_text: str) -> str:
@@ -145,12 +126,15 @@ def subject_key(claim_text: str) -> str:
     return lowered.split(".", 1)[0].strip()
 
 
-def contradiction_id_for_subject(subject: str) -> str:
-    return f"contradiction::{hashlib.sha1(subject.encode('utf-8')).hexdigest()[:12]}"
+def _is_negative_claim(claim_text: str) -> bool:
+    lowered = claim_text.strip().lower()
+    if any(exclusion in lowered for exclusion in _NEGATION_EXCLUSIONS):
+        return False
+    return bool(_NEGATION_RE.search(lowered))
 
 
 def _detect_contradictions(
-    claims: list[tuple[str, str, str, str, float]]
+    claims: list[tuple[str, str, str, str, float]],
 ) -> list[tuple[str, str, str, str, str, str, str]]:
     grouped: dict[str, list[tuple[str, str]]] = {}
     for claim_id, _object_id, claim_kind, claim_text, _confidence in claims:
@@ -167,7 +151,8 @@ def _detect_contradictions(
         negatives = [claim_id for claim_id, text in rows if _is_negative_claim(text)]
         if not positives or not negatives:
             continue
-        contradiction_id = contradiction_id_for_subject(subject)
+        fingerprint = re.sub(r"\s+", " ", subject.strip().lower())
+        contradiction_id = f"contradiction::{hashlib.sha1(fingerprint.encode('utf-8')).hexdigest()[:12]}"
         contradictions.append(
             (
                 contradiction_id,
@@ -182,8 +167,13 @@ def _detect_contradictions(
     return contradictions
 
 
-def _is_negative_claim(claim_text: str) -> bool:
-    lowered = claim_text.strip().lower()
-    if any(exclusion in lowered for exclusion in _NEGATION_EXCLUSIONS):
-        return False
-    return bool(_NEGATION_RE.search(lowered))
+@dataclass(frozen=True)
+class TruthStoreProjection:
+    objects: list[tuple[str, str, str, str, str, str]] = field(default_factory=list)
+    claims: list[tuple[str, str, str, str, str, float]] = field(default_factory=list)
+    claim_evidence: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    relations: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    compiled_summaries: list[tuple[str, str, str, str]] = field(default_factory=list)
+    contradictions: list[tuple[str, str, str, str, str, str, str, str]] = field(default_factory=list)
+    graph_edges: list[tuple[str, str, str, str, str, float, str]] = field(default_factory=list)
+    graph_clusters: list[tuple[str, str, str, str, str, str, float]] = field(default_factory=list)

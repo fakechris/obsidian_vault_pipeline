@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import json
 from pathlib import Path
+import sqlite3
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 
@@ -225,6 +226,90 @@ def test_truth_api_returns_object_detail_with_claims_relations_and_summary(temp_
     assert detail["relations"][0]["target_object_id"] == "target-note"
     assert detail["evidence"][0]["evidence_kind"] == "body_summary"
     assert detail["contradictions"][0]["subject_key"] == "agent harness"
+
+
+def test_truth_api_filters_truth_rows_by_pack_name(temp_vault):
+    from openclaw_pipeline.truth_api import get_object_detail, list_objects
+
+    vault = _seed_truth_vault(temp_vault)
+    db_path = vault / "60-Logs" / "knowledge.db"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "default-knowledge",
+                "source-note",
+                "evergreen",
+                "Default Source Note",
+                "10-Knowledge/Evergreen/Source.md",
+                "source-note",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO claims (pack, claim_id, object_id, claim_kind, claim_text, confidence)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "default-knowledge",
+                "source-note::default-pack",
+                "source-note",
+                "page_summary",
+                "Default-knowledge source summary.",
+                1.0,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO compiled_summaries (pack, object_id, summary_text, source_slug)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                "default-knowledge",
+                "source-note",
+                "Default-knowledge source summary.",
+                "source-note",
+            ),
+        )
+        conn.commit()
+
+    research_objects = list_objects(vault, pack_name="research-tech")
+    default_objects = list_objects(vault, pack_name="default-knowledge")
+    research_detail = get_object_detail(vault, "source-note", pack_name="research-tech")
+    default_detail = get_object_detail(vault, "source-note", pack_name="default-knowledge")
+
+    assert research_objects[1]["title"] == "Source Note"
+    assert default_objects == [
+        {
+            "object_id": "source-note",
+            "object_kind": "evergreen",
+            "title": "Default Source Note",
+            "canonical_path": "10-Knowledge/Evergreen/Source.md",
+            "source_slug": "source-note",
+            "pack": "default-knowledge",
+        }
+    ]
+    assert research_detail["object"]["title"] == "Source Note"
+    assert default_detail["object"]["title"] == "Default Source Note"
+    assert default_detail["summary"]["summary_text"] == "Default-knowledge source summary."
+
+
+def test_truth_api_lists_research_graph_clusters(temp_vault):
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    vault = _seed_truth_vault(temp_vault)
+
+    clusters = list_graph_clusters(vault, pack_name="research-tech")
+
+    assert len(clusters) >= 1
+    assert clusters[0]["pack"] == "research-tech"
+    assert clusters[0]["cluster_kind"] == "relation_component"
+    assert "source-note" in clusters[0]["member_object_ids"]
+    assert "target-note" in clusters[0]["member_object_ids"]
 
 
 def test_truth_api_lists_contradictions(temp_vault):

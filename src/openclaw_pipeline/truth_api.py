@@ -14,6 +14,7 @@ import yaml
 
 from .handler_registry import execute_focused_action_handler, resolve_focused_action_handler
 from .observation_surface_registry import execute_observation_surface_builder
+from .pack_resolution import iter_compatible_packs
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from .runtime import (
     VaultLayout,
@@ -79,6 +80,33 @@ _BRIEFING_EVOLUTION_PRIORITY = {
 def _db_path(vault_dir: Path | str) -> Path:
     resolved = resolve_vault_dir(vault_dir)
     return VaultLayout.from_vault(resolved).knowledge_db
+
+
+def _truth_pack_name(pack_name: str | None = None) -> str:
+    return str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+
+
+def _truth_pack_candidates(pack_name: str | None = None) -> list[str]:
+    return [pack.name for pack in iter_compatible_packs(pack_name or DEFAULT_WORKFLOW_PACK_NAME)]
+
+
+def _materialized_truth_packs(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None,
+    table_name: str,
+) -> list[str]:
+    candidates = _truth_pack_candidates(pack_name)
+    requested_pack = candidates[0]
+    db_path = _db_path(vault_dir)
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            f"SELECT 1 FROM {table_name} WHERE pack = ? LIMIT 1",
+            (requested_pack,),
+        ).fetchone()
+    if row is not None:
+        return [requested_pack]
+    return candidates
 
 
 def _utc_now_text() -> str:
@@ -268,32 +296,45 @@ def _is_moc_row(note_type: str, path: str) -> bool:
     return note_type == "moc" or "/10-Knowledge/Atlas/" in path or Path(path).name.startswith("MOC")
 
 
-def _batch_object_rows(vault_dir: Path | str, object_ids: list[str]) -> dict[str, dict[str, Any]]:
+def _batch_object_rows(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, dict[str, Any]]:
     if not object_ids:
         return {}
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
     placeholders = ",".join("?" for _ in object_ids)
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
             f"""
-            SELECT object_id, object_kind, title, canonical_path, source_slug
+            SELECT pack, object_id, object_kind, title, canonical_path, source_slug
             FROM objects
-            WHERE object_id IN ({placeholders})
-            ORDER BY object_id
+            WHERE pack IN ({pack_placeholders}) AND object_id IN ({placeholders})
+            ORDER BY CASE pack
+              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              ELSE {len(pack_candidates)}
+            END, object_id
             """,
-            tuple(object_ids),
+            (*pack_candidates, *object_ids, *pack_candidates),
         ).fetchall()
-    return {
-        row[0]: {
-            "object_id": row[0],
-            "object_kind": row[1],
-            "title": row[2],
-            "canonical_path": _vault_relative_path(resolved_vault, row[3]),
-            "source_slug": row[4],
+    items: dict[str, dict[str, Any]] = {}
+    for pack, object_id, object_kind, title, canonical_path, source_slug in rows:
+        if object_id in items:
+            continue
+        items[object_id] = {
+            "object_id": object_id,
+            "object_kind": object_kind,
+            "title": title,
+            "canonical_path": _vault_relative_path(resolved_vault, canonical_path),
+            "source_slug": source_slug,
+            "pack": pack,
         }
-        for row in rows
-    }
+    return items
 
 
 def get_object_provenance_map(vault_dir: Path | str, object_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -663,22 +704,27 @@ def list_objects(
     limit: int = 100,
     offset: int = 0,
     query: str | None = None,
+    pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     limit, offset = _validate_page_args(limit=limit, offset=offset)
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
     normalized_query = _escape_like(query.strip().lower()) if query else ""
     with sqlite3.connect(db_path) as conn:
         sql = """
-            SELECT object_id, object_kind, title, canonical_path, source_slug
+            SELECT pack, object_id, object_kind, title, canonical_path, source_slug
             FROM objects
         """
-        params: list[Any] = []
+        params: list[Any] = [*pack_candidates]
+        sql += f" WHERE pack IN ({','.join('?' for _ in pack_candidates)})"
         if normalized_query:
             sql += """
-                WHERE lower(object_id) LIKE ? ESCAPE '\\'
-                   OR lower(title) LIKE ? ESCAPE '\\'
-                   OR lower(source_slug) LIKE ? ESCAPE '\\'
+                AND (
+                  lower(object_id) LIKE ? ESCAPE '\\'
+                  OR lower(title) LIKE ? ESCAPE '\\'
+                  OR lower(source_slug) LIKE ? ESCAPE '\\'
+                )
             """
             params.extend(
                 [
@@ -687,20 +733,34 @@ def list_objects(
                     f"%{normalized_query}%",
                 ]
             )
-        sql += " ORDER BY object_id LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
+        sql += """
+            ORDER BY CASE pack
+              {pack_order}
+              ELSE {fallback_order}
+            END, object_id
+        """.format(
+            pack_order=" ".join(f"WHEN ? THEN {index}" for index, _ in enumerate(pack_candidates)),
+            fallback_order=len(pack_candidates),
+        )
+        params.extend(pack_candidates)
         rows = conn.execute(sql, tuple(params)).fetchall()
-
-    return [
-        {
-            "object_id": row[0],
-            "object_kind": row[1],
-            "title": row[2],
-            "canonical_path": _vault_relative_path(resolved_vault, row[3]),
-            "source_slug": row[4],
-        }
-        for row in rows
-    ]
+    items: list[dict[str, Any]] = []
+    seen_object_ids: set[str] = set()
+    for pack, object_id, object_kind, title, canonical_path, source_slug in rows:
+        if object_id in seen_object_ids:
+            continue
+        seen_object_ids.add(object_id)
+        items.append(
+            {
+                "object_id": object_id,
+                "object_kind": object_kind,
+                "title": title,
+                "canonical_path": _vault_relative_path(resolved_vault, canonical_path),
+                "source_slug": source_slug,
+                "pack": pack,
+            }
+        )
+    return items[offset : offset + limit]
 
 
 def search_vault_surface(
@@ -709,6 +769,7 @@ def search_vault_surface(
     query: str,
     object_limit: int = 25,
     note_limit: int = 25,
+    pack_name: str | None = None,
 ) -> dict[str, Any]:
     normalized_query = query.strip()
     object_limit, _ = _validate_page_args(limit=object_limit, offset=0)
@@ -721,23 +782,32 @@ def search_vault_surface(
         }
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
+    truth_pack = _truth_pack_name(pack_name)
     escaped_query = _escape_like(normalized_query.lower())
     with sqlite3.connect(db_path) as conn:
         object_rows = conn.execute(
             """
             SELECT DISTINCT objects.object_id, objects.object_kind, objects.title, objects.canonical_path, objects.source_slug
             FROM objects
-            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
-            LEFT JOIN claims ON claims.object_id = objects.object_id
-            WHERE lower(objects.object_id) LIKE ? ESCAPE '\\'
-               OR lower(objects.title) LIKE ? ESCAPE '\\'
-               OR lower(objects.source_slug) LIKE ? ESCAPE '\\'
-               OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
-               OR lower(claims.claim_text) LIKE ? ESCAPE '\\'
+            LEFT JOIN compiled_summaries
+              ON compiled_summaries.pack = objects.pack
+             AND compiled_summaries.object_id = objects.object_id
+            LEFT JOIN claims
+              ON claims.pack = objects.pack
+             AND claims.object_id = objects.object_id
+            WHERE objects.pack = ?
+              AND (
+                lower(objects.object_id) LIKE ? ESCAPE '\\'
+                OR lower(objects.title) LIKE ? ESCAPE '\\'
+                OR lower(objects.source_slug) LIKE ? ESCAPE '\\'
+                OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
+                OR lower(claims.claim_text) LIKE ? ESCAPE '\\'
+              )
             ORDER BY objects.object_id
             LIMIT ?
             """,
             (
+                truth_pack,
                 f"%{escaped_query}%",
                 f"%{escaped_query}%",
                 f"%{escaped_query}%",
@@ -780,6 +850,7 @@ def search_vault_surface(
             "title": row[2],
             "canonical_path": _vault_relative_path(resolved_vault, row[3]),
             "source_slug": row[4],
+            "pack": truth_pack,
         }
         for row in object_rows
     ]
@@ -799,25 +870,21 @@ def search_vault_surface(
     }
 
 
-def count_objects(vault_dir: Path | str, *, query: str | None = None) -> int:
+def count_objects(vault_dir: Path | str, *, query: str | None = None, pack_name: str | None = None) -> int:
     db_path = _db_path(vault_dir)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
     normalized_query = _escape_like(query.strip().lower()) if query else ""
-    sql = "SELECT COUNT(*) FROM objects"
-    params: list[Any] = []
+    sql = f"SELECT COUNT(DISTINCT object_id) FROM objects WHERE pack IN ({','.join('?' for _ in pack_candidates)})"
+    params: list[Any] = [*pack_candidates]
     if normalized_query:
         sql += """
-            WHERE lower(object_id) LIKE ? ESCAPE '\\'
-               OR lower(title) LIKE ? ESCAPE '\\'
-               OR lower(source_slug) LIKE ? ESCAPE '\\'
+            AND (
+              lower(object_id) LIKE ? ESCAPE '\\'
+              OR lower(title) LIKE ? ESCAPE '\\'
+              OR lower(source_slug) LIKE ? ESCAPE '\\'
+            )
         """
-        params.extend(
-            [
-                f"%{normalized_query}%",
-                f"%{normalized_query}%",
-                f"%{normalized_query}%",
-            ]
-        )
-
+        params.extend([f"%{normalized_query}%"] * 3)
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(sql, tuple(params)).fetchone()
     return int(row[0]) if row else 0
@@ -903,20 +970,32 @@ def _list_surface_groups(
     return list(grouped.values())
 
 
-def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
+def get_object_detail(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     escaped = _escape_like(object_id)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="graph_clusters")
 
+    truth_pack = ""
     with sqlite3.connect(db_path) as conn:
-        object_row = conn.execute(
-            """
-            SELECT object_id, object_kind, title, canonical_path, source_slug
-            FROM objects
-            WHERE object_id = ?
-            """,
-            (object_id,),
-        ).fetchone()
+        object_row = None
+        for candidate_pack in pack_candidates:
+            object_row = conn.execute(
+                """
+                SELECT object_id, object_kind, title, canonical_path, source_slug
+                FROM objects
+                WHERE pack = ? AND object_id = ?
+                """,
+                (candidate_pack, object_id),
+            ).fetchone()
+            if object_row is not None:
+                truth_pack = candidate_pack
+                break
         if object_row is None:
             raise ValueError(f"Unknown object_id: {object_id}")
 
@@ -924,47 +1003,48 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             """
             SELECT object_id, summary_text, source_slug
             FROM compiled_summaries
-            WHERE object_id = ?
+            WHERE pack = ? AND object_id = ?
             """,
-            (object_id,),
+            (truth_pack, object_id),
         ).fetchone()
         claim_rows = conn.execute(
             """
             SELECT claim_id, claim_kind, claim_text, confidence
             FROM claims
-            WHERE object_id = ?
+            WHERE pack = ? AND object_id = ?
             ORDER BY claim_id
             """,
-            (object_id,),
+            (truth_pack, object_id),
         ).fetchall()
         evidence_rows = conn.execute(
             """
             SELECT claim_id, source_slug, evidence_kind, quote_text
             FROM claim_evidence
             WHERE claim_id IN (
-                SELECT claim_id FROM claims WHERE object_id = ?
+                SELECT claim_id FROM claims WHERE pack = ? AND object_id = ?
             )
             ORDER BY claim_id, evidence_kind
             """,
-            (object_id,),
+            (truth_pack, object_id),
         ).fetchall()
         relation_rows = conn.execute(
             """
             SELECT source_object_id, target_object_id, relation_type, evidence_source_slug
             FROM relations
-            WHERE source_object_id = ?
+            WHERE pack = ? AND source_object_id = ?
             ORDER BY target_object_id
             """,
-            (object_id,),
+            (truth_pack, object_id),
         ).fetchall()
         contradiction_rows = conn.execute(
             """
             SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
             FROM contradictions
-            WHERE positive_claim_ids_json LIKE ? ESCAPE '\\' OR negative_claim_ids_json LIKE ? ESCAPE '\\'
+            WHERE pack = ?
+              AND (positive_claim_ids_json LIKE ? ESCAPE '\\' OR negative_claim_ids_json LIKE ? ESCAPE '\\')
             ORDER BY subject_key
             """,
-            (f'%"{escaped}::%', f'%"{escaped}::%'),
+            (truth_pack, f'%"{escaped}::%', f'%"{escaped}::%'),
         ).fetchall()
         mention_rows = conn.execute(
             """
@@ -1023,6 +1103,7 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             "title": object_row[2],
             "canonical_path": _vault_relative_path(resolved_vault, object_row[3]),
             "source_slug": object_row[4],
+            "pack": truth_pack,
         },
         "summary": (
             {
@@ -1067,6 +1148,90 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             "mocs": mocs,
         },
     }
+
+
+def list_graph_clusters(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    pack_candidates = _truth_pack_candidates(pack_name)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
+
+    sql = """
+        SELECT pack, cluster_id, cluster_kind, label, center_object_id, member_object_ids_json, score
+        FROM graph_clusters
+        WHERE pack IN ({pack_placeholders})
+    """
+    sql = sql.format(pack_placeholders=",".join("?" for _ in pack_candidates))
+    params: list[Any] = [*pack_candidates]
+    if normalized_query:
+        sql += """
+          AND (
+            lower(pack) LIKE ? ESCAPE '\\'
+            OR
+            lower(cluster_kind) LIKE ? ESCAPE '\\'
+            OR lower(label) LIKE ? ESCAPE '\\'
+            OR lower(center_object_id) LIKE ? ESCAPE '\\'
+            OR lower(member_object_ids_json) LIKE ? ESCAPE '\\'
+          )
+        """
+        params.extend([f"%{normalized_query}%"] * 5)
+    sql += """
+      ORDER BY CASE pack
+        {pack_order}
+        ELSE {fallback_order}
+      END, score DESC, cluster_id
+    """.format(
+        pack_order=" ".join(f"WHEN ? THEN {index}" for index, _ in enumerate(pack_candidates)),
+        fallback_order=len(pack_candidates),
+    )
+    params.extend(pack_candidates)
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    all_member_ids = [
+        object_id
+        for _pack, _cluster_id, _cluster_kind, _label, _center_object_id, member_json, _score in rows
+        for object_id in json.loads(member_json)
+    ]
+    object_rows = _batch_object_rows(vault_dir, all_member_ids, pack_name=pack_name)
+
+    items: list[dict[str, Any]] = []
+    seen_cluster_ids: set[str] = set()
+    for cluster_pack, cluster_id, cluster_kind, label, center_object_id, member_json, score in rows:
+        if cluster_id in seen_cluster_ids:
+            continue
+        seen_cluster_ids.add(cluster_id)
+        member_object_ids = json.loads(member_json)
+        items.append(
+            {
+                "cluster_id": str(cluster_id),
+                "cluster_kind": str(cluster_kind),
+                "label": str(label),
+                "center_object_id": str(center_object_id),
+                "center_title": object_rows.get(str(center_object_id), {}).get("title", str(center_object_id)),
+                "member_object_ids": member_object_ids,
+                "member_count": len(member_object_ids),
+                "members": [
+                    object_rows.get(
+                        str(object_id),
+                        {"object_id": str(object_id), "title": str(object_id), "pack": cluster_pack},
+                    )
+                    for object_id in member_object_ids
+                ],
+                "score": float(score or 0.0),
+                "pack": cluster_pack,
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
 
 
 def _find_note_by_source(vault_dir: Path, *, source_url: str, exclude_path: str) -> dict[str, str] | None:

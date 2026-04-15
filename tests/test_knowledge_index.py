@@ -233,6 +233,59 @@ date: 2026-04-07
     assert rows == [("alpha", "Alpha Evergreen", "evergreen", str(evergreen))]
 
 
+def test_rebuild_knowledge_index_scopes_truth_rows_and_graph_seeds_to_selected_pack(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-15
+---
+
+# Source Note
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-15
+---
+
+# Target Note
+""",
+        encoding="utf-8",
+    )
+
+    result = rebuild_knowledge_index(temp_vault, pack_name="default-knowledge")
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+
+    assert result["projection_pack"] == "default-knowledge"
+    assert result["graph_edges_indexed"] >= 1
+    assert result["graph_clusters_indexed"] >= 1
+
+    with sqlite3.connect(db_path) as conn:
+        object_packs = conn.execute(
+            "SELECT DISTINCT pack FROM objects ORDER BY pack"
+        ).fetchall()
+        graph_packs = conn.execute(
+            "SELECT DISTINCT pack FROM graph_edges ORDER BY pack"
+        ).fetchall()
+
+    assert object_packs == [("default-knowledge",)]
+    assert graph_packs == [("default-knowledge",)]
+
+
 def test_knowledge_index_help_includes_expected_arguments(capsys):
     from openclaw_pipeline.commands.knowledge_index import main
 
@@ -358,6 +411,8 @@ date: 2026-04-07
                 relations=[],
                 compiled_summaries=[],
                 contradictions=[],
+                graph_edges=[],
+                graph_clusters=[],
             ),
         )
 

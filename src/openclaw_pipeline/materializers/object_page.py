@@ -11,7 +11,7 @@ def materialize_object_page(vault_dir: Path, *, pack_name: str, object_id: str) 
     layout = VaultLayout.from_vault(resolved_vault)
     output_path = layout.compiled_views_dir / pack_name / "objects" / f"{object_id}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    detail = get_object_detail(resolved_vault, object_id)
+    detail = get_object_detail(resolved_vault, object_id, pack_name=pack_name)
     object_row = detail["object"]
     object_kind = object_row["object_kind"]
     title = object_row["title"]
