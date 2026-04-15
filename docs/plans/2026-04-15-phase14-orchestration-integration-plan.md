@@ -8,6 +8,11 @@
 
 **Tech Stack:** Python 3.13, existing `truth_api`, `ui_server`, `unified_pipeline_enhanced.py`, JSONL/audit logs, pytest.
 
+**Architecture follow-up:** This orchestration plan now depends on a deeper runtime split captured in:
+
+- [2026-04-15-ovp-layer-contract.md](2026-04-15-ovp-layer-contract.md)
+- [2026-04-15-stage-handler-registry-design.md](2026-04-15-stage-handler-registry-design.md)
+
 ## Current State
 
 The repo already has two partially overlapping systems:
@@ -302,6 +307,10 @@ The worker should:
 - dispatch by `action_kind`
 - record outcome
 
+This dispatch should not be implemented as another local dict of hard-coded handlers.
+It should be extracted through the Stage Handler Registry design so queue execution,
+profile execution, and autopilot all converge on the same handler contract.
+
 **Step 2: Keep handlers thin**
 
 Do not duplicate pipeline logic in the worker.
@@ -321,6 +330,7 @@ Needed handlers:
 - one deep dive -> evergreen/object extraction
 
 These should reuse existing workflow primitives as much as possible.
+They should be registered as focused handlers, not hidden behind `truth_api.py` imports.
 
 **Step 2: Queue auto-policy**
 

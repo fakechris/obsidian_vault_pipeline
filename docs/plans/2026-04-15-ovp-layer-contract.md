@@ -275,6 +275,10 @@ OVP does not need a big-bang rewrite. It needs a second platform extraction pass
 
 ### Refactor A: Stage Handler Registry
 
+Detailed design:
+
+- [2026-04-15-stage-handler-registry-design.md](2026-04-15-stage-handler-registry-design.md)
+
 Introduce a first-class handler registry between:
 
 - action queue worker
