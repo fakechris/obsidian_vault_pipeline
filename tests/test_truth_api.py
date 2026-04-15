@@ -1848,8 +1848,18 @@ Processed source note without any derived deep dive.
         calls.append(action["action_kind"])
         return {"output_path": "20-Areas/AI-Research/Topics/2026-04/Harness Source_深度解读.md"}
 
-    monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", fake_run_deep_dive)
-    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir: None)
+    monkeypatch.setattr(
+        truth_api,
+        "_run_deep_dive_workflow_action",
+        lambda vault_dir, action: (_ for _ in ()).throw(AssertionError("direct action dispatch")),
+    )
+    monkeypatch.setattr(
+        truth_api,
+        "execute_focused_action_handler",
+        lambda vault_dir, action, **kwargs: (object(), fake_run_deep_dive(vault_dir, action)),
+        raising=False,
+    )
+    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir, **kwargs: None)
 
     payload = truth_api.run_next_action_queue_item(vault)
     actions = truth_api.list_action_queue(vault)
@@ -1880,7 +1890,7 @@ Processed source note without any derived deep dive.
     rebuild_knowledge_index(vault)
     truth_api.sync_signal_ledger(vault)
 
-    monkeypatch.setattr(truth_api, "_signal_by_id", lambda vault_dir, signal_id: None)
+    monkeypatch.setattr(truth_api, "_signal_by_id", lambda vault_dir, signal_id, **kwargs: None)
 
     payload = truth_api.run_next_action_queue_item(vault)
     actions = truth_api.list_action_queue(vault)
@@ -2029,7 +2039,7 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
 
     monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", lambda vault_dir, action: {"ok": "deep_dive"})
     monkeypatch.setattr(truth_api, "_run_object_extraction_workflow_action", lambda vault_dir, action: {"ok": "objects"})
-    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir: None)
+    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir, **kwargs: None)
 
     payload = truth_api.run_action_queue(vault, limit=5)
     actions = truth_api.list_action_queue(vault)
@@ -2119,9 +2129,13 @@ def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkey
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(truth_api, "_signal_by_id", lambda vault_dir, signal_id: {"signal_id": signal_id})
+    monkeypatch.setattr(
+        truth_api,
+        "_signal_by_id",
+        lambda vault_dir, signal_id, **kwargs: {"signal_id": signal_id},
+    )
     monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", lambda vault_dir, action: {"ok": True})
-    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir: None)
+    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir, **kwargs: None)
 
     payload = truth_api.run_action_queue(temp_vault, limit=1, safe_only=True)
     actions = truth_api.list_action_queue(temp_vault)
@@ -2184,7 +2198,7 @@ def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, mo
     import openclaw_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
-    monkeypatch.setattr(truth_api, "list_signals", lambda vault_dir, limit=8: [])
+    monkeypatch.setattr(truth_api, "_list_signals_from_ledger", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         truth_api,
         "list_evolution_candidates",
@@ -2204,7 +2218,7 @@ def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, mo
         ],
     )
 
-    payload = truth_api.get_briefing_snapshot(vault, limit=8)
+    payload = truth_api._research_tech_build_briefing_snapshot(vault, limit=8)
 
     assert len(payload["insights"]) == 1
     assert len(payload["priority_items"]) == 1
@@ -2216,8 +2230,8 @@ def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault,
     vault = _seed_truth_vault(temp_vault)
     monkeypatch.setattr(
         truth_api,
-        "list_signals",
-        lambda vault_dir, limit=8: [
+        "_list_signals_from_ledger",
+        lambda *args, **kwargs: [
             {
                 "signal_id": "signal::source",
                 "signal_type": "source_needs_deep_dive",
@@ -2252,7 +2266,7 @@ def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault,
     )
     monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24: [])
 
-    payload = truth_api.get_briefing_snapshot(vault, limit=8)
+    payload = truth_api._research_tech_build_briefing_snapshot(vault, limit=8)
 
     assert payload["priority_items"][0]["kind"] == "contradiction_open"
 
@@ -2391,7 +2405,7 @@ def test_truth_api_sync_signal_ledger_uses_signal_ledger_lock(temp_vault, monkey
     monkeypatch.setattr(
         truth_api,
         "_backfill_auto_queue_actions",
-        lambda vault_dir, *, signals=None: {"created_count": 0, "created_action_ids": []},
+        lambda vault_dir, *, pack_name=None, signals=None: {"created_count": 0, "created_action_ids": []},
     )
 
     truth_api.sync_signal_ledger(vault)
@@ -2433,14 +2447,130 @@ def test_truth_api_run_next_action_queue_item_uses_action_queue_lock(temp_vault,
         calls.append("exit")
 
     monkeypatch.setattr(truth_api, "action_queue_write_lock", fake_lock, raising=False)
-    monkeypatch.setattr(truth_api, "_signal_by_id", lambda vault_dir, signal_id: {"signal_id": signal_id})
+    monkeypatch.setattr(
+        truth_api,
+        "_signal_by_id",
+        lambda vault_dir, signal_id, **kwargs: {"signal_id": signal_id},
+    )
     monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", lambda vault_dir, action: {"ok": True})
-    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir: None)
+    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir, **kwargs: None)
 
     payload = truth_api.run_next_action_queue_item(temp_vault, safe_only=True)
 
     assert payload["ran"] is True
     assert calls == [f"enter:{True}", "exit", f"enter:{True}", "exit"]
+
+
+def test_truth_api_refresh_truth_after_action_uses_pack_override(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api_source
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "openclaw_pipeline.knowledge_index.rebuild_knowledge_index",
+        lambda vault_dir, *, pack_name=None: captured.update(
+            {"vault_dir": vault_dir, "pack_name": pack_name}
+        ),
+    )
+    monkeypatch.setattr(
+        truth_api_source,
+        "sync_signal_ledger",
+        lambda vault_dir, **kwargs: captured.update({"synced": vault_dir, "synced_pack": kwargs.get("pack_name")}),
+    )
+
+    truth_api_source._refresh_truth_after_action(temp_vault, pack_name="default-knowledge")
+
+    assert captured["pack_name"] == "default-knowledge"
+    assert captured["synced"] == temp_vault
+    assert captured["synced_pack"] == "default-knowledge"
+
+
+def test_truth_api_list_signals_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api_source
+
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_execute(*, surface_kind, vault_dir, pack_name=None, **kwargs):
+        calls.append((surface_kind, pack_name))
+        if surface_kind == "signals":
+            return object(), [
+                {
+                    "signal_id": "signal::1",
+                    "signal_type": "production_gap",
+                    "title": "Gap",
+                    "detail": "detail",
+                    "recommended_action": {"label": "Inspect"},
+                }
+            ]
+        raise AssertionError(f"unexpected surface {surface_kind}")
+
+    monkeypatch.setattr(
+        truth_api_source,
+        "execute_observation_surface_builder",
+        fake_execute,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        truth_api_source,
+        "_rewrite_jsonl",
+        lambda path, items: path.write_text(
+            "\n".join(json.dumps(item, ensure_ascii=False) for item in items) + ("\n" if items else ""),
+            encoding="utf-8",
+        ),
+    )
+
+    items = truth_api_source.list_signals(temp_vault, pack_name="default-knowledge")
+
+    assert items[0]["signal_id"] == "signal::1"
+    assert calls == [("signals", "default-knowledge")]
+
+
+def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api_source
+
+    def fake_execute(*, surface_kind, vault_dir, pack_name=None, **kwargs):
+        if surface_kind == "signals":
+            return object(), []
+        if surface_kind == "briefing":
+            return object(), {"generated_at": "2026-04-15T00:00:00Z", "priority_item_count": 1, "recent_signals": []}
+        raise AssertionError(f"unexpected surface {surface_kind}")
+
+    monkeypatch.setattr(
+        truth_api_source,
+        "execute_observation_surface_builder",
+        fake_execute,
+        raising=False,
+    )
+
+    payload = truth_api_source.get_briefing_snapshot(temp_vault, pack_name="default-knowledge", limit=5)
+
+    assert payload["priority_item_count"] == 1
+
+
+def test_truth_api_list_production_chains_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api_source
+
+    calls: list[tuple[str, str | None, str | None]] = []
+
+    def fake_execute(*, surface_kind, vault_dir, pack_name=None, **kwargs):
+        calls.append((surface_kind, pack_name, kwargs.get("query")))
+        return object(), [{"title": "Chain", "path": "20-Areas/AI/Chain.md", "traceability": {}}]
+
+    monkeypatch.setattr(
+        truth_api_source,
+        "execute_observation_surface_builder",
+        fake_execute,
+        raising=False,
+    )
+
+    items = truth_api_source.list_production_chains(
+        temp_vault,
+        pack_name="default-knowledge",
+        query="chain",
+    )
+
+    assert items[0]["title"] == "Chain"
+    assert calls == [("production_chains", "default-knowledge", "chain")]
 
 
 def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, monkeypatch):
@@ -2491,14 +2621,14 @@ def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, m
             },
         ]
 
-    monkeypatch.setattr(truth_api, "list_production_chains", fake_chains)
+    monkeypatch.setattr(truth_api, "_research_tech_list_production_chains", fake_chains)
     monkeypatch.setattr(
         truth_api,
         "list_production_gaps",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not call list_production_gaps")),
     )
 
-    items = truth_api._compute_signal_entries(temp_vault)
+    items = truth_api._research_tech_build_signal_entries(temp_vault)
 
     assert calls["chains"] == 1
     assert {item["signal_type"] for item in items} >= {
@@ -2514,8 +2644,8 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
     calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(
         truth_api,
-        "list_signals",
-        lambda vault_dir, limit=8: [
+        "_list_signals_from_ledger",
+        lambda *args, **kwargs: [
             {
                 "signal_id": "signal::a",
                 "signal_type": "source_needs_deep_dive",
@@ -2550,7 +2680,7 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
 
     monkeypatch.setattr(truth_api, "_batch_object_rows", fake_batch)
 
-    payload = truth_api.get_briefing_snapshot(temp_vault, limit=8)
+    payload = truth_api._research_tech_build_briefing_snapshot(temp_vault, limit=8)
 
     assert payload["active_topics"] == [
         {

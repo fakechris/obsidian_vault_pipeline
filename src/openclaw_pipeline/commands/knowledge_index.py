@@ -16,12 +16,18 @@ from ..knowledge_index import (
     search_knowledge_index,
     serve_knowledge_index,
 )
+from ..packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from ..runtime import resolve_vault_dir
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Rebuild the derived SQLite knowledge index")
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
+    parser.add_argument(
+        "--pack",
+        default=DEFAULT_WORKFLOW_PACK_NAME,
+        help="Pack name used to resolve the truth projection builder",
+    )
     parser.add_argument("--search", help="Run keyword search against the knowledge index")
     parser.add_argument("--query", help="Run a read-only semantic-style query against chunk embeddings")
     parser.add_argument("--get", help="Fetch a canonical page payload by slug")
@@ -120,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"- {row['timestamp']} {row['source_log']} {row['event_type']} {row['slug']}")
         return 0
 
-    payload = rebuild_knowledge_index(vault_dir)
+    payload = rebuild_knowledge_index(vault_dir, pack_name=args.pack)
 
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from ..base import BaseDomainPack
+from ..base import BaseDomainPack, TruthProjectionSpec
 from .extraction_profiles import RESEARCH_TECH_EXTRACTION_PROFILES
+from .handlers import build_stage_handlers
+from .observation_surfaces import build_observation_surfaces
 from .operation_profiles import RESEARCH_TECH_OPERATION_PROFILES
 from .profiles import RESEARCH_TECH_WORKFLOW_PROFILES
 from .schemas import RESEARCH_TECH_OBJECT_KINDS
@@ -19,4 +21,12 @@ def get_pack() -> BaseDomainPack:
         _extraction_profiles=list(RESEARCH_TECH_EXTRACTION_PROFILES),
         _operation_profiles=list(RESEARCH_TECH_OPERATION_PROFILES),
         _wiki_views=list(RESEARCH_TECH_WIKI_VIEWS),
+        _stage_handlers=build_stage_handlers(),
+        _truth_projection=TruthProjectionSpec(
+            name="research-tech-default",
+            pack="research-tech",
+            entrypoint="openclaw_pipeline.packs.research_tech.truth_projection:build_truth_projection",
+            description="Default research-tech truth projection",
+        ),
+        _observation_surfaces=build_observation_surfaces(),
     )

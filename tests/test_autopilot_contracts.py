@@ -131,6 +131,77 @@ def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monk
     assert order == ["absorb", "moc", "refine", "knowledge_index"]
 
 
+def test_autopilot_uses_handler_registry_for_follow_up_stages(tmp_path, monkeypatch):
+    import openclaw_pipeline.autopilot.daemon as daemon_source
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    daemon = AutoPilotDaemon(vault, watch_sources=["inbox"], auto_commit=False)
+
+    monkeypatch.setattr(
+        daemon_source.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Completed", (), {"returncode": 0, "stderr": "", "stdout": ""})(),
+    )
+    monkeypatch.setattr(daemon, "_check_quality", lambda task: (4.0, {}))
+    monkeypatch.setattr(daemon, "_run_absorb", lambda: (_ for _ in ()).throw(AssertionError("direct absorb dispatch")))
+    monkeypatch.setattr(daemon, "_run_moc_update", lambda: (_ for _ in ()).throw(AssertionError("direct moc dispatch")))
+    monkeypatch.setattr(
+        daemon,
+        "_run_knowledge_index_refresh",
+        lambda: (_ for _ in ()).throw(AssertionError("direct knowledge_index dispatch")),
+    )
+
+    calls: list[str] = []
+
+    def fake_execute_autopilot_stage_handler(daemon_runtime, stage, **kwargs):
+        calls.append(stage)
+        if stage == "interpretation":
+            return {"skipped": False}
+        if stage == "quality":
+            return {"quality": 4.0, "quality_dimensions": {}}
+        return {"stage": stage}
+
+    monkeypatch.setattr(
+        daemon_source,
+        "execute_autopilot_stage_handler",
+        fake_execute_autopilot_stage_handler,
+        raising=False,
+    )
+
+    task = Task(id=1, source="inbox", file_path=str(vault / "50-Inbox" / "01-Raw" / "note.md"))
+    result = daemon.process_task(task)
+
+    assert result["success"] is True
+    assert calls == ["interpretation", "quality", "absorb", "moc", "knowledge_index"]
+
+
+def test_autopilot_knowledge_index_refresh_passes_pack(tmp_path, monkeypatch):
+    import openclaw_pipeline.autopilot.daemon as daemon_source
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    daemon = AutoPilotDaemon(
+        vault,
+        watch_sources=["inbox"],
+        auto_commit=False,
+        pack="default-knowledge",
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        return type("Completed", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(daemon_source.subprocess, "run", fake_run)
+
+    daemon._run_knowledge_index_refresh()
+
+    assert "--pack" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--pack") + 1] == "default-knowledge"
+
+
 def test_autopilot_watcher_import_does_not_require_watchdog(tmp_path):
     watcher = MultiSourceWatcher({"inbox": tmp_path}, lambda source, path: None)
 

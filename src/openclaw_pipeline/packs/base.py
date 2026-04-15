@@ -25,7 +25,35 @@ class WorkflowProfile:
 
 @dataclass(frozen=True)
 class StageHandlerSpec:
-    stage: str
+    name: str
+    pack: str
+    handler_kind: str
+    runtime_adapter: str
+    entrypoint: str
+    stage: str | None = None
+    action_kind: str | None = None
+    description: str = ""
+    target_mode: str = "batch"
+    supports_autopilot: bool = False
+    safe_to_run: bool = False
+    requires_truth_refresh: bool = False
+    requires_signal_resync: bool = False
+
+
+@dataclass(frozen=True)
+class TruthProjectionSpec:
+    name: str
+    pack: str
+    entrypoint: str
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class ObservationSurfaceSpec:
+    name: str
+    pack: str
+    surface_kind: str
+    entrypoint: str
     description: str = ""
 
 
@@ -42,6 +70,9 @@ class BaseDomainPack:
     _extraction_profiles: list[object] = field(default_factory=list)
     _operation_profiles: list[object] = field(default_factory=list)
     _wiki_views: list[object] = field(default_factory=list)
+    _stage_handlers: list[StageHandlerSpec] = field(default_factory=list)
+    _truth_projection: TruthProjectionSpec | None = None
+    _observation_surfaces: list[ObservationSurfaceSpec] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.role not in ALLOWED_PACK_ROLES:
@@ -55,6 +86,16 @@ class BaseDomainPack:
                 raise ValueError(
                     f"Pack '{self.name}' has compatibility_base={self.compatibility_base!r} "
                     f"but role is '{self.role}'"
+                )
+        if self._truth_projection is not None and self._truth_projection.pack != self.name:
+            raise ValueError(
+                f"Pack '{self.name}' declares truth projection for "
+                f"'{self._truth_projection.pack}'"
+            )
+        for spec in self._observation_surfaces:
+            if spec.pack != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares observation surface for '{spec.pack}'"
                 )
 
     def object_kinds(self) -> list[ObjectKindSpec]:
@@ -100,3 +141,12 @@ class BaseDomainPack:
             if getattr(view, "name", None) == name:
                 return view
         raise ValueError(f"Unknown wiki view '{name}' for pack '{self.name}'")
+
+    def stage_handlers(self) -> list[StageHandlerSpec]:
+        return list(self._stage_handlers)
+
+    def truth_projection(self) -> TruthProjectionSpec | None:
+        return self._truth_projection
+
+    def observation_surfaces(self) -> list[ObservationSurfaceSpec]:
+        return list(self._observation_surfaces)
