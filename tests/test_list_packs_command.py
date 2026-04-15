@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from types import SimpleNamespace
 
 
 def test_list_packs_command_outputs_builtin_roles(capsys):
@@ -29,6 +30,31 @@ def test_list_packs_command_help_mentions_domain_packs(capsys):
     assert "domain packs" in output.lower()
 
 
+def test_list_packs_command_lists_entrypoint_packs(monkeypatch, capsys):
+    from openclaw_pipeline.commands import list_packs
+
+    class FakePack:
+        name = "media"
+        role = "domain"
+        compatibility_base = None
+        version = "0.1.0"
+        api_version = 1
+
+        @staticmethod
+        def workflow_profiles():
+            return [SimpleNamespace(name="daily-desk"), SimpleNamespace(name="feature-dossier")]
+
+    monkeypatch.setattr(list_packs, "discover_entrypoint_packs", lambda: {"media": FakePack()})
+
+    exit_code = list_packs.main(["--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    external = {item["name"]: item for item in payload["external"]}
+    assert external["media"]["source"] == "entrypoint"
+    assert external["media"]["profiles"] == ["daily-desk", "feature-dossier"]
+
+
 def test_list_packs_command_reads_manifest_paths_from_os_pathsep(tmp_path, monkeypatch, capsys):
     from openclaw_pipeline.commands.list_packs import main
 
@@ -53,6 +79,10 @@ entrypoints:
   pack: external.two:get_pack
 """.strip(),
         encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.list_packs.discover_entrypoint_packs",
+        lambda: {},
     )
     monkeypatch.setenv("OPENCLAW_PACK_MANIFESTS", f"{first}{os.pathsep}{second}")
 
