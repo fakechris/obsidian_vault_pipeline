@@ -76,6 +76,25 @@ def test_truth_api_lists_objects(temp_vault):
     assert objects[1]["object_kind"] == "evergreen"
 
 
+def test_note_date_text_returns_empty_string_when_frontmatter_date_missing(temp_vault):
+    from openclaw_pipeline.truth_api import _note_date_text
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "NoDate.md"
+    note.write_text(
+        """---
+note_id: no-date
+title: No Date
+type: evergreen
+---
+
+# No Date
+""",
+        encoding="utf-8",
+    )
+
+    assert _note_date_text(temp_vault, "10-Knowledge/Evergreen/NoDate.md") == ""
+
+
 def test_truth_api_returns_object_detail_with_claims_relations_and_summary(temp_vault):
     from openclaw_pipeline.truth_api import get_object_detail
 

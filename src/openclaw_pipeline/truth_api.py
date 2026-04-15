@@ -510,7 +510,7 @@ def _page_paths_for_slugs(vault_dir: Path | str, slugs: list[str]) -> dict[str, 
 def _note_date_text(vault_dir: Path | str, note_path: str) -> str:
     frontmatter = _read_note_frontmatter(vault_dir, note_path)
     date_value = frontmatter.get("date")
-    return str(date_value).strip()
+    return str(date_value).strip() if date_value is not None else ""
 
 
 def _note_date_sort_key(date_text: str) -> tuple[int, float, str]:
