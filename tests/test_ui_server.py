@@ -530,6 +530,7 @@ def test_ui_server_can_dismiss_action_via_api(temp_vault, monkeypatch):
 def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
     from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_contradictions
 
     _seed_truth_store(temp_vault)
     layout = VaultLayout.from_vault(temp_vault)
@@ -568,23 +569,12 @@ def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
     assert payload["contradiction_ids"] == [contradiction_id]
     assert payload["rebuilt_summary_count"] == 2
 
-    with sqlite3.connect(layout.knowledge_db) as conn:
-        row = conn.execute(
-            "SELECT status, resolution_note FROM contradictions WHERE contradiction_id = ?",
-            (contradiction_id,),
-        ).fetchone()
-        audit_row = conn.execute(
-            """
-            SELECT event_type, payload_json
-            FROM audit_events
-            WHERE source_log = 'review-actions'
-            ORDER BY timestamp DESC
-            LIMIT 1
-            """
-        ).fetchone()
-    assert row == ("resolved_keep_positive", "Reviewed in UI")
-    assert audit_row is not None
-    assert audit_row[0] == "ui_contradictions_resolved"
+    review_log = (layout.logs_dir / "review-actions.jsonl").read_text(encoding="utf-8").splitlines()
+    latest_review = json.loads(review_log[-1])
+    contradiction = next(item for item in list_contradictions(temp_vault, status="resolved") if item["contradiction_id"] == contradiction_id)
+    assert contradiction["status"] == "resolved_keep_positive"
+    assert contradiction["resolution_note"] == "Reviewed in UI"
+    assert latest_review["event_type"] == "ui_contradictions_resolved"
 
 
 def test_ui_server_can_bulk_resolve_contradictions_via_api(temp_vault):
@@ -703,18 +693,11 @@ Thin note.
     assert response.status == 200
     assert payload["objects_rebuilt"] == 1
     assert payload["object_ids"] == ["thin-note"]
-    with sqlite3.connect(VaultLayout.from_vault(temp_vault).knowledge_db) as conn:
-        audit_row = conn.execute(
-            """
-            SELECT event_type, payload_json
-            FROM audit_events
-            WHERE source_log = 'review-actions'
-            ORDER BY timestamp DESC
-            LIMIT 1
-            """
-        ).fetchone()
-    assert audit_row is not None
-    assert audit_row[0] == "ui_summaries_rebuilt"
+    review_log = (
+        VaultLayout.from_vault(temp_vault).logs_dir / "review-actions.jsonl"
+    ).read_text(encoding="utf-8").splitlines()
+    latest_review = json.loads(review_log[-1])
+    assert latest_review["event_type"] == "ui_summaries_rebuilt"
 
 
 def test_ui_server_can_bulk_rebuild_summaries_via_api(temp_vault):
@@ -823,16 +806,6 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         "openclaw_pipeline.commands.ui_server._start_ui_prewarm",
         lambda vault_dir: calls.setdefault("prewarm_vault_dir", str(vault_dir)),
     )
-    monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server._start_action_dispatcher",
-        lambda vault_dir, *, interval_seconds: calls.setdefault(
-            "dispatcher", {"vault_dir": str(vault_dir), "interval_seconds": interval_seconds}
-        ),
-    )
-    monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server._stop_action_dispatcher",
-        lambda dispatcher: calls.setdefault("dispatcher_stopped", dispatcher is None or True),
-    )
 
     exit_code = main(["--vault-dir", str(temp_vault), "--host", "127.0.0.1", "--port", "9999"])
     payload = json.loads(capsys.readouterr().out)
@@ -844,12 +817,11 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         "host": "127.0.0.1",
         "port": 9999,
         "prewarm_vault_dir": str(temp_vault),
-        "dispatcher_stopped": True,
         "closed": True,
     }
 
 
-def test_ui_server_main_can_start_action_dispatcher_when_enabled(temp_vault, capsys, monkeypatch):
+def test_ui_server_main_can_spawn_detached_action_worker_when_enabled(temp_vault, capsys, monkeypatch):
     from openclaw_pipeline.commands.ui_server import main
 
     calls = {}
@@ -881,12 +853,8 @@ def test_ui_server_main_can_start_action_dispatcher_when_enabled(temp_vault, cap
         lambda vault_dir: None,
     )
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server._start_action_dispatcher",
-        lambda vault_dir, *, interval_seconds: {"worker": True, "interval_seconds": interval_seconds},
-    )
-    monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server._stop_action_dispatcher",
-        lambda dispatcher: calls.setdefault("dispatcher_stopped", dispatcher["worker"]),
+        "openclaw_pipeline.commands.ui_server.subprocess.Popen",
+        lambda cmd, **kwargs: calls.setdefault("worker_process", {"cmd": cmd, "kwargs": kwargs}),
     )
 
     exit_code = main(
@@ -904,53 +872,9 @@ def test_ui_server_main_can_start_action_dispatcher_when_enabled(temp_vault, cap
 
     assert exit_code == 0
     assert payload == {"host": "127.0.0.1", "port": 9999, "vault_dir": str(temp_vault)}
-    assert calls["dispatcher_stopped"] is True
-
-
-def test_ui_server_action_dispatcher_runs_actions_in_subprocess(temp_vault, monkeypatch):
-    from openclaw_pipeline.commands import ui_server
-
-    calls = {}
-
-    class FakeStopEvent:
-        def __init__(self):
-            self._is_set = False
-
-        def is_set(self):
-            return self._is_set
-
-        def wait(self, timeout):
-            calls["wait_timeout"] = timeout
-            self._is_set = True
-            return True
-
-    def fake_run(cmd, *, capture_output, text, timeout):
-        calls["cmd"] = cmd
-        calls["capture_output"] = capture_output
-        calls["text"] = text
-        calls["timeout"] = timeout
-
-        class Result:
-            returncode = 0
-            stdout = '{"status":"idle"}'
-            stderr = ""
-
-        return Result()
-
-    monkeypatch.setattr(ui_server.subprocess, "run", fake_run)
-
-    ui_server._action_dispatcher_loop(
-        temp_vault,
-        stop_event=FakeStopEvent(),
-        interval_seconds=3.5,
-    )
-
-    assert calls["cmd"][1:4] == ["-m", "openclaw_pipeline.commands.run_actions", "--vault-dir"]
-    assert calls["cmd"][-1] == "--once"
-    assert calls["capture_output"] is True
-    assert calls["text"] is True
-    assert calls["timeout"] == 1800
-    assert calls["wait_timeout"] == 3.5
+    assert calls["worker_process"]["cmd"][1:4] == ["-m", "openclaw_pipeline.commands.run_actions", "--vault-dir"]
+    assert "--loop" in calls["worker_process"]["cmd"]
+    assert calls["worker_process"]["kwargs"]["start_new_session"] is True
 
 
 def test_ui_server_main_exits_nonzero_when_preflight_fails(temp_vault, capsys, monkeypatch):

@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 from ..runtime import VaultLayout, resolve_vault_dir
-
-
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+from ..truth_api import get_object_detail
 
 
 def materialize_object_page(vault_dir: Path, *, pack_name: str, object_id: str) -> Path:
@@ -15,54 +11,13 @@ def materialize_object_page(vault_dir: Path, *, pack_name: str, object_id: str) 
     layout = VaultLayout.from_vault(resolved_vault)
     output_path = layout.compiled_views_dir / pack_name / "objects" / f"{object_id}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    escaped_object_id = _escape_like(object_id)
-    with sqlite3.connect(layout.knowledge_db) as conn:
-        object_row = conn.execute(
-            """
-            SELECT object_id, object_kind, title, canonical_path, source_slug
-            FROM objects
-            WHERE object_id = ?
-            """,
-            (object_id,),
-        ).fetchone()
-        if object_row is None:
-            raise ValueError(f"Unknown object_id: {object_id}")
-
-        summary_row = conn.execute(
-            "SELECT summary_text FROM compiled_summaries WHERE object_id = ?",
-            (object_id,),
-        ).fetchone()
-        claim_rows = conn.execute(
-            """
-            SELECT claim_kind, claim_text
-            FROM claims
-            WHERE object_id = ?
-            ORDER BY claim_id
-            """,
-            (object_id,),
-        ).fetchall()
-        relation_rows = conn.execute(
-            """
-            SELECT target_object_id, relation_type
-            FROM relations
-            WHERE source_object_id = ?
-            ORDER BY target_object_id
-            """,
-            (object_id,),
-        ).fetchall()
-        contradiction_rows = conn.execute(
-            """
-            SELECT contradiction_id, subject_key, status, resolution_note
-            FROM contradictions
-            WHERE positive_claim_ids_json LIKE ? ESCAPE '\\' OR negative_claim_ids_json LIKE ? ESCAPE '\\'
-            ORDER BY subject_key
-            """,
-            (f"%{escaped_object_id}::%", f"%{escaped_object_id}::%"),
-        ).fetchall()
-
-    _object_id, object_kind, title, canonical_path, source_slug = object_row
-    summary_text = summary_row[0] if summary_row else ""
+    detail = get_object_detail(resolved_vault, object_id)
+    object_row = detail["object"]
+    object_kind = object_row["object_kind"]
+    title = object_row["title"]
+    canonical_path = object_row["canonical_path"]
+    source_slug = object_row["source_slug"]
+    summary_text = detail.get("summary", {}).get("summary_text", "")
 
     lines = [
         f"# {title}",
@@ -79,8 +34,8 @@ def materialize_object_page(vault_dir: Path, *, pack_name: str, object_id: str) 
         "## Claims",
         "",
     ]
-    if claim_rows:
-        lines.extend(f"- [{claim_kind}] {claim_text}" for claim_kind, claim_text in claim_rows)
+    if detail["claims"]:
+        lines.extend(f"- [{item['claim_kind']}] {item['claim_text']}" for item in detail["claims"])
     else:
         lines.append("- (none)")
 
@@ -91,8 +46,10 @@ def materialize_object_page(vault_dir: Path, *, pack_name: str, object_id: str) 
             "",
         ]
     )
-    if relation_rows:
-        lines.extend(f"- [[{target_object_id}]] ({relation_type})" for target_object_id, relation_type in relation_rows)
+    if detail["relations"]:
+        lines.extend(
+            f"- [[{item['target_object_id']}]] ({item['relation_type']})" for item in detail["relations"]
+        )
     else:
         lines.append("- (none)")
 
@@ -103,11 +60,11 @@ def materialize_object_page(vault_dir: Path, *, pack_name: str, object_id: str) 
             "",
         ]
     )
-    if contradiction_rows:
-        for contradiction_id, subject_key, status, resolution_note in contradiction_rows:
-            lines.append(f"- {subject_key} [{status}] ({contradiction_id})")
-            if resolution_note:
-                lines.append(f"  - note: {resolution_note}")
+    if detail["contradictions"]:
+        for item in detail["contradictions"]:
+            lines.append(f"- {item['subject_key']} [{item['status']}] ({item['contradiction_id']})")
+            if item["resolution_note"]:
+                lines.append(f"  - note: {item['resolution_note']}")
     else:
         lines.append("- (none)")
 

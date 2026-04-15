@@ -226,6 +226,7 @@ def test_build_views_command_can_materialize_object_page_from_truth_store(temp_v
     from openclaw_pipeline.commands.build_views import main
     from openclaw_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions
     from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import record_review_action
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -283,6 +284,18 @@ Source note does not support the runtime architecture.
         [contradiction_id],
         status="needs_human",
         note="Needs editorial review.",
+    )
+    record_review_action(
+        temp_vault,
+        event_type="ui_contradictions_resolved",
+        slug="source-note",
+        payload={
+            "object_ids": ["source-note", "conflict-note"],
+            "contradiction_ids": [contradiction_id],
+            "status": "needs_human",
+            "note": "Needs editorial review.",
+            "rebuilt_object_ids": [],
+        },
     )
 
     result = main(
@@ -504,6 +517,7 @@ def test_build_views_command_can_materialize_contradictions_overview(temp_vault)
     from openclaw_pipeline.commands.build_views import main
     from openclaw_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions
     from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import record_review_action
 
     one = temp_vault / "10-Knowledge" / "Evergreen" / "One.md"
     two = temp_vault / "10-Knowledge" / "Evergreen" / "Two.md"
@@ -543,6 +557,18 @@ Agent harness does not support local-first execution for operators.
         [contradiction_id],
         status="dismissed",
         note="False conflict after claim review.",
+    )
+    record_review_action(
+        temp_vault,
+        event_type="ui_contradictions_resolved",
+        slug="harness-positive",
+        payload={
+            "object_ids": ["harness-positive", "harness-negative"],
+            "contradiction_ids": [contradiction_id],
+            "status": "dismissed",
+            "note": "False conflict after claim review.",
+            "rebuilt_object_ids": [],
+        },
     )
 
     result = main(

@@ -306,6 +306,48 @@ def _ensure_knowledge_db(vault_dir: Path) -> tuple[Path, VaultLayout]:
     return resolved_vault, layout
 
 
+def _read_jsonl_items(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    items: list[dict[str, object]] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            payload = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            items.append(payload)
+    return items
+
+
+def _latest_contradiction_review_overrides(vault_dir: Path) -> dict[str, dict[str, str]]:
+    layout = VaultLayout.from_vault(vault_dir)
+    items = sorted(
+        [
+            item
+            for item in _read_jsonl_items(layout.logs_dir / "review-actions.jsonl")
+            if item.get("event_type") == "ui_contradictions_resolved"
+        ],
+        key=lambda item: str(item.get("timestamp") or ""),
+    )
+    overrides: dict[str, dict[str, str]] = {}
+    for item in items:
+        status = str(item.get("status") or "")
+        note = str(item.get("note") or "")
+        resolved_at = str(item.get("timestamp") or "")
+        for contradiction_id in item.get("contradiction_ids", []) or []:
+            contradiction_key = str(contradiction_id or "")
+            if contradiction_key:
+                overrides[contradiction_key] = {
+                    "status": status,
+                    "resolution_note": note,
+                    "resolved_at": resolved_at,
+                }
+    return overrides
+
+
 def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
@@ -511,6 +553,7 @@ def rebuild_knowledge_index(vault_dir: Path) -> dict[str, int | str]:
         else:
             assert conn is not None
             conn.close()
+            _remove_sqlite_artifacts(layout.knowledge_db)
             temp_db_path.replace(layout.knowledge_db)
 
         return {
@@ -659,12 +702,19 @@ def list_contradictions(vault_dir: Path, limit: int = 20, subject: str | None = 
         params = (limit,)
     query += " ORDER BY subject_key LIMIT ?"
 
-    with sqlite3.connect(layout.knowledge_db) as conn:
-        rows = conn.execute(query, params).fetchall()
-
-    return [
-        {
-            "contradiction_id": row[0],
+    try:
+        with sqlite3.connect(layout.knowledge_db) as conn:
+            rows = conn.execute(query, params).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
+    overrides = _latest_contradiction_review_overrides(vault_dir)
+    items = []
+    for row in rows:
+        contradiction_id = str(row[0])
+        item = {
+            "contradiction_id": contradiction_id,
             "subject_key": row[1],
             "positive_claim_ids": json.loads(row[2]),
             "negative_claim_ids": json.loads(row[3]),
@@ -672,8 +722,13 @@ def list_contradictions(vault_dir: Path, limit: int = 20, subject: str | None = 
             "resolution_note": row[5] or "",
             "resolved_at": row[6] or "",
         }
-        for row in rows
-    ]
+        override = overrides.get(contradiction_id)
+        if override:
+            item["status"] = override["status"]
+            item["resolution_note"] = override["resolution_note"]
+            item["resolved_at"] = override["resolved_at"]
+        items.append(item)
+    return items
 
 
 def resolve_contradictions(
@@ -695,30 +750,17 @@ def resolve_contradictions(
         }
 
     placeholders = ",".join("?" for _ in resolved_ids)
-    with knowledge_db_write_lock(vault_dir):
-        with sqlite3.connect(layout.knowledge_db) as conn:
-            existing = conn.execute(
-                f"""
-                SELECT contradiction_id
-                FROM contradictions
-                WHERE contradiction_id IN ({placeholders})
-                ORDER BY contradiction_id
-                """,
-                tuple(resolved_ids),
-            ).fetchall()
-            found_ids = [row[0] for row in existing]
-            if found_ids:
-                now_value = conn.execute("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now')").fetchone()[0]
-                found_placeholders = ",".join("?" for _ in found_ids)
-                conn.execute(
-                    f"""
-                    UPDATE contradictions
-                    SET status = ?, resolution_note = ?, resolved_at = ?
-                    WHERE contradiction_id IN ({found_placeholders})
-                    """,
-                    (status, note, now_value, *found_ids),
-                )
-                conn.commit()
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        existing = conn.execute(
+            f"""
+            SELECT contradiction_id
+            FROM contradictions
+            WHERE contradiction_id IN ({placeholders})
+            ORDER BY contradiction_id
+            """,
+            tuple(resolved_ids),
+        ).fetchall()
+        found_ids = [row[0] for row in existing]
 
     return {
         "resolved_count": len(found_ids),
@@ -770,80 +812,29 @@ def contradiction_object_ids(vault_dir: Path, contradiction_ids: list[str]) -> l
 
 def rebuild_compiled_summaries(vault_dir: Path, object_ids: list[str] | None = None) -> dict[str, object]:
     _, layout = _ensure_knowledge_db(vault_dir)
-    with knowledge_db_write_lock(vault_dir):
-        with sqlite3.connect(layout.knowledge_db) as conn:
-            if object_ids:
-                placeholders = ",".join("?" for _ in object_ids)
-                object_rows = conn.execute(
-                    f"""
-                    SELECT objects.object_id, objects.title,
-                           COALESCE(rel.outgoing_count, 0) AS outgoing_count
-                    FROM objects
-                    LEFT JOIN (
-                        SELECT source_object_id, COUNT(*) AS outgoing_count
-                        FROM relations
-                        GROUP BY source_object_id
-                    ) AS rel ON rel.source_object_id = objects.object_id
-                    WHERE objects.object_id IN ({placeholders})
-                    ORDER BY objects.object_id
-                    """,
-                    tuple(object_ids),
-                ).fetchall()
-            else:
-                object_rows = conn.execute(
-                    """
-                    SELECT objects.object_id, objects.title,
-                           COALESCE(rel.outgoing_count, 0) AS outgoing_count
-                    FROM objects
-                    LEFT JOIN (
-                        SELECT source_object_id, COUNT(*) AS outgoing_count
-                        FROM relations
-                        GROUP BY source_object_id
-                    ) AS rel ON rel.source_object_id = objects.object_id
-                    ORDER BY objects.object_id
-                    """
-                ).fetchall()
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        if object_ids:
+            placeholders = ",".join("?" for _ in object_ids)
+            object_rows = conn.execute(
+                f"""
+                SELECT object_id
+                FROM objects
+                WHERE object_id IN ({placeholders})
+                ORDER BY object_id
+                """,
+                tuple(object_ids),
+            ).fetchall()
+        else:
+            object_rows = conn.execute(
+                """
+                SELECT object_id
+                FROM objects
+                ORDER BY object_id
+                """
+            ).fetchall()
 
-            rebuilt_ids: list[str] = []
-            for object_id, title, _outgoing_count in object_rows:
-                claim_rows = conn.execute(
-                    """
-                    SELECT claim_text
-                    FROM claims
-                    WHERE object_id = ? AND claim_kind = 'page_summary'
-                    ORDER BY claim_id
-                    """,
-                    (object_id,),
-                ).fetchall()
-                base_summary = str(claim_rows[0][0]) if claim_rows else str(title)
-                related_rows = conn.execute(
-                    """
-                    SELECT target_object_id
-                    FROM relations
-                    WHERE source_object_id = ?
-                    ORDER BY target_object_id
-                    LIMIT ?
-                    """,
-                    (object_id, SUMMARY_RELATED_LIMIT),
-                ).fetchall()
-                related_ids = [row[0] for row in related_rows]
-                summary = base_summary
-                if related_ids:
-                    summary = f"{base_summary} Related: {', '.join(related_ids)}."
-                if len(summary) > SUMMARY_MAX_LEN:
-                    summary = summary[: SUMMARY_MAX_LEN - 3].rstrip() + "..."
-
-                conn.execute(
-                    """
-                    INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(object_id) DO UPDATE SET summary_text = excluded.summary_text, source_slug = excluded.source_slug
-                    """,
-                    (object_id, summary, object_id),
-                )
-                rebuilt_ids.append(str(object_id))
-
-            conn.commit()
+    rebuilt_ids = [str(row[0]) for row in object_rows]
+    rebuild_knowledge_index(vault_dir)
 
     return {
         "objects_rebuilt": len(rebuilt_ids),

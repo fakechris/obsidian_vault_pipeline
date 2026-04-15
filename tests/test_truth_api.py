@@ -77,6 +77,109 @@ def test_truth_api_lists_objects(temp_vault):
     assert objects[1]["object_kind"] == "evergreen"
 
 
+def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vault):
+    from openclaw_pipeline.truth_api import list_action_queue, list_signals
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "knowledge.db").write_bytes(b"not-a-real-sqlite-db")
+    (logs_dir / "signals.jsonl").write_text(
+        json.dumps(
+            {
+                "signal_id": "source_needs_deep_dive::demo",
+                "signal_type": "source_needs_deep_dive",
+                "detected_at": "2026-04-15T00:00:00Z",
+                "status": "active",
+                "title": "Create deep dive for Demo Source",
+                "detail": "Demo source is missing a deep dive.",
+                "source_path": "/note?path=50-Inbox%2F03-Processed%2FDemo.md",
+                "object_ids": [],
+                "note_paths": ["50-Inbox/03-Processed/Demo.md"],
+                "recommended_action": {
+                    "kind": "deep_dive_workflow",
+                    "label": "Create deep dive",
+                    "path": "/note?path=50-Inbox%2F03-Processed%2FDemo.md",
+                    "executable": False,
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (logs_dir / "actions.jsonl").write_text(
+        json.dumps(
+            {
+                "action_id": "action::demo",
+                "action_kind": "deep_dive_workflow",
+                "source_signal_id": "source_needs_deep_dive::demo",
+                "title": "Create deep dive for Demo Source",
+                "target_ref": "50-Inbox/03-Processed/Demo.md",
+                "status": "queued",
+                "created_at": "2026-04-15T00:00:01Z",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    signals = list_signals(temp_vault)
+    actions = list_action_queue(temp_vault)
+
+    assert signals[0]["signal_id"] == "source_needs_deep_dive::demo"
+    assert signals[0]["recommended_action"]["queue_status"] == "queued"
+    assert actions[0]["action_id"] == "action::demo"
+
+
+def test_truth_api_reads_review_actions_from_jsonl_without_knowledge_db(temp_vault):
+    from openclaw_pipeline.truth_api import list_evolution_review_actions, list_review_actions
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "knowledge.db").write_bytes(b"not-a-real-sqlite-db")
+    (logs_dir / "review-actions.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-15T00:00:00Z",
+                        "session_id": "ovp-ui",
+                        "event_type": "ui_evolution_reviewed",
+                        "slug": "agent-harness",
+                        "object_ids": ["source-note"],
+                        "evolution_id": "evolution::demo",
+                        "link_type": "challenges",
+                        "status": "accepted",
+                        "note": "accepted",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-15T00:00:10Z",
+                        "session_id": "ovp-ui",
+                        "event_type": "ui_summaries_rebuilt",
+                        "slug": "source-note",
+                        "object_ids": ["source-note"],
+                        "rebuilt_object_ids": ["source-note"],
+                        "objects_rebuilt": 1,
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    review_actions = list_review_actions(temp_vault)
+    evolution_actions = list_evolution_review_actions(temp_vault)
+
+    assert review_actions[0]["event_type"] == "ui_summaries_rebuilt"
+    assert evolution_actions[0]["evolution_id"] == "evolution::demo"
+
+
 def test_note_date_text_returns_empty_string_when_frontmatter_date_missing(temp_vault):
     from openclaw_pipeline.truth_api import _note_date_text
 
@@ -2028,7 +2131,7 @@ def test_truth_api_includes_review_action_signals(temp_vault):
     assert reviewed["source_path"] == "/contradictions?status=resolved"
 
 
-def test_truth_api_sync_signal_ledger_acquires_single_writer_lock(temp_vault, monkeypatch):
+def test_truth_api_sync_signal_ledger_writes_jsonl_without_db_lock(temp_vault, monkeypatch):
     from openclaw_pipeline import truth_api
 
     vault = _seed_truth_vault(temp_vault)
@@ -2042,12 +2145,15 @@ def test_truth_api_sync_signal_ledger_acquires_single_writer_lock(temp_vault, mo
 
     monkeypatch.setattr(truth_api, "knowledge_db_write_lock", fake_lock)
 
-    truth_api.sync_signal_ledger(vault)
+    summary = truth_api.sync_signal_ledger(vault)
 
-    assert calls == ["enter:True", "exit"]
+    assert calls == []
+    signals_path = vault / "60-Logs" / "signals.jsonl"
+    assert signals_path.exists()
+    assert summary["signal_count"] >= 1
 
 
-def test_truth_api_record_review_action_acquires_single_writer_lock(temp_vault, monkeypatch):
+def test_truth_api_record_review_action_writes_jsonl_without_db_lock(temp_vault, monkeypatch):
     from openclaw_pipeline import truth_api
 
     vault = _seed_truth_vault(temp_vault)
@@ -2072,4 +2178,8 @@ def test_truth_api_record_review_action_acquires_single_writer_lock(temp_vault, 
         },
     )
 
-    assert calls == ["enter:True", "exit"]
+    assert calls == []
+    review_log = vault / "60-Logs" / "review-actions.jsonl"
+    assert review_log.exists()
+    lines = [line for line in review_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1

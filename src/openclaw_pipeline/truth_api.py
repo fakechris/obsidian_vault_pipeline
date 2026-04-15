@@ -72,6 +72,22 @@ def _db_path(vault_dir: Path | str) -> Path:
     return VaultLayout.from_vault(resolved).knowledge_db
 
 
+def _read_jsonl_items(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    items: list[dict[str, Any]] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            payload = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            items.append(payload)
+    return items
+
+
 def _briefing_priority_score(item: dict[str, Any]) -> tuple[int, int, int]:
     signal_type = str(item.get("signal_type") or item.get("kind") or "")
     recommended_action = item.get("recommended_action")
@@ -217,24 +233,6 @@ def record_review_action(
         **payload,
     }
     _append_jsonl(layout.logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl", event)
-    if layout.knowledge_db.exists():
-        with knowledge_db_write_lock(resolved_vault):
-            with sqlite3.connect(layout.knowledge_db) as conn:
-                conn.execute(
-                    """
-                    INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        _REVIEW_AUDIT_LOG_NAME,
-                        event_type,
-                        slug,
-                        session_id,
-                        timestamp,
-                        json.dumps(event, ensure_ascii=False),
-                    ),
-                )
-                conn.commit()
     return event
 
 
@@ -969,6 +967,27 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
         if note_type != "evergreen":
             source_notes.append(item)
 
+    contradiction_items = [
+        {
+            "contradiction_id": row[0],
+            "subject_key": row[1],
+            "positive_claim_ids": json.loads(row[2]),
+            "negative_claim_ids": json.loads(row[3]),
+            "status": row[4],
+            "resolution_note": row[5] or "",
+            "resolved_at": row[6] or "",
+        }
+        for row in contradiction_rows
+    ]
+    contradiction_overrides = _latest_contradiction_review_overrides(resolved_vault)
+    for item in contradiction_items:
+        override = contradiction_overrides.get(str(item["contradiction_id"]))
+        if not override:
+            continue
+        item["status"] = override["status"]
+        item["resolution_note"] = override["resolution_note"]
+        item["resolved_at"] = override["resolved_at"]
+
     return {
         "object": {
             "object_id": object_row[0],
@@ -1013,18 +1032,7 @@ def get_object_detail(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
             }
             for row in relation_rows
         ],
-        "contradictions": [
-            {
-                "contradiction_id": row[0],
-                "subject_key": row[1],
-                "positive_claim_ids": json.loads(row[2]),
-                "negative_claim_ids": json.loads(row[3]),
-                "status": row[4],
-                "resolution_note": row[5] or "",
-                "resolved_at": row[6] or "",
-            }
-            for row in contradiction_rows
-        ],
+        "contradictions": contradiction_items,
         "provenance": {
             "evergreen_path": _vault_relative_path(resolved_vault, object_row[3]),
             "source_notes": source_notes,
@@ -1092,18 +1100,22 @@ def list_review_actions(
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     normalized_object_ids = set(object_id for object_id in (object_ids or []) if object_id)
-    db_path = _db_path(vault_dir)
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT source_log, event_type, slug, session_id, timestamp, payload_json
-            FROM audit_events
-            WHERE source_log = ?
-            ORDER BY timestamp DESC
-            LIMIT 200
-            """,
-            (_REVIEW_AUDIT_LOG_NAME,),
-        ).fetchall()
+    resolved_vault = resolve_vault_dir(vault_dir)
+    rows = [
+        (
+            _REVIEW_AUDIT_LOG_NAME,
+            item.get("event_type", ""),
+            item.get("slug", ""),
+            item.get("session_id", ""),
+            item.get("timestamp", ""),
+            json.dumps(item, ensure_ascii=False),
+        )
+        for item in sorted(
+            _read_jsonl_items(VaultLayout.from_vault(resolved_vault).logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"),
+            key=lambda item: str(item.get("timestamp") or ""),
+            reverse=True,
+        )[:200]
+    ]
     return _review_action_items(rows, normalized_object_ids=normalized_object_ids, limit=limit)
 
 
@@ -1161,23 +1173,62 @@ def _review_action_items(
     return items
 
 
+def _latest_contradiction_review_overrides(vault_dir: Path | str) -> dict[str, dict[str, str]]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    items = sorted(
+        [
+            item
+            for item in _read_jsonl_items(
+                VaultLayout.from_vault(resolved_vault).logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"
+            )
+            if item.get("event_type") == "ui_contradictions_resolved"
+        ],
+        key=lambda item: str(item.get("timestamp") or ""),
+    )
+    overrides: dict[str, dict[str, str]] = {}
+    for item in items:
+        status = str(item.get("status") or "")
+        note = str(item.get("note") or "")
+        resolved_at = str(item.get("timestamp") or "")
+        for contradiction_id in item.get("contradiction_ids", []) or []:
+            contradiction_key = str(contradiction_id or "")
+            if contradiction_key:
+                overrides[contradiction_key] = {
+                    "status": status,
+                    "resolution_note": note,
+                    "resolved_at": resolved_at,
+                }
+    return overrides
+
+
 def list_evolution_review_actions(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_object_ids = set(object_id for object_id in (object_ids or []) if object_id)
-    db_path = _db_path(vault_dir)
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT source_log, event_type, slug, session_id, timestamp, payload_json
-            FROM audit_events
-            WHERE source_log = ? AND event_type = ?
-            ORDER BY timestamp DESC
-            """,
-            (_REVIEW_AUDIT_LOG_NAME, "ui_evolution_reviewed"),
-        ).fetchall()
+    resolved_vault = resolve_vault_dir(vault_dir)
+    rows = [
+        (
+            _REVIEW_AUDIT_LOG_NAME,
+            item.get("event_type", ""),
+            item.get("slug", ""),
+            item.get("session_id", ""),
+            item.get("timestamp", ""),
+            json.dumps(item, ensure_ascii=False),
+        )
+        for item in sorted(
+            [
+                item
+                for item in _read_jsonl_items(
+                    VaultLayout.from_vault(resolved_vault).logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"
+                )
+                if item.get("event_type") == "ui_evolution_reviewed"
+            ],
+            key=lambda item: str(item.get("timestamp") or ""),
+            reverse=True,
+        )
+    ]
     return _review_action_items(rows, normalized_object_ids=normalized_object_ids, limit=None)
 
 
@@ -1203,59 +1254,13 @@ def _recommended_action(*, kind: str, label: str, path: str, executable: bool) -
 def _read_action_queue_rows(vault_dir: Path | str) -> list[dict[str, Any]]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
-    rows: list[tuple[str]] = []
-    if layout.knowledge_db.exists():
-        with sqlite3.connect(layout.knowledge_db) as conn:
-            rows = conn.execute(
-                """
-                SELECT payload_json
-                FROM audit_events
-                WHERE source_log = ?
-                ORDER BY timestamp DESC, slug
-                """,
-                (_ACTION_LOG_NAME,),
-            ).fetchall()
-    elif (layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl").exists():
-        rows = [
-            (line,)
-            for line in (layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl").read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-    items: list[dict[str, Any]] = []
-    for (payload_json,) in rows:
-        try:
-            items.append(json.loads(payload_json))
-        except json.JSONDecodeError:
-            continue
-    return items
+    return _read_jsonl_items(layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl")
 
 
 def _write_action_queue_rows(vault_dir: Path | str, actions: list[dict[str, Any]]) -> None:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
     _rewrite_jsonl(layout.logs_dir / f"{_ACTION_LOG_NAME}.jsonl", actions)
-    if layout.knowledge_db.exists():
-        with knowledge_db_write_lock(resolved_vault):
-            with sqlite3.connect(layout.knowledge_db) as conn:
-                conn.execute("DELETE FROM audit_events WHERE source_log = ?", (_ACTION_LOG_NAME,))
-                conn.executemany(
-                    """
-                    INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            _ACTION_LOG_NAME,
-                            action["action_kind"],
-                            action["action_id"],
-                            action.get("session_id", "action-queue"),
-                            action["created_at"],
-                            json.dumps(action, ensure_ascii=False),
-                        )
-                        for action in actions
-                    ],
-                )
-                conn.commit()
 
 
 def list_action_queue(
@@ -1286,25 +1291,14 @@ def list_action_queue(
 
 
 def _signal_by_id(vault_dir: Path | str, signal_id: str) -> dict[str, Any] | None:
-    ensure_signal_ledger_synced(vault_dir)
-    db_path = _db_path(vault_dir)
-    with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT payload_json
-            FROM audit_events
-            WHERE source_log = ? AND slug = ?
-            ORDER BY timestamp DESC
-            LIMIT 1
-            """,
-            (_SIGNAL_LOG_NAME, signal_id),
-        ).fetchone()
-    if not row:
-        return None
-    try:
-        return json.loads(row[0])
-    except json.JSONDecodeError:
-        return None
+    layout = VaultLayout.from_vault(resolve_vault_dir(vault_dir))
+    ledger_path = layout.logs_dir / f"{_SIGNAL_LOG_NAME}.jsonl"
+    if not ledger_path.exists():
+        ensure_signal_ledger_synced(vault_dir)
+    for item in _read_jsonl_items(ledger_path):
+        if item.get("signal_id") == signal_id:
+            return item
+    return None
 
 
 def enqueue_signal_action(
@@ -1916,28 +1910,6 @@ def sync_signal_ledger(vault_dir: Path | str) -> dict[str, Any]:
     layout = VaultLayout.from_vault(resolved_vault)
     signals = _compute_signal_entries(resolved_vault)
     _rewrite_jsonl(layout.logs_dir / f"{_SIGNAL_LOG_NAME}.jsonl", signals)
-    if layout.knowledge_db.exists():
-        with knowledge_db_write_lock(resolved_vault):
-            with sqlite3.connect(layout.knowledge_db) as conn:
-                conn.execute("DELETE FROM audit_events WHERE source_log = ?", (_SIGNAL_LOG_NAME,))
-                conn.executemany(
-                    """
-                    INSERT INTO audit_events (source_log, event_type, slug, session_id, timestamp, payload_json)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            _SIGNAL_LOG_NAME,
-                            item["signal_type"],
-                            item["signal_id"],
-                            "signal-ledger",
-                            item["detected_at"],
-                            json.dumps(item, ensure_ascii=False),
-                        )
-                        for item in signals
-                    ],
-                )
-                conn.commit()
     type_counts = Counter(item["signal_type"] for item in signals)
     result = {
         "signal_count": len(signals),
@@ -1971,25 +1943,13 @@ def list_signals(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
-    ensure_signal_ledger_synced(vault_dir)
-    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    ledger_path = VaultLayout.from_vault(resolved_vault).logs_dir / f"{_SIGNAL_LOG_NAME}.jsonl"
+    if not ledger_path.exists():
+        ensure_signal_ledger_synced(resolved_vault)
     normalized_query = (query or "").strip().lower()
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT payload_json
-            FROM audit_events
-            WHERE source_log = ?
-            ORDER BY timestamp DESC, slug
-            """,
-            (_SIGNAL_LOG_NAME,),
-        ).fetchall()
     items: list[dict[str, Any]] = []
-    for (payload_json,) in rows:
-        try:
-            item = json.loads(payload_json)
-        except json.JSONDecodeError:
-            continue
+    for item in _read_jsonl_items(ledger_path):
         if signal_type and item.get("signal_type") != signal_type:
             continue
         if normalized_query:
@@ -2597,13 +2557,6 @@ def list_contradictions(
     """
     params: list[Any] = []
     where_clauses: list[str] = []
-    if status:
-        if status == "resolved":
-            where_clauses.append("status != ?")
-            params.append("open")
-        else:
-            where_clauses.append("status = ?")
-            params.append(status)
     if normalized_query:
         where_clauses.append("lower(subject_key) LIKE ? ESCAPE '\\'")
         params.append(f"%{normalized_query}%")
@@ -2612,8 +2565,13 @@ def list_contradictions(
     query += " ORDER BY subject_key LIMIT ?"
     params.append(limit)
 
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(query, tuple(params)).fetchall()
+    try:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
+        raise
 
     items = [
         {
@@ -2627,6 +2585,19 @@ def list_contradictions(
         }
         for row in rows
     ]
+    contradiction_overrides = _latest_contradiction_review_overrides(vault_dir)
+    for item in items:
+        override = contradiction_overrides.get(str(item["contradiction_id"]))
+        if not override:
+            continue
+        item["status"] = override["status"]
+        item["resolution_note"] = override["resolution_note"]
+        item["resolved_at"] = override["resolved_at"]
+    if status:
+        if status == "resolved":
+            items = [item for item in items if item["status"] != "open"]
+        else:
+            items = [item for item in items if item["status"] == status]
     claim_map = _claim_details_map(
         vault_dir,
         [

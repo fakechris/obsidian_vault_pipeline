@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..knowledge_index import contradiction_object_ids, rebuild_compiled_summaries, resolve_contradictions
 from ..runtime import VaultLayout, resolve_vault_dir
+from ..truth_api import record_review_action
 
 
 def _load_contradiction_ids_from_queue(layout: VaultLayout, queue_name: str) -> tuple[list[str], dict[str, list[Path]]]:
@@ -57,14 +58,31 @@ def main(argv: list[str] | None = None) -> int:
     contradiction_ids = list(dict.fromkeys(contradiction_ids))
 
     payload = resolve_contradictions(vault_dir, contradiction_ids, status=args.status, note=args.note)
+    affected_object_ids = contradiction_object_ids(vault_dir, payload["contradiction_ids"])
     if payload["resolved_count"] and args.rebuild_summaries:
-        affected_object_ids = contradiction_object_ids(vault_dir, payload["contradiction_ids"])
         rebuild_payload = rebuild_compiled_summaries(vault_dir, object_ids=affected_object_ids)
         payload["rebuilt_summary_count"] = rebuild_payload["objects_rebuilt"]
         payload["rebuilt_object_ids"] = rebuild_payload["object_ids"]
     else:
         payload["rebuilt_summary_count"] = 0
         payload["rebuilt_object_ids"] = []
+    if payload["resolved_count"]:
+        payload["object_ids"] = affected_object_ids
+        record_review_action(
+            vault_dir,
+            event_type="ui_contradictions_resolved",
+            slug=affected_object_ids[0] if affected_object_ids else "",
+            payload={
+                "object_ids": affected_object_ids,
+                "contradiction_ids": payload["contradiction_ids"],
+                "status": args.status,
+                "note": args.note,
+                "rebuilt_object_ids": payload["rebuilt_object_ids"],
+            },
+            session_id="resolve-contradictions-cli",
+        )
+    else:
+        payload["object_ids"] = []
 
     cleared_queue_files: list[str] = []
     if payload["resolved_count"] and queue_files_by_id:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 from ..derived.paths import compiled_view_path
+from ..knowledge_index import list_contradictions
 from ..runtime import VaultLayout, resolve_vault_dir
 
 
@@ -13,19 +13,7 @@ def materialize_contradiction_view(vault_dir: Path, *, pack_name: str, view_name
     output_path = compiled_view_path(layout, pack_name=pack_name, view_name=view_name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with sqlite3.connect(layout.knowledge_db) as conn:
-        try:
-            rows = conn.execute(
-                """
-                SELECT contradiction_id, subject_key, status, resolution_note, resolved_at
-                FROM contradictions
-                ORDER BY subject_key
-                """
-            ).fetchall()
-        except sqlite3.OperationalError as exc:
-            if "no such table: contradictions" not in str(exc):
-                raise
-            rows = []
+    rows = list_contradictions(resolved_vault, limit=500)
 
     lines = [
         f"# {view_name}",
@@ -40,15 +28,15 @@ def materialize_contradiction_view(vault_dir: Path, *, pack_name: str, view_name
     if not rows:
         lines.append("- (none)")
     else:
-        for contradiction_id, subject_key, status, resolution_note, resolved_at in rows:
+        for row in rows:
             lines.extend(
                 [
-                    f"### {subject_key}",
+                    f"### {row['subject_key']}",
                     "",
-                    f"- contradiction_id: {contradiction_id}",
-                    f"- status: {status}",
-                    f"- resolved_at: {resolved_at or '(open)'}",
-                    f"- resolution_note: {resolution_note or '(none)'}",
+                    f"- contradiction_id: {row['contradiction_id']}",
+                    f"- status: {row['status']}",
+                    f"- resolved_at: {row['resolved_at'] or '(open)'}",
+                    f"- resolution_note: {row['resolution_note'] or '(none)'}",
                     "",
                 ]
             )

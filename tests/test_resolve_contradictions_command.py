@@ -49,7 +49,7 @@ Agent harness does not support local-first execution for operators.
 
 def test_resolve_contradictions_command_updates_truth_store_status(temp_vault, capsys):
     from openclaw_pipeline.commands.resolve_contradictions import main
-    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_contradictions, list_review_actions
 
     contradiction_id, _one, _two = _build_contradiction(temp_vault)
 
@@ -72,25 +72,19 @@ def test_resolve_contradictions_command_updates_truth_store_status(temp_vault, c
     assert payload["resolved_count"] == 1
     assert payload["contradiction_ids"] == [contradiction_id]
 
-    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
-    with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT status, resolution_note
-            FROM contradictions
-            WHERE contradiction_id = ?
-            """,
-            (contradiction_id,),
-        ).fetchone()
-
-    assert row == ("resolved_keep_positive", "Confirmed the positive claim after review.")
+    row = next(item for item in list_contradictions(temp_vault, limit=10) if item["contradiction_id"] == contradiction_id)
+    assert row["status"] == "resolved_keep_positive"
+    assert row["resolution_note"] == "Confirmed the positive claim after review."
+    review = list_review_actions(temp_vault, limit=5)[0]
+    assert review["event_type"] == "ui_contradictions_resolved"
+    assert review["status"] == "resolved_keep_positive"
 
 
 def test_resolve_contradictions_command_can_apply_review_queue(temp_vault, capsys):
     from openclaw_pipeline.commands.resolve_contradictions import main
     from openclaw_pipeline.operations.runtime import run_operation_profile
     from openclaw_pipeline.packs.loader import load_pack
-    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_contradictions
 
     contradiction_id, _one, _two = _build_contradiction(temp_vault)
     pack = load_pack("default-knowledge")
@@ -119,18 +113,9 @@ def test_resolve_contradictions_command_can_apply_review_queue(temp_vault, capsy
     assert payload["cleared_queue_files"] == [str(queue_file)]
     assert not queue_file.exists()
 
-    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
-    with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT status, resolution_note
-            FROM contradictions
-            WHERE contradiction_id = ?
-            """,
-            (contradiction_id,),
-        ).fetchone()
-
-    assert row == ("dismissed", "")
+    row = next(item for item in list_contradictions(temp_vault, limit=10) if item["contradiction_id"] == contradiction_id)
+    assert row["status"] == "dismissed"
+    assert row["resolution_note"] == ""
 
 
 def test_resolve_contradictions_command_can_rebuild_affected_summaries(temp_vault, capsys):
