@@ -442,6 +442,26 @@ Exit condition:
 Reference plan:
 
 - [2026-04-15-phase14-orchestration-integration-plan.md](2026-04-15-phase14-orchestration-integration-plan.md)
+- [2026-04-15-stage-handler-registry-design.md](2026-04-15-stage-handler-registry-design.md)
+
+Architecture follow-up:
+
+- [2026-04-15-ovp-layer-contract.md](2026-04-15-ovp-layer-contract.md)
+  OVP now needs a deeper separation between core runtime, pack surfaces, domain execution hooks,
+  domain truth projection, and domain UI semantics so the product does not remain implicitly bound
+  to `research-tech` while it grows beyond the first in-repo pack.
+
+Implementation sequence:
+
+1. `Stage Handler Registry`
+   Extract execution dispatch from current in-repo handler coupling so profile execution,
+   autopilot, and queue actions share one handler contract.
+2. `Pack-Aware Truth Projection`
+   Move truth-building semantics behind domain-aware contracts instead of keeping them implicitly
+   bound to `research-tech`.
+3. `Pack-Aware Observation Surfaces`
+   Generalize `signals`, `briefing`, `production`, and related product semantics after execution
+   and truth layers are no longer hard-coded.
 
 ### Milestone 10: Graph Intelligence And Synthesis
 
