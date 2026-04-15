@@ -244,6 +244,8 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["events"][0]["semantic_role"] == "note_date_projection"
     assert payload["cluster_sections"][0]["date"] == "2026-04-13"
     assert payload["event_type_counts"] == {"dated_note": 3}
+    assert payload["limit"] == 50
+    assert payload["is_limited"] is True
     assert payload["timeline_contract"]["timeline_kind"] == "dated_note_projection"
     assert payload["timeline_contract"]["row_type_counts"] == {"page_date": 3}
     assert payload["timeline_contract"]["semantic_roles"] == {"note_date_projection": 3}
@@ -545,6 +547,57 @@ Filler note.
     assert len(payload["objects"]["items"]) == 12
 
 
+def test_build_signal_browser_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_signal_browser_payload
+
+    _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_signal_browser_payload(temp_vault)
+
+    assert payload["screen"] == "signals/browser"
+    assert payload["count"] >= 2
+    assert payload["type_counts"]["contradiction_open"] >= 1
+    assert any(item["signal_type"] == "production_gap" for item in payload["items"])
+
+
+def test_build_briefing_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_briefing_payload
+    from openclaw_pipeline.truth_api import record_review_action
+
+    _seed_truth_store(temp_vault)
+    record_review_action(
+        temp_vault,
+        event_type="ui_summaries_rebuilt",
+        slug="alpha",
+        payload={
+            "object_ids": ["alpha"],
+            "objects_rebuilt": 1,
+            "rebuilt_object_ids": ["alpha"],
+        },
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_briefing_payload(temp_vault)
+
+    assert payload["screen"] == "briefing/snapshot"
+    assert payload["recent_signal_count"] >= 1
+    assert payload["recent_signals"]
+    assert payload["active_topics"]
+
+
 def test_build_event_dossier_payload_filters_by_query(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 
@@ -632,6 +685,8 @@ date: 2026-04-13
     assert payload["items"][0]["members"][0]["object_id"] == "alpha"
     assert payload["items"][0]["member_count"] == 1
     assert payload["items"][0]["preview_titles"] == ["Alpha"]
+    assert payload["limit"] == 50
+    assert payload["is_limited"] is True
 
 
 def test_build_derivation_browser_payload(temp_vault):
@@ -685,6 +740,8 @@ Mentions [[alpha]].
     assert payload["items"][0]["derived_object_count"] == 1
     assert payload["items"][0]["preview_titles"] == ["Alpha"]
     assert payload["items"][0]["source_notes"] == []
+    assert payload["limit"] == 50
+    assert payload["is_limited"] is True
 
 
 def test_build_derivation_browser_payload_includes_chain_context(temp_vault):
@@ -918,6 +975,8 @@ Mentions [[alpha]].
     assert payload["counts"]["deep_dives"] == 1
     assert any(item["stage_label"] == "source_note" for item in payload["items"])
     assert any(item["stage_label"] == "deep_dive" for item in payload["items"])
+    assert payload["limit"] == 50
+    assert payload["is_limited"] is True
 
 
 def test_build_production_browser_payload_surfaces_weak_points(temp_vault):
@@ -942,6 +1001,60 @@ Processed source note without downstream chain.
     assert payload["weak_points"]
     assert payload["weak_points"][0]["title"] == "Loose Source"
     assert "deep dives" in payload["weak_points"][0]["missing"]
+
+
+def test_build_derivation_browser_payload_filters_stale_object_ids(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_derivation_browser_payload
+    from openclaw_pipeline.runtime import VaultLayout
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: deep-dive
+title: Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}',
+                '{"event_type":"evergreen_auto_promoted","concept":"stale-object","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"stale-object"}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_derivation_browser_payload(temp_vault)
+
+    assert [item["object_id"] for item in payload["items"][0]["derived_objects"]] == ["alpha"]
 
 
 def test_build_stale_summary_browser_payload(temp_vault):
@@ -1044,6 +1157,47 @@ def test_build_event_dossier_payload_applies_limit_before_materializing(temp_vau
 
     assert payload["event_count"] == 2
     assert len(payload["events"]) == 2
+
+
+def test_build_event_dossier_payload_orders_latest_first(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    older = temp_vault / "10-Knowledge" / "Evergreen" / "Older.md"
+    newer = temp_vault / "10-Knowledge" / "Evergreen" / "Newer.md"
+    older.write_text(
+        """---
+note_id: older
+title: Older
+type: evergreen
+date: 2026-04-10
+---
+
+# Older
+
+Older event.
+""",
+        encoding="utf-8",
+    )
+    newer.write_text(
+        """---
+note_id: newer
+title: Newer
+type: evergreen
+date: 2026-04-13
+---
+
+# Newer
+
+Newer event.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault)
+
+    assert payload["dates"][0] == "2026-04-13"
+    assert payload["events"][0]["object_id"] == "newer"
 
 
 def test_build_object_page_payload_handles_missing_summary(temp_vault):

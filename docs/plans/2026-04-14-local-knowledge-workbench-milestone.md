@@ -318,7 +318,7 @@ That transition should stay constrained by a few hard product rules:
 
 ### Milestone 7: Active Signal Loop
 
-Status: **Not Started**
+Status: **In Progress**
 
 Goal:
 
@@ -335,6 +335,16 @@ Core deliverables:
 Exit condition:
 
 - saving or updating a note can improve future retrieval and navigation without requiring a manual full pipeline run every time.
+
+Current slice:
+
+- deterministic signal ledger over existing trusted maintenance surfaces,
+- signal browser in `ovp-ui`,
+- dashboard signal surfacing,
+- persisted signal rows in logs plus mirrored `audit_events`,
+- review-action-derived change signals for contradiction resolution and summary rebuild,
+- extraction-trigger signals for missing deep dives and missing downstream objects,
+- briefing-ready snapshot payloads over recent signals, unresolved issues, changed objects, and active topics.
 
 ### Milestone 8: Knowledge Evolution Layer
 
@@ -493,7 +503,8 @@ As of this plan:
 - Milestone 4: in progress
 - Milestone 5: in progress
 - Milestone 6: not started
-- Milestone 7+: not started
+- Milestone 7: in progress
+- Milestone 8+: not started
 
 So the honest product statement is:
 
