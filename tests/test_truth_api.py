@@ -740,6 +740,181 @@ date: 2026-04-13
     assert [item["slug"] for item in traceability["atlas_pages"]] == ["atlas-index"]
 
 
+def test_truth_api_object_traceability_excludes_incidental_deep_dive_mentions(temp_vault):
+    from openclaw_pipeline.truth_api import get_object_traceability
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    promoted = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    promoted.parent.mkdir(parents=True, exist_ok=True)
+    promoted.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    incidental = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Incidental_深度解读.md"
+    incidental.write_text(
+        """---
+note_id: incidental-deep-dive
+title: Incidental Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Incidental Deep Dive
+
+Also mentions [[alpha]] but did not promote it.
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        json.dumps(
+            {
+                "event_type": "evergreen_auto_promoted",
+                "concept": "alpha",
+                "source": "Harness_深度解读.md",
+                "mutation": {"target_slug": "alpha"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    traceability = get_object_traceability(temp_vault, "alpha")
+
+    assert [item["slug"] for item in traceability["deep_dives"]] == ["harness-deep-dive"]
+
+
+def test_truth_api_returns_note_traceability_for_evergreen_note(temp_vault):
+    from openclaw_pipeline.truth_api import get_note_traceability
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        json.dumps(
+            {
+                "event_type": "evergreen_auto_promoted",
+                "concept": "alpha",
+                "source": "Harness_深度解读.md",
+                "mutation": {"target_slug": "alpha"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    traceability = get_note_traceability(
+        temp_vault,
+        note_path="10-Knowledge/Evergreen/Alpha.md",
+    )
+
+    assert traceability["note"]["note_type"] == "evergreen"
+    assert [item["slug"] for item in traceability["deep_dives"]] == ["harness-deep-dive"]
+    assert [item["path"] for item in traceability["source_notes"]] == ["50-Inbox/03-Processed/2026-04/Harness.md"]
+    assert [item["object_id"] for item in traceability["objects"]] == ["alpha"]
+    assert [item["slug"] for item in traceability["atlas_pages"]] == ["atlas-index"]
+
+
 def test_truth_api_limits_atlas_memberships_by_page_not_join_rows(temp_vault):
     from openclaw_pipeline.truth_api import list_atlas_memberships
 

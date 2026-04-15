@@ -5,6 +5,7 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
@@ -557,7 +558,7 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
             {
                 "kind": "production_gap",
                 "label": item["title"],
-                "path": f"/note?path={item['note_path']}",
+                "path": f"/note?path={quote(item['note_path'], safe='')}",
                 "detail": item["detail"],
             }
         )

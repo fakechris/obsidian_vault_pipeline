@@ -218,11 +218,12 @@ date: 2026-04-13
     payload = build_topic_overview_payload(temp_vault, "alpha")
 
     assert payload["production_summary"]["object_count"] == 2
-    assert payload["production_summary"]["counts"]["deep_dives"] == 1
+    assert payload["production_summary"]["counts"]["deep_dives"] == 0
     assert payload["production_summary"]["counts"]["atlas_pages"] == 1
     assert payload["production_summary"]["counts"]["source_notes"] == 0
-    assert payload["production_summary"]["top_deep_dives"][0]["title"] == "Source Deep Dive"
+    assert payload["production_summary"]["top_deep_dives"] == []
     assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
+    assert any(signal["code"] == "missing_deep_dives" for signal in payload["production_summary"]["signals"])
 
 
 def test_build_event_dossier_payload(temp_vault):
@@ -339,11 +340,12 @@ date: 2026-04-13
     payload = build_event_dossier_payload(temp_vault)
 
     assert payload["production_summary"]["object_count"] == 3
-    assert payload["production_summary"]["counts"]["deep_dives"] == 1
+    assert payload["production_summary"]["counts"]["deep_dives"] == 0
     assert payload["production_summary"]["counts"]["atlas_pages"] == 1
     assert payload["production_summary"]["counts"]["source_notes"] == 0
-    assert payload["production_summary"]["top_deep_dives"][0]["title"] == "Source Deep Dive"
+    assert payload["production_summary"]["top_deep_dives"] == []
     assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
+    assert any(signal["code"] == "missing_deep_dives" for signal in payload["production_summary"]["signals"])
 
 
 def test_build_contradiction_browser_payload(temp_vault):
@@ -510,6 +512,8 @@ Thin note.
     assert payload["priorities"]
     assert payload["production"]["weak_point_count"] >= 1
     assert any(item["kind"] == "production_gap" for item in payload["priorities"])
+    production_gap = next(item for item in payload["priorities"] if item["kind"] == "production_gap")
+    assert production_gap["path"].startswith("/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md")
     assert payload["recent_review_actions"] == []
 
 

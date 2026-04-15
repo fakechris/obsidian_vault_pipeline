@@ -212,7 +212,6 @@ date: 2026-04-13
     assert atlas_status == 200
     assert "Atlas / MOC Browser" in atlas_body
     assert "Contribution Summary" in atlas_body
-    assert "Source Deep Dive" in atlas_body
 
     assert deep_dives_status == 200
     assert "Deep Dive Derivations" in deep_dives_body

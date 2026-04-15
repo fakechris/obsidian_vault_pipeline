@@ -1016,10 +1016,12 @@ def _page_row_by_path(vault_dir: Path | str, note_path: str) -> dict[str, str]:
 
 
 def _deep_dive_objects_for_path(vault_dir: Path | str, note_path: str) -> list[dict[str, str]]:
-    source_name = Path(note_path).name
+    resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_target = (resolved_vault / note_path).resolve().as_posix()
     items = list_deep_dive_derivations(vault_dir, limit=MAX_PAGE_SIZE)
     for item in items:
-        if Path(item["path"]).name == source_name:
+        candidate_path = (resolved_vault / item["path"]).resolve().as_posix()
+        if candidate_path == normalized_target:
             return item["derived_objects"]
     return []
 
@@ -1032,27 +1034,93 @@ def _atlas_pages_for_object_ids(vault_dir: Path | str, object_ids: list[str]) ->
     return list(atlas_pages.values())
 
 
+def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> list[dict[str, str]]:
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    with sqlite3.connect(db_path) as conn:
+        deep_dive_rows = conn.execute(
+            """
+            SELECT slug, title, note_type, path
+            FROM pages_index
+            WHERE note_type = 'deep_dive'
+            ORDER BY slug
+            """
+        ).fetchall()
+        audit_rows = conn.execute(
+            """
+            SELECT payload_json
+            FROM audit_events
+            WHERE event_type = 'evergreen_auto_promoted'
+            """
+        ).fetchall()
+
+    promoted_source_names: set[str] = set()
+    for (payload_json,) in audit_rows:
+        try:
+            payload = json.loads(payload_json)
+        except json.JSONDecodeError:
+            continue
+        target_slug = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
+        source_name = str(payload.get("source") or "").strip()
+        if target_slug == object_id and source_name:
+            promoted_source_names.add(source_name)
+
+    items: list[dict[str, str]] = []
+    seen_slugs: set[str] = set()
+    for slug, title, _note_type, path in deep_dive_rows:
+        relative_path = _vault_relative_path(resolved_vault, path)
+        if Path(relative_path).name not in promoted_source_names:
+            continue
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        items.append(
+            {
+                "slug": str(slug),
+                "title": str(title),
+                "note_type": "deep_dive",
+                "path": relative_path,
+            }
+        )
+    return items
+
+
 def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
     note = _page_row_by_path(vault_dir, note_path)
     provenance = get_note_provenance(vault_dir, note_path=note_path)
     deep_dives: list[dict[str, str]] = []
     source_notes: list[dict[str, str]] = []
+    objects: list[dict[str, str]] = []
+    atlas_pages: list[dict[str, str]] = []
 
     if note["note_type"] == "deep_dive":
         deep_dives = [note]
         if provenance["original_source_note"]:
             source_notes = [provenance["original_source_note"]]
+    elif note["note_type"] == "evergreen":
+        object_traceability = get_object_traceability(vault_dir, note["slug"])
+        deep_dives = object_traceability["deep_dives"]
+        source_notes = object_traceability["source_notes"]
+        objects = [
+            {
+                "object_id": object_traceability["object"]["object_id"],
+                "title": object_traceability["object"]["title"],
+            }
+        ]
+        atlas_pages = object_traceability["atlas_pages"]
     else:
         deep_dives = provenance["derived_deep_dives"]
         if provenance["original_source_note"]:
             source_notes = [provenance["original_source_note"]]
 
-    object_map: dict[str, dict[str, str]] = {}
-    for deep_dive in deep_dives:
-        for item in _deep_dive_objects_for_path(vault_dir, deep_dive["path"]):
-            object_map.setdefault(item["object_id"], item)
-    objects = list(object_map.values())
-    atlas_pages = _atlas_pages_for_object_ids(vault_dir, [item["object_id"] for item in objects])
+    if not objects:
+        object_map: dict[str, dict[str, str]] = {}
+        for deep_dive in deep_dives:
+            for item in _deep_dive_objects_for_path(vault_dir, deep_dive["path"]):
+                object_map.setdefault(item["object_id"], item)
+        objects = list(object_map.values())
+    if not atlas_pages:
+        atlas_pages = _atlas_pages_for_object_ids(vault_dir, [item["object_id"] for item in objects])
     return {
         "note": note,
         "source_notes": source_notes,
@@ -1070,7 +1138,7 @@ def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str,
 
 def get_object_traceability(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
     detail = get_object_detail(vault_dir, object_id)
-    deep_dives = [item for item in detail["provenance"]["source_notes"] if item["note_type"] == "deep_dive"]
+    deep_dives = _promoted_deep_dives_for_object(vault_dir, object_id)
     source_note_map: dict[str, dict[str, str]] = {}
     for deep_dive in deep_dives:
         original = get_note_provenance(vault_dir, note_path=deep_dive["path"])["original_source_note"]
