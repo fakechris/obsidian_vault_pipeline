@@ -348,7 +348,7 @@ Current slice:
 
 ### Milestone 8: Knowledge Evolution Layer
 
-Status: **Not Started**
+Status: **Complete**
 
 Goal:
 
@@ -369,9 +369,21 @@ Exit condition:
 
 - users can trace how a topic evolved across notes and reviews, not just detect isolated conflicts.
 
+Current progress:
+
+- deterministic evolution candidates now exist for:
+  - `replaces`
+  - `enriches`
+  - `confirms`
+  - `challenges`
+- `/evolution` and `/api/evolution` expose candidate plus reviewed evolution links,
+- object and topic pages render `Evolution` sections,
+- evolution review actions persist accepted and rejected links,
+- the layer is reviewable without pretending candidate links are already truth.
+
 ### Milestone 9: Background Intelligence
 
-Status: **Not Started**
+Status: **In Progress**
 
 Goal:
 
@@ -391,6 +403,45 @@ Core deliverables:
 Exit condition:
 
 - the system can surface at least one relevant contradiction, one useful synthesis, or one actionable priority the user likely would not have found unaided.
+
+Current progress:
+
+- `/briefing` is no longer a raw snapshot page; it now surfaces:
+  - `First Useful Sign`
+  - `Insights`
+  - `Priority Items`
+- `signals` and `briefing` now attach explicit `Recommended Action` metadata,
+- deterministic briefing intelligence is grounded in existing signals and evolution links,
+- UI cold-start no longer blocks on full evolution recomputation because caches are prewarmed at startup.
+
+### Milestone 9A: Background Intelligence Orchestration Integration
+
+Status: **Planned**
+
+Goal:
+
+Keep `signals`, `briefing`, and `recommended actions` as observation and prioritization surfaces while unifying all execution behind one action queue plus worker layer that dispatches into the existing `ovp` runtime.
+
+Core deliverables:
+
+- one execution surface:
+  - action queue
+  - worker
+  - workflow handler registry
+- explicit relationship between focused queue actions and broad batch execution through `ovp --full`,
+- policy-driven auto-queue for low-risk deterministic actions:
+  - `source_needs_deep_dive`
+  - `deep_dive_needs_objects`
+- queue state surfaced back into `signals` and `briefing`,
+- worker-side precondition checks and idempotent dedupe.
+
+Exit condition:
+
+- the product has many observation surfaces but only one execution surface, and `ovp --full` remains the batch reconciler instead of competing with a second workflow engine.
+
+Reference plan:
+
+- [2026-04-15-phase14-orchestration-integration-plan.md](/Users/chris/Documents/openclaw-template/docs/plans/2026-04-15-phase14-orchestration-integration-plan.md)
 
 ### Milestone 10: Graph Intelligence And Synthesis
 
