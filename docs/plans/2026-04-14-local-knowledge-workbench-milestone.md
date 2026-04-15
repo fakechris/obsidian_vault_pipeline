@@ -441,7 +441,7 @@ Exit condition:
 
 Reference plan:
 
-- [2026-04-15-phase14-orchestration-integration-plan.md](/Users/chris/Documents/openclaw-template/docs/plans/2026-04-15-phase14-orchestration-integration-plan.md)
+- [2026-04-15-phase14-orchestration-integration-plan.md](2026-04-15-phase14-orchestration-integration-plan.md)
 
 ### Milestone 10: Graph Intelligence And Synthesis
 

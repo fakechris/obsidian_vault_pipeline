@@ -2287,7 +2287,8 @@ def _spawn_action_worker_process(vault_dir: Path | str, *, interval_seconds: flo
 def _prewarm_ui_caches(vault_dir: Path | str) -> None:
     try:
         build_evolution_browser_payload(vault_dir, status="all")
-    except Exception:
+    except Exception as exc:
+        print(f"ui server cache pre-warming failed: {exc}", file=sys.stderr)
         return
 
 

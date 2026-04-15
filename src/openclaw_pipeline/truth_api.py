@@ -2619,7 +2619,7 @@ def list_contradictions(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
-    query = """
+    sql = """
         SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
         FROM contradictions
     """
@@ -2629,13 +2629,15 @@ def list_contradictions(
         where_clauses.append("lower(subject_key) LIKE ? ESCAPE '\\'")
         params.append(f"%{normalized_query}%")
     if where_clauses:
-        query += " WHERE " + " AND ".join(where_clauses)
-    query += " ORDER BY subject_key LIMIT ?"
-    params.append(limit)
+        sql += " WHERE " + " AND ".join(where_clauses)
+    sql += " ORDER BY subject_key"
+    if status is None:
+        sql += " LIMIT ?"
+        params.append(limit)
 
     try:
         with sqlite3.connect(db_path) as conn:
-            rows = conn.execute(query, tuple(params)).fetchall()
+            rows = conn.execute(sql, tuple(params)).fetchall()
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
             return []
@@ -2666,6 +2668,7 @@ def list_contradictions(
             items = [item for item in items if item["status"] != "open"]
         else:
             items = [item for item in items if item["status"] == status]
+    items = items[:limit]
     claim_map = _claim_details_map(
         vault_dir,
         [

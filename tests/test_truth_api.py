@@ -244,6 +244,62 @@ def test_truth_api_filters_contradictions_by_query(temp_vault):
     assert items[0]["subject_key"] == "agent harness"
 
 
+def test_truth_api_filters_contradictions_by_resolved_status_after_overrides(temp_vault):
+    from openclaw_pipeline.truth_api import list_contradictions, record_review_action
+
+    vault = _seed_truth_vault(temp_vault)
+    positive = vault / "10-Knowledge" / "Evergreen" / "Zeta Positive.md"
+    negative = vault / "10-Knowledge" / "Evergreen" / "Zeta Negative.md"
+    positive.write_text(
+        """---
+note_id: zeta-positive
+title: Zeta Positive
+type: evergreen
+date: 2026-04-13
+---
+
+# Zeta Positive
+
+Zeta platform supports high-trust execution for operators.
+""",
+        encoding="utf-8",
+    )
+    negative.write_text(
+        """---
+note_id: zeta-negative
+title: Zeta Negative
+type: evergreen
+date: 2026-04-13
+---
+
+# Zeta Negative
+
+Zeta platform does not support high-trust execution for operators.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+    contradiction = next(item for item in list_contradictions(vault, limit=10) if item["subject_key"] == "zeta platform")
+    record_review_action(
+        vault,
+        event_type="ui_contradictions_resolved",
+        slug="zeta-positive",
+        payload={
+            "object_ids": ["zeta-negative", "zeta-positive"],
+            "contradiction_ids": [contradiction["contradiction_id"]],
+            "status": "dismissed",
+            "note": "",
+            "rebuilt_object_ids": [],
+        },
+    )
+
+    items = list_contradictions(vault, status="resolved", limit=1)
+
+    assert len(items) == 1
+    assert items[0]["subject_key"] == "zeta platform"
+    assert items[0]["status"] == "dismissed"
+
+
 def test_truth_api_lists_evolution_candidates_from_open_contradictions(temp_vault):
     from openclaw_pipeline.truth_api import list_evolution_candidates
 
