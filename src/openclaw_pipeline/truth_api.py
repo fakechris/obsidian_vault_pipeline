@@ -984,7 +984,8 @@ def list_production_gaps(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
-    items = list_production_chains(vault_dir, query=query, limit=MAX_PAGE_SIZE)
+    candidate_limit = min(MAX_PAGE_SIZE, max(limit * 5, limit))
+    items = list_production_chains(vault_dir, query=query, limit=candidate_limit)
     weak_points: list[dict[str, Any]] = []
     for item in items:
         traceability = item["traceability"]

@@ -685,6 +685,8 @@ date: 2026-04-13
     assert payload["items"][0]["members"][0]["object_id"] == "alpha"
     assert payload["items"][0]["member_count"] == 1
     assert payload["items"][0]["preview_titles"] == ["Alpha"]
+    assert payload["limit"] == 50
+    assert payload["is_limited"] is True
 
 
 def test_build_derivation_browser_payload(temp_vault):
@@ -738,6 +740,8 @@ Mentions [[alpha]].
     assert payload["items"][0]["derived_object_count"] == 1
     assert payload["items"][0]["preview_titles"] == ["Alpha"]
     assert payload["items"][0]["source_notes"] == []
+    assert payload["limit"] == 50
+    assert payload["is_limited"] is True
 
 
 def test_build_derivation_browser_payload_includes_chain_context(temp_vault):
@@ -971,6 +975,8 @@ Mentions [[alpha]].
     assert payload["counts"]["deep_dives"] == 1
     assert any(item["stage_label"] == "source_note" for item in payload["items"])
     assert any(item["stage_label"] == "deep_dive" for item in payload["items"])
+    assert payload["limit"] == 50
+    assert payload["is_limited"] is True
 
 
 def test_build_production_browser_payload_surfaces_weak_points(temp_vault):
@@ -995,6 +1001,60 @@ Processed source note without downstream chain.
     assert payload["weak_points"]
     assert payload["weak_points"][0]["title"] == "Loose Source"
     assert "deep dives" in payload["weak_points"][0]["missing"]
+
+
+def test_build_derivation_browser_payload_filters_stale_object_ids(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_derivation_browser_payload
+    from openclaw_pipeline.runtime import VaultLayout
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+
+Alpha supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: deep-dive
+title: Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}',
+                '{"event_type":"evergreen_auto_promoted","concept":"stale-object","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"stale-object"}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_derivation_browser_payload(temp_vault)
+
+    assert [item["object_id"] for item in payload["items"][0]["derived_objects"]] == ["alpha"]
 
 
 def test_build_stale_summary_browser_payload(temp_vault):

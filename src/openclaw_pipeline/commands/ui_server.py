@@ -1056,6 +1056,11 @@ def _render_events_page(payload: dict) -> str:
 
 def _render_atlas_page(payload: dict) -> str:
     query = payload.get("query", "")
+    limit_note = (
+        f" Showing the most recent {payload['limit']} atlas pages in this browser window."
+        if payload.get("is_limited")
+        else ""
+    )
     items = "".join(
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
@@ -1088,7 +1093,7 @@ def _render_atlas_page(payload: dict) -> str:
             f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter MOCs or objects' /> "
             "<button type='submit'>Search</button>"
             "</form>"
-            f"<p class='muted'>{payload['count']} atlas/moc pages linked to indexed objects.</p>"
+            f"<p class='muted'>{payload['count']} atlas/moc pages linked to indexed objects.{escape(limit_note)}</p>"
             "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each Atlas page now shows the source notes and deep dives that feed the objects it organizes.</p></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
@@ -1097,6 +1102,11 @@ def _render_atlas_page(payload: dict) -> str:
 
 def _render_derivations_page(payload: dict) -> str:
     query = payload.get("query", "")
+    limit_note = (
+        f" Showing the most recent {payload['limit']} deep dives in this browser window."
+        if payload.get("is_limited")
+        else ""
+    )
     items = "".join(
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
@@ -1129,7 +1139,7 @@ def _render_derivations_page(payload: dict) -> str:
             f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter deep dives or objects' /> "
             "<button type='submit'>Search</button>"
             "</form>"
-            f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.</p>"
+            f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.{escape(limit_note)}</p>"
             "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each deep dive now shows upstream source notes and downstream Atlas reach, not just derived objects.</p></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
@@ -1138,6 +1148,11 @@ def _render_derivations_page(payload: dict) -> str:
 
 def _render_production_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
+    limit_note = (
+        f" Showing the most recent {payload['limit']} production-chain entries in this browser window."
+        if payload.get("is_limited")
+        else ""
+    )
     items = "".join(
         "<li>"
         f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
@@ -1167,7 +1182,7 @@ def _render_production_browser_page(payload: dict) -> str:
             f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter source notes, deep dives, objects, or atlas' /> "
             "<button type='submit'>Search</button>"
             "</form>"
-            f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.</p>"
+            f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.{escape(limit_note)}</p>"
             "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>"
             f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
