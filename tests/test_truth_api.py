@@ -1855,6 +1855,7 @@ Processed source note without any derived deep dive.
     assert payload["retried"] is True
     assert payload["action"]["status"] == "queued"
     assert payload["action"]["error"] == ""
+    assert payload["action"]["failure_bucket"] == ""
     assert payload["action"]["started_at"] == ""
     assert payload["action"]["finished_at"] == ""
     assert retried_action["status"] == "queued"
@@ -1933,8 +1934,103 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
     actions = truth_api.list_action_queue(vault)
 
     assert payload["ran_count"] == 2
+    assert payload["safe_only"] is False
     assert payload["stopped_reason"] == "no_queued_actions"
     assert {item["status"] for item in actions} == {"succeeded"}
+
+
+def test_truth_api_failed_action_tracks_retry_count_and_failure_bucket(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness Source
+source: https://example.com/harness
+---
+
+Processed source note without any derived deep dive.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+    truth_api.sync_signal_ledger(vault)
+
+    monkeypatch.setattr(
+        truth_api,
+        "_run_deep_dive_workflow_action",
+        lambda vault_dir, action: (_ for _ in ()).throw(FileNotFoundError("source note not found")),
+    )
+
+    payload = truth_api.run_next_action_queue_item(vault, safe_only=True)
+    failed_action = truth_api.list_action_queue(vault)[0]
+
+    assert payload["ran"] is False
+    assert payload["safe_only"] is True
+    assert failed_action["status"] == "failed"
+    assert failed_action["retry_count"] == 1
+    assert failed_action["failure_bucket"] == "missing_target"
+
+
+def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "action_id": "action::manual",
+                        "action_kind": "review_contradiction",
+                        "source_signal_id": "signal::manual",
+                        "title": "Manual review",
+                        "target_ref": "/contradictions",
+                        "status": "queued",
+                        "created_at": "2026-04-15T00:00:00Z",
+                        "retry_count": 0,
+                        "failure_bucket": "",
+                        "safe_to_run": False,
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "action_id": "action::safe",
+                        "action_kind": "deep_dive_workflow",
+                        "source_signal_id": "signal::safe",
+                        "title": "Safe action",
+                        "target_ref": "50-Inbox/03-Processed/Harness.md",
+                        "status": "queued",
+                        "created_at": "2026-04-15T00:00:01Z",
+                        "retry_count": 0,
+                        "failure_bucket": "",
+                        "safe_to_run": True,
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(truth_api, "_signal_by_id", lambda vault_dir, signal_id: {"signal_id": signal_id})
+    monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", lambda vault_dir, action: {"ok": True})
+    monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir: None)
+
+    payload = truth_api.run_action_queue(temp_vault, limit=1, safe_only=True)
+    actions = truth_api.list_action_queue(temp_vault)
+    safe = next(item for item in actions if item["action_id"] == "action::safe")
+    manual = next(item for item in actions if item["action_id"] == "action::manual")
+
+    assert payload["safe_only"] is True
+    assert payload["ran_count"] == 1
+    assert safe["status"] == "succeeded"
+    assert manual["status"] == "queued"
 
 
 def test_truth_api_builds_briefing_snapshot(temp_vault):

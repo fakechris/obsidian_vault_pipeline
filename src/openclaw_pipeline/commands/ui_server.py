@@ -1504,6 +1504,11 @@ def _render_briefing_page(payload: dict) -> str:
         f"<span class='muted'>({item['signal_count']} signals)</span></li>"
         for item in payload["active_topics"]
     ) or "<li class='muted'>No active topics surfaced.</li>"
+    queue_summary = payload.get("queue_summary", {})
+    failure_buckets = "".join(
+        f"<li><span class='pill'>{escape(bucket)}</span> {count}</li>"
+        for bucket, count in queue_summary.get("failure_buckets", {}).items()
+    ) or "<li class='muted'>No failed actions.</li>"
     return _layout(
         "Working Memory Snapshot",
         (
@@ -1512,6 +1517,18 @@ def _render_briefing_page(payload: dict) -> str:
             f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>"
             f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>"
             f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>"
+            "<section class='card'><h2>Execution Surface</h2>"
+            f"<p class='muted'>{queue_summary.get('queued_count', 0)} queued, "
+            f"{queue_summary.get('safe_queued_count', 0)} safe to auto-run, "
+            f"{queue_summary.get('running_count', 0)} running, "
+            f"{queue_summary.get('failed_count', 0)} failed.</p>"
+            "<form method='post' action='/actions/run-batch' class='link-row'>"
+            "<input type='hidden' name='limit' value='5' />"
+            "<input type='hidden' name='safe_only' value='1' />"
+            "<input type='hidden' name='next' value='/briefing' />"
+            "<button type='submit'>Run 5 safe queued actions</button>"
+            "</form>"
+            f"<ul class='list-tight'>{failure_buckets}</ul></section>"
             f"<section class='card'><h2>Recent Signals</h2><ul class='list-tight'>{recent_signals}</ul></section>"
             f"<section class='card'><h2>Unresolved Issues</h2><ul class='list-tight'>{unresolved}</ul></section>"
             f"<section class='card'><h2>Changed Objects</h2><ul class='list-tight'>{changed_objects}</ul></section>"
@@ -1533,7 +1550,13 @@ def _render_actions_page(payload: dict) -> str:
         "<li>"
         f"<span class='pill'>{escape(str(item['status']))}</span> "
         f"<span class='pill'>{escape(str(item['action_kind']))}</span> "
-        f"{escape(str(item['title']))}"
+        + (
+            " <span class='pill'>safe</span>"
+            if item.get("safe_to_run")
+            else " <span class='pill'>manual</span>"
+        )
+        + " "
+        + f"{escape(str(item['title']))}"
         + (
             f"<div class='muted'>Target: {escape(str(item['target_ref']))}</div>"
             if item.get("target_ref")
@@ -1542,6 +1565,16 @@ def _render_actions_page(payload: dict) -> str:
         + (
             f"<div class='muted'>Created at {escape(str(item['created_at']))}</div>"
             if item.get("created_at")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Retry count: {int(item.get('retry_count') or 0)}</div>"
+            if item.get("retry_count") is not None
+            else ""
+        )
+        + (
+            f"<div class='muted'>Failure bucket: {escape(str(item['failure_bucket']))}</div>"
+            if item.get("failure_bucket")
             else ""
         )
         + (
@@ -1575,12 +1608,19 @@ def _render_actions_page(payload: dict) -> str:
             "<input type='hidden' name='limit' value='5' />"
             "<button type='submit'>Run 5 queued actions</button>"
             "</form>"
+            "<form method='post' action='/actions/run-batch' class='link-row'>"
+            "<input type='hidden' name='limit' value='5' />"
+            "<input type='hidden' name='safe_only' value='1' />"
+            "<button type='submit'>Run 5 safe queued actions</button>"
+            "</form>"
             "<form method='get' action='/actions' class='link-row'>"
             f"<input type='text' name='q' value='{escape(query)}' placeholder='Search actions' />"
             f"<select name='status'>{option_html}</select>"
             "<button type='submit'>Filter</button>"
             "</form>"
-            f"<p class='muted'>{payload['count']} actions in the current execution surface.</p>"
+            f"<p class='muted'>{payload['count']} actions in the current execution surface. "
+            f"{payload.get('queued_safe_count', 0)} queued safe actions. "
+            f"{payload.get('failed_count', 0)} failed actions.</p>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
@@ -2045,20 +2085,24 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     self._redirect(str(payload["next_path"]))
                     return
                 if path == "/api/actions/run-next":
-                    self._write_json(run_next_action_queue_item(resolved_vault))
+                    safe_only = self._form_first(form, "safe_only").strip() == "1"
+                    self._write_json(run_next_action_queue_item(resolved_vault, safe_only=safe_only))
                     return
                 if path == "/actions/run-next":
-                    run_next_action_queue_item(resolved_vault)
-                    self._redirect("/actions")
+                    safe_only = self._form_first(form, "safe_only").strip() == "1"
+                    run_next_action_queue_item(resolved_vault, safe_only=safe_only)
+                    self._redirect(self._form_first(form, "next").strip() or "/actions")
                     return
                 if path == "/api/actions/run-batch":
                     limit = int(self._form_first(form, "limit").strip() or "5")
-                    self._write_json(run_action_queue(resolved_vault, limit=limit))
+                    safe_only = self._form_first(form, "safe_only").strip() == "1"
+                    self._write_json(run_action_queue(resolved_vault, limit=limit, safe_only=safe_only))
                     return
                 if path == "/actions/run-batch":
                     limit = int(self._form_first(form, "limit").strip() or "5")
-                    run_action_queue(resolved_vault, limit=limit)
-                    self._redirect("/actions")
+                    safe_only = self._form_first(form, "safe_only").strip() == "1"
+                    run_action_queue(resolved_vault, limit=limit, safe_only=safe_only)
+                    self._redirect(self._form_first(form, "next").strip() or "/actions")
                     return
                 if path == "/api/actions/retry":
                     self._write_json(self._retry_action(form))

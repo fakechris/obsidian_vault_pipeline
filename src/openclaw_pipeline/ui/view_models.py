@@ -308,6 +308,15 @@ def build_action_queue_payload(
         "query": query or "",
         "status": status or "",
         "status_counts": dict(Counter(str(item["status"]) for item in items)),
+        "queued_safe_count": sum(1 for item in items if item.get("status") == "queued" and item.get("safe_to_run")),
+        "failed_count": sum(1 for item in items if item.get("status") == "failed"),
+        "failure_buckets": dict(
+            Counter(
+                str(item.get("failure_bucket") or "")
+                for item in items
+                if item.get("status") == "failed" and str(item.get("failure_bucket") or "")
+            )
+        ),
     }
 
 

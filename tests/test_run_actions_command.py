@@ -8,7 +8,11 @@ def test_run_actions_main_runs_once_and_prints_payload(temp_vault, capsys, monke
 
     monkeypatch.setattr(
         "openclaw_pipeline.commands.run_actions.run_next_action_queue_item",
-        lambda vault_dir: {"ran": True, "action": {"action_id": "action::demo"}},
+        lambda vault_dir, *, safe_only=False: {
+            "ran": True,
+            "safe_only": safe_only,
+            "action": {"action_id": "action::demo"},
+        },
     )
 
     exit_code = main(["--vault-dir", str(temp_vault), "--once"])
@@ -24,9 +28,9 @@ def test_run_actions_main_can_loop_for_multiple_iterations(temp_vault, capsys, m
 
     calls = {"count": 0}
 
-    def fake_run_next(vault_dir):
+    def fake_run_next(vault_dir, *, safe_only=False):
         calls["count"] += 1
-        return {"ran": False, "action": None, "iteration": calls["count"]}
+        return {"ran": False, "safe_only": safe_only, "action": None, "iteration": calls["count"]}
 
     monkeypatch.setattr(
         "openclaw_pipeline.commands.run_actions.run_next_action_queue_item",
@@ -50,3 +54,4 @@ def test_run_actions_main_can_loop_for_multiple_iterations(temp_vault, capsys, m
     assert calls["count"] == 2
     assert payload["loop"] is True
     assert payload["iterations"] == 2
+    assert payload["last_result"]["iteration"] == 2

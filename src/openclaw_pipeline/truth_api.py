@@ -1251,6 +1251,33 @@ def _recommended_action(*, kind: str, label: str, path: str, executable: bool) -
     }
 
 
+SAFE_AUTO_RUN_ACTION_KINDS = {
+    "deep_dive_workflow",
+    "object_extraction_workflow",
+}
+
+
+def _is_safe_action_kind(action_kind: str) -> bool:
+    return action_kind in SAFE_AUTO_RUN_ACTION_KINDS
+
+
+def _classify_action_error(error: str) -> str:
+    normalized = (error or "").strip().lower()
+    if not normalized:
+        return ""
+    if normalized.startswith("unsupported_action_kind:"):
+        return "unsupported_action_kind"
+    if "not found" in normalized or "missing" in normalized:
+        return "missing_target"
+    if "timed out" in normalized or "timeout" in normalized:
+        return "timeout"
+    if "integrity" in normalized or "database" in normalized or "sqlite" in normalized:
+        return "storage_error"
+    if "refresh" in normalized or "knowledge_index" in normalized:
+        return "refresh_failed"
+    return "workflow_failed"
+
+
 def _read_action_queue_rows(vault_dir: Path | str) -> list[dict[str, Any]]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
@@ -1367,6 +1394,9 @@ def _enqueue_action_from_signal(
         "started_at": "",
         "finished_at": "",
         "error": "",
+        "failure_bucket": "",
+        "retry_count": 0,
+        "safe_to_run": _is_safe_action_kind(str(recommended_action["kind"])),
         "payload": payload,
         "session_id": session_id,
     }
@@ -1442,6 +1472,18 @@ def _next_queued_action(vault_dir: Path | str) -> dict[str, Any] | None:
     return dict(queued[0])
 
 
+def _next_safe_queued_action(vault_dir: Path | str) -> dict[str, Any] | None:
+    queued = [
+        item
+        for item in _read_action_queue_rows(vault_dir)
+        if item.get("status") == "queued" and bool(item.get("safe_to_run"))
+    ]
+    if not queued:
+        return None
+    queued.sort(key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))))
+    return dict(queued[0])
+
+
 def retry_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[str, Any]:
     action = _action_by_id(vault_dir, action_id)
     if action is None:
@@ -1452,6 +1494,7 @@ def retry_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[st
     action["started_at"] = ""
     action["finished_at"] = ""
     action["error"] = ""
+    action["failure_bucket"] = ""
     action["result"] = {}
     _replace_action_queue_item(vault_dir, action)
     return {"retried": True, "action": action}
@@ -1516,22 +1559,24 @@ def _refresh_truth_after_action(vault_dir: Path | str) -> None:
     sync_signal_ledger(vault_dir)
 
 
-def run_next_action_queue_item(vault_dir: Path | str) -> dict[str, Any]:
-    action = _next_queued_action(vault_dir)
+def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False) -> dict[str, Any]:
+    action = _next_safe_queued_action(vault_dir) if safe_only else _next_queued_action(vault_dir)
     if action is None:
-        return {"ran": False, "reason": "no_queued_actions"}
+        return {"ran": False, "reason": "no_queued_actions", "safe_only": safe_only}
 
     started_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     action["status"] = "running"
     action["started_at"] = started_at
     action["error"] = ""
+    action["failure_bucket"] = ""
     _replace_action_queue_item(vault_dir, action)
 
     if _signal_by_id(vault_dir, str(action.get("source_signal_id") or "")) is None:
         action["status"] = "obsolete"
         action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        action["failure_bucket"] = "obsolete_signal"
         _replace_action_queue_item(vault_dir, action)
-        return {"ran": False, "reason": "obsolete_signal", "action": action}
+        return {"ran": False, "reason": "obsolete_signal", "action": action, "safe_only": safe_only}
 
     handlers = {
         "deep_dive_workflow": _run_deep_dive_workflow_action,
@@ -1541,9 +1586,11 @@ def run_next_action_queue_item(vault_dir: Path | str) -> dict[str, Any]:
     if handler is None:
         action["status"] = "failed"
         action["error"] = f"unsupported_action_kind:{action.get('action_kind')}"
+        action["failure_bucket"] = "unsupported_action_kind"
+        action["retry_count"] = int(action.get("retry_count") or 0) + 1
         action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         _replace_action_queue_item(vault_dir, action)
-        return {"ran": False, "reason": "unsupported_action_kind", "action": action}
+        return {"ran": False, "reason": "unsupported_action_kind", "action": action, "safe_only": safe_only}
 
     try:
         result = handler(vault_dir, action)
@@ -1552,27 +1599,30 @@ def run_next_action_queue_item(vault_dir: Path | str) -> dict[str, Any]:
         action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         action["result"] = result
         _replace_action_queue_item(vault_dir, action)
-        return {"ran": True, "action": action}
+        return {"ran": True, "action": action, "safe_only": safe_only}
     except Exception as exc:
         action["status"] = "failed"
         action["error"] = str(exc)
+        action["failure_bucket"] = _classify_action_error(str(exc))
+        action["retry_count"] = int(action.get("retry_count") or 0) + 1
         action["finished_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         _replace_action_queue_item(vault_dir, action)
-        return {"ran": False, "reason": "execution_failed", "action": action}
+        return {"ran": False, "reason": "execution_failed", "action": action, "safe_only": safe_only}
 
 
-def run_action_queue(vault_dir: Path | str, *, limit: int = 5) -> dict[str, Any]:
+def run_action_queue(vault_dir: Path | str, *, limit: int = 5, safe_only: bool = False) -> dict[str, Any]:
     limit = max(1, min(int(limit), MAX_PAGE_SIZE))
     results: list[dict[str, Any]] = []
     stopped_reason = "limit_reached"
     for _ in range(limit):
-        payload = run_next_action_queue_item(vault_dir)
+        payload = run_next_action_queue_item(vault_dir, safe_only=safe_only)
         results.append(payload)
         if not payload.get("ran"):
             stopped_reason = str(payload.get("reason") or "stopped")
             break
     return {
         "limit": limit,
+        "safe_only": safe_only,
         "ran_count": sum(1 for item in results if item.get("ran")),
         "stopped_reason": stopped_reason,
         "results": results,
@@ -1601,6 +1651,7 @@ def _attach_action_queue_state(vault_dir: Path | str, items: list[dict[str, Any]
                 recommended["queue_status"] = action.get("status", "")
                 recommended["action_id"] = action.get("action_id", "")
                 recommended["queue_path"] = "/actions"
+                recommended["safe_to_run"] = bool(action.get("safe_to_run"))
             enriched["recommended_action"] = recommended
         annotated.append(enriched)
     return annotated
@@ -2113,6 +2164,22 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
         if len(priority_items) >= limit:
             break
     first_useful_sign = insights[0] if insights else (priority_items[0] if priority_items else None)
+    action_items = list_action_queue(vault_dir, limit=MAX_PAGE_SIZE)
+    queue_summary = {
+        "queued_count": sum(1 for item in action_items if item.get("status") == "queued"),
+        "safe_queued_count": sum(
+            1 for item in action_items if item.get("status") == "queued" and bool(item.get("safe_to_run"))
+        ),
+        "running_count": sum(1 for item in action_items if item.get("status") == "running"),
+        "failed_count": sum(1 for item in action_items if item.get("status") == "failed"),
+        "failure_buckets": dict(
+            Counter(
+                str(item.get("failure_bucket") or "")
+                for item in action_items
+                if item.get("status") == "failed" and str(item.get("failure_bucket") or "")
+            )
+        ),
+    }
 
     return {
         "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -2129,6 +2196,7 @@ def get_briefing_snapshot(vault_dir: Path | str, *, limit: int = 8) -> dict[str,
         "insights": insights,
         "priority_items": priority_items,
         "first_useful_sign": first_useful_sign,
+        "queue_summary": queue_summary,
     }
 
 

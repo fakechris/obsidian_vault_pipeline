@@ -377,8 +377,9 @@ def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
     monkeypatch.setattr(
         ui_server,
         "run_next_action_queue_item",
-        lambda vault_dir: {
+        lambda vault_dir, *, safe_only=False: {
             "ran": True,
+            "safe_only": safe_only,
             "action": {
                 "action_id": "action::demo",
                 "action_kind": "deep_dive_workflow",
@@ -418,11 +419,12 @@ def test_ui_server_can_run_action_batch_via_api(temp_vault, monkeypatch):
     monkeypatch.setattr(
         ui_server,
         "run_action_queue",
-        lambda vault_dir, *, limit: {
+        lambda vault_dir, *, limit, safe_only=False: {
             "ran_count": 2,
             "stopped_reason": "no_queued_actions",
             "results": [],
             "limit": limit,
+            "safe_only": safe_only,
         },
     )
 
@@ -449,6 +451,44 @@ def test_ui_server_can_run_action_batch_via_api(temp_vault, monkeypatch):
     assert response.status == 200
     assert payload["ran_count"] == 2
     assert payload["limit"] == 5
+
+
+def test_ui_server_can_run_safe_action_batch_via_api(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "run_action_queue",
+        lambda vault_dir, *, limit, safe_only=False: {
+            "ran_count": 1,
+            "limit": limit,
+            "safe_only": safe_only,
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode({"limit": "5", "safe_only": "1"})
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/actions/run-batch",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["safe_only"] is True
 
 
 def test_ui_server_can_retry_action_via_api(temp_vault, monkeypatch):

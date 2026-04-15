@@ -598,6 +598,7 @@ def test_build_briefing_payload(temp_vault):
     assert payload["active_topics"]
     assert payload["insights"]
     assert payload["priority_items"]
+    assert payload["queue_summary"]["queued_count"] >= 0
 
 
 def test_build_evolution_browser_payload(temp_vault):
