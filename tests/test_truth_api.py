@@ -142,6 +142,7 @@ def test_truth_api_avoids_datetime_utc_import_for_python_310_compatibility():
 
     assert "from datetime import UTC" not in source
     assert "datetime.now(UTC)" not in source
+    assert "datetime.UTC" not in source
 
 
 def test_truth_api_reads_review_actions_from_jsonl_without_knowledge_db(temp_vault):
@@ -1956,6 +1957,38 @@ Processed source note without any derived deep dive.
     assert payload["action"]["status"] == "dismissed"
     assert payload["action"]["finished_at"]
     assert dismissed_action["status"] == "dismissed"
+
+
+def test_truth_api_cannot_dismiss_running_action_queue_item(temp_vault):
+    import pytest
+    import openclaw_pipeline.truth_api as truth_api
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        json.dumps(
+            {
+                "action_id": "action::running",
+                "action_kind": "deep_dive_workflow",
+                "source_signal_id": "signal::running",
+                "title": "Running action",
+                "target_ref": "50-Inbox/03-Processed/Harness.md",
+                "status": "running",
+                "created_at": "2026-04-15T00:00:01Z",
+                "started_at": "2026-04-15T00:00:02Z",
+                "retry_count": 0,
+                "failure_bucket": "",
+                "safe_to_run": True,
+                "payload": {},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="action is not dismissible"):
+        truth_api.dismiss_action_queue_item(temp_vault, action_id="action::running")
 
 
 def test_truth_api_run_action_queue_processes_multiple_queued_items(temp_vault, monkeypatch):

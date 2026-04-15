@@ -1530,7 +1530,7 @@ def dismiss_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[
         action = _action_by_id_unlocked(vault_dir, action_id)
         if action is None:
             raise ValueError("unknown action_id")
-        if str(action.get("status") or "") in {"succeeded", "dismissed"}:
+        if str(action.get("status") or "") in {"running", "succeeded", "dismissed"}:
             raise ValueError("action is not dismissible")
         action["status"] = "dismissed"
         action["finished_at"] = _utc_now_text()
