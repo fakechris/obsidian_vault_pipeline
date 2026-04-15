@@ -459,6 +459,129 @@ def _rank_contradiction_evidence(item: dict[str, Any]) -> list[dict[str, Any]]:
     return ranked
 
 
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _candidate_evolution_id(
+    *,
+    link_type: str,
+    subject_kind: str,
+    subject_id: str,
+    earlier_ref: str,
+    later_ref: str,
+) -> str:
+    fingerprint = "::".join([link_type, subject_kind, subject_id, earlier_ref, later_ref])
+    return hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:16]
+
+
+def _page_paths_for_slugs(vault_dir: Path | str, slugs: list[str]) -> dict[str, str]:
+    normalized_slugs = list(dict.fromkeys(slug for slug in slugs if slug))
+    if not normalized_slugs:
+        return {}
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    placeholders = ",".join("?" for _ in normalized_slugs)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT slug, path
+            FROM pages_index
+            WHERE slug IN ({placeholders})
+            """,
+            tuple(normalized_slugs),
+        ).fetchall()
+    return {
+        str(slug): _vault_relative_path(resolved_vault, path)
+        for slug, path in rows
+    }
+
+
+def _note_date_text(vault_dir: Path | str, note_path: str) -> str:
+    frontmatter = _read_note_frontmatter(vault_dir, note_path)
+    date_value = frontmatter.get("date")
+    return str(date_value).strip()
+
+
+def _note_date_sort_key(date_text: str) -> tuple[int, float, str]:
+    parsed = _parse_iso_datetime(date_text)
+    if parsed is None:
+        return (0, 0.0, date_text)
+    return (1, parsed.timestamp(), date_text)
+
+
+def _read_note_text(vault_dir: Path | str, relative_path: str) -> str:
+    resolved = resolve_vault_dir(vault_dir)
+    note_path = (resolved / relative_path).resolve()
+    try:
+        note_path.relative_to(resolved.resolve())
+    except ValueError:
+        return ""
+    if not note_path.is_file():
+        return ""
+    return note_path.read_text(encoding="utf-8")
+
+
+_SUPERSESSION_CUE_RE = re.compile(
+    r"\b(supersed(?:e|es|ed|ing)|replace(?:s|d|ment|ments)?|obsolete|deprecated|no longer|instead)\b",
+    re.IGNORECASE,
+)
+_CONFIRMATION_CUE_RE = re.compile(
+    r"\b(confirm(?:s|ed|ing)?|corroborat(?:e|es|ed|ing)|validated?|agrees?\s+with|supports?)\b",
+    re.IGNORECASE,
+)
+
+
+def _has_cue(
+    vault_dir: Path | str,
+    note_path: str,
+    pattern: re.Pattern[str],
+) -> bool:
+    text = _read_note_text(vault_dir, note_path).lower()
+    for match in pattern.finditer(text):
+        prefix = text[max(0, match.start() - 24) : match.start()]
+        if re.search(r"(?:\bnot\s+|\bwithout\s+|n't\s+)$", prefix):
+            continue
+        return True
+    return False
+
+
+def _has_supersession_cue(vault_dir: Path | str, note_path: str) -> bool:
+    return _has_cue(vault_dir, note_path, _SUPERSESSION_CUE_RE)
+
+
+def _has_confirmation_cue(vault_dir: Path | str, note_path: str) -> bool:
+    return _has_cue(vault_dir, note_path, _CONFIRMATION_CUE_RE)
+
+
+def _evolution_candidate_matches_query(item: dict[str, Any], normalized_query: str) -> bool:
+    haystacks = [
+        str(item.get("link_type") or "").lower(),
+        str(item.get("subject_kind") or "").lower(),
+        str(item.get("subject_id") or "").lower(),
+        str(item.get("earlier_ref") or "").lower(),
+        str(item.get("later_ref") or "").lower(),
+        *(str(path).lower() for path in item.get("source_paths", [])),
+        *(str(code).lower() for code in item.get("reason_codes", [])),
+        *(
+            str(entry.get("source_slug") or entry.get("path") or entry.get("title") or "").lower()
+            for entry in item.get("evidence", [])
+            if isinstance(entry, dict)
+        ),
+    ]
+    return any(normalized_query in haystack for haystack in haystacks if haystack)
+
+
 def list_objects(
     vault_dir: Path | str,
     *,
@@ -919,8 +1042,8 @@ def list_review_actions(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
-    db_path = _db_path(vault_dir)
     normalized_object_ids = set(object_id for object_id in (object_ids or []) if object_id)
+    db_path = _db_path(vault_dir)
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -932,6 +1055,15 @@ def list_review_actions(
             """,
             (_REVIEW_AUDIT_LOG_NAME,),
         ).fetchall()
+    return _review_action_items(rows, normalized_object_ids=normalized_object_ids, limit=limit)
+
+
+def _review_action_items(
+    rows: list[tuple[Any, ...]],
+    *,
+    normalized_object_ids: set[str],
+    limit: int | None,
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for source_log, event_type, slug, session_id, timestamp, payload_json in rows:
         try:
@@ -953,6 +1085,13 @@ def list_review_actions(
                 "session_id": session_id,
                 "timestamp": timestamp,
                 "object_ids": action_object_ids,
+                "evolution_id": str(payload.get("evolution_id") or ""),
+                "subject_kind": str(payload.get("subject_kind") or ""),
+                "subject_id": str(payload.get("subject_id") or ""),
+                "earlier_ref": str(payload.get("earlier_ref") or ""),
+                "later_ref": str(payload.get("later_ref") or ""),
+                "link_type": str(payload.get("link_type") or ""),
+                "candidate_link_type": str(payload.get("candidate_link_type") or ""),
                 "contradiction_ids": [
                     str(value)
                     for value in payload.get("contradiction_ids", [])
@@ -968,9 +1107,29 @@ def list_review_actions(
                 "objects_rebuilt": int(payload.get("objects_rebuilt") or 0),
             }
         )
-        if len(items) >= limit:
+        if limit is not None and len(items) >= limit:
             break
     return items
+
+
+def list_evolution_review_actions(
+    vault_dir: Path | str,
+    *,
+    object_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    normalized_object_ids = set(object_id for object_id in (object_ids or []) if object_id)
+    db_path = _db_path(vault_dir)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT source_log, event_type, slug, session_id, timestamp, payload_json
+            FROM audit_events
+            WHERE source_log = ? AND event_type = ?
+            ORDER BY timestamp DESC
+            """,
+            (_REVIEW_AUDIT_LOG_NAME, "ui_evolution_reviewed"),
+        ).fetchall()
+    return _review_action_items(rows, normalized_object_ids=normalized_object_ids, limit=None)
 
 
 def _signal_id(signal_type: str, key: str) -> str:
@@ -1905,6 +2064,362 @@ def list_contradictions(
         item["ranked_evidence"] = _rank_contradiction_evidence(item)
         item["review_history"] = list_review_actions(vault_dir, object_ids=object_ids, limit=5)
     return items
+
+
+def _all_evolution_candidates(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    link_type: str | None = None,
+) -> list[dict[str, Any]]:
+    normalized_query = (query or "").strip().lower()
+    candidates: list[dict[str, Any]] = []
+
+    open_contradictions = list_contradictions(vault_dir, limit=MAX_PAGE_SIZE, status="open")
+    contradiction_object_ids = sorted(
+        {
+            claim["object_id"]
+            for item in open_contradictions
+            for claim in (item["positive_claims"] + item["negative_claims"])
+        }
+    )
+    contradiction_object_paths = _batch_object_rows(vault_dir, contradiction_object_ids)
+    contradiction_source_paths = _page_paths_for_slugs(
+        vault_dir,
+        [
+            evidence["source_slug"]
+            for item in open_contradictions
+            for claim in (item["positive_claims"] + item["negative_claims"])
+            for evidence in claim["evidence"]
+            if evidence.get("source_slug")
+        ],
+    )
+
+    for item in open_contradictions:
+        positive_claims = list(item["positive_claims"])
+        negative_claims = list(item["negative_claims"])
+        if not positive_claims or not negative_claims:
+            continue
+        contradiction_item_object_ids = sorted(
+            {
+                claim["object_id"]
+                for claim in (positive_claims + negative_claims)
+            }
+        )
+
+        claim_dates: dict[str, tuple[tuple[int, float, str], str]] = {}
+        for claim in positive_claims + negative_claims:
+            canonical_path = contradiction_object_paths.get(claim["object_id"], {}).get("canonical_path", "")
+            date_text = _note_date_text(vault_dir, canonical_path) if canonical_path else ""
+            claim_dates[claim["claim_id"]] = (_note_date_sort_key(date_text), date_text)
+
+        positive_claim = positive_claims[0]
+        negative_claim = negative_claims[0]
+        best_pair_score: tuple[int, float, str, str] | None = None
+        for positive_candidate in positive_claims:
+            positive_key, _positive_date = claim_dates[positive_candidate["claim_id"]]
+            for negative_candidate in negative_claims:
+                negative_key, _negative_date = claim_dates[negative_candidate["claim_id"]]
+                both_valid = 1 if positive_key[0] and negative_key[0] else 0
+                distance = abs(positive_key[1] - negative_key[1]) if both_valid else 0.0
+                pair_score = (
+                    both_valid,
+                    distance,
+                    positive_candidate["claim_id"],
+                    negative_candidate["claim_id"],
+                )
+                if best_pair_score is None or pair_score > best_pair_score:
+                    best_pair_score = pair_score
+                    positive_claim = positive_candidate
+                    negative_claim = negative_candidate
+
+        positive_key, positive_date = claim_dates[positive_claim["claim_id"]]
+        negative_key, negative_date = claim_dates[negative_claim["claim_id"]]
+        if positive_key > negative_key:
+            earlier_claim, later_claim = negative_claim, positive_claim
+            earlier_date, later_date = negative_date, positive_date
+        else:
+            earlier_claim, later_claim = positive_claim, negative_claim
+            earlier_date, later_date = positive_date, negative_date
+
+        record = {
+            "evolution_id": _candidate_evolution_id(
+                link_type="challenges",
+                subject_kind="topic",
+                subject_id=item["subject_key"],
+                earlier_ref=f"claim://{earlier_claim['claim_id']}",
+                later_ref=f"claim://{later_claim['claim_id']}",
+            ),
+            "status": "candidate",
+            "link_type": "challenges",
+            "subject_kind": "topic",
+            "subject_id": item["subject_key"],
+            "object_ids": contradiction_item_object_ids,
+            "earlier_ref": f"claim://{earlier_claim['claim_id']}",
+            "later_ref": f"claim://{later_claim['claim_id']}",
+            "earlier_date": earlier_date,
+            "later_date": later_date,
+            "reason_codes": ["open_contradiction", "claim_polarity_divergence"],
+            "confidence": 0.9,
+            "evidence": item["ranked_evidence"][:4],
+            "source_paths": [
+                path
+                for path in dict.fromkeys(
+                    [
+                        *(
+                            contradiction_source_paths.get(evidence["source_slug"], "")
+                            for claim in (item["positive_claims"] + item["negative_claims"])
+                            for evidence in claim["evidence"]
+                            if evidence.get("source_slug")
+                        ),
+                        *(
+                            contradiction_object_paths.get(object_id, {}).get("canonical_path", "")
+                            for object_id in contradiction_item_object_ids
+                        ),
+                    ]
+                )
+                if path
+            ],
+        }
+        if link_type and record["link_type"] != link_type:
+            continue
+        if normalized_query and not _evolution_candidate_matches_query(record, normalized_query):
+            continue
+        candidates.append(record)
+
+    stale_summaries = list_stale_summaries(vault_dir, limit=MAX_PAGE_SIZE)
+    for item in stale_summaries:
+        traceability = get_object_traceability(vault_dir, item["object_id"])
+        earlier_path = traceability["object"]["canonical_path"]
+        earlier_date = _note_date_text(vault_dir, earlier_path)
+        earlier_key = _note_date_sort_key(earlier_date)
+        later_choice: dict[str, str] | None = None
+        later_choice_key: tuple[int, float, str] | None = None
+        for note in [*traceability["deep_dives"], *traceability["source_notes"]]:
+            if not _has_supersession_cue(vault_dir, note["path"]):
+                continue
+            candidate_date = _note_date_text(vault_dir, note["path"])
+            candidate_key = _note_date_sort_key(candidate_date)
+            if candidate_key <= earlier_key:
+                continue
+            if later_choice_key is None or candidate_key > later_choice_key:
+                later_choice = note
+                later_choice_key = candidate_key
+        if later_choice is None:
+            continue
+        later_ref = f"{later_choice.get('note_type') or 'note'}://{later_choice['path']}"
+        later_date = _note_date_text(vault_dir, later_choice["path"])
+        record = {
+            "evolution_id": _candidate_evolution_id(
+                link_type="replaces",
+                subject_kind="object",
+                subject_id=item["object_id"],
+                earlier_ref=f"object://{item['object_id']}",
+                later_ref=later_ref,
+            ),
+            "status": "candidate",
+            "link_type": "replaces",
+            "subject_kind": "object",
+            "subject_id": item["object_id"],
+            "object_ids": [item["object_id"]],
+            "earlier_ref": f"object://{item['object_id']}",
+            "later_ref": later_ref,
+            "earlier_date": earlier_date,
+            "later_date": later_date,
+            "reason_codes": ["stale_summary", "later_traceability_neighbor"],
+            "confidence": 0.8,
+            "evidence": [
+                *[
+                    {"kind": "stale_summary_reason", "code": code, "text": text}
+                    for code, text in zip(item["reason_codes"], item["reason_texts"], strict=False)
+                ],
+                {
+                    "kind": "later_traceability_neighbor",
+                    "title": later_choice["title"],
+                    "path": later_choice["path"],
+                    "date": later_date,
+                },
+            ],
+            "source_paths": [
+                path
+                for path in dict.fromkeys(
+                    [
+                        earlier_path,
+                        *[note["path"] for note in traceability["deep_dives"]],
+                        *[note["path"] for note in traceability["source_notes"]],
+                    ]
+                )
+                if path
+            ],
+        }
+        if link_type and record["link_type"] != link_type:
+            continue
+        if normalized_query and not _evolution_candidate_matches_query(record, normalized_query):
+            continue
+        candidates.append(record)
+
+    for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE):
+        traceability = get_object_traceability(vault_dir, item["object_id"])
+        earlier_path = traceability["object"]["canonical_path"]
+        earlier_date = _note_date_text(vault_dir, earlier_path)
+        earlier_key = _note_date_sort_key(earlier_date)
+        for note in [*traceability["deep_dives"], *traceability["source_notes"]]:
+            later_date = _note_date_text(vault_dir, note["path"])
+            later_key = _note_date_sort_key(later_date)
+            if later_key <= earlier_key:
+                continue
+            if _has_supersession_cue(vault_dir, note["path"]):
+                continue
+            inferred_link_type = "confirms" if _has_confirmation_cue(vault_dir, note["path"]) else "enriches"
+            record = {
+                "evolution_id": _candidate_evolution_id(
+                    link_type=inferred_link_type,
+                    subject_kind="object",
+                    subject_id=item["object_id"],
+                    earlier_ref=f"object://{item['object_id']}",
+                    later_ref=f"{note.get('note_type') or 'note'}://{note['path']}",
+                ),
+                "status": "candidate",
+                "link_type": inferred_link_type,
+                "subject_kind": "object",
+                "subject_id": item["object_id"],
+                "object_ids": [item["object_id"]],
+                "earlier_ref": f"object://{item['object_id']}",
+                "later_ref": f"{note.get('note_type') or 'note'}://{note['path']}",
+                "earlier_date": earlier_date,
+                "later_date": later_date,
+                "reason_codes": ["later_traceability_neighbor", f"lexical_{inferred_link_type}" if inferred_link_type == "confirms" else "later_context"],
+                "confidence": 0.7 if inferred_link_type == "confirms" else 0.6,
+                "evidence": [
+                    {
+                        "kind": "later_traceability_neighbor",
+                        "title": note["title"],
+                        "path": note["path"],
+                        "date": later_date,
+                    }
+                ],
+                "source_paths": [path for path in dict.fromkeys([earlier_path, note["path"]]) if path],
+            }
+            if link_type and record["link_type"] != link_type:
+                continue
+            if normalized_query and not _evolution_candidate_matches_query(record, normalized_query):
+                continue
+            candidates.append(record)
+
+    candidates.sort(
+        key=lambda item: (
+            str(item["later_date"]),
+            str(item["subject_id"]),
+            str(item["link_type"]),
+            str(item["evolution_id"]),
+        ),
+        reverse=True,
+    )
+    unique_candidates: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in candidates:
+        if item["evolution_id"] in seen_ids:
+            continue
+        seen_ids.add(item["evolution_id"])
+        unique_candidates.append(item)
+    return unique_candidates
+
+
+def list_evolution_candidates(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    link_type: str | None = None,
+    status: str = "candidate",
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    limit, offset = _validate_page_args(limit=limit, offset=offset)
+    if status != "candidate":
+        return []
+    unique_candidates = _all_evolution_candidates(vault_dir, query=query, link_type=link_type)
+    return unique_candidates[offset : offset + limit]
+
+
+def list_evolution_links(
+    vault_dir: Path | str,
+    *,
+    object_ids: list[str] | None = None,
+    query: str | None = None,
+    link_type: str | None = None,
+    status: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    normalized_query = (query or "").strip().lower()
+    latest_by_evolution_id: dict[str, dict[str, Any]] = {}
+    for action in list_evolution_review_actions(vault_dir, object_ids=object_ids):
+        evolution_id = str(action.get("evolution_id") or "")
+        if not evolution_id or evolution_id in latest_by_evolution_id:
+            continue
+        latest_by_evolution_id[evolution_id] = action
+    items = list(latest_by_evolution_id.values())
+    filtered: list[dict[str, Any]] = []
+    for item in items:
+        if status and item.get("status") != status:
+            continue
+        if link_type and item.get("link_type") != link_type:
+            continue
+        if normalized_query and not _evolution_candidate_matches_query(item, normalized_query):
+            continue
+        filtered.append(item)
+    if limit is not None:
+        limit, _ = _validate_page_args(limit=limit, offset=0)
+        return filtered[:limit]
+    return filtered
+
+
+def review_evolution_candidate(
+    vault_dir: Path | str,
+    *,
+    evolution_id: str,
+    status: str,
+    note: str = "",
+    link_type: str | None = None,
+) -> dict[str, Any]:
+    if not evolution_id:
+        raise ValueError("missing evolution_id")
+    if status not in {"accepted", "rejected"}:
+        raise ValueError("invalid evolution status")
+    if link_type and link_type not in {"replaces", "enriches", "confirms", "challenges"}:
+        raise ValueError("invalid evolution link_type")
+    candidate = next(
+        (item for item in _all_evolution_candidates(vault_dir) if item["evolution_id"] == evolution_id),
+        None,
+    )
+    if candidate is None:
+        raise ValueError("unknown evolution candidate")
+    final_link_type = link_type or str(candidate["link_type"])
+    payload = {
+        "object_ids": list(candidate.get("object_ids", [])),
+        "evolution_id": candidate["evolution_id"],
+        "status": status,
+        "note": note,
+        "link_type": final_link_type,
+        "candidate_link_type": candidate["link_type"],
+        "subject_kind": candidate["subject_kind"],
+        "subject_id": candidate["subject_id"],
+        "earlier_ref": candidate["earlier_ref"],
+        "later_ref": candidate["later_ref"],
+    }
+    record_review_action(
+        vault_dir,
+        event_type="ui_evolution_reviewed",
+        slug=str(candidate["subject_id"]),
+        payload=payload,
+    )
+    return {
+        "reviewed_count": 1,
+        "accepted_count": 1 if status == "accepted" else 0,
+        "rejected_count": 1 if status == "rejected" else 0,
+        "evolution_ids": [candidate["evolution_id"]],
+        "candidate_count": 1,
+        "status": status,
+    }
 
 
 def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int = 1) -> dict[str, Any]:
