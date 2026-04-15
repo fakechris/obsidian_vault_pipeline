@@ -707,6 +707,16 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         "openclaw_pipeline.commands.ui_server._start_ui_prewarm",
         lambda vault_dir: calls.setdefault("prewarm_vault_dir", str(vault_dir)),
     )
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server._start_action_dispatcher",
+        lambda vault_dir, *, interval_seconds: calls.setdefault(
+            "dispatcher", {"vault_dir": str(vault_dir), "interval_seconds": interval_seconds}
+        ),
+    )
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server._stop_action_dispatcher",
+        lambda dispatcher: calls.setdefault("dispatcher_stopped", dispatcher is None or True),
+    )
 
     exit_code = main(["--vault-dir", str(temp_vault), "--host", "127.0.0.1", "--port", "9999"])
     payload = json.loads(capsys.readouterr().out)
@@ -718,8 +728,67 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         "host": "127.0.0.1",
         "port": 9999,
         "prewarm_vault_dir": str(temp_vault),
+        "dispatcher_stopped": True,
         "closed": True,
     }
+
+
+def test_ui_server_main_can_start_action_dispatcher_when_enabled(temp_vault, capsys, monkeypatch):
+    from openclaw_pipeline.commands.ui_server import main
+
+    calls = {}
+
+    class FakeServer:
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            calls["closed"] = True
+
+    def fake_create_server(vault_dir, *, host, port):
+        calls["vault_dir"] = str(vault_dir)
+        calls["host"] = host
+        calls["port"] = port
+        return FakeServer()
+
+    monkeypatch.setattr("openclaw_pipeline.commands.ui_server.create_server", fake_create_server)
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server.build_objects_index_payload",
+        lambda vault_dir, *, limit, offset: {"items": []},
+    )
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server.ensure_signal_ledger_synced",
+        lambda vault_dir: {"signal_count": 0, "type_counts": {}},
+    )
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server._start_ui_prewarm",
+        lambda vault_dir: None,
+    )
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server._start_action_dispatcher",
+        lambda vault_dir, *, interval_seconds: {"worker": True, "interval_seconds": interval_seconds},
+    )
+    monkeypatch.setattr(
+        "openclaw_pipeline.commands.ui_server._stop_action_dispatcher",
+        lambda dispatcher: calls.setdefault("dispatcher_stopped", dispatcher["worker"]),
+    )
+
+    exit_code = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9999",
+            "--with-action-worker",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload == {"host": "127.0.0.1", "port": 9999, "vault_dir": str(temp_vault)}
+    assert calls["dispatcher_stopped"] is True
 
 
 def test_ui_server_main_exits_nonzero_when_preflight_fails(temp_vault, capsys, monkeypatch):

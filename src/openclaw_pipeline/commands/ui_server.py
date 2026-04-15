@@ -6,6 +6,7 @@ import mimetypes
 import sqlite3
 import re
 import sys
+import threading
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1547,6 +1548,7 @@ def _render_actions_page(payload: dict) -> str:
         "Action Queue",
         (
             "<h1>Action Queue</h1>"
+            "<p class='muted'>Asynchronous queue consumption is opt-in. Start the UI with <code>--with-action-worker</code> to let a background dispatcher run queued actions outside the request thread.</p>"
             "<form method='post' action='/actions/run-next' class='link-row'>"
             "<button type='submit'>Run next queued action</button>"
             "</form>"
@@ -2163,6 +2165,46 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
     return ThreadingHTTPServer((host, port), Handler)
 
 
+def _action_dispatcher_loop(vault_dir: Path | str, *, stop_event: threading.Event, interval_seconds: float) -> None:
+    while not stop_event.is_set():
+        try:
+            run_next_action_queue_item(vault_dir)
+        except Exception:
+            pass
+        stop_event.wait(interval_seconds)
+
+
+def _start_action_dispatcher(
+    vault_dir: Path | str,
+    *,
+    interval_seconds: float = 2.0,
+) -> dict[str, Any]:
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_action_dispatcher_loop,
+        kwargs={
+            "vault_dir": resolve_vault_dir(vault_dir),
+            "stop_event": stop_event,
+            "interval_seconds": interval_seconds,
+        },
+        daemon=True,
+        name="ovp-action-dispatcher",
+    )
+    thread.start()
+    return {"thread": thread, "stop_event": stop_event, "interval_seconds": interval_seconds}
+
+
+def _stop_action_dispatcher(dispatcher: dict[str, Any] | None) -> None:
+    if not dispatcher:
+        return
+    stop_event = dispatcher.get("stop_event")
+    thread = dispatcher.get("thread")
+    if isinstance(stop_event, threading.Event):
+        stop_event.set()
+    if isinstance(thread, threading.Thread):
+        thread.join(timeout=5)
+
+
 def _prewarm_ui_caches(vault_dir: Path | str) -> None:
     try:
         build_evolution_browser_payload(vault_dir, status="all")
@@ -2179,16 +2221,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--with-action-worker", action="store_true", help="Run a background action dispatcher in this UI process")
+    parser.add_argument("--action-worker-interval", type=float, default=2.0, help="Polling interval for the optional background action dispatcher")
     args = parser.parse_args(argv)
 
     resolved_vault = resolve_vault_dir(args.vault_dir)
     server = create_server(resolved_vault, host=args.host, port=args.port)
+    dispatcher = None
     try:
         build_objects_index_payload(resolved_vault, limit=1, offset=0)
         ensure_signal_ledger_synced(resolved_vault)
         _start_ui_prewarm(resolved_vault)
+        if args.with_action_worker:
+            dispatcher = _start_action_dispatcher(
+                resolved_vault,
+                interval_seconds=args.action_worker_interval,
+            )
     except Exception as exc:
         print(f"ui server preflight failed: {exc}", file=sys.stderr)
+        _stop_action_dispatcher(dispatcher)
         server.server_close()
         return 1
 
@@ -2198,6 +2249,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:  # pragma: no cover
         pass
     finally:
+        _stop_action_dispatcher(dispatcher)
         server.server_close()
     return 0
 
