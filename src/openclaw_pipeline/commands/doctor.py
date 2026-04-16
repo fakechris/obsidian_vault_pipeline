@@ -45,6 +45,12 @@ _RESEARCH_SHELL_ROUTES = [
     "/summaries",
 ]
 
+_EMBEDDED_RESEARCH_CAPABILITIES = [
+    {"screen": "dashboard", "capability": "research_overview"},
+    {"screen": "object/page", "capability": "research_review_affordances"},
+    {"screen": "overview/topic", "capability": "research_review_affordances"},
+]
+
 
 def _repo_root() -> Path:
     current = Path(__file__).resolve()
@@ -223,9 +229,19 @@ def _shell_payload(pack_name: str) -> dict[str, object]:
         }
         for path in _RESEARCH_SHELL_ROUTES
     ]
+    embedded_research_capabilities = [
+        {
+            "screen": item["screen"],
+            "capability": item["capability"],
+            "status": research_status,
+            "provider_pack": research_provider,
+        }
+        for item in _EMBEDDED_RESEARCH_CAPABILITIES
+    ]
     return {
         "shared_routes": shared_routes,
         "research_routes": research_routes,
+        "embedded_research_capabilities": embedded_research_capabilities,
     }
 
 
@@ -309,6 +325,10 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "research_shell_behavior": (
                 "Research-specific routes stay hidden unless the current pack resolves through "
                 "the research-tech compatibility chain."
+            ),
+            "embedded_research_behavior": (
+                "Object/topic/dashboard screens only expose research review affordances when the "
+                "current pack resolves through the research-tech compatibility chain."
             ),
         },
     }

@@ -56,6 +56,13 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
         item["path"] == "/clusters" and item["status"] == "declared" and item["provider_pack"] == "research-tech"
         for item in payload["contracts"]["shell"]["research_routes"]
     )
+    assert any(
+        item["screen"] == "object/page"
+        and item["capability"] == "research_review_affordances"
+        and item["status"] == "declared"
+        and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["embedded_research_capabilities"]
+    )
 
 
 def test_doctor_command_reports_compatibility_pack_metadata(capsys):
@@ -96,7 +103,15 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
         item["path"] == "/clusters" and item["status"] == "inherited" and item["provider_pack"] == "research-tech"
         for item in payload["contracts"]["shell"]["research_routes"]
     )
+    assert any(
+        item["screen"] == "overview/topic"
+        and item["capability"] == "research_review_affordances"
+        and item["status"] == "inherited"
+        and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["embedded_research_capabilities"]
+    )
     assert "research-specific routes stay hidden" in payload["contracts"]["contract_notes"]["research_shell_behavior"].lower()
+    assert "object/topic/dashboard" in payload["contracts"]["contract_notes"]["embedded_research_behavior"].lower()
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):
