@@ -10,9 +10,18 @@ from ... import truth_api as core
 from ...runtime import resolve_vault_dir
 
 
+def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
+    normalized_pack = str(pack_name or "").strip()
+    if not normalized_pack:
+        return path
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}pack={quote(normalized_pack, safe='')}"
+
+
 def list_production_chains(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -65,7 +74,7 @@ def list_production_chains(
     items: list[dict[str, Any]] = []
     for candidate in candidates:
         relative_path = candidate["path"]
-        chain = core.get_note_traceability(vault_dir, note_path=relative_path)
+        chain = core.get_note_traceability(vault_dir, note_path=relative_path, pack_name=pack_name)
         if normalized_query:
             haystacks = [
                 str(candidate["title"]).lower(),
@@ -103,7 +112,12 @@ def build_signal_entries(
     timestamp = core._utc_now_text()
     signals: list[dict[str, Any]] = []
 
-    for item in core.list_contradictions(resolved_vault, status="open", limit=core.MAX_PAGE_SIZE):
+    for item in core.list_contradictions(
+        resolved_vault,
+        pack_name=normalized_pack,
+        status="open",
+        limit=core.MAX_PAGE_SIZE,
+    ):
         object_ids = list(
             dict.fromkeys(
                 claim_id.split("::", 1)[0]
@@ -122,21 +136,36 @@ def build_signal_entries(
                     f"{len(item['ranked_evidence'])} ranked evidence rows"
                 ),
                 "explanation": core.SIGNAL_TYPE_EXPLANATIONS["contradiction_open"],
-                "source_path": "/contradictions",
+                "source_path": _scoped_path("/contradictions", pack_name=normalized_pack),
                 "source_label": "Contradictions",
                 "object_ids": object_ids,
                 "note_paths": [],
                 "downstream_effects": [
-                    {"label": "Review contradiction", "path": f"/contradictions?q={quote(item['subject_key'], safe='')}"},
+                    {
+                        "label": "Review contradiction",
+                        "path": _scoped_path(
+                            f"/contradictions?q={quote(item['subject_key'], safe='')}",
+                            pack_name=normalized_pack,
+                        ),
+                    },
                     *[
-                        {"label": f"Object: {claim['object_title']}", "path": f"/object?id={claim['object_id']}"}
+                        {
+                            "label": f"Object: {claim['object_title']}",
+                            "path": _scoped_path(
+                                f"/object?id={claim['object_id']}",
+                                pack_name=normalized_pack,
+                            ),
+                        }
                         for claim in item["positive_claims"][:1] + item["negative_claims"][:1]
                     ],
                 ],
                 "recommended_action": core._recommended_action(
                     kind="review_contradiction",
                     label="Review contradiction",
-                    path=f"/contradictions?q={quote(item['subject_key'], safe='')}",
+                    path=_scoped_path(
+                        f"/contradictions?q={quote(item['subject_key'], safe='')}",
+                        pack_name=normalized_pack,
+                    ),
                     executable=True,
                 ),
                 "payload": {
@@ -147,7 +176,11 @@ def build_signal_entries(
             }
         )
 
-    for item in core.list_stale_summaries(resolved_vault, limit=core.MAX_PAGE_SIZE):
+    for item in core.list_stale_summaries(
+        resolved_vault,
+        pack_name=normalized_pack,
+        limit=core.MAX_PAGE_SIZE,
+    ):
         signals.append(
             {
                 "signal_id": core._signal_id("stale_summary", item["object_id"]),
@@ -157,18 +190,30 @@ def build_signal_entries(
                 "title": item["title"],
                 "detail": ", ".join(item["reason_texts"]),
                 "explanation": core.SIGNAL_TYPE_EXPLANATIONS["stale_summary"],
-                "source_path": f"/summaries?q={quote(item['object_id'], safe='')}",
+                "source_path": _scoped_path(
+                    f"/summaries?q={quote(item['object_id'], safe='')}",
+                    pack_name=normalized_pack,
+                ),
                 "source_label": "Stale Summaries",
                 "object_ids": [item["object_id"]],
                 "note_paths": [],
                 "downstream_effects": [
                     {"label": "Open object", "path": item["object_path"]},
-                    {"label": "Review stale summary", "path": f"/summaries?q={quote(item['object_id'], safe='')}"},
+                    {
+                        "label": "Review stale summary",
+                        "path": _scoped_path(
+                            f"/summaries?q={quote(item['object_id'], safe='')}",
+                            pack_name=normalized_pack,
+                        ),
+                    },
                 ],
                 "recommended_action": core._recommended_action(
                     kind="rebuild_summary",
                     label="Rebuild summary",
-                    path=f"/summaries?q={quote(item['object_id'], safe='')}",
+                    path=_scoped_path(
+                        f"/summaries?q={quote(item['object_id'], safe='')}",
+                        pack_name=normalized_pack,
+                    ),
                     executable=True,
                 ),
                 "payload": {
@@ -200,12 +245,21 @@ def build_signal_entries(
                 "note_paths": [item["note_path"]],
                 "downstream_effects": [
                     {"label": "Open note", "path": f"/note?path={quote(item['note_path'], safe='')}"},
-                    {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
+                    {
+                        "label": "Inspect production chain",
+                        "path": _scoped_path(
+                            f"/production?q={quote(item['title'], safe='')}",
+                            pack_name=normalized_pack,
+                        ),
+                    },
                 ],
                 "recommended_action": core._recommended_action(
                     kind="inspect_production_gap",
                     label="Inspect production gap",
-                    path=f"/production?q={quote(item['title'], safe='')}",
+                    path=_scoped_path(
+                        f"/production?q={quote(item['title'], safe='')}",
+                        pack_name=normalized_pack,
+                    ),
                     executable=False,
                 ),
                 "payload": {
@@ -234,7 +288,13 @@ def build_signal_entries(
                     "note_paths": [item["path"]],
                     "downstream_effects": [
                         {"label": "Open source note", "path": f"/note?path={quote(item['path'], safe='')}"},
-                        {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
+                        {
+                            "label": "Inspect production chain",
+                            "path": _scoped_path(
+                                f"/production?q={quote(item['title'], safe='')}",
+                                pack_name=normalized_pack,
+                            ),
+                        },
                     ],
                     "recommended_action": core._recommended_action(
                         kind="deep_dive_workflow",
@@ -264,7 +324,13 @@ def build_signal_entries(
                     "note_paths": [item["path"]],
                     "downstream_effects": [
                         {"label": "Open deep dive", "path": f"/note?path={quote(item['path'], safe='')}"},
-                        {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
+                        {
+                            "label": "Inspect production chain",
+                            "path": _scoped_path(
+                                f"/production?q={quote(item['title'], safe='')}",
+                                pack_name=normalized_pack,
+                            ),
+                        },
                     ],
                     "recommended_action": core._recommended_action(
                         kind="object_extraction_workflow",
@@ -370,11 +436,12 @@ def build_briefing_snapshot(
 ) -> dict[str, Any]:
     limit, _ = core._validate_page_args(limit=limit, offset=0)
     resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_pack = str(pack_name or core.DEFAULT_WORKFLOW_PACK_NAME)
     recent_signals = core._list_signals_from_ledger(
         resolved_vault,
         ledger_path=core._signal_ledger_path(
             resolved_vault,
-            pack_name=str(pack_name or core.DEFAULT_WORKFLOW_PACK_NAME),
+            pack_name=normalized_pack,
         ),
         limit=limit,
     )
@@ -414,12 +481,16 @@ def build_briefing_snapshot(
             topic_counts[object_id] += 1
     active_topic_ids = [object_id for object_id, _ in topic_counts.most_common(limit)]
 
-    object_rows = core._batch_object_rows(resolved_vault, [*changed_object_ids, *active_topic_ids])
+    object_rows = core._batch_object_rows(
+        resolved_vault,
+        [*changed_object_ids, *active_topic_ids],
+        pack_name=normalized_pack,
+    )
     changed_objects = [
         {
             "object_id": object_id,
             "title": object_rows.get(object_id, {}).get("title") or object_id,
-            "path": f"/object?id={object_id}",
+            "path": _scoped_path(f"/object?id={object_id}", pack_name=normalized_pack),
         }
         for object_id in changed_object_ids[:limit]
     ]
@@ -428,7 +499,7 @@ def build_briefing_snapshot(
             "object_id": object_id,
             "title": object_rows.get(object_id, {}).get("title") or object_id,
             "signal_count": count,
-            "path": f"/topic?id={object_id}",
+            "path": _scoped_path(f"/topic?id={object_id}", pack_name=normalized_pack),
         }
         for object_id, count in topic_counts.most_common(limit)
     ]
@@ -441,7 +512,7 @@ def build_briefing_snapshot(
             if object_id
         )
     )
-    evolution_rows = core._batch_object_rows(vault_dir, evolution_object_ids)
+    evolution_rows = core._batch_object_rows(vault_dir, evolution_object_ids, pack_name=normalized_pack)
     merged_insights: dict[tuple[str, str, str], dict[str, Any]] = {}
     for item in evolution_candidates:
         primary_object_id = next((object_id for object_id in item.get("object_ids", []) if object_id), "")
@@ -521,7 +592,7 @@ def build_briefing_snapshot(
         if len(priority_items) >= limit:
             break
     first_useful_sign = insights[0] if insights else (priority_items[0] if priority_items else None)
-    action_items = core.list_action_queue(vault_dir, limit=core.MAX_PAGE_SIZE)
+    action_items = core.list_action_queue(vault_dir, pack_name=normalized_pack, limit=core.MAX_PAGE_SIZE)
     queue_summary = {
         "queued_count": sum(1 for item in action_items if item.get("status") == "queued"),
         "safe_queued_count": sum(

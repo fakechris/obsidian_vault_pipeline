@@ -1650,16 +1650,20 @@ def _write_action_queue_rows_unlocked(vault_dir: Path | str, actions: list[dict[
 def list_action_queue(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     status: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     normalized_query = (query or "").strip().lower()
+    normalized_pack = str(pack_name or "").strip()
     items: list[dict[str, Any]] = []
     with action_queue_write_lock(vault_dir):
         for item in _read_action_queue_rows_unlocked(vault_dir):
             item = _normalize_action_queue_item(item)
+            if normalized_pack and str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) != normalized_pack:
+                continue
             if status and item.get("status") != status:
                 continue
             if normalized_query:
@@ -2334,9 +2338,14 @@ def _deep_dive_objects_for_path(vault_dir: Path | str, note_path: str) -> list[d
     return list(_deep_dive_object_map(vault_dir).get(normalized_target, []))
 
 
-def _atlas_pages_for_object_ids(vault_dir: Path | str, object_ids: list[str]) -> list[dict[str, str]]:
+def _atlas_pages_for_object_ids(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, str]]:
     atlas_pages: dict[str, dict[str, str]] = {}
-    for provenance in get_object_provenance_map(vault_dir, object_ids).values():
+    for provenance in get_object_provenance_map(vault_dir, object_ids, pack_name=pack_name).values():
         for item in provenance["mocs"]:
             atlas_pages.setdefault(item["slug"], item)
     return list(atlas_pages.values())
@@ -2529,7 +2538,12 @@ def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> li
     return items
 
 
-def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+def get_note_traceability(
+    vault_dir: Path | str,
+    *,
+    note_path: str,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     note = _page_row_by_path(vault_dir, note_path)
     provenance = get_note_provenance(vault_dir, note_path=note_path)
     deep_dives: list[dict[str, str]] = []
@@ -2542,7 +2556,7 @@ def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str,
         if provenance["original_source_note"]:
             source_notes = [provenance["original_source_note"]]
     elif note["note_type"] == "evergreen":
-        object_traceability = get_object_traceability(vault_dir, note["slug"])
+        object_traceability = get_object_traceability(vault_dir, note["slug"], pack_name=pack_name)
         deep_dives = object_traceability["deep_dives"]
         source_notes = object_traceability["source_notes"]
         objects = [
@@ -2564,7 +2578,11 @@ def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str,
                 object_map.setdefault(item["object_id"], item)
         objects = list(object_map.values())
     if not atlas_pages:
-        atlas_pages = _atlas_pages_for_object_ids(vault_dir, [item["object_id"] for item in objects])
+        atlas_pages = _atlas_pages_for_object_ids(
+            vault_dir,
+            [item["object_id"] for item in objects],
+            pack_name=pack_name,
+        )
     return {
         "note": note,
         "source_notes": source_notes,
@@ -2613,6 +2631,7 @@ def get_object_traceability(
 def _research_tech_list_production_chains(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -2620,6 +2639,7 @@ def _research_tech_list_production_chains(
 
     return surfaces.list_production_chains(
         resolve_vault_dir(vault_dir),
+        pack_name=pack_name,
         query=query,
         limit=limit,
     )

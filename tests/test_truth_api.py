@@ -1688,6 +1688,47 @@ date: 2026-04-13
     assert [item["slug"] for item in traceability["atlas_pages"]] == ["atlas-index"]
 
 
+def test_truth_api_note_traceability_forwards_pack_to_object_traceability(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api
+
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    calls: list[str | None] = []
+
+    monkeypatch.setattr(
+        truth_api,
+        "get_object_traceability",
+        lambda vault_dir, object_id, *, pack_name=None: calls.append(pack_name)
+        or {
+            "object": {"object_id": object_id, "title": "Alpha"},
+            "source_notes": [],
+            "deep_dives": [],
+            "atlas_pages": [],
+        },
+    )
+
+    truth_api.get_note_traceability(
+        temp_vault,
+        note_path="10-Knowledge/Evergreen/Alpha.md",
+        pack_name="default-knowledge",
+    )
+
+    assert calls == ["default-knowledge"]
+
+
 def test_truth_api_limits_atlas_memberships_by_page_not_join_rows(temp_vault):
     from openclaw_pipeline.truth_api import list_atlas_memberships
 
@@ -1869,12 +1910,13 @@ Processed source note with no downstream chain.
     assert any(item["signal_type"] == "stale_summary" for item in items)
     assert any(item["signal_type"] == "production_gap" for item in items)
     contradiction = next(item for item in items if item["signal_type"] == "contradiction_open")
-    assert contradiction["source_path"] == "/contradictions"
+    assert contradiction["source_path"].startswith("/contradictions")
+    assert contradiction["source_path"].endswith("pack=research-tech")
     assert contradiction["downstream_effects"]
     assert contradiction["recommended_action"]["executable"] is True
     stale = next(item for item in items if item["signal_type"] == "stale_summary")
     assert stale["object_ids"] == ["thin-note"]
-    assert stale["source_path"] == "/summaries?q=thin-note"
+    assert stale["source_path"] == "/summaries?q=thin-note&pack=research-tech"
     assert stale["recommended_action"]["executable"] is True
 
 
@@ -2816,6 +2858,49 @@ def test_truth_api_refresh_truth_after_action_respects_independent_flags(temp_va
     assert calls == ["sync:default-knowledge"]
 
 
+def test_truth_api_list_action_queue_can_filter_by_pack(temp_vault):
+    import openclaw_pipeline.truth_api as truth_api
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "action_id": "action::research",
+                        "action_kind": "deep_dive_workflow",
+                        "pack": "research-tech",
+                        "title": "Research action",
+                        "target_ref": "research",
+                        "status": "queued",
+                        "created_at": "2026-04-16T00:00:00Z",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "action_id": "action::default",
+                        "action_kind": "deep_dive_workflow",
+                        "pack": "default-knowledge",
+                        "title": "Default action",
+                        "target_ref": "default",
+                        "status": "queued",
+                        "created_at": "2026-04-16T00:00:01Z",
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    items = truth_api.list_action_queue(temp_vault, pack_name="default-knowledge")
+
+    assert [item["action_id"] for item in items] == ["action::default"]
+
+
 def test_action_id_includes_pack_to_avoid_cross_pack_collisions():
     from openclaw_pipeline.truth_api import _action_id
 
@@ -2879,17 +2964,27 @@ def test_truth_api_list_signals_dispatches_via_observation_surface_registry(temp
     assert calls == [("signals", "default-knowledge")]
 
 
-def test_research_tech_build_signal_entries_uses_pack_aware_production_chains(temp_vault, monkeypatch):
+def test_research_tech_build_signal_entries_uses_pack_aware_core_surfaces(temp_vault, monkeypatch):
     import openclaw_pipeline.truth_api as truth_api_source
 
-    calls: list[str | None] = []
+    contradiction_calls: list[str | None] = []
+    stale_summary_calls: list[str | None] = []
+    production_calls: list[str | None] = []
 
-    monkeypatch.setattr(truth_api_source, "list_contradictions", lambda *args, **kwargs: [])
-    monkeypatch.setattr(truth_api_source, "list_stale_summaries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        truth_api_source,
+        "list_contradictions",
+        lambda vault_dir, *, pack_name=None, **kwargs: contradiction_calls.append(pack_name) or [],
+    )
+    monkeypatch.setattr(
+        truth_api_source,
+        "list_stale_summaries",
+        lambda vault_dir, *, pack_name=None, **kwargs: stale_summary_calls.append(pack_name) or [],
+    )
     monkeypatch.setattr(
         truth_api_source,
         "list_production_chains",
-        lambda vault_dir, *, pack_name=None, **kwargs: calls.append(pack_name) or [],
+        lambda vault_dir, *, pack_name=None, **kwargs: production_calls.append(pack_name) or [],
     )
 
     items = truth_api_source._research_tech_build_signal_entries(
@@ -2898,7 +2993,9 @@ def test_research_tech_build_signal_entries_uses_pack_aware_production_chains(te
     )
 
     assert items == []
-    assert calls == ["default-knowledge"]
+    assert contradiction_calls == ["default-knowledge"]
+    assert stale_summary_calls == ["default-knowledge"]
+    assert production_calls == ["default-knowledge"]
 
 
 def test_research_tech_build_signal_entries_delegates_to_pack_surface_module(temp_vault, monkeypatch):
@@ -2997,23 +3094,24 @@ def test_research_tech_list_production_chains_delegates_to_pack_surface_module(t
     import openclaw_pipeline.truth_api as truth_api_source
     from openclaw_pipeline.packs.research_tech import surfaces
 
-    calls: list[tuple[Path, str | None, int]] = []
+    calls: list[tuple[Path, str | None, str | None, int]] = []
 
     monkeypatch.setattr(
         surfaces,
         "list_production_chains",
-        lambda vault_dir, *, query=None, limit=100: calls.append((vault_dir, query, limit))
+        lambda vault_dir, *, pack_name=None, query=None, limit=100: calls.append((vault_dir, pack_name, query, limit))
         or [{"title": "delegated chain"}],
     )
 
     items = truth_api_source._research_tech_list_production_chains(
         temp_vault,
+        pack_name="default-knowledge",
         query="chain",
         limit=5,
     )
 
     assert items == [{"title": "delegated chain"}]
-    assert calls == [(temp_vault, "chain", 5)]
+    assert calls == [(temp_vault, "default-knowledge", "chain", 5)]
 
 
 def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, monkeypatch):
@@ -3085,6 +3183,7 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
     import openclaw_pipeline.truth_api as truth_api
 
     calls: list[tuple[str, ...]] = []
+    action_queue_calls: list[str | None] = []
     monkeypatch.setattr(
         truth_api,
         "_list_signals_from_ledger",
@@ -3112,9 +3211,14 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
         ],
     )
     monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24: [])
-    monkeypatch.setattr(truth_api, "list_action_queue", lambda vault_dir, limit=100: [])
+    monkeypatch.setattr(
+        truth_api,
+        "list_action_queue",
+        lambda vault_dir, limit=100, pack_name=None: action_queue_calls.append(pack_name) or [],
+    )
 
-    def fake_batch(vault_dir, object_ids):
+    def fake_batch(vault_dir, object_ids, pack_name=None):
+        assert pack_name == "default-knowledge"
         calls.append(tuple(object_ids))
         return {
             object_id: {"title": f"title:{object_id}"}
@@ -3123,24 +3227,29 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
 
     monkeypatch.setattr(truth_api, "_batch_object_rows", fake_batch)
 
-    payload = truth_api._research_tech_build_briefing_snapshot(temp_vault, limit=8)
+    payload = truth_api._research_tech_build_briefing_snapshot(
+        temp_vault,
+        pack_name="default-knowledge",
+        limit=8,
+    )
 
     assert payload["active_topics"] == [
         {
             "object_id": "source-note",
             "title": "title:source-note",
             "signal_count": 1,
-            "path": "/topic?id=source-note",
+            "path": "/topic?id=source-note&pack=default-knowledge",
         },
         {
             "object_id": "target-note",
             "title": "title:target-note",
             "signal_count": 1,
-            "path": "/topic?id=target-note",
+            "path": "/topic?id=target-note&pack=default-knowledge",
         },
     ]
     non_empty_calls = [set(call) for call in calls if call]
     assert non_empty_calls == [{"source-note", "target-note"}]
+    assert action_queue_calls == ["default-knowledge"]
 
 
 def test_truth_api_record_review_action_writes_jsonl_without_db_lock(temp_vault, monkeypatch):

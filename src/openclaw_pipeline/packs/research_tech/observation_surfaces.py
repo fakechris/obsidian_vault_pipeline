@@ -66,5 +66,10 @@ def build_production_chains(
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    _ = pack_name, spec
-    return surfaces.list_production_chains(vault_dir, query=query, limit=limit)
+    _ = spec
+    return surfaces.list_production_chains(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=limit,
+    )
