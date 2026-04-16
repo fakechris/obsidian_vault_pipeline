@@ -1273,6 +1273,7 @@ def _render_derivations_page(payload: dict) -> str:
 
 def _render_production_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     limit_note = (
         f" Showing the most recent {payload['limit']} production-chain entries in this browser window."
         if payload.get("is_limited")
@@ -1301,16 +1302,25 @@ def _render_production_browser_page(payload: dict) -> str:
     ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
     return _layout(
         "Production Browser",
-        (
-            "<h1>Production Browser</h1>"
-            "<form method='get' action='/production'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter source notes, deep dives, objects, or atlas' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.{escape(limit_note)}</p>"
-            "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>"
-            f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Production Browser</h1>",
+                "<form method='get' action='/production'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter source notes, deep dives, objects, or atlas' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>",
+                f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
     )
 
@@ -1598,6 +1608,8 @@ def _render_evolution_browser_page(payload: dict) -> str:
 def _render_signals_page(payload: dict) -> str:
     query = payload.get("query", "")
     selected_type = payload.get("signal_type", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = "/signals" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     options = ["", *sorted(payload["signal_type_explanations"].keys())]
     option_html = "".join(
         f"<option value='{escape(option)}' {'selected' if option == selected_type else ''}>"
@@ -1628,7 +1640,7 @@ def _render_signals_page(payload: dict) -> str:
         + (
             "<form method='post' action='/actions/enqueue' class='link-row'>"
             + f"<input type='hidden' name='signal_id' value='{escape(item['signal_id'])}' />"
-            + "<input type='hidden' name='next' value='/signals' />"
+            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Queue action</button>"
             + "</form>"
             if item.get("recommended_action") and not item["recommended_action"].get("queue_status")
@@ -1653,21 +1665,32 @@ def _render_signals_page(payload: dict) -> str:
     )
     return _layout(
         "Active Signals",
-        (
-            "<h1>Active Signals</h1>"
-            "<form method='get' action='/signals' class='link-row'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search signals' />"
-            f"<select name='type'>{option_html}</select>"
-            "<button type='submit'>Filter</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} active signals.</p>"
-            f"<section class='card'><h2>Signal Types</h2><ul class='list-tight'>{explanations}</ul></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Active Signals</h1>",
+                "<form method='get' action='/signals' class='link-row'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Search signals' />",
+                f"<select name='type'>{option_html}</select>",
+                "<button type='submit'>Filter</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} active signals.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                "</p>",
+                f"<section class='card'><h2>Signal Types</h2><ul class='list-tight'>{explanations}</ul></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
     )
 
 
 def _render_briefing_page(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    next_path = "/briefing" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     first_useful_sign = payload.get("first_useful_sign")
     first_useful_sign_html = (
         "<li>"
@@ -1720,7 +1743,7 @@ def _render_briefing_page(payload: dict) -> str:
         + (
             "<form method='post' action='/actions/enqueue' class='link-row'>"
             + f"<input type='hidden' name='signal_id' value='{escape(str(item['signal_id']))}' />"
-            + "<input type='hidden' name='next' value='/briefing' />"
+            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Queue action</button>"
             + "</form>"
             if item.get("signal_id") and item.get("recommended_action") and not item["recommended_action"].get("queue_status")
@@ -1756,28 +1779,32 @@ def _render_briefing_page(payload: dict) -> str:
     ) or "<li class='muted'>No failed actions.</li>"
     return _layout(
         "Working Memory Snapshot",
-        (
-            "<h1>Working Memory Snapshot</h1>"
-            f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.</p>"
-            f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>"
-            f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>"
-            f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>"
-            "<section class='card'><h2>Execution Surface</h2>"
-            f"<p class='muted'>{queue_summary.get('queued_count', 0)} queued, "
-            f"{queue_summary.get('safe_queued_count', 0)} safe to auto-run, "
-            f"{queue_summary.get('running_count', 0)} running, "
-            f"{queue_summary.get('failed_count', 0)} failed.</p>"
-            "<form method='post' action='/actions/run-batch' class='link-row'>"
-            "<input type='hidden' name='limit' value='5' />"
-            "<input type='hidden' name='safe_only' value='1' />"
-            "<input type='hidden' name='next' value='/briefing' />"
-            "<button type='submit'>Run 5 safe queued actions</button>"
-            "</form>"
-            f"<ul class='list-tight'>{failure_buckets}</ul></section>"
-            f"<section class='card'><h2>Recent Signals</h2><ul class='list-tight'>{recent_signals}</ul></section>"
-            f"<section class='card'><h2>Unresolved Issues</h2><ul class='list-tight'>{unresolved}</ul></section>"
-            f"<section class='card'><h2>Changed Objects</h2><ul class='list-tight'>{changed_objects}</ul></section>"
-            f"<section class='card'><h2>Active Topics</h2><ul class='list-tight'>{active_topics}</ul></section>"
+        "".join(
+            [
+                "<h1>Working Memory Snapshot</h1>",
+                f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                "</p>",
+                f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
+                f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>",
+                f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>",
+                "<section class='card'><h2>Execution Surface</h2>",
+                f"<p class='muted'>{queue_summary.get('queued_count', 0)} queued, ",
+                f"{queue_summary.get('safe_queued_count', 0)} safe to auto-run, ",
+                f"{queue_summary.get('running_count', 0)} running, ",
+                f"{queue_summary.get('failed_count', 0)} failed.</p>",
+                "<form method='post' action='/actions/run-batch' class='link-row'>",
+                "<input type='hidden' name='limit' value='5' />",
+                "<input type='hidden' name='safe_only' value='1' />",
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Run 5 safe queued actions</button>",
+                "</form>",
+                f"<ul class='list-tight'>{failure_buckets}</ul></section>",
+                f"<section class='card'><h2>Recent Signals</h2><ul class='list-tight'>{recent_signals}</ul></section>",
+                f"<section class='card'><h2>Unresolved Issues</h2><ul class='list-tight'>{unresolved}</ul></section>",
+                f"<section class='card'><h2>Changed Objects</h2><ul class='list-tight'>{changed_objects}</ul></section>",
+                f"<section class='card'><h2>Active Topics</h2><ul class='list-tight'>{active_topics}</ul></section>",
+            ]
         ),
     )
 
@@ -2185,20 +2212,36 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     self._write_html(_render_search_page(payload))
                     return
                 if path == "/api/briefing":
-                    self._write_json(build_briefing_payload(resolved_vault))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_briefing_payload(resolved_vault, pack_name=pack_name))
                     return
                 if path == "/briefing":
-                    self._write_html(_render_briefing_page(build_briefing_payload(resolved_vault)))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_html(_render_briefing_page(build_briefing_payload(resolved_vault, pack_name=pack_name)))
                     return
                 if path == "/api/signals":
                     q = query.get("q", [""])[0]
                     signal_type = query.get("type", [""])[0] or None
-                    self._write_json(build_signal_browser_payload(resolved_vault, signal_type=signal_type, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(
+                        build_signal_browser_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            signal_type=signal_type,
+                            query=q,
+                        )
+                    )
                     return
                 if path == "/signals":
                     q = query.get("q", [""])[0]
                     signal_type = query.get("type", [""])[0] or None
-                    payload = build_signal_browser_payload(resolved_vault, signal_type=signal_type, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_signal_browser_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        signal_type=signal_type,
+                        query=q,
+                    )
                     self._write_html(_render_signals_page(payload))
                     return
                 if path == "/api/evolution":
@@ -2261,11 +2304,13 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/api/production":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_production_browser_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_production_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/production":
                     q = query.get("q", [""])[0]
-                    payload = build_production_browser_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_production_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_production_browser_page(payload))
                     return
                 if path == "/api/clusters":

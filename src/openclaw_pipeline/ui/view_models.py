@@ -647,10 +647,11 @@ def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> d
 def _build_production_weak_points(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
-    return list_production_gaps(vault_dir, query=query, limit=limit)
+    return list_production_gaps(vault_dir, pack_name=pack_name, query=query, limit=limit)
 
 
 def _build_evolution_section(
@@ -739,12 +740,15 @@ def _build_evolution_section(
 def build_signal_browser_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     signal_type: str | None = None,
     query: str | None = None,
 ) -> dict[str, Any]:
-    items = list_signals(vault_dir, signal_type=signal_type, query=query)
+    requested_pack = pack_name or ""
+    items = list_signals(vault_dir, pack_name=pack_name, signal_type=signal_type, query=query)
     return {
         "screen": "signals/browser",
+        "requested_pack": requested_pack,
         "items": items,
         "count": len(items),
         "query": query or "",
@@ -780,10 +784,12 @@ def build_action_queue_payload(
     }
 
 
-def build_briefing_payload(vault_dir: Path | str) -> dict[str, Any]:
+def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = None) -> dict[str, Any]:
+    requested_pack = pack_name or ""
     return {
         "screen": "briefing/intelligence",
-        **get_briefing_snapshot(vault_dir),
+        "requested_pack": requested_pack,
+        **get_briefing_snapshot(vault_dir, pack_name=pack_name),
     }
 
 
@@ -1559,13 +1565,25 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
     }
 
 
-def build_production_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
-    items = list_production_chains(vault_dir, query=query, limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT)
+def build_production_browser_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    items = list_production_chains(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+    )
     source_items = [item for item in items if item["stage_label"] == "source_note"]
     deep_dive_items = [item for item in items if item["stage_label"] == "deep_dive"]
-    weak_points = _build_production_weak_points(vault_dir, query=query)
+    weak_points = _build_production_weak_points(vault_dir, pack_name=pack_name, query=query)
     return {
         "screen": "production/browser",
+        "requested_pack": requested_pack,
         "items": items,
         "source_items": source_items,
         "deep_dive_items": deep_dive_items,

@@ -975,6 +975,17 @@ Processed source note without downstream chain.
     assert any(item["signal_type"] == "production_gap" for item in payload["items"])
 
 
+def test_build_signal_browser_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_signal_browser_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_signal_browser_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["screen"] == "signals/browser"
+
+
 def test_build_briefing_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_briefing_payload
     from openclaw_pipeline.truth_api import record_review_action
@@ -1001,6 +1012,17 @@ def test_build_briefing_payload(temp_vault):
     assert payload["insights"]
     assert payload["priority_items"]
     assert payload["queue_summary"]["queued_count"] >= 0
+
+
+def test_build_briefing_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_briefing_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_briefing_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["screen"] == "briefing/intelligence"
 
 
 def test_build_evolution_browser_payload(temp_vault):
@@ -1473,6 +1495,17 @@ Mentions [[alpha]].
     assert any(item["stage_label"] == "deep_dive" for item in payload["items"])
     assert payload["limit"] == 50
     assert payload["is_limited"] is True
+
+
+def test_build_production_browser_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_production_browser_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_production_browser_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["screen"] == "production/browser"
 
 
 def test_build_production_browser_payload_surfaces_weak_points(temp_vault):
