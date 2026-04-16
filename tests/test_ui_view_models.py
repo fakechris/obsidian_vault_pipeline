@@ -277,6 +277,38 @@ def test_build_cluster_detail_payload(temp_vault):
     from openclaw_pipeline.truth_api import list_graph_clusters
     from openclaw_pipeline.ui.view_models import build_cluster_detail_payload
 
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]] and [[beta]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+- [[beta]]
+""",
+        encoding="utf-8",
+    )
     _seed_truth_store(temp_vault)
     cluster = list_graph_clusters(temp_vault)[0]
 
@@ -290,6 +322,12 @@ def test_build_cluster_detail_payload(temp_vault):
     assert payload["edges"]
     assert payload["edges"][0]["source_path"].startswith("/object?id=")
     assert payload["edges"][0]["target_path"].startswith("/object?id=")
+    assert payload["summary_bullets"]
+    assert payload["object_kind_counts"]["evergreen"] == payload["cluster"]["member_count"]
+    assert payload["review_context"]["source_note_count"] >= 1
+    assert payload["review_context"]["moc_count"] >= 1
+    assert payload["top_source_notes"][0]["slug"] == "source-deep-dive"
+    assert payload["top_mocs"][0]["slug"] == "atlas-index"
 
 
 def test_build_event_dossier_payload_includes_provenance(temp_vault):

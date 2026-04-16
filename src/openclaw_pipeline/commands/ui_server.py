@@ -1366,6 +1366,14 @@ def _render_cluster_detail_page(payload: dict) -> str:
         f"<span class='pill'>{escape(edge_kind)}: {count}</span>"
         for edge_kind, count in payload["edge_kind_counts"].items()
     ) or "<span class='muted'>None</span>"
+    object_kind_counts = "".join(
+        f"<span class='pill'>{escape(object_kind)}: {count}</span>"
+        for object_kind, count in payload["object_kind_counts"].items()
+    ) or "<span class='muted'>None</span>"
+    summary_bullets = "".join(
+        f"<li>{escape(item)}</li>"
+        for item in payload["summary_bullets"]
+    ) or "<li class='muted'>No cluster summary available.</li>"
     members = "".join(
         f'<li><a href="{escape(member["path"])}">{escape(member["title"])}</a></li>'
         for member in cluster["member_links"]
@@ -1383,6 +1391,15 @@ def _render_cluster_detail_page(payload: dict) -> str:
         + "</li>"
         for edge in payload["edges"]
     ) or "<li class='muted'>No internal edges for this cluster.</li>"
+    top_source_notes = "".join(
+        f"<li>{escape(item['title'])} <span class='pill'>{item['object_count']} objects</span></li>"
+        for item in payload["top_source_notes"]
+    ) or "<li class='muted'>No source-note coverage.</li>"
+    top_mocs = "".join(
+        f"<li>{escape(item['title'])} <span class='pill'>{item['object_count']} objects</span></li>"
+        for item in payload["top_mocs"]
+    ) or "<li class='muted'>No atlas coverage.</li>"
+    review_context = payload["review_context"]
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     return _layout(
         "Graph Cluster",
@@ -1394,7 +1411,17 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<p>Center: <a href='{escape(cluster['center_object_path'])}'>{escape(cluster['center_title'])}</a></p>"
             f"<p class='muted'>{cluster['member_count']} member objects.</p>"
             "</section>"
+            f"<section class='card'><h2>Cluster Synthesis</h2><ul class='list-tight'>{summary_bullets}</ul></section>"
             f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
+            f"<section class='card'><h2>Object Kinds</h2><div class='link-row'>{object_kind_counts}</div></section>"
+            f"<section class='card'><h2>Coverage</h2><p class='muted'>"
+            f"{review_context['source_note_count']} source/deep-dive notes · "
+            f"{review_context['moc_count']} atlas pages · "
+            f"{review_context['open_contradiction_count']} open contradictions · "
+            f"{review_context['stale_summary_count']} stale summaries"
+            "</p></section>"
+            f"<section class='card'><h2>Top Source Notes</h2><ul class='list-tight'>{top_source_notes}</ul></section>"
+            f"<section class='card'><h2>Top Atlas Pages</h2><ul class='list-tight'>{top_mocs}</ul></section>"
             f"<section class='card'><h2>Members</h2><ul class='list-tight'>{members}</ul></section>"
             f"<section class='card'><h2>Internal Edges</h2><ul class='list-tight'>{edges}</ul></section>"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"

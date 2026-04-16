@@ -617,6 +617,7 @@ def build_cluster_detail_payload(
     detail = get_graph_cluster_detail(vault_dir, cluster_id, pack_name=pack_name)
     cluster = detail["cluster"]
     member_index = {str(member["object_id"]): member for member in cluster["members"]}
+    member_object_ids = [str(member["object_id"]) for member in cluster["members"]]
     detail_path = (
         f"/cluster?id={quote(str(cluster['cluster_id']), safe='')}"
         f"&pack={quote(str(cluster['pack']), safe='')}"
@@ -649,11 +650,71 @@ def build_cluster_detail_payload(
         }
         for edge in detail["edges"]
     ]
+    edge_kind_counts = Counter(edge["edge_kind"] for edge in enriched_edges)
+    object_kind_counts = Counter(
+        str(member["object_kind"])
+        for member in cluster["members"]
+        if member.get("object_kind")
+    )
+    review_context = get_review_context(vault_dir, member_object_ids)
+    provenance_map = get_object_provenance_map(vault_dir, member_object_ids)
+    source_note_counts: Counter[str] = Counter()
+    source_note_items: dict[str, dict[str, Any]] = {}
+    moc_counts: Counter[str] = Counter()
+    moc_items: dict[str, dict[str, Any]] = {}
+    for provenance in provenance_map.values():
+        for note in provenance["source_notes"]:
+            slug = str(note["slug"])
+            source_note_items.setdefault(slug, note)
+            source_note_counts[slug] += 1
+        for moc in provenance["mocs"]:
+            slug = str(moc["slug"])
+            moc_items.setdefault(slug, moc)
+            moc_counts[slug] += 1
+
+    def _top_counter_items(
+        counts: Counter[str],
+        item_map: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return [
+            {**item_map[key], "object_count": count}
+            for key, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+            if key in item_map
+        ][:5]
+
+    top_edge_kind = next(iter(sorted(edge_kind_counts.items(), key=lambda item: (-item[1], item[0]))), None)
+    kind_summary = ", ".join(
+        f"{kind} {count}"
+        for kind, count in sorted(object_kind_counts.items(), key=lambda item: (-item[1], item[0]))
+    )
+    summary_bullets = [
+        f"{cluster['member_count']} objects in a {cluster['cluster_kind']} cluster centered on {cluster['center_title']}.",
+    ]
+    if top_edge_kind:
+        summary_bullets.append(
+            f"{len(enriched_edges)} internal edges across {len(edge_kind_counts)} edge kinds; dominant edge kind is {top_edge_kind[0]} ({top_edge_kind[1]})."
+        )
+    if kind_summary:
+        summary_bullets.append(f"Object kinds in scope: {kind_summary}.")
+    if review_context["source_note_count"] or review_context["moc_count"]:
+        summary_bullets.append(
+            f"Coverage currently includes {review_context['source_note_count']} source/deep-dive notes and {review_context['moc_count']} atlas pages."
+        )
+    if review_context["open_contradiction_count"] or review_context["stale_summary_count"]:
+        summary_bullets.append(
+            f"Review pressure: {review_context['open_contradiction_count']} open contradictions and {review_context['stale_summary_count']} stale summaries in this cluster scope."
+        )
+
     return {
         "screen": "graph/cluster-detail",
         "cluster": enriched_cluster,
         "edges": enriched_edges,
-        "edge_kind_counts": dict(Counter(edge["edge_kind"] for edge in enriched_edges)),
+        "edge_kind_counts": dict(edge_kind_counts),
+        "object_kind_counts": dict(object_kind_counts),
+        "review_context": review_context,
+        "top_source_notes": _top_counter_items(source_note_counts, source_note_items),
+        "top_mocs": _top_counter_items(moc_counts, moc_items),
+        "summary_bullets": summary_bullets,
         "model_notes": [
             "Cluster detail currently reflects pack-owned graph seed structure, not a final semantic subgraph model.",
             "Edges are filtered to the cluster's own member set inside the requested pack projection.",

@@ -301,6 +301,7 @@ def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
     assert payload["cluster"]["cluster_id"] == cluster["cluster_id"]
     assert payload["cluster"]["pack"] == cluster["pack"]
     assert payload["edges"]
+    assert payload["summary_bullets"]
 
 
 def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):
