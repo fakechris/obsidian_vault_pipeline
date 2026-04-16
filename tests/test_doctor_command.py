@@ -40,6 +40,11 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
     )
     assert payload["contracts"]["contract_integrity"]["missing_processor_contracts"] == []
     assert payload["contracts"]["contract_integrity"]["orphan_processor_contracts"] == []
+    assert payload["contracts"]["contract_integrity"]["observation_surfaces"]["missing_shell_surface_kinds"] == []
+    assert {
+        item["status"]
+        for item in payload["contracts"]["contract_integrity"]["observation_surfaces"]["shell_surface_support"]
+    } == {"declared"}
     assert {
         item["surface_kind"] for item in payload["contracts"]["effective"]["observation_surfaces"]
     } >= {"signals", "briefing", "production_chains"}
@@ -68,7 +73,13 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
         item["runtime_adapter"] == "focused_action"
         for item in payload["contracts"]["effective"]["stage_handlers"]
     )
+    assert payload["contracts"]["contract_integrity"]["observation_surfaces"]["missing_shell_surface_kinds"] == []
+    assert any(
+        item["status"] == "inherited" and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["contract_integrity"]["observation_surfaces"]["shell_surface_support"]
+    )
     assert "compatibility packs inherit" in payload["contracts"]["contract_notes"]["compatibility_behavior"].lower()
+    assert "signals, briefing, production_chains" in payload["contracts"]["contract_notes"]["ui_shell_required_surfaces"]
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):

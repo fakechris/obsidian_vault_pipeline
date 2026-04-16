@@ -116,3 +116,5 @@ This now exposes:
 - declared truth projection
 - effective truth projection
 - declared/effective observation surfaces
+- observation-surface shell support
+  - whether `signals`, `briefing`, and `production_chains` are `declared`, `inherited`, or `missing`

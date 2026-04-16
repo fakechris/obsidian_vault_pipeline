@@ -4,6 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+from ..observation_surface_registry import (
+    UI_SHELL_SURFACE_KINDS,
+    compute_declared_observation_surface_integrity,
+    list_effective_observation_surfaces,
+)
 from ..execution_contract_registry import (
     compute_declared_contract_integrity,
     list_effective_execution_contracts,
@@ -174,15 +179,10 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             seen_stage_keys.add(key)
             effective_stage_handlers.append(_stage_handler_payload(spec))
 
-    effective_surfaces: list[dict[str, object]] = []
-    seen_surface_kinds: set[str] = set()
-    for compatible_pack in compatible_packs:
-        for spec in compatible_pack.observation_surfaces():
-            surface_kind = str(getattr(spec, "surface_kind", ""))
-            if surface_kind in seen_surface_kinds:
-                continue
-            seen_surface_kinds.add(surface_kind)
-            effective_surfaces.append(_observation_surface_payload(spec))
+    effective_surfaces = [
+        _observation_surface_payload(spec)
+        for spec in list_effective_observation_surfaces(pack_name=pack_name)
+    ]
 
     effective_processor_contracts = [
         _processor_contract_payload(spec)
@@ -209,7 +209,10 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "processor_contracts": effective_processor_contracts,
             "execution_contracts": effective_execution_contracts,
         },
-        "contract_integrity": compute_declared_contract_integrity(pack_name=pack_name),
+        "contract_integrity": {
+            **compute_declared_contract_integrity(pack_name=pack_name),
+            "observation_surfaces": compute_declared_observation_surface_integrity(pack_name=pack_name),
+        },
         "contract_notes": {
             "compatibility_behavior": (
                 "Compatibility packs inherit stage handlers, truth projection, and observation "
@@ -224,6 +227,11 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 "External packs should implement stage handlers, processor contracts, a truth "
                 "projection builder, and observation surfaces inside the pack rather than "
                 "patching core runtime modules."
+            ),
+            "ui_shell_required_surfaces": (
+                "The current shared UI shell assumes pack support for these observation surfaces: "
+                + ", ".join(UI_SHELL_SURFACE_KINDS)
+                + "."
             ),
         },
     }
