@@ -630,6 +630,7 @@ date: 2026-04-10
     assert "#### Relation Patterns" in content
     assert "#### Related Clusters" in content
     assert "#### Next Reading Route" in content
+    assert "- top_reading_route_kind:" in content
     assert "- priority_band:" in content
     assert "- neighborhood_score:" in content
     assert "#### Coverage" in content

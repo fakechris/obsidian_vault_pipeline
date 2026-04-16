@@ -872,6 +872,7 @@ def build_cluster_browser_payload(
             priority_band = "reference"
             priority_reason = f"{review_context['source_note_count']} source notes in scope"
         strongest_related = detail["related_clusters"][0] if detail["related_clusters"] else None
+        top_reading_route = detail["reading_routes"][0] if detail["reading_routes"] else None
         enriched_items.append(
             {
                 **item,
@@ -893,6 +894,9 @@ def build_cluster_browser_payload(
                 "next_read_title": strongest_related["display_title"] if strongest_related else "",
                 "next_read_path": strongest_related["detail_path"] if strongest_related else "",
                 "next_read_reason": strongest_related["reason"] if strongest_related else "",
+                "top_reading_route_kind": top_reading_route["route_kind"] if top_reading_route else "",
+                "top_reading_route_title": top_reading_route["display_title"] if top_reading_route else "",
+                "top_reading_route_reason": top_reading_route["route_reason"] if top_reading_route else "",
                 "priority_score": priority_score,
                 "priority_band": priority_band,
                 "priority_reason": priority_reason,

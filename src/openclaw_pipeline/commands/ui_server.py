@@ -1365,6 +1365,11 @@ def _render_clusters_page(payload: dict) -> str:
             else ""
         )
         + (
+            f"<div class='muted'>Top route: {escape(item['top_reading_route_kind'])} · {escape(item['top_reading_route_title'])} · {escape(item['top_reading_route_reason'])}</div>"
+            if item.get("top_reading_route_kind")
+            else ""
+        )
+        + (
             f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
             if item.get("top_summary_bullet")
             else ""

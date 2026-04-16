@@ -52,6 +52,8 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     f"- neighborhood_band: {row['neighborhood_band']}",
                     f"- neighborhood_bridge_kind: {row['neighborhood_bridge_kind']}",
                     f"- neighborhood_reason: {row['neighborhood_reason']}",
+                    f"- top_reading_route_kind: {row['top_reading_route_kind']}",
+                    f"- top_reading_route_title: {row['top_reading_route_title']}",
                     "",
                     "#### Members",
                     "",

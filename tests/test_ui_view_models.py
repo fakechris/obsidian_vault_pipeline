@@ -431,6 +431,9 @@ date: 2026-04-13
     assert item["neighborhood_bridge_kind"] == "source_and_atlas_overlap"
     assert item["next_read_title"]
     assert item["next_read_path"].startswith("/cluster?id=")
+    assert item["top_reading_route_kind"] == "full_context_route"
+    assert item["top_reading_route_title"]
+    assert item["top_reading_route_reason"]
 
 
 def test_build_cluster_detail_payload(temp_vault):
