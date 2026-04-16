@@ -57,6 +57,14 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
         for item in payload["contracts"]["shell"]["research_routes"]
     )
     assert any(
+        item["path"] == "/actions/run-next" and item["status"] == "always_available"
+        for item in payload["contracts"]["shell"]["shared_mutations"]
+    )
+    assert any(
+        item["path"] == "/evolution/review" and item["status"] == "declared" and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["research_mutations"]
+    )
+    assert any(
         item["screen"] == "object/page"
         and item["capability"] == "research_review_affordances"
         and item["status"] == "declared"
@@ -104,6 +112,14 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
         for item in payload["contracts"]["shell"]["research_routes"]
     )
     assert any(
+        item["path"] == "/actions/enqueue" and item["status"] == "always_available"
+        for item in payload["contracts"]["shell"]["shared_mutations"]
+    )
+    assert any(
+        item["path"] == "/summaries/rebuild" and item["status"] == "inherited" and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["research_mutations"]
+    )
+    assert any(
         item["screen"] == "overview/topic"
         and item["capability"] == "research_review_affordances"
         and item["status"] == "inherited"
@@ -112,6 +128,7 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
     )
     assert "research-specific routes stay hidden" in payload["contracts"]["contract_notes"]["research_shell_behavior"].lower()
     assert "object/topic/dashboard" in payload["contracts"]["contract_notes"]["embedded_research_behavior"].lower()
+    assert "action queue mutations remain available" in payload["contracts"]["contract_notes"]["mutation_shell_behavior"].lower()
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):

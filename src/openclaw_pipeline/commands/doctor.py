@@ -45,6 +45,20 @@ _RESEARCH_SHELL_ROUTES = [
     "/summaries",
 ]
 
+_SHARED_SHELL_MUTATIONS = [
+    "/actions/enqueue",
+    "/actions/run-next",
+    "/actions/run-batch",
+    "/actions/retry",
+    "/actions/dismiss",
+]
+
+_RESEARCH_SHELL_MUTATIONS = [
+    "/contradictions/resolve",
+    "/summaries/rebuild",
+    "/evolution/review",
+]
+
 _EMBEDDED_RESEARCH_CAPABILITIES = [
     {"screen": "dashboard", "capability": "research_overview"},
     {"screen": "object/page", "capability": "research_review_affordances"},
@@ -229,6 +243,22 @@ def _shell_payload(pack_name: str) -> dict[str, object]:
         }
         for path in _RESEARCH_SHELL_ROUTES
     ]
+    shared_mutations = [
+        {
+            "path": path,
+            "status": "always_available",
+            "provider_pack": pack_name,
+        }
+        for path in _SHARED_SHELL_MUTATIONS
+    ]
+    research_mutations = [
+        {
+            "path": path,
+            "status": research_status,
+            "provider_pack": research_provider,
+        }
+        for path in _RESEARCH_SHELL_MUTATIONS
+    ]
     embedded_research_capabilities = [
         {
             "screen": item["screen"],
@@ -241,6 +271,8 @@ def _shell_payload(pack_name: str) -> dict[str, object]:
     return {
         "shared_routes": shared_routes,
         "research_routes": research_routes,
+        "shared_mutations": shared_mutations,
+        "research_mutations": research_mutations,
         "embedded_research_capabilities": embedded_research_capabilities,
     }
 
@@ -329,6 +361,11 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "embedded_research_behavior": (
                 "Object/topic/dashboard screens only expose research review affordances when the "
                 "current pack resolves through the research-tech compatibility chain."
+            ),
+            "mutation_shell_behavior": (
+                "Action queue mutations remain available across the shared shell, while "
+                "research review mutations resolve only through the research-tech "
+                "compatibility chain."
             ),
         },
     }
