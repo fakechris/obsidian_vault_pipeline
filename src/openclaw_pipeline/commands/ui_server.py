@@ -2146,8 +2146,8 @@ def _render_contradictions_page(payload: dict) -> str:
             if item["object_links"]
             else ""
         )
-        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
-        + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
         + (
             "<details><summary>Ranked Evidence</summary><ol class='list-tight'>"
             + "".join(
