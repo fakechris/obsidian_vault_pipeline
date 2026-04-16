@@ -65,6 +65,29 @@ _EMBEDDED_RESEARCH_CAPABILITIES = [
     {"screen": "overview/topic", "capability": "research_review_affordances"},
 ]
 
+_TRUTH_PROJECTION_ROW_FAMILIES = [
+    {"name": "objects", "storage_table": "objects", "family_kind": "core_truth"},
+    {"name": "claims", "storage_table": "claims", "family_kind": "core_truth"},
+    {"name": "claim_evidence", "storage_table": "claim_evidence", "family_kind": "core_truth"},
+    {"name": "relations", "storage_table": "relations", "family_kind": "core_truth"},
+    {
+        "name": "compiled_summaries",
+        "storage_table": "compiled_summaries",
+        "family_kind": "core_truth",
+    },
+    {
+        "name": "contradictions",
+        "storage_table": "contradictions",
+        "family_kind": "core_truth",
+    },
+    {"name": "graph_edges", "storage_table": "graph_edges", "family_kind": "graph_projection"},
+    {
+        "name": "graph_clusters",
+        "storage_table": "graph_clusters",
+        "family_kind": "graph_projection",
+    },
+]
+
 
 def _repo_root() -> Path:
     current = Path(__file__).resolve()
@@ -237,6 +260,24 @@ def _wiki_view_payload(spec: object) -> dict[str, object]:
     }
 
 
+def _truth_projection_contract_payload(pack_name: str) -> dict[str, object]:
+    pack = load_pack(pack_name)
+    declared_builder = _truth_projection_payload(pack.truth_projection())
+    effective_builder = _truth_projection_payload(resolve_truth_projection_builder(pack_name=pack_name))
+    return {
+        "declared_builder": declared_builder,
+        "effective_builder": effective_builder,
+        "projection_registry_table": "truth_projections",
+        "row_families": [
+            {
+                **item,
+                "pack_scoped": True,
+            }
+            for item in _TRUTH_PROJECTION_ROW_FAMILIES
+        ],
+    }
+
+
 def _shell_payload(pack_name: str) -> dict[str, object]:
     shell_integrity = compute_declared_observation_surface_integrity(pack_name=pack_name)
     shell_support = {
@@ -374,6 +415,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             **compute_declared_contract_integrity(pack_name=pack_name),
             "observation_surfaces": compute_declared_observation_surface_integrity(pack_name=pack_name),
         },
+        "truth_projection_contract": _truth_projection_contract_payload(pack_name),
         "shell": _shell_payload(pack_name),
         "wiki_views": declared_wiki_views,
         "contract_notes": {
@@ -413,6 +455,11 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 "Wiki view specs are pack-owned declarations. Compatibility packs should "
                 "publish their own view specs even when they reuse shared builders or "
                 "inherit research shell behavior elsewhere."
+            ),
+            "truth_projection_behavior": (
+                "Truth projection builders emit pack-scoped row families into shared "
+                "knowledge.db tables. Graph families may be empty, but builders should "
+                "still preserve pack namespace and registry metadata."
             ),
         },
     }

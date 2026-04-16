@@ -83,6 +83,16 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
         and item["required_args"] == ["cluster_id"]
         for item in payload["contracts"]["wiki_views"]
     )
+    assert (
+        payload["contracts"]["truth_projection_contract"]["effective_builder"]["pack"]
+        == "research-tech"
+    )
+    assert any(
+        item["name"] == "graph_clusters"
+        and item["family_kind"] == "graph_projection"
+        and item["pack_scoped"] is True
+        for item in payload["contracts"]["truth_projection_contract"]["row_families"]
+    )
 
 
 def test_doctor_command_reports_compatibility_pack_metadata(capsys):
@@ -149,10 +159,24 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
         and item["input_sources"][0]["source_kind"] == "query"
         for item in payload["contracts"]["wiki_views"]
     )
+    assert (
+        payload["contracts"]["truth_projection_contract"]["declared_builder"] is None
+    )
+    assert (
+        payload["contracts"]["truth_projection_contract"]["effective_builder"]["pack"]
+        == "research-tech"
+    )
+    assert any(
+        item["name"] == "claim_evidence"
+        and item["storage_table"] == "claim_evidence"
+        and item["pack_scoped"] is True
+        for item in payload["contracts"]["truth_projection_contract"]["row_families"]
+    )
     assert "research-specific routes stay hidden" in payload["contracts"]["contract_notes"]["research_shell_behavior"].lower()
     assert "object/topic/dashboard" in payload["contracts"]["contract_notes"]["embedded_research_behavior"].lower()
     assert "action queue mutations remain available" in payload["contracts"]["contract_notes"]["mutation_shell_behavior"].lower()
     assert "wiki view specs are pack-owned declarations" in payload["contracts"]["contract_notes"]["wiki_view_behavior"].lower()
+    assert "pack-scoped row families" in payload["contracts"]["contract_notes"]["truth_projection_behavior"].lower()
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):
