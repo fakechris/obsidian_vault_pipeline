@@ -274,6 +274,8 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
     assert payload["screen"] == "graph/clusters"
     assert payload["count"] >= 1
     assert payload["items"][0]["cluster_kind"] == "relation_component"
+    assert payload["items"][0]["priority_band"]
+    assert payload["items"][0]["priority_reason"]
 
 
 def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):

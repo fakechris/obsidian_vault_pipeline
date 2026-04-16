@@ -1330,6 +1330,7 @@ def _render_clusters_page(payload: dict) -> str:
         "<li>"
         f'<a href="{escape(item["detail_path"])}">{escape(item["label"])}</a>'
         + f" <span class='pill'>{escape(item['cluster_kind'])}</span>"
+        + f" <span class='pill'>{escape(item['priority_band'])}</span>"
         + f" <span class='pill'>{item['member_count']} objects</span>"
         + (
             " <span class='muted'>"
@@ -1340,6 +1341,12 @@ def _render_clusters_page(payload: dict) -> str:
             + "</span>"
         )
         + f"<div class='muted'>Center: <a href='{escape(item['center_object_path'])}'>{escape(item['center_title'])}</a></div>"
+        + f"<div class='muted'>Priority: {escape(item['priority_reason'])}</div>"
+        + (
+            f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
+            if item.get("top_summary_bullet")
+            else ""
+        )
         + "</li>"
         for item in payload["items"]
     ) or "<li class='muted'>No graph clusters found.</li>"

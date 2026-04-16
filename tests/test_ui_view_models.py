@@ -259,18 +259,54 @@ def test_build_event_dossier_payload(temp_vault):
 
 
 def test_build_cluster_browser_payload(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
     from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
 
     _seed_truth_store(temp_vault)
+    gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
+    delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
+    gamma.write_text(
+        """---
+note_id: gamma
+title: Gamma
+type: evergreen
+date: 2026-04-13
+---
+
+# Gamma
+
+Links to [[delta]].
+""",
+        encoding="utf-8",
+    )
+    delta.write_text(
+        """---
+note_id: delta
+title: Delta
+type: evergreen
+date: 2026-04-13
+---
+
+# Delta
+
+Delta extends Gamma.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
 
     payload = build_cluster_browser_payload(temp_vault)
 
     assert payload["screen"] == "graph/clusters"
-    assert payload["count"] >= 1
+    assert payload["count"] >= 2
     assert payload["cluster_kind_counts"] == {"relation_component": payload["count"]}
     assert payload["items"][0]["center_object_path"].startswith("/object?id=")
     assert payload["items"][0]["member_count"] >= 2
     assert payload["items"][0]["members"][0]["object_id"]
+    assert payload["items"][0]["priority_band"] == "attention"
+    assert payload["items"][0]["priority_reason"]
+    assert payload["items"][0]["priority_score"] > payload["items"][1]["priority_score"]
+    assert "alpha" in payload["items"][0]["member_object_ids"]
 
 
 def test_build_cluster_detail_payload(temp_vault):

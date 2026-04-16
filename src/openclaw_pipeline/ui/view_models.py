@@ -574,24 +574,63 @@ def build_cluster_browser_payload(
     items = list_graph_clusters(vault_dir, query=query, limit=limit)
     cluster_kind_counts = Counter(item["cluster_kind"] for item in items)
     largest_cluster_size = max((int(item["member_count"]) for item in items), default=0)
-    enriched_items = [
-        {
-            **item,
-            "detail_path": (
-                f"/cluster?id={quote(str(item['cluster_id']), safe='')}"
-                f"&pack={quote(str(item['pack']), safe='')}"
+    enriched_items = []
+    for item in items:
+        detail = build_cluster_detail_payload(
+            vault_dir,
+            cluster_id=str(item["cluster_id"]),
+            pack_name=str(item["pack"]),
+        )
+        review_context = detail["review_context"]
+        dominant_edge_kind = next(
+            iter(
+                sorted(
+                    detail["edge_kind_counts"].items(),
+                    key=lambda pair: (-pair[1], pair[0]),
+                )
             ),
-            "center_object_path": f"/object?id={quote(str(item['center_object_id']), safe='')}",
-            "member_links": [
-                {
-                    **member,
-                    "path": f"/object?id={quote(str(member['object_id']), safe='')}",
-                }
-                for member in item["members"]
-            ],
-        }
-        for item in items
-    ]
+            None,
+        )
+        priority_score = (
+            review_context["open_contradiction_count"] * 100
+            + review_context["stale_summary_count"] * 40
+            + int(item["member_count"]) * 10
+            + len(detail["edges"]) * 3
+            + review_context["source_note_count"]
+            + review_context["moc_count"]
+        )
+        if review_context["open_contradiction_count"] > 0 or review_context["stale_summary_count"] > 0:
+            priority_band = "attention"
+            priority_reason = (
+                f"{review_context['open_contradiction_count']} open contradictions, "
+                f"{review_context['stale_summary_count']} stale summaries"
+            )
+        elif dominant_edge_kind is not None:
+            priority_band = "active"
+            priority_reason = f"dominant edge kind {dominant_edge_kind[0]} ({dominant_edge_kind[1]})"
+        else:
+            priority_band = "reference"
+            priority_reason = f"{review_context['source_note_count']} source notes in scope"
+        enriched_items.append(
+            {
+                **item,
+                "detail_path": detail["cluster"]["detail_path"],
+                "center_object_path": detail["cluster"]["center_object_path"],
+                "member_links": detail["cluster"]["member_links"],
+                "priority_score": priority_score,
+                "priority_band": priority_band,
+                "priority_reason": priority_reason,
+                "top_summary_bullet": detail["summary_bullets"][0] if detail["summary_bullets"] else "",
+                "dominant_edge_kind": dominant_edge_kind[0] if dominant_edge_kind is not None else "",
+            }
+        )
+    enriched_items.sort(
+        key=lambda item: (
+            -int(item["priority_score"]),
+            str(item["label"]).lower(),
+            str(item["cluster_id"]),
+        )
+    )
     return {
         "screen": "graph/clusters",
         "query": query or "",
