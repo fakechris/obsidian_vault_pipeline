@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .handler_registry import resolve_focused_action_handler, resolve_stage_handler
 from .pack_resolution import coerce_pack, iter_compatible_packs
 from .packs.base import BaseDomainPack, ProcessorContractSpec, StageHandlerSpec
 from .processor_contract_registry import resolve_processor_contract
@@ -26,13 +25,51 @@ class ExecutionContractSpec:
         return self.handler_spec.action_kind or self.processor_contract.action_kind
 
 
+def _resolve_stage_handler_spec(
+    *,
+    pack_name: str | BaseDomainPack | None,
+    stage: str,
+    runtime_adapter: str,
+) -> StageHandlerSpec:
+    for pack in iter_compatible_packs(pack_name):
+        for spec in pack.stage_handlers():
+            if (
+                spec.handler_kind == "profile_stage"
+                and spec.stage == stage
+                and spec.runtime_adapter == runtime_adapter
+            ):
+                return spec
+    resolved = coerce_pack(pack_name)
+    raise ValueError(
+        f"Unknown stage handler '{stage}' for pack '{resolved.name}' "
+        f"(runtime_adapter={runtime_adapter})"
+    )
+
+
+def _resolve_focused_action_handler_spec(
+    *,
+    pack_name: str | BaseDomainPack | None,
+    action_kind: str,
+) -> StageHandlerSpec:
+    for pack in iter_compatible_packs(pack_name):
+        for spec in pack.stage_handlers():
+            if (
+                spec.handler_kind == "focused_action"
+                and spec.action_kind == action_kind
+                and spec.runtime_adapter == "focused_action"
+            ):
+                return spec
+    resolved = coerce_pack(pack_name)
+    raise ValueError(f"Unknown focused action handler '{action_kind}' for pack '{resolved.name}'")
+
+
 def resolve_stage_execution_contract(
     *,
     pack_name: str | BaseDomainPack | None,
     stage: str,
     runtime_adapter: str,
 ) -> ExecutionContractSpec:
-    handler_spec = resolve_stage_handler(
+    handler_spec = _resolve_stage_handler_spec(
         pack_name=pack_name,
         stage=stage,
         runtime_adapter=runtime_adapter,
@@ -52,7 +89,7 @@ def resolve_focused_action_execution_contract(
     pack_name: str | BaseDomainPack | None,
     action_kind: str,
 ) -> ExecutionContractSpec:
-    handler_spec = resolve_focused_action_handler(
+    handler_spec = _resolve_focused_action_handler_spec(
         pack_name=pack_name,
         action_kind=action_kind,
     )

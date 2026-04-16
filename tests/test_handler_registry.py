@@ -103,3 +103,101 @@ def test_execute_autopilot_stage_handler_preserves_caller_owned_empty_result(mon
     registry_source.execute_autopilot_stage_handler(object(), "quality", result=owned_result)
 
     assert captured["result"] is owned_result
+
+
+def test_execute_profile_stage_handler_uses_execution_contract_resolution(monkeypatch):
+    import openclaw_pipeline.handler_registry as registry_source
+    from openclaw_pipeline.execution_contract_registry import ExecutionContractSpec
+    from openclaw_pipeline.packs.base import ProcessorContractSpec, StageHandlerSpec
+
+    monkeypatch.setattr(
+        registry_source,
+        "resolve_stage_handler",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("legacy stage resolver should not run")),
+    )
+    monkeypatch.setattr(
+        registry_source,
+        "resolve_stage_execution_contract",
+        lambda **kwargs: ExecutionContractSpec(
+            handler_spec=StageHandlerSpec(
+                name="articles",
+                pack="research-tech",
+                handler_kind="profile_stage",
+                runtime_adapter="pipeline_step",
+                entrypoint="tests.fake:handler",
+                stage="articles",
+            ),
+            processor_contract=ProcessorContractSpec(
+                name="articles",
+                pack="research-tech",
+                stage="articles",
+                mode="llm_structured",
+                inputs=("source_note",),
+                outputs=("deep_dive",),
+                entrypoint="tests.fake:processor",
+            ),
+        ),
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        registry_source,
+        "load_entrypoint",
+        lambda entrypoint: lambda **kwargs: (
+            captured.setdefault("spec", kwargs["spec"]),
+            {"ok": True},
+        )[1],
+    )
+
+    result = registry_source.execute_profile_stage_handler(object(), "articles")
+
+    assert result == {"ok": True}
+    assert captured["spec"].stage == "articles"
+
+
+def test_execute_focused_action_handler_uses_execution_contract_resolution(monkeypatch):
+    import openclaw_pipeline.handler_registry as registry_source
+    from openclaw_pipeline.execution_contract_registry import ExecutionContractSpec
+    from openclaw_pipeline.packs.base import ProcessorContractSpec, StageHandlerSpec
+
+    monkeypatch.setattr(
+        registry_source,
+        "resolve_focused_action_handler",
+        lambda **kwargs: (
+            (_ for _ in ()).throw(AssertionError("legacy focused resolver should not run"))
+        ),
+    )
+    monkeypatch.setattr(
+        registry_source,
+        "resolve_focused_action_execution_contract",
+        lambda **kwargs: ExecutionContractSpec(
+            handler_spec=StageHandlerSpec(
+                name="deep-dive",
+                pack="research-tech",
+                handler_kind="focused_action",
+                runtime_adapter="focused_action",
+                entrypoint="tests.fake:handler",
+                action_kind="deep_dive_workflow",
+            ),
+            processor_contract=ProcessorContractSpec(
+                name="deep-dive",
+                pack="research-tech",
+                action_kind="deep_dive_workflow",
+                mode="llm_structured",
+                inputs=("source_note",),
+                outputs=("deep_dive",),
+                entrypoint="tests.fake:processor",
+            ),
+        ),
+    )
+
+    monkeypatch.setattr(
+        registry_source,
+        "load_entrypoint",
+        lambda entrypoint: lambda vault_dir, action: {"output_path": "demo.md"},
+    )
+
+    spec, result = registry_source.execute_focused_action_handler("/tmp/vault", {"action_kind": "deep_dive_workflow"})
+
+    assert spec.action_kind == "deep_dive_workflow"
+    assert result == {"output_path": "demo.md"}
