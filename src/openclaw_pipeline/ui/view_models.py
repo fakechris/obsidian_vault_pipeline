@@ -859,6 +859,8 @@ def build_cluster_browser_payload(
             + review_context["source_note_count"]
             + review_context["moc_count"]
         )
+        if detail["reading_routes"]:
+            priority_score += 15
         if review_context["open_contradiction_count"] > 0 or review_context["stale_summary_count"] > 0:
             priority_band = "attention"
             priority_reason = (
@@ -897,6 +899,7 @@ def build_cluster_browser_payload(
                 "top_reading_route_kind": top_reading_route["route_kind"] if top_reading_route else "",
                 "top_reading_route_title": top_reading_route["display_title"] if top_reading_route else "",
                 "top_reading_route_reason": top_reading_route["route_reason"] if top_reading_route else "",
+                "has_reading_route": bool(top_reading_route),
                 "priority_score": priority_score,
                 "priority_band": priority_band,
                 "priority_reason": priority_reason,

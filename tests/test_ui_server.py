@@ -505,6 +505,7 @@ date: 2026-04-13
     assert item["next_read_path"].startswith("/cluster?id=")
     assert item["top_reading_route_kind"] == "full_context_route"
     assert item["top_reading_route_title"]
+    assert item["has_reading_route"] is True
 
 
 def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):
