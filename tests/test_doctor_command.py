@@ -18,6 +18,14 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
     assert payload["pack"]["role"] == "primary"
     assert payload["docs"]["skillpack"]["exists"] is True
     assert payload["docs"]["verify"]["exists"] is True
+    assert payload["contracts"]["declared"]["truth_projection"]["pack"] == "research-tech"
+    assert any(
+        item["action_kind"] == "deep_dive_workflow"
+        for item in payload["contracts"]["effective"]["stage_handlers"]
+    )
+    assert {
+        item["surface_kind"] for item in payload["contracts"]["effective"]["observation_surfaces"]
+    } >= {"signals", "briefing", "production_chains"}
 
 
 def test_doctor_command_reports_compatibility_pack_metadata(capsys):
@@ -32,6 +40,13 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
     assert payload["pack"]["compatibility_base"] == "research-tech"
     assert payload["docs"]["skillpack"]["exists"] is False
     assert payload["docs"]["verify"]["exists"] is False
+    assert payload["contracts"]["declared"]["truth_projection"] is None
+    assert payload["contracts"]["effective"]["truth_projection"]["pack"] == "research-tech"
+    assert any(
+        item["runtime_adapter"] == "focused_action"
+        for item in payload["contracts"]["effective"]["stage_handlers"]
+    )
+    assert "compatibility packs inherit" in payload["contracts"]["contract_notes"]["compatibility_behavior"].lower()
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):
