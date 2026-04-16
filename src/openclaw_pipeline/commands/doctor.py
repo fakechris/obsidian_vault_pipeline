@@ -4,6 +4,10 @@ import argparse
 import json
 from pathlib import Path
 
+from ..execution_contract_registry import (
+    compute_declared_contract_integrity,
+    list_effective_execution_contracts,
+)
 from ..pack_resolution import iter_compatible_packs
 from ..processor_contract_registry import list_effective_processor_contracts
 from ..packs.loader import (
@@ -126,6 +130,28 @@ def _processor_contract_payload(spec: object) -> dict[str, object]:
     }
 
 
+def _execution_contract_payload(spec: object) -> dict[str, object]:
+    handler_spec = getattr(spec, "handler_spec")
+    processor_contract = getattr(spec, "processor_contract")
+    return {
+        "stage": getattr(spec, "stage", None),
+        "action_kind": getattr(spec, "action_kind", None),
+        "runtime_adapter": getattr(handler_spec, "runtime_adapter", ""),
+        "handler_pack": getattr(handler_spec, "pack", ""),
+        "processor_pack": getattr(processor_contract, "pack", ""),
+        "target_mode": getattr(handler_spec, "target_mode", ""),
+        "safe_to_run": bool(getattr(handler_spec, "safe_to_run", False)),
+        "requires_truth_refresh": bool(getattr(handler_spec, "requires_truth_refresh", False)),
+        "requires_signal_resync": bool(getattr(handler_spec, "requires_signal_resync", False)),
+        "mode": getattr(processor_contract, "mode", ""),
+        "inputs": list(getattr(processor_contract, "inputs", ()) or ()),
+        "outputs": list(getattr(processor_contract, "outputs", ()) or ()),
+        "quality_hooks": list(getattr(processor_contract, "quality_hooks", ()) or ()),
+        "handler_entrypoint": getattr(handler_spec, "entrypoint", ""),
+        "processor_entrypoint": getattr(processor_contract, "entrypoint", ""),
+    }
+
+
 def _contracts_payload(pack_name: str) -> dict[str, object]:
     pack = load_pack(pack_name)
     compatible_packs = iter_compatible_packs(pack)
@@ -162,6 +188,10 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
         _processor_contract_payload(spec)
         for spec in list_effective_processor_contracts(pack_name=pack_name)
     ]
+    effective_execution_contracts = [
+        _execution_contract_payload(spec)
+        for spec in list_effective_execution_contracts(pack_name=pack_name)
+    ]
 
     return {
         "declared": {
@@ -177,7 +207,9 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             ),
             "observation_surfaces": effective_surfaces,
             "processor_contracts": effective_processor_contracts,
+            "execution_contracts": effective_execution_contracts,
         },
+        "contract_integrity": compute_declared_contract_integrity(pack_name=pack_name),
         "contract_notes": {
             "compatibility_behavior": (
                 "Compatibility packs inherit stage handlers, truth projection, and observation "
@@ -185,7 +217,8 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             ),
             "processor_control_plane": (
                 "Processor contracts declare mode, inputs, outputs, and quality hooks without "
-                "requiring core runtime patches."
+                "requiring core runtime patches; execution contracts pair them with runtime "
+                "handlers."
             ),
             "media_pack_guidance": (
                 "External packs should implement stage handlers, processor contracts, a truth "

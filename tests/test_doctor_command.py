@@ -34,6 +34,12 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
         item["action_kind"] == "deep_dive_workflow"
         for item in payload["contracts"]["effective"]["processor_contracts"]
     )
+    assert any(
+        item["stage"] == "articles"
+        for item in payload["contracts"]["effective"]["execution_contracts"]
+    )
+    assert payload["contracts"]["contract_integrity"]["missing_processor_contracts"] == []
+    assert payload["contracts"]["contract_integrity"]["orphan_processor_contracts"] == []
     assert {
         item["surface_kind"] for item in payload["contracts"]["effective"]["observation_surfaces"]
     } >= {"signals", "briefing", "production_chains"}
