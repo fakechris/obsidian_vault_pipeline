@@ -36,6 +36,7 @@ from ..truth_api import (
     list_production_chains,
     list_signals,
     list_stale_summaries,
+    list_timeline_events,
     search_vault_surface,
 )
 
@@ -48,7 +49,12 @@ def _db_path(vault_dir: Path | str) -> Path:
     return VaultLayout.from_vault(resolved).knowledge_db
 
 
-def _existing_object_rows(vault_dir: Path | str, object_ids: list[str]) -> dict[str, str]:
+def _existing_object_rows(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, str]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     if not normalized_object_ids:
         return {}
@@ -892,45 +898,26 @@ def _escape_like(value: str) -> str:
 def build_event_dossier_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    db_path = _db_path(vault_dir)
-    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    requested_pack = pack_name or ""
     effective_limit = DEFAULT_EVENT_DOSSIER_LIMIT if limit is None else limit
-    with sqlite3.connect(db_path) as conn:
-        sql = """
-            SELECT timeline_events.event_date, timeline_events.event_type, timeline_events.heading,
-                   timeline_events.payload_json, objects.object_id, objects.title, compiled_summaries.summary_text
-            FROM timeline_events
-            JOIN objects ON objects.object_id = timeline_events.slug
-            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
-        """
-        params: list[Any] = []
-        if normalized_query:
-            sql += """
-                WHERE lower(objects.object_id) LIKE ? ESCAPE '\\'
-                   OR lower(objects.title) LIKE ? ESCAPE '\\'
-                   OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
-            """
-            params.extend(
-                [
-                    f"%{normalized_query}%",
-                    f"%{normalized_query}%",
-                    f"%{normalized_query}%",
-                ]
-            )
-        sql += " ORDER BY timeline_events.event_date DESC, objects.object_id"
-        if effective_limit is not None:
-            sql += " LIMIT ?"
-            params.append(effective_limit)
-        rows = conn.execute(sql, tuple(params)).fetchall()
-
     events = [
         _build_timeline_event_item(row)
-        for row in rows
+        for row in list_timeline_events(
+            vault_dir,
+            pack_name=pack_name,
+            query=query,
+            limit=effective_limit or DEFAULT_EVENT_DOSSIER_LIMIT,
+        )
     ]
-    provenance_map = get_object_provenance_map(vault_dir, [event["object_id"] for event in events])
+    provenance_map = get_object_provenance_map(
+        vault_dir,
+        [event["object_id"] for event in events],
+        pack_name=pack_name,
+    )
     scoped_object_ids = [event["object_id"] for event in events]
     review_context = get_review_context(vault_dir, scoped_object_ids)
     scoped_stale_summaries = list_stale_summaries(vault_dir, object_ids=scoped_object_ids, limit=100)
@@ -968,6 +955,7 @@ def build_event_dossier_payload(
     semantic_roles = Counter(event["semantic_role"] for event in events)
     return {
         "screen": "event/dossier",
+        "requested_pack": requested_pack,
         "events": events,
         "event_count": len(events),
         "cluster_count": sum(len(section["clusters"]) for section in cluster_sections),
@@ -1312,11 +1300,25 @@ def build_contradiction_browser_payload(
     }
 
 
-def _build_timeline_event_item(row: tuple[Any, ...]) -> dict[str, Any]:
-    payload = json.loads(row[3] or "{}")
-    event_type = str(row[1])
-    title = str(row[5])
-    heading = str(row[2] or "").strip()
+def _build_timeline_event_item(row: tuple[Any, ...] | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(row, dict):
+        payload = json.loads(str(row.get("payload_json") or "{}"))
+        event_date = str(row.get("event_date") or "")
+        event_type = str(row.get("event_type") or "")
+        heading = str(row.get("heading") or "").strip()
+        object_id = str(row.get("object_id") or "")
+        title = str(row.get("title") or object_id)
+        summary_text = str(row.get("summary_text") or "")
+        row_pack = str(row.get("row_pack") or "")
+    else:
+        payload = json.loads(row[3] or "{}")
+        event_date = str(row[0] or "")
+        event_type = str(row[1])
+        heading = str(row[2] or "").strip()
+        object_id = str(row[4])
+        title = str(row[5])
+        summary_text = str(row[6] or "")
+        row_pack = ""
     if event_type == "page_date":
         timeline_anchor_kind = "note"
         timeline_anchor_label = str(payload.get("title") or title)
@@ -1330,7 +1332,7 @@ def _build_timeline_event_item(row: tuple[Any, ...]) -> dict[str, Any]:
         event_kind = "dated_heading"
         event_label = "Dated Heading"
     return {
-        "event_date": row[0],
+        "event_date": event_date,
         "event_type": event_type,
         "row_type": event_type,
         "event_kind": event_kind,
@@ -1338,9 +1340,10 @@ def _build_timeline_event_item(row: tuple[Any, ...]) -> dict[str, Any]:
         "semantic_role": semantic_role,
         "timeline_anchor_kind": timeline_anchor_kind,
         "timeline_anchor_label": timeline_anchor_label,
-        "object_id": row[4],
+        "object_id": object_id,
         "title": title,
-        "summary_text": row[6] or "",
+        "summary_text": summary_text,
+        "row_pack": row_pack,
     }
 
 
@@ -1475,9 +1478,24 @@ def build_objects_index_payload(
     }
 
 
-def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
-    items = list_atlas_memberships(vault_dir, query=query, limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT)
-    derivations = list_deep_dive_derivations(vault_dir, limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT)
+def build_atlas_browser_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    items = list_atlas_memberships(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+    )
+    derivations = list_deep_dive_derivations(
+        vault_dir,
+        pack_name=pack_name,
+        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+    )
     object_to_deep_dives: dict[str, dict[str, dict[str, str]]] = {}
     object_to_source_notes: dict[str, dict[str, dict[str, str]]] = {}
     for item in derivations:
@@ -1514,6 +1532,7 @@ def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = No
         )
     return {
         "screen": "atlas/browser",
+        "requested_pack": requested_pack,
         "items": enriched_items,
         "count": len(enriched_items),
         "query": query or "",
@@ -1522,24 +1541,34 @@ def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = No
     }
 
 
-def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
-    items = list_deep_dive_derivations(vault_dir, query=query, limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT)
+def build_derivation_browser_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    items = list_deep_dive_derivations(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+    )
     enriched_items = []
     for item in items:
-        existing_object_rows = _existing_object_rows(
-            vault_dir,
-            [member["object_id"] for member in item["derived_objects"]],
-        )
         derived_objects = [
             {
                 "object_id": member["object_id"],
-                "title": existing_object_rows.get(member["object_id"], member["title"]),
+                "title": member["title"],
             }
             for member in item["derived_objects"]
-            if member["object_id"] in existing_object_rows
         ]
         preview_titles = [member["title"] for member in derived_objects[:5]]
-        provenance_map = get_object_provenance_map(vault_dir, [member["object_id"] for member in derived_objects])
+        provenance_map = get_object_provenance_map(
+            vault_dir,
+            [member["object_id"] for member in derived_objects],
+            pack_name=pack_name,
+        )
         atlas_page_map: dict[str, dict[str, str]] = {}
         for provenance in provenance_map.values():
             for atlas_page in provenance["mocs"]:
@@ -1557,6 +1586,7 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
         )
     return {
         "screen": "derivations/browser",
+        "requested_pack": requested_pack,
         "items": enriched_items,
         "count": len(enriched_items),
         "query": query or "",

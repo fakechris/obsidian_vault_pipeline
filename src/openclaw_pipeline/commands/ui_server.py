@@ -1070,6 +1070,7 @@ def _render_topic_page(payload: dict) -> str:
 
 def _render_events_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     limit_note = (
         f" Showing the most recent {payload['limit']} timeline rows in this dossier window."
         if payload.get("is_limited")
@@ -1154,33 +1155,43 @@ def _render_events_page(payload: dict) -> str:
     )
     return _layout(
         "Event Dossier",
-        (
-            "<h1>Event Dossier</h1>"
-            "<p class='muted'>A timeline-oriented view over dated truth objects, not a separate event object model.</p>"
-            "<form method='get' action='/events'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.{escape(limit_note)}</p>"
-            f"<div class='link-row'>{type_breakdown}</div>"
-            f"{_render_production_summary_card(payload['production_summary'])}"
-            f"{_render_review_context_card(payload['review_context'])}"
-            f"{_render_review_history(payload['review_history'])}"
-            "<section class='card'><h2>Quick Maintenance</h2>"
-            f"{contradiction_entry}"
-            f"{summary_form}"
-            "</section>"
-            "<section class='card'><h2>Event Clusters</h2><p class='muted'>Rows for the same object and date are grouped into a single cluster so the dossier reads as an object timeline instead of raw timeline rows.</p></section>"
-            f"<section class='card'><h2>Timeline Contract</h2><ul class='list-tight'>{timeline_contract_items}</ul></section>"
-            f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
-            f"<nav class='subnav'>{date_nav}</nav>"
-            f"{events}"
+        "".join(
+            [
+                "<h1>Event Dossier</h1>",
+                "<p class='muted'>A timeline-oriented view over dated truth objects, not a separate event object model.</p>",
+                "<form method='get' action='/events'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                f"<div class='link-row'>{type_breakdown}</div>",
+                f"{_render_production_summary_card(payload['production_summary'])}",
+                f"{_render_review_context_card(payload['review_context'])}",
+                f"{_render_review_history(payload['review_history'])}",
+                "<section class='card'><h2>Quick Maintenance</h2>",
+                f"{contradiction_entry}",
+                f"{summary_form}",
+                "</section>",
+                "<section class='card'><h2>Event Clusters</h2><p class='muted'>Rows for the same object and date are grouped into a single cluster so the dossier reads as an object timeline instead of raw timeline rows.</p></section>",
+                f"<section class='card'><h2>Timeline Contract</h2><ul class='list-tight'>{timeline_contract_items}</ul></section>",
+                f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>",
+                f"<nav class='subnav'>{date_nav}</nav>",
+                f"{events}",
+            ]
         ),
     )
 
 
 def _render_atlas_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     limit_note = (
         f" Showing the most recent {payload['limit']} atlas pages in this browser window."
         if payload.get("is_limited")
@@ -1212,21 +1223,31 @@ def _render_atlas_page(payload: dict) -> str:
     ) or "<li>None</li>"
     return _layout(
         "Atlas / MOC Browser",
-        (
-            "<h1>Atlas / MOC Browser</h1>"
-            "<form method='get' action='/atlas'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter MOCs or objects' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} atlas/moc pages linked to indexed objects.{escape(limit_note)}</p>"
-            "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each Atlas page now shows the source notes and deep dives that feed the objects it organizes.</p></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Atlas / MOC Browser</h1>",
+                "<form method='get' action='/atlas'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter MOCs or objects' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} atlas/moc pages linked to indexed objects.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each Atlas page now shows the source notes and deep dives that feed the objects it organizes.</p></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
     )
 
 
 def _render_derivations_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     limit_note = (
         f" Showing the most recent {payload['limit']} deep dives in this browser window."
         if payload.get("is_limited")
@@ -1258,15 +1279,24 @@ def _render_derivations_page(payload: dict) -> str:
     ) or "<li>None</li>"
     return _layout(
         "Deep Dive Derivations",
-        (
-            "<h1>Deep Dive Derivations</h1>"
-            "<form method='get' action='/deep-dives'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter deep dives or objects' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.{escape(limit_note)}</p>"
-            "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each deep dive now shows upstream source notes and downstream Atlas reach, not just derived objects.</p></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Deep Dive Derivations</h1>",
+                "<form method='get' action='/deep-dives'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter deep dives or objects' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each deep dive now shows upstream source notes and downstream Atlas reach, not just derived objects.</p></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
     )
 
@@ -2277,29 +2307,35 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/api/events":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_event_dossier_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/events":
                     q = query.get("q", [""])[0]
-                    payload = build_event_dossier_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_events_page(payload))
                     return
                 if path == "/api/atlas":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_atlas_browser_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_atlas_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/atlas":
                     q = query.get("q", [""])[0]
-                    payload = build_atlas_browser_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_atlas_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_atlas_page(payload))
                     return
                 if path == "/api/deep-dives":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_derivation_browser_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_derivation_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/deep-dives":
                     q = query.get("q", [""])[0]
-                    payload = build_derivation_browser_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_derivation_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_derivations_page(payload))
                     return
                 if path == "/api/production":

@@ -353,13 +353,18 @@ def _batch_object_rows(
     return items
 
 
-def get_object_provenance_map(vault_dir: Path | str, object_ids: list[str]) -> dict[str, dict[str, Any]]:
+def get_object_provenance_map(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, dict[str, Any]]:
     if not object_ids:
         return {}
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     ordered_object_ids = list(dict.fromkeys(object_ids))
-    object_rows = _batch_object_rows(vault_dir, ordered_object_ids)
+    object_rows = _batch_object_rows(vault_dir, ordered_object_ids, pack_name=pack_name)
     placeholders = ",".join("?" for _ in ordered_object_ids)
     with sqlite3.connect(db_path) as conn:
         mention_rows = conn.execute(
@@ -927,6 +932,7 @@ def _surface_page_query_clauses(*, note_type: str, normalized_query: str) -> tup
 def _list_surface_groups(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     note_type: str,
     query: str | None,
     limit: int,
@@ -936,6 +942,8 @@ def _list_surface_groups(
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
     where_sql, base_params = _surface_page_query_clauses(
         note_type=note_type,
         normalized_query=normalized_query,
@@ -948,11 +956,11 @@ def _list_surface_groups(
             FROM pages_index
             JOIN page_links ON page_links.source_slug = pages_index.slug
             JOIN objects ON objects.object_id = page_links.target_slug
-            WHERE {where_sql}
+            WHERE objects.pack IN ({pack_placeholders}) AND {where_sql}
             ORDER BY pages_index.slug
             LIMIT ?
             """,
-            tuple([*base_params, limit]),
+            tuple([*pack_candidates, *base_params, limit]),
         ).fetchall()
         selected_slugs = [row[0] for row in selected_rows]
         if not selected_slugs:
@@ -960,18 +968,24 @@ def _list_surface_groups(
         placeholders = ",".join("?" for _ in selected_slugs)
         rows = conn.execute(
             f"""
-            SELECT pages_index.slug, pages_index.title, pages_index.note_type, pages_index.path, objects.object_id, objects.title
+            SELECT pages_index.slug, pages_index.title, pages_index.note_type, pages_index.path, objects.pack, objects.object_id, objects.title
             FROM pages_index
             JOIN page_links ON page_links.source_slug = pages_index.slug
             JOIN objects ON objects.object_id = page_links.target_slug
             WHERE pages_index.slug IN ({placeholders})
-            ORDER BY pages_index.slug, objects.object_id
+              AND objects.pack IN ({pack_placeholders})
+            ORDER BY pages_index.slug,
+              CASE objects.pack
+                {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+                ELSE {len(pack_candidates)}
+              END,
+              objects.object_id
             """,
-            tuple(selected_slugs),
+            tuple([*selected_slugs, *pack_candidates, *pack_candidates]),
         ).fetchall()
 
     grouped: dict[str, dict[str, Any]] = {}
-    for slug, title, row_note_type, path, object_id, object_title in rows:
+    for slug, title, row_note_type, path, object_pack, object_id, object_title in rows:
         item = grouped.setdefault(
             slug,
             {
@@ -982,7 +996,11 @@ def _list_surface_groups(
                 object_list_key: [],
             },
         )
-        item[object_list_key].append({"object_id": object_id, "title": object_title})
+        if any(existing["object_id"] == object_id for existing in item[object_list_key]):
+            continue
+        item[object_list_key].append(
+            {"object_id": object_id, "title": object_title, "pack": object_pack}
+        )
     return list(grouped.values())
 
 
@@ -3191,11 +3209,13 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
 def list_atlas_memberships(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     items = _list_surface_groups(
         vault_dir,
+        pack_name=pack_name,
         note_type="moc",
         query=query,
         limit=limit,
@@ -3215,6 +3235,7 @@ def list_atlas_memberships(
 def list_deep_dive_derivations(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -3234,11 +3255,24 @@ def list_deep_dive_derivations(
         ).fetchall()
 
     derivation_map = _deep_dive_object_map(vault_dir)
+    object_rows = _batch_object_rows(
+        vault_dir,
+        [item["object_id"] for items in derivation_map.values() for item in items],
+        pack_name=pack_name,
+    )
 
     items: list[dict[str, Any]] = []
     for slug, title, note_type, path in deep_dive_rows:
         relative_path = _vault_relative_path(resolved_vault, path)
-        derived_objects = list(derivation_map.get(relative_path, []))
+        derived_objects = [
+            {
+                "object_id": item["object_id"],
+                "title": str(object_rows[item["object_id"]]["title"]),
+                "pack": str(object_rows[item["object_id"]]["pack"]),
+            }
+            for item in derivation_map.get(relative_path, [])
+            if item["object_id"] in object_rows
+        ]
         if normalized_query:
             haystacks = [
                 slug.lower(),
@@ -3259,6 +3293,76 @@ def list_deep_dive_derivations(
                 "note_type": note_type,
                 "path": relative_path,
                 "derived_objects": sorted(derived_objects, key=lambda item: item["object_id"]),
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+def list_timeline_events(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
+    candidate_limit = min(MAX_PAGE_SIZE, max(limit * max(1, len(pack_candidates)), limit))
+    sql = f"""
+        SELECT timeline_events.event_date, timeline_events.event_type, timeline_events.heading,
+               timeline_events.payload_json, objects.pack, objects.object_id, objects.title, compiled_summaries.summary_text
+        FROM timeline_events
+        JOIN objects ON objects.object_id = timeline_events.slug
+        LEFT JOIN compiled_summaries
+          ON compiled_summaries.object_id = objects.object_id
+         AND compiled_summaries.pack = objects.pack
+        WHERE objects.pack IN ({pack_placeholders})
+    """
+    params: list[Any] = [*pack_candidates]
+    if normalized_query:
+        sql += """
+            AND (
+                lower(objects.object_id) LIKE ? ESCAPE '\\'
+                OR lower(objects.title) LIKE ? ESCAPE '\\'
+                OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
+            )
+        """
+        params.extend([f"%{normalized_query}%"] * 3)
+    sql += f"""
+        ORDER BY timeline_events.event_date DESC,
+          CASE objects.pack
+            {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+            ELSE {len(pack_candidates)}
+          END,
+          objects.object_id
+        LIMIT ?
+    """
+    params.extend([*pack_candidates, candidate_limit])
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for event_date, event_type, heading, payload_json, row_pack, object_id, title, summary_text in rows:
+        key = (str(event_date or ""), str(event_type or ""), str(object_id))
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(
+            {
+                "event_date": str(event_date or ""),
+                "event_type": str(event_type or ""),
+                "heading": str(heading or ""),
+                "payload_json": str(payload_json or ""),
+                "row_pack": str(row_pack or ""),
+                "object_id": str(object_id),
+                "title": str(title or object_id),
+                "summary_text": str(summary_text or ""),
             }
         )
         if len(items) >= limit:

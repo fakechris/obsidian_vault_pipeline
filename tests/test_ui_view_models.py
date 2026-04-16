@@ -258,6 +258,16 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["scoped_open_contradiction_ids"]
 
 
+def test_build_event_dossier_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_event_dossier_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+
+
 def test_build_cluster_browser_payload(temp_vault):
     from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
     from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
@@ -350,6 +360,26 @@ date: 2026-04-10
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["items"]
     assert all(item["pack"] == "default-knowledge" for item in payload["items"])
+
+
+def test_build_atlas_browser_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_atlas_browser_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_atlas_browser_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_build_derivation_browser_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_derivation_browser_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_derivation_browser_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
 
 
 def test_build_cluster_browser_payload_includes_related_cluster_summary(temp_vault):
