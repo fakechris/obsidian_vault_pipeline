@@ -1249,6 +1249,85 @@ def list_graph_clusters(
     return items
 
 
+def get_graph_cluster_detail(
+    vault_dir: Path | str,
+    cluster_id: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    db_path = _db_path(vault_dir)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="graph_clusters")
+
+    truth_pack = ""
+    cluster_row = None
+    with sqlite3.connect(db_path) as conn:
+        for candidate_pack in pack_candidates:
+            cluster_row = conn.execute(
+                """
+                SELECT cluster_id, cluster_kind, label, center_object_id, member_object_ids_json, score
+                FROM graph_clusters
+                WHERE pack = ? AND cluster_id = ?
+                """,
+                (candidate_pack, cluster_id),
+            ).fetchone()
+            if cluster_row is not None:
+                truth_pack = candidate_pack
+                break
+        if cluster_row is None:
+            raise ValueError(f"Unknown cluster_id: {cluster_id}")
+
+        member_object_ids = [str(value) for value in json.loads(cluster_row[4])]
+        if member_object_ids:
+            placeholders = ",".join("?" for _ in member_object_ids)
+            edge_rows = conn.execute(
+                f"""
+                SELECT edge_id, source_object_id, target_object_id, edge_kind, weight, evidence_source_slug
+                FROM graph_edges
+                WHERE pack = ?
+                  AND source_object_id IN ({placeholders})
+                  AND target_object_id IN ({placeholders})
+                ORDER BY weight DESC, edge_kind, source_object_id, target_object_id
+                """,
+                (truth_pack, *member_object_ids, *member_object_ids),
+            ).fetchall()
+        else:
+            edge_rows = []
+
+    object_rows = _batch_object_rows(vault_dir, member_object_ids, pack_name=truth_pack)
+    center_object_id = str(cluster_row[3])
+    return {
+        "cluster": {
+            "cluster_id": str(cluster_row[0]),
+            "cluster_kind": str(cluster_row[1]),
+            "label": str(cluster_row[2]),
+            "center_object_id": center_object_id,
+            "center_title": object_rows.get(center_object_id, {}).get("title", center_object_id),
+            "member_object_ids": member_object_ids,
+            "member_count": len(member_object_ids),
+            "members": [
+                object_rows.get(
+                    object_id,
+                    {"object_id": object_id, "title": object_id, "pack": truth_pack},
+                )
+                for object_id in member_object_ids
+            ],
+            "score": float(cluster_row[5] or 0.0),
+            "pack": truth_pack,
+        },
+        "edges": [
+            {
+                "edge_id": str(row[0]),
+                "source_object_id": str(row[1]),
+                "target_object_id": str(row[2]),
+                "edge_kind": str(row[3]),
+                "weight": float(row[4] or 0.0),
+                "evidence_source_slug": str(row[5] or ""),
+            }
+            for row in edge_rows
+        ],
+    }
+
+
 def _find_note_by_source(vault_dir: Path, *, source_url: str, exclude_path: str) -> dict[str, str] | None:
     cache_key = (str(vault_dir.resolve()), _search_root_signatures(vault_dir))
     source_index = _SOURCE_NOTE_INDEX_CACHE.get(cache_key)

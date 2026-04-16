@@ -14,6 +14,7 @@ from ..truth_api import (
     SIGNAL_TYPE_EXPLANATIONS,
     count_objects,
     get_briefing_snapshot,
+    get_graph_cluster_detail,
     get_object_detail,
     get_object_traceability,
     get_note_provenance,
@@ -576,6 +577,10 @@ def build_cluster_browser_payload(
     enriched_items = [
         {
             **item,
+            "detail_path": (
+                f"/cluster?id={quote(str(item['cluster_id']), safe='')}"
+                f"&pack={quote(str(item['pack']), safe='')}"
+            ),
             "center_object_path": f"/object?id={quote(str(item['center_object_id']), safe='')}",
             "member_links": [
                 {
@@ -599,6 +604,59 @@ def build_cluster_browser_payload(
         "model_notes": [
             "Graph clusters currently come from pack-owned graph seed projections, not from a final semantic clustering model.",
             "Current research-tech clusters are relation/contradiction connected components over pack-scoped truth rows.",
+        ],
+    }
+
+
+def build_cluster_detail_payload(
+    vault_dir: Path | str,
+    *,
+    cluster_id: str,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    detail = get_graph_cluster_detail(vault_dir, cluster_id, pack_name=pack_name)
+    cluster = detail["cluster"]
+    member_index = {str(member["object_id"]): member for member in cluster["members"]}
+    detail_path = (
+        f"/cluster?id={quote(str(cluster['cluster_id']), safe='')}"
+        f"&pack={quote(str(cluster['pack']), safe='')}"
+    )
+    enriched_cluster = {
+        **cluster,
+        "detail_path": detail_path,
+        "center_object_path": f"/object?id={quote(str(cluster['center_object_id']), safe='')}",
+        "member_links": [
+            {
+                **member,
+                "path": f"/object?id={quote(str(member['object_id']), safe='')}",
+            }
+            for member in cluster["members"]
+        ],
+    }
+    enriched_edges = [
+        {
+            **edge,
+            "source_title": member_index.get(str(edge["source_object_id"]), {}).get(
+                "title",
+                str(edge["source_object_id"]),
+            ),
+            "target_title": member_index.get(str(edge["target_object_id"]), {}).get(
+                "title",
+                str(edge["target_object_id"]),
+            ),
+            "source_path": f"/object?id={quote(str(edge['source_object_id']), safe='')}",
+            "target_path": f"/object?id={quote(str(edge['target_object_id']), safe='')}",
+        }
+        for edge in detail["edges"]
+    ]
+    return {
+        "screen": "graph/cluster-detail",
+        "cluster": enriched_cluster,
+        "edges": enriched_edges,
+        "edge_kind_counts": dict(Counter(edge["edge_kind"] for edge in enriched_edges)),
+        "model_notes": [
+            "Cluster detail currently reflects pack-owned graph seed structure, not a final semantic subgraph model.",
+            "Edges are filtered to the cluster's own member set inside the requested pack projection.",
         ],
     }
 

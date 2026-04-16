@@ -273,6 +273,25 @@ def test_build_cluster_browser_payload(temp_vault):
     assert payload["items"][0]["members"][0]["object_id"]
 
 
+def test_build_cluster_detail_payload(temp_vault):
+    from openclaw_pipeline.truth_api import list_graph_clusters
+    from openclaw_pipeline.ui.view_models import build_cluster_detail_payload
+
+    _seed_truth_store(temp_vault)
+    cluster = list_graph_clusters(temp_vault)[0]
+
+    payload = build_cluster_detail_payload(temp_vault, cluster_id=cluster["cluster_id"], pack_name=cluster["pack"])
+
+    assert payload["screen"] == "graph/cluster-detail"
+    assert payload["cluster"]["cluster_id"] == cluster["cluster_id"]
+    assert payload["cluster"]["detail_path"].startswith("/cluster?id=")
+    assert payload["cluster"]["center_object_path"].startswith("/object?id=")
+    assert payload["cluster"]["member_links"][0]["path"].startswith("/object?id=")
+    assert payload["edges"]
+    assert payload["edges"][0]["source_path"].startswith("/object?id=")
+    assert payload["edges"][0]["target_path"].startswith("/object?id=")
+
+
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 

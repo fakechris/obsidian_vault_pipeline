@@ -23,6 +23,7 @@ from ..ui.view_models import (
     build_atlas_browser_payload,
     build_briefing_payload,
     build_cluster_browser_payload,
+    build_cluster_detail_payload,
     build_contradiction_browser_payload,
     build_derivation_browser_payload,
     build_evolution_browser_payload,
@@ -1327,7 +1328,7 @@ def _render_clusters_page(payload: dict) -> str:
     ) or "<span class='muted'>None</span>"
     items = "".join(
         "<li>"
-        f'<a href="{escape(item["center_object_path"])}">{escape(item["label"])}</a>'
+        f'<a href="{escape(item["detail_path"])}">{escape(item["label"])}</a>'
         + f" <span class='pill'>{escape(item['cluster_kind'])}</span>"
         + f" <span class='pill'>{item['member_count']} objects</span>"
         + (
@@ -1355,6 +1356,48 @@ def _render_clusters_page(payload: dict) -> str:
             f"<section class='card'><h2>Cluster Kinds</h2><div class='link-row'>{kind_counts}</div></section>"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
             f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        ),
+    )
+
+
+def _render_cluster_detail_page(payload: dict) -> str:
+    cluster = payload["cluster"]
+    edge_kind_counts = "".join(
+        f"<span class='pill'>{escape(edge_kind)}: {count}</span>"
+        for edge_kind, count in payload["edge_kind_counts"].items()
+    ) or "<span class='muted'>None</span>"
+    members = "".join(
+        f'<li><a href="{escape(member["path"])}">{escape(member["title"])}</a></li>'
+        for member in cluster["member_links"]
+    ) or "<li class='muted'>No members.</li>"
+    edges = "".join(
+        "<li>"
+        f'<a href="{escape(edge["source_path"])}">{escape(edge["source_title"])}</a>'
+        f" <span class='pill'>{escape(edge['edge_kind'])}</span> "
+        f'<a href="{escape(edge["target_path"])}">{escape(edge["target_title"])}</a>'
+        + (
+            f" <span class='muted'>source: {escape(edge['evidence_source_slug'])}</span>"
+            if edge["evidence_source_slug"]
+            else ""
+        )
+        + "</li>"
+        for edge in payload["edges"]
+    ) or "<li class='muted'>No internal edges for this cluster.</li>"
+    model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
+    return _layout(
+        "Graph Cluster",
+        (
+            "<h1>Graph Cluster</h1>"
+            f"<p><a href='/clusters'>Back to clusters</a></p>"
+            f"<section class='card'><h2>{escape(cluster['label'])}</h2>"
+            f"<p class='muted'>Pack: {escape(cluster['pack'])} · Kind: {escape(cluster['cluster_kind'])} · Score: {cluster['score']:.1f}</p>"
+            f"<p>Center: <a href='{escape(cluster['center_object_path'])}'>{escape(cluster['center_title'])}</a></p>"
+            f"<p class='muted'>{cluster['member_count']} member objects.</p>"
+            "</section>"
+            f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
+            f"<section class='card'><h2>Members</h2><ul class='list-tight'>{members}</ul></section>"
+            f"<section class='card'><h2>Internal Edges</h2><ul class='list-tight'>{edges}</ul></section>"
+            f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
         ),
     )
 
@@ -2058,6 +2101,17 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     payload = build_cluster_browser_payload(resolved_vault, query=q)
                     self._write_html(_render_clusters_page(payload))
+                    return
+                if path == "/api/cluster":
+                    cluster_id = self._required(query, "id")
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name))
+                    return
+                if path == "/cluster":
+                    cluster_id = self._required(query, "id")
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name)
+                    self._write_html(_render_cluster_detail_page(payload))
                     return
                 if path == "/api/actions":
                     status = query.get("status", [""])[0] or None

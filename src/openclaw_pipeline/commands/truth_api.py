@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..runtime import resolve_vault_dir
 from ..truth_api import (
+    get_graph_cluster_detail,
     get_object_detail,
     get_topic_neighborhood,
     list_contradictions,
@@ -39,6 +40,11 @@ def main(argv: list[str] | None = None) -> int:
     clusters_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
     clusters_parser.add_argument("--limit", type=int, default=100)
     clusters_parser.add_argument("--query", default=None, help="Case-insensitive cluster search")
+
+    cluster_parser = subparsers.add_parser("cluster", help="Fetch graph cluster detail")
+    cluster_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
+    cluster_parser.add_argument("--id", required=True, help="Cluster id")
+    cluster_parser.add_argument("--pack", default=None, help="Pack namespace for the cluster")
 
     neighborhood_parser = subparsers.add_parser("neighborhood", help="Fetch topic neighborhood")
     neighborhood_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
@@ -75,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
                     query=args.query,
                 )
             }
+        elif args.command == "cluster":
+            payload = get_graph_cluster_detail(vault_dir, args.id, pack_name=args.pack)
         elif args.command == "neighborhood":
             payload = get_topic_neighborhood(vault_dir, args.id, depth=args.depth)
         else:  # pragma: no cover - argparse enforces commands
