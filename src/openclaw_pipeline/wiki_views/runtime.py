@@ -4,6 +4,8 @@ from pathlib import Path
 
 from ..derived.paths import compiled_view_path
 from ..extraction.artifacts import iter_run_results
+from ..materializers.cluster_crystal import materialize_cluster_crystal
+from ..materializers.cluster_view import materialize_cluster_view
 from ..materializers.contradiction_view import materialize_contradiction_view
 from ..materializers.event_dossier import materialize_event_dossier
 from ..materializers.object_page import materialize_object_page
@@ -49,7 +51,13 @@ def _resolve_view_inputs(layout: VaultLayout, spec: WikiViewSpec) -> list[Path]:
     return resolved
 
 
-def build_view(vault_dir: Path, spec: WikiViewSpec, *, object_id: str | None = None) -> Path:
+def build_view(
+    vault_dir: Path,
+    spec: WikiViewSpec,
+    *,
+    object_id: str | None = None,
+    cluster_id: str | None = None,
+) -> Path:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
 
@@ -57,12 +65,18 @@ def build_view(vault_dir: Path, spec: WikiViewSpec, *, object_id: str | None = N
         if not object_id:
             raise ValueError("object_id is required for object_page views")
         return materialize_object_page(resolved_vault, pack_name=spec.pack, object_id=object_id)
+    if spec.builder == "cluster_crystal":
+        if not cluster_id:
+            raise ValueError("cluster_id is required for cluster_crystal views")
+        return materialize_cluster_crystal(resolved_vault, pack_name=spec.pack, cluster_id=cluster_id)
     if spec.builder == "topic_view":
         return materialize_topic_view(resolved_vault, pack_name=spec.pack, view_name=spec.name)
     if spec.builder == "event_dossier":
         return materialize_event_dossier(resolved_vault, pack_name=spec.pack, view_name=spec.name)
     if spec.builder == "contradiction_view":
         return materialize_contradiction_view(resolved_vault, pack_name=spec.pack, view_name=spec.name)
+    if spec.builder == "cluster_view":
+        return materialize_cluster_view(resolved_vault, pack_name=spec.pack, view_name=spec.name)
 
     output_path = compiled_view_path(layout, pack_name=spec.pack, view_name=spec.name)
     output_path.parent.mkdir(parents=True, exist_ok=True)

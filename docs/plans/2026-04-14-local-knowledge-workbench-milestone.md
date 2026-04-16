@@ -465,7 +465,7 @@ Implementation sequence:
 
 ### Milestone 10: Graph Intelligence And Synthesis
 
-Status: **Not Started**
+Status: **Implemented**
 
 Goal:
 
@@ -483,61 +483,19 @@ Exit condition:
 
 - users can see coherent topic clusters, cross-domain links, and evolving synthesized references grounded in source-cited knowledge.
 
+Closeout:
+
+- [[2026-04-15-phase15-graph-intelligence-closeout]]
+
 ## Recommended Next Sequence
 
-### Finish Phase 10: Event + Contradiction Hardening
+The historical Phase 10 -> Phase 15 ordering below is now complete and should be treated as archived milestone history, not as the active follow-up plan.
 
-Do first.
+Use the `Architecture follow-up` and `Implementation sequence` sections above as the current next-step order:
 
-Reason:
-
-- the review workbench is now strong enough that model weaknesses are visible,
-- event and contradiction semantics need to become trustworthy before we add more intelligence on top.
-
-### Phase 11: Knowledge Production Traceability
-
-Do next.
-
-Reason:
-
-- this is still the most legible product-value surface,
-- it closes the source -> deep dive -> evergreen -> Atlas chain,
-- it prepares the evidence trail required for later active intelligence.
-
-### Phase 12: Active Signal Loop
-
-Do after Phase 11.
-
-Reason:
-
-- once production traceability is strong, asynchronous signal capture can safely create backlinks, entities, and updates,
-- this is the first real step from “workbench” to “active system.”
-
-### Phase 13: Knowledge Evolution Layer
-
-Do after Phase 12.
-
-Reason:
-
-- evolution links depend on better signal capture and graph linking,
-- they turn the current maintenance model into a more complete model of changing understanding.
-
-### Phase 14: Background Intelligence
-
-Do after Phase 13.
-
-Reason:
-
-- briefings, insights, and proactive flags should sit on top of a stable evolution layer,
-- otherwise they become noisy product theater instead of useful intelligence.
-
-### Phase 15: Graph Intelligence And Synthesis
-
-Do after Phase 14.
-
-Reason:
-
-- community detection, clusters, and crystal-like synthesis become much more useful once the graph and evolution layers are already trustworthy.
+1. `Stage Handler Registry`
+2. `Pack-Aware Truth Projection`
+3. `Pack-Aware Observation Surfaces`
 
 ## Non-Recommended Paths Right Now
 

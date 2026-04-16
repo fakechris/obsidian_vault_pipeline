@@ -22,6 +22,8 @@ from ..ui.view_models import (
     build_action_queue_payload,
     build_atlas_browser_payload,
     build_briefing_payload,
+    build_cluster_browser_payload,
+    build_cluster_detail_payload,
     build_contradiction_browser_payload,
     build_derivation_browser_payload,
     build_evolution_browser_payload,
@@ -121,6 +123,7 @@ def _layout(title: str, body: str) -> str:
             <a href="/actions">Actions</a>
             <a href="/evolution">Evolution</a>
             <a href="/production">Production</a>
+            <a href="/clusters">Clusters</a>
             <a href="/atlas">Atlas</a>
             <a href="/deep-dives">Deep Dives</a>
             <a href="/events">Event Dossier</a>
@@ -1312,6 +1315,248 @@ def _render_production_browser_page(payload: dict) -> str:
     )
 
 
+def _render_clusters_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
+    limit_note = (
+        f" Showing the first {payload['limit']} graph clusters in this browser window."
+        if payload.get("is_limited")
+        else ""
+    )
+    kind_counts = "".join(
+        f"<span class='pill'>{escape(cluster_kind)}: {count}</span>"
+        for cluster_kind, count in payload["cluster_kind_counts"].items()
+    ) or "<span class='muted'>None</span>"
+    items = "".join(
+        "<li>"
+        f'<a href="{escape(item["detail_path"])}">{escape(item.get("display_title") or item["label"])}</a>'
+        + f" <span class='pill'>{escape(item['cluster_kind'])}</span>"
+        + f" <span class='pill'>{escape(item['priority_band'])}</span>"
+        + f" <span class='pill'>{item['member_count']} objects</span>"
+        + (
+            " <span class='muted'>"
+            + ", ".join(
+                f'<a href="{escape(member["path"])}">{escape(member["title"])}</a>'
+                for member in item["member_links"]
+            )
+            + "</span>"
+        )
+        + f"<div class='muted'>Canonical cluster: {escape(item['label'])}</div>"
+        + f"<div class='muted'>Center: <a href='{escape(item['center_object_path'])}'>{escape(item['center_title'])}</a></div>"
+        + f"<div class='muted'>Priority: {escape(item['priority_reason'])}</div>"
+        + (
+            f"<div class='muted'>Relation patterns: {escape(item['relation_pattern_preview'])}</div>"
+            if item.get("relation_pattern_preview")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Related clusters: {item['related_cluster_count']} · {escape(item['related_cluster_preview'])}</div>"
+            if item.get("related_cluster_count")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Neighborhood: {escape(item['neighborhood_band'])} · {escape(item['neighborhood_bridge_kind'])} · {escape(item['neighborhood_reason'])}</div>"
+            if item.get("neighborhood_score")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Next read: <a href='{escape(item['next_read_path'])}'>{escape(item['next_read_title'])}</a> · {escape(item['next_read_reason'])}</div>"
+            if item.get("next_read_title")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Top route: {escape(item['top_reading_route_kind'])} · {escape(item['top_reading_route_title'])} · {escape(item['top_reading_route_reason'])}</div>"
+            if item.get("top_reading_route_kind")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Reading intents: {item['reading_intent_count']} · {escape(item['reading_intent_preview'])}</div>"
+            if item.get("reading_intent_count")
+            else ""
+        )
+        + (
+            f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
+            if item.get("top_summary_bullet")
+            else ""
+        )
+        + "</li>"
+        for item in payload["items"]
+    ) or "<li class='muted'>No graph clusters found.</li>"
+    model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
+    return _layout(
+        "Graph Clusters",
+        "".join(
+            [
+                "<h1>Graph Clusters</h1>",
+                "<form method='get' action='/clusters'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter clusters or members' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                f"<section class='card'><h2>Cluster Kinds</h2><div class='link-row'>{kind_counts}</div></section>",
+                f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
+        ),
+    )
+
+
+def _render_cluster_detail_page(payload: dict) -> str:
+    cluster = payload["cluster"]
+    edge_kind_counts = "".join(
+        f"<span class='pill'>{escape(edge_kind)}: {count}</span>"
+        for edge_kind, count in payload["edge_kind_counts"].items()
+    ) or "<span class='muted'>None</span>"
+    object_kind_counts = "".join(
+        f"<span class='pill'>{escape(object_kind)}: {count}</span>"
+        for object_kind, count in payload["object_kind_counts"].items()
+    ) or "<span class='muted'>None</span>"
+    summary_bullets = "".join(
+        f"<li>{escape(item)}</li>"
+        for item in payload["summary_bullets"]
+    ) or "<li class='muted'>No cluster summary available.</li>"
+    members = "".join(
+        f'<li><a href="{escape(member["path"])}">{escape(member["title"])}</a></li>'
+        for member in cluster["member_links"]
+    ) or "<li class='muted'>No members.</li>"
+    edges = "".join(
+        "<li>"
+        f'<a href="{escape(edge["source_path"])}">{escape(edge["source_title"])}</a>'
+        f" <span class='pill'>{escape(edge['edge_kind'])}</span> "
+        f'<a href="{escape(edge["target_path"])}">{escape(edge["target_title"])}</a>'
+        + (
+            f" <span class='muted'>source: {escape(edge['evidence_source_slug'])}</span>"
+            if edge["evidence_source_slug"]
+            else ""
+        )
+        + "</li>"
+        for edge in payload["edges"]
+    ) or "<li class='muted'>No internal edges for this cluster.</li>"
+    top_source_notes = "".join(
+        f"<li>{escape(item['title'])} <span class='pill'>{item['object_count']} objects</span></li>"
+        for item in payload["top_source_notes"]
+    ) or "<li class='muted'>No source-note coverage.</li>"
+    top_mocs = "".join(
+        f"<li>{escape(item['title'])} <span class='pill'>{item['object_count']} objects</span></li>"
+        for item in payload["top_mocs"]
+    ) or "<li class='muted'>No atlas coverage.</li>"
+    open_contradictions = "".join(
+        f"<li><a href=\"{escape(item['path'])}\">{escape(item['subject_key'])}</a> <span class='pill'>{len(item['object_ids'])} objects</span></li>"
+        for item in payload["open_contradictions"]
+    ) or "<li class='muted'>No open contradictions in this cluster.</li>"
+    stale_summaries = "".join(
+        f"<li><a href=\"{escape(item['object_path'])}\">{escape(item['title'])}</a> <span class='pill'>{', '.join(escape(code) for code in item['reason_codes'])}</span></li>"
+        for item in payload["stale_summaries"]
+    ) or "<li class='muted'>No stale summaries in this cluster.</li>"
+    related_clusters = "".join(
+        "<li>"
+        f"<a href=\"{escape(item['detail_path'])}\">{escape(item['display_title'])}</a> "
+        f"<span class='pill'>{item['member_count']} objects</span> "
+        f"<span class='pill'>{escape(item['bridge_kind'])}</span> "
+        f"<span class='pill'>{escape(item['reason'])}</span>"
+        + (
+            f"<div class='muted'>Shared source notes: {escape(', '.join(item['shared_source_titles']))}</div>"
+            if item["shared_source_titles"]
+            else ""
+        )
+        + (
+            f"<div class='muted'>Shared atlas pages: {escape(', '.join(item['shared_moc_titles']))}</div>"
+            if item["shared_moc_titles"]
+            else ""
+        )
+        + "</li>"
+        for item in payload["related_clusters"]
+    ) or "<li class='muted'>No related clusters surfaced for this scope.</li>"
+    related_cluster_groups = "".join(
+        f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span>"
+        + (
+            f"<div class='muted'>{escape(', '.join(item['cluster_titles'][:3]))}</div>"
+            if item["cluster_titles"]
+            else ""
+        )
+        + "</li>"
+        for item in payload["related_cluster_groups"]
+    ) or "<li class='muted'>No neighborhood groups surfaced for this cluster.</li>"
+    reading_routes = "".join(
+        "<li>"
+        f"<span class='pill'>#{item['route_rank']}</span> "
+        f"{escape(item['display_name'])}: "
+        f"<a href=\"{escape(item['detail_path'])}\">{escape(item['display_title'])}</a> "
+        f"<span class='pill'>{escape(item['bridge_kind'])}</span> "
+        f"<span class='pill'>{escape(item['bridge_band'])}</span>"
+        f"<div class='muted'>Score: {item['route_score']} · {escape(item['route_reason'])}</div>"
+        f"<div class='muted'>Bridge evidence: {escape(item['reason'])}</div>"
+        "</li>"
+        for item in payload["reading_routes"]
+    ) or "<li class='muted'>No reading routes derived for this cluster.</li>"
+    next_read_cluster = payload.get("next_read_cluster")
+    next_read_route = (
+        "<p>"
+        f"<a href=\"{escape(next_read_cluster['detail_path'])}\">{escape(next_read_cluster['display_title'])}</a> "
+        f"<span class='pill'>{escape(next_read_cluster['bridge_kind'])}</span> "
+        f"<span class='pill'>{escape(next_read_cluster['bridge_band'])}</span>"
+        "</p>"
+        f"<p class='muted'>{escape(next_read_cluster['reason'])}</p>"
+        + (
+            f"<p class='muted'>Shared source notes: {escape(', '.join(next_read_cluster['shared_source_titles']))}</p>"
+            if next_read_cluster["shared_source_titles"]
+            else ""
+        )
+        + (
+            f"<p class='muted'>Shared atlas pages: {escape(', '.join(next_read_cluster['shared_moc_titles']))}</p>"
+            if next_read_cluster["shared_moc_titles"]
+            else ""
+        )
+    ) if next_read_cluster else "<p class='muted'>No next reading route surfaced for this cluster.</p>"
+    relation_patterns = "".join(
+        f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span></li>"
+        for item in payload["relation_pattern_items"]
+    ) or "<li class='muted'>No relation patterns in this cluster.</li>"
+    review_context = payload["review_context"]
+    model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
+    return _layout(
+        "Graph Cluster",
+        (
+            "<h1>Graph Cluster</h1>"
+            f"<p><a href='{escape(payload['browser_path'])}'>Back to clusters</a></p>"
+            f"<section class='card'><h2>{escape(payload.get('display_title') or cluster['label'])}</h2>"
+            f"<p class='muted'>Pack: {escape(cluster['pack'])} · Kind: {escape(cluster['cluster_kind'])} · Score: {cluster['score']:.1f}</p>"
+            f"<p class='muted'>Canonical cluster id: {escape(cluster['cluster_id'])}</p>"
+            f"<p>Center: <a href='{escape(cluster['center_object_path'])}'>{escape(cluster['center_title'])}</a></p>"
+            f"<p class='muted'>{cluster['member_count']} member objects.</p>"
+            "</section>"
+            f"<section class='card'><h2>Cluster Synthesis</h2><ul class='list-tight'>{summary_bullets}</ul></section>"
+            f"<section class='card'><h2>Structural Label</h2><p><strong>{escape(payload['structural_label']['title'])}</strong></p><p class='muted'>{escape(payload['structural_label']['reason'])}</p></section>"
+            f"<section class='card'><h2>Relation Patterns</h2><ul class='list-tight'>{relation_patterns}</ul></section>"
+            f"<section class='card'><h2>Review Pressure</h2><h3>Open Contradictions</h3><ul class='list-tight'>{open_contradictions}</ul><h3>Stale Summaries</h3><ul class='list-tight'>{stale_summaries}</ul></section>"
+            f"<section class='card'><h2>Reading Routes</h2><ul class='list-tight'>{reading_routes}</ul></section>"
+            f"<section class='card'><h2>Next Reading Route</h2>{next_read_route}</section>"
+            f"<section class='card'><h2>Neighborhood Groups</h2><ul class='list-tight'>{related_cluster_groups}</ul></section>"
+            f"<section class='card'><h2>Related Clusters</h2><ul class='list-tight'>{related_clusters}</ul></section>"
+            f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
+            f"<section class='card'><h2>Object Kinds</h2><div class='link-row'>{object_kind_counts}</div></section>"
+            f"<section class='card'><h2>Coverage</h2><p class='muted'>"
+            f"{review_context['source_note_count']} source/deep-dive notes · "
+            f"{review_context['moc_count']} atlas pages · "
+            f"{review_context['open_contradiction_count']} open contradictions · "
+            f"{review_context['stale_summary_count']} stale summaries"
+            "</p></section>"
+            f"<section class='card'><h2>Top Source Notes</h2><ul class='list-tight'>{top_source_notes}</ul></section>"
+            f"<section class='card'><h2>Top Atlas Pages</h2><ul class='list-tight'>{top_mocs}</ul></section>"
+            f"<section class='card'><h2>Members</h2><ul class='list-tight'>{members}</ul></section>"
+            f"<section class='card'><h2>Internal Edges</h2><ul class='list-tight'>{edges}</ul></section>"
+            f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
+        ),
+    )
+
+
 def _render_evolution_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
     status = payload.get("status", "all")
@@ -2002,6 +2247,28 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     payload = build_production_browser_payload(resolved_vault, query=q)
                     self._write_html(_render_production_browser_page(payload))
+                    return
+                if path == "/api/clusters":
+                    q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q))
+                    return
+                if path == "/clusters":
+                    q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q)
+                    self._write_html(_render_clusters_page(payload))
+                    return
+                if path == "/api/cluster":
+                    cluster_id = self._required(query, "id")
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name))
+                    return
+                if path == "/cluster":
+                    cluster_id = self._required(query, "id")
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name)
+                    self._write_html(_render_cluster_detail_page(payload))
                     return
                 if path == "/api/actions":
                     status = query.get("status", [""])[0] or None

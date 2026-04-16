@@ -32,6 +32,7 @@ def execute_truth_projection_builder(
         vault_dir=vault_dir,
         page_rows=page_rows,
         link_rows=link_rows,
+        pack_name=str(getattr(coerce_pack(pack_name), "name", "")),
         spec=spec,
     )
     return spec, projection

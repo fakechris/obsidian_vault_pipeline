@@ -258,6 +258,408 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["scoped_open_contradiction_ids"]
 
 
+def test_build_cluster_browser_payload(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
+
+    _seed_truth_store(temp_vault)
+    gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
+    delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
+    gamma.write_text(
+        """---
+note_id: gamma
+title: Gamma
+type: evergreen
+date: 2026-04-13
+---
+
+# Gamma
+
+Links to [[delta]].
+""",
+        encoding="utf-8",
+    )
+    delta.write_text(
+        """---
+note_id: delta
+title: Delta
+type: evergreen
+date: 2026-04-13
+---
+
+# Delta
+
+Delta extends Gamma.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_cluster_browser_payload(temp_vault)
+
+    assert payload["screen"] == "graph/clusters"
+    assert payload["count"] >= 2
+    assert payload["cluster_kind_counts"] == {"relation_component": payload["count"]}
+    assert payload["items"][0]["center_object_path"].startswith("/object?id=")
+    assert payload["items"][0]["member_count"] >= 2
+    assert payload["items"][0]["members"][0]["object_id"]
+    assert payload["items"][0]["priority_band"] == "attention"
+    assert payload["items"][0]["priority_reason"]
+    assert payload["items"][0]["display_title"].startswith("Contradiction cluster around")
+    assert payload["items"][0]["relation_pattern_preview"]
+    assert payload["items"][0]["priority_score"] > payload["items"][1]["priority_score"]
+    assert "alpha" in payload["items"][0]["member_object_ids"]
+
+
+def test_build_cluster_browser_payload_respects_requested_pack(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_cluster_browser_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["items"]
+    assert all(item["pack"] == "default-knowledge" for item in payload["items"])
+
+
+def test_build_cluster_browser_payload_includes_related_cluster_summary(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
+
+    _seed_truth_store(temp_vault)
+    gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
+    delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
+    gamma.write_text(
+        """---
+note_id: gamma
+title: Gamma
+type: evergreen
+date: 2026-04-13
+---
+
+# Gamma
+
+Gamma links to [[delta]].
+""",
+        encoding="utf-8",
+    )
+    delta.write_text(
+        """---
+note_id: delta
+title: Delta
+type: evergreen
+date: 2026-04-13
+---
+
+# Delta
+""",
+        encoding="utf-8",
+    )
+    shared_source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    shared_source.parent.mkdir(parents=True, exist_ok=True)
+    shared_source.write_text(
+        """---
+note_id: shared-deep-dive
+title: Shared Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Shared Deep Dive
+
+Mentions [[alpha]], [[beta]], [[gamma]], and [[delta]].
+""",
+        encoding="utf-8",
+    )
+    shared_atlas = temp_vault / "10-Knowledge" / "Atlas" / "Shared-Atlas.md"
+    shared_atlas.write_text(
+        """---
+note_id: shared-atlas
+title: Shared Atlas
+type: moc
+date: 2026-04-13
+---
+
+# Shared Atlas
+
+- [[alpha]]
+- [[beta]]
+- [[gamma]]
+- [[delta]]
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_cluster_browser_payload(temp_vault)
+    item = next(entry for entry in payload["items"] if "alpha" in entry["member_object_ids"])
+
+    assert item["related_cluster_count"] >= 1
+    assert item["related_cluster_preview"]
+    assert item["neighborhood_score"] > 0
+    assert item["neighborhood_reason"]
+    assert item["neighborhood_bridge_kind"] == "source_and_atlas_overlap"
+    assert item["next_read_title"]
+    assert item["next_read_path"].startswith("/cluster?id=")
+    assert item["top_reading_route_kind"] == "full_context_route"
+    assert item["top_reading_route_title"]
+    assert item["top_reading_route_reason"]
+    assert item["has_reading_route"] is True
+    assert item["reading_intent_count"] >= 1
+    assert "Full Context Route" in item["reading_intent_preview"]
+
+
+def test_build_cluster_browser_payload_does_not_call_full_detail_builder(temp_vault, monkeypatch):
+    from openclaw_pipeline.ui import view_models
+
+    _seed_truth_store(temp_vault)
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("cluster browser should not call full detail builder")
+
+    monkeypatch.setattr(view_models, "build_cluster_detail_payload", _explode)
+
+    payload = view_models.build_cluster_browser_payload(temp_vault)
+
+    assert payload["items"]
+
+
+def test_build_cluster_detail_payload(temp_vault):
+    from openclaw_pipeline.truth_api import list_graph_clusters
+    from openclaw_pipeline.ui.view_models import build_cluster_detail_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]] and [[beta]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+- [[beta]]
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+    cluster = list_graph_clusters(temp_vault)[0]
+
+    payload = build_cluster_detail_payload(temp_vault, cluster_id=cluster["cluster_id"], pack_name=cluster["pack"])
+
+    assert payload["screen"] == "graph/cluster-detail"
+    assert payload["cluster"]["cluster_id"] == cluster["cluster_id"]
+    assert payload["cluster"]["detail_path"].startswith("/cluster?id=")
+    assert "pack=" in payload["browser_path"]
+    assert payload["cluster"]["center_object_path"].startswith("/object?id=")
+    assert payload["cluster"]["member_links"][0]["path"].startswith("/object?id=")
+    assert payload["edges"]
+    assert payload["edges"][0]["source_path"].startswith("/object?id=")
+    assert payload["edges"][0]["target_path"].startswith("/object?id=")
+    assert payload["structural_label"]["kind"] == "contradiction_cluster"
+    assert "Alpha" in payload["structural_label"]["title"]
+    assert payload["edge_summary_items"]
+    assert payload["edge_summary_items"][0]["edge_family"] == "contradiction"
+    assert payload["relation_pattern_items"]
+    assert payload["relation_pattern_items"][0]["display_name"].endswith("links")
+    assert payload["summary_bullets"]
+    assert payload["object_kind_counts"]["evergreen"] == payload["cluster"]["member_count"]
+    assert payload["review_context"]["source_note_count"] >= 1
+    assert payload["review_context"]["moc_count"] >= 1
+    assert payload["open_contradictions"]
+    assert payload["stale_summaries"]
+    assert payload["top_source_notes"][0]["slug"] == "source-deep-dive"
+    assert payload["top_mocs"][0]["slug"] == "atlas-index"
+
+
+def test_build_cluster_detail_payload_filters_relevant_contradictions_before_slicing(
+    temp_vault,
+    monkeypatch,
+):
+    from openclaw_pipeline.truth_api import list_graph_clusters
+    from openclaw_pipeline.ui import view_models
+
+    _seed_truth_store(temp_vault)
+    cluster = list_graph_clusters(temp_vault)[0]
+
+    relevant = {
+        "contradiction_id": "contradiction::relevant",
+        "subject_key": "alpha",
+        "positive_claim_ids": ["alpha::p"],
+        "negative_claim_ids": ["conflict::n"],
+    }
+    unrelated = [
+        {
+            "contradiction_id": f"contradiction::other::{index}",
+            "subject_key": f"other-{index}",
+            "positive_claim_ids": [f"other-{index}::p"],
+            "negative_claim_ids": [f"other-{index}::n"],
+        }
+        for index in range(20)
+    ]
+
+    def _fake_list_contradictions(_vault_dir, *, status=None, query=None, limit=100, **kwargs):
+        assert status == "open"
+        rows = [*unrelated, relevant]
+        return rows if limit is None else rows[:limit]
+
+    monkeypatch.setattr(view_models, "list_contradictions", _fake_list_contradictions)
+
+    payload = view_models.build_cluster_detail_payload(
+        temp_vault,
+        cluster_id=cluster["cluster_id"],
+        pack_name=cluster["pack"],
+    )
+
+    assert payload["open_contradictions"]
+    assert payload["open_contradictions"][0]["contradiction_id"] == "contradiction::relevant"
+
+
+def test_build_cluster_detail_payload_includes_related_clusters(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.truth_api import list_graph_clusters
+    from openclaw_pipeline.ui.view_models import build_cluster_detail_payload
+
+    _seed_truth_store(temp_vault)
+    gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
+    delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
+    gamma.write_text(
+        """---
+note_id: gamma
+title: Gamma
+type: evergreen
+date: 2026-04-13
+---
+
+# Gamma
+
+Gamma links to [[delta]].
+""",
+        encoding="utf-8",
+    )
+    delta.write_text(
+        """---
+note_id: delta
+title: Delta
+type: evergreen
+date: 2026-04-13
+---
+
+# Delta
+""",
+        encoding="utf-8",
+    )
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: shared-deep-dive
+title: Shared Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Shared Deep Dive
+
+Mentions [[alpha]], [[beta]], [[gamma]], and [[delta]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Shared-Atlas.md"
+    atlas.write_text(
+        """---
+note_id: shared-atlas
+title: Shared Atlas
+type: moc
+date: 2026-04-13
+---
+
+# Shared Atlas
+
+- [[alpha]]
+- [[beta]]
+- [[gamma]]
+- [[delta]]
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    cluster = next(
+        item
+        for item in list_graph_clusters(temp_vault)
+        if "alpha" in {member["object_id"] for member in item["members"]}
+    )
+    payload = build_cluster_detail_payload(temp_vault, cluster_id=cluster["cluster_id"], pack_name=cluster["pack"])
+
+    assert payload["related_clusters"]
+    assert payload["related_clusters"][0]["bridge_band"]
+    assert payload["related_clusters"][0]["bridge_kind"] == "source_and_atlas_overlap"
+    assert payload["related_clusters"][0]["shared_source_count"] >= 1
+    assert payload["related_clusters"][0]["shared_moc_count"] >= 1
+    assert payload["related_clusters"][0]["detail_path"].startswith("/cluster?id=")
+    assert payload["next_read_cluster"]["detail_path"] == payload["related_clusters"][0]["detail_path"]
+    assert payload["next_read_cluster"]["display_title"]
+    assert payload["next_read_cluster"]["bridge_kind"] == "source_and_atlas_overlap"
+    assert payload["related_cluster_groups"]
+    assert payload["related_cluster_groups"][0]["bridge_kind"] == "source_and_atlas_overlap"
+    assert payload["related_cluster_groups"][0]["count"] >= 1
+    assert payload["reading_routes"]
+    assert payload["reading_routes"][0]["route_kind"] == "full_context_route"
+    assert payload["reading_routes"][0]["route_rank"] == 1
+    assert payload["reading_routes"][0]["route_score"] >= payload["reading_routes"][-1]["route_score"]
+    assert payload["reading_routes"][0]["route_reason"]
+    assert payload["reading_routes"][0]["detail_path"].startswith("/cluster?id=")
+
+
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 

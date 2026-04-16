@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from urllib.parse import quote
+
+import pytest
+
 
 def test_build_views_help_mentions_primary_pack(capsys):
     from openclaw_pipeline.commands.build_views import main
@@ -32,6 +36,24 @@ def test_build_views_command_requires_object_id_for_object_page(temp_vault):
         assert exc.code == 2
     else:
         raise AssertionError("expected object/page to require --object-id")
+
+
+def test_build_views_command_requires_cluster_id_for_cluster_crystal(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--vault-dir",
+                str(temp_vault),
+                "--pack",
+                "default-knowledge",
+                "--view",
+                "cluster/crystal",
+            ]
+        )
+
+    assert exc_info.value.code == 2
 
 
 def test_build_views_command_writes_compiled_markdown(temp_vault):
@@ -354,21 +376,22 @@ Baseline note.
     with sqlite3.connect(layout.knowledge_db) as conn:
         conn.execute(
             """
-            INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
-            VALUES ('agent_note', 'evergreen', 'Agent Note', '10-Knowledge/Evergreen/Agent Note.md', 'agent_note')
+            INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug)
+            VALUES ('research-tech', 'agent_note', 'evergreen', 'Agent Note', '10-Knowledge/Evergreen/Agent Note.md', 'agent_note')
             """
         )
         conn.execute(
             """
-            INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
-            VALUES ('agent_note', 'Agent note documents an unrelated system.', 'agent_note')
+            INSERT INTO compiled_summaries (pack, object_id, summary_text, source_slug)
+            VALUES ('research-tech', 'agent_note', 'Agent note documents an unrelated system.', 'agent_note')
             """
         )
         conn.execute(
             """
             INSERT INTO contradictions (
-              contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
+              pack, contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
             ) VALUES (
+              'research-tech',
               'contradiction::underscore',
               'agent platform',
               '[\"agentXnote::positive\"]',
@@ -511,6 +534,390 @@ The system launched publicly for operators.
     assert "2026-04-09" in content
     assert "Launch Note" in content
     assert "Launch note explains the system launch details." in content
+
+
+def test_build_views_command_can_materialize_cluster_overview(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Source note explains the runtime architecture.
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+
+Target note captures downstream effects.
+""",
+        encoding="utf-8",
+    )
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-10
+---
+
+# Source Deep Dive
+
+Mentions [[source-note]] and [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-10
+---
+
+# Atlas Index
+
+- [[source-note]]
+- [[target-note]]
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "overview/clusters",
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (layout.compiled_views_dir / "default-knowledge" / "overview__clusters.md").read_text(encoding="utf-8")
+
+    assert result == 0
+    assert "# overview/clusters" in content
+    assert "## Graph Clusters" in content
+    assert "Source Note" in content
+    assert "Target Note" in content
+    assert "#### Cluster Synthesis" in content
+    assert "#### Structural Label" in content
+    assert "#### Relation Patterns" in content
+    assert "#### Related Clusters" in content
+    assert "#### Next Reading Route" in content
+    assert "- top_reading_route_kind:" in content
+    assert "- has_reading_route:" in content
+    assert "- reading_intent_count:" in content
+    assert "- priority_band:" in content
+    assert "- neighborhood_score:" in content
+    assert "#### Coverage" in content
+    assert "Source Deep Dive" in content
+    assert "Atlas Index" in content
+
+
+def test_build_views_command_can_materialize_cluster_crystal(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Source note explains the runtime architecture.
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+
+Target note captures downstream effects.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    cluster = list_graph_clusters(temp_vault, pack_name="default-knowledge")[0]
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "cluster/crystal",
+            "--cluster-id",
+            cluster["cluster_id"],
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (
+        layout.compiled_views_dir
+        / "default-knowledge"
+        / "clusters"
+        / f"{quote(cluster['cluster_id'], safe='')}.md"
+    ).read_text(encoding="utf-8")
+
+    assert result == 0
+    assert f"# cluster/{cluster['cluster_id']}" in content
+    assert "## Cluster Synthesis" in content
+    assert "## Structural Label" in content
+    assert "## Edge Summary" in content
+    assert "## Relation Patterns" in content
+    assert "## Review Pressure" in content
+    assert "## Next Reading Route" in content
+    assert "## Members" in content
+    assert "## Internal Edges" in content
+    assert "- display_title: " in content
+    assert "cluster around" in content
+    assert "Source Note" in content
+    assert "Target Note" in content
+
+
+def test_build_views_command_materializes_cluster_crystal_to_safe_path(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    cluster = list_graph_clusters(temp_vault, pack_name="default-knowledge")[0]
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "cluster/crystal",
+            "--cluster-id",
+            cluster["cluster_id"],
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    output_path = (
+        layout.compiled_views_dir
+        / "default-knowledge"
+        / "clusters"
+        / f"{quote(cluster['cluster_id'], safe='')}.md"
+    )
+
+    assert result == 0
+    assert ":" not in output_path.name
+    assert output_path.exists()
+
+
+def test_build_views_command_cluster_crystal_includes_related_clusters(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    beta = temp_vault / "10-Knowledge" / "Evergreen" / "Beta.md"
+    gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
+    delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-10
+---
+
+# Alpha
+
+Alpha links to [[beta]].
+""",
+        encoding="utf-8",
+    )
+    beta.write_text(
+        """---
+note_id: beta
+title: Beta
+type: evergreen
+date: 2026-04-10
+---
+
+# Beta
+
+Alpha does not support local-first execution.
+""",
+        encoding="utf-8",
+    )
+    gamma.write_text(
+        """---
+note_id: gamma
+title: Gamma
+type: evergreen
+date: 2026-04-10
+---
+
+# Gamma
+
+Gamma links to [[delta]].
+""",
+        encoding="utf-8",
+    )
+    delta.write_text(
+        """---
+note_id: delta
+title: Delta
+type: evergreen
+date: 2026-04-10
+---
+
+# Delta
+""",
+        encoding="utf-8",
+    )
+    shared_source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    shared_source.parent.mkdir(parents=True, exist_ok=True)
+    shared_source.write_text(
+        """---
+note_id: shared-deep-dive
+title: Shared Deep Dive
+type: deep_dive
+date: 2026-04-10
+---
+
+# Shared Deep Dive
+
+Mentions [[alpha]], [[beta]], [[gamma]], and [[delta]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Shared-Atlas.md"
+    atlas.write_text(
+        """---
+note_id: shared-atlas
+title: Shared Atlas
+type: moc
+date: 2026-04-10
+---
+
+# Shared Atlas
+
+- [[alpha]]
+- [[beta]]
+- [[gamma]]
+- [[delta]]
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    cluster = next(
+        item
+        for item in list_graph_clusters(temp_vault, pack_name="default-knowledge")
+        if "alpha" in {member["object_id"] for member in item["members"]}
+    )
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "cluster/crystal",
+            "--cluster-id",
+            cluster["cluster_id"],
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (
+        layout.compiled_views_dir
+        / "default-knowledge"
+        / "clusters"
+        / f"{quote(cluster['cluster_id'], safe='')}.md"
+    ).read_text(encoding="utf-8")
+
+    assert result == 0
+    assert "## Reading Routes" in content
+    assert "route_rank:" in content
+    assert "route_reason:" in content
+    assert "## Related Clusters" in content
+    assert "## Neighborhood Groups" in content
+    assert "source_and_atlas_overlap" in content
+    assert "Shared Atlas" in content or "Shared Deep Dive" in content
 
 
 def test_build_views_command_can_materialize_contradictions_overview(temp_vault):

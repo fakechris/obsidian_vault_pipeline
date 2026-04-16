@@ -19,6 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--view", required=True, help="Wiki view name")
     parser.add_argument("--object-id", help="Object ID for object-specific materializers")
+    parser.add_argument("--cluster-id", help="Cluster ID for cluster-specific materializers")
     args = parser.parse_args(argv)
 
     vault_dir = resolve_vault_dir(args.vault_dir)
@@ -26,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     view = pack.wiki_view(args.view)
     if view.builder == "object_page" and not args.object_id:
         parser.error("the --object-id argument is required for object/page views")
-    output_path = build_view(vault_dir, view, object_id=args.object_id)
+    if view.builder == "cluster_crystal" and not args.cluster_id:
+        parser.error("the --cluster-id argument is required for cluster/crystal views")
+    output_path = build_view(vault_dir, view, object_id=args.object_id, cluster_id=args.cluster_id)
     print(json.dumps({"output_path": str(output_path)}, ensure_ascii=False))
     return 0

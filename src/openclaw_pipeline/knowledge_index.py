@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from array import array
+from datetime import datetime, timezone
 import hashlib
 from io import TextIOBase
 import json
@@ -13,8 +14,9 @@ from .concept_registry import ConceptRegistry, ResolutionAction
 from .graph.frontmatter import FrontmatterParser, NoteMetadata
 from .graph.link_parser import LinkParser
 from .identity import canonicalize_note_id
+from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from .runtime import VaultLayout, knowledge_db_write_lock, resolve_vault_dir
-from .truth_projection_registry import execute_truth_projection_builder
+from .truth_projection_registry import execute_truth_projection_builder, resolve_truth_projection_builder
 from .truth_store import TRUTH_STORE_SCHEMA
 
 SUMMARY_MAX_LEN = 320
@@ -100,6 +102,126 @@ SCHEMA += "\n" + TRUTH_STORE_SCHEMA
 
 EMBEDDING_DIMENSIONS = 128
 EMBEDDING_MODEL = "local-hash-v1"
+TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug"),
+    "claims": ("pack", "claim_id", "object_id", "claim_kind", "claim_text", "confidence"),
+    "claim_evidence": ("pack", "claim_id", "source_slug", "evidence_kind", "quote_text"),
+    "relations": ("pack", "source_object_id", "target_object_id", "relation_type", "evidence_source_slug"),
+    "compiled_summaries": ("pack", "object_id", "summary_text", "source_slug"),
+    "contradictions": (
+        "pack",
+        "contradiction_id",
+        "subject_key",
+        "positive_claim_ids_json",
+        "negative_claim_ids_json",
+        "status",
+        "resolution_note",
+        "resolved_at",
+    ),
+    "graph_edges": (
+        "pack",
+        "edge_id",
+        "source_object_id",
+        "target_object_id",
+        "edge_kind",
+        "weight",
+        "evidence_source_slug",
+    ),
+    "graph_clusters": (
+        "pack",
+        "cluster_id",
+        "cluster_kind",
+        "label",
+        "center_object_id",
+        "member_object_ids_json",
+        "score",
+    ),
+}
+
+
+def _truth_pack_name(pack_name: str | None = None) -> str:
+    return str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+
+
+def _utc_now_text() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _projection_metadata(pack_name: str) -> tuple[str, str]:
+    try:
+        spec = resolve_truth_projection_builder(pack_name=pack_name)
+    except Exception:
+        return pack_name, ""
+    return spec.pack, getattr(spec, "name", "")
+
+
+def _preserve_existing_truth_rows(
+    source_db_path: Path,
+    dest_conn: sqlite3.Connection,
+    *,
+    exclude_pack: str,
+) -> None:
+    if not source_db_path.exists():
+        return
+    preserved_packs: set[str] = set()
+    preserved_metadata_packs: set[str] = set()
+    try:
+        with sqlite3.connect(source_db_path) as source_conn:
+            for table_name, columns in TRUTH_PROJECTION_TABLE_COLUMNS.items():
+                column_sql = ", ".join(columns)
+                rows = source_conn.execute(
+                    f"SELECT {column_sql} FROM {table_name} WHERE pack != ? ORDER BY pack",
+                    (exclude_pack,),
+                ).fetchall()
+                if not rows:
+                    continue
+                placeholders = ", ".join("?" for _ in columns)
+                dest_conn.executemany(
+                    f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+                    rows,
+                )
+                preserved_packs.update(str(row[0]) for row in rows if row and row[0])
+
+            metadata_rows = source_conn.execute(
+                """
+                SELECT pack, owner_pack, builder_name, built_at
+                FROM truth_projections
+                WHERE pack != ?
+                ORDER BY pack
+                """,
+                (exclude_pack,),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        metadata_rows = []
+    except sqlite3.DatabaseError:
+        return
+
+    if metadata_rows:
+        dest_conn.executemany(
+            """
+            INSERT INTO truth_projections (pack, owner_pack, builder_name, built_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            metadata_rows,
+        )
+        preserved_metadata_packs.update(str(row[0]) for row in metadata_rows if row and row[0])
+
+    missing_metadata_packs = sorted(preserved_packs - preserved_metadata_packs)
+    if not missing_metadata_packs:
+        return
+
+    built_at = _utc_now_text()
+    for pack in missing_metadata_packs:
+        owner_pack, builder_name = _projection_metadata(pack)
+        dest_conn.execute(
+            """
+            INSERT INTO truth_projections (pack, owner_pack, builder_name, built_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (pack, owner_pack, builder_name, built_at),
+        )
 
 
 def _split_frontmatter_body(content: str) -> str:
@@ -356,6 +478,7 @@ def rebuild_knowledge_index(
 ) -> dict[str, int | str]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
+    truth_pack = _truth_pack_name(pack_name)
     with knowledge_db_write_lock(resolved_vault):
         evergreen_dir = layout.evergreen_dir
         atlas_dir = layout.atlas_dir
@@ -396,6 +519,7 @@ def rebuild_knowledge_index(
         conn = None
         try:
             conn = _initialize_database(temp_db_path)
+            _preserve_existing_truth_rows(layout.knowledge_db, conn, exclude_pack=truth_pack)
             page_rows = []
             timeline_rows = []
             embedding_rows = []
@@ -473,42 +597,43 @@ def rebuild_knowledge_index(
             )
             conn.executemany(
                 """
-                INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 truth_projection.objects,
             )
             conn.executemany(
                 """
-                INSERT INTO claims (claim_id, object_id, claim_kind, claim_text, confidence)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO claims (pack, claim_id, object_id, claim_kind, claim_text, confidence)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 truth_projection.claims,
             )
             conn.executemany(
                 """
-                INSERT INTO claim_evidence (claim_id, source_slug, evidence_kind, quote_text)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO claim_evidence (pack, claim_id, source_slug, evidence_kind, quote_text)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 truth_projection.claim_evidence,
             )
             conn.executemany(
                 """
-                INSERT INTO relations (source_object_id, target_object_id, relation_type, evidence_source_slug)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO relations (pack, source_object_id, target_object_id, relation_type, evidence_source_slug)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 truth_projection.relations,
             )
             conn.executemany(
                 """
-                INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
-                VALUES (?, ?, ?)
+                INSERT INTO compiled_summaries (pack, object_id, summary_text, source_slug)
+                VALUES (?, ?, ?, ?)
                 """,
                 truth_projection.compiled_summaries,
             )
             conn.executemany(
                 """
                 INSERT INTO contradictions (
+                    pack,
                     contradiction_id,
                     subject_key,
                     positive_claim_ids_json,
@@ -517,9 +642,51 @@ def rebuild_knowledge_index(
                     resolution_note,
                     resolved_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 truth_projection.contradictions,
+            )
+            conn.executemany(
+                """
+                INSERT INTO graph_edges (
+                    pack,
+                    edge_id,
+                    source_object_id,
+                    target_object_id,
+                    edge_kind,
+                    weight,
+                    evidence_source_slug
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                truth_projection.graph_edges,
+            )
+            conn.executemany(
+                """
+                INSERT INTO graph_clusters (
+                    pack,
+                    cluster_id,
+                    cluster_kind,
+                    label,
+                    center_object_id,
+                    member_object_ids_json,
+                    score
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                truth_projection.graph_clusters,
+            )
+            conn.execute(
+                """
+                INSERT INTO truth_projections (pack, owner_pack, builder_name, built_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    truth_pack,
+                    projection_spec.pack,
+                    getattr(projection_spec, "name", ""),
+                    _utc_now_text(),
+                ),
             )
 
             raw_rows = _collect_raw_rows(layout)
@@ -568,7 +735,7 @@ def rebuild_knowledge_index(
 
             return {
                 "db_path": str(layout.knowledge_db),
-                "projection_pack": projection_spec.pack,
+                "projection_pack": truth_pack,
                 "pages_indexed": len(page_rows),
                 "links_indexed": len(link_rows),
                 "raw_records_indexed": len(raw_rows),
@@ -580,6 +747,8 @@ def rebuild_knowledge_index(
                 "relations_indexed": len(truth_projection.relations),
                 "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
                 "contradictions_indexed": len(truth_projection.contradictions),
+                "graph_edges_indexed": len(truth_projection.graph_edges),
+                "graph_clusters_indexed": len(truth_projection.graph_clusters),
             }
 
 
@@ -670,21 +839,31 @@ def search_knowledge_index(vault_dir: Path, query: str, limit: int = 10) -> list
     return results
 
 
-def search_truth_store(vault_dir: Path, query: str, limit: int = 10) -> list[dict[str, object]]:
+def search_truth_store(
+    vault_dir: Path,
+    query: str,
+    limit: int = 10,
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, object]]:
     _, layout = _ensure_knowledge_db(vault_dir)
+    truth_pack = _truth_pack_name(pack_name)
     like_query = f"%{query.strip()}%"
     with sqlite3.connect(layout.knowledge_db) as conn:
         rows = conn.execute(
             """
             SELECT claims.object_id, objects.title, claims.claim_kind, claims.claim_text, compiled_summaries.summary_text
             FROM claims
-            JOIN objects ON objects.object_id = claims.object_id
-            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = claims.object_id
-            WHERE claims.claim_text LIKE ? OR compiled_summaries.summary_text LIKE ? OR objects.title LIKE ?
+            JOIN objects ON objects.pack = claims.pack AND objects.object_id = claims.object_id
+            LEFT JOIN compiled_summaries
+              ON compiled_summaries.pack = claims.pack
+             AND compiled_summaries.object_id = claims.object_id
+            WHERE claims.pack = ?
+              AND (claims.claim_text LIKE ? OR compiled_summaries.summary_text LIKE ? OR objects.title LIKE ?)
             ORDER BY claims.object_id
             LIMIT ?
             """,
-            (like_query, like_query, like_query, limit),
+            (truth_pack, like_query, like_query, like_query, limit),
         ).fetchall()
 
     return [
@@ -699,18 +878,26 @@ def search_truth_store(vault_dir: Path, query: str, limit: int = 10) -> list[dic
     ]
 
 
-def list_contradictions(vault_dir: Path, limit: int = 20, subject: str | None = None) -> list[dict[str, object]]:
+def list_contradictions(
+    vault_dir: Path,
+    limit: int = 20,
+    subject: str | None = None,
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, object]]:
     _, layout = _ensure_knowledge_db(vault_dir)
+    truth_pack = _truth_pack_name(pack_name)
     query = """
         SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
         FROM contradictions
     """
     params: tuple[object, ...]
     if subject:
-        query += " WHERE subject_key LIKE ?"
-        params = (f"%{subject}%", limit)
+        query += " WHERE pack = ? AND subject_key LIKE ?"
+        params = (truth_pack, f"%{subject}%", limit)
     else:
-        params = (limit,)
+        query += " WHERE pack = ?"
+        params = (truth_pack, limit)
     query += " ORDER BY subject_key LIMIT ?"
 
     try:
@@ -748,8 +935,10 @@ def resolve_contradictions(
     *,
     status: str,
     note: str = "",
+    pack_name: str | None = None,
 ) -> dict[str, object]:
     _, layout = _ensure_knowledge_db(vault_dir)
+    truth_pack = _truth_pack_name(pack_name)
     resolved_ids = list(dict.fromkeys(contradiction_ids))
     if not resolved_ids:
         return {
@@ -766,10 +955,10 @@ def resolve_contradictions(
             f"""
             SELECT contradiction_id
             FROM contradictions
-            WHERE contradiction_id IN ({placeholders})
+            WHERE pack = ? AND contradiction_id IN ({placeholders})
             ORDER BY contradiction_id
             """,
-            tuple(resolved_ids),
+            (truth_pack, *resolved_ids),
         ).fetchall()
         found_ids = [row[0] for row in existing]
 
@@ -782,8 +971,14 @@ def resolve_contradictions(
     }
 
 
-def contradiction_object_ids(vault_dir: Path, contradiction_ids: list[str]) -> list[str]:
+def contradiction_object_ids(
+    vault_dir: Path,
+    contradiction_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> list[str]:
     _, layout = _ensure_knowledge_db(vault_dir)
+    truth_pack = _truth_pack_name(pack_name)
     resolved_ids = list(dict.fromkeys(contradiction_ids))
     if not resolved_ids:
         return []
@@ -794,9 +989,9 @@ def contradiction_object_ids(vault_dir: Path, contradiction_ids: list[str]) -> l
             f"""
             SELECT positive_claim_ids_json, negative_claim_ids_json
             FROM contradictions
-            WHERE contradiction_id IN ({placeholders})
+            WHERE pack = ? AND contradiction_id IN ({placeholders})
             """,
-            tuple(resolved_ids),
+            (truth_pack, *resolved_ids),
         ).fetchall()
 
         claim_ids: list[str] = []
@@ -812,17 +1007,23 @@ def contradiction_object_ids(vault_dir: Path, contradiction_ids: list[str]) -> l
             f"""
             SELECT DISTINCT object_id
             FROM claims
-            WHERE claim_id IN ({claim_placeholders})
+            WHERE pack = ? AND claim_id IN ({claim_placeholders})
             ORDER BY object_id
             """,
-            tuple(claim_ids),
+            (truth_pack, *claim_ids),
         ).fetchall()
 
     return [row[0] for row in object_rows]
 
 
-def rebuild_compiled_summaries(vault_dir: Path, object_ids: list[str] | None = None) -> dict[str, object]:
+def rebuild_compiled_summaries(
+    vault_dir: Path,
+    object_ids: list[str] | None = None,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, object]:
     _, layout = _ensure_knowledge_db(vault_dir)
+    truth_pack = _truth_pack_name(pack_name)
     with sqlite3.connect(layout.knowledge_db) as conn:
         if object_ids:
             placeholders = ",".join("?" for _ in object_ids)
@@ -830,22 +1031,25 @@ def rebuild_compiled_summaries(vault_dir: Path, object_ids: list[str] | None = N
                 f"""
                 SELECT object_id
                 FROM objects
-                WHERE object_id IN ({placeholders})
+                WHERE pack = ? AND object_id IN ({placeholders})
                 ORDER BY object_id
                 """,
-                tuple(object_ids),
+                (truth_pack, *object_ids),
             ).fetchall()
         else:
             object_rows = conn.execute(
                 """
                 SELECT object_id
                 FROM objects
+                WHERE pack = ?
                 ORDER BY object_id
                 """
+                ,
+                (truth_pack,),
             ).fetchall()
 
     rebuilt_ids = [str(row[0]) for row in object_rows]
-    rebuild_knowledge_index(vault_dir)
+    rebuild_knowledge_index(vault_dir, pack_name=truth_pack)
 
     return {
         "objects_rebuilt": len(rebuilt_ids),
@@ -880,8 +1084,9 @@ def get_knowledge_page(vault_dir: Path, slug: str) -> dict[str, object] | None:
     }
 
 
-def knowledge_index_stats(vault_dir: Path) -> dict[str, object]:
+def knowledge_index_stats(vault_dir: Path, *, pack_name: str | None = None) -> dict[str, object]:
     _, layout = _ensure_knowledge_db(vault_dir)
+    truth_pack = _truth_pack_name(pack_name)
     queries = {
         "pages": "SELECT COUNT(*) FROM pages_index",
         "links": "SELECT COUNT(*) FROM page_links",
@@ -889,16 +1094,39 @@ def knowledge_index_stats(vault_dir: Path) -> dict[str, object]:
         "timeline_events": "SELECT COUNT(*) FROM timeline_events",
         "audit_events": "SELECT COUNT(*) FROM audit_events",
         "embedding_chunks": "SELECT COUNT(*) FROM page_embeddings",
-        "objects": "SELECT COUNT(*) FROM objects",
-        "claims": "SELECT COUNT(*) FROM claims",
-        "relations": "SELECT COUNT(*) FROM relations",
-        "compiled_summaries": "SELECT COUNT(*) FROM compiled_summaries",
-        "contradictions": "SELECT COUNT(*) FROM contradictions",
+        "objects": "SELECT COUNT(*) FROM objects WHERE pack = ?",
+        "claims": "SELECT COUNT(*) FROM claims WHERE pack = ?",
+        "relations": "SELECT COUNT(*) FROM relations WHERE pack = ?",
+        "compiled_summaries": "SELECT COUNT(*) FROM compiled_summaries WHERE pack = ?",
+        "contradictions": "SELECT COUNT(*) FROM contradictions WHERE pack = ?",
+        "graph_edges": "SELECT COUNT(*) FROM graph_edges WHERE pack = ?",
+        "graph_clusters": "SELECT COUNT(*) FROM graph_clusters WHERE pack = ?",
     }
     stats: dict[str, object] = {"db_path": str(layout.knowledge_db)}
     with sqlite3.connect(layout.knowledge_db) as conn:
         for key, query in queries.items():
-            stats[key] = int(conn.execute(query).fetchone()[0])
+            stats[key] = int(conn.execute(query, (truth_pack,)).fetchone()[0]) if "pack = ?" in query else int(conn.execute(query).fetchone()[0])
+        try:
+            rows = conn.execute(
+                """
+                SELECT pack, owner_pack, builder_name, built_at
+                FROM truth_projections
+                ORDER BY pack
+                """
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            rows = []
+        stats["materialized_truth_packs"] = [
+            {
+                "pack": str(pack),
+                "owner_pack": str(owner_pack),
+                "builder_name": str(builder_name or ""),
+                "built_at": str(built_at or ""),
+            }
+            for pack, owner_pack, builder_name, built_at in rows
+        ]
     return stats
 
 
