@@ -10,6 +10,7 @@ from ..truth_api import (
     get_object_detail,
     get_topic_neighborhood,
     list_contradictions,
+    list_graph_clusters,
     list_objects,
 )
 
@@ -33,6 +34,11 @@ def main(argv: list[str] | None = None) -> int:
     contradictions_parser.add_argument("--limit", type=int, default=100)
     contradictions_parser.add_argument("--status", default=None)
     contradictions_parser.add_argument("--query", default=None, help="Case-insensitive contradiction search")
+
+    clusters_parser = subparsers.add_parser("clusters", help="List graph clusters")
+    clusters_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
+    clusters_parser.add_argument("--limit", type=int, default=100)
+    clusters_parser.add_argument("--query", default=None, help="Case-insensitive cluster search")
 
     neighborhood_parser = subparsers.add_parser("neighborhood", help="Fetch topic neighborhood")
     neighborhood_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
@@ -58,6 +64,14 @@ def main(argv: list[str] | None = None) -> int:
                     vault_dir,
                     limit=args.limit,
                     status=args.status,
+                    query=args.query,
+                )
+            }
+        elif args.command == "clusters":
+            payload = {
+                "items": list_graph_clusters(
+                    vault_dir,
+                    limit=args.limit,
                     query=args.query,
                 )
             }

@@ -108,6 +108,20 @@ def test_truth_api_command_lists_contradictions(temp_vault, capsys):
     assert payload["items"][0]["subject_key"] == "alpha"
 
 
+def test_truth_api_command_lists_graph_clusters(temp_vault, capsys):
+    from openclaw_pipeline.commands.truth_api import main
+
+    _seed_truth_store(temp_vault)
+
+    exit_code = main(["clusters", "--vault-dir", str(temp_vault)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert len(payload["items"]) >= 1
+    assert payload["items"][0]["cluster_kind"] == "relation_component"
+    assert "alpha" in payload["items"][0]["member_object_ids"]
+
+
 def test_truth_api_command_filters_contradictions_by_query(temp_vault, capsys):
     from openclaw_pipeline.commands.truth_api import main
 

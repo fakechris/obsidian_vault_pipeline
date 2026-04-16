@@ -28,6 +28,7 @@ from ..truth_api import (
     list_action_queue,
     list_contradictions,
     list_deep_dive_derivations,
+    list_graph_clusters,
     list_objects,
     list_production_gaps,
     list_production_chains,
@@ -560,6 +561,45 @@ def build_evolution_browser_payload(
         "count": evolution["candidate_count"] + evolution["accepted_count"] + evolution["rejected_count"],
         "type_counts": dict(type_counts),
         "link_types": evolution["link_types"],
+    }
+
+
+def build_cluster_browser_payload(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+) -> dict[str, Any]:
+    items = list_graph_clusters(vault_dir, query=query, limit=limit)
+    cluster_kind_counts = Counter(item["cluster_kind"] for item in items)
+    largest_cluster_size = max((int(item["member_count"]) for item in items), default=0)
+    enriched_items = [
+        {
+            **item,
+            "center_object_path": f"/object?id={quote(str(item['center_object_id']), safe='')}",
+            "member_links": [
+                {
+                    **member,
+                    "path": f"/object?id={quote(str(member['object_id']), safe='')}",
+                }
+                for member in item["members"]
+            ],
+        }
+        for item in items
+    ]
+    return {
+        "screen": "graph/clusters",
+        "query": query or "",
+        "limit": limit,
+        "is_limited": True,
+        "items": enriched_items,
+        "count": len(enriched_items),
+        "cluster_kind_counts": dict(cluster_kind_counts),
+        "largest_cluster_size": largest_cluster_size,
+        "model_notes": [
+            "Graph clusters currently come from pack-owned graph seed projections, not from a final semantic clustering model.",
+            "Current research-tech clusters are relation/contradiction connected components over pack-scoped truth rows.",
+        ],
     }
 
 

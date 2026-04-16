@@ -513,6 +513,68 @@ The system launched publicly for operators.
     assert "Launch note explains the system launch details." in content
 
 
+def test_build_views_command_can_materialize_cluster_overview(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Source note explains the runtime architecture.
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+
+Target note captures downstream effects.
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "overview/clusters",
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (layout.compiled_views_dir / "default-knowledge" / "overview__clusters.md").read_text(encoding="utf-8")
+
+    assert result == 0
+    assert "# overview/clusters" in content
+    assert "## Graph Clusters" in content
+    assert "Source Note" in content
+    assert "Target Note" in content
+
+
 def test_build_views_command_can_materialize_contradictions_overview(temp_vault):
     from openclaw_pipeline.commands.build_views import main
     from openclaw_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions

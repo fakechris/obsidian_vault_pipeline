@@ -22,6 +22,7 @@ from ..ui.view_models import (
     build_action_queue_payload,
     build_atlas_browser_payload,
     build_briefing_payload,
+    build_cluster_browser_payload,
     build_contradiction_browser_payload,
     build_derivation_browser_payload,
     build_evolution_browser_payload,
@@ -121,6 +122,7 @@ def _layout(title: str, body: str) -> str:
             <a href="/actions">Actions</a>
             <a href="/evolution">Evolution</a>
             <a href="/production">Production</a>
+            <a href="/clusters">Clusters</a>
             <a href="/atlas">Atlas</a>
             <a href="/deep-dives">Deep Dives</a>
             <a href="/events">Event Dossier</a>
@@ -1312,6 +1314,51 @@ def _render_production_browser_page(payload: dict) -> str:
     )
 
 
+def _render_clusters_page(payload: dict) -> str:
+    query = payload.get("query", "")
+    limit_note = (
+        f" Showing the first {payload['limit']} graph clusters in this browser window."
+        if payload.get("is_limited")
+        else ""
+    )
+    kind_counts = "".join(
+        f"<span class='pill'>{escape(cluster_kind)}: {count}</span>"
+        for cluster_kind, count in payload["cluster_kind_counts"].items()
+    ) or "<span class='muted'>None</span>"
+    items = "".join(
+        "<li>"
+        f'<a href="{escape(item["center_object_path"])}">{escape(item["label"])}</a>'
+        + f" <span class='pill'>{escape(item['cluster_kind'])}</span>"
+        + f" <span class='pill'>{item['member_count']} objects</span>"
+        + (
+            " <span class='muted'>"
+            + ", ".join(
+                f'<a href="{escape(member["path"])}">{escape(member["title"])}</a>'
+                for member in item["member_links"]
+            )
+            + "</span>"
+        )
+        + f"<div class='muted'>Center: <a href='{escape(item['center_object_path'])}'>{escape(item['center_title'])}</a></div>"
+        + "</li>"
+        for item in payload["items"]
+    ) or "<li class='muted'>No graph clusters found.</li>"
+    model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
+    return _layout(
+        "Graph Clusters",
+        (
+            "<h1>Graph Clusters</h1>"
+            "<form method='get' action='/clusters'>"
+            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter clusters or members' /> "
+            "<button type='submit'>Search</button>"
+            "</form>"
+            f"<p class='muted'>{payload['count']} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.{escape(limit_note)}</p>"
+            f"<section class='card'><h2>Cluster Kinds</h2><div class='link-row'>{kind_counts}</div></section>"
+            f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
+            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        ),
+    )
+
+
 def _render_evolution_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
     status = payload.get("status", "all")
@@ -2002,6 +2049,15 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     payload = build_production_browser_payload(resolved_vault, query=q)
                     self._write_html(_render_production_browser_page(payload))
+                    return
+                if path == "/api/clusters":
+                    q = query.get("q", [""])[0]
+                    self._write_json(build_cluster_browser_payload(resolved_vault, query=q))
+                    return
+                if path == "/clusters":
+                    q = query.get("q", [""])[0]
+                    payload = build_cluster_browser_payload(resolved_vault, query=q)
+                    self._write_html(_render_clusters_page(payload))
                     return
                 if path == "/api/actions":
                     status = query.get("status", [""])[0] or None

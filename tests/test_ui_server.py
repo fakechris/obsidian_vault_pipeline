@@ -252,6 +252,30 @@ def test_ui_server_evolution_endpoint_returns_payload(temp_vault):
     assert payload["count"] >= 1
 
 
+def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/clusters")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["screen"] == "graph/clusters"
+    assert payload["count"] >= 1
+    assert payload["items"][0]["cluster_kind"] == "relation_component"
+
+
 def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
     from openclaw_pipeline.truth_api import list_evolution_candidates

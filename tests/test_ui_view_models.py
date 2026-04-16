@@ -258,6 +258,21 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["scoped_open_contradiction_ids"]
 
 
+def test_build_cluster_browser_payload(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_cluster_browser_payload(temp_vault)
+
+    assert payload["screen"] == "graph/clusters"
+    assert payload["count"] >= 1
+    assert payload["cluster_kind_counts"] == {"relation_component": payload["count"]}
+    assert payload["items"][0]["center_object_path"].startswith("/object?id=")
+    assert payload["items"][0]["member_count"] >= 2
+    assert payload["items"][0]["members"][0]["object_id"]
+
+
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 
