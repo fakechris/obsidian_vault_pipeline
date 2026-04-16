@@ -1077,7 +1077,7 @@ def _render_objects_index(payload: dict) -> str:
 
 def _render_object_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
-    research_shell_enabled = _shell_supports_research_nav(requested_pack)
+    research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
     next_path = _shell_href(f"/object?id={quote(str(payload['object']['object_id']), safe='')}", requested_pack)
     evergreen_path = payload["provenance"]["evergreen_path"]
     evergreen_html = (
@@ -1253,7 +1253,7 @@ def _render_object_page(payload: dict) -> str:
 
 def _render_topic_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
-    research_shell_enabled = _shell_supports_research_nav(requested_pack)
+    research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
     next_path = _shell_href(f"/topic?id={quote(str(payload['center']['object_id']), safe='')}", requested_pack)
     neighbors = "".join(
         f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a></li>'

@@ -55,7 +55,7 @@ def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
     return f"{path}{separator}pack={quote(pack_name, safe='')}"
 
 
-def _dashboard_supports_research_overview(pack_name: str | None = None) -> bool:
+def _supports_research_shell(pack_name: str | None = None) -> bool:
     try:
         return any(pack.name == PRIMARY_PACK_NAME for pack in iter_compatible_packs(pack_name))
     except ValueError:
@@ -922,9 +922,10 @@ def build_object_page_payload(
     pack_name: str | None = None,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
+    research_shell_enabled = _supports_research_shell(pack_name)
     detail = get_object_detail(vault_dir, object_id, pack_name=pack_name)
     neighborhood = get_topic_neighborhood(vault_dir, object_id, pack_name=pack_name)
-    review_context = get_review_context(vault_dir, [object_id], pack_name=pack_name)
+    review_context = get_review_context(vault_dir, [object_id], pack_name=pack_name) if research_shell_enabled else {}
     neighbor_titles = {item["object_id"]: item["title"] for item in neighborhood["neighbors"]}
     relations = [
         {
@@ -937,15 +938,57 @@ def build_object_page_payload(
         }
         for item in detail["relations"]
     ]
+    research_links = {
+        "events_path": _scoped_path(f"/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
+        "contradictions_path": _scoped_path(
+            f"/contradictions?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "summaries_path": _scoped_path(
+            f"/summaries?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "deep_dives_path": _scoped_path(
+            f"/deep-dives?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
+    } if research_shell_enabled else {
+        "events_path": "",
+        "contradictions_path": "",
+        "summaries_path": "",
+        "deep_dives_path": "",
+        "atlas_path": "",
+    }
+    evolution_section = (
+        _build_evolution_section(
+            vault_dir,
+            pack_name=pack_name,
+            status="all",
+            scoped_object_ids=[object_id],
+        )
+        if research_shell_enabled
+        else {
+            "accepted_links": [],
+            "rejected_links": [],
+            "candidate_items": [],
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "link_types": [],
+            "status": "all",
+        }
+    )
     return {
         "screen": "object/page",
         "requested_pack": requested_pack,
+        "research_shell_enabled": research_shell_enabled,
         **detail,
         "production_chain": get_object_traceability(vault_dir, object_id, pack_name=pack_name),
         "relations": relations,
         "claim_count": len(detail["claims"]),
         "relation_count": len(relations),
-        "contradiction_count": len(detail["contradictions"]),
+        "contradiction_count": len(detail["contradictions"]) if research_shell_enabled else 0,
         "evidence_count": len(detail["evidence"]),
         "context": {
             "object_kind": detail["object"]["object_kind"],
@@ -954,45 +997,41 @@ def build_object_page_payload(
         },
         "provenance": detail["provenance"],
         "review_context": review_context,
-        "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8),
-        "evolution": _build_evolution_section(
-            vault_dir,
-            pack_name=pack_name,
-            status="all",
-            scoped_object_ids=[object_id],
+        "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8) if research_shell_enabled else [],
+        "evolution": evolution_section,
+        "stale_summary_details": (
+            list_stale_summaries(
+                vault_dir,
+                pack_name=pack_name,
+                object_ids=[object_id],
+                limit=10,
+            )
+            if research_shell_enabled
+            else []
         ),
-        "stale_summary_details": list_stale_summaries(
-            vault_dir,
-            pack_name=pack_name,
-            object_ids=[object_id],
-            limit=10,
+        "open_contradiction_ids": (
+            [item["contradiction_id"] for item in detail["contradictions"] if item["status"] == "open"]
+            if research_shell_enabled
+            else []
         ),
-        "open_contradiction_ids": [
-            item["contradiction_id"] for item in detail["contradictions"] if item["status"] == "open"
-        ],
         "links": {
             "topic_path": _scoped_path(f"/topic?id={quote(object_id, safe='')}", pack_name=requested_pack),
-            "events_path": _scoped_path(f"/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
-            "contradictions_path": _scoped_path(
-                f"/contradictions?q={quote(object_id, safe='')}",
-                pack_name=requested_pack,
-            ),
-            "summaries_path": _scoped_path(
-                f"/summaries?q={quote(object_id, safe='')}",
-                pack_name=requested_pack,
-            ),
-            "deep_dives_path": _scoped_path(
-                f"/deep-dives?q={quote(object_id, safe='')}",
-                pack_name=requested_pack,
-            ),
-            "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
+            **research_links,
         },
-        "section_nav": [
-            {"href": "#summary", "label": "Summary"},
-            {"href": "#claims", "label": "Claims"},
-            {"href": "#relations", "label": "Relations"},
-            {"href": "#contradictions", "label": "Contradictions"},
-        ],
+        "section_nav": (
+            [
+                {"href": "#summary", "label": "Summary"},
+                {"href": "#claims", "label": "Claims"},
+                {"href": "#relations", "label": "Relations"},
+                {"href": "#contradictions", "label": "Contradictions"},
+            ]
+            if research_shell_enabled
+            else [
+                {"href": "#summary", "label": "Summary"},
+                {"href": "#claims", "label": "Claims"},
+                {"href": "#relations", "label": "Relations"},
+            ]
+        ),
     }
 
 
@@ -1003,27 +1042,40 @@ def build_topic_overview_payload(
     pack_name: str | None = None,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
+    research_shell_enabled = _supports_research_shell(pack_name)
     neighborhood = get_topic_neighborhood(vault_dir, object_id, pack_name=pack_name)
     detail = get_object_detail(vault_dir, object_id, pack_name=pack_name)
     scoped_object_ids = [object_id, *[item["object_id"] for item in neighborhood["neighbors"]]]
-    review_context = get_review_context(
-        vault_dir,
-        scoped_object_ids,
-        pack_name=pack_name,
+    review_context = (
+        get_review_context(
+            vault_dir,
+            scoped_object_ids,
+            pack_name=pack_name,
+        )
+        if research_shell_enabled
+        else {}
     )
-    scoped_stale_summaries = list_stale_summaries(
-        vault_dir,
-        pack_name=pack_name,
-        object_ids=scoped_object_ids,
-        limit=50,
+    scoped_stale_summaries = (
+        list_stale_summaries(
+            vault_dir,
+            pack_name=pack_name,
+            object_ids=scoped_object_ids,
+            limit=50,
+        )
+        if research_shell_enabled
+        else []
     )
-    scoped_contradictions = [
-        item
-        for item in list_contradictions(vault_dir, pack_name=pack_name, limit=100)
-        if set(item["positive_claim_ids"] + item["negative_claim_ids"])
-        and any(claim_id.split("::", 1)[0] in set(scoped_object_ids) for claim_id in item["positive_claim_ids"] + item["negative_claim_ids"])
-        and item["status"] == "open"
-    ]
+    scoped_contradictions = (
+        [
+            item
+            for item in list_contradictions(vault_dir, pack_name=pack_name, limit=100)
+            if set(item["positive_claim_ids"] + item["negative_claim_ids"])
+            and any(claim_id.split("::", 1)[0] in set(scoped_object_ids) for claim_id in item["positive_claim_ids"] + item["negative_claim_ids"])
+            and item["status"] == "open"
+        ]
+        if research_shell_enabled
+        else []
+    )
     neighbors = [
         {
             **item,
@@ -1034,9 +1086,32 @@ def build_topic_overview_payload(
         }
         for item in neighborhood["neighbors"]
     ]
+    research_links = {
+        "events_path": _scoped_path(f"/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
+        "contradictions_path": _scoped_path(
+            f"/contradictions?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "summaries_path": _scoped_path(
+            f"/summaries?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "deep_dives_path": _scoped_path(
+            f"/deep-dives?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
+    } if research_shell_enabled else {
+        "events_path": "",
+        "contradictions_path": "",
+        "summaries_path": "",
+        "deep_dives_path": "",
+        "atlas_path": "",
+    }
     return {
         "screen": "overview/topic",
         "requested_pack": requested_pack,
+        "research_shell_enabled": research_shell_enabled,
         **neighborhood,
         "neighbors": neighbors,
         "edge_count": len(neighborhood["edges"]),
@@ -1049,16 +1124,33 @@ def build_topic_overview_payload(
             pack_name=pack_name,
         ),
         "review_context": review_context,
-        "review_history": list_review_actions(
-            vault_dir,
-            object_ids=scoped_object_ids,
-            limit=8,
+        "review_history": (
+            list_review_actions(
+                vault_dir,
+                object_ids=scoped_object_ids,
+                limit=8,
+            )
+            if research_shell_enabled
+            else []
         ),
-        "evolution": _build_evolution_section(
-            vault_dir,
-            pack_name=pack_name,
-            status="all",
-            scoped_object_ids=scoped_object_ids,
+        "evolution": (
+            _build_evolution_section(
+                vault_dir,
+                pack_name=pack_name,
+                status="all",
+                scoped_object_ids=scoped_object_ids,
+            )
+            if research_shell_enabled
+            else {
+                "accepted_links": [],
+                "rejected_links": [],
+                "candidate_items": [],
+                "candidate_count": 0,
+                "accepted_count": 0,
+                "rejected_count": 0,
+                "link_types": [],
+                "status": "all",
+            }
         ),
         "scoped_object_ids": scoped_object_ids,
         "scoped_stale_summary_ids": [item["object_id"] for item in scoped_stale_summaries],
@@ -1068,20 +1160,7 @@ def build_topic_overview_payload(
                 f"/object?id={quote(object_id, safe='')}",
                 pack_name=requested_pack,
             ),
-            "events_path": _scoped_path(f"/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
-            "contradictions_path": _scoped_path(
-                f"/contradictions?q={quote(object_id, safe='')}",
-                pack_name=requested_pack,
-            ),
-            "summaries_path": _scoped_path(
-                f"/summaries?q={quote(object_id, safe='')}",
-                pack_name=requested_pack,
-            ),
-            "deep_dives_path": _scoped_path(
-                f"/deep-dives?q={quote(object_id, safe='')}",
-                pack_name=requested_pack,
-            ),
-            "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
+            **research_links,
         },
     }
 
@@ -1641,7 +1720,7 @@ def build_truth_dashboard_payload(
     signals = build_signal_browser_payload(vault_dir, pack_name=pack_name)
     production = build_production_browser_payload(vault_dir, pack_name=pack_name)
     production_weak_points = production["weak_points"]
-    research_overview_supported = _dashboard_supports_research_overview(pack_name)
+    research_overview_supported = _supports_research_shell(pack_name)
     if research_overview_supported:
         contradictions = build_contradiction_browser_payload(vault_dir, pack_name=pack_name)
         events = build_event_dossier_payload(vault_dir, pack_name=pack_name, limit=8)

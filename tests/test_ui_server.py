@@ -2145,6 +2145,7 @@ def test_render_object_page_hides_research_affordances_when_pack_lacks_research_
     _seed_truth_store(temp_vault)
     payload = build_object_page_payload(temp_vault, "alpha")
     payload["requested_pack"] = "media-editorial"
+    payload["research_shell_enabled"] = False
     monkeypatch.setattr(ui_server, "_shell_supports_research_nav", lambda requested_pack="": False)
 
     body = ui_server._render_object_page(payload)
@@ -2163,6 +2164,7 @@ def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_s
     _seed_truth_store(temp_vault)
     payload = build_topic_overview_payload(temp_vault, "alpha")
     payload["requested_pack"] = "media-editorial"
+    payload["research_shell_enabled"] = False
     monkeypatch.setattr(ui_server, "_shell_supports_research_nav", lambda requested_pack="": False)
 
     body = ui_server._render_topic_page(payload)

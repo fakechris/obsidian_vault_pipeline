@@ -113,6 +113,34 @@ def test_build_object_page_payload_preserves_requested_pack(temp_vault):
     assert payload["relations"][0]["target_path"] == "/object?id=beta&pack=default-knowledge"
 
 
+def test_build_object_page_payload_hides_research_affordances_when_research_shell_disabled(temp_vault, monkeypatch):
+    import openclaw_pipeline.ui.view_models as view_models
+
+    _seed_truth_store(temp_vault)
+    monkeypatch.setattr(view_models, "_supports_research_shell", lambda pack_name=None: False, raising=False)
+
+    payload = view_models.build_object_page_payload(temp_vault, "alpha", pack_name="default-knowledge")
+
+    assert payload["research_shell_enabled"] is False
+    assert payload["contradiction_count"] == 0
+    assert payload["links"]["events_path"] == ""
+    assert payload["links"]["contradictions_path"] == ""
+    assert payload["links"]["summaries_path"] == ""
+    assert payload["links"]["deep_dives_path"] == ""
+    assert payload["links"]["atlas_path"] == ""
+    assert payload["review_context"] == {}
+    assert payload["review_history"] == []
+    assert payload["stale_summary_details"] == []
+    assert payload["open_contradiction_ids"] == []
+    assert payload["section_nav"] == [
+        {"href": "#summary", "label": "Summary"},
+        {"href": "#claims", "label": "Claims"},
+        {"href": "#relations", "label": "Relations"},
+    ]
+    assert payload["evolution"]["candidate_count"] == 0
+    assert payload["evolution"]["accepted_count"] == 0
+
+
 def test_build_object_page_payload_includes_provenance(temp_vault):
     from openclaw_pipeline.ui.view_models import build_object_page_payload
 
@@ -204,6 +232,28 @@ def test_build_topic_overview_payload_preserves_requested_pack(temp_vault):
     assert payload["links"]["center_object_path"] == "/object?id=alpha&pack=default-knowledge"
     assert payload["links"]["deep_dives_path"] == "/deep-dives?q=alpha&pack=default-knowledge"
     assert payload["neighbors"][0]["object_path"] == "/object?id=beta&pack=default-knowledge"
+
+
+def test_build_topic_overview_payload_hides_research_affordances_when_research_shell_disabled(temp_vault, monkeypatch):
+    import openclaw_pipeline.ui.view_models as view_models
+
+    _seed_truth_store(temp_vault)
+    monkeypatch.setattr(view_models, "_supports_research_shell", lambda pack_name=None: False, raising=False)
+
+    payload = view_models.build_topic_overview_payload(temp_vault, "alpha", pack_name="default-knowledge")
+
+    assert payload["research_shell_enabled"] is False
+    assert payload["links"]["events_path"] == ""
+    assert payload["links"]["contradictions_path"] == ""
+    assert payload["links"]["summaries_path"] == ""
+    assert payload["links"]["deep_dives_path"] == ""
+    assert payload["links"]["atlas_path"] == ""
+    assert payload["review_context"] == {}
+    assert payload["review_history"] == []
+    assert payload["scoped_open_contradiction_ids"] == []
+    assert payload["scoped_stale_summary_ids"] == []
+    assert payload["evolution"]["candidate_count"] == 0
+    assert payload["evolution"]["accepted_count"] == 0
 
 
 def test_build_topic_overview_payload_includes_production_summary(temp_vault):
