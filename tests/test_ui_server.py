@@ -235,6 +235,8 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/objects?pack=default-knowledge"' in body
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/atlas?pack=default-knowledge"' in body
 
@@ -342,6 +344,29 @@ def test_ui_server_signals_endpoint_accepts_pack_scope(temp_vault):
     assert payload["requested_pack"] == "default-knowledge"
 
 
+def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/signals?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/events?pack=default-knowledge"' in body
+    assert 'href="/summaries?pack=default-knowledge"' in body
+
+
 def test_ui_server_summaries_endpoint_accepts_pack_scope(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -399,6 +424,29 @@ def test_ui_server_events_endpoint_accepts_pack_scope(temp_vault):
 
     assert response.status == 200
     assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/events?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/atlas?pack=default-knowledge"' in body
 
 
 def test_ui_server_atlas_endpoint_accepts_pack_scope(temp_vault):
@@ -495,6 +543,29 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
     assert payload["items"][0]["priority_reason"]
     assert payload["items"][0]["display_title"]
     assert payload["items"][0]["relation_pattern_preview"]
+
+
+def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/clusters?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/briefing?pack=default-knowledge"' in body
+    assert 'href="/atlas?pack=default-knowledge"' in body
 
 
 def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
@@ -842,6 +913,29 @@ def test_ui_server_briefing_endpoint_accepts_pack_scope(temp_vault):
 
     assert response.status == 200
     assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/briefing?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/clusters?pack=default-knowledge"' in body
 
 
 def test_ui_server_can_enqueue_signal_action_via_api(temp_vault):

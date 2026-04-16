@@ -122,8 +122,8 @@ def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
       <div class="shell">
         <div class="shell-head">
           <nav>
-            <a href="/">Home</a>
-            <a href="/objects">Objects</a>
+            <a href="{escape(_shell_href('/', requested_pack))}">Home</a>
+            <a href="{escape(_shell_href('/objects', requested_pack))}">Objects</a>
             <a href="/search">Search</a>
             <a href="{escape(_shell_href('/signals', requested_pack))}">Signals</a>
             <a href="{escape(_shell_href('/briefing', requested_pack))}">Briefing</a>
@@ -1228,6 +1228,7 @@ def _render_events_page(payload: dict) -> str:
                 f"{events}",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1284,6 +1285,7 @@ def _render_atlas_page(payload: dict) -> str:
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1340,6 +1342,7 @@ def _render_derivations_page(payload: dict) -> str:
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1394,6 +1397,7 @@ def _render_production_browser_page(payload: dict) -> str:
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1487,11 +1491,13 @@ def _render_clusters_page(payload: dict) -> str:
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_cluster_detail_page(payload: dict) -> str:
     cluster = payload["cluster"]
+    requested_pack = payload.get("requested_pack", "")
     edge_kind_counts = "".join(
         f"<span class='pill'>{escape(edge_kind)}: {count}</span>"
         for edge_kind, count in payload["edge_kind_counts"].items()
@@ -1636,6 +1642,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Internal Edges</h2><ul class='list-tight'>{edges}</ul></section>"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1757,6 +1764,7 @@ def _render_signals_page(payload: dict) -> str:
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1878,6 +1886,7 @@ def _render_briefing_page(payload: dict) -> str:
                 f"<section class='card'><h2>Active Topics</h2><ul class='list-tight'>{active_topics}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -2186,6 +2195,7 @@ def _render_contradictions_page(payload: dict) -> str:
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -2263,6 +2273,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
