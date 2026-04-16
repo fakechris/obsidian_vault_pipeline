@@ -216,6 +216,29 @@ def test_ui_server_object_endpoint_accepts_pack_scope(temp_vault):
     assert payload["links"]["topic_path"] == "/topic?id=alpha&pack=default-knowledge"
 
 
+def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/object?id=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/atlas?pack=default-knowledge"' in body
+
+
 def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -1412,6 +1435,29 @@ def test_ui_server_topic_endpoint_accepts_pack_scope(temp_vault):
     assert response.status == 200
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["links"]["center_object_path"] == "/object?id=alpha&pack=default-knowledge"
+
+
+def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/topic?id=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/summaries?pack=default-knowledge"' in body
 
 
 def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, monkeypatch):

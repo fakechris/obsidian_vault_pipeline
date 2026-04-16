@@ -55,7 +55,14 @@ _GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
 _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
 
 
-def _layout(title: str, body: str) -> str:
+def _shell_href(path: str, requested_pack: str = "") -> str:
+    if not requested_pack:
+        return path
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}pack={quote(requested_pack, safe='')}"
+
+
+def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -118,17 +125,17 @@ def _layout(title: str, body: str) -> str:
             <a href="/">Home</a>
             <a href="/objects">Objects</a>
             <a href="/search">Search</a>
-            <a href="/signals">Signals</a>
-            <a href="/briefing">Briefing</a>
+            <a href="{escape(_shell_href('/signals', requested_pack))}">Signals</a>
+            <a href="{escape(_shell_href('/briefing', requested_pack))}">Briefing</a>
             <a href="/actions">Actions</a>
             <a href="/evolution">Evolution</a>
-            <a href="/production">Production</a>
-            <a href="/clusters">Clusters</a>
-            <a href="/atlas">Atlas</a>
-            <a href="/deep-dives">Deep Dives</a>
-            <a href="/events">Event Dossier</a>
-            <a href="/contradictions">Contradictions</a>
-            <a href="/summaries">Stale Summaries</a>
+            <a href="{escape(_shell_href('/production', requested_pack))}">Production</a>
+            <a href="{escape(_shell_href('/clusters', requested_pack))}">Clusters</a>
+            <a href="{escape(_shell_href('/atlas', requested_pack))}">Atlas</a>
+            <a href="{escape(_shell_href('/deep-dives', requested_pack))}">Deep Dives</a>
+            <a href="{escape(_shell_href('/events', requested_pack))}">Event Dossier</a>
+            <a href="{escape(_shell_href('/contradictions', requested_pack))}">Contradictions</a>
+            <a href="{escape(_shell_href('/summaries', requested_pack))}">Stale Summaries</a>
           </nav>
         </div>
         <div class="shell-body">
@@ -843,6 +850,7 @@ def _render_dashboard(payload: dict) -> str:
             "</div>"
             "</section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -872,6 +880,7 @@ def _render_objects_index(payload: dict) -> str:
             + "</p>"
             + f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1019,6 +1028,7 @@ def _render_object_page(payload: dict) -> str:
             "</div>"
             "</section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1096,6 +1106,7 @@ def _render_topic_page(payload: dict) -> str:
             "</section>"
             "</section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
