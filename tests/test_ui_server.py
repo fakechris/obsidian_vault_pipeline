@@ -405,6 +405,8 @@ date: 2026-04-13
     assert payload["related_clusters"]
     assert payload["related_clusters"][0]["shared_source_count"] >= 1
     assert payload["related_clusters"][0]["shared_moc_count"] >= 1
+    assert payload["related_cluster_groups"]
+    assert payload["related_cluster_groups"][0]["bridge_kind"] == "source_and_atlas_overlap"
 
 
 def test_ui_server_clusters_endpoint_includes_related_cluster_summary(temp_vault):

@@ -267,6 +267,37 @@ def _build_related_cluster_items(
     return related_items[:5]
 
 
+def _bridge_kind_display_name(bridge_kind: str) -> str:
+    if bridge_kind == "source_and_atlas_overlap":
+        return "Source + Atlas Overlap"
+    if bridge_kind == "source_overlap":
+        return "Source Overlap"
+    if bridge_kind == "atlas_overlap":
+        return "Atlas Overlap"
+    return bridge_kind.replace("_", " ").title()
+
+
+def _build_related_cluster_groups(related_clusters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in related_clusters:
+        group = grouped.setdefault(
+            str(item["bridge_kind"]),
+            {
+                "bridge_kind": str(item["bridge_kind"]),
+                "display_name": _bridge_kind_display_name(str(item["bridge_kind"])),
+                "count": 0,
+                "cluster_titles": [],
+            },
+        )
+        group["count"] += 1
+        if item["display_title"] not in group["cluster_titles"]:
+            group["cluster_titles"].append(item["display_title"])
+    return sorted(
+        grouped.values(),
+        key=lambda item: (-int(item["count"]), str(item["bridge_kind"])),
+    )
+
+
 def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     object_traceability = [get_object_traceability(vault_dir, object_id) for object_id in normalized_object_ids]
@@ -958,6 +989,7 @@ def build_cluster_detail_payload(
         current_source_note_items=source_note_items,
         current_moc_items=moc_items,
     )
+    related_cluster_groups = _build_related_cluster_groups(related_clusters)
     next_read_cluster = related_clusters[0] if related_clusters else None
 
     return {
@@ -977,6 +1009,7 @@ def build_cluster_detail_payload(
         "open_contradictions": open_contradictions,
         "stale_summaries": stale_summaries,
         "related_clusters": related_clusters,
+        "related_cluster_groups": related_cluster_groups,
         "next_read_cluster": next_read_cluster,
         "top_source_notes": _top_counter_items(source_note_counts, source_note_items),
         "top_mocs": _top_counter_items(moc_counts, moc_items),

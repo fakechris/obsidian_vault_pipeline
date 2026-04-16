@@ -126,6 +126,19 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
     lines.extend(
         [
             "",
+            "## Neighborhood Groups",
+            "",
+        ]
+    )
+    if payload["related_cluster_groups"]:
+        for item in payload["related_cluster_groups"]:
+            lines.append(f"- {item['bridge_kind']} ({item['count']})")
+    else:
+        lines.append("- (none)")
+
+    lines.extend(
+        [
+            "",
             "## Related Clusters",
             "",
         ]

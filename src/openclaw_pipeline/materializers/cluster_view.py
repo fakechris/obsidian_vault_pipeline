@@ -110,6 +110,18 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
             lines.extend(
                 [
                     "",
+                    "#### Neighborhood Groups",
+                    "",
+                ]
+            )
+            if detail["related_cluster_groups"]:
+                for item in detail["related_cluster_groups"]:
+                    lines.append(f"- {item['bridge_kind']} ({item['count']})")
+            else:
+                lines.append("- (none)")
+            lines.extend(
+                [
+                    "",
                     "#### Related Clusters",
                     "",
                 ]

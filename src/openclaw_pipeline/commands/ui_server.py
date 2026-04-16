@@ -1464,6 +1464,16 @@ def _render_cluster_detail_page(payload: dict) -> str:
         + "</li>"
         for item in payload["related_clusters"]
     ) or "<li class='muted'>No related clusters surfaced for this scope.</li>"
+    related_cluster_groups = "".join(
+        f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span>"
+        + (
+            f"<div class='muted'>{escape(', '.join(item['cluster_titles'][:3]))}</div>"
+            if item["cluster_titles"]
+            else ""
+        )
+        + "</li>"
+        for item in payload["related_cluster_groups"]
+    ) or "<li class='muted'>No neighborhood groups surfaced for this cluster.</li>"
     next_read_cluster = payload.get("next_read_cluster")
     next_read_route = (
         "<p>"
@@ -1505,6 +1515,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Relation Patterns</h2><ul class='list-tight'>{relation_patterns}</ul></section>"
             f"<section class='card'><h2>Review Pressure</h2><h3>Open Contradictions</h3><ul class='list-tight'>{open_contradictions}</ul><h3>Stale Summaries</h3><ul class='list-tight'>{stale_summaries}</ul></section>"
             f"<section class='card'><h2>Next Reading Route</h2>{next_read_route}</section>"
+            f"<section class='card'><h2>Neighborhood Groups</h2><ul class='list-tight'>{related_cluster_groups}</ul></section>"
             f"<section class='card'><h2>Related Clusters</h2><ul class='list-tight'>{related_clusters}</ul></section>"
             f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
             f"<section class='card'><h2>Object Kinds</h2><div class='link-row'>{object_kind_counts}</div></section>"
