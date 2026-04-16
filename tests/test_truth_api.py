@@ -2042,6 +2042,69 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
     )
 
 
+def test_truth_api_action_queue_items_include_execution_contract_metadata(temp_vault):
+    from openclaw_pipeline.truth_api import list_action_queue, sync_signal_ledger
+
+    vault = _seed_truth_vault(temp_vault)
+    processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    sync_signal_ledger(vault)
+    action = next(item for item in list_action_queue(vault) if item["action_kind"] == "deep_dive_workflow")
+
+    assert action["safe_to_run"] is True
+    assert action["processor_mode"] == "llm_structured"
+    assert action["processor_inputs"] == ["source_note"]
+    assert action["processor_outputs"] == ["deep_dive"]
+    assert action["processor_quality_hooks"] == ["quality"]
+
+
+def test_truth_api_list_action_queue_backfills_execution_contract_metadata_for_legacy_rows(temp_vault):
+    from openclaw_pipeline.truth_api import list_action_queue
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        json.dumps(
+            {
+                "action_id": "action::legacy",
+                "action_kind": "deep_dive_workflow",
+                "pack": "research-tech",
+                "source_signal_id": "signal::legacy",
+                "title": "Legacy action",
+                "target_ref": "50-Inbox/03-Processed/Legacy.md",
+                "status": "queued",
+                "created_at": "2026-04-16T00:00:00Z",
+                "retry_count": 0,
+                "failure_bucket": "",
+                "safe_to_run": True,
+                "payload": {},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    action = list_action_queue(temp_vault)[0]
+
+    assert action["processor_mode"] == "llm_structured"
+    assert action["processor_inputs"] == ["source_note"]
+    assert action["processor_outputs"] == ["deep_dive"]
+    assert action["processor_quality_hooks"] == ["quality"]
+
+
 def test_truth_api_run_next_action_queue_item_executes_deep_dive_workflow(temp_vault, monkeypatch):
     import openclaw_pipeline.truth_api as truth_api
 

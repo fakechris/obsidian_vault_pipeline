@@ -12,7 +12,8 @@ from urllib.parse import quote
 
 import yaml
 
-from .handler_registry import execute_focused_action_handler, resolve_focused_action_handler
+from .execution_contract_registry import resolve_focused_action_execution_contract
+from .handler_registry import execute_focused_action_handler
 from .knowledge_index import ensure_knowledge_db_current
 from .observation_surface_registry import execute_observation_surface_builder
 from .pack_resolution import iter_compatible_packs
@@ -1549,15 +1550,36 @@ def _recommended_action(*, kind: str, label: str, path: str, executable: bool) -
     }
 
 
-def _is_safe_action_kind(action_kind: str, *, pack_name: str | None = None) -> bool:
+def _focused_action_contract_metadata(
+    action_kind: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     try:
-        spec = resolve_focused_action_handler(
+        contract = resolve_focused_action_execution_contract(
             pack_name=pack_name or DEFAULT_WORKFLOW_PACK_NAME,
             action_kind=action_kind,
         )
     except ValueError:
-        return False
-    return bool(spec.safe_to_run)
+        return {
+            "safe_to_run": False,
+            "processor_mode": "",
+            "processor_inputs": [],
+            "processor_outputs": [],
+            "processor_quality_hooks": [],
+        }
+    return {
+        "safe_to_run": bool(contract.handler_spec.safe_to_run),
+        "processor_mode": str(contract.processor_contract.mode or ""),
+        "processor_inputs": list(contract.processor_contract.inputs or ()),
+        "processor_outputs": list(contract.processor_contract.outputs or ()),
+        "processor_quality_hooks": list(contract.processor_contract.quality_hooks or ()),
+    }
+
+
+def _is_safe_action_kind(action_kind: str, *, pack_name: str | None = None) -> bool:
+    metadata = _focused_action_contract_metadata(action_kind, pack_name=pack_name)
+    return bool(metadata["safe_to_run"])
 
 
 def _classify_action_error(error: str) -> str:
@@ -1597,6 +1619,7 @@ def list_action_queue(
     items: list[dict[str, Any]] = []
     with action_queue_write_lock(vault_dir):
         for item in _read_action_queue_rows_unlocked(vault_dir):
+            item = _normalize_action_queue_item(item)
             if status and item.get("status") != status:
                 continue
             if normalized_query:
@@ -1611,6 +1634,19 @@ def list_action_queue(
             if len(items) >= limit:
                 break
     return items
+
+
+def _normalize_action_queue_item(item: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(item)
+    metadata = _focused_action_contract_metadata(
+        str(normalized.get("action_kind") or ""),
+        pack_name=str(normalized.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+    )
+    for key, value in metadata.items():
+        current = normalized.get(key)
+        if key not in normalized or current in (None, "", []):
+            normalized[key] = value
+    return normalized
 
 
 def _signal_by_id(
@@ -1684,6 +1720,10 @@ def _enqueue_action_from_signal(
         "object_ids": list(signal.get("object_ids", [])),
     }
     normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    contract_metadata = _focused_action_contract_metadata(
+        str(recommended_action["kind"]),
+        pack_name=normalized_pack,
+    )
     action_id = _action_id(
         signal_id,
         str(recommended_action["kind"]),
@@ -1711,12 +1751,9 @@ def _enqueue_action_from_signal(
         "error": "",
         "failure_bucket": "",
         "retry_count": 0,
-        "safe_to_run": _is_safe_action_kind(
-            str(recommended_action["kind"]),
-            pack_name=normalized_pack,
-        ),
         "payload": payload,
         "session_id": session_id,
+        **contract_metadata,
     }
     return True, action
 
@@ -1901,7 +1938,7 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
         return {"ran": False, "reason": "obsolete_signal", "action": action, "safe_only": safe_only}
 
     try:
-        spec = resolve_focused_action_handler(
+        contract = resolve_focused_action_execution_contract(
             pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
             action_kind=str(action.get("action_kind") or ""),
         )
@@ -1921,12 +1958,20 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
             action,
             pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
         )
-        if getattr(spec, "requires_truth_refresh", False) or getattr(spec, "requires_signal_resync", False):
+        if getattr(contract.handler_spec, "requires_truth_refresh", False) or getattr(
+            contract.handler_spec,
+            "requires_signal_resync",
+            False,
+        ):
             _refresh_truth_after_action(
                 vault_dir,
                 pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
-                requires_truth_refresh=bool(getattr(spec, "requires_truth_refresh", False)),
-                requires_signal_resync=bool(getattr(spec, "requires_signal_resync", False)),
+                requires_truth_refresh=bool(
+                    getattr(contract.handler_spec, "requires_truth_refresh", False)
+                ),
+                requires_signal_resync=bool(
+                    getattr(contract.handler_spec, "requires_signal_resync", False)
+                ),
             )
         with action_queue_write_lock(vault_dir):
             action["status"] = "succeeded"

@@ -652,6 +652,63 @@ Processed source note without downstream chain.
     assert payload["action"]["status"] == "queued"
 
 
+def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_action_queue_payload",
+        lambda vault_dir, status=None, query=None: {
+            "screen": "actions/browser",
+            "items": [
+                {
+                    "action_id": "action::demo",
+                    "status": "queued",
+                    "action_kind": "deep_dive_workflow",
+                    "title": "Create deep dive",
+                    "target_ref": "50-Inbox/03-Processed/Loose Source.md",
+                    "created_at": "2026-04-16T00:00:00Z",
+                    "retry_count": 0,
+                    "failure_bucket": "",
+                    "safe_to_run": True,
+                    "processor_mode": "llm_structured",
+                    "processor_inputs": ["source_note"],
+                    "processor_outputs": ["deep_dive"],
+                    "processor_quality_hooks": ["quality"],
+                }
+            ],
+            "count": 1,
+            "query": "",
+            "status": "",
+            "status_counts": {"queued": 1},
+            "queued_safe_count": 1,
+            "failed_count": 0,
+            "failure_buckets": {},
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/actions")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Processor: llm_structured" in body
+    assert "Inputs: source_note" in body
+    assert "Outputs: deep_dive" in body
+    assert "Quality hooks: quality" in body
+
+
 def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
     import openclaw_pipeline.commands.ui_server as ui_server
     from openclaw_pipeline.commands.ui_server import create_server

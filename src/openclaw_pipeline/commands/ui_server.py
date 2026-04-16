@@ -1823,6 +1823,26 @@ def _render_actions_page(payload: dict) -> str:
             else ""
         )
         + (
+            f"<div class='muted'>Processor: {escape(str(item['processor_mode']))}</div>"
+            if item.get("processor_mode")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Inputs: {escape(', '.join(str(value) for value in item['processor_inputs']))}</div>"
+            if item.get("processor_inputs")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Outputs: {escape(', '.join(str(value) for value in item['processor_outputs']))}</div>"
+            if item.get("processor_outputs")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Quality hooks: {escape(', '.join(str(value) for value in item['processor_quality_hooks']))}</div>"
+            if item.get("processor_quality_hooks")
+            else ""
+        )
+        + (
             "<form method='post' action='/actions/retry' class='link-row'>"
             + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
             + "<button type='submit'>Retry</button>"
