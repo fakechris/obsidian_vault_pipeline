@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from ..pack_resolution import iter_compatible_packs
+from ..processor_contract_registry import list_effective_processor_contracts
 from ..packs.loader import (
     DEFAULT_PACK_NAME,
     DEFAULT_WORKFLOW_PACK_NAME,
@@ -157,18 +158,10 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             seen_surface_kinds.add(surface_kind)
             effective_surfaces.append(_observation_surface_payload(spec))
 
-    effective_processor_contracts: list[dict[str, object]] = []
-    seen_processor_keys: set[tuple[str, str]] = set()
-    for compatible_pack in compatible_packs:
-        for spec in compatible_pack.processor_contracts():
-            key = (
-                str(getattr(spec, "stage", "") or ""),
-                str(getattr(spec, "action_kind", "") or ""),
-            )
-            if key in seen_processor_keys:
-                continue
-            seen_processor_keys.add(key)
-            effective_processor_contracts.append(_processor_contract_payload(spec))
+    effective_processor_contracts = [
+        _processor_contract_payload(spec)
+        for spec in list_effective_processor_contracts(pack_name=pack_name)
+    ]
 
     return {
         "declared": {
