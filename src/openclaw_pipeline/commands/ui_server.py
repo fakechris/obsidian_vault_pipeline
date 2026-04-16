@@ -17,6 +17,8 @@ from markdown_it import MarkdownIt
 
 from ..identity import canonicalize_note_id
 from ..knowledge_index import contradiction_object_ids, rebuild_compiled_summaries, resolve_contradictions
+from ..pack_resolution import iter_compatible_packs
+from ..packs.loader import PRIMARY_PACK_NAME
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import (
     build_action_queue_payload,
@@ -62,7 +64,43 @@ def _shell_href(path: str, requested_pack: str = "") -> str:
     return f"{path}{separator}pack={quote(requested_pack, safe='')}"
 
 
+def _shell_supports_research_nav(requested_pack: str = "") -> bool:
+    try:
+        return any(pack.name == PRIMARY_PACK_NAME for pack in iter_compatible_packs(requested_pack or None))
+    except ValueError:
+        return False
+
+
+def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
+    items = [
+        ("Home", "/"),
+        ("Objects", "/objects"),
+        ("Search", "/search"),
+        ("Signals", "/signals"),
+        ("Briefing", "/briefing"),
+        ("Actions", "/actions"),
+        ("Production", "/production"),
+    ]
+    if _shell_supports_research_nav(requested_pack):
+        items.extend(
+            [
+                ("Evolution", "/evolution"),
+                ("Clusters", "/clusters"),
+                ("Atlas", "/atlas"),
+                ("Deep Dives", "/deep-dives"),
+                ("Event Dossier", "/events"),
+                ("Contradictions", "/contradictions"),
+                ("Stale Summaries", "/summaries"),
+            ]
+        )
+    return items
+
+
 def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
+    nav_items = "".join(
+        f'<a href="{escape(_shell_href(path, requested_pack))}">{escape(label)}</a>'
+        for label, path in _shell_nav_items(requested_pack)
+    )
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -122,20 +160,7 @@ def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
       <div class="shell">
         <div class="shell-head">
           <nav>
-            <a href="{escape(_shell_href('/', requested_pack))}">Home</a>
-            <a href="{escape(_shell_href('/objects', requested_pack))}">Objects</a>
-            <a href="{escape(_shell_href('/search', requested_pack))}">Search</a>
-            <a href="{escape(_shell_href('/signals', requested_pack))}">Signals</a>
-            <a href="{escape(_shell_href('/briefing', requested_pack))}">Briefing</a>
-            <a href="{escape(_shell_href('/actions', requested_pack))}">Actions</a>
-            <a href="{escape(_shell_href('/evolution', requested_pack))}">Evolution</a>
-            <a href="{escape(_shell_href('/production', requested_pack))}">Production</a>
-            <a href="{escape(_shell_href('/clusters', requested_pack))}">Clusters</a>
-            <a href="{escape(_shell_href('/atlas', requested_pack))}">Atlas</a>
-            <a href="{escape(_shell_href('/deep-dives', requested_pack))}">Deep Dives</a>
-            <a href="{escape(_shell_href('/events', requested_pack))}">Event Dossier</a>
-            <a href="{escape(_shell_href('/contradictions', requested_pack))}">Contradictions</a>
-            <a href="{escape(_shell_href('/summaries', requested_pack))}">Stale Summaries</a>
+            {nav_items}
           </nav>
         </div>
         <div class="shell-body">

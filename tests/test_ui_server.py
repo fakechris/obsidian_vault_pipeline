@@ -583,6 +583,55 @@ def test_ui_server_signals_page_renders_missing_surface_contract_error(temp_vaul
     assert "does not expose a shared shell &#x27;signals&#x27; surface" in body
 
 
+def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_signal_browser_payload",
+        lambda vault_dir, *, pack_name=None, signal_type=None, query=None: {
+            "screen": "signals/browser",
+            "requested_pack": pack_name or "",
+            "surface_contract": {
+                "surface_kind": "signals",
+                "requested_pack": pack_name or "",
+                "status": "missing",
+                "provider_pack": "",
+                "provider_name": "",
+                "description": "",
+            },
+            "surface_error": "Pack 'media-editorial' does not expose a shared shell 'signals' surface.",
+            "items": [],
+            "count": 0,
+            "query": "",
+            "signal_type": "",
+            "type_counts": {},
+            "signal_type_explanations": {},
+        },
+    )
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/signals?pack=media-editorial")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/signals?pack=media-editorial"' in body
+    assert 'href="/production?pack=media-editorial"' in body
+    assert 'href="/clusters?pack=media-editorial"' not in body
+    assert 'href="/contradictions?pack=media-editorial"' not in body
+    assert 'href="/events?pack=media-editorial"' not in body
+
+
 def test_ui_server_summaries_endpoint_accepts_pack_scope(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
