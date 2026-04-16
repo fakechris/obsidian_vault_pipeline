@@ -695,8 +695,11 @@ Target note captures downstream effects.
     assert "## Cluster Synthesis" in content
     assert "## Structural Label" in content
     assert "## Edge Summary" in content
+    assert "## Relation Patterns" in content
     assert "## Members" in content
     assert "## Internal Edges" in content
+    assert "- display_title: " in content
+    assert "cluster around" in content
     assert "Source Note" in content
     assert "Target Note" in content
 

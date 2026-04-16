@@ -1328,7 +1328,7 @@ def _render_clusters_page(payload: dict) -> str:
     ) or "<span class='muted'>None</span>"
     items = "".join(
         "<li>"
-        f'<a href="{escape(item["detail_path"])}">{escape(item["label"])}</a>'
+        f'<a href="{escape(item["detail_path"])}">{escape(item.get("display_title") or item["label"])}</a>'
         + f" <span class='pill'>{escape(item['cluster_kind'])}</span>"
         + f" <span class='pill'>{escape(item['priority_band'])}</span>"
         + f" <span class='pill'>{item['member_count']} objects</span>"
@@ -1340,8 +1340,14 @@ def _render_clusters_page(payload: dict) -> str:
             )
             + "</span>"
         )
+        + f"<div class='muted'>Canonical cluster: {escape(item['label'])}</div>"
         + f"<div class='muted'>Center: <a href='{escape(item['center_object_path'])}'>{escape(item['center_title'])}</a></div>"
         + f"<div class='muted'>Priority: {escape(item['priority_reason'])}</div>"
+        + (
+            f"<div class='muted'>Relation patterns: {escape(item['relation_pattern_preview'])}</div>"
+            if item.get("relation_pattern_preview")
+            else ""
+        )
         + (
             f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
             if item.get("top_summary_bullet")
@@ -1406,6 +1412,10 @@ def _render_cluster_detail_page(payload: dict) -> str:
         f"<li>{escape(item['title'])} <span class='pill'>{item['object_count']} objects</span></li>"
         for item in payload["top_mocs"]
     ) or "<li class='muted'>No atlas coverage.</li>"
+    relation_patterns = "".join(
+        f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span></li>"
+        for item in payload["relation_pattern_items"]
+    ) or "<li class='muted'>No relation patterns in this cluster.</li>"
     review_context = payload["review_context"]
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     return _layout(
@@ -1413,12 +1423,15 @@ def _render_cluster_detail_page(payload: dict) -> str:
         (
             "<h1>Graph Cluster</h1>"
             f"<p><a href='/clusters'>Back to clusters</a></p>"
-            f"<section class='card'><h2>{escape(cluster['label'])}</h2>"
+            f"<section class='card'><h2>{escape(payload.get('display_title') or cluster['label'])}</h2>"
             f"<p class='muted'>Pack: {escape(cluster['pack'])} · Kind: {escape(cluster['cluster_kind'])} · Score: {cluster['score']:.1f}</p>"
+            f"<p class='muted'>Canonical cluster id: {escape(cluster['label'])}</p>"
             f"<p>Center: <a href='{escape(cluster['center_object_path'])}'>{escape(cluster['center_title'])}</a></p>"
             f"<p class='muted'>{cluster['member_count']} member objects.</p>"
             "</section>"
             f"<section class='card'><h2>Cluster Synthesis</h2><ul class='list-tight'>{summary_bullets}</ul></section>"
+            f"<section class='card'><h2>Structural Label</h2><p><strong>{escape(payload['structural_label']['title'])}</strong></p><p class='muted'>{escape(payload['structural_label']['reason'])}</p></section>"
+            f"<section class='card'><h2>Relation Patterns</h2><ul class='list-tight'>{relation_patterns}</ul></section>"
             f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
             f"<section class='card'><h2>Object Kinds</h2><div class='link-row'>{object_kind_counts}</div></section>"
             f"<section class='card'><h2>Coverage</h2><p class='muted'>"

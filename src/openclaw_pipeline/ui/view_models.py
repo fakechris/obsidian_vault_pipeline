@@ -134,6 +134,29 @@ def _derive_cluster_structural_label(
     }
 
 
+def _build_relation_pattern_items(edge_summary_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "edge_kind": item["edge_kind"],
+            "subtype": item["edge_subtype"],
+            "display_name": item["display_name"],
+            "count": item["count"],
+        }
+        for item in edge_summary_items
+        if item["edge_family"] == "relation"
+    ]
+
+
+def _relation_pattern_preview(relation_pattern_items: list[dict[str, Any]]) -> str:
+    if not relation_pattern_items:
+        return ""
+    preview_items = relation_pattern_items[:2]
+    preview = ", ".join(f"{item['display_name']} ({item['count']})" for item in preview_items)
+    if len(relation_pattern_items) > 2:
+        return f"{preview}, +{len(relation_pattern_items) - 2} more"
+    return preview
+
+
 def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     object_traceability = [get_object_traceability(vault_dir, object_id) for object_id in normalized_object_ids]
@@ -656,6 +679,8 @@ def build_cluster_browser_payload(
                 "detail_path": detail["cluster"]["detail_path"],
                 "center_object_path": detail["cluster"]["center_object_path"],
                 "member_links": detail["cluster"]["member_links"],
+                "display_title": detail["display_title"],
+                "relation_pattern_preview": detail["relation_pattern_preview"],
                 "priority_score": priority_score,
                 "priority_band": priority_band,
                 "priority_reason": priority_reason,
@@ -804,13 +829,18 @@ def build_cluster_detail_payload(
         center_title=str(cluster["center_title"]),
         edge_summary_items=edge_summary_items,
     )
+    relation_pattern_items = _build_relation_pattern_items(edge_summary_items)
+    relation_pattern_preview = _relation_pattern_preview(relation_pattern_items)
 
     return {
         "screen": "graph/cluster-detail",
         "cluster": enriched_cluster,
+        "display_title": structural_label["title"],
         "edges": enriched_edges,
         "edge_kind_counts": dict(edge_kind_counts),
         "edge_summary_items": edge_summary_items,
+        "relation_pattern_items": relation_pattern_items,
+        "relation_pattern_preview": relation_pattern_preview,
         "object_kind_counts": dict(object_kind_counts),
         "structural_label": structural_label,
         "review_context": review_context,

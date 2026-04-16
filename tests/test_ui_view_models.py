@@ -305,6 +305,8 @@ Delta extends Gamma.
     assert payload["items"][0]["members"][0]["object_id"]
     assert payload["items"][0]["priority_band"] == "attention"
     assert payload["items"][0]["priority_reason"]
+    assert payload["items"][0]["display_title"].startswith("Contradiction cluster around")
+    assert payload["items"][0]["relation_pattern_preview"]
     assert payload["items"][0]["priority_score"] > payload["items"][1]["priority_score"]
     assert "alpha" in payload["items"][0]["member_object_ids"]
 
@@ -362,6 +364,8 @@ date: 2026-04-13
     assert "Alpha" in payload["structural_label"]["title"]
     assert payload["edge_summary_items"]
     assert payload["edge_summary_items"][0]["edge_family"] == "contradiction"
+    assert payload["relation_pattern_items"]
+    assert payload["relation_pattern_items"][0]["display_name"].endswith("links")
     assert payload["summary_bullets"]
     assert payload["object_kind_counts"]["evergreen"] == payload["cluster"]["member_count"]
     assert payload["review_context"]["source_note_count"] >= 1

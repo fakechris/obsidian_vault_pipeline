@@ -24,6 +24,7 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
         f"- center: [[{cluster['center_object_id']}]]",
         f"- member_count: {cluster['member_count']}",
         f"- score: {cluster['score']}",
+        f"- display_title: {payload['display_title']}",
         "",
         "## Cluster Synthesis",
         "",
@@ -52,6 +53,19 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
             lines.append(
                 f"- {item['edge_kind']} ({item['edge_family']}) = {item['count']} [{item['display_name']}]"
             )
+    else:
+        lines.append("- (none)")
+
+    lines.extend(
+        [
+            "",
+            "## Relation Patterns",
+            "",
+        ]
+    )
+    if payload["relation_pattern_items"]:
+        for item in payload["relation_pattern_items"]:
+            lines.append(f"- {item['display_name']} = {item['count']}")
     else:
         lines.append("- (none)")
 

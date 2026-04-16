@@ -276,6 +276,8 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
     assert payload["items"][0]["cluster_kind"] == "relation_component"
     assert payload["items"][0]["priority_band"]
     assert payload["items"][0]["priority_reason"]
+    assert payload["items"][0]["display_title"]
+    assert payload["items"][0]["relation_pattern_preview"]
 
 
 def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
@@ -304,6 +306,8 @@ def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
     assert payload["cluster"]["pack"] == cluster["pack"]
     assert payload["edges"]
     assert payload["summary_bullets"]
+    assert payload["structural_label"]["title"]
+    assert payload["relation_pattern_items"]
 
 
 def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):
