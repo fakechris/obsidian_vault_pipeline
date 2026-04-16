@@ -107,6 +107,7 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
         lines.extend(
             [
                 f"- title: {payload['next_read_cluster']['display_title']}",
+                f"- bridge_kind: {payload['next_read_cluster']['bridge_kind']}",
                 f"- bridge_band: {payload['next_read_cluster']['bridge_band']}",
                 f"- reason: {payload['next_read_cluster']['reason']}",
             ]
@@ -132,7 +133,7 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
     if payload["related_clusters"]:
         for item in payload["related_clusters"]:
             lines.append(
-                f"- {item['display_title']} [{item['reason']}]"
+                f"- {item['display_title']} [{item['bridge_kind']} / {item['bridge_band']}: {item['reason']}]"
             )
             if item["shared_source_titles"]:
                 lines.append(f"  - shared source notes: {', '.join(item['shared_source_titles'])}")

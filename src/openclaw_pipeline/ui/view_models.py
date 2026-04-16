@@ -224,6 +224,12 @@ def _build_related_cluster_items(
         if shared_moc_slugs:
             reason_parts.append(f"{len(shared_moc_slugs)} shared atlas pages")
         score = len(shared_source_slugs) * 10 + len(shared_moc_slugs) * 5 + int(row["member_count"])
+        if shared_source_slugs and shared_moc_slugs:
+            bridge_kind = "source_and_atlas_overlap"
+        elif shared_source_slugs:
+            bridge_kind = "source_overlap"
+        else:
+            bridge_kind = "atlas_overlap"
         if len(shared_source_slugs) >= 1 and len(shared_moc_slugs) >= 1:
             bridge_band = "strong"
         elif len(shared_source_slugs) >= 1 or len(shared_moc_slugs) >= 2:
@@ -251,6 +257,7 @@ def _build_related_cluster_items(
                     str(current_moc_items.get(slug, provenance["moc_items"].get(slug, {})).get("title", slug))
                     for slug in shared_moc_slugs
                 ][:3],
+                "bridge_kind": bridge_kind,
                 "bridge_band": bridge_band,
                 "reason": ", ".join(reason_parts),
                 "score": score,
@@ -796,6 +803,7 @@ def build_cluster_browser_payload(
                 "neighborhood_score": strongest_related["score"] if strongest_related else 0,
                 "neighborhood_reason": strongest_related["reason"] if strongest_related else "",
                 "neighborhood_band": strongest_related["bridge_band"] if strongest_related else "",
+                "neighborhood_bridge_kind": strongest_related["bridge_kind"] if strongest_related else "",
                 "next_read_title": strongest_related["display_title"] if strongest_related else "",
                 "next_read_path": strongest_related["detail_path"] if strongest_related else "",
                 "next_read_reason": strongest_related["reason"] if strongest_related else "",

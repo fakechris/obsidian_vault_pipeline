@@ -494,6 +494,7 @@ date: 2026-04-13
     assert item["related_cluster_preview"]
     assert item["neighborhood_score"] > 0
     assert item["neighborhood_reason"]
+    assert item["neighborhood_bridge_kind"] == "source_and_atlas_overlap"
     assert item["next_read_title"]
     assert item["next_read_path"].startswith("/cluster?id=")
 

@@ -837,6 +837,7 @@ date: 2026-04-10
 
     assert result == 0
     assert "## Related Clusters" in content
+    assert "source_and_atlas_overlap" in content
     assert "Shared Atlas" in content or "Shared Deep Dive" in content
 
 

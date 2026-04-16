@@ -1355,7 +1355,7 @@ def _render_clusters_page(payload: dict) -> str:
             else ""
         )
         + (
-            f"<div class='muted'>Neighborhood: {escape(item['neighborhood_band'])} · {escape(item['neighborhood_reason'])}</div>"
+            f"<div class='muted'>Neighborhood: {escape(item['neighborhood_band'])} · {escape(item['neighborhood_bridge_kind'])} · {escape(item['neighborhood_reason'])}</div>"
             if item.get("neighborhood_score")
             else ""
         )
@@ -1449,6 +1449,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
         "<li>"
         f"<a href=\"{escape(item['detail_path'])}\">{escape(item['display_title'])}</a> "
         f"<span class='pill'>{item['member_count']} objects</span> "
+        f"<span class='pill'>{escape(item['bridge_kind'])}</span> "
         f"<span class='pill'>{escape(item['reason'])}</span>"
         + (
             f"<div class='muted'>Shared source notes: {escape(', '.join(item['shared_source_titles']))}</div>"
@@ -1467,6 +1468,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
     next_read_route = (
         "<p>"
         f"<a href=\"{escape(next_read_cluster['detail_path'])}\">{escape(next_read_cluster['display_title'])}</a> "
+        f"<span class='pill'>{escape(next_read_cluster['bridge_kind'])}</span> "
         f"<span class='pill'>{escape(next_read_cluster['bridge_band'])}</span>"
         "</p>"
         f"<p class='muted'>{escape(next_read_cluster['reason'])}</p>"

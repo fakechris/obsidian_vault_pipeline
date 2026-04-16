@@ -428,6 +428,7 @@ date: 2026-04-13
     assert item["related_cluster_preview"]
     assert item["neighborhood_score"] > 0
     assert item["neighborhood_reason"]
+    assert item["neighborhood_bridge_kind"] == "source_and_atlas_overlap"
     assert item["next_read_title"]
     assert item["next_read_path"].startswith("/cluster?id=")
 
@@ -577,11 +578,13 @@ date: 2026-04-13
 
     assert payload["related_clusters"]
     assert payload["related_clusters"][0]["bridge_band"]
+    assert payload["related_clusters"][0]["bridge_kind"] == "source_and_atlas_overlap"
     assert payload["related_clusters"][0]["shared_source_count"] >= 1
     assert payload["related_clusters"][0]["shared_moc_count"] >= 1
     assert payload["related_clusters"][0]["detail_path"].startswith("/cluster?id=")
     assert payload["next_read_cluster"]["detail_path"] == payload["related_clusters"][0]["detail_path"]
     assert payload["next_read_cluster"]["display_title"]
+    assert payload["next_read_cluster"]["bridge_kind"] == "source_and_atlas_overlap"
 
 
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
