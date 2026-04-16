@@ -1634,7 +1634,8 @@ def build_truth_dashboard_payload(
     stale_summaries = build_stale_summary_browser_payload(vault_dir, pack_name=pack_name)
     evolution = build_evolution_browser_payload(vault_dir, pack_name=pack_name, status="all")
     signals = build_signal_browser_payload(vault_dir, pack_name=pack_name)
-    production_weak_points = _build_production_weak_points(vault_dir, pack_name=pack_name)
+    production = build_production_browser_payload(vault_dir, pack_name=pack_name)
+    production_weak_points = production["weak_points"]
     priorities: list[dict[str, Any]] = []
     for item in contradictions["items"][:4]:
         priorities.append(
@@ -1699,14 +1700,13 @@ def build_truth_dashboard_payload(
             "items": evolution["candidate_items"][:6],
         },
         "production": {
-            "weak_points": production_weak_points,
-            "weak_point_count": len(production_weak_points),
+            **production,
             "browser_path": _scoped_path("/production", pack_name=requested_pack),
+            "weak_point_count": len(production_weak_points),
         },
         "signals": {
-            "count": signals["count"],
+            **signals,
             "items": signals["items"][:8],
-            "type_counts": signals["type_counts"],
             "browser_path": _scoped_path("/signals", pack_name=requested_pack),
         },
         "recent_review_actions": list_review_actions(vault_dir, limit=8),

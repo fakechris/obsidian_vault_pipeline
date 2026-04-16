@@ -1014,6 +1014,79 @@ Processed source note without downstream chain.
     assert payload["production"]["browser_path"] == "/production?pack=default-knowledge"
     production_gap = next(item for item in payload["priorities"] if item["kind"] == "production_gap")
     assert production_gap["path"].endswith("&pack=default-knowledge")
+    assert payload["signals"]["surface_contract"]["status"] == "inherited"
+    assert payload["production"]["surface_contract"]["status"] == "inherited"
+
+
+def test_build_truth_dashboard_payload_handles_missing_shell_surfaces(temp_vault, monkeypatch):
+    from openclaw_pipeline.ui import view_models
+
+    _seed_truth_store(temp_vault)
+
+    monkeypatch.setattr(
+        view_models,
+        "build_signal_browser_payload",
+        lambda vault_dir, *, pack_name=None, signal_type=None, query=None: {
+            "screen": "signals/browser",
+            "requested_pack": pack_name or "",
+            "surface_contract": {
+                "surface_kind": "signals",
+                "requested_pack": pack_name or "",
+                "status": "missing",
+                "provider_pack": "",
+                "provider_name": "",
+                "description": "",
+            },
+            "surface_error": "Pack 'media-editorial' does not expose a shared shell 'signals' surface.",
+            "items": [],
+            "count": 0,
+            "query": query or "",
+            "signal_type": signal_type or "",
+            "type_counts": {},
+            "signal_type_explanations": {},
+        },
+    )
+    monkeypatch.setattr(
+        view_models,
+        "build_production_browser_payload",
+        lambda vault_dir, *, pack_name=None, query=None: {
+            "screen": "production/browser",
+            "requested_pack": pack_name or "",
+            "surface_contract": {
+                "surface_kind": "production_chains",
+                "requested_pack": pack_name or "",
+                "status": "missing",
+                "provider_pack": "",
+                "provider_name": "",
+                "description": "",
+            },
+            "surface_error": "Pack 'media-editorial' does not expose a shared shell 'production_chains' surface.",
+            "items": [],
+            "source_items": [],
+            "deep_dive_items": [],
+            "weak_points": [],
+            "count": 0,
+            "query": query or "",
+            "limit": 50,
+            "is_limited": True,
+            "counts": {"source_notes": 0, "deep_dives": 0},
+        },
+    )
+    monkeypatch.setattr(
+        view_models,
+        "_build_production_weak_points",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("dashboard should reuse production payload")),
+    )
+
+    payload = view_models.build_truth_dashboard_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["signals"]["surface_contract"]["status"] == "missing"
+    assert payload["production"]["surface_contract"]["status"] == "missing"
+    assert payload["signals"]["surface_error"] == "Pack 'media-editorial' does not expose a shared shell 'signals' surface."
+    assert payload["production"]["surface_error"] == (
+        "Pack 'media-editorial' does not expose a shared shell 'production_chains' surface."
+    )
+    assert not any(item["kind"] == "production_gap" for item in payload["priorities"])
 
 
 def test_build_truth_dashboard_payload_uses_total_object_count(temp_vault):

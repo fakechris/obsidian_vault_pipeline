@@ -105,6 +105,8 @@ def test_ui_server_root_accepts_pack_scope(temp_vault):
     assert response.status == 200
     assert "Pack scope: default-knowledge" in body
     assert "/signals?pack=default-knowledge" in body
+    assert "inherited from research-tech-signals" in body
+    assert "inherited from research-tech-production-chains" in body
 
 
 def test_ui_server_objects_endpoint_returns_json(temp_vault):

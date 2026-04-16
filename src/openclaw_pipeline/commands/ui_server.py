@@ -855,6 +855,8 @@ def _render_production_summary_card(
 
 def _render_dashboard(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
+    signals_surface_contract = _render_surface_contract_card(payload["signals"])
+    production_surface_contract = _render_surface_contract_card(payload["production"])
     object_items = "".join(
         f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a></li>'
         for item in payload["objects"]["items"]
@@ -928,7 +930,9 @@ def _render_dashboard(payload: dict) -> str:
             f"<section class='card'><h2><a href='{escape(payload['stale_summaries']['browser_path'])}'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
+            f"{signals_surface_contract}"
             f"<section class='card'><h2><a href='{escape(payload['signals']['browser_path'])}'>Signals</a></h2><ul class='list-tight'>{signal_items}</ul></section>"
+            f"{production_surface_contract}"
             f"<section class='card'><h2><a href='{escape(payload['production']['browser_path'])}'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>"
             f"<section class='card'><h2><a href='{escape(payload['contradictions']['browser_path'])}'>Contradiction Queue</a></h2><ul class='list-tight'>{contradiction_items}</ul></section>"
             f"{_render_review_history(payload['recent_review_actions'], title='Recent Review Actions')}"
