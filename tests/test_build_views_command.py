@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 
 def test_build_views_help_mentions_primary_pack(capsys):
     from openclaw_pipeline.commands.build_views import main
@@ -32,6 +34,24 @@ def test_build_views_command_requires_object_id_for_object_page(temp_vault):
         assert exc.code == 2
     else:
         raise AssertionError("expected object/page to require --object-id")
+
+
+def test_build_views_command_requires_cluster_id_for_cluster_crystal(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--vault-dir",
+                str(temp_vault),
+                "--pack",
+                "default-knowledge",
+                "--view",
+                "cluster/crystal",
+            ]
+        )
+
+    assert exc_info.value.code == 2
 
 
 def test_build_views_command_writes_compiled_markdown(temp_vault):
@@ -609,6 +629,74 @@ date: 2026-04-10
     assert "#### Coverage" in content
     assert "Source Deep Dive" in content
     assert "Atlas Index" in content
+
+
+def test_build_views_command_can_materialize_cluster_crystal(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Source note explains the runtime architecture.
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+
+Target note captures downstream effects.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    cluster = list_graph_clusters(temp_vault, pack_name="default-knowledge")[0]
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "cluster/crystal",
+            "--cluster-id",
+            cluster["cluster_id"],
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (
+        layout.compiled_views_dir / "default-knowledge" / "clusters" / f"{cluster['cluster_id']}.md"
+    ).read_text(encoding="utf-8")
+
+    assert result == 0
+    assert f"# cluster/{cluster['cluster_id']}" in content
+    assert "## Cluster Synthesis" in content
+    assert "## Members" in content
+    assert "## Internal Edges" in content
+    assert "Source Note" in content
+    assert "Target Note" in content
 
 
 def test_build_views_command_can_materialize_contradictions_overview(temp_vault):

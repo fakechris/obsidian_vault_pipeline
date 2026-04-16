@@ -212,6 +212,16 @@ def build_wiki_views(pack_name: str) -> list[WikiViewSpec]:
             publish_target="compiled_markdown",
         ),
         WikiViewSpec(
+            name="cluster/crystal",
+            pack=pack_name,
+            purpose_path="90-Templates/purpose/topic.md",
+            schema_path="90-Templates/schema/topic.md",
+            input_sources=[],
+            builder="cluster_crystal",
+            traceability_policy=TraceabilityPolicy(include_sources=True, include_generated_from=True),
+            publish_target="compiled_markdown",
+        ),
+        WikiViewSpec(
             name="saved_answer/query",
             pack=pack_name,
             purpose_path="90-Templates/purpose/saved-answer.md",
