@@ -1360,6 +1360,11 @@ def _render_clusters_page(payload: dict) -> str:
             else ""
         )
         + (
+            f"<div class='muted'>Next read: <a href='{escape(item['next_read_path'])}'>{escape(item['next_read_title'])}</a> · {escape(item['next_read_reason'])}</div>"
+            if item.get("next_read_title")
+            else ""
+        )
+        + (
             f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
             if item.get("top_summary_bullet")
             else ""
@@ -1458,6 +1463,24 @@ def _render_cluster_detail_page(payload: dict) -> str:
         + "</li>"
         for item in payload["related_clusters"]
     ) or "<li class='muted'>No related clusters surfaced for this scope.</li>"
+    next_read_cluster = payload.get("next_read_cluster")
+    next_read_route = (
+        "<p>"
+        f"<a href=\"{escape(next_read_cluster['detail_path'])}\">{escape(next_read_cluster['display_title'])}</a> "
+        f"<span class='pill'>{escape(next_read_cluster['bridge_band'])}</span>"
+        "</p>"
+        f"<p class='muted'>{escape(next_read_cluster['reason'])}</p>"
+        + (
+            f"<p class='muted'>Shared source notes: {escape(', '.join(next_read_cluster['shared_source_titles']))}</p>"
+            if next_read_cluster["shared_source_titles"]
+            else ""
+        )
+        + (
+            f"<p class='muted'>Shared atlas pages: {escape(', '.join(next_read_cluster['shared_moc_titles']))}</p>"
+            if next_read_cluster["shared_moc_titles"]
+            else ""
+        )
+    ) if next_read_cluster else "<p class='muted'>No next reading route surfaced for this cluster.</p>"
     relation_patterns = "".join(
         f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span></li>"
         for item in payload["relation_pattern_items"]
@@ -1479,6 +1502,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Structural Label</h2><p><strong>{escape(payload['structural_label']['title'])}</strong></p><p class='muted'>{escape(payload['structural_label']['reason'])}</p></section>"
             f"<section class='card'><h2>Relation Patterns</h2><ul class='list-tight'>{relation_patterns}</ul></section>"
             f"<section class='card'><h2>Review Pressure</h2><h3>Open Contradictions</h3><ul class='list-tight'>{open_contradictions}</ul><h3>Stale Summaries</h3><ul class='list-tight'>{stale_summaries}</ul></section>"
+            f"<section class='card'><h2>Next Reading Route</h2>{next_read_route}</section>"
             f"<section class='card'><h2>Related Clusters</h2><ul class='list-tight'>{related_clusters}</ul></section>"
             f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
             f"<section class='card'><h2>Object Kinds</h2><div class='link-row'>{object_kind_counts}</div></section>"

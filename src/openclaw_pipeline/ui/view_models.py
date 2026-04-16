@@ -796,6 +796,9 @@ def build_cluster_browser_payload(
                 "neighborhood_score": strongest_related["score"] if strongest_related else 0,
                 "neighborhood_reason": strongest_related["reason"] if strongest_related else "",
                 "neighborhood_band": strongest_related["bridge_band"] if strongest_related else "",
+                "next_read_title": strongest_related["display_title"] if strongest_related else "",
+                "next_read_path": strongest_related["detail_path"] if strongest_related else "",
+                "next_read_reason": strongest_related["reason"] if strongest_related else "",
                 "priority_score": priority_score,
                 "priority_band": priority_band,
                 "priority_reason": priority_reason,
@@ -947,6 +950,7 @@ def build_cluster_detail_payload(
         current_source_note_items=source_note_items,
         current_moc_items=moc_items,
     )
+    next_read_cluster = related_clusters[0] if related_clusters else None
 
     return {
         "screen": "graph/cluster-detail",
@@ -965,6 +969,7 @@ def build_cluster_detail_payload(
         "open_contradictions": open_contradictions,
         "stale_summaries": stale_summaries,
         "related_clusters": related_clusters,
+        "next_read_cluster": next_read_cluster,
         "top_source_notes": _top_counter_items(source_note_counts, source_note_items),
         "top_mocs": _top_counter_items(moc_counts, moc_items),
         "summary_bullets": summary_bullets,

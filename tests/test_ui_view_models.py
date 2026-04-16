@@ -428,6 +428,8 @@ date: 2026-04-13
     assert item["related_cluster_preview"]
     assert item["neighborhood_score"] > 0
     assert item["neighborhood_reason"]
+    assert item["next_read_title"]
+    assert item["next_read_path"].startswith("/cluster?id=")
 
 
 def test_build_cluster_detail_payload(temp_vault):
@@ -578,6 +580,8 @@ date: 2026-04-13
     assert payload["related_clusters"][0]["shared_source_count"] >= 1
     assert payload["related_clusters"][0]["shared_moc_count"] >= 1
     assert payload["related_clusters"][0]["detail_path"].startswith("/cluster?id=")
+    assert payload["next_read_cluster"]["detail_path"] == payload["related_clusters"][0]["detail_path"]
+    assert payload["next_read_cluster"]["display_title"]
 
 
 def test_build_event_dossier_payload_includes_provenance(temp_vault):

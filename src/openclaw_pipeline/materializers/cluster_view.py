@@ -91,6 +91,23 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
             lines.extend(
                 [
                     "",
+                    "#### Next Reading Route",
+                    "",
+                ]
+            )
+            if detail["next_read_cluster"]:
+                lines.extend(
+                    [
+                        f"- title: {detail['next_read_cluster']['display_title']}",
+                        f"- bridge_band: {detail['next_read_cluster']['bridge_band']}",
+                        f"- reason: {detail['next_read_cluster']['reason']}",
+                    ]
+                )
+            else:
+                lines.append("- (none)")
+            lines.extend(
+                [
+                    "",
                     "#### Related Clusters",
                     "",
                 ]

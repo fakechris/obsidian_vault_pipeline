@@ -629,6 +629,7 @@ date: 2026-04-10
     assert "#### Structural Label" in content
     assert "#### Relation Patterns" in content
     assert "#### Related Clusters" in content
+    assert "#### Next Reading Route" in content
     assert "- priority_band:" in content
     assert "- neighborhood_score:" in content
     assert "#### Coverage" in content
@@ -702,6 +703,7 @@ Target note captures downstream effects.
     assert "## Edge Summary" in content
     assert "## Relation Patterns" in content
     assert "## Review Pressure" in content
+    assert "## Next Reading Route" in content
     assert "## Members" in content
     assert "## Internal Edges" in content
     assert "- display_title: " in content
