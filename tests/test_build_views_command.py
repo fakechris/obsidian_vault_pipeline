@@ -630,6 +630,7 @@ date: 2026-04-10
     assert "#### Relation Patterns" in content
     assert "#### Related Clusters" in content
     assert "- priority_band:" in content
+    assert "- neighborhood_score:" in content
     assert "#### Coverage" in content
     assert "Source Deep Dive" in content
     assert "Atlas Index" in content

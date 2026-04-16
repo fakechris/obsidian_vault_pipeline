@@ -48,6 +48,9 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     f"- priority_band: {row['priority_band']}",
                     f"- priority_reason: {row['priority_reason']}",
                     f"- related_cluster_count: {row['related_cluster_count']}",
+                    f"- neighborhood_score: {row['neighborhood_score']}",
+                    f"- neighborhood_band: {row['neighborhood_band']}",
+                    f"- neighborhood_reason: {row['neighborhood_reason']}",
                     "",
                     "#### Members",
                     "",
@@ -94,7 +97,7 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
             )
             if detail["related_clusters"]:
                 for item in detail["related_clusters"]:
-                    lines.append(f"- {item['display_title']} [{item['reason']}]")
+                    lines.append(f"- {item['display_title']} [{item['bridge_band']}: {item['reason']}]")
             else:
                 lines.append("- (none)")
             lines.extend(

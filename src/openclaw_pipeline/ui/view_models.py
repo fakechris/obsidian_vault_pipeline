@@ -224,6 +224,12 @@ def _build_related_cluster_items(
         if shared_moc_slugs:
             reason_parts.append(f"{len(shared_moc_slugs)} shared atlas pages")
         score = len(shared_source_slugs) * 10 + len(shared_moc_slugs) * 5 + int(row["member_count"])
+        if len(shared_source_slugs) >= 1 and len(shared_moc_slugs) >= 1:
+            bridge_band = "strong"
+        elif len(shared_source_slugs) >= 1 or len(shared_moc_slugs) >= 2:
+            bridge_band = "medium"
+        else:
+            bridge_band = "light"
         related_items.append(
             {
                 "cluster_id": str(row["cluster_id"]),
@@ -245,6 +251,7 @@ def _build_related_cluster_items(
                     str(current_moc_items.get(slug, provenance["moc_items"].get(slug, {})).get("title", slug))
                     for slug in shared_moc_slugs
                 ][:3],
+                "bridge_band": bridge_band,
                 "reason": ", ".join(reason_parts),
                 "score": score,
             }
@@ -771,6 +778,7 @@ def build_cluster_browser_payload(
         else:
             priority_band = "reference"
             priority_reason = f"{review_context['source_note_count']} source notes in scope"
+        strongest_related = detail["related_clusters"][0] if detail["related_clusters"] else None
         enriched_items.append(
             {
                 **item,
@@ -785,6 +793,9 @@ def build_cluster_browser_payload(
                 "related_cluster_preview": ", ".join(
                     related["display_title"] for related in detail["related_clusters"][:2]
                 ),
+                "neighborhood_score": strongest_related["score"] if strongest_related else 0,
+                "neighborhood_reason": strongest_related["reason"] if strongest_related else "",
+                "neighborhood_band": strongest_related["bridge_band"] if strongest_related else "",
                 "priority_score": priority_score,
                 "priority_band": priority_band,
                 "priority_reason": priority_reason,

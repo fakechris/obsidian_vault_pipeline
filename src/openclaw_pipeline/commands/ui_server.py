@@ -1355,6 +1355,11 @@ def _render_clusters_page(payload: dict) -> str:
             else ""
         )
         + (
+            f"<div class='muted'>Neighborhood: {escape(item['neighborhood_band'])} · {escape(item['neighborhood_reason'])}</div>"
+            if item.get("neighborhood_score")
+            else ""
+        )
+        + (
             f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
             if item.get("top_summary_bullet")
             else ""

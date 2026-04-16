@@ -426,6 +426,8 @@ date: 2026-04-13
 
     assert item["related_cluster_count"] >= 1
     assert item["related_cluster_preview"]
+    assert item["neighborhood_score"] > 0
+    assert item["neighborhood_reason"]
 
 
 def test_build_cluster_detail_payload(temp_vault):
@@ -572,6 +574,7 @@ date: 2026-04-13
     payload = build_cluster_detail_payload(temp_vault, cluster_id=cluster["cluster_id"], pack_name=cluster["pack"])
 
     assert payload["related_clusters"]
+    assert payload["related_clusters"][0]["bridge_band"]
     assert payload["related_clusters"][0]["shared_source_count"] >= 1
     assert payload["related_clusters"][0]["shared_moc_count"] >= 1
     assert payload["related_clusters"][0]["detail_path"].startswith("/cluster?id=")

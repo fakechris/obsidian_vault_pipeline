@@ -492,6 +492,8 @@ date: 2026-04-13
     assert response.status == 200
     assert item["related_cluster_count"] >= 1
     assert item["related_cluster_preview"]
+    assert item["neighborhood_score"] > 0
+    assert item["neighborhood_reason"]
 
 
 def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):
