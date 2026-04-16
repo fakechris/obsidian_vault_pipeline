@@ -176,6 +176,16 @@ def _object_kind_payload(spec: object, *, discoverable: set[str]) -> dict[str, o
     }
 
 
+def _workflow_profile_payload(spec: object) -> dict[str, object]:
+    return {
+        "name": getattr(spec, "name", ""),
+        "description": getattr(spec, "description", ""),
+        "stages": list(getattr(spec, "stages", ()) or ()),
+        "supports_autopilot": bool(getattr(spec, "supports_autopilot", False)),
+        "status": "declared",
+    }
+
+
 def _truth_projection_payload(spec: object | None) -> dict[str, object] | None:
     if spec is None:
         return None
@@ -448,6 +458,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
     pack = load_pack(pack_name)
     compatible_packs = iter_compatible_packs(pack)
     discoverable_object_kinds = set(pack.discoverable_object_kinds())
+    declared_workflow_profiles = [_workflow_profile_payload(spec) for spec in pack.workflow_profiles()]
     declared_object_kinds = [
         {
             **_object_kind_payload(spec, discoverable=discoverable_object_kinds),
@@ -493,6 +504,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
 
     return {
         "declared": {
+            "workflow_profiles": declared_workflow_profiles,
             "object_kinds": declared_object_kinds,
             "stage_handlers": declared_stage_handlers,
             "truth_projection": declared_truth_projection,
@@ -511,6 +523,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "processor_contracts": effective_processor_contracts,
             "execution_contracts": effective_execution_contracts,
         },
+        "workflow_profiles": declared_workflow_profiles,
         "contract_integrity": {
             **compute_declared_contract_integrity(pack_name=pack_name),
             "observation_surfaces": compute_declared_observation_surface_integrity(pack_name=pack_name),
@@ -573,6 +586,11 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 "Object kinds are pack-owned domain vocabulary. Packs should declare which "
                 "kinds are canonical and discoverable instead of teaching core a new object "
                 "taxonomy."
+            ),
+            "workflow_profile_behavior": (
+                "Workflow profiles are pack-owned execution plans. They should declare stage "
+                "order and autopilot support explicitly instead of depending on hidden runtime "
+                "defaults."
             ),
         },
     }
