@@ -48,6 +48,14 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
     assert {
         item["surface_kind"] for item in payload["contracts"]["effective"]["observation_surfaces"]
     } >= {"signals", "briefing", "production_chains"}
+    assert any(
+        item["path"] == "/signals" and item["status"] == "declared" and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["shared_routes"]
+    )
+    assert any(
+        item["path"] == "/clusters" and item["status"] == "declared" and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["research_routes"]
+    )
 
 
 def test_doctor_command_reports_compatibility_pack_metadata(capsys):
@@ -80,6 +88,15 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
     )
     assert "compatibility packs inherit" in payload["contracts"]["contract_notes"]["compatibility_behavior"].lower()
     assert "signals, briefing, production_chains" in payload["contracts"]["contract_notes"]["ui_shell_required_surfaces"]
+    assert any(
+        item["path"] == "/signals" and item["status"] == "inherited" and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["shared_routes"]
+    )
+    assert any(
+        item["path"] == "/clusters" and item["status"] == "inherited" and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["research_routes"]
+    )
+    assert "research-specific routes stay hidden" in payload["contracts"]["contract_notes"]["research_shell_behavior"].lower()
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):

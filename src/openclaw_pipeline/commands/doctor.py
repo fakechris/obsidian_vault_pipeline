@@ -24,6 +24,27 @@ from ..packs.loader import (
 from ..runtime import VaultLayout, iter_markdown_files, resolve_vault_dir
 from ..truth_projection_registry import resolve_truth_projection_builder
 
+_SHARED_SHELL_ROUTES = [
+    {"path": "/", "kind": "builtin"},
+    {"path": "/objects", "kind": "builtin"},
+    {"path": "/search", "kind": "builtin"},
+    {"path": "/actions", "kind": "builtin"},
+    {"path": "/signals", "kind": "surface", "surface_kind": "signals"},
+    {"path": "/briefing", "kind": "surface", "surface_kind": "briefing"},
+    {"path": "/production", "kind": "surface", "surface_kind": "production_chains"},
+]
+
+_RESEARCH_SHELL_ROUTES = [
+    "/evolution",
+    "/clusters",
+    "/cluster",
+    "/atlas",
+    "/deep-dives",
+    "/events",
+    "/contradictions",
+    "/summaries",
+]
+
 
 def _repo_root() -> Path:
     current = Path(__file__).resolve()
@@ -157,6 +178,57 @@ def _execution_contract_payload(spec: object) -> dict[str, object]:
     }
 
 
+def _shell_payload(pack_name: str) -> dict[str, object]:
+    shell_integrity = compute_declared_observation_surface_integrity(pack_name=pack_name)
+    shell_support = {
+        str(item["surface_kind"]): item
+        for item in shell_integrity["shell_surface_support"]
+    }
+    compatible_packs = iter_compatible_packs(pack_name)
+    research_provider = next((pack.name for pack in compatible_packs if pack.name == PRIMARY_PACK_NAME), "")
+
+    shared_routes: list[dict[str, object]] = []
+    for route in _SHARED_SHELL_ROUTES:
+        if route["kind"] == "builtin":
+            shared_routes.append(
+                {
+                    "path": route["path"],
+                    "status": "always_available",
+                    "provider_pack": pack_name,
+                }
+            )
+            continue
+        support = shell_support[str(route["surface_kind"])]
+        shared_routes.append(
+            {
+                "path": route["path"],
+                "surface_kind": route["surface_kind"],
+                "status": support["status"],
+                "provider_pack": support["provider_pack"],
+            }
+        )
+
+    research_status = (
+        "declared"
+        if research_provider == pack_name and research_provider
+        else "inherited"
+        if research_provider
+        else "hidden"
+    )
+    research_routes = [
+        {
+            "path": path,
+            "status": research_status,
+            "provider_pack": research_provider,
+        }
+        for path in _RESEARCH_SHELL_ROUTES
+    ]
+    return {
+        "shared_routes": shared_routes,
+        "research_routes": research_routes,
+    }
+
+
 def _contracts_payload(pack_name: str) -> dict[str, object]:
     pack = load_pack(pack_name)
     compatible_packs = iter_compatible_packs(pack)
@@ -213,6 +285,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             **compute_declared_contract_integrity(pack_name=pack_name),
             "observation_surfaces": compute_declared_observation_surface_integrity(pack_name=pack_name),
         },
+        "shell": _shell_payload(pack_name),
         "contract_notes": {
             "compatibility_behavior": (
                 "Compatibility packs inherit stage handlers, truth projection, and observation "
@@ -232,6 +305,10 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 "The current shared UI shell assumes pack support for these observation surfaces: "
                 + ", ".join(UI_SHELL_SURFACE_KINDS)
                 + "."
+            ),
+            "research_shell_behavior": (
+                "Research-specific routes stay hidden unless the current pack resolves through "
+                "the research-tech compatibility chain."
             ),
         },
     }
