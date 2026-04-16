@@ -199,6 +199,80 @@ def _processor_contract_payload(spec: object) -> dict[str, object]:
     }
 
 
+def _extraction_profile_payload(spec: object) -> dict[str, object]:
+    projection_target = getattr(spec, "projection_target", None)
+    grounding_policy = getattr(spec, "grounding_policy", None)
+    merge_policy = getattr(spec, "merge_policy", None)
+    return {
+        "name": getattr(spec, "name", ""),
+        "pack": getattr(spec, "pack", ""),
+        "input_object_kinds": list(getattr(spec, "input_object_kinds", ()) or ()),
+        "output_mode": getattr(spec, "output_mode", ""),
+        "fields": [
+            {
+                "name": getattr(field, "name", ""),
+                "field_type": getattr(field, "field_type", ""),
+                "required": bool(getattr(field, "required", False)),
+            }
+            for field in list(getattr(spec, "fields", ()) or ())
+        ],
+        "relations": [
+            {
+                "name": getattr(relation, "name", ""),
+                "source_field": getattr(relation, "source_field", ""),
+                "target_field": getattr(relation, "target_field", ""),
+            }
+            for relation in list(getattr(spec, "relations", ()) or ())
+        ],
+        "identifier_fields": list(getattr(spec, "identifier_fields", ()) or ()),
+        "display_fields": list(getattr(spec, "display_fields", ()) or ()),
+        "projection_target": {
+            "object_kind": getattr(projection_target, "object_kind", ""),
+            "channel": getattr(projection_target, "channel", ""),
+            "target_name": getattr(projection_target, "target_name", None),
+        },
+        "grounding_policy": {
+            "require_quote": bool(getattr(grounding_policy, "require_quote", True)),
+            "include_char_offsets": bool(getattr(grounding_policy, "include_char_offsets", True)),
+            "include_section_title": bool(getattr(grounding_policy, "include_section_title", True)),
+        },
+        "merge_policy": {
+            "strategy": getattr(merge_policy, "strategy", ""),
+            "allow_partial_updates": bool(getattr(merge_policy, "allow_partial_updates", False)),
+        },
+        "notes": getattr(spec, "notes", ""),
+        "status": "declared",
+        "provider_pack": getattr(spec, "pack", ""),
+    }
+
+
+def _operation_profile_payload(spec: object) -> dict[str, object]:
+    return {
+        "name": getattr(spec, "name", ""),
+        "pack": getattr(spec, "pack", ""),
+        "scope": getattr(spec, "scope", ""),
+        "triggers": list(getattr(spec, "triggers", ()) or ()),
+        "checks": [
+            {
+                "name": getattr(check, "name", ""),
+                "description": getattr(check, "description", ""),
+            }
+            for check in list(getattr(spec, "checks", ()) or ())
+        ],
+        "proposal_types": [
+            {
+                "proposal_type": getattr(proposal, "proposal_type", ""),
+                "queue_name": getattr(proposal, "queue_name", ""),
+            }
+            for proposal in list(getattr(spec, "proposal_types", ()) or ())
+        ],
+        "auto_fix_policy": getattr(spec, "auto_fix_policy", ""),
+        "review_required": bool(getattr(spec, "review_required", False)),
+        "status": "declared",
+        "provider_pack": getattr(spec, "pack", ""),
+    }
+
+
 def _execution_contract_payload(spec: object) -> dict[str, object]:
     handler_spec = getattr(spec, "handler_spec")
     processor_contract = getattr(spec, "processor_contract")
@@ -365,6 +439,8 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
     declared_surfaces = [_observation_surface_payload(spec) for spec in pack.observation_surfaces()]
     declared_processor_contracts = [_processor_contract_payload(spec) for spec in pack.processor_contracts()]
     declared_wiki_views = [_wiki_view_payload(spec) for spec in pack.wiki_views()]
+    declared_extraction_profiles = [_extraction_profile_payload(spec) for spec in pack.extraction_profiles()]
+    declared_operation_profiles = [_operation_profile_payload(spec) for spec in pack.operation_profiles()]
 
     effective_stage_handlers: list[dict[str, object]] = []
     seen_stage_keys: set[tuple[str, str, str]] = set()
@@ -401,6 +477,8 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "observation_surfaces": declared_surfaces,
             "processor_contracts": declared_processor_contracts,
             "wiki_views": declared_wiki_views,
+            "extraction_profiles": declared_extraction_profiles,
+            "operation_profiles": declared_operation_profiles,
         },
         "effective": {
             "stage_handlers": effective_stage_handlers,
@@ -418,6 +496,8 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
         "truth_projection_contract": _truth_projection_contract_payload(pack_name),
         "shell": _shell_payload(pack_name),
         "wiki_views": declared_wiki_views,
+        "extraction_profiles": declared_extraction_profiles,
+        "operation_profiles": declared_operation_profiles,
         "contract_notes": {
             "compatibility_behavior": (
                 "Compatibility packs inherit stage handlers, truth projection, and observation "
@@ -460,6 +540,11 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 "Truth projection builders emit pack-scoped row families into shared "
                 "knowledge.db tables. Graph families may be empty, but builders should "
                 "still preserve pack namespace and registry metadata."
+            ),
+            "profile_contract_behavior": (
+                "Extraction and operation profiles are pack-owned declarations. They define "
+                "record shapes, grounding rules, review queues, and proposal flows without "
+                "requiring core runtime branches."
             ),
         },
     }

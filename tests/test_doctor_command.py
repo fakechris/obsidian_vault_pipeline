@@ -83,6 +83,18 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
         and item["required_args"] == ["cluster_id"]
         for item in payload["contracts"]["wiki_views"]
     )
+    assert any(
+        item["name"] == "tech/doc_structure"
+        and item["projection_target"]["channel"] == "extraction"
+        and any(field["name"] == "section_title" and field["required"] is True for field in item["fields"])
+        for item in payload["contracts"]["extraction_profiles"]
+    )
+    assert any(
+        item["name"] == "truth/contradiction_review"
+        and item["scope"] == "truth"
+        and item["proposal_types"][0]["queue_name"] == "contradictions"
+        for item in payload["contracts"]["operation_profiles"]
+    )
     assert (
         payload["contracts"]["truth_projection_contract"]["effective_builder"]["pack"]
         == "research-tech"
@@ -159,6 +171,18 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
         and item["input_sources"][0]["source_kind"] == "query"
         for item in payload["contracts"]["wiki_views"]
     )
+    assert any(
+        item["name"] == "media/news_timeline"
+        and item["provider_pack"] == "default-knowledge"
+        and any(field["name"] == "claim" and field["required"] is True for field in item["fields"])
+        for item in payload["contracts"]["extraction_profiles"]
+    )
+    assert any(
+        item["name"] == "vault/review_queue"
+        and item["provider_pack"] == "default-knowledge"
+        and item["proposal_types"][0]["queue_name"] == "review"
+        for item in payload["contracts"]["operation_profiles"]
+    )
     assert (
         payload["contracts"]["truth_projection_contract"]["declared_builder"] is None
     )
@@ -177,6 +201,7 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
     assert "action queue mutations remain available" in payload["contracts"]["contract_notes"]["mutation_shell_behavior"].lower()
     assert "wiki view specs are pack-owned declarations" in payload["contracts"]["contract_notes"]["wiki_view_behavior"].lower()
     assert "pack-scoped row families" in payload["contracts"]["contract_notes"]["truth_projection_behavior"].lower()
+    assert "record shapes, grounding rules, review queues, and proposal flows" in payload["contracts"]["contract_notes"]["profile_contract_behavior"].lower()
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):
