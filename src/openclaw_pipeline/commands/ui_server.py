@@ -1951,6 +1951,8 @@ def _render_actions_page(payload: dict) -> str:
 def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = "/contradictions" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     scope_summary = payload["scope_summary"]
     scope_summary_items = (
@@ -2082,6 +2084,7 @@ def _render_contradictions_page(payload: dict) -> str:
         + (
             "<form method='post' action='/contradictions/resolve' class='link-row'>"
             f"<input type='hidden' name='contradiction_id' value='{escape(item['contradiction_id'])}' />"
+            f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             "<select name='status'>"
             "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
             "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
@@ -2100,42 +2103,54 @@ def _render_contradictions_page(payload: dict) -> str:
     ) or f"<li>{escape(payload['empty_state'])}</li>"
     return _layout(
         "Contradictions",
-        (
-            "<h1>Contradictions</h1>"
-            "<form method='get' action='/contradictions'>"
-            "<select name='status'>"
-            f"<option value=''{' selected' if not status else ''}>all</option>"
-            f"<option value='open'{' selected' if status == 'open' else ''}>open</option>"
-            f"<option value='resolved'{' selected' if status == 'resolved' else ''}>resolved</option>"
-            "</select> "
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter contradictions' /> "
-            "<button type='submit'>Filter</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.</p>"
-            f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
-            "<section class='card'>"
-            "<h2>Batch Resolve</h2>"
-            "<form id='contradiction-batch-form' method='post' action='/contradictions/resolve' class='link-row'>"
-            "<select name='status'>"
-            "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
-            "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
-            "<option value='dismissed'>dismissed</option>"
-            "<option value='needs_human'>needs_human</option>"
-            "</select>"
-            "<input type='text' name='note' placeholder='Resolution note for selected rows' />"
-            "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>"
-            "<button type='submit'>Resolve Selected</button>"
-            "</form>"
-            "</section>"
-            f"<section class='card'><h2>Scope Summary</h2><ul class='list-tight'>{scope_summary_items}</ul></section>"
-            f"<section class='card'><h2>Detection Contract</h2><ul class='list-tight'>{detection_contract_items}</ul></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Contradictions</h1>",
+                "<form method='get' action='/contradictions'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                "<select name='status'>",
+                f"<option value=''{' selected' if not status else ''}>all</option>",
+                f"<option value='open'{' selected' if status == 'open' else ''}>open</option>",
+                f"<option value='resolved'{' selected' if status == 'resolved' else ''}>resolved</option>",
+                "</select> ",
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter contradictions' /> ",
+                "<button type='submit'>Filter</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                "</p>",
+                f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
+                "<section class='card'>",
+                "<h2>Batch Resolve</h2>",
+                "<form id='contradiction-batch-form' method='post' action='/contradictions/resolve' class='link-row'>",
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<select name='status'>",
+                "<option value='resolved_keep_positive'>resolved_keep_positive</option>",
+                "<option value='resolved_keep_negative'>resolved_keep_negative</option>",
+                "<option value='dismissed'>dismissed</option>",
+                "<option value='needs_human'>needs_human</option>",
+                "</select>",
+                "<input type='text' name='note' placeholder='Resolution note for selected rows' />",
+                "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>",
+                "<button type='submit'>Resolve Selected</button>",
+                "</form>",
+                "</section>",
+                f"<section class='card'><h2>Scope Summary</h2><ul class='list-tight'>{scope_summary_items}</ul></section>",
+                f"<section class='card'><h2>Detection Contract</h2><ul class='list-tight'>{detection_contract_items}</ul></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
     )
 
 
 def _render_stale_summaries_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = "/summaries" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     items = "".join(
         "<li>"
@@ -2170,6 +2185,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
         )
         + "<form method='post' action='/summaries/rebuild' class='link-row'>"
         + f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
+        + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<button type='submit'>Rebuild Summary</button>"
         + "</form>"
         + "</li>"
@@ -2177,23 +2193,33 @@ def _render_stale_summaries_page(payload: dict) -> str:
     ) or "<li class='muted'>No stale summaries detected.</li>"
     return _layout(
         "Stale Summaries",
-        (
-            "<h1>Stale Summaries</h1>"
-            "<form method='get' action='/summaries'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter stale summaries' /> "
-            "<button type='submit'>Filter</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} stale summary candidates.</p>"
-            f"{_render_review_context_card(payload['review_context'])}"
-            f"{_render_review_history(payload['review_history'])}"
-            f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
-            "<section class='card'>"
-            "<h2>Batch Rebuild</h2>"
-            "<form id='summary-batch-form' method='post' action='/summaries/rebuild' class='link-row'>"
-            "<button type='submit'>Rebuild Selected</button>"
-            "</form>"
-            "</section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Stale Summaries</h1>",
+                "<form method='get' action='/summaries'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter stale summaries' /> ",
+                "<button type='submit'>Filter</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} stale summary candidates.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                "</p>",
+                f"{_render_review_context_card(payload['review_context'])}",
+                f"{_render_review_history(payload['review_history'])}",
+                f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
+                "<section class='card'>",
+                "<h2>Batch Rebuild</h2>",
+                "<form id='summary-batch-form' method='post' action='/summaries/rebuild' class='link-row'>",
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Rebuild Selected</button>",
+                "</form>",
+                "</section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
     )
 
@@ -2384,11 +2410,13 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/api/summaries":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_stale_summary_browser_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_stale_summary_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/summaries":
                     q = query.get("q", [""])[0]
-                    payload = build_stale_summary_browser_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_stale_summary_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_stale_summaries_page(payload))
                     return
                 if path == "/note":
@@ -2405,14 +2433,26 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/contradictions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
                     self._write_json(
-                        build_contradiction_browser_payload(resolved_vault, status=status, query=q)
+                        build_contradiction_browser_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            status=status,
+                            query=q,
+                        )
                     )
                     return
                 if path == "/contradictions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
-                    payload = build_contradiction_browser_payload(resolved_vault, status=status, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_contradiction_browser_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        status=status,
+                        query=q,
+                    )
                     self._write_html(_render_contradictions_page(payload))
                     return
                 self.send_error(404, "Not Found")
@@ -2429,14 +2469,14 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/contradictions/resolve":
                     self._resolve_contradiction_action(form)
-                    self._redirect("/contradictions?status=resolved")
+                    self._redirect(self._form_first(form, "next").strip() or "/contradictions?status=resolved")
                     return
                 if path == "/api/summaries/rebuild":
                     self._write_json(self._rebuild_summary_action(form))
                     return
                 if path == "/summaries/rebuild":
                     self._rebuild_summary_action(form)
-                    self._redirect("/summaries")
+                    self._redirect(self._form_first(form, "next").strip() or "/summaries")
                     return
                 if path == "/api/evolution/review":
                     self._write_json(self._review_evolution_action(form))

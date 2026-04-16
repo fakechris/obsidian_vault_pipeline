@@ -402,7 +402,12 @@ def get_object_provenance_map(
     return provenance
 
 
-def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
+def get_review_context(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     if not normalized_object_ids:
         return {
@@ -420,7 +425,7 @@ def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str
             "recent_review_actions": [],
         }
 
-    provenance_map = get_object_provenance_map(vault_dir, normalized_object_ids)
+    provenance_map = get_object_provenance_map(vault_dir, normalized_object_ids, pack_name=pack_name)
     source_notes: dict[str, dict[str, Any]] = {}
     mocs: dict[str, dict[str, Any]] = {}
     for provenance in provenance_map.values():
@@ -431,22 +436,30 @@ def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str
 
     db_path = _db_path(vault_dir)
     placeholders = ",".join("?" for _ in normalized_object_ids)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
     with sqlite3.connect(db_path) as conn:
         stale_rows = conn.execute(
             f"""
             SELECT objects.object_id, objects.title, compiled_summaries.summary_text,
                    COALESCE(rel.outgoing_count, 0) AS outgoing_count
             FROM objects
-            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+            LEFT JOIN compiled_summaries
+              ON compiled_summaries.pack = objects.pack
+             AND compiled_summaries.object_id = objects.object_id
             LEFT JOIN (
-                SELECT source_object_id, COUNT(*) AS outgoing_count
+                SELECT pack, source_object_id, COUNT(*) AS outgoing_count
                 FROM relations
-                GROUP BY source_object_id
-            ) AS rel ON rel.source_object_id = objects.object_id
+                GROUP BY pack, source_object_id
+            ) AS rel ON rel.pack = objects.pack AND rel.source_object_id = objects.object_id
             WHERE objects.object_id IN ({placeholders})
-            ORDER BY objects.object_id
+              AND objects.pack IN ({pack_placeholders})
+            ORDER BY CASE objects.pack
+              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              ELSE {len(pack_candidates)}
+            END, objects.object_id
             """,
-            tuple(normalized_object_ids),
+            tuple([*normalized_object_ids, *pack_candidates, *pack_candidates]),
         ).fetchall()
         event_row = conn.execute(
             f"""
@@ -457,15 +470,24 @@ def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str
             tuple(normalized_object_ids),
         ).fetchone()
         contradiction_rows = conn.execute(
-            """
+            f"""
             SELECT contradiction_id, positive_claim_ids_json, negative_claim_ids_json, status
             FROM contradictions
-            ORDER BY contradiction_id
-            """
+            WHERE pack IN ({pack_placeholders})
+            ORDER BY CASE pack
+              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              ELSE {len(pack_candidates)}
+            END, contradiction_id
+            """,
+            tuple([*pack_candidates, *pack_candidates]),
         ).fetchall()
 
     stale_summaries: list[dict[str, Any]] = []
+    seen_stale_object_ids: set[str] = set()
     for object_id, title, summary_text, outgoing_count in stale_rows:
+        if str(object_id) in seen_stale_object_ids:
+            continue
+        seen_stale_object_ids.add(str(object_id))
         summary = str(summary_text or "").strip()
         if outgoing_count > 0:
             continue
@@ -2618,6 +2640,7 @@ def list_production_chains(
 def list_contradictions(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     limit: int = 100,
     status: str | None = None,
     query: str | None = None,
@@ -2625,18 +2648,25 @@ def list_contradictions(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="contradictions")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
     sql = """
         SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
         FROM contradictions
     """
-    params: list[Any] = []
-    where_clauses: list[str] = []
+    params: list[Any] = [*pack_candidates]
+    where_clauses: list[str] = [f"pack IN ({pack_placeholders})"]
     if normalized_query:
         where_clauses.append("lower(subject_key) LIKE ? ESCAPE '\\'")
         params.append(f"%{normalized_query}%")
     if where_clauses:
         sql += " WHERE " + " AND ".join(where_clauses)
-    sql += " ORDER BY subject_key"
+    sql += (
+        " ORDER BY CASE pack "
+        + "".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))
+        + f"ELSE {len(pack_candidates)} END, subject_key"
+    )
+    params.extend(pack_candidates)
     if status is None:
         sql += " LIMIT ?"
         params.append(limit)
@@ -3373,6 +3403,7 @@ def list_timeline_events(
 def list_stale_summaries(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     object_ids: list[str] | None = None,
     limit: int = 100,
@@ -3380,19 +3411,23 @@ def list_stale_summaries(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
     sql = """
         SELECT objects.object_id, objects.title, compiled_summaries.summary_text,
                COALESCE(rel.outgoing_count, 0) AS outgoing_count
         FROM objects
-        LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+        LEFT JOIN compiled_summaries
+          ON compiled_summaries.pack = objects.pack
+         AND compiled_summaries.object_id = objects.object_id
         LEFT JOIN (
-            SELECT source_object_id, COUNT(*) AS outgoing_count
+            SELECT pack, source_object_id, COUNT(*) AS outgoing_count
             FROM relations
-            GROUP BY source_object_id
-        ) AS rel ON rel.source_object_id = objects.object_id
+            GROUP BY pack, source_object_id
+        ) AS rel ON rel.pack = objects.pack AND rel.source_object_id = objects.object_id
     """
-    params: list[Any] = []
-    where_clauses: list[str] = []
+    params: list[Any] = [*pack_candidates]
+    where_clauses: list[str] = [f"objects.pack IN ({pack_placeholders})"]
     if object_ids:
         normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
         if not normalized_object_ids:
@@ -3413,7 +3448,12 @@ def list_stale_summaries(
         params.extend([f"%{normalized_query}%"] * 3)
     if where_clauses:
         sql += " WHERE " + " AND ".join(where_clauses)
-    sql += " ORDER BY objects.object_id LIMIT ?"
+    sql += (
+        " ORDER BY CASE objects.pack "
+        + "".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))
+        + f"ELSE {len(pack_candidates)} END, objects.object_id LIMIT ?"
+    )
+    params.extend(pack_candidates)
     params.append(limit)
 
     with sqlite3.connect(db_path) as conn:
@@ -3428,7 +3468,11 @@ def list_stale_summaries(
     latest_event_map = {str(slug): str(event_date or "") for slug, event_date in latest_event_rows}
 
     items: list[dict[str, Any]] = []
+    seen_object_ids: set[str] = set()
     for object_id, title, summary_text, outgoing_count in rows:
+        if str(object_id) in seen_object_ids:
+            continue
+        seen_object_ids.add(str(object_id))
         summary = str(summary_text or "").strip()
         if outgoing_count > 0:
             continue

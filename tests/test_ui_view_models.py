@@ -806,6 +806,16 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert "page_summary claim polarity" in payload["detection_notes"][0]
 
 
+def test_build_contradiction_browser_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_contradiction_browser_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+
+
 def test_build_contradiction_browser_payload_empty_state_explains_zero(temp_vault):
     from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
 
@@ -1644,6 +1654,31 @@ Thin note.
     assert "summary_too_short" in payload["items"][0]["reason_codes"]
     assert payload["items"][0]["latest_event_date"] == "2026-04-10"
     assert payload["review_history"] == []
+
+
+def test_build_stale_summary_browser_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_stale_summary_browser_payload
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    note.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_stale_summary_browser_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
 
 
 def test_build_object_page_payload_includes_review_history(temp_vault):

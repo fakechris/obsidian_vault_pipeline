@@ -193,6 +193,28 @@ def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
     assert payload["items"][0]["subject_key"] == "alpha"
 
 
+def test_ui_server_contradictions_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/contradictions?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+
+
 def test_ui_server_signals_endpoint_returns_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -240,6 +262,43 @@ def test_ui_server_signals_endpoint_accepts_pack_scope(temp_vault):
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request("GET", "/api/signals?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_summaries_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    note.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/summaries?pack=default-knowledge")
         response = conn.getresponse()
         payload = json.loads(response.read().decode("utf-8"))
     finally:

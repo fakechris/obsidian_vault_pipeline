@@ -414,7 +414,7 @@ def _build_cluster_surface_sections(
         for member in cluster["members"]
         if member.get("object_kind")
     )
-    review_context = get_review_context(vault_dir, member_object_ids)
+    review_context = get_review_context(vault_dir, member_object_ids, pack_name=requested_pack)
     open_contradictions = [
         {
             "contradiction_id": item["contradiction_id"],
@@ -422,10 +422,20 @@ def _build_cluster_surface_sections(
             "object_ids": _object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"]),
             "path": f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
         }
-        for item in list_contradictions(vault_dir, status="open", limit=MAX_PAGE_SIZE)
+        for item in list_contradictions(
+            vault_dir,
+            pack_name=requested_pack,
+            status="open",
+            limit=MAX_PAGE_SIZE,
+        )
         if set(_object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"])) & set(member_object_ids)
     ][:5]
-    stale_summaries = list_stale_summaries(vault_dir, object_ids=member_object_ids, limit=5)
+    stale_summaries = list_stale_summaries(
+        vault_dir,
+        pack_name=requested_pack,
+        object_ids=member_object_ids,
+        limit=5,
+    )
     provenance = (
         cluster_provenance_index.get(str(cluster["cluster_id"]))
         if cluster_provenance_index is not None and str(cluster["cluster_id"]) in cluster_provenance_index
@@ -919,11 +929,16 @@ def build_event_dossier_payload(
         pack_name=pack_name,
     )
     scoped_object_ids = [event["object_id"] for event in events]
-    review_context = get_review_context(vault_dir, scoped_object_ids)
-    scoped_stale_summaries = list_stale_summaries(vault_dir, object_ids=scoped_object_ids, limit=100)
+    review_context = get_review_context(vault_dir, scoped_object_ids, pack_name=pack_name)
+    scoped_stale_summaries = list_stale_summaries(
+        vault_dir,
+        pack_name=pack_name,
+        object_ids=scoped_object_ids,
+        limit=100,
+    )
     scoped_contradictions = [
         item
-        for item in list_contradictions(vault_dir, limit=200)
+        for item in list_contradictions(vault_dir, pack_name=pack_name, limit=200)
         if any(claim_id.split("::", 1)[0] in set(scoped_object_ids) for claim_id in item["positive_claim_ids"] + item["negative_claim_ids"])
         and item["status"] == "open"
     ]
@@ -1219,10 +1234,12 @@ def build_cluster_detail_payload(
 def build_contradiction_browser_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     status: str | None = None,
     query: str | None = None,
 ) -> dict[str, Any]:
-    raw_items = list_contradictions(vault_dir, status=status, query=query)
+    requested_pack = pack_name or ""
+    raw_items = list_contradictions(vault_dir, pack_name=pack_name, status=status, query=query)
     provenance_map = get_object_provenance_map(
         vault_dir,
         _object_ids_from_claim_ids(
@@ -1231,6 +1248,7 @@ def build_contradiction_browser_payload(
                 for item in raw_items
             )
         ),
+        pack_name=pack_name,
     )
     items = []
     for item in raw_items:
@@ -1265,6 +1283,7 @@ def build_contradiction_browser_payload(
     status_counts = Counter(item["status"] for item in items)
     return {
         "screen": "truth/contradictions",
+        "requested_pack": requested_pack,
         "items": items,
         "count": len(items),
         "open_count": status_counts.get("open", 0),
@@ -1629,11 +1648,18 @@ def build_production_browser_payload(
     }
 
 
-def build_stale_summary_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
-    items = list_stale_summaries(vault_dir, query=query)
-    review_context = get_review_context(vault_dir, [item["object_id"] for item in items])
+def build_stale_summary_browser_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    items = list_stale_summaries(vault_dir, pack_name=pack_name, query=query)
+    review_context = get_review_context(vault_dir, [item["object_id"] for item in items], pack_name=pack_name)
     return {
         "screen": "truth/stale-summaries",
+        "requested_pack": requested_pack,
         "items": items,
         "count": len(items),
         "query": query or "",
