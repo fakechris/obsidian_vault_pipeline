@@ -317,16 +317,29 @@ def _build_reading_routes(related_clusters: list[dict[str, Any]]) -> list[dict[s
         ),
     ]
     routes: list[dict[str, Any]] = []
-    for route_kind, display_name, allowed_bridge_kinds in route_specs:
+    for index, (route_kind, display_name, allowed_bridge_kinds) in enumerate(route_specs, start=1):
         candidate = next(
             (item for item in related_clusters if str(item["bridge_kind"]) in allowed_bridge_kinds),
             None,
         )
         if candidate is None:
             continue
+        if route_kind == "full_context_route":
+            route_reason = (
+                "Best first if you want both evidence continuity and atlas continuity across clusters."
+            )
+            route_score = int(candidate["score"]) + 30
+        elif route_kind == "source_continuity_route":
+            route_reason = "Best if you want to keep reading along shared source-note coverage."
+            route_score = int(candidate["score"]) + 20
+        else:
+            route_reason = "Best if you want to keep reading along shared atlas-page coverage."
+            route_score = int(candidate["score"]) + 10
         routes.append(
             {
                 "route_kind": route_kind,
+                "route_rank": index,
+                "route_score": route_score,
                 "display_name": display_name,
                 "cluster_id": candidate["cluster_id"],
                 "display_title": candidate["display_title"],
@@ -334,6 +347,7 @@ def _build_reading_routes(related_clusters: list[dict[str, Any]]) -> list[dict[s
                 "bridge_kind": candidate["bridge_kind"],
                 "bridge_band": candidate["bridge_band"],
                 "reason": candidate["reason"],
+                "route_reason": route_reason,
             }
         )
     return routes

@@ -590,6 +590,9 @@ date: 2026-04-13
     assert payload["related_cluster_groups"][0]["count"] >= 1
     assert payload["reading_routes"]
     assert payload["reading_routes"][0]["route_kind"] == "full_context_route"
+    assert payload["reading_routes"][0]["route_rank"] == 1
+    assert payload["reading_routes"][0]["route_score"] >= payload["reading_routes"][-1]["route_score"]
+    assert payload["reading_routes"][0]["route_reason"]
     assert payload["reading_routes"][0]["detail_path"].startswith("/cluster?id=")
 
 

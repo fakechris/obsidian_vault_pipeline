@@ -409,6 +409,8 @@ date: 2026-04-13
     assert payload["related_cluster_groups"][0]["bridge_kind"] == "source_and_atlas_overlap"
     assert payload["reading_routes"]
     assert payload["reading_routes"][0]["route_kind"] == "full_context_route"
+    assert payload["reading_routes"][0]["route_rank"] == 1
+    assert payload["reading_routes"][0]["route_reason"]
 
 
 def test_ui_server_clusters_endpoint_includes_related_cluster_summary(temp_vault):

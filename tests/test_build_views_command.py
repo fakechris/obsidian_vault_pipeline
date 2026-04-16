@@ -837,6 +837,8 @@ date: 2026-04-10
 
     assert result == 0
     assert "## Reading Routes" in content
+    assert "route_rank:" in content
+    assert "route_reason:" in content
     assert "## Related Clusters" in content
     assert "## Neighborhood Groups" in content
     assert "source_and_atlas_overlap" in content

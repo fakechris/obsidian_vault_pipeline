@@ -108,8 +108,11 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
             lines.extend(
                 [
                     f"- {item['display_name']}: {item['display_title']}",
+                    f"  - route_rank: {item['route_rank']}",
+                    f"  - route_score: {item['route_score']}",
                     f"  - bridge_kind: {item['bridge_kind']}",
                     f"  - bridge_band: {item['bridge_band']}",
+                    f"  - route_reason: {item['route_reason']}",
                     f"  - reason: {item['reason']}",
                 ]
             )

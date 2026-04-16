@@ -1476,11 +1476,13 @@ def _render_cluster_detail_page(payload: dict) -> str:
     ) or "<li class='muted'>No neighborhood groups surfaced for this cluster.</li>"
     reading_routes = "".join(
         "<li>"
+        f"<span class='pill'>#{item['route_rank']}</span> "
         f"{escape(item['display_name'])}: "
         f"<a href=\"{escape(item['detail_path'])}\">{escape(item['display_title'])}</a> "
         f"<span class='pill'>{escape(item['bridge_kind'])}</span> "
         f"<span class='pill'>{escape(item['bridge_band'])}</span>"
-        f"<div class='muted'>{escape(item['reason'])}</div>"
+        f"<div class='muted'>Score: {item['route_score']} · {escape(item['route_reason'])}</div>"
+        f"<div class='muted'>Bridge evidence: {escape(item['reason'])}</div>"
         "</li>"
         for item in payload["reading_routes"]
     ) or "<li class='muted'>No reading routes derived for this cluster.</li>"
