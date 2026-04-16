@@ -630,18 +630,20 @@ def build_evolution_browser_payload(
 def build_cluster_browser_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = DEFAULT_TRACEABILITY_BROWSER_LIMIT,
 ) -> dict[str, Any]:
-    items = list_graph_clusters(vault_dir, query=query, limit=limit)
+    items = list_graph_clusters(vault_dir, pack_name=pack_name, query=query, limit=limit)
     cluster_kind_counts = Counter(item["cluster_kind"] for item in items)
     largest_cluster_size = max((int(item["member_count"]) for item in items), default=0)
     enriched_items = []
     for item in items:
+        requested_pack = pack_name or str(item["pack"])
         detail = build_cluster_detail_payload(
             vault_dir,
             cluster_id=str(item["cluster_id"]),
-            pack_name=str(item["pack"]),
+            pack_name=requested_pack,
         )
         review_context = detail["review_context"]
         dominant_edge_kind = next(
@@ -676,6 +678,8 @@ def build_cluster_browser_payload(
         enriched_items.append(
             {
                 **item,
+                "row_pack": str(item["pack"]),
+                "pack": requested_pack,
                 "detail_path": detail["cluster"]["detail_path"],
                 "center_object_path": detail["cluster"]["center_object_path"],
                 "member_links": detail["cluster"]["member_links"],
@@ -697,6 +701,7 @@ def build_cluster_browser_payload(
     )
     return {
         "screen": "graph/clusters",
+        "requested_pack": pack_name or "",
         "query": query or "",
         "limit": limit,
         "is_limited": True,
@@ -719,11 +724,12 @@ def build_cluster_detail_payload(
 ) -> dict[str, Any]:
     detail = get_graph_cluster_detail(vault_dir, cluster_id, pack_name=pack_name)
     cluster = detail["cluster"]
+    requested_pack = pack_name or str(cluster["pack"])
     member_index = {str(member["object_id"]): member for member in cluster["members"]}
     member_object_ids = [str(member["object_id"]) for member in cluster["members"]]
     detail_path = (
         f"/cluster?id={quote(str(cluster['cluster_id']), safe='')}"
-        f"&pack={quote(str(cluster['pack']), safe='')}"
+        f"&pack={quote(requested_pack, safe='')}"
     )
     enriched_cluster = {
         **cluster,
@@ -834,7 +840,9 @@ def build_cluster_detail_payload(
 
     return {
         "screen": "graph/cluster-detail",
+        "requested_pack": requested_pack,
         "cluster": enriched_cluster,
+        "browser_path": f"/clusters?pack={quote(requested_pack, safe='')}",
         "display_title": structural_label["title"],
         "edges": enriched_edges,
         "edge_kind_counts": dict(edge_kind_counts),

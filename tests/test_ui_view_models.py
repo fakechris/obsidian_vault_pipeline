@@ -311,6 +311,47 @@ Delta extends Gamma.
     assert "alpha" in payload["items"][0]["member_object_ids"]
 
 
+def test_build_cluster_browser_payload_respects_requested_pack(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_cluster_browser_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["items"]
+    assert all(item["pack"] == "default-knowledge" for item in payload["items"])
+
+
 def test_build_cluster_detail_payload(temp_vault):
     from openclaw_pipeline.truth_api import list_graph_clusters
     from openclaw_pipeline.ui.view_models import build_cluster_detail_payload
@@ -355,6 +396,7 @@ date: 2026-04-13
     assert payload["screen"] == "graph/cluster-detail"
     assert payload["cluster"]["cluster_id"] == cluster["cluster_id"]
     assert payload["cluster"]["detail_path"].startswith("/cluster?id=")
+    assert "pack=" in payload["browser_path"]
     assert payload["cluster"]["center_object_path"].startswith("/object?id=")
     assert payload["cluster"]["member_links"][0]["path"].startswith("/object?id=")
     assert payload["edges"]

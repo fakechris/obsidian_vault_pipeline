@@ -262,7 +262,7 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/api/clusters")
+        conn.request("GET", "/api/clusters?pack=default-knowledge")
         response = conn.getresponse()
         payload = json.loads(response.read().decode("utf-8"))
     finally:
@@ -272,6 +272,7 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
 
     assert response.status == 200
     assert payload["screen"] == "graph/clusters"
+    assert payload["requested_pack"] == "default-knowledge"
     assert payload["count"] >= 1
     assert payload["items"][0]["cluster_kind"] == "relation_component"
     assert payload["items"][0]["priority_band"]
@@ -304,6 +305,7 @@ def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
     assert payload["screen"] == "graph/cluster-detail"
     assert payload["cluster"]["cluster_id"] == cluster["cluster_id"]
     assert payload["cluster"]["pack"] == cluster["pack"]
+    assert payload["browser_path"].startswith("/clusters?pack=")
     assert payload["edges"]
     assert payload["summary_bullets"]
     assert payload["structural_label"]["title"]

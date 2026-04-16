@@ -4,8 +4,7 @@ from pathlib import Path
 
 from ..derived.paths import compiled_view_path
 from ..runtime import VaultLayout, resolve_vault_dir
-from ..truth_api import list_graph_clusters
-from ..ui.view_models import build_cluster_detail_payload
+from ..ui.view_models import build_cluster_browser_payload, build_cluster_detail_payload
 
 
 def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str) -> Path:
@@ -14,7 +13,8 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
     output_path = compiled_view_path(layout, pack_name=pack_name, view_name=view_name)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    rows = list_graph_clusters(resolved_vault, pack_name=pack_name, limit=200)
+    browser_payload = build_cluster_browser_payload(resolved_vault, pack_name=pack_name, limit=200)
+    rows = browser_payload["items"]
 
     lines = [
         f"# {view_name}",
@@ -37,13 +37,16 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
             )
             lines.extend(
                 [
-                    f"### {row['label']}",
+                    f"### {row.get('display_title') or row['label']}",
                     "",
                     f"- cluster_id: {row['cluster_id']}",
+                    f"- canonical_label: {row['label']}",
                     f"- cluster_kind: {row['cluster_kind']}",
                     f"- center: [[{row['center_object_id']}]]",
                     f"- member_count: {row['member_count']}",
                     f"- score: {row['score']}",
+                    f"- priority_band: {row['priority_band']}",
+                    f"- priority_reason: {row['priority_reason']}",
                     "",
                     "#### Members",
                     "",
@@ -63,6 +66,24 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
             )
             for bullet in detail["summary_bullets"]:
                 lines.append(f"- {bullet}")
+            lines.extend(
+                [
+                    "",
+                    "#### Structural Label",
+                    "",
+                    f"- kind: {detail['structural_label']['kind']}",
+                    f"- title: {detail['structural_label']['title']}",
+                    f"- reason: {detail['structural_label']['reason']}",
+                    "",
+                    "#### Relation Patterns",
+                    "",
+                ]
+            )
+            if detail["relation_pattern_items"]:
+                for item in detail["relation_pattern_items"]:
+                    lines.append(f"- {item['display_name']} ({item['count']})")
+            else:
+                lines.append("- (none)")
             lines.extend(
                 [
                     "",

@@ -1317,6 +1317,7 @@ def _render_production_browser_page(payload: dict) -> str:
 
 def _render_clusters_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     limit_note = (
         f" Showing the first {payload['limit']} graph clusters in this browser window."
         if payload.get("is_limited")
@@ -1359,16 +1360,25 @@ def _render_clusters_page(payload: dict) -> str:
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     return _layout(
         "Graph Clusters",
-        (
-            "<h1>Graph Clusters</h1>"
-            "<form method='get' action='/clusters'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter clusters or members' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.{escape(limit_note)}</p>"
-            f"<section class='card'><h2>Cluster Kinds</h2><div class='link-row'>{kind_counts}</div></section>"
-            f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Graph Clusters</h1>",
+                "<form method='get' action='/clusters'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter clusters or members' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                f"<section class='card'><h2>Cluster Kinds</h2><div class='link-row'>{kind_counts}</div></section>",
+                f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
     )
 
@@ -1422,7 +1432,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
         "Graph Cluster",
         (
             "<h1>Graph Cluster</h1>"
-            f"<p><a href='/clusters'>Back to clusters</a></p>"
+            f"<p><a href='{escape(payload['browser_path'])}'>Back to clusters</a></p>"
             f"<section class='card'><h2>{escape(payload.get('display_title') or cluster['label'])}</h2>"
             f"<p class='muted'>Pack: {escape(cluster['pack'])} · Kind: {escape(cluster['cluster_kind'])} · Score: {cluster['score']:.1f}</p>"
             f"<p class='muted'>Canonical cluster id: {escape(cluster['label'])}</p>"
@@ -2142,11 +2152,13 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/api/clusters":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_cluster_browser_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/clusters":
                     q = query.get("q", [""])[0]
-                    payload = build_cluster_browser_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_clusters_page(payload))
                     return
                 if path == "/api/cluster":

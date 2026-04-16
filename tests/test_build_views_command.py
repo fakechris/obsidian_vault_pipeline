@@ -626,6 +626,9 @@ date: 2026-04-10
     assert "Source Note" in content
     assert "Target Note" in content
     assert "#### Cluster Synthesis" in content
+    assert "#### Structural Label" in content
+    assert "#### Relation Patterns" in content
+    assert "- priority_band:" in content
     assert "#### Coverage" in content
     assert "Source Deep Dive" in content
     assert "Atlas Index" in content
