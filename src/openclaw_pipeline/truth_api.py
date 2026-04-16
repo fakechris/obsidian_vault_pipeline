@@ -13,6 +13,7 @@ from urllib.parse import quote
 import yaml
 
 from .handler_registry import execute_focused_action_handler, resolve_focused_action_handler
+from .knowledge_index import ensure_knowledge_db_current
 from .observation_surface_registry import execute_observation_surface_builder
 from .pack_resolution import iter_compatible_packs
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
@@ -78,8 +79,7 @@ _BRIEFING_EVOLUTION_PRIORITY = {
 
 
 def _db_path(vault_dir: Path | str) -> Path:
-    resolved = resolve_vault_dir(vault_dir)
-    return VaultLayout.from_vault(resolved).knowledge_db
+    return ensure_knowledge_db_current(vault_dir)
 
 
 def _truth_pack_name(pack_name: str | None = None) -> str:

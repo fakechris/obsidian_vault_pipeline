@@ -80,6 +80,55 @@ def test_truth_api_lists_objects(temp_vault):
     assert objects[1]["object_kind"] == "evergreen"
 
 
+def test_truth_api_rebuilds_legacy_knowledge_db_before_object_queries(temp_vault):
+    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_objects
+
+    vault = _seed_truth_vault(temp_vault)
+    db_path = VaultLayout.from_vault(vault).knowledge_db
+    db_path.unlink()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE objects (
+              object_id TEXT PRIMARY KEY,
+              object_kind TEXT NOT NULL,
+              title TEXT NOT NULL,
+              canonical_path TEXT NOT NULL,
+              source_slug TEXT NOT NULL
+            );
+            CREATE TABLE claims (
+              claim_id TEXT PRIMARY KEY,
+              object_id TEXT NOT NULL,
+              claim_kind TEXT NOT NULL,
+              claim_text TEXT NOT NULL,
+              confidence REAL NOT NULL DEFAULT 1.0
+            );
+            CREATE TABLE relations (
+              source_object_id TEXT NOT NULL,
+              target_object_id TEXT NOT NULL,
+              relation_type TEXT NOT NULL,
+              evidence_source_slug TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+
+    objects = list_objects(vault)
+
+    assert [item["object_id"] for item in objects] == [
+        "negative-note",
+        "source-note",
+        "target-note",
+    ]
+    with sqlite3.connect(db_path) as conn:
+        object_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(objects)").fetchall()
+        }
+    assert "pack" in object_columns
+
+
 def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vault):
     from openclaw_pipeline.truth_api import list_action_queue, list_signals
 
