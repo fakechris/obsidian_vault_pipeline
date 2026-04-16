@@ -163,6 +163,19 @@ def _stage_handler_payload(spec: object) -> dict[str, object]:
     }
 
 
+def _object_kind_payload(spec: object, *, discoverable: set[str]) -> dict[str, object]:
+    return {
+        "kind": getattr(spec, "kind", ""),
+        "display_name": getattr(spec, "display_name", ""),
+        "description": getattr(spec, "description", ""),
+        "canonical": bool(getattr(spec, "canonical", False)),
+        "schema_ref": getattr(spec, "schema_ref", None),
+        "discoverable": getattr(spec, "kind", "") in discoverable,
+        "status": "declared",
+        "provider_pack": "",
+    }
+
+
 def _truth_projection_payload(spec: object | None) -> dict[str, object] | None:
     if spec is None:
         return None
@@ -434,6 +447,14 @@ def _shell_payload(pack_name: str) -> dict[str, object]:
 def _contracts_payload(pack_name: str) -> dict[str, object]:
     pack = load_pack(pack_name)
     compatible_packs = iter_compatible_packs(pack)
+    discoverable_object_kinds = set(pack.discoverable_object_kinds())
+    declared_object_kinds = [
+        {
+            **_object_kind_payload(spec, discoverable=discoverable_object_kinds),
+            "provider_pack": pack.name,
+        }
+        for spec in pack.object_kinds()
+    ]
     declared_stage_handlers = [_stage_handler_payload(spec) for spec in pack.stage_handlers()]
     declared_truth_projection = _truth_projection_payload(pack.truth_projection())
     declared_surfaces = [_observation_surface_payload(spec) for spec in pack.observation_surfaces()]
@@ -472,6 +493,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
 
     return {
         "declared": {
+            "object_kinds": declared_object_kinds,
             "stage_handlers": declared_stage_handlers,
             "truth_projection": declared_truth_projection,
             "observation_surfaces": declared_surfaces,
@@ -495,6 +517,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
         },
         "truth_projection_contract": _truth_projection_contract_payload(pack_name),
         "shell": _shell_payload(pack_name),
+        "object_kinds": declared_object_kinds,
         "wiki_views": declared_wiki_views,
         "extraction_profiles": declared_extraction_profiles,
         "operation_profiles": declared_operation_profiles,
@@ -545,6 +568,11 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 "Extraction and operation profiles are pack-owned declarations. They define "
                 "record shapes, grounding rules, review queues, and proposal flows without "
                 "requiring core runtime branches."
+            ),
+            "object_kind_behavior": (
+                "Object kinds are pack-owned domain vocabulary. Packs should declare which "
+                "kinds are canonical and discoverable instead of teaching core a new object "
+                "taxonomy."
             ),
         },
     }

@@ -90,6 +90,13 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
         for item in payload["contracts"]["extraction_profiles"]
     )
     assert any(
+        item["kind"] == "concept"
+        and item["canonical"] is True
+        and item["discoverable"] is True
+        and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["object_kinds"]
+    )
+    assert any(
         item["name"] == "truth/contradiction_review"
         and item["scope"] == "truth"
         and item["proposal_types"][0]["queue_name"] == "contradictions"
@@ -178,6 +185,13 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
         for item in payload["contracts"]["extraction_profiles"]
     )
     assert any(
+        item["kind"] == "document"
+        and item["canonical"] is False
+        and item["discoverable"] is True
+        and item["provider_pack"] == "default-knowledge"
+        for item in payload["contracts"]["object_kinds"]
+    )
+    assert any(
         item["name"] == "vault/review_queue"
         and item["provider_pack"] == "default-knowledge"
         and item["proposal_types"][0]["queue_name"] == "review"
@@ -202,6 +216,7 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
     assert "wiki view specs are pack-owned declarations" in payload["contracts"]["contract_notes"]["wiki_view_behavior"].lower()
     assert "pack-scoped row families" in payload["contracts"]["contract_notes"]["truth_projection_behavior"].lower()
     assert "record shapes, grounding rules, review queues, and proposal flows" in payload["contracts"]["contract_notes"]["profile_contract_behavior"].lower()
+    assert "canonical and discoverable" in payload["contracts"]["contract_notes"]["object_kind_behavior"].lower()
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):
