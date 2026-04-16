@@ -110,12 +110,28 @@ def _observation_surface_payload(spec: object) -> dict[str, object]:
     }
 
 
+def _processor_contract_payload(spec: object) -> dict[str, object]:
+    return {
+        "name": getattr(spec, "name", ""),
+        "pack": getattr(spec, "pack", ""),
+        "stage": getattr(spec, "stage", None),
+        "action_kind": getattr(spec, "action_kind", None),
+        "mode": getattr(spec, "mode", ""),
+        "inputs": list(getattr(spec, "inputs", ()) or ()),
+        "outputs": list(getattr(spec, "outputs", ()) or ()),
+        "quality_hooks": list(getattr(spec, "quality_hooks", ()) or ()),
+        "entrypoint": getattr(spec, "entrypoint", ""),
+        "description": getattr(spec, "description", ""),
+    }
+
+
 def _contracts_payload(pack_name: str) -> dict[str, object]:
     pack = load_pack(pack_name)
     compatible_packs = iter_compatible_packs(pack)
     declared_stage_handlers = [_stage_handler_payload(spec) for spec in pack.stage_handlers()]
     declared_truth_projection = _truth_projection_payload(pack.truth_projection())
     declared_surfaces = [_observation_surface_payload(spec) for spec in pack.observation_surfaces()]
+    declared_processor_contracts = [_processor_contract_payload(spec) for spec in pack.processor_contracts()]
 
     effective_stage_handlers: list[dict[str, object]] = []
     seen_stage_keys: set[tuple[str, str, str]] = set()
@@ -141,11 +157,25 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             seen_surface_kinds.add(surface_kind)
             effective_surfaces.append(_observation_surface_payload(spec))
 
+    effective_processor_contracts: list[dict[str, object]] = []
+    seen_processor_keys: set[tuple[str, str]] = set()
+    for compatible_pack in compatible_packs:
+        for spec in compatible_pack.processor_contracts():
+            key = (
+                str(getattr(spec, "stage", "") or ""),
+                str(getattr(spec, "action_kind", "") or ""),
+            )
+            if key in seen_processor_keys:
+                continue
+            seen_processor_keys.add(key)
+            effective_processor_contracts.append(_processor_contract_payload(spec))
+
     return {
         "declared": {
             "stage_handlers": declared_stage_handlers,
             "truth_projection": declared_truth_projection,
             "observation_surfaces": declared_surfaces,
+            "processor_contracts": declared_processor_contracts,
         },
         "effective": {
             "stage_handlers": effective_stage_handlers,
@@ -153,15 +183,21 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 resolve_truth_projection_builder(pack_name=pack_name)
             ),
             "observation_surfaces": effective_surfaces,
+            "processor_contracts": effective_processor_contracts,
         },
         "contract_notes": {
             "compatibility_behavior": (
                 "Compatibility packs inherit stage handlers, truth projection, and observation "
                 "surfaces from compatibility_base only when they do not declare their own contract."
             ),
+            "processor_control_plane": (
+                "Processor contracts declare mode, inputs, outputs, and quality hooks without "
+                "requiring core runtime patches."
+            ),
             "media_pack_guidance": (
-                "External packs should implement stage handlers, a truth projection builder, and "
-                "observation surfaces inside the pack rather than patching core runtime modules."
+                "External packs should implement stage handlers, processor contracts, a truth "
+                "projection builder, and observation surfaces inside the pack rather than "
+                "patching core runtime modules."
             ),
         },
     }

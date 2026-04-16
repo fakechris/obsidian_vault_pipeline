@@ -24,7 +24,16 @@ Media Pack should treat these as the supported pack-owned insertion points:
    - autopilot stage execution
    - focused queue actions
 
-2. `truth projection`
+2. `processor contracts`
+   - processor name
+   - stage or focused action kind
+   - mode
+   - input objects
+   - output objects
+   - quality hooks
+   - implementation entrypoint
+
+3. `truth projection`
    - `objects`
    - `claims`
    - `claim_evidence`
@@ -34,7 +43,7 @@ Media Pack should treat these as the supported pack-owned insertion points:
    - optional `graph_edges`
    - optional `graph_clusters`
 
-3. `observation surfaces`
+4. `observation surfaces`
    - `signals`
    - `briefing`
    - `production_chains`
@@ -66,6 +75,7 @@ Compatibility fallback is intentionally narrow.
 If a compatibility pack does **not** declare its own:
 
 - stage handlers
+- processor contracts
 - truth projection
 - observation surfaces
 
@@ -78,9 +88,10 @@ Once a pack declares its own contract, OVP should treat that contract as authori
 Phase 16 should make these rules more explicit, not less:
 
 1. execution dispatch resolves through pack-owned handlers
-2. truth projection resolves through pack-owned builders
-3. observation surfaces resolve through pack-owned builders
-4. core stops carrying `research-tech` defaults in disguise
+2. processor control-plane metadata resolves through pack-owned contracts
+3. truth projection resolves through pack-owned builders
+4. observation surfaces resolve through pack-owned builders
+5. core stops carrying `research-tech` defaults in disguise
 
 ## Immediate Guidance For Media Pack
 
@@ -101,6 +112,7 @@ This now exposes:
 
 - declared handlers
 - effective handlers after compatibility fallback
+- declared/effective processor contracts
 - declared truth projection
 - effective truth projection
 - declared/effective observation surfaces

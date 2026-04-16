@@ -57,6 +57,20 @@ class ObservationSurfaceSpec:
     description: str = ""
 
 
+@dataclass(frozen=True)
+class ProcessorContractSpec:
+    name: str
+    pack: str
+    entrypoint: str
+    stage: str | None = None
+    action_kind: str | None = None
+    mode: str = "rule_based"
+    inputs: tuple[str, ...] = ()
+    outputs: tuple[str, ...] = ()
+    quality_hooks: tuple[str, ...] = ()
+    description: str = ""
+
+
 @dataclass
 class BaseDomainPack:
     name: str
@@ -73,6 +87,7 @@ class BaseDomainPack:
     _stage_handlers: list[StageHandlerSpec] = field(default_factory=list)
     _truth_projection: TruthProjectionSpec | None = None
     _observation_surfaces: list[ObservationSurfaceSpec] = field(default_factory=list)
+    _processor_contracts: list[ProcessorContractSpec] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.role not in ALLOWED_PACK_ROLES:
@@ -101,6 +116,11 @@ class BaseDomainPack:
             if spec.pack != self.name:
                 raise ValueError(
                     f"Pack '{self.name}' declares observation surface for '{spec.pack}'"
+                )
+        for spec in self._processor_contracts:
+            if spec.pack != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares processor contract for '{spec.pack}'"
                 )
 
     def object_kinds(self) -> list[ObjectKindSpec]:
@@ -155,3 +175,6 @@ class BaseDomainPack:
 
     def observation_surfaces(self) -> list[ObservationSurfaceSpec]:
         return list(self._observation_surfaces)
+
+    def processor_contracts(self) -> list[ProcessorContractSpec]:
+        return list(self._processor_contracts)

@@ -44,6 +44,28 @@ def test_base_domain_pack_rejects_stage_handler_from_other_pack():
         )
 
 
+def test_base_domain_pack_rejects_processor_contract_from_other_pack():
+    from openclaw_pipeline.packs.base import BaseDomainPack, ProcessorContractSpec
+
+    with pytest.raises(ValueError, match="declares processor contract"):
+        BaseDomainPack(
+            name="broken",
+            version="0.1.0",
+            api_version=1,
+            _processor_contracts=[
+                ProcessorContractSpec(
+                    name="articles",
+                    pack="other-pack",
+                    stage="articles",
+                    mode="llm_structured",
+                    inputs=("source_note",),
+                    outputs=("deep_dive",),
+                    entrypoint="tests.fake:handler",
+                )
+            ],
+        )
+
+
 def test_load_default_pack_returns_pack_contract():
     from openclaw_pipeline.packs.base import BaseDomainPack
     from openclaw_pipeline.packs.loader import load_default_pack

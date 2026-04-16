@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ... import truth_api
 from ..base import ObservationSurfaceSpec
+from . import surfaces
 
 
 def build_observation_surfaces(pack_name: str = "research-tech") -> list[ObservationSurfaceSpec]:
@@ -40,7 +40,7 @@ def build_signals(
     spec: ObservationSurfaceSpec | None = None,
 ) -> list[dict[str, Any]]:
     _ = spec
-    return truth_api._research_tech_build_signal_entries(vault_dir, pack_name=pack_name)
+    return surfaces.build_signal_entries(vault_dir, pack_name=pack_name)
 
 
 def build_briefing(
@@ -51,7 +51,7 @@ def build_briefing(
     limit: int = 8,
 ) -> dict[str, Any]:
     _ = spec
-    return truth_api._research_tech_build_briefing_snapshot(
+    return surfaces.build_briefing_snapshot(
         vault_dir,
         pack_name=pack_name,
         limit=limit,
@@ -67,4 +67,4 @@ def build_production_chains(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     _ = pack_name, spec
-    return truth_api._research_tech_list_production_chains(vault_dir, query=query, limit=limit)
+    return surfaces.list_production_chains(vault_dir, query=query, limit=limit)

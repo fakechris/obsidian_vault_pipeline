@@ -2092,8 +2092,9 @@ Processed source note without any derived deep dive.
 
     monkeypatch.setattr(
         truth_api,
-        "_run_deep_dive_workflow_action",
-        lambda vault_dir, action: (_ for _ in ()).throw(RuntimeError("boom")),
+        "execute_focused_action_handler",
+        lambda vault_dir, action, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        raising=False,
     )
     truth_api.run_next_action_queue_item(vault)
     failed_action = truth_api.list_action_queue(vault)[0]
@@ -2207,8 +2208,15 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
     rebuild_knowledge_index(vault)
     truth_api.sync_signal_ledger(vault)
 
-    monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", lambda vault_dir, action: {"ok": "deep_dive"})
-    monkeypatch.setattr(truth_api, "_run_object_extraction_workflow_action", lambda vault_dir, action: {"ok": "objects"})
+    monkeypatch.setattr(
+        truth_api,
+        "execute_focused_action_handler",
+        lambda vault_dir, action, **kwargs: (
+            object(),
+            {"ok": "deep_dive"} if action["action_kind"] == "deep_dive_workflow" else {"ok": "objects"},
+        ),
+        raising=False,
+    )
     monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir, **kwargs: None)
 
     payload = truth_api.run_action_queue(vault, limit=5)
@@ -2241,8 +2249,9 @@ Processed source note without any derived deep dive.
 
     monkeypatch.setattr(
         truth_api,
-        "_run_deep_dive_workflow_action",
-        lambda vault_dir, action: (_ for _ in ()).throw(FileNotFoundError("source note not found")),
+        "execute_focused_action_handler",
+        lambda vault_dir, action, **kwargs: (_ for _ in ()).throw(FileNotFoundError("source note not found")),
+        raising=False,
     )
 
     payload = truth_api.run_next_action_queue_item(vault, safe_only=True)
@@ -2304,7 +2313,12 @@ def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkey
         "_signal_by_id",
         lambda vault_dir, signal_id, **kwargs: {"signal_id": signal_id},
     )
-    monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", lambda vault_dir, action: {"ok": True})
+    monkeypatch.setattr(
+        truth_api,
+        "execute_focused_action_handler",
+        lambda vault_dir, action, **kwargs: (object(), {"ok": True}),
+        raising=False,
+    )
     monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir, **kwargs: None)
 
     payload = truth_api.run_action_queue(temp_vault, limit=1, safe_only=True)
@@ -2622,7 +2636,12 @@ def test_truth_api_run_next_action_queue_item_uses_action_queue_lock(temp_vault,
         "_signal_by_id",
         lambda vault_dir, signal_id, **kwargs: {"signal_id": signal_id},
     )
-    monkeypatch.setattr(truth_api, "_run_deep_dive_workflow_action", lambda vault_dir, action: {"ok": True})
+    monkeypatch.setattr(
+        truth_api,
+        "execute_focused_action_handler",
+        lambda vault_dir, action, **kwargs: (object(), {"ok": True}),
+        raising=False,
+    )
     monkeypatch.setattr(truth_api, "_refresh_truth_after_action", lambda vault_dir, **kwargs: None)
 
     payload = truth_api.run_next_action_queue_item(temp_vault, safe_only=True)
@@ -2770,6 +2789,27 @@ def test_research_tech_build_signal_entries_uses_pack_aware_production_chains(te
     assert calls == ["default-knowledge"]
 
 
+def test_research_tech_build_signal_entries_delegates_to_pack_surface_module(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api_source
+    from openclaw_pipeline.packs.research_tech import surfaces
+
+    calls: list[tuple[Path, str | None]] = []
+
+    monkeypatch.setattr(
+        surfaces,
+        "build_signal_entries",
+        lambda vault_dir, *, pack_name=None: calls.append((vault_dir, pack_name)) or [{"signal_id": "signal::delegated"}],
+    )
+
+    items = truth_api_source._research_tech_build_signal_entries(
+        temp_vault,
+        pack_name="default-knowledge",
+    )
+
+    assert items == [{"signal_id": "signal::delegated"}]
+    assert calls == [(temp_vault, "default-knowledge")]
+
+
 def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
     import openclaw_pipeline.truth_api as truth_api_source
 
@@ -2790,6 +2830,29 @@ def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_regi
     payload = truth_api_source.get_briefing_snapshot(temp_vault, pack_name="default-knowledge", limit=5)
 
     assert payload["priority_item_count"] == 1
+
+
+def test_research_tech_build_briefing_snapshot_delegates_to_pack_surface_module(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api_source
+    from openclaw_pipeline.packs.research_tech import surfaces
+
+    calls: list[tuple[Path, str | None, int]] = []
+
+    monkeypatch.setattr(
+        surfaces,
+        "build_briefing_snapshot",
+        lambda vault_dir, *, pack_name=None, limit=8: calls.append((vault_dir, pack_name, limit))
+        or {"generated_at": "2026-04-16T00:00:00Z", "priority_item_count": 2},
+    )
+
+    payload = truth_api_source._research_tech_build_briefing_snapshot(
+        temp_vault,
+        pack_name="default-knowledge",
+        limit=5,
+    )
+
+    assert payload["priority_item_count"] == 2
+    assert calls == [(temp_vault, "default-knowledge", 5)]
 
 
 def test_truth_api_list_production_chains_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
@@ -2818,6 +2881,29 @@ def test_truth_api_list_production_chains_dispatches_via_observation_surface_reg
     assert calls == [("production_chains", "default-knowledge", "chain")]
 
 
+def test_research_tech_list_production_chains_delegates_to_pack_surface_module(temp_vault, monkeypatch):
+    import openclaw_pipeline.truth_api as truth_api_source
+    from openclaw_pipeline.packs.research_tech import surfaces
+
+    calls: list[tuple[Path, str | None, int]] = []
+
+    monkeypatch.setattr(
+        surfaces,
+        "list_production_chains",
+        lambda vault_dir, *, query=None, limit=100: calls.append((vault_dir, query, limit))
+        or [{"title": "delegated chain"}],
+    )
+
+    items = truth_api_source._research_tech_list_production_chains(
+        temp_vault,
+        query="chain",
+        limit=5,
+    )
+
+    assert items == [{"title": "delegated chain"}]
+    assert calls == [(temp_vault, "chain", 5)]
+
+
 def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, monkeypatch):
     import openclaw_pipeline.truth_api as truth_api
 
@@ -2827,7 +2913,7 @@ def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, m
     monkeypatch.setattr(truth_api, "list_stale_summaries", lambda *args, **kwargs: [])
     monkeypatch.setattr(truth_api, "list_review_actions", lambda *args, **kwargs: [])
 
-    def fake_chains(vault_dir, *, query=None, limit=100):
+    def fake_chains(vault_dir, *, pack_name=None, query=None, limit=100):
         calls["chains"] += 1
         return [
             {
@@ -2866,7 +2952,7 @@ def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, m
             },
         ]
 
-    monkeypatch.setattr(truth_api, "_research_tech_list_production_chains", fake_chains)
+    monkeypatch.setattr(truth_api, "list_production_chains", fake_chains)
     monkeypatch.setattr(
         truth_api,
         "list_production_gaps",

@@ -26,6 +26,9 @@ def test_compatibility_pack_falls_back_to_base_focused_action_handler():
     assert spec.pack == "research-tech"
     assert spec.action_kind == "deep_dive_workflow"
     assert spec.safe_to_run is True
+    assert spec.entrypoint == (
+        "openclaw_pipeline.packs.research_tech.focused_actions:run_deep_dive_workflow_action"
+    )
 
 
 def test_focused_action_handlers_accept_positional_vault_and_action():

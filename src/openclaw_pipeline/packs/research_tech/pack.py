@@ -5,6 +5,7 @@ from .extraction_profiles import RESEARCH_TECH_EXTRACTION_PROFILES
 from .handlers import build_stage_handlers
 from .observation_surfaces import build_observation_surfaces
 from .operation_profiles import RESEARCH_TECH_OPERATION_PROFILES
+from .processor_contracts import build_processor_contracts
 from .profiles import RESEARCH_TECH_WORKFLOW_PROFILES
 from .schemas import RESEARCH_TECH_OBJECT_KINDS
 from .wiki_views import RESEARCH_TECH_WIKI_VIEWS
@@ -22,6 +23,7 @@ def get_pack() -> BaseDomainPack:
         _operation_profiles=list(RESEARCH_TECH_OPERATION_PROFILES),
         _wiki_views=list(RESEARCH_TECH_WIKI_VIEWS),
         _stage_handlers=build_stage_handlers(),
+        _processor_contracts=build_processor_contracts(),
         _truth_projection=TruthProjectionSpec(
             name="research-tech-default",
             pack="research-tech",
