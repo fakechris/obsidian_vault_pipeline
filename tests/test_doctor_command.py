@@ -71,6 +71,18 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
         and item["provider_pack"] == "research-tech"
         for item in payload["contracts"]["shell"]["embedded_research_capabilities"]
     )
+    assert any(
+        item["name"] == "object/page"
+        and item["builder"] == "object_page"
+        and item["required_args"] == ["object_id"]
+        and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["wiki_views"]
+    )
+    assert any(
+        item["name"] == "cluster/crystal"
+        and item["required_args"] == ["cluster_id"]
+        for item in payload["contracts"]["wiki_views"]
+    )
 
 
 def test_doctor_command_reports_compatibility_pack_metadata(capsys):
@@ -126,9 +138,21 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
         and item["provider_pack"] == "research-tech"
         for item in payload["contracts"]["shell"]["embedded_research_capabilities"]
     )
+    assert any(
+        item["name"] == "overview/topic"
+        and item["builder"] == "topic_view"
+        and item["provider_pack"] == "default-knowledge"
+        for item in payload["contracts"]["wiki_views"]
+    )
+    assert any(
+        item["name"] == "saved_answer/query"
+        and item["input_sources"][0]["source_kind"] == "query"
+        for item in payload["contracts"]["wiki_views"]
+    )
     assert "research-specific routes stay hidden" in payload["contracts"]["contract_notes"]["research_shell_behavior"].lower()
     assert "object/topic/dashboard" in payload["contracts"]["contract_notes"]["embedded_research_behavior"].lower()
     assert "action queue mutations remain available" in payload["contracts"]["contract_notes"]["mutation_shell_behavior"].lower()
+    assert "wiki view specs are pack-owned declarations" in payload["contracts"]["contract_notes"]["wiki_view_behavior"].lower()
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):

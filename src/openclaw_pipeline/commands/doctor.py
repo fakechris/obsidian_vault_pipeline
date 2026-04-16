@@ -198,6 +198,45 @@ def _execution_contract_payload(spec: object) -> dict[str, object]:
     }
 
 
+def _wiki_view_payload(spec: object) -> dict[str, object]:
+    builder = str(getattr(spec, "builder", "compiled_markdown"))
+    required_args: list[str] = []
+    if builder == "object_page":
+        required_args.append("object_id")
+    if builder == "cluster_crystal":
+        required_args.append("cluster_id")
+    return {
+        "name": getattr(spec, "name", ""),
+        "pack": getattr(spec, "pack", ""),
+        "builder": builder,
+        "publish_target": getattr(spec, "publish_target", ""),
+        "purpose_path": getattr(spec, "purpose_path", ""),
+        "schema_path": getattr(spec, "schema_path", ""),
+        "input_sources": [
+            {
+                "source_kind": getattr(item, "source_kind", ""),
+                "description": getattr(item, "description", ""),
+            }
+            for item in list(getattr(spec, "input_sources", ()) or ())
+        ],
+        "required_args": required_args,
+        "traceability_policy": {
+            "include_sources": bool(
+                getattr(getattr(spec, "traceability_policy", None), "include_sources", True)
+            ),
+            "include_generated_from": bool(
+                getattr(
+                    getattr(spec, "traceability_policy", None),
+                    "include_generated_from",
+                    True,
+                )
+            ),
+        },
+        "status": "declared",
+        "provider_pack": getattr(spec, "pack", ""),
+    }
+
+
 def _shell_payload(pack_name: str) -> dict[str, object]:
     shell_integrity = compute_declared_observation_surface_integrity(pack_name=pack_name)
     shell_support = {
@@ -284,6 +323,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
     declared_truth_projection = _truth_projection_payload(pack.truth_projection())
     declared_surfaces = [_observation_surface_payload(spec) for spec in pack.observation_surfaces()]
     declared_processor_contracts = [_processor_contract_payload(spec) for spec in pack.processor_contracts()]
+    declared_wiki_views = [_wiki_view_payload(spec) for spec in pack.wiki_views()]
 
     effective_stage_handlers: list[dict[str, object]] = []
     seen_stage_keys: set[tuple[str, str, str]] = set()
@@ -319,6 +359,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "truth_projection": declared_truth_projection,
             "observation_surfaces": declared_surfaces,
             "processor_contracts": declared_processor_contracts,
+            "wiki_views": declared_wiki_views,
         },
         "effective": {
             "stage_handlers": effective_stage_handlers,
@@ -334,6 +375,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "observation_surfaces": compute_declared_observation_surface_integrity(pack_name=pack_name),
         },
         "shell": _shell_payload(pack_name),
+        "wiki_views": declared_wiki_views,
         "contract_notes": {
             "compatibility_behavior": (
                 "Compatibility packs inherit stage handlers, truth projection, and observation "
@@ -366,6 +408,11 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 "Action queue mutations remain available across the shared shell, while "
                 "research review mutations resolve only through the research-tech "
                 "compatibility chain."
+            ),
+            "wiki_view_behavior": (
+                "Wiki view specs are pack-owned declarations. Compatibility packs should "
+                "publish their own view specs even when they reuse shared builders or "
+                "inherit research shell behavior elsewhere."
             ),
         },
     }
