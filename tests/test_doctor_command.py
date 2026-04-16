@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 
 
 def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
@@ -104,3 +107,21 @@ def test_doctor_help_mentions_pglite(capsys):
 
     output = capsys.readouterr().out
     assert "PGlite" in output
+
+
+def test_doctor_module_cli_emits_json():
+    env = dict(os.environ)
+    env["PYTHONPATH"] = "src"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "openclaw_pipeline.commands.doctor", "--json"],
+        cwd="/Users/chris/Documents/openclaw-template",
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["pack"]["name"] == "research-tech"

@@ -275,3 +275,7 @@ def main(argv: list[str] | None = None) -> int:
             f"evergreen={vault['evergreen_count']} knowledge_db_exists={vault['knowledge_db_exists']}"
         )
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
