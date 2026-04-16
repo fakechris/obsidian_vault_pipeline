@@ -632,6 +632,66 @@ def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vau
     assert 'href="/events?pack=media-editorial"' not in body
 
 
+def test_ui_server_research_api_route_rejects_non_research_pack(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_cluster_browser_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cluster builder should not run")),
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/clusters?pack=media-editorial")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 409
+    assert payload["status"] == "unsupported_pack"
+    assert payload["route"] == "/clusters"
+    assert payload["requested_pack"] == "media-editorial"
+
+
+def test_ui_server_research_html_route_rejects_non_research_pack(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_cluster_browser_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cluster builder should not run")),
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/clusters?pack=media-editorial")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Route Unavailable" in body
+    assert "research-specific observation shell" in body
+    assert "media-editorial" in body
+
+
 def test_ui_server_summaries_endpoint_accepts_pack_scope(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -1961,6 +2021,48 @@ Thin note.
     assert payload["object_ids"] == ["fragile-note", "thin-note"]
 
 
+def test_ui_server_research_mutation_rejects_non_research_pack(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "resolve_contradictions",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("contradiction resolver should not run")),
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode(
+            {
+                "contradiction_id": "contradiction::demo",
+                "status": "dismissed",
+                "pack": "media-editorial",
+            }
+        )
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/contradictions/resolve",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 409
+    assert payload["status"] == "unsupported_pack"
+    assert payload["route"] == "/contradictions/resolve"
+    assert payload["requested_pack"] == "media-editorial"
+
+
 def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -2034,6 +2136,42 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/summaries?pack=default-knowledge"' in body
+
+
+def test_render_object_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+    payload = build_object_page_payload(temp_vault, "alpha")
+    payload["requested_pack"] = "media-editorial"
+    monkeypatch.setattr(ui_server, "_shell_supports_research_nav", lambda requested_pack="": False)
+
+    body = ui_server._render_object_page(payload)
+
+    assert "Research-specific review surfaces stay hidden" in body
+    assert "Related events" not in body
+    assert "Resolve Open Contradictions" not in body
+    assert "<h2>Evolution</h2>" not in body
+    assert "<h2>Contradictions</h2>" not in body
+
+
+def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+
+    _seed_truth_store(temp_vault)
+    payload = build_topic_overview_payload(temp_vault, "alpha")
+    payload["requested_pack"] = "media-editorial"
+    monkeypatch.setattr(ui_server, "_shell_supports_research_nav", lambda requested_pack="": False)
+
+    body = ui_server._render_topic_page(payload)
+
+    assert "Research-specific review surfaces stay hidden" in body
+    assert "Related events" not in body
+    assert "Review scoped contradictions" not in body
+    assert "<h2>Evolution</h2>" not in body
+    assert "<h2>Atlas / MOC</h2>" not in body
 
 
 def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, monkeypatch):

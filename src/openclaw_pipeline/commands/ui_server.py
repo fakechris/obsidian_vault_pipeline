@@ -219,6 +219,45 @@ def _render_surface_contract_card(payload: dict) -> str:
     return f"<section class='card'><h2>Surface Contract</h2><p class='muted'>{detail}</p>{extra}</section>"
 
 
+def _unsupported_route_payload(route_path: str, requested_pack: str = "") -> dict[str, str]:
+    normalized_pack = requested_pack.strip()
+    return {
+        "status": "unsupported_pack",
+        "route": route_path,
+        "requested_pack": normalized_pack,
+        "error": (
+            f"Route '{route_path}' is not available in the shared shell for pack '{normalized_pack}'."
+            if normalized_pack
+            else f"Route '{route_path}' is not available in the shared shell."
+        ),
+    }
+
+
+def _render_unsupported_route_page(route_path: str, requested_pack: str = "") -> str:
+    payload = _unsupported_route_payload(route_path, requested_pack)
+    return _layout(
+        "Route Unavailable",
+        "".join(
+            [
+                "<h1>Route Unavailable</h1>",
+                f"<p class='muted'>{escape(payload['error'])}</p>",
+                "<section class='card'><h2>Why</h2><p class='muted'>This route currently belongs to the research-specific observation shell. Shared shell routes remain available, but research-only routes stay hidden until the current pack declares equivalent semantics.</p></section>",
+            ]
+        ),
+        requested_pack=requested_pack,
+    )
+
+
+def _render_research_scope_notice(requested_pack: str = "") -> str:
+    pack_label = f" for pack '{requested_pack}'" if requested_pack else ""
+    return (
+        "<section class='card'><h2>Research Review</h2>"
+        f"<p class='muted'>Research-specific review surfaces stay hidden{escape(pack_label)}. "
+        "This page still shows shared object/topic context, but contradiction, summary, evolution, and related research affordances only appear when the current pack declares those semantics.</p>"
+        "</section>"
+    )
+
+
 def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
     candidate = (vault_dir / relative_path).resolve()
     try:
@@ -1038,6 +1077,7 @@ def _render_objects_index(payload: dict) -> str:
 
 def _render_object_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
+    research_shell_enabled = _shell_supports_research_nav(requested_pack)
     next_path = _shell_href(f"/object?id={quote(str(payload['object']['object_id']), safe='')}", requested_pack)
     evergreen_path = payload["provenance"]["evergreen_path"]
     evergreen_html = (
@@ -1080,8 +1120,11 @@ def _render_object_page(payload: dict) -> str:
         "evolution",
         {"candidate_items": [], "accepted_links": [], "accepted_count": 0, "candidate_count": 0, "link_types": []},
     )
+    section_nav_items = [
+        item for item in payload["section_nav"] if research_shell_enabled or item["href"] != "#contradictions"
+    ]
     section_nav = "".join(
-        f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>' for item in payload["section_nav"]
+        f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>' for item in section_nav_items
     )
     contradiction_form = (
         "<form method='post' action='/contradictions/resolve' class='link-row'>"
@@ -1112,6 +1155,78 @@ def _render_object_page(payload: dict) -> str:
         if payload["stale_summary_details"]
         else "<p class='muted'>No stale summary action needed for this object.</p>"
     )
+    hero_links = [
+        f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>",
+    ]
+    if research_shell_enabled:
+        hero_links.extend(
+            [
+                f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>",
+                f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>",
+                f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>",
+                f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>",
+                f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>",
+            ]
+        )
+    stats_cards = [
+        f"<div class='card'><h2>Claims</h2><p>{payload['claim_count']}</p></div>",
+        f"<div class='card'><h2>Relations</h2><p>{payload['relation_count']}</p></div>",
+    ]
+    if research_shell_enabled:
+        stats_cards.append(f"<div class='card'><h2>Contradictions</h2><p>{payload['contradiction_count']}</p></div>")
+    right_sections = []
+    if research_shell_enabled:
+        right_sections.extend(
+            [
+                _render_review_context_card(payload['review_context']),
+                _render_review_history(payload['review_history']),
+                "<section class='card'><h2>Quick Maintenance</h2>"
+                f"{contradiction_form}"
+                f"{summary_form}"
+                "</section>",
+                "<section class='card'><h2>Evolution</h2>"
+                f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
+                + (
+                    f" Link types: {escape(', '.join(evolution['link_types']))}."
+                    if evolution["link_types"]
+                    else ""
+                )
+                + "</p>"
+                + f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
+                + f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True, requested_pack=requested_pack, next_path=next_path)}"
+                + "</section>",
+            ]
+        )
+    else:
+        right_sections.append(_render_research_scope_notice(requested_pack))
+    right_sections.extend(
+        [
+            "<section class='card'><h2>Context</h2><dl class='meta-list'>"
+            f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
+            f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
+            f"<div><dt>Canonical Path</dt><dd>{canonical_path_html}</dd></div>"
+            "</dl></section>",
+            "<section class='card'><h2>Provenance</h2><dl class='meta-list'>"
+            f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
+            f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
+            f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
+            "</dl></section>",
+            "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
+            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
+            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
+            "</dl></section>",
+            f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>",
+        ]
+    )
+    if research_shell_enabled:
+        right_sections.extend(
+            [
+                f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>",
+                f"<section class='card'><h2>Stale Summary Signals</h2><ul class='list-tight'>{stale_summary_signals}</ul></section>",
+            ]
+        )
     return _layout(
         f"Object: {payload['object']['title']}",
         (
@@ -1119,62 +1234,16 @@ def _render_object_page(payload: dict) -> str:
             f"<p class='muted'>{escape(payload['object']['object_id'])}"
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            "<div class='link-row'>"
-            f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>"
-            f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
-            f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
-            f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
-            f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>"
-            f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>"
-            "</div></section>"
+            + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
             f"<nav class='subnav'>{section_nav}</nav>"
-            "<section class='grid stats'>"
-            f"<div class='card'><h2>Claims</h2><p>{payload['claim_count']}</p></div>"
-            f"<div class='card'><h2>Relations</h2><p>{payload['relation_count']}</p></div>"
-            f"<div class='card'><h2>Contradictions</h2><p>{payload['contradiction_count']}</p></div>"
-            "</section>"
+            + f"<section class='grid stats'>{''.join(stats_cards)}</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
             f"<section id='summary' class='card'><h2>Compiled Summary</h2><p>{escape(summary_text)}</p></section>"
             f"<section id='claims' class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
-            f"{_render_review_context_card(payload['review_context'])}"
-            f"{_render_review_history(payload['review_history'])}"
-            "<section class='card'><h2>Quick Maintenance</h2>"
-            f"{contradiction_form}"
-            f"{summary_form}"
-            "</section>"
-            "<section class='card'><h2>Context</h2><dl class='meta-list'>"
-            f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
-            f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
-            f"<div><dt>Canonical Path</dt><dd>{canonical_path_html}</dd></div>"
-            "</dl></section>"
-            "<section class='card'><h2>Provenance</h2><dl class='meta-list'>"
-            f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
-            f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
-            f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
-            "</dl></section>"
-            "<section class='card'><h2>Evolution</h2>"
-            f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
-            + (
-                f" Link types: {escape(', '.join(evolution['link_types']))}."
-                if evolution["link_types"]
-                else ""
-            )
-            + "</p>"
-            f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
-            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True, requested_pack=requested_pack, next_path=next_path)}"
-            "</section>"
-            "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
-            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
-            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
-            "</dl></section>"
-            f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>"
-            f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>"
-            f"<section class='card'><h2>Stale Summary Signals</h2><ul class='list-tight'>{stale_summary_signals}</ul></section>"
+            f"{''.join(right_sections)}"
             "</div>"
             "</section>"
         ),
@@ -1184,6 +1253,7 @@ def _render_object_page(payload: dict) -> str:
 
 def _render_topic_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
+    research_shell_enabled = _shell_supports_research_nav(requested_pack)
     next_path = _shell_href(f"/topic?id={quote(str(payload['center']['object_id']), safe='')}", requested_pack)
     neighbors = "".join(
         f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a></li>'
@@ -1216,6 +1286,46 @@ def _render_topic_page(payload: dict) -> str:
         if payload["scoped_open_contradiction_ids"]
         else "<p class='muted'>No open contradictions in this topic scope.</p>"
     )
+    hero_links = [
+        f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>",
+    ]
+    if research_shell_enabled:
+        hero_links.extend(
+            [
+                f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>",
+                f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>",
+                f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>",
+                f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>",
+                f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>",
+            ]
+        )
+    right_sections = []
+    if research_shell_enabled:
+        right_sections.extend(
+            [
+                f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>",
+                "<section class='card'><h2>Evolution</h2>"
+                f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
+                + (
+                    f" Link types: {escape(', '.join(evolution['link_types']))}."
+                    if evolution["link_types"]
+                    else ""
+                )
+                + "</p>"
+                + f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
+                + f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True, requested_pack=requested_pack, next_path=next_path)}"
+                + "</section>",
+                _render_review_context_card(payload['review_context']),
+                _render_review_history(payload['review_history']),
+                "<section class='card'><h2>Quick Maintenance</h2>"
+                f"{contradiction_entry}"
+                f"{summary_form}"
+                "</section>",
+            ]
+        )
+    else:
+        right_sections.append(_render_research_scope_notice(requested_pack))
+    right_sections.append(_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack))
     return _layout(
         f"Topic: {payload['center']['title']}",
         (
@@ -1223,36 +1333,11 @@ def _render_topic_page(payload: dict) -> str:
             f"<p class='muted'>{payload['neighbor_count']} neighbors, {payload['edge_count']} edges."
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            "<div class='link-row'>"
-            f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>"
-            f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
-            f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
-            f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
-            f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>"
-            f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>"
-            "</div></section>"
+            + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
             "<section class='grid two-col'>"
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
-            f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
-            "<section class='card'><h2>Evolution</h2>"
-            f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
-            + (
-                f" Link types: {escape(', '.join(evolution['link_types']))}."
-                if evolution["link_types"]
-                else ""
-            )
-            + "</p>"
-            f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
-            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True, requested_pack=requested_pack, next_path=next_path)}"
-            "</section>"
-            f"{_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack)}"
-            f"{_render_review_context_card(payload['review_context'])}"
-            f"{_render_review_history(payload['review_history'])}"
-            "<section class='card'><h2>Quick Maintenance</h2>"
-            f"{contradiction_entry}"
-            f"{summary_form}"
-            "</section>"
+            f"{''.join(right_sections)}"
             "</section>"
         ),
         requested_pack=requested_pack,
@@ -2568,6 +2653,8 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     status = query.get("status", ["all"])[0] or "all"
                     link_type = query.get("link_type", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution", api=True):
+                        return
                     self._write_json(
                         build_evolution_browser_payload(
                             resolved_vault,
@@ -2583,6 +2670,8 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     status = query.get("status", ["all"])[0] or "all"
                     link_type = query.get("link_type", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution", api=False):
+                        return
                     payload = build_evolution_browser_payload(
                         resolved_vault,
                         pack_name=pack_name,
@@ -2617,33 +2706,45 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/events":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/events", api=True):
+                        return
                     self._write_json(build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/events":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/events", api=False):
+                        return
                     payload = build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_events_page(payload))
                     return
                 if path == "/api/atlas":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/atlas", api=True):
+                        return
                     self._write_json(build_atlas_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/atlas":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/atlas", api=False):
+                        return
                     payload = build_atlas_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_atlas_page(payload))
                     return
                 if path == "/api/deep-dives":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/deep-dives", api=True):
+                        return
                     self._write_json(build_derivation_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/deep-dives":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/deep-dives", api=False):
+                        return
                     payload = build_derivation_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_derivations_page(payload))
                     return
@@ -2661,22 +2762,30 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/clusters":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/clusters", api=True):
+                        return
                     self._write_json(build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/clusters":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/clusters", api=False):
+                        return
                     payload = build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_clusters_page(payload))
                     return
                 if path == "/api/cluster":
                     cluster_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/cluster", api=True):
+                        return
                     self._write_json(build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name))
                     return
                 if path == "/cluster":
                     cluster_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/cluster", api=False):
+                        return
                     payload = build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name)
                     self._write_html(_render_cluster_detail_page(payload))
                     return
@@ -2708,11 +2817,15 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/summaries":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries", api=True):
+                        return
                     self._write_json(build_stale_summary_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/summaries":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries", api=False):
+                        return
                     payload = build_stale_summary_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_stale_summaries_page(payload))
                     return
@@ -2732,6 +2845,8 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions", api=True):
+                        return
                     self._write_json(
                         build_contradiction_browser_payload(
                             resolved_vault,
@@ -2745,6 +2860,8 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions", api=False):
+                        return
                     payload = build_contradiction_browser_payload(
                         resolved_vault,
                         pack_name=pack_name,
@@ -2763,23 +2880,41 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             try:
                 form = self._read_form()
                 if path == "/api/contradictions/resolve":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions/resolve", api=True):
+                        return
                     self._write_json(self._resolve_contradiction_action(form))
                     return
                 if path == "/contradictions/resolve":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions/resolve", api=False):
+                        return
                     self._resolve_contradiction_action(form)
                     self._redirect(self._form_first(form, "next").strip() or "/contradictions?status=resolved")
                     return
                 if path == "/api/summaries/rebuild":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries/rebuild", api=True):
+                        return
                     self._write_json(self._rebuild_summary_action(form))
                     return
                 if path == "/summaries/rebuild":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries/rebuild", api=False):
+                        return
                     self._rebuild_summary_action(form)
                     self._redirect(self._form_first(form, "next").strip() or "/summaries")
                     return
                 if path == "/api/evolution/review":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution/review", api=True):
+                        return
                     self._write_json(self._review_evolution_action(form))
                     return
                 if path == "/evolution/review":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution/review", api=False):
+                        return
                     payload = self._review_evolution_action(form)
                     self._redirect(str(payload["next_path"]))
                     return
@@ -2871,6 +3006,17 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
 
         def _form_all(self, form: dict[str, list[str]], key: str) -> list[str]:
             return form.get(key, [])
+
+        def _guard_research_route(self, *, pack_name: str | None, route_path: str, api: bool) -> bool:
+            requested_pack = pack_name or ""
+            if _shell_supports_research_nav(requested_pack):
+                return False
+            payload = _unsupported_route_payload(route_path, requested_pack)
+            if api:
+                self._write_json(payload, status=409)
+            else:
+                self._write_html(_render_unsupported_route_page(route_path, requested_pack))
+            return True
 
         def _resolve_contradiction_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             contradiction_ids = [item.strip() for item in self._form_all(form, "contradiction_id") if item.strip()]
@@ -2978,17 +3124,17 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             payload["next_path"] = self._form_first(form, "next").strip() or "/actions"
             return payload
 
-        def _write_json(self, payload: dict) -> None:
+        def _write_json(self, payload: dict, *, status: int = 200) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
-        def _write_html(self, html: str) -> None:
+        def _write_html(self, html: str, *, status: int = 200) -> None:
             body = html.encode("utf-8")
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
