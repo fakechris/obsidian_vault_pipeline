@@ -95,6 +95,45 @@ def _object_ids_from_claim_ids(*claim_id_lists: list[str]) -> list[str]:
     return ordered
 
 
+def _edge_kind_parts(edge_kind: str) -> tuple[str, str]:
+    family, sep, subtype = str(edge_kind).partition(":")
+    if not sep:
+        return (family, "")
+    return (family, subtype)
+
+
+def _derive_cluster_structural_label(
+    *,
+    center_title: str,
+    edge_summary_items: list[dict[str, Any]],
+) -> dict[str, str]:
+    contradiction_item = next((item for item in edge_summary_items if item["edge_family"] == "contradiction"), None)
+    if contradiction_item is not None:
+        return {
+            "kind": "contradiction_cluster",
+            "title": f"Contradiction cluster around {center_title}",
+            "reason": f"{contradiction_item['count']} contradiction edges are present in the local graph.",
+        }
+    dominant = edge_summary_items[0] if edge_summary_items else None
+    if dominant is None:
+        return {
+            "kind": "reference_cluster",
+            "title": f"Reference cluster around {center_title}",
+            "reason": "No internal edge structure has been materialized yet.",
+        }
+    if dominant["edge_family"] == "relation":
+        return {
+            "kind": "relation_cluster",
+            "title": f"Relation cluster around {center_title}",
+            "reason": f"{dominant['count']} {dominant['display_name']} dominate the local graph.",
+        }
+    return {
+        "kind": "mixed_cluster",
+        "title": f"Mixed graph cluster around {center_title}",
+        "reason": f"Dominant edge family is {dominant['edge_family']}.",
+    }
+
+
 def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     object_traceability = [get_object_traceability(vault_dir, object_id) for object_id in normalized_object_ids]
@@ -690,6 +729,24 @@ def build_cluster_detail_payload(
         for edge in detail["edges"]
     ]
     edge_kind_counts = Counter(edge["edge_kind"] for edge in enriched_edges)
+    edge_summary_items = [
+        {
+            "edge_kind": edge_kind,
+            "edge_family": _edge_kind_parts(edge_kind)[0],
+            "edge_subtype": _edge_kind_parts(edge_kind)[1],
+            "display_name": (
+                "contradiction links"
+                if _edge_kind_parts(edge_kind)[0] == "contradiction"
+                else (
+                    f"{_edge_kind_parts(edge_kind)[1].replace('_', ' ')} links"
+                    if _edge_kind_parts(edge_kind)[0] == "relation" and _edge_kind_parts(edge_kind)[1]
+                    else edge_kind.replace(":", " ")
+                )
+            ),
+            "count": count,
+        }
+        for edge_kind, count in sorted(edge_kind_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
     object_kind_counts = Counter(
         str(member["object_kind"])
         for member in cluster["members"]
@@ -743,13 +800,19 @@ def build_cluster_detail_payload(
         summary_bullets.append(
             f"Review pressure: {review_context['open_contradiction_count']} open contradictions and {review_context['stale_summary_count']} stale summaries in this cluster scope."
         )
+    structural_label = _derive_cluster_structural_label(
+        center_title=str(cluster["center_title"]),
+        edge_summary_items=edge_summary_items,
+    )
 
     return {
         "screen": "graph/cluster-detail",
         "cluster": enriched_cluster,
         "edges": enriched_edges,
         "edge_kind_counts": dict(edge_kind_counts),
+        "edge_summary_items": edge_summary_items,
         "object_kind_counts": dict(object_kind_counts),
+        "structural_label": structural_label,
         "review_context": review_context,
         "top_source_notes": _top_counter_items(source_note_counts, source_note_items),
         "top_mocs": _top_counter_items(moc_counts, moc_items),

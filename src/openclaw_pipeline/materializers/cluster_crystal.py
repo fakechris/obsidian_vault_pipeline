@@ -37,6 +37,27 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
     lines.extend(
         [
             "",
+            "## Structural Label",
+            "",
+            f"- kind: {payload['structural_label']['kind']}",
+            f"- title: {payload['structural_label']['title']}",
+            f"- reason: {payload['structural_label']['reason']}",
+            "",
+            "## Edge Summary",
+            "",
+        ]
+    )
+    if payload["edge_summary_items"]:
+        for item in payload["edge_summary_items"]:
+            lines.append(
+                f"- {item['edge_kind']} ({item['edge_family']}) = {item['count']} [{item['display_name']}]"
+            )
+    else:
+        lines.append("- (none)")
+
+    lines.extend(
+        [
+            "",
             "## Coverage",
             "",
             f"- source_note_count: {payload['review_context']['source_note_count']}",

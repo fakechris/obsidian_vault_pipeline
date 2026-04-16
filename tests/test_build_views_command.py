@@ -693,6 +693,8 @@ Target note captures downstream effects.
     assert result == 0
     assert f"# cluster/{cluster['cluster_id']}" in content
     assert "## Cluster Synthesis" in content
+    assert "## Structural Label" in content
+    assert "## Edge Summary" in content
     assert "## Members" in content
     assert "## Internal Edges" in content
     assert "Source Note" in content

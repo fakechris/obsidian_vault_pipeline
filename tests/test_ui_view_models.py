@@ -358,6 +358,10 @@ date: 2026-04-13
     assert payload["edges"]
     assert payload["edges"][0]["source_path"].startswith("/object?id=")
     assert payload["edges"][0]["target_path"].startswith("/object?id=")
+    assert payload["structural_label"]["kind"] == "contradiction_cluster"
+    assert "Alpha" in payload["structural_label"]["title"]
+    assert payload["edge_summary_items"]
+    assert payload["edge_summary_items"][0]["edge_family"] == "contradiction"
     assert payload["summary_bullets"]
     assert payload["object_kind_counts"]["evergreen"] == payload["cluster"]["member_count"]
     assert payload["review_context"]["source_note_count"] >= 1
