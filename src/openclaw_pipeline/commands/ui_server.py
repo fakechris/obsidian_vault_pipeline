@@ -855,6 +855,8 @@ def _render_production_summary_card(
 
 def _render_dashboard(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
+    research_overview = payload.get("research_overview", {})
+    research_overview_supported = research_overview.get("status") == "supported"
     signals_surface_contract = _render_surface_contract_card(payload["signals"])
     production_surface_contract = _render_surface_contract_card(payload["production"])
     object_items = "".join(
@@ -899,46 +901,82 @@ def _render_dashboard(payload: dict) -> str:
         f"<div class='muted'>{escape(item['detail'])}</div></li>"
         for item in payload["priorities"]
     ) or "<li class='muted'>No urgent maintenance items surfaced.</li>"
+    stats_cards = [
+        "<div class='card'><h2>Objects Indexed</h2>"
+        f"<p>{payload['objects']['count']}</p></div>",
+        "<div class='card'><h2>Signals</h2>"
+        f"<p>{payload['signals']['count']}</p></div>",
+        "<div class='card'><h2>Production Weak Points</h2>"
+        f"<p>{payload['production']['weak_point_count']}</p></div>",
+    ]
+    if research_overview_supported:
+        stats_cards[1:1] = [
+            "<div class='card'><h2>Contradictions Open</h2>"
+            f"<p>{payload['contradictions']['open_count']}</p></div>",
+            "<div class='card'><h2>Recent Events</h2>"
+            f"<p>{payload['events']['count']}</p></div>",
+            "<div class='card'><h2>Stale Summaries</h2>"
+            f"<p>{payload['stale_summaries']['count']}</p></div>",
+            "<div class='card'><h2>Evolution Candidates</h2>"
+            f"<p>{payload['evolution']['candidate_count']}</p></div>",
+        ]
+    research_overview_card = (
+        ""
+        if research_overview_supported
+        else (
+            "<section class='card'><h2>Research Overview</h2>"
+            f"<p class='muted'>{escape(str(research_overview.get('reason') or ''))}</p>"
+            "</section>"
+        )
+    )
+    left_sections = [
+        f"<section class='card'><h2>Needs Attention Now</h2><ul class='list-tight'>{priority_items}</ul></section>",
+        f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>",
+    ]
+    if research_overview_supported:
+        left_sections.extend(
+            [
+                f"<section class='card'><h2><a href='{escape(_shell_href('/evolution', requested_pack))}'>Evolution</a></h2>{evolution_items}</section>",
+                f"<section class='card'><h2><a href='{escape(payload['events']['browser_path'])}'>Recent Events</a></h2><ul class='list-tight'>{event_items}</ul></section>",
+                f"<section class='card'><h2><a href='{escape(payload['stale_summaries']['browser_path'])}'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>",
+            ]
+        )
+    else:
+        left_sections.append(research_overview_card)
+    right_sections = [
+        signals_surface_contract,
+        f"<section class='card'><h2><a href='{escape(payload['signals']['browser_path'])}'>Signals</a></h2><ul class='list-tight'>{signal_items}</ul></section>",
+        production_surface_contract,
+        f"<section class='card'><h2><a href='{escape(payload['production']['browser_path'])}'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>",
+    ]
+    if research_overview_supported:
+        right_sections.append(
+            f"<section class='card'><h2><a href='{escape(payload['contradictions']['browser_path'])}'>Contradiction Queue</a></h2><ul class='list-tight'>{contradiction_items}</ul></section>"
+        )
+    right_sections.append(_render_review_history(payload['recent_review_actions'], title='Recent Review Actions'))
+    dashboard_body = "".join(
+        [
+            "<section class='hero'>",
+            "<h1>OpenClaw Truth UI</h1>",
+            "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
+            f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
+            "</section>",
+            "<section class='grid stats'>",
+            "".join(stats_cards),
+            "</section>",
+            "<section class='grid two-col'>",
+            "<div class='section-stack'>",
+            "".join(left_sections),
+            "</div>",
+            "<div class='section-stack'>",
+            "".join(right_sections),
+            "</div>",
+            "</section>",
+        ]
+    )
     return _layout(
         "OpenClaw Truth UI",
-        (
-            "<section class='hero'>"
-            "<h1>OpenClaw Truth UI</h1>"
-            "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>."
-            f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>"
-            "</section>"
-            "<section class='grid stats'>"
-            "<div class='card'><h2>Objects Indexed</h2>"
-            f"<p>{payload['objects']['count']}</p></div>"
-            "<div class='card'><h2>Contradictions Open</h2>"
-            f"<p>{payload['contradictions']['open_count']}</p></div>"
-            "<div class='card'><h2>Recent Events</h2>"
-            f"<p>{payload['events']['count']}</p></div>"
-            "<div class='card'><h2>Stale Summaries</h2>"
-            f"<p>{payload['stale_summaries']['count']}</p></div>"
-            "<div class='card'><h2>Evolution Candidates</h2>"
-            f"<p>{payload['evolution']['candidate_count']}</p></div>"
-            "<div class='card'><h2>Signals</h2>"
-            f"<p>{payload['signals']['count']}</p></div>"
-            "</section>"
-            "<section class='grid two-col'>"
-            "<div class='section-stack'>"
-            f"<section class='card'><h2>Needs Attention Now</h2><ul class='list-tight'>{priority_items}</ul></section>"
-            f"<section class='card'><h2><a href='{escape(_shell_href('/evolution', requested_pack))}'>Evolution</a></h2>{evolution_items}</section>"
-            f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
-            f"<section class='card'><h2><a href='{escape(payload['events']['browser_path'])}'>Recent Events</a></h2><ul class='list-tight'>{event_items}</ul></section>"
-            f"<section class='card'><h2><a href='{escape(payload['stale_summaries']['browser_path'])}'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
-            "</div>"
-            "<div class='section-stack'>"
-            f"{signals_surface_contract}"
-            f"<section class='card'><h2><a href='{escape(payload['signals']['browser_path'])}'>Signals</a></h2><ul class='list-tight'>{signal_items}</ul></section>"
-            f"{production_surface_contract}"
-            f"<section class='card'><h2><a href='{escape(payload['production']['browser_path'])}'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>"
-            f"<section class='card'><h2><a href='{escape(payload['contradictions']['browser_path'])}'>Contradiction Queue</a></h2><ul class='list-tight'>{contradiction_items}</ul></section>"
-            f"{_render_review_history(payload['recent_review_actions'], title='Recent Review Actions')}"
-            "</div>"
-            "</section>"
-        ),
+        dashboard_body,
         requested_pack=requested_pack,
     )
 

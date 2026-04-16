@@ -8,6 +8,8 @@ from typing import Any
 from urllib.parse import quote
 
 from ..observation_surface_registry import describe_observation_surface_contract
+from ..pack_resolution import iter_compatible_packs
+from ..packs.loader import PRIMARY_PACK_NAME
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
 from ..truth_api import (
@@ -51,6 +53,13 @@ def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
         return path
     separator = "&" if "?" in path else "?"
     return f"{path}{separator}pack={quote(pack_name, safe='')}"
+
+
+def _dashboard_supports_research_overview(pack_name: str | None = None) -> bool:
+    try:
+        return any(pack.name == PRIMARY_PACK_NAME for pack in iter_compatible_packs(pack_name))
+    except ValueError:
+        return False
 
 
 def _db_path(vault_dir: Path | str) -> Path:
@@ -1629,35 +1638,71 @@ def build_truth_dashboard_payload(
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
     objects = build_objects_index_payload(vault_dir, limit=12, offset=0, pack_name=pack_name)
-    contradictions = build_contradiction_browser_payload(vault_dir, pack_name=pack_name)
-    events = build_event_dossier_payload(vault_dir, pack_name=pack_name, limit=8)
-    stale_summaries = build_stale_summary_browser_payload(vault_dir, pack_name=pack_name)
-    evolution = build_evolution_browser_payload(vault_dir, pack_name=pack_name, status="all")
     signals = build_signal_browser_payload(vault_dir, pack_name=pack_name)
     production = build_production_browser_payload(vault_dir, pack_name=pack_name)
     production_weak_points = production["weak_points"]
+    research_overview_supported = _dashboard_supports_research_overview(pack_name)
+    if research_overview_supported:
+        contradictions = build_contradiction_browser_payload(vault_dir, pack_name=pack_name)
+        events = build_event_dossier_payload(vault_dir, pack_name=pack_name, limit=8)
+        stale_summaries = build_stale_summary_browser_payload(vault_dir, pack_name=pack_name)
+        evolution = build_evolution_browser_payload(vault_dir, pack_name=pack_name, status="all")
+    else:
+        contradictions = {
+            "count": 0,
+            "open_count": 0,
+            "items": [],
+            "browser_path": _scoped_path("/contradictions", pack_name=requested_pack),
+        }
+        events = {
+            "count": 0,
+            "items": [],
+            "dates": [],
+            "browser_path": _scoped_path("/events", pack_name=requested_pack),
+        }
+        stale_summaries = {
+            "count": 0,
+            "items": [],
+            "browser_path": _scoped_path("/summaries", pack_name=requested_pack),
+        }
+        evolution = {
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "items": [],
+        }
     priorities: list[dict[str, Any]] = []
-    for item in contradictions["items"][:4]:
-        priorities.append(
-            {
-                "kind": "contradiction",
-                "label": item["subject_key"],
-                "path": _scoped_path(
-                    f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
-                    pack_name=requested_pack,
-                ),
-                "detail": f"{len(item['object_ids'])} objects in scope",
-            }
-        )
-    for item in stale_summaries["items"][:4]:
-        priorities.append(
-            {
-                "kind": "stale_summary",
-                "label": item["title"],
-                "path": item["object_path"],
-                "detail": ", ".join(item["reason_codes"]),
-            }
-        )
+    if research_overview_supported:
+        for item in contradictions["items"][:4]:
+            priorities.append(
+                {
+                    "kind": "contradiction",
+                    "label": item["subject_key"],
+                    "path": _scoped_path(
+                        f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": f"{len(item['object_ids'])} objects in scope",
+                }
+            )
+        for item in stale_summaries["items"][:4]:
+            priorities.append(
+                {
+                    "kind": "stale_summary",
+                    "label": item["title"],
+                    "path": item["object_path"],
+                    "detail": ", ".join(item["reason_codes"]),
+                }
+            )
+    else:
+        for item in signals["items"][:4]:
+            priorities.append(
+                {
+                    "kind": item["signal_type"],
+                    "label": item["title"],
+                    "path": item["source_path"],
+                    "detail": item["detail"],
+                }
+            )
     for item in production_weak_points[:4]:
         priorities.append(
             {
@@ -1673,6 +1718,14 @@ def build_truth_dashboard_payload(
     return {
         "screen": "truth/dashboard",
         "requested_pack": requested_pack,
+        "research_overview": {
+            "status": "supported" if research_overview_supported else "shared_shell_only",
+            "reason": (
+                "Research-specific overview surfaces are available because this pack resolves through research-tech."
+                if research_overview_supported
+                else "This pack currently gets the shared home shell only; research-specific overview panels stay hidden until the pack defines its own equivalents."
+            ),
+        },
         "objects": {
             "count": objects["total_count"],
             "items": objects["items"],
