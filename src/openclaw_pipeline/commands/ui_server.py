@@ -189,7 +189,9 @@ def _render_surface_contract_card(payload: dict) -> str:
             f"This shared shell surface has no provider for {escape(surface_kind)} "
             f"in the current pack scope."
         )
-    return f"<section class='card'><h2>Surface Contract</h2><p class='muted'>{detail}</p></section>"
+    error_text = str(payload.get("surface_error") or "").strip()
+    extra = f"<p class='muted'>{escape(error_text)}</p>" if error_text else ""
+    return f"<section class='card'><h2>Surface Contract</h2><p class='muted'>{detail}</p>{extra}</section>"
 
 
 def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:

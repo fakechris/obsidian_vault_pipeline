@@ -1085,6 +1085,35 @@ def test_build_signal_browser_payload_preserves_requested_pack(temp_vault):
     assert payload["surface_contract"]["provider_name"] == "research-tech-signals"
 
 
+def test_build_signal_browser_payload_handles_missing_surface_contract(temp_vault, monkeypatch):
+    from openclaw_pipeline.ui import view_models
+
+    monkeypatch.setattr(
+        view_models,
+        "describe_observation_surface_contract",
+        lambda *, pack_name=None, surface_kind: {
+            "surface_kind": surface_kind,
+            "requested_pack": "media-editorial",
+            "status": "missing",
+            "provider_pack": "",
+            "provider_name": "",
+            "description": "",
+        },
+    )
+    monkeypatch.setattr(
+        view_models,
+        "list_signals",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("list_signals should not run")),
+    )
+
+    payload = view_models.build_signal_browser_payload(temp_vault, pack_name="media-editorial")
+
+    assert payload["surface_contract"]["status"] == "missing"
+    assert payload["surface_error"] == "Pack 'media-editorial' does not expose a shared shell 'signals' surface."
+    assert payload["items"] == []
+    assert payload["count"] == 0
+
+
 def test_build_action_queue_payload_preserves_requested_pack(temp_vault, monkeypatch):
     from openclaw_pipeline.ui import view_models
 
@@ -1164,6 +1193,35 @@ def test_build_briefing_payload_preserves_requested_pack(temp_vault):
     assert payload["surface_contract"]["status"] == "inherited"
     assert payload["surface_contract"]["provider_pack"] == "research-tech"
     assert payload["surface_contract"]["provider_name"] == "research-tech-briefing"
+
+
+def test_build_briefing_payload_handles_missing_surface_contract(temp_vault, monkeypatch):
+    from openclaw_pipeline.ui import view_models
+
+    monkeypatch.setattr(
+        view_models,
+        "describe_observation_surface_contract",
+        lambda *, pack_name=None, surface_kind: {
+            "surface_kind": surface_kind,
+            "requested_pack": "media-editorial",
+            "status": "missing",
+            "provider_pack": "",
+            "provider_name": "",
+            "description": "",
+        },
+    )
+    monkeypatch.setattr(
+        view_models,
+        "get_briefing_snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("get_briefing_snapshot should not run")),
+    )
+
+    payload = view_models.build_briefing_payload(temp_vault, pack_name="media-editorial")
+
+    assert payload["surface_contract"]["status"] == "missing"
+    assert payload["surface_error"] == "Pack 'media-editorial' does not expose a shared shell 'briefing' surface."
+    assert payload["recent_signal_count"] == 0
+    assert payload["priority_items"] == []
 
 
 def test_build_evolution_browser_payload(temp_vault):
@@ -1711,6 +1769,42 @@ def test_build_production_browser_payload_preserves_requested_pack(temp_vault):
     assert payload["surface_contract"]["status"] == "inherited"
     assert payload["surface_contract"]["provider_pack"] == "research-tech"
     assert payload["surface_contract"]["provider_name"] == "research-tech-production-chains"
+
+
+def test_build_production_browser_payload_handles_missing_surface_contract(temp_vault, monkeypatch):
+    from openclaw_pipeline.ui import view_models
+
+    monkeypatch.setattr(
+        view_models,
+        "describe_observation_surface_contract",
+        lambda *, pack_name=None, surface_kind: {
+            "surface_kind": surface_kind,
+            "requested_pack": "media-editorial",
+            "status": "missing",
+            "provider_pack": "",
+            "provider_name": "",
+            "description": "",
+        },
+    )
+    monkeypatch.setattr(
+        view_models,
+        "list_production_chains",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("list_production_chains should not run")),
+    )
+    monkeypatch.setattr(
+        view_models,
+        "_build_production_weak_points",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("weak points should not run")),
+    )
+
+    payload = view_models.build_production_browser_payload(temp_vault, pack_name="media-editorial")
+
+    assert payload["surface_contract"]["status"] == "missing"
+    assert payload["surface_error"] == (
+        "Pack 'media-editorial' does not expose a shared shell 'production_chains' surface."
+    )
+    assert payload["items"] == []
+    assert payload["weak_points"] == []
 
 
 def test_build_production_browser_payload_surfaces_weak_points(temp_vault):

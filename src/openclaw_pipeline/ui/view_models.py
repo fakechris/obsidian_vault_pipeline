@@ -799,11 +799,27 @@ def build_signal_browser_payload(
     query: str | None = None,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
-    items = list_signals(vault_dir, pack_name=pack_name, signal_type=signal_type, query=query)
     surface_contract = describe_observation_surface_contract(
         pack_name=pack_name,
         surface_kind="signals",
     )
+    if surface_contract["status"] == "missing":
+        return {
+            "screen": "signals/browser",
+            "requested_pack": requested_pack,
+            "surface_contract": surface_contract,
+            "surface_error": (
+                f"Pack '{surface_contract['requested_pack']}' does not expose a shared shell "
+                f"'signals' surface."
+            ),
+            "items": [],
+            "count": 0,
+            "query": query or "",
+            "signal_type": signal_type or "",
+            "type_counts": {},
+            "signal_type_explanations": SIGNAL_TYPE_EXPLANATIONS,
+        }
+    items = list_signals(vault_dir, pack_name=pack_name, signal_type=signal_type, query=query)
     return {
         "screen": "signals/browser",
         "requested_pack": requested_pack,
@@ -852,6 +868,37 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         pack_name=pack_name,
         surface_kind="briefing",
     )
+    if surface_contract["status"] == "missing":
+        return {
+            "screen": "briefing/intelligence",
+            "requested_pack": requested_pack,
+            "surface_contract": surface_contract,
+            "surface_error": (
+                f"Pack '{surface_contract['requested_pack']}' does not expose a shared shell "
+                f"'briefing' surface."
+            ),
+            "generated_at": "",
+            "recent_signal_count": 0,
+            "unresolved_issue_count": 0,
+            "changed_object_count": 0,
+            "active_topic_count": 0,
+            "recent_signals": [],
+            "unresolved_issues": [],
+            "changed_objects": [],
+            "active_topics": [],
+            "insight_count": 0,
+            "priority_item_count": 0,
+            "insights": [],
+            "priority_items": [],
+            "first_useful_sign": None,
+            "queue_summary": {
+                "queued_count": 0,
+                "safe_queued_count": 0,
+                "running_count": 0,
+                "failed_count": 0,
+                "failure_buckets": {},
+            },
+        }
     return {
         "screen": "briefing/intelligence",
         "requested_pack": requested_pack,
@@ -1838,15 +1885,37 @@ def build_production_browser_payload(
     query: str | None = None,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
+    surface_contract = describe_observation_surface_contract(
+        pack_name=pack_name,
+        surface_kind="production_chains",
+    )
+    if surface_contract["status"] == "missing":
+        return {
+            "screen": "production/browser",
+            "requested_pack": requested_pack,
+            "surface_contract": surface_contract,
+            "surface_error": (
+                f"Pack '{surface_contract['requested_pack']}' does not expose a shared shell "
+                f"'production_chains' surface."
+            ),
+            "items": [],
+            "source_items": [],
+            "deep_dive_items": [],
+            "weak_points": [],
+            "count": 0,
+            "query": query or "",
+            "limit": DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+            "is_limited": True,
+            "counts": {
+                "source_notes": 0,
+                "deep_dives": 0,
+            },
+        }
     items = list_production_chains(
         vault_dir,
         pack_name=pack_name,
         query=query,
         limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
-    )
-    surface_contract = describe_observation_surface_contract(
-        pack_name=pack_name,
-        surface_kind="production_chains",
     )
     source_items = [item for item in items if item["stage_label"] == "source_note"]
     deep_dive_items = [item for item in items if item["stage_label"] == "deep_dive"]
