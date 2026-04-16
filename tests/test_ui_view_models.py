@@ -99,6 +99,20 @@ def test_build_object_page_payload(temp_vault):
     assert payload["stale_summary_details"] == []
 
 
+def test_build_object_page_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_object_page_payload(temp_vault, "alpha", pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["links"]["topic_path"] == "/topic?id=alpha&pack=default-knowledge"
+    assert payload["links"]["events_path"] == "/events?q=alpha&pack=default-knowledge"
+    assert payload["links"]["deep_dives_path"] == "/deep-dives?q=alpha&pack=default-knowledge"
+    assert payload["relations"][0]["target_path"] == "/object?id=beta&pack=default-knowledge"
+
+
 def test_build_object_page_payload_includes_provenance(temp_vault):
     from openclaw_pipeline.ui.view_models import build_object_page_payload
 
@@ -177,6 +191,19 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["review_history"] == []
     assert payload["scoped_open_contradiction_ids"]
     assert payload["scoped_stale_summary_ids"] == ["beta"]
+
+
+def test_build_topic_overview_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_topic_overview_payload(temp_vault, "alpha", pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["links"]["center_object_path"] == "/object?id=alpha&pack=default-knowledge"
+    assert payload["links"]["deep_dives_path"] == "/deep-dives?q=alpha&pack=default-knowledge"
+    assert payload["neighbors"][0]["object_path"] == "/object?id=beta&pack=default-knowledge"
 
 
 def test_build_topic_overview_payload_includes_production_summary(temp_vault):
@@ -959,6 +986,19 @@ Thin note.
     production_gap = next(item for item in payload["priorities"] if item["kind"] == "production_gap")
     assert production_gap["path"].startswith("/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md")
     assert payload["recent_review_actions"] == []
+
+
+def test_build_truth_dashboard_payload_preserves_requested_pack(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_truth_dashboard_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["objects"]["items"][0]["object_path"] == "/object?id=alpha&pack=default-knowledge"
+    assert payload["signals"]["browser_path"] == "/signals?pack=default-knowledge"
+    assert payload["production"]["browser_path"] == "/production?pack=default-knowledge"
 
 
 def test_build_truth_dashboard_payload_uses_total_object_count(temp_vault):

@@ -153,6 +153,12 @@ def _search_href(query: str) -> str:
     return f"/search?q={quote(query, safe='')}"
 
 
+def _object_href(object_id: str, path: str = "") -> str:
+    if path:
+        return path
+    return f"/object?id={quote(str(object_id), safe='')}"
+
+
 def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
     candidate = (vault_dir / relative_path).resolve()
     try:
@@ -589,7 +595,7 @@ def _render_object_links(items: list[dict[str, str]]) -> str:
     if not items:
         return "<span class='muted'>None</span>"
     return ", ".join(
-        f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a>'
         for item in items
     )
 
@@ -761,8 +767,9 @@ def _render_production_summary_card(summary: dict[str, object], *, title: str = 
 
 
 def _render_dashboard(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
     object_items = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a></li>'
         for item in payload["objects"]["items"]
     ) or "<li>None</li>"
     contradiction_items = "".join(
@@ -771,11 +778,11 @@ def _render_dashboard(payload: dict) -> str:
     ) or "<li>None</li>"
     event_items = "".join(
         f"<li>{escape(item['event_date'])} - "
-        f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+        f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a></li>'
         for item in payload["events"]["items"]
     ) or "<li>None</li>"
     stale_summary_items = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(item["object_path"])}">{escape(item["title"])}</a> '
         f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
         for item in payload["stale_summaries"]["items"]
     ) or "<li>None</li>"
@@ -803,7 +810,8 @@ def _render_dashboard(payload: dict) -> str:
         (
             "<section class='hero'>"
             "<h1>OpenClaw Truth UI</h1>"
-            "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.</p>"
+            "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>."
+            f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>"
             "</section>"
             "<section class='grid stats'>"
             "<div class='card'><h2>Objects Indexed</h2>"
@@ -824,13 +832,13 @@ def _render_dashboard(payload: dict) -> str:
             f"<section class='card'><h2>Needs Attention Now</h2><ul class='list-tight'>{priority_items}</ul></section>"
             f"<section class='card'><h2><a href='/evolution'>Evolution</a></h2>{evolution_items}</section>"
             f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
-            f"<section class='card'><h2>Recent Events</h2><ul class='list-tight'>{event_items}</ul></section>"
-            f"<section class='card'><h2><a href='/summaries'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
+            f"<section class='card'><h2><a href='{escape(payload['events']['browser_path'])}'>Recent Events</a></h2><ul class='list-tight'>{event_items}</ul></section>"
+            f"<section class='card'><h2><a href='{escape(payload['stale_summaries']['browser_path'])}'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
-            f"<section class='card'><h2><a href='/signals'>Signals</a></h2><ul class='list-tight'>{signal_items}</ul></section>"
-            f"<section class='card'><h2><a href='/production'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>"
-            f"<section class='card'><h2>Contradiction Queue</h2><ul class='list-tight'>{contradiction_items}</ul></section>"
+            f"<section class='card'><h2><a href='{escape(payload['signals']['browser_path'])}'>Signals</a></h2><ul class='list-tight'>{signal_items}</ul></section>"
+            f"<section class='card'><h2><a href='{escape(payload['production']['browser_path'])}'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>"
+            f"<section class='card'><h2><a href='{escape(payload['contradictions']['browser_path'])}'>Contradiction Queue</a></h2><ul class='list-tight'>{contradiction_items}</ul></section>"
             f"{_render_review_history(payload['recent_review_actions'], title='Recent Review Actions')}"
             "</div>"
             "</section>"
@@ -840,8 +848,9 @@ def _render_dashboard(payload: dict) -> str:
 
 def _render_objects_index(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     items = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a> '
         f'<span class="muted">({escape(item["object_id"])})</span></li>'
         for item in payload["items"]
     )
@@ -849,17 +858,28 @@ def _render_objects_index(payload: dict) -> str:
         "Objects",
         (
             "<h1>Objects</h1>"
-            "<form method='get' action='/objects'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} objects in current page.</p>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+            + "<form method='get' action='/objects'>"
+            + (
+                f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                if requested_pack
+                else ""
+            )
+            + f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
+            + "<button type='submit'>Search</button>"
+            + "</form>"
+            + f"<p class='muted'>{payload['count']} objects in current page."
+            + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
+            + "</p>"
+            + f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
     )
 
 
 def _render_object_page(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    next_path = f"/object?id={quote(str(payload['object']['object_id']), safe='')}" + (
+        f"&pack={quote(requested_pack, safe='')}" if requested_pack else ""
+    )
     evergreen_path = payload["provenance"]["evergreen_path"]
     evergreen_html = (
         f'<a href="{escape(_note_href(evergreen_path))}">{escape(evergreen_path)}</a>'
@@ -874,7 +894,7 @@ def _render_object_page(payload: dict) -> str:
     )
     claims = "".join(f"<li>{escape(item['claim_text'])}</li>" for item in payload["claims"]) or "<li>None</li>"
     relations = "".join(
-        f'<li><a href="/object?id={escape(item["target_object_id"])}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
+        f'<li><a href="{escape(_object_href(item["target_object_id"], item.get("target_path", "")))}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
         f' <span class="muted">({escape(item["relation_type"])})</span></li>'
         for item in payload["relations"]
     ) or "<li>None</li>"
@@ -910,6 +930,7 @@ def _render_object_page(payload: dict) -> str:
             f"<input type='hidden' name='contradiction_id' value='{escape(contradiction_id)}' />"
             for contradiction_id in payload["open_contradiction_ids"]
         )
+        + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<select name='status'>"
         + "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
         + "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
@@ -926,6 +947,7 @@ def _render_object_page(payload: dict) -> str:
     summary_form = (
         "<form method='post' action='/summaries/rebuild' class='link-row'>"
         + f"<input type='hidden' name='object_id' value='{escape(payload['object']['object_id'])}' />"
+        + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<button type='submit'>Rebuild This Summary</button>"
         + "</form>"
         if payload["stale_summary_details"]
@@ -935,14 +957,16 @@ def _render_object_page(payload: dict) -> str:
         f"Object: {payload['object']['title']}",
         (
             f"<section class='hero'><h1>Object: {escape(payload['object']['title'])}</h1>"
-            f"<p class='muted'>{escape(payload['object']['object_id'])}</p>"
+            f"<p class='muted'>{escape(payload['object']['object_id'])}"
+            + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
+            + "</p>"
             "<div class='link-row'>"
             f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>"
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
             f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
-            f"<a href='/deep-dives?q={escape(payload['object']['object_id'])}'>Source deep dives</a>"
-            f"<a href='/atlas?q={escape(payload['object']['object_id'])}'>Atlas / MOC</a>"
+            f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>"
+            f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>"
             "</div></section>"
             f"<nav class='subnav'>{section_nav}</nav>"
             "<section class='grid stats'>"
@@ -999,8 +1023,12 @@ def _render_object_page(payload: dict) -> str:
 
 
 def _render_topic_page(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    next_path = f"/topic?id={quote(str(payload['center']['object_id']), safe='')}" + (
+        f"&pack={quote(requested_pack, safe='')}" if requested_pack else ""
+    )
     neighbors = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a></li>'
         for item in payload["neighbors"]
     ) or "<li>None</li>"
     mocs = "".join(
@@ -1016,6 +1044,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
             for object_id in payload["scoped_stale_summary_ids"]
         )
+        + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<button type='submit'>Rebuild Scoped Summaries</button>"
         + "</form>"
         if payload["scoped_stale_summary_ids"]
@@ -1032,14 +1061,16 @@ def _render_topic_page(payload: dict) -> str:
         f"Topic: {payload['center']['title']}",
         (
             f"<section class='hero'><h1>Topic: {escape(payload['center']['title'])}</h1>"
-            f"<p class='muted'>{payload['neighbor_count']} neighbors, {payload['edge_count']} edges.</p>"
+            f"<p class='muted'>{payload['neighbor_count']} neighbors, {payload['edge_count']} edges."
+            + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
+            + "</p>"
             "<div class='link-row'>"
             f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>"
             f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
             f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
             f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
-            f"<a href='/deep-dives?q={escape(payload['center']['object_id'])}'>Source deep dives</a>"
-            f"<a href='/atlas?q={escape(payload['center']['object_id'])}'>Atlas / MOC</a>"
+            f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>"
+            f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>"
             "</div></section>"
             "<section class='grid two-col'>"
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
@@ -1206,7 +1237,7 @@ def _render_atlas_page(payload: dict) -> str:
         + (
             " <span class='muted'>"
             + ", ".join(
-                f'<a href="/object?id={escape(member["object_id"])}">{escape(member["title"])}</a>'
+                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", "")))}">{escape(member["title"])}</a>'
                 for member in item["members"]
             )
             + "</span>"
@@ -1262,7 +1293,7 @@ def _render_derivations_page(payload: dict) -> str:
         + (
             " <span class='muted'>"
             + ", ".join(
-                f'<a href="/object?id={escape(member["object_id"])}">{escape(member["title"])}</a>'
+                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", "")))}">{escape(member["title"])}</a>'
                 for member in item["derived_objects"]
             )
             + "</span>"
@@ -2238,23 +2269,36 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
 
             try:
                 if path == "/":
-                    payload = build_truth_dashboard_payload(resolved_vault)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_truth_dashboard_payload(resolved_vault, pack_name=pack_name)
                     self._write_html(_render_dashboard(payload))
                     return
                 if path == "/api/objects":
                     limit = int(query.get("limit", ["100"])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
                     self._write_json(
-                        build_objects_index_payload(resolved_vault, limit=limit, offset=offset, query=q)
+                        build_objects_index_payload(
+                            resolved_vault,
+                            limit=limit,
+                            offset=offset,
+                            query=q,
+                            pack_name=pack_name,
+                        )
                     )
                     return
                 if path == "/objects":
                     limit = int(query.get("limit", ["100"])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
                     payload = build_objects_index_payload(
-                        resolved_vault, limit=limit, offset=offset, query=q
+                        resolved_vault,
+                        limit=limit,
+                        offset=offset,
+                        query=q,
+                        pack_name=pack_name,
                     )
                     self._write_html(_render_objects_index(payload))
                     return
@@ -2315,20 +2359,24 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/api/object":
                     object_id = self._required(query, "id")
-                    self._write_json(build_object_page_payload(resolved_vault, object_id))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_object_page_payload(resolved_vault, object_id, pack_name=pack_name))
                     return
                 if path == "/object":
                     object_id = self._required(query, "id")
-                    payload = build_object_page_payload(resolved_vault, object_id)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_object_page_payload(resolved_vault, object_id, pack_name=pack_name)
                     self._write_html(_render_object_page(payload))
                     return
                 if path == "/api/topic":
                     object_id = self._required(query, "id")
-                    self._write_json(build_topic_overview_payload(resolved_vault, object_id))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_topic_overview_payload(resolved_vault, object_id, pack_name=pack_name))
                     return
                 if path == "/topic":
                     object_id = self._required(query, "id")
-                    payload = build_topic_overview_payload(resolved_vault, object_id)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_topic_overview_payload(resolved_vault, object_id, pack_name=pack_name)
                     self._write_html(_render_topic_page(payload))
                     return
                 if path == "/api/events":

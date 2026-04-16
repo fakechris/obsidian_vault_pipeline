@@ -84,6 +84,29 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert "/api/objects" in body
 
 
+def test_ui_server_root_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Pack scope: default-knowledge" in body
+    assert "/signals?pack=default-knowledge" in body
+
+
 def test_ui_server_objects_endpoint_returns_json(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -168,6 +191,29 @@ def test_ui_server_object_endpoint_returns_detail_payload(temp_vault):
     assert response.status == 200
     assert payload["object"]["object_id"] == "alpha"
     assert payload["relation_count"] == 1
+
+
+def test_ui_server_object_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/object?id=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["links"]["topic_path"] == "/topic?id=alpha&pack=default-knowledge"
 
 
 def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
@@ -1343,6 +1389,29 @@ def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):
     assert topic_payload["center"]["object_id"] == "alpha"
     assert event_response.status == 200
     assert event_payload["event_count"] == 3
+
+
+def test_ui_server_topic_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/topic?id=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["links"]["center_object_path"] == "/object?id=alpha&pack=default-knowledge"
 
 
 def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, monkeypatch):

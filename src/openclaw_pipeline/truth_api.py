@@ -2580,8 +2580,13 @@ def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str,
     }
 
 
-def get_object_traceability(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
-    detail = get_object_detail(vault_dir, object_id)
+def get_object_traceability(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    detail = get_object_detail(vault_dir, object_id, pack_name=pack_name)
     deep_dives = _promoted_deep_dives_for_object(vault_dir, object_id)
     source_note_map: dict[str, dict[str, str]] = {}
     for deep_dive in deep_dives:
@@ -3164,32 +3169,43 @@ def review_evolution_candidate(
     }
 
 
-def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int = 1) -> dict[str, Any]:
+def get_topic_neighborhood(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+    depth: int = 1,
+) -> dict[str, Any]:
     if depth != 1:
         raise ValueError("Only depth=1 is currently supported")
 
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_order = "".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))
     with sqlite3.connect(db_path) as conn:
         center = conn.execute(
-            """
-            SELECT object_id, object_kind, title, canonical_path, source_slug
+            f"""
+            SELECT pack, object_id, object_kind, title, canonical_path, source_slug
             FROM objects
-            WHERE object_id = ?
+            WHERE pack IN ({",".join("?" for _ in pack_candidates)}) AND object_id = ?
+            ORDER BY CASE pack {pack_order}ELSE {len(pack_candidates)} END
+            LIMIT 1
             """,
-            (object_id,),
+            (*pack_candidates, object_id, *pack_candidates),
         ).fetchone()
         if center is None:
             raise ValueError(f"Unknown object_id: {object_id}")
+        truth_pack = str(center[0])
 
         edge_rows = conn.execute(
             """
             SELECT source_object_id, target_object_id, relation_type, evidence_source_slug
             FROM relations
-            WHERE source_object_id = ?
+            WHERE pack = ? AND source_object_id = ?
             ORDER BY target_object_id
             """,
-            (object_id,),
+            (truth_pack, object_id),
         ).fetchall()
         neighbor_ids = [row[1] for row in edge_rows]
         if neighbor_ids:
@@ -3198,21 +3214,22 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
                 f"""
                 SELECT object_id, object_kind, title, canonical_path, source_slug
                 FROM objects
-                WHERE object_id IN ({placeholders})
+                WHERE pack = ? AND object_id IN ({placeholders})
                 ORDER BY object_id
                 """,
-                tuple(neighbor_ids),
+                (truth_pack, *neighbor_ids),
             ).fetchall()
         else:
             neighbor_rows = []
 
     return {
         "center": {
-            "object_id": center[0],
-            "object_kind": center[1],
-            "title": center[2],
-            "canonical_path": _vault_relative_path(resolved_vault, center[3]),
-            "source_slug": center[4],
+            "object_id": center[1],
+            "object_kind": center[2],
+            "title": center[3],
+            "canonical_path": _vault_relative_path(resolved_vault, center[4]),
+            "source_slug": center[5],
+            "row_pack": truth_pack,
         },
         "neighbors": [
             {
@@ -3221,6 +3238,7 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
                 "title": row[2],
                 "canonical_path": _vault_relative_path(resolved_vault, row[3]),
                 "source_slug": row[4],
+                "row_pack": truth_pack,
             }
             for row in neighbor_rows
         ],
