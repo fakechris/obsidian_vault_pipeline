@@ -124,7 +124,7 @@ def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
           <nav>
             <a href="{escape(_shell_href('/', requested_pack))}">Home</a>
             <a href="{escape(_shell_href('/objects', requested_pack))}">Objects</a>
-            <a href="/search">Search</a>
+            <a href="{escape(_shell_href('/search', requested_pack))}">Search</a>
             <a href="{escape(_shell_href('/signals', requested_pack))}">Signals</a>
             <a href="{escape(_shell_href('/briefing', requested_pack))}">Briefing</a>
             <a href="{escape(_shell_href('/actions', requested_pack))}">Actions</a>
@@ -148,22 +148,22 @@ def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
 """
 
 
-def _note_href(path: str) -> str:
-    return f"/note?path={quote(path, safe='')}"
+def _note_href(path: str, requested_pack: str = "") -> str:
+    return _shell_href(f"/note?path={quote(path, safe='')}", requested_pack)
 
 
 def _asset_href(path: str) -> str:
     return f"/asset?path={quote(path, safe='')}"
 
 
-def _search_href(query: str) -> str:
-    return f"/search?q={quote(query, safe='')}"
+def _search_href(query: str, requested_pack: str = "") -> str:
+    return _shell_href(f"/search?q={quote(query, safe='')}", requested_pack)
 
 
-def _object_href(object_id: str, path: str = "") -> str:
+def _object_href(object_id: str, path: str = "", requested_pack: str = "") -> str:
     if path:
         return path
-    return f"/object?id={quote(str(object_id), safe='')}"
+    return _shell_href(f"/object?id={quote(str(object_id), safe='')}", requested_pack)
 
 
 def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
@@ -188,7 +188,7 @@ def _read_vault_asset(vault_dir: Path, relative_path: str) -> tuple[bytes, str]:
     return candidate.read_bytes(), mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
 
 
-def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | None:
+def _lookup_wikilink_target(vault_dir: Path, target: str, *, requested_pack: str = "") -> tuple[str, str] | None:
     db_path = VaultLayout.from_vault(vault_dir).knowledge_db
     if not db_path.exists():
         return None
@@ -248,8 +248,11 @@ def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | N
                 continue
             relative_path = str(candidate.resolve().relative_to(vault_dir.resolve()))
             if "10-Knowledge/Evergreen/" in relative_path:
-                return (f"/object?id={quote(canonicalize_note_id(stem), safe='')}", canonicalize_note_id(stem))
-            return (_note_href(relative_path), relative_path)
+                return (
+                    _shell_href(f"/object?id={quote(canonicalize_note_id(stem), safe='')}", requested_pack),
+                    canonicalize_note_id(stem),
+                )
+            return (_note_href(relative_path, requested_pack), relative_path)
         return None
 
     slug, _title, note_type, path = sorted(rows, key=rank)[0]
@@ -262,8 +265,8 @@ def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | N
             relative_path = path
 
     if note_type == "evergreen":
-        return (f"/object?id={quote(slug, safe='')}", slug)
-    return (_note_href(relative_path), relative_path)
+        return (_shell_href(f"/object?id={quote(slug, safe='')}", requested_pack), slug)
+    return (_note_href(relative_path, requested_pack), relative_path)
 
 
 def _is_search_href(href: str) -> bool:
@@ -332,13 +335,13 @@ def _render_frontmatter(frontmatter: dict[str, object]) -> str:
     )
 
 
-def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str) -> str:
+def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str, *, requested_pack: str = "") -> str:
     def replace_match(match: re.Match[str]) -> str:
         raw_inner = match.group(1)
         target_part, _, label_part = raw_inner.partition("|")
         label = label_part.strip() or target_part.split("#", 1)[0].strip()
-        resolved = _lookup_wikilink_target(vault_dir, target_part)
-        href = resolved[0] if resolved else _search_href(target_part.split("#", 1)[0].strip() or label)
+        resolved = _lookup_wikilink_target(vault_dir, target_part, requested_pack=requested_pack)
+        href = resolved[0] if resolved else _search_href(target_part.split("#", 1)[0].strip() or label, requested_pack)
         emoji = "🔍" if _is_search_href(href) else "🎯"
         safe_label = label.replace("[", "\\[").replace("]", "\\]")
         return f"[{emoji} {safe_label}]({href})"
@@ -441,7 +444,7 @@ def _convert_box_table_fences(markdown: str, *, github_repo_base: str | None) ->
     return "\n".join(output)
 
 
-def _linkify_keywords(markdown: str) -> str:
+def _linkify_keywords(markdown: str, *, requested_pack: str = "") -> str:
     output: list[str] = []
     keyword_re = re.compile(r"^(\*\*关键词\*\*|关键词)\s*[：:]\s*(.+)$")
     for line in markdown.splitlines():
@@ -455,12 +458,12 @@ def _linkify_keywords(markdown: str) -> str:
             keyword = raw.strip()
             if not keyword:
                 continue
-            rendered.append(_smart_markdown_link(keyword, _search_href(keyword)))
+            rendered.append(_smart_markdown_link(keyword, _search_href(keyword, requested_pack)))
         output.append(f"{prefix}：{'，'.join(rendered)}")
     return "\n".join(output)
 
 
-def _linkify_related_knowledge_section(vault_dir: Path, markdown: str) -> str:
+def _linkify_related_knowledge_section(vault_dir: Path, markdown: str, *, requested_pack: str = "") -> str:
     output_lines: list[str] = []
     in_related = False
 
@@ -473,8 +476,8 @@ def _linkify_related_knowledge_section(vault_dir: Path, markdown: str) -> str:
         if in_related and re.match(r"^- [^\[][^—]+ — ", stripped):
             concept, sep, remainder = stripped[2:].partition(" — ")
             concept = concept.strip()
-            resolved = _lookup_wikilink_target(vault_dir, concept)
-            href = resolved[0] if resolved else _search_href(concept)
+            resolved = _lookup_wikilink_target(vault_dir, concept, requested_pack=requested_pack)
+            href = resolved[0] if resolved else _search_href(concept, requested_pack)
             emoji = "🔍" if _is_search_href(href) else "🎯"
             output_lines.append(f'- [{emoji} {concept}]({href}) — {remainder}')
             continue
@@ -483,14 +486,14 @@ def _linkify_related_knowledge_section(vault_dir: Path, markdown: str) -> str:
     return "\n".join(output_lines)
 
 
-def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
+def _render_markdown_note(vault_dir: Path, markdown: str, *, requested_pack: str = "") -> tuple[str, str]:
     frontmatter, body = _parse_frontmatter(markdown)
     github_repo_base = _infer_github_repo_base(frontmatter, body)
     rendered_body = _convert_box_table_fences(body, github_repo_base=github_repo_base)
     rendered_body = _rewrite_local_image_links(vault_dir, rendered_body)
-    rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, rendered_body)
-    rendered_body = _linkify_related_knowledge_section(vault_dir, rendered_body)
-    rendered_body = _linkify_keywords(rendered_body).strip()
+    rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, rendered_body, requested_pack=requested_pack)
+    rendered_body = _linkify_related_knowledge_section(vault_dir, rendered_body, requested_pack=requested_pack)
+    rendered_body = _linkify_keywords(rendered_body, requested_pack=requested_pack).strip()
     if not rendered_body:
         html_body = "<p class='muted'>Empty note.</p>"
     else:
@@ -499,7 +502,8 @@ def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
 
 
 def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payload: dict | None = None) -> str:
-    frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown)
+    requested_pack = payload.get("requested_pack", "") if payload else ""
+    frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown, requested_pack=requested_pack)
     source_note = None
     derived_notes: list[dict[str, str]] = []
     production_chain = None
@@ -514,7 +518,7 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             "<h2>Provenance</h2>"
             "<dl class='meta-list'>"
             "<div><dt>Original Source Note</dt><dd>"
-            f'<a href="{escape(_note_href(source_note["path"]))}">{escape(source_note["title"])}</a>'
+            f'<a href="{escape(_note_href(source_note["path"], requested_pack))}">{escape(source_note["title"])}</a>'
             f"<div class='muted'>{escape(source_note['path'])}</div>"
             "</dd></div>"
             "</dl>"
@@ -522,7 +526,7 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
         )
     if derived_notes:
         derived_list = "".join(
-            f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+            f'<li><a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
             f"<div class='muted'>{escape(item['path'])}</div></li>"
             for item in derived_notes
         )
@@ -539,10 +543,10 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             "<h2>Production Chain</h2>"
             "<dl class='meta-list'>"
             f"<div><dt>Current Note</dt><dd>{escape(production_chain['note']['title'])}<div class='muted'>{escape(production_chain['note']['path'])}</div></dd></div>"
-            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'])}</dd></div>"
-            f"<div><dt>Deep Dives</dt><dd>{_render_named_note_links(production_chain['deep_dives'])}</dd></div>"
-            f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'])}</dd></div>"
-            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(production_chain['atlas_pages'])}</dd></div>"
+            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Deep Dives</dt><dd>{_render_named_note_links(production_chain['deep_dives'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(production_chain['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
             "</dl>"
             "</section>"
         )
@@ -558,51 +562,62 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             f"{production_chain_html}"
             f"<section class='card'>{note_html}</section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_search_page(payload: dict) -> str:
     query = payload["query"]
+    requested_pack = payload.get("requested_pack", "")
     object_items = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(item.get("object_path") or _object_href(item["object_id"], requested_pack=requested_pack))}">{escape(item["title"])}</a> '
         f'<span class="muted">({escape(item["object_id"])})</span></li>'
         for item in payload["objects"]
     ) or "<li class='muted'>No object hits.</li>"
     note_items = "".join(
-        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
         f'<span class="pill">{escape(item["note_type"])}</span></li>'
         for item in payload["notes"]
     ) or "<li class='muted'>No note hits.</li>"
     return _layout(
         f"Search: {query}",
-        (
-            "<h1>Search</h1>"
-            "<form method='get' action='/search'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['object_count']} object hits, {payload['note_count']} note hits.</p>"
-            "<section class='grid two-col'>"
-            f"<section class='card'><h2>Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
-            f"<section class='card'><h2>Notes</h2><ul class='list-tight'>{note_items}</ul></section>"
-            "</section>"
+        "".join(
+            [
+                "<h1>Search</h1>",
+                "<form method='get' action='/search'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' /> "
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['object_count']} object hits, {payload['note_count']} note hits.</p>",
+                "<section class='grid two-col'>",
+                f"<section class='card'><h2>Objects</h2><ul class='list-tight'>{object_items}</ul></section>",
+                f"<section class='card'><h2>Notes</h2><ul class='list-tight'>{note_items}</ul></section>",
+                "</section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
-def _render_named_note_links(items: list[dict[str, str]]) -> str:
+def _render_named_note_links(items: list[dict[str, str]], *, requested_pack: str = "") -> str:
     if not items:
         return "<span class='muted'>None</span>"
     return ", ".join(
-        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>' for item in items
+        f'<a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
+        for item in items
     )
 
 
-def _render_object_links(items: list[dict[str, str]]) -> str:
+def _render_object_links(items: list[dict[str, str]], *, requested_pack: str = "") -> str:
     if not items:
         return "<span class='muted'>None</span>"
     return ", ".join(
-        f'<a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a>'
         for item in items
     )
 
@@ -2396,11 +2411,13 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/api/search":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_search_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_search_payload(resolved_vault, query=q, pack_name=pack_name))
                     return
                 if path == "/search":
                     q = query.get("q", [""])[0]
-                    payload = build_search_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_search_payload(resolved_vault, query=q, pack_name=pack_name)
                     self._write_html(_render_search_page(payload))
                     return
                 if path == "/api/briefing":
@@ -2591,8 +2608,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/note":
                     relative_path = self._required(query, "path")
+                    pack_name = query.get("pack", [""])[0] or None
                     _, markdown = _read_vault_note(resolved_vault, relative_path)
-                    payload = build_note_page_payload(resolved_vault, note_path=relative_path)
+                    payload = build_note_page_payload(resolved_vault, note_path=relative_path, pack_name=pack_name)
                     self._write_html(_render_note_page(resolved_vault, relative_path, markdown, payload))
                     return
                 if path == "/asset":

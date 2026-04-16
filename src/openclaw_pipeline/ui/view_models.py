@@ -1604,7 +1604,10 @@ def build_truth_dashboard_payload(
             {
                 "kind": "production_gap",
                 "label": item["title"],
-                "path": f"/note?path={quote(item['note_path'], safe='')}",
+                "path": _scoped_path(
+                    f"/note?path={quote(item['note_path'], safe='')}",
+                    pack_name=requested_pack,
+                ),
                 "detail": item["detail"],
             }
         )
@@ -1706,7 +1709,7 @@ def build_atlas_browser_payload(
     object_to_deep_dives: dict[str, dict[str, dict[str, str]]] = {}
     object_to_source_notes: dict[str, dict[str, dict[str, str]]] = {}
     for item in derivations:
-        source_notes = get_note_traceability(vault_dir, note_path=item["path"])["source_notes"]
+        source_notes = get_note_traceability(vault_dir, note_path=item["path"], pack_name=pack_name)["source_notes"]
         for derived in item["derived_objects"]:
             object_to_deep_dives.setdefault(derived["object_id"], {})[item["slug"]] = {
                 "slug": item["slug"],
@@ -1795,7 +1798,7 @@ def build_derivation_browser_payload(
         for provenance in provenance_map.values():
             for atlas_page in provenance["mocs"]:
                 atlas_page_map.setdefault(atlas_page["slug"], atlas_page)
-        source_notes = get_note_traceability(vault_dir, note_path=item["path"])["source_notes"]
+        source_notes = get_note_traceability(vault_dir, note_path=item["path"], pack_name=pack_name)["source_notes"]
         enriched_items.append(
             {
                 **item,
@@ -1884,21 +1887,96 @@ def build_stale_summary_browser_payload(
     }
 
 
-def build_search_payload(vault_dir: Path | str, *, query: str) -> dict[str, Any]:
-    results = search_vault_surface(vault_dir, query=query)
+def build_search_payload(
+    vault_dir: Path | str,
+    *,
+    query: str,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    results = search_vault_surface(vault_dir, query=query, pack_name=pack_name)
     return {
         "screen": "search/results",
+        "requested_pack": requested_pack,
         **results,
+        "objects": [
+            {
+                **item,
+                "object_path": _scoped_path(
+                    f"/object?id={quote(str(item['object_id']), safe='')}",
+                    pack_name=requested_pack,
+                ),
+            }
+            for item in results["objects"]
+        ],
+        "notes": [
+            {
+                **item,
+                "note_path": _scoped_path(
+                    f"/note?path={quote(str(item['path']), safe='')}",
+                    pack_name=requested_pack,
+                ),
+            }
+            for item in results["notes"]
+        ],
         "object_count": len(results["objects"]),
         "note_count": len(results["notes"]),
     }
 
 
-def build_note_page_payload(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+def build_note_page_payload(
+    vault_dir: Path | str,
+    *,
+    note_path: str,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
     provenance = get_note_provenance(vault_dir, note_path=note_path)
+    production_chain = get_note_traceability(vault_dir, note_path=note_path, pack_name=pack_name)
+    production_chain["source_notes"] = [
+        {
+            **item,
+            "note_path": _scoped_path(
+                f"/note?path={quote(str(item['path']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in production_chain["source_notes"]
+    ]
+    production_chain["deep_dives"] = [
+        {
+            **item,
+            "note_path": _scoped_path(
+                f"/note?path={quote(str(item['path']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in production_chain["deep_dives"]
+    ]
+    production_chain["objects"] = [
+        {
+            **item,
+            "object_path": _scoped_path(
+                f"/object?id={quote(str(item['object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in production_chain["objects"]
+    ]
+    production_chain["atlas_pages"] = [
+        {
+            **item,
+            "note_path": _scoped_path(
+                f"/note?path={quote(str(item['path']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in production_chain["atlas_pages"]
+    ]
     return {
         "screen": "note/page",
+        "requested_pack": requested_pack,
         "note_path": note_path,
         "provenance": provenance,
-        "production_chain": get_note_traceability(vault_dir, note_path=note_path),
+        "production_chain": production_chain,
     }

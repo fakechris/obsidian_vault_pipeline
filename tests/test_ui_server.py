@@ -170,6 +170,72 @@ Mentions [[alpha]].
     assert any(item["note_type"] == "deep_dive" for item in payload["notes"])
 
 
+def test_ui_server_search_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+title: Agent Harness Deep Dive
+source: https://example.com/agent-harness
+date: 2026-04-13
+type: deep_dive
+---
+
+# Agent Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/search?q=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["objects"][0]["object_path"] == "/object?id=alpha&pack=default-knowledge"
+    assert any(item["note_path"].endswith("&pack=default-knowledge") for item in payload["notes"])
+
+
+def test_ui_server_search_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/search?q=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/search?pack=default-knowledge"' in body
+    assert "name='pack' value='default-knowledge'" in body or 'name="pack" value="default-knowledge"' in body
+    assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
+
+
 def test_ui_server_object_endpoint_returns_detail_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -239,6 +305,106 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/objects?pack=default-knowledge"' in body
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/atlas?pack=default-knowledge"' in body
+
+
+def test_ui_server_note_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event_type":"article_processed","file":"Harness.md","output":"'
+                + str(deep_dive)
+                + '"}',
+                '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Harness_深度解读.md","mutation":{"target_slug":"alpha"}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "GET",
+            "/note?path=50-Inbox%2F03-Processed%2F2026-04%2FHarness.md&pack=default-knowledge",
+        )
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/search?pack=default-knowledge"' in body
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
+    assert 'href="/note?path=20-Areas%2FAI-Research%2FTopics%2F2026-04%2FHarness_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md&amp;pack=default-knowledge"' in body
 
 
 def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):

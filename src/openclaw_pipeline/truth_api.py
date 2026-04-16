@@ -820,6 +820,7 @@ def search_vault_surface(
     normalized_query = query.strip()
     object_limit, _ = _validate_page_args(limit=object_limit, offset=0)
     note_limit, _ = _validate_page_args(limit=note_limit, offset=0)
+    requested_pack = _truth_pack_name(pack_name)
     if not normalized_query:
         return {
             "query": "",
@@ -828,12 +829,12 @@ def search_vault_surface(
         }
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
-    truth_pack = _truth_pack_name(pack_name)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
     escaped_query = _escape_like(normalized_query.lower())
     with sqlite3.connect(db_path) as conn:
         object_rows = conn.execute(
-            """
-            SELECT DISTINCT objects.object_id, objects.object_kind, objects.title, objects.canonical_path, objects.source_slug
+            f"""
+            SELECT DISTINCT objects.object_id, objects.object_kind, objects.title, objects.canonical_path, objects.source_slug, objects.pack
             FROM objects
             LEFT JOIN compiled_summaries
               ON compiled_summaries.pack = objects.pack
@@ -841,7 +842,7 @@ def search_vault_surface(
             LEFT JOIN claims
               ON claims.pack = objects.pack
              AND claims.object_id = objects.object_id
-            WHERE objects.pack = ?
+            WHERE objects.pack IN ({",".join("?" for _ in pack_candidates)})
               AND (
                 lower(objects.object_id) LIKE ? ESCAPE '\\'
                 OR lower(objects.title) LIKE ? ESCAPE '\\'
@@ -853,7 +854,7 @@ def search_vault_surface(
             LIMIT ?
             """,
             (
-                truth_pack,
+                *pack_candidates,
                 f"%{escaped_query}%",
                 f"%{escaped_query}%",
                 f"%{escaped_query}%",
@@ -896,7 +897,8 @@ def search_vault_surface(
             "title": row[2],
             "canonical_path": _vault_relative_path(resolved_vault, row[3]),
             "source_slug": row[4],
-            "pack": truth_pack,
+            "pack": requested_pack,
+            "row_pack": row[5],
         }
         for row in object_rows
     ]
