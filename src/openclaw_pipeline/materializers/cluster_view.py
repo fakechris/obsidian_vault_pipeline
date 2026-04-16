@@ -47,6 +47,7 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     f"- score: {row['score']}",
                     f"- priority_band: {row['priority_band']}",
                     f"- priority_reason: {row['priority_reason']}",
+                    f"- related_cluster_count: {row['related_cluster_count']}",
                     "",
                     "#### Members",
                     "",
@@ -82,6 +83,18 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
             if detail["relation_pattern_items"]:
                 for item in detail["relation_pattern_items"]:
                     lines.append(f"- {item['display_name']} ({item['count']})")
+            else:
+                lines.append("- (none)")
+            lines.extend(
+                [
+                    "",
+                    "#### Related Clusters",
+                    "",
+                ]
+            )
+            if detail["related_clusters"]:
+                for item in detail["related_clusters"]:
+                    lines.append(f"- {item['display_title']} [{item['reason']}]")
             else:
                 lines.append("- (none)")
             lines.extend(

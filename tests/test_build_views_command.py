@@ -628,6 +628,7 @@ date: 2026-04-10
     assert "#### Cluster Synthesis" in content
     assert "#### Structural Label" in content
     assert "#### Relation Patterns" in content
+    assert "#### Related Clusters" in content
     assert "- priority_band:" in content
     assert "#### Coverage" in content
     assert "Source Deep Dive" in content

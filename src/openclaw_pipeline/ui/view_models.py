@@ -781,6 +781,10 @@ def build_cluster_browser_payload(
                 "member_links": detail["cluster"]["member_links"],
                 "display_title": detail["display_title"],
                 "relation_pattern_preview": detail["relation_pattern_preview"],
+                "related_cluster_count": len(detail["related_clusters"]),
+                "related_cluster_preview": ", ".join(
+                    related["display_title"] for related in detail["related_clusters"][:2]
+                ),
                 "priority_score": priority_score,
                 "priority_band": priority_band,
                 "priority_reason": priority_reason,

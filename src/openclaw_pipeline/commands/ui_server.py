@@ -1350,6 +1350,11 @@ def _render_clusters_page(payload: dict) -> str:
             else ""
         )
         + (
+            f"<div class='muted'>Related clusters: {item['related_cluster_count']} · {escape(item['related_cluster_preview'])}</div>"
+            if item.get("related_cluster_count")
+            else ""
+        )
+        + (
             f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
             if item.get("top_summary_bullet")
             else ""
