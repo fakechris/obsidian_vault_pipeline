@@ -99,6 +99,25 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
     lines.extend(
         [
             "",
+            "## Related Clusters",
+            "",
+        ]
+    )
+    if payload["related_clusters"]:
+        for item in payload["related_clusters"]:
+            lines.append(
+                f"- {item['display_title']} [{item['reason']}]"
+            )
+            if item["shared_source_titles"]:
+                lines.append(f"  - shared source notes: {', '.join(item['shared_source_titles'])}")
+            if item["shared_moc_titles"]:
+                lines.append(f"  - shared atlas pages: {', '.join(item['shared_moc_titles'])}")
+    else:
+        lines.append("- (none)")
+
+    lines.extend(
+        [
+            "",
             "## Coverage",
             "",
             f"- source_note_count: {payload['review_context']['source_note_count']}",

@@ -418,6 +418,89 @@ date: 2026-04-13
     assert payload["top_mocs"][0]["slug"] == "atlas-index"
 
 
+def test_build_cluster_detail_payload_includes_related_clusters(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.truth_api import list_graph_clusters
+    from openclaw_pipeline.ui.view_models import build_cluster_detail_payload
+
+    _seed_truth_store(temp_vault)
+    gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
+    delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
+    gamma.write_text(
+        """---
+note_id: gamma
+title: Gamma
+type: evergreen
+date: 2026-04-13
+---
+
+# Gamma
+
+Gamma links to [[delta]].
+""",
+        encoding="utf-8",
+    )
+    delta.write_text(
+        """---
+note_id: delta
+title: Delta
+type: evergreen
+date: 2026-04-13
+---
+
+# Delta
+""",
+        encoding="utf-8",
+    )
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: shared-deep-dive
+title: Shared Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Shared Deep Dive
+
+Mentions [[alpha]], [[beta]], [[gamma]], and [[delta]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Shared-Atlas.md"
+    atlas.write_text(
+        """---
+note_id: shared-atlas
+title: Shared Atlas
+type: moc
+date: 2026-04-13
+---
+
+# Shared Atlas
+
+- [[alpha]]
+- [[beta]]
+- [[gamma]]
+- [[delta]]
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    cluster = next(
+        item
+        for item in list_graph_clusters(temp_vault)
+        if "alpha" in {member["object_id"] for member in item["members"]}
+    )
+    payload = build_cluster_detail_payload(temp_vault, cluster_id=cluster["cluster_id"], pack_name=cluster["pack"])
+
+    assert payload["related_clusters"]
+    assert payload["related_clusters"][0]["shared_source_count"] >= 1
+    assert payload["related_clusters"][0]["shared_moc_count"] >= 1
+    assert payload["related_clusters"][0]["detail_path"].startswith("/cluster?id=")
+
+
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
     from openclaw_pipeline.ui.view_models import build_event_dossier_payload
 

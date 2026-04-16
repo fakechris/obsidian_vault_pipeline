@@ -708,6 +708,134 @@ Target note captures downstream effects.
     assert "Target Note" in content
 
 
+def test_build_views_command_cluster_crystal_includes_related_clusters(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    beta = temp_vault / "10-Knowledge" / "Evergreen" / "Beta.md"
+    gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
+    delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
+    alpha.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-10
+---
+
+# Alpha
+
+Alpha links to [[beta]].
+""",
+        encoding="utf-8",
+    )
+    beta.write_text(
+        """---
+note_id: beta
+title: Beta
+type: evergreen
+date: 2026-04-10
+---
+
+# Beta
+
+Alpha does not support local-first execution.
+""",
+        encoding="utf-8",
+    )
+    gamma.write_text(
+        """---
+note_id: gamma
+title: Gamma
+type: evergreen
+date: 2026-04-10
+---
+
+# Gamma
+
+Gamma links to [[delta]].
+""",
+        encoding="utf-8",
+    )
+    delta.write_text(
+        """---
+note_id: delta
+title: Delta
+type: evergreen
+date: 2026-04-10
+---
+
+# Delta
+""",
+        encoding="utf-8",
+    )
+    shared_source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    shared_source.parent.mkdir(parents=True, exist_ok=True)
+    shared_source.write_text(
+        """---
+note_id: shared-deep-dive
+title: Shared Deep Dive
+type: deep_dive
+date: 2026-04-10
+---
+
+# Shared Deep Dive
+
+Mentions [[alpha]], [[beta]], [[gamma]], and [[delta]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Shared-Atlas.md"
+    atlas.write_text(
+        """---
+note_id: shared-atlas
+title: Shared Atlas
+type: moc
+date: 2026-04-10
+---
+
+# Shared Atlas
+
+- [[alpha]]
+- [[beta]]
+- [[gamma]]
+- [[delta]]
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    cluster = next(
+        item
+        for item in list_graph_clusters(temp_vault, pack_name="default-knowledge")
+        if "alpha" in {member["object_id"] for member in item["members"]}
+    )
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "cluster/crystal",
+            "--cluster-id",
+            cluster["cluster_id"],
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    content = (
+        layout.compiled_views_dir / "default-knowledge" / "clusters" / f"{cluster['cluster_id']}.md"
+    ).read_text(encoding="utf-8")
+
+    assert result == 0
+    assert "## Related Clusters" in content
+    assert "Shared Atlas" in content or "Shared Deep Dive" in content
+
+
 def test_build_views_command_can_materialize_contradictions_overview(temp_vault):
     from openclaw_pipeline.commands.build_views import main
     from openclaw_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions

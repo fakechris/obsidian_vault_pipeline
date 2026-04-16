@@ -1430,6 +1430,24 @@ def _render_cluster_detail_page(payload: dict) -> str:
         f"<li><a href=\"{escape(item['object_path'])}\">{escape(item['title'])}</a> <span class='pill'>{', '.join(escape(code) for code in item['reason_codes'])}</span></li>"
         for item in payload["stale_summaries"]
     ) or "<li class='muted'>No stale summaries in this cluster.</li>"
+    related_clusters = "".join(
+        "<li>"
+        f"<a href=\"{escape(item['detail_path'])}\">{escape(item['display_title'])}</a> "
+        f"<span class='pill'>{item['member_count']} objects</span> "
+        f"<span class='pill'>{escape(item['reason'])}</span>"
+        + (
+            f"<div class='muted'>Shared source notes: {escape(', '.join(item['shared_source_titles']))}</div>"
+            if item["shared_source_titles"]
+            else ""
+        )
+        + (
+            f"<div class='muted'>Shared atlas pages: {escape(', '.join(item['shared_moc_titles']))}</div>"
+            if item["shared_moc_titles"]
+            else ""
+        )
+        + "</li>"
+        for item in payload["related_clusters"]
+    ) or "<li class='muted'>No related clusters surfaced for this scope.</li>"
     relation_patterns = "".join(
         f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span></li>"
         for item in payload["relation_pattern_items"]
@@ -1451,6 +1469,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Structural Label</h2><p><strong>{escape(payload['structural_label']['title'])}</strong></p><p class='muted'>{escape(payload['structural_label']['reason'])}</p></section>"
             f"<section class='card'><h2>Relation Patterns</h2><ul class='list-tight'>{relation_patterns}</ul></section>"
             f"<section class='card'><h2>Review Pressure</h2><h3>Open Contradictions</h3><ul class='list-tight'>{open_contradictions}</ul><h3>Stale Summaries</h3><ul class='list-tight'>{stale_summaries}</ul></section>"
+            f"<section class='card'><h2>Related Clusters</h2><ul class='list-tight'>{related_clusters}</ul></section>"
             f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
             f"<section class='card'><h2>Object Kinds</h2><div class='link-row'>{object_kind_counts}</div></section>"
             f"<section class='card'><h2>Coverage</h2><p class='muted'>"

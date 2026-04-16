@@ -314,6 +314,99 @@ def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
     assert payload["stale_summaries"]
 
 
+def test_ui_server_cluster_detail_endpoint_includes_related_clusters(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    _seed_truth_store(temp_vault)
+    gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
+    delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
+    gamma.write_text(
+        """---
+note_id: gamma
+title: Gamma
+type: evergreen
+date: 2026-04-13
+---
+
+# Gamma
+
+Gamma links to [[delta]].
+""",
+        encoding="utf-8",
+    )
+    delta.write_text(
+        """---
+note_id: delta
+title: Delta
+type: evergreen
+date: 2026-04-13
+---
+
+# Delta
+""",
+        encoding="utf-8",
+    )
+    shared_source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    shared_source.parent.mkdir(parents=True, exist_ok=True)
+    shared_source.write_text(
+        """---
+note_id: shared-deep-dive
+title: Shared Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Shared Deep Dive
+
+Mentions [[alpha]], [[beta]], [[gamma]], and [[delta]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Shared-Atlas.md"
+    atlas.write_text(
+        """---
+note_id: shared-atlas
+title: Shared Atlas
+type: moc
+date: 2026-04-13
+---
+
+# Shared Atlas
+
+- [[alpha]]
+- [[beta]]
+- [[gamma]]
+- [[delta]]
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    cluster = next(
+        item
+        for item in list_graph_clusters(temp_vault)
+        if "alpha" in {member["object_id"] for member in item["members"]}
+    )
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", f"/api/cluster?id={cluster['cluster_id']}&pack={cluster['pack']}")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["related_clusters"]
+    assert payload["related_clusters"][0]["shared_source_count"] >= 1
+    assert payload["related_clusters"][0]["shared_moc_count"] >= 1
+
+
 def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
     from openclaw_pipeline.truth_api import list_evolution_candidates

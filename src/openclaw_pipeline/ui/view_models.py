@@ -157,6 +157,102 @@ def _relation_pattern_preview(relation_pattern_items: list[dict[str, Any]]) -> s
     return preview
 
 
+def _top_counter_items(
+    counts: Counter[str],
+    item_map: dict[str, dict[str, Any]],
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    return [
+        {**item_map[key], "object_count": count}
+        for key, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        if key in item_map
+    ][:limit]
+
+
+def _collect_cluster_provenance(
+    vault_dir: Path | str,
+    member_object_ids: list[str],
+) -> dict[str, Any]:
+    provenance_map = get_object_provenance_map(vault_dir, member_object_ids)
+    source_note_counts: Counter[str] = Counter()
+    source_note_items: dict[str, dict[str, Any]] = {}
+    moc_counts: Counter[str] = Counter()
+    moc_items: dict[str, dict[str, Any]] = {}
+    for provenance in provenance_map.values():
+        for note in provenance["source_notes"]:
+            slug = str(note["slug"])
+            source_note_items.setdefault(slug, note)
+            source_note_counts[slug] += 1
+        for moc in provenance["mocs"]:
+            slug = str(moc["slug"])
+            moc_items.setdefault(slug, moc)
+            moc_counts[slug] += 1
+    return {
+        "source_note_counts": source_note_counts,
+        "source_note_items": source_note_items,
+        "moc_counts": moc_counts,
+        "moc_items": moc_items,
+    }
+
+
+def _build_related_cluster_items(
+    vault_dir: Path | str,
+    *,
+    cluster_id: str,
+    requested_pack: str,
+    current_source_note_items: dict[str, dict[str, Any]],
+    current_moc_items: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    current_source_slugs = set(current_source_note_items)
+    current_moc_slugs = set(current_moc_items)
+    if not current_source_slugs and not current_moc_slugs:
+        return []
+    related_items: list[dict[str, Any]] = []
+    for row in list_graph_clusters(vault_dir, pack_name=requested_pack, limit=200):
+        if str(row["cluster_id"]) == cluster_id:
+            continue
+        member_object_ids = [str(member["object_id"]) for member in row["members"]]
+        provenance = _collect_cluster_provenance(vault_dir, member_object_ids)
+        shared_source_slugs = sorted(current_source_slugs & set(provenance["source_note_items"]))
+        shared_moc_slugs = sorted(current_moc_slugs & set(provenance["moc_items"]))
+        if not shared_source_slugs and not shared_moc_slugs:
+            continue
+        reason_parts: list[str] = []
+        if shared_source_slugs:
+            reason_parts.append(f"{len(shared_source_slugs)} shared source notes")
+        if shared_moc_slugs:
+            reason_parts.append(f"{len(shared_moc_slugs)} shared atlas pages")
+        score = len(shared_source_slugs) * 10 + len(shared_moc_slugs) * 5 + int(row["member_count"])
+        related_items.append(
+            {
+                "cluster_id": str(row["cluster_id"]),
+                "pack": requested_pack,
+                "label": str(row["label"]),
+                "display_title": f"Cluster around {row['center_title']}",
+                "detail_path": (
+                    f"/cluster?id={quote(str(row['cluster_id']), safe='')}"
+                    f"&pack={quote(requested_pack, safe='')}"
+                ),
+                "member_count": int(row["member_count"]),
+                "shared_source_count": len(shared_source_slugs),
+                "shared_moc_count": len(shared_moc_slugs),
+                "shared_source_titles": [
+                    str(current_source_note_items.get(slug, provenance["source_note_items"].get(slug, {})).get("title", slug))
+                    for slug in shared_source_slugs
+                ][:3],
+                "shared_moc_titles": [
+                    str(current_moc_items.get(slug, provenance["moc_items"].get(slug, {})).get("title", slug))
+                    for slug in shared_moc_slugs
+                ][:3],
+                "reason": ", ".join(reason_parts),
+                "score": score,
+            }
+        )
+    related_items.sort(key=lambda item: (-item["score"], item["label"].lower(), item["cluster_id"]))
+    return related_items[:5]
+
+
 def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     object_traceability = [get_object_traceability(vault_dir, object_id) for object_id in normalized_object_ids]
@@ -795,30 +891,11 @@ def build_cluster_detail_payload(
         if set(_object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"])) & set(member_object_ids)
     ][:5]
     stale_summaries = list_stale_summaries(vault_dir, object_ids=member_object_ids, limit=5)
-    provenance_map = get_object_provenance_map(vault_dir, member_object_ids)
-    source_note_counts: Counter[str] = Counter()
-    source_note_items: dict[str, dict[str, Any]] = {}
-    moc_counts: Counter[str] = Counter()
-    moc_items: dict[str, dict[str, Any]] = {}
-    for provenance in provenance_map.values():
-        for note in provenance["source_notes"]:
-            slug = str(note["slug"])
-            source_note_items.setdefault(slug, note)
-            source_note_counts[slug] += 1
-        for moc in provenance["mocs"]:
-            slug = str(moc["slug"])
-            moc_items.setdefault(slug, moc)
-            moc_counts[slug] += 1
-
-    def _top_counter_items(
-        counts: Counter[str],
-        item_map: dict[str, dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        return [
-            {**item_map[key], "object_count": count}
-            for key, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-            if key in item_map
-        ][:5]
+    provenance = _collect_cluster_provenance(vault_dir, member_object_ids)
+    source_note_counts = provenance["source_note_counts"]
+    source_note_items = provenance["source_note_items"]
+    moc_counts = provenance["moc_counts"]
+    moc_items = provenance["moc_items"]
 
     top_edge_kind = next(iter(sorted(edge_kind_counts.items(), key=lambda item: (-item[1], item[0]))), None)
     kind_summary = ", ".join(
@@ -848,6 +925,13 @@ def build_cluster_detail_payload(
     )
     relation_pattern_items = _build_relation_pattern_items(edge_summary_items)
     relation_pattern_preview = _relation_pattern_preview(relation_pattern_items)
+    related_clusters = _build_related_cluster_items(
+        vault_dir,
+        cluster_id=str(cluster["cluster_id"]),
+        requested_pack=requested_pack,
+        current_source_note_items=source_note_items,
+        current_moc_items=moc_items,
+    )
 
     return {
         "screen": "graph/cluster-detail",
@@ -865,6 +949,7 @@ def build_cluster_detail_payload(
         "review_context": review_context,
         "open_contradictions": open_contradictions,
         "stale_summaries": stale_summaries,
+        "related_clusters": related_clusters,
         "top_source_notes": _top_counter_items(source_note_counts, source_note_items),
         "top_mocs": _top_counter_items(moc_counts, moc_items),
         "summary_bullets": summary_bullets,
