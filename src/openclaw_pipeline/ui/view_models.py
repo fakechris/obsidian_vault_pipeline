@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from ..observation_surface_registry import describe_observation_surface_contract
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
 from ..truth_api import (
@@ -799,9 +800,14 @@ def build_signal_browser_payload(
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
     items = list_signals(vault_dir, pack_name=pack_name, signal_type=signal_type, query=query)
+    surface_contract = describe_observation_surface_contract(
+        pack_name=pack_name,
+        surface_kind="signals",
+    )
     return {
         "screen": "signals/browser",
         "requested_pack": requested_pack,
+        "surface_contract": surface_contract,
         "items": items,
         "count": len(items),
         "query": query or "",
@@ -842,9 +848,14 @@ def build_action_queue_payload(
 
 def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = None) -> dict[str, Any]:
     requested_pack = pack_name or ""
+    surface_contract = describe_observation_surface_contract(
+        pack_name=pack_name,
+        surface_kind="briefing",
+    )
     return {
         "screen": "briefing/intelligence",
         "requested_pack": requested_pack,
+        "surface_contract": surface_contract,
         **get_briefing_snapshot(vault_dir, pack_name=pack_name),
     }
 
@@ -1833,12 +1844,17 @@ def build_production_browser_payload(
         query=query,
         limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
     )
+    surface_contract = describe_observation_surface_contract(
+        pack_name=pack_name,
+        surface_kind="production_chains",
+    )
     source_items = [item for item in items if item["stage_label"] == "source_note"]
     deep_dive_items = [item for item in items if item["stage_label"] == "deep_dive"]
     weak_points = _build_production_weak_points(vault_dir, pack_name=pack_name, query=query)
     return {
         "screen": "production/browser",
         "requested_pack": requested_pack,
+        "surface_contract": surface_contract,
         "items": items,
         "source_items": source_items,
         "deep_dive_items": deep_dive_items,

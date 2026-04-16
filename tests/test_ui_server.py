@@ -532,6 +532,7 @@ def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/events?pack=default-knowledge"' in body
     assert 'href="/summaries?pack=default-knowledge"' in body
+    assert "inherited from research-tech-signals" in body
 
 
 def test_ui_server_summaries_endpoint_accepts_pack_scope(temp_vault):
@@ -1182,6 +1183,7 @@ def test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/clusters?pack=default-knowledge"' in body
+    assert "inherited from research-tech-briefing" in body
 
 
 def test_ui_server_can_enqueue_signal_action_via_api(temp_vault):
@@ -1285,6 +1287,7 @@ Processed source note without downstream chain.
 
     assert response.status == 200
     assert 'href="/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md&amp;pack=default-knowledge"' in body
+    assert "inherited from research-tech-production-chains" in body
 
 
 def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, monkeypatch):

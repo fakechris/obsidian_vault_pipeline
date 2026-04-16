@@ -53,6 +53,48 @@ def list_effective_observation_surfaces(
     return surfaces
 
 
+def describe_observation_surface_contract(
+    *,
+    pack_name: str | BaseDomainPack | None,
+    surface_kind: str,
+) -> dict[str, str]:
+    pack = coerce_pack(pack_name)
+    declared = next(
+        (spec for spec in pack.observation_surfaces() if spec.surface_kind == surface_kind),
+        None,
+    )
+    if declared is not None:
+        return {
+            "surface_kind": surface_kind,
+            "requested_pack": pack.name,
+            "status": "declared",
+            "provider_pack": declared.pack,
+            "provider_name": declared.name,
+            "description": declared.description,
+        }
+    effective = next(
+        (spec for spec in list_effective_observation_surfaces(pack_name=pack) if spec.surface_kind == surface_kind),
+        None,
+    )
+    if effective is not None:
+        return {
+            "surface_kind": surface_kind,
+            "requested_pack": pack.name,
+            "status": "inherited",
+            "provider_pack": effective.pack,
+            "provider_name": effective.name,
+            "description": effective.description,
+        }
+    return {
+        "surface_kind": surface_kind,
+        "requested_pack": pack.name,
+        "status": "missing",
+        "provider_pack": "",
+        "provider_name": "",
+        "description": "",
+    }
+
+
 def compute_declared_observation_surface_integrity(
     *,
     pack_name: str | BaseDomainPack | None,

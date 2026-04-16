@@ -166,6 +166,32 @@ def _object_href(object_id: str, path: str = "", requested_pack: str = "") -> st
     return _shell_href(f"/object?id={quote(str(object_id), safe='')}", requested_pack)
 
 
+def _render_surface_contract_card(payload: dict) -> str:
+    contract = payload.get("surface_contract")
+    if not isinstance(contract, dict) or not contract:
+        return ""
+    provider_name = str(contract.get("provider_name") or "")
+    provider_pack = str(contract.get("provider_pack") or "")
+    status = str(contract.get("status") or "")
+    surface_kind = str(contract.get("surface_kind") or "")
+    if status == "declared":
+        detail = (
+            f"This shared shell surface resolves as {escape(surface_kind)} "
+            f"declared by {escape(provider_name)} in {escape(provider_pack)}."
+        )
+    elif status == "inherited":
+        detail = (
+            f"This shared shell surface resolves as {escape(surface_kind)} "
+            f"inherited from {escape(provider_name)} in {escape(provider_pack)}."
+        )
+    else:
+        detail = (
+            f"This shared shell surface has no provider for {escape(surface_kind)} "
+            f"in the current pack scope."
+        )
+    return f"<section class='card'><h2>Surface Contract</h2><p class='muted'>{detail}</p></section>"
+
+
 def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
     candidate = (vault_dir / relative_path).resolve()
     try:
@@ -1405,6 +1431,7 @@ def _render_derivations_page(payload: dict) -> str:
 def _render_production_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
+    surface_contract_card = _render_surface_contract_card(payload)
     limit_note = (
         f" Showing the most recent {payload['limit']} production-chain entries in this browser window."
         if payload.get("is_limited")
@@ -1448,6 +1475,7 @@ def _render_production_browser_page(payload: dict) -> str:
                 f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
+                surface_contract_card,
                 "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>",
                 f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>",
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
@@ -1755,6 +1783,7 @@ def _render_signals_page(payload: dict) -> str:
     selected_type = payload.get("signal_type", "")
     requested_pack = payload.get("requested_pack", "")
     next_path = "/signals" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    surface_contract_card = _render_surface_contract_card(payload)
     options = ["", *sorted(payload["signal_type_explanations"].keys())]
     option_html = "".join(
         f"<option value='{escape(option)}' {'selected' if option == selected_type else ''}>"
@@ -1826,6 +1855,7 @@ def _render_signals_page(payload: dict) -> str:
                 f"<p class='muted'>{payload['count']} active signals.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
+                surface_contract_card,
                 f"<section class='card'><h2>Signal Types</h2><ul class='list-tight'>{explanations}</ul></section>",
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
@@ -1837,6 +1867,7 @@ def _render_signals_page(payload: dict) -> str:
 def _render_briefing_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     next_path = "/briefing" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    surface_contract_card = _render_surface_contract_card(payload)
     first_useful_sign = payload.get("first_useful_sign")
     first_useful_sign_html = (
         "<li>"
@@ -1931,6 +1962,7 @@ def _render_briefing_page(payload: dict) -> str:
                 f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
+                surface_contract_card,
                 f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
                 f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>",
                 f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>",

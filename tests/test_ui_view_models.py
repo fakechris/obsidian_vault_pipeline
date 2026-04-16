@@ -1079,6 +1079,10 @@ def test_build_signal_browser_payload_preserves_requested_pack(temp_vault):
 
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["screen"] == "signals/browser"
+    assert payload["surface_contract"]["surface_kind"] == "signals"
+    assert payload["surface_contract"]["status"] == "inherited"
+    assert payload["surface_contract"]["provider_pack"] == "research-tech"
+    assert payload["surface_contract"]["provider_name"] == "research-tech-signals"
 
 
 def test_build_action_queue_payload_preserves_requested_pack(temp_vault, monkeypatch):
@@ -1156,6 +1160,10 @@ def test_build_briefing_payload_preserves_requested_pack(temp_vault):
 
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["screen"] == "briefing/intelligence"
+    assert payload["surface_contract"]["surface_kind"] == "briefing"
+    assert payload["surface_contract"]["status"] == "inherited"
+    assert payload["surface_contract"]["provider_pack"] == "research-tech"
+    assert payload["surface_contract"]["provider_name"] == "research-tech-briefing"
 
 
 def test_build_evolution_browser_payload(temp_vault):
@@ -1699,6 +1707,10 @@ def test_build_production_browser_payload_preserves_requested_pack(temp_vault):
 
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["screen"] == "production/browser"
+    assert payload["surface_contract"]["surface_kind"] == "production_chains"
+    assert payload["surface_contract"]["status"] == "inherited"
+    assert payload["surface_contract"]["provider_pack"] == "research-tech"
+    assert payload["surface_contract"]["provider_name"] == "research-tech-production-chains"
 
 
 def test_build_production_browser_payload_surfaces_weak_points(temp_vault):
