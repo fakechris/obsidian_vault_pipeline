@@ -99,6 +99,26 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
     lines.extend(
         [
             "",
+            "## Reading Routes",
+            "",
+        ]
+    )
+    if payload["reading_routes"]:
+        for item in payload["reading_routes"]:
+            lines.extend(
+                [
+                    f"- {item['display_name']}: {item['display_title']}",
+                    f"  - bridge_kind: {item['bridge_kind']}",
+                    f"  - bridge_band: {item['bridge_band']}",
+                    f"  - reason: {item['reason']}",
+                ]
+            )
+    else:
+        lines.append("- (none)")
+
+    lines.extend(
+        [
+            "",
             "## Next Reading Route",
             "",
         ]

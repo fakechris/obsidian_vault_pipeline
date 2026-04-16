@@ -588,6 +588,9 @@ date: 2026-04-13
     assert payload["related_cluster_groups"]
     assert payload["related_cluster_groups"][0]["bridge_kind"] == "source_and_atlas_overlap"
     assert payload["related_cluster_groups"][0]["count"] >= 1
+    assert payload["reading_routes"]
+    assert payload["reading_routes"][0]["route_kind"] == "full_context_route"
+    assert payload["reading_routes"][0]["detail_path"].startswith("/cluster?id=")
 
 
 def test_build_event_dossier_payload_includes_provenance(temp_vault):

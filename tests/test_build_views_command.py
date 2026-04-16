@@ -836,6 +836,7 @@ date: 2026-04-10
     ).read_text(encoding="utf-8")
 
     assert result == 0
+    assert "## Reading Routes" in content
     assert "## Related Clusters" in content
     assert "## Neighborhood Groups" in content
     assert "source_and_atlas_overlap" in content
