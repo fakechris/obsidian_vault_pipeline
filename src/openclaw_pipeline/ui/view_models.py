@@ -784,6 +784,17 @@ def build_cluster_detail_payload(
         if member.get("object_kind")
     )
     review_context = get_review_context(vault_dir, member_object_ids)
+    open_contradictions = [
+        {
+            "contradiction_id": item["contradiction_id"],
+            "subject_key": item["subject_key"],
+            "object_ids": _object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"]),
+            "path": f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
+        }
+        for item in list_contradictions(vault_dir, status="open", limit=20)
+        if set(_object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"])) & set(member_object_ids)
+    ][:5]
+    stale_summaries = list_stale_summaries(vault_dir, object_ids=member_object_ids, limit=5)
     provenance_map = get_object_provenance_map(vault_dir, member_object_ids)
     source_note_counts: Counter[str] = Counter()
     source_note_items: dict[str, dict[str, Any]] = {}
@@ -852,6 +863,8 @@ def build_cluster_detail_payload(
         "object_kind_counts": dict(object_kind_counts),
         "structural_label": structural_label,
         "review_context": review_context,
+        "open_contradictions": open_contradictions,
+        "stale_summaries": stale_summaries,
         "top_source_notes": _top_counter_items(source_note_counts, source_note_items),
         "top_mocs": _top_counter_items(moc_counts, moc_items),
         "summary_bullets": summary_bullets,

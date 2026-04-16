@@ -310,6 +310,8 @@ def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
     assert payload["summary_bullets"]
     assert payload["structural_label"]["title"]
     assert payload["relation_pattern_items"]
+    assert payload["open_contradictions"]
+    assert payload["stale_summaries"]
 
 
 def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):

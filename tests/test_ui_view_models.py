@@ -412,6 +412,8 @@ date: 2026-04-13
     assert payload["object_kind_counts"]["evergreen"] == payload["cluster"]["member_count"]
     assert payload["review_context"]["source_note_count"] >= 1
     assert payload["review_context"]["moc_count"] >= 1
+    assert payload["open_contradictions"]
+    assert payload["stale_summaries"]
     assert payload["top_source_notes"][0]["slug"] == "source-deep-dive"
     assert payload["top_mocs"][0]["slug"] == "atlas-index"
 

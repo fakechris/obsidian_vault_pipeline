@@ -699,6 +699,7 @@ Target note captures downstream effects.
     assert "## Structural Label" in content
     assert "## Edge Summary" in content
     assert "## Relation Patterns" in content
+    assert "## Review Pressure" in content
     assert "## Members" in content
     assert "## Internal Edges" in content
     assert "- display_title: " in content

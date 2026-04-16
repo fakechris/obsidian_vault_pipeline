@@ -72,6 +72,33 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
     lines.extend(
         [
             "",
+            "## Review Pressure",
+            "",
+            "### Open Contradictions",
+            "",
+        ]
+    )
+    if payload["open_contradictions"]:
+        for item in payload["open_contradictions"]:
+            lines.append(f"- {item['subject_key']} ({len(item['object_ids'])} objects)")
+    else:
+        lines.append("- (none)")
+    lines.extend(
+        [
+            "",
+            "### Stale Summaries",
+            "",
+        ]
+    )
+    if payload["stale_summaries"]:
+        for item in payload["stale_summaries"]:
+            lines.append(f"- {item['title']} [{', '.join(item['reason_codes'])}]")
+    else:
+        lines.append("- (none)")
+
+    lines.extend(
+        [
+            "",
             "## Coverage",
             "",
             f"- source_note_count: {payload['review_context']['source_note_count']}",
