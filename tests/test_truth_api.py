@@ -750,9 +750,9 @@ def test_truth_api_scopes_evolution_candidate_traceability_to_requested_objects(
     observed_object_ids: list[str] = []
     original = truth_api.get_object_traceability
 
-    def counted_get_object_traceability(vault_dir, object_id):
+    def counted_get_object_traceability(vault_dir, object_id, *, pack_name=None):
         observed_object_ids.append(object_id)
-        return original(vault_dir, object_id)
+        return original(vault_dir, object_id, pack_name=pack_name)
 
     monkeypatch.setattr(truth_api, "get_object_traceability", counted_get_object_traceability)
 
@@ -2540,7 +2540,7 @@ def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, mo
     monkeypatch.setattr(
         truth_api,
         "list_evolution_candidates",
-        lambda vault_dir, limit=24: [
+        lambda vault_dir, limit=24, pack_name=None: [
             {
                 "link_type": "challenges",
                 "subject_id": "agent harness",
@@ -2602,7 +2602,7 @@ def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault,
             },
         ],
     )
-    monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24: [])
+    monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24, pack_name=None: [])
 
     payload = truth_api._research_tech_build_briefing_snapshot(vault, limit=8)
 
@@ -3210,7 +3210,7 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
             },
         ],
     )
-    monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24: [])
+    monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24, pack_name=None: [])
     monkeypatch.setattr(
         truth_api,
         "list_action_queue",

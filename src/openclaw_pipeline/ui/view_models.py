@@ -13,6 +13,7 @@ from ..truth_api import (
     CONTRADICTION_STATUS_EXPLANATIONS,
     MAX_PAGE_SIZE,
     SIGNAL_TYPE_EXPLANATIONS,
+    _batch_object_rows,
     count_objects,
     get_briefing_snapshot,
     get_graph_cluster_detail,
@@ -79,22 +80,20 @@ def _existing_object_rows(
     return {str(object_id): str(title) for object_id, title in rows}
 
 
-def _object_scope_paths(vault_dir: Path | str, object_ids: list[str]) -> dict[str, str]:
+def _object_scope_paths(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, str]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     if not normalized_object_ids:
         return {}
-    db_path = _db_path(vault_dir)
-    placeholders = ",".join("?" for _ in normalized_object_ids)
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            f"""
-            SELECT object_id, canonical_path
-            FROM objects
-            WHERE object_id IN ({placeholders})
-            """,
-            tuple(normalized_object_ids),
-        ).fetchall()
-    return {str(object_id): str(path or "") for object_id, path in rows}
+    rows = _batch_object_rows(vault_dir, normalized_object_ids, pack_name=pack_name)
+    return {
+        str(object_id): str(rows.get(object_id, {}).get("canonical_path") or "")
+        for object_id in normalized_object_ids
+    }
 
 
 def _object_ids_from_claim_ids(*claim_id_lists: list[str]) -> list[str]:
@@ -700,16 +699,26 @@ def _build_production_weak_points(
 def _build_evolution_section(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     link_type: str | None = None,
     status: str = "candidate",
     scoped_object_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in (scoped_object_ids or []) if object_id))
-    canonical_paths = {path for path in _object_scope_paths(vault_dir, normalized_object_ids).values() if path}
+    canonical_paths = {
+        path
+        for path in _object_scope_paths(
+            vault_dir,
+            normalized_object_ids,
+            pack_name=pack_name,
+        ).values()
+        if path
+    }
     reviewed_links = list_evolution_links(
         vault_dir,
         object_ids=normalized_object_ids or None,
+        pack_name=pack_name,
         query=query,
         link_type=link_type,
     )
@@ -721,6 +730,7 @@ def _build_evolution_section(
         for item in list_evolution_candidates(
             vault_dir,
             object_ids=normalized_object_ids or None,
+            pack_name=pack_name,
             query=query,
             link_type=link_type,
             status="candidate",
@@ -804,12 +814,15 @@ def build_signal_browser_payload(
 def build_action_queue_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     status: str | None = None,
     query: str | None = None,
 ) -> dict[str, Any]:
-    items = list_action_queue(vault_dir, status=status, query=query)
+    requested_pack = pack_name or ""
+    items = list_action_queue(vault_dir, pack_name=pack_name, status=status, query=query)
     return {
         "screen": "actions/browser",
+        "requested_pack": requested_pack,
         "items": items,
         "count": len(items),
         "query": query or "",
@@ -875,7 +888,12 @@ def build_object_page_payload(
         "provenance": detail["provenance"],
         "review_context": review_context,
         "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8),
-        "evolution": _build_evolution_section(vault_dir, status="all", scoped_object_ids=[object_id]),
+        "evolution": _build_evolution_section(
+            vault_dir,
+            pack_name=pack_name,
+            status="all",
+            scoped_object_ids=[object_id],
+        ),
         "stale_summary_details": list_stale_summaries(
             vault_dir,
             pack_name=pack_name,
@@ -969,7 +987,12 @@ def build_topic_overview_payload(
             object_ids=scoped_object_ids,
             limit=8,
         ),
-        "evolution": _build_evolution_section(vault_dir, status="all", scoped_object_ids=scoped_object_ids),
+        "evolution": _build_evolution_section(
+            vault_dir,
+            pack_name=pack_name,
+            status="all",
+            scoped_object_ids=scoped_object_ids,
+        ),
         "scoped_object_ids": scoped_object_ids,
         "scoped_stale_summary_ids": [item["object_id"] for item in scoped_stale_summaries],
         "scoped_open_contradiction_ids": [item["contradiction_id"] for item in scoped_contradictions],
@@ -1112,11 +1135,19 @@ def build_event_dossier_payload(
 def build_evolution_browser_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     status: str = "all",
     link_type: str | None = None,
 ) -> dict[str, Any]:
-    evolution = _build_evolution_section(vault_dir, query=query, link_type=link_type, status=status)
+    requested_pack = pack_name or ""
+    evolution = _build_evolution_section(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        link_type=link_type,
+        status=status,
+    )
     type_counts = Counter(
         item["link_type"]
         for item in [
@@ -1127,6 +1158,7 @@ def build_evolution_browser_payload(
     )
     return {
         "screen": "evolution/browser",
+        "requested_pack": requested_pack,
         "query": query or "",
         "status": status,
         "link_type": link_type or "",
@@ -1542,7 +1574,7 @@ def build_truth_dashboard_payload(
     contradictions = build_contradiction_browser_payload(vault_dir, pack_name=pack_name)
     events = build_event_dossier_payload(vault_dir, pack_name=pack_name, limit=8)
     stale_summaries = build_stale_summary_browser_payload(vault_dir, pack_name=pack_name)
-    evolution = build_evolution_browser_payload(vault_dir, status="all")
+    evolution = build_evolution_browser_payload(vault_dir, pack_name=pack_name, status="all")
     signals = build_signal_browser_payload(vault_dir, pack_name=pack_name)
     production_weak_points = _build_production_weak_points(vault_dir, pack_name=pack_name)
     priorities: list[dict[str, Any]] = []

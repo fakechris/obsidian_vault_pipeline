@@ -1066,6 +1066,44 @@ def test_build_signal_browser_payload_preserves_requested_pack(temp_vault):
     assert payload["screen"] == "signals/browser"
 
 
+def test_build_action_queue_payload_preserves_requested_pack(temp_vault, monkeypatch):
+    from openclaw_pipeline.ui import view_models
+
+    captured: dict[str, str | None] = {}
+
+    def fake_list_action_queue(vault_dir, *, pack_name=None, status=None, query=None):
+        captured["pack_name"] = pack_name
+        captured["status"] = status
+        captured["query"] = query
+        return [
+            {
+                "action_id": "action::demo",
+                "pack": "default-knowledge",
+                "status": "queued",
+                "action_kind": "deep_dive_workflow",
+                "title": "Run deep dive",
+                "safe_to_run": True,
+            }
+        ]
+
+    monkeypatch.setattr(view_models, "list_action_queue", fake_list_action_queue)
+
+    payload = view_models.build_action_queue_payload(
+        temp_vault,
+        pack_name="default-knowledge",
+        status="queued",
+        query="deep dive",
+    )
+
+    assert captured == {
+        "pack_name": "default-knowledge",
+        "status": "queued",
+        "query": "deep dive",
+    }
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["items"][0]["pack"] == "default-knowledge"
+
+
 def test_build_briefing_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_briefing_payload
     from openclaw_pipeline.truth_api import record_review_action
@@ -1116,6 +1154,66 @@ def test_build_evolution_browser_payload(temp_vault):
     assert payload["count"] >= 1
     assert payload["candidate_items"]
     assert payload["type_counts"]
+
+
+def test_build_evolution_browser_payload_preserves_requested_pack(temp_vault, monkeypatch):
+    from openclaw_pipeline.ui import view_models
+
+    captured: dict[str, str | None] = {}
+
+    def fake_build_evolution_section(
+        vault_dir,
+        *,
+        pack_name=None,
+        query=None,
+        link_type=None,
+        status="candidate",
+        scoped_object_ids=None,
+    ):
+        captured["pack_name"] = pack_name
+        captured["query"] = query
+        captured["link_type"] = link_type
+        captured["status"] = status
+        return {
+            "accepted_links": [],
+            "rejected_links": [],
+            "candidate_items": [
+                {
+                    "evolution_id": "evolution::demo",
+                    "link_type": "enriches",
+                    "subject_kind": "object",
+                    "subject_id": "alpha",
+                    "earlier_ref": "object://alpha",
+                    "later_ref": "note://20-Areas/demo.md",
+                    "source_paths": ["20-Areas/demo.md"],
+                    "reason_codes": ["later_context"],
+                    "evidence": [],
+                }
+            ],
+            "candidate_count": 1,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "link_types": ["enriches"],
+        }
+
+    monkeypatch.setattr(view_models, "_build_evolution_section", fake_build_evolution_section)
+
+    payload = view_models.build_evolution_browser_payload(
+        temp_vault,
+        pack_name="default-knowledge",
+        query="alpha",
+        status="all",
+        link_type="enriches",
+    )
+
+    assert captured == {
+        "pack_name": "default-knowledge",
+        "query": "alpha",
+        "link_type": "enriches",
+        "status": "all",
+    }
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["count"] == 1
 
 
 def test_build_evolution_browser_payload_filters_reviewed_links_by_link_type(temp_vault):

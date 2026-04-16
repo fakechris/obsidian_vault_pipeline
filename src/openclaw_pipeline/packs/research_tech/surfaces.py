@@ -503,7 +503,11 @@ def build_briefing_snapshot(
         }
         for object_id, count in topic_counts.most_common(limit)
     ]
-    evolution_candidates = core.list_evolution_candidates(vault_dir, limit=min(core.MAX_PAGE_SIZE, limit * 3))
+    evolution_candidates = core.list_evolution_candidates(
+        vault_dir,
+        pack_name=normalized_pack,
+        limit=min(core.MAX_PAGE_SIZE, limit * 3),
+    )
     evolution_object_ids = list(
         dict.fromkeys(
             object_id
@@ -521,11 +525,12 @@ def build_briefing_snapshot(
             or object_rows.get(primary_object_id, {}).get("title")
             or str(item.get("subject_id") or primary_object_id)
         )
-        path = (
+        path = _scoped_path(
             "/evolution?link_type="
             + quote(str(item["link_type"]), safe="")
             + "&q="
-            + quote(str(primary_title), safe="")
+            + quote(str(primary_title), safe=""),
+            pack_name=normalized_pack,
         )
         insight = {
             "kind": f"evolution_{item['link_type']}",

@@ -127,8 +127,8 @@ def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
             <a href="/search">Search</a>
             <a href="{escape(_shell_href('/signals', requested_pack))}">Signals</a>
             <a href="{escape(_shell_href('/briefing', requested_pack))}">Briefing</a>
-            <a href="/actions">Actions</a>
-            <a href="/evolution">Evolution</a>
+            <a href="{escape(_shell_href('/actions', requested_pack))}">Actions</a>
+            <a href="{escape(_shell_href('/evolution', requested_pack))}">Evolution</a>
             <a href="{escape(_shell_href('/production', requested_pack))}">Production</a>
             <a href="{escape(_shell_href('/clusters', requested_pack))}">Clusters</a>
             <a href="{escape(_shell_href('/atlas', requested_pack))}">Atlas</a>
@@ -614,16 +614,33 @@ def _render_evolution_link_type_select(selected: str) -> str:
     ) + "</select>"
 
 
-def _render_evolution_review_form(item: dict[str, object]) -> str:
+def _render_evolution_review_form(
+    item: dict[str, object],
+    *,
+    requested_pack: str = "",
+    next_path: str = "",
+) -> str:
     link_type = str(item.get("link_type") or "")
-    return (
-        "<form method='post' action='/evolution/review' class='link-row'>"
-        f"<input type='hidden' name='evolution_id' value='{escape(str(item['evolution_id']))}' />"
-        f"{_render_evolution_link_type_select(link_type)}"
-        "<input type='text' name='note' placeholder='Review note' />"
-        "<button type='submit' name='status' value='accepted'>Accept</button>"
-        "<button type='submit' name='status' value='rejected'>Reject</button>"
-        "</form>"
+    return "".join(
+        [
+            "<form method='post' action='/evolution/review' class='link-row'>",
+            f"<input type='hidden' name='evolution_id' value='{escape(str(item['evolution_id']))}' />",
+            (
+                f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                if requested_pack
+                else ""
+            ),
+            (
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+                if next_path
+                else ""
+            ),
+            _render_evolution_link_type_select(link_type),
+            "<input type='text' name='note' placeholder='Review note' />",
+            "<button type='submit' name='status' value='accepted'>Accept</button>",
+            "<button type='submit' name='status' value='rejected'>Reject</button>",
+            "</form>",
+        ]
     )
 
 
@@ -652,7 +669,14 @@ def _render_evolution_links(items: list[dict[str, object]], *, empty_text: str) 
     return "<ul class='list-tight'>" + "".join(rows) + "</ul>"
 
 
-def _render_evolution_candidates(items: list[dict[str, object]], *, compact: bool = False, reviewable: bool = False) -> str:
+def _render_evolution_candidates(
+    items: list[dict[str, object]],
+    *,
+    compact: bool = False,
+    reviewable: bool = False,
+    requested_pack: str = "",
+    next_path: str = "",
+) -> str:
     if not items:
         return "<p class='muted'>No evolution candidates surfaced for this scope.</p>"
     rows = []
@@ -674,7 +698,15 @@ def _render_evolution_candidates(items: list[dict[str, object]], *, compact: boo
             f"<div class='muted'>Reasons: {escape(', '.join(str(code) for code in item['reason_codes']))}</div>"
             f"<div class='muted'>Sources: {source_paths}</div>"
             + (f"<div class='muted'>Evidence: {evidence}</div>" if evidence else "")
-            + (_render_evolution_review_form(item) if reviewable else "")
+            + (
+                _render_evolution_review_form(
+                    item,
+                    requested_pack=requested_pack,
+                    next_path=next_path,
+                )
+                if reviewable
+                else ""
+            )
             + "</li>"
         )
     return "<ul class='list-tight'>" + "".join(rows) + "</ul>"
@@ -1650,37 +1682,47 @@ def _render_evolution_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
     status = payload.get("status", "all")
     selected_link_type = payload.get("link_type", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = _shell_href("/evolution", requested_pack)
     type_counts = "".join(
         f"<span class='pill'>{escape(link_type)}: {count}</span>"
         for link_type, count in payload["type_counts"].items()
     ) or "<span class='muted'>None</span>"
     return _layout(
         "Evolution Browser",
-        (
-            "<h1>Evolution Browser</h1>"
-            "<form method='get' action='/evolution' class='link-row'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter evolution links' />"
-            "<select name='status'>"
-            + "".join(
-                f"<option value='{escape(option)}' {'selected' if status == option else ''}>{escape(option)}</option>"
-                for option in ("all", "candidate", "accepted", "rejected")
-            )
-            + "</select>"
-            "<select name='link_type'>"
-            "<option value=''>all link types</option>"
-            + "".join(
-                f"<option value='{escape(option)}' {'selected' if selected_link_type == option else ''}>{escape(option)}</option>"
-                for option in _EVOLUTION_LINK_TYPES
-            )
-            + "</select>"
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} evolution records in the current view.</p>"
-            f"<section class='card'><h2>Link Types</h2><div class='link-row'>{type_counts}</div></section>"
-            f"<section class='card'><h2>Accepted Links</h2>{_render_evolution_links(payload['accepted_links'], empty_text='No accepted evolution links yet.')}</section>"
-            f"<section class='card'><h2>Rejected Links</h2>{_render_evolution_links(payload['rejected_links'], empty_text='No rejected evolution links yet.')}</section>"
-            f"<section class='card'><h2>Candidate Links</h2>{_render_evolution_candidates(payload['candidate_items'], reviewable=True)}</section>"
+        "".join(
+            [
+                "<h1>Evolution Browser</h1>",
+                "<form method='get' action='/evolution' class='link-row'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter evolution links' />",
+                "<select name='status'>",
+                "".join(
+                    f"<option value='{escape(option)}' {'selected' if status == option else ''}>{escape(option)}</option>"
+                    for option in ("all", "candidate", "accepted", "rejected")
+                ),
+                "</select>",
+                "<select name='link_type'>",
+                "<option value=''>all link types</option>",
+                "".join(
+                    f"<option value='{escape(option)}' {'selected' if selected_link_type == option else ''}>{escape(option)}</option>"
+                    for option in _EVOLUTION_LINK_TYPES
+                ),
+                "</select>",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} evolution records in the current view.</p>",
+                f"<section class='card'><h2>Link Types</h2><div class='link-row'>{type_counts}</div></section>",
+                f"<section class='card'><h2>Accepted Links</h2>{_render_evolution_links(payload['accepted_links'], empty_text='No accepted evolution links yet.')}</section>",
+                f"<section class='card'><h2>Rejected Links</h2>{_render_evolution_links(payload['rejected_links'], empty_text='No rejected evolution links yet.')}</section>",
+                f"<section class='card'><h2>Candidate Links</h2>{_render_evolution_candidates(payload['candidate_items'], reviewable=True, requested_pack=requested_pack, next_path=next_path)}</section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1893,6 +1935,8 @@ def _render_briefing_page(payload: dict) -> str:
 def _render_actions_page(payload: dict) -> str:
     query = payload.get("query", "")
     selected_status = payload.get("status", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = _shell_href("/actions", requested_pack)
     options = ["", "queued", "running", "succeeded", "failed", "dismissed", "obsolete"]
     option_html = "".join(
         f"<option value='{escape(option)}' {'selected' if option == selected_status else ''}>"
@@ -1953,6 +1997,7 @@ def _render_actions_page(payload: dict) -> str:
         + (
             "<form method='post' action='/actions/retry' class='link-row'>"
             + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
+            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Retry</button>"
             + "</form>"
             if item.get("status") in {"failed", "obsolete"}
@@ -1961,6 +2006,7 @@ def _render_actions_page(payload: dict) -> str:
         + (
             "<form method='post' action='/actions/dismiss' class='link-row'>"
             + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
+            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Dismiss</button>"
             + "</form>"
             if item.get("status") in {"queued", "failed", "obsolete", "running"}
@@ -1971,31 +2017,55 @@ def _render_actions_page(payload: dict) -> str:
     ) or "<li class='muted'>No queued actions yet.</li>"
     return _layout(
         "Action Queue",
-        (
-            "<h1>Action Queue</h1>"
-            "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m openclaw_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>"
-            "<form method='post' action='/actions/run-next' class='link-row'>"
-            "<button type='submit'>Run next queued action</button>"
-            "</form>"
-            "<form method='post' action='/actions/run-batch' class='link-row'>"
-            "<input type='hidden' name='limit' value='5' />"
-            "<button type='submit'>Run 5 queued actions</button>"
-            "</form>"
-            "<form method='post' action='/actions/run-batch' class='link-row'>"
-            "<input type='hidden' name='limit' value='5' />"
-            "<input type='hidden' name='safe_only' value='1' />"
-            "<button type='submit'>Run 5 safe queued actions</button>"
-            "</form>"
-            "<form method='get' action='/actions' class='link-row'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search actions' />"
-            f"<select name='status'>{option_html}</select>"
-            "<button type='submit'>Filter</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} actions in the current execution surface. "
-            f"{payload.get('queued_safe_count', 0)} queued safe actions. "
-            f"{payload.get('failed_count', 0)} failed actions.</p>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Action Queue</h1>",
+                "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m openclaw_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>",
+                "<form method='post' action='/actions/run-next' class='link-row'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Run next queued action</button>",
+                "</form>",
+                "<form method='post' action='/actions/run-batch' class='link-row'>",
+                "<input type='hidden' name='limit' value='5' />",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Run 5 queued actions</button>",
+                "</form>",
+                "<form method='post' action='/actions/run-batch' class='link-row'>",
+                "<input type='hidden' name='limit' value='5' />",
+                "<input type='hidden' name='safe_only' value='1' />",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Run 5 safe queued actions</button>",
+                "</form>",
+                "<form method='get' action='/actions' class='link-row'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Search actions' />",
+                f"<select name='status'>{option_html}</select>",
+                "<button type='submit'>Filter</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} actions in the current execution surface. {payload.get('queued_safe_count', 0)} queued safe actions. {payload.get('failed_count', 0)} failed actions.</p>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -2370,13 +2440,29 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     status = query.get("status", ["all"])[0] or "all"
                     link_type = query.get("link_type", [""])[0] or None
-                    self._write_json(build_evolution_browser_payload(resolved_vault, query=q, status=status, link_type=link_type))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(
+                        build_evolution_browser_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            query=q,
+                            status=status,
+                            link_type=link_type,
+                        )
+                    )
                     return
                 if path == "/evolution":
                     q = query.get("q", [""])[0]
                     status = query.get("status", ["all"])[0] or "all"
                     link_type = query.get("link_type", [""])[0] or None
-                    payload = build_evolution_browser_payload(resolved_vault, query=q, status=status, link_type=link_type)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_evolution_browser_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
+                        status=status,
+                        link_type=link_type,
+                    )
                     self._write_html(_render_evolution_browser_page(payload))
                     return
                 if path == "/api/object":
@@ -2470,12 +2556,26 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/actions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
-                    self._write_json(build_action_queue_payload(resolved_vault, status=status, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(
+                        build_action_queue_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            status=status,
+                            query=q,
+                        )
+                    )
                     return
                 if path == "/actions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
-                    payload = build_action_queue_payload(resolved_vault, status=status, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_action_queue_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        status=status,
+                        query=q,
+                    )
                     self._write_html(_render_actions_page(payload))
                     return
                 if path == "/api/summaries":
@@ -2552,8 +2652,8 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     self._write_json(self._review_evolution_action(form))
                     return
                 if path == "/evolution/review":
-                    self._review_evolution_action(form)
-                    self._redirect("/evolution")
+                    payload = self._review_evolution_action(form)
+                    self._redirect(str(payload["next_path"]))
                     return
                 if path == "/api/actions/enqueue":
                     self._write_json(self._enqueue_signal_action(form))
@@ -2564,37 +2664,63 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/api/actions/run-next":
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
-                    self._write_json(run_next_action_queue_item(resolved_vault, safe_only=safe_only))
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    self._write_json(
+                        run_next_action_queue_item(
+                            resolved_vault,
+                            safe_only=safe_only,
+                            pack_name=pack_name,
+                        )
+                    )
                     return
                 if path == "/actions/run-next":
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
-                    run_next_action_queue_item(resolved_vault, safe_only=safe_only)
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    run_next_action_queue_item(
+                        resolved_vault,
+                        safe_only=safe_only,
+                        pack_name=pack_name,
+                    )
                     self._redirect(self._form_first(form, "next").strip() or "/actions")
                     return
                 if path == "/api/actions/run-batch":
                     limit = int(self._form_first(form, "limit").strip() or "5")
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
-                    self._write_json(run_action_queue(resolved_vault, limit=limit, safe_only=safe_only))
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    self._write_json(
+                        run_action_queue(
+                            resolved_vault,
+                            limit=limit,
+                            safe_only=safe_only,
+                            pack_name=pack_name,
+                        )
+                    )
                     return
                 if path == "/actions/run-batch":
                     limit = int(self._form_first(form, "limit").strip() or "5")
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
-                    run_action_queue(resolved_vault, limit=limit, safe_only=safe_only)
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    run_action_queue(
+                        resolved_vault,
+                        limit=limit,
+                        safe_only=safe_only,
+                        pack_name=pack_name,
+                    )
                     self._redirect(self._form_first(form, "next").strip() or "/actions")
                     return
                 if path == "/api/actions/retry":
                     self._write_json(self._retry_action(form))
                     return
                 if path == "/actions/retry":
-                    self._retry_action(form)
-                    self._redirect("/actions")
+                    payload = self._retry_action(form)
+                    self._redirect(str(payload["next_path"]))
                     return
                 if path == "/api/actions/dismiss":
                     self._write_json(self._dismiss_action(form))
                     return
                 if path == "/actions/dismiss":
-                    self._dismiss_action(form)
-                    self._redirect("/actions")
+                    payload = self._dismiss_action(form)
+                    self._redirect(str(payload["next_path"]))
                     return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
@@ -2685,13 +2811,20 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             status = self._form_first(form, "status").strip()
             note = self._form_first(form, "note").strip()
             link_type = self._form_first(form, "link_type").strip() or None
-            return review_evolution_candidate(
+            pack_name = self._form_first(form, "pack").strip() or None
+            payload = review_evolution_candidate(
                 resolved_vault,
                 evolution_id=evolution_id,
                 status=status,
+                pack_name=pack_name,
                 note=note,
                 link_type=link_type,
             )
+            payload["next_path"] = self._form_first(form, "next").strip() or _shell_href(
+                "/evolution",
+                pack_name or "",
+            )
+            return payload
 
         def _enqueue_signal_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             signal_id = self._form_first(form, "signal_id").strip()
@@ -2705,13 +2838,17 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             action_id = self._form_first(form, "action_id").strip()
             if not action_id:
                 raise ValueError("missing action_id")
-            return retry_action_queue_item(resolved_vault, action_id=action_id)
+            payload = retry_action_queue_item(resolved_vault, action_id=action_id)
+            payload["next_path"] = self._form_first(form, "next").strip() or "/actions"
+            return payload
 
         def _dismiss_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             action_id = self._form_first(form, "action_id").strip()
             if not action_id:
                 raise ValueError("missing action_id")
-            return dismiss_action_queue_item(resolved_vault, action_id=action_id)
+            payload = dismiss_action_queue_item(resolved_vault, action_id=action_id)
+            payload["next_path"] = self._form_first(form, "next").strip() or "/actions"
+            return payload
 
         def _write_json(self, payload: dict) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

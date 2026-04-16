@@ -35,7 +35,10 @@ _SOURCE_NOTE_INDEX_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dic
 _PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
 _SIGNAL_LEDGER_SYNC_CACHE: dict[tuple[str, str, tuple[tuple[str, int, int], ...]], dict[str, Any]] = {}
-_EVOLUTION_CANDIDATE_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...], tuple[str, ...]], list[dict[str, Any]]] = {}
+_EVOLUTION_CANDIDATE_CACHE: dict[
+    tuple[str, tuple[tuple[str, int, int], ...], str, tuple[str, ...]],
+    list[dict[str, Any]],
+] = {}
 CONTRADICTION_STATUS_EXPLANATIONS = {
     "open": "Active contradiction awaiting review.",
     "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
@@ -1537,8 +1540,10 @@ def list_evolution_review_actions(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     normalized_object_ids = set(object_id for object_id in (object_ids or []) if object_id)
+    normalized_pack = _truth_pack_name(pack_name)
     resolved_vault = resolve_vault_dir(vault_dir)
     rows = [
         (
@@ -1556,6 +1561,7 @@ def list_evolution_review_actions(
                     VaultLayout.from_vault(resolved_vault).logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"
                 )
                 if item.get("event_type") == "ui_evolution_reviewed"
+                and str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) == normalized_pack
             ],
             key=lambda item: str(item.get("timestamp") or ""),
             reverse=True,
@@ -1875,19 +1881,41 @@ def _action_by_id(vault_dir: Path | str, action_id: str) -> dict[str, Any] | Non
         return _action_by_id_unlocked(vault_dir, action_id)
 
 
-def _next_queued_action_unlocked(vault_dir: Path | str) -> dict[str, Any] | None:
-    queued = [item for item in _read_action_queue_rows_unlocked(vault_dir) if item.get("status") == "queued"]
+def _next_queued_action_unlocked(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_pack = str(pack_name or "").strip()
+    queued = [
+        item
+        for item in _read_action_queue_rows_unlocked(vault_dir)
+        if item.get("status") == "queued"
+        and (
+            not normalized_pack
+            or str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) == normalized_pack
+        )
+    ]
     if not queued:
         return None
     queued.sort(key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))))
     return dict(queued[0])
 
 
-def _next_safe_queued_action_unlocked(vault_dir: Path | str) -> dict[str, Any] | None:
+def _next_safe_queued_action_unlocked(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_pack = str(pack_name or "").strip()
     queued = [
         item
         for item in _read_action_queue_rows_unlocked(vault_dir)
         if item.get("status") == "queued" and bool(item.get("safe_to_run"))
+        and (
+            not normalized_pack
+            or str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) == normalized_pack
+        )
     ]
     if not queued:
         return None
@@ -1952,15 +1980,25 @@ def _refresh_truth_after_action(
         sync_signal_ledger(vault_dir, pack_name=pack_name)
 
 
-def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False) -> dict[str, Any]:
+def run_next_action_queue_item(
+    vault_dir: Path | str,
+    *,
+    safe_only: bool = False,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     with action_queue_write_lock(vault_dir):
         action = (
-            _next_safe_queued_action_unlocked(vault_dir)
+            _next_safe_queued_action_unlocked(vault_dir, pack_name=pack_name)
             if safe_only
-            else _next_queued_action_unlocked(vault_dir)
+            else _next_queued_action_unlocked(vault_dir, pack_name=pack_name)
         )
         if action is None:
-            return {"ran": False, "reason": "no_queued_actions", "safe_only": safe_only}
+            return {
+                "ran": False,
+                "reason": "no_queued_actions",
+                "safe_only": safe_only,
+                "requested_pack": str(pack_name or ""),
+            }
 
         started_at = _utc_now_text()
         action["status"] = "running"
@@ -2034,12 +2072,18 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
         return {"ran": False, "reason": "execution_failed", "action": action, "safe_only": safe_only}
 
 
-def run_action_queue(vault_dir: Path | str, *, limit: int = 5, safe_only: bool = False) -> dict[str, Any]:
+def run_action_queue(
+    vault_dir: Path | str,
+    *,
+    limit: int = 5,
+    safe_only: bool = False,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     limit = max(1, min(int(limit), MAX_PAGE_SIZE))
     results: list[dict[str, Any]] = []
     stopped_reason = "limit_reached"
     for _ in range(limit):
-        payload = run_next_action_queue_item(vault_dir, safe_only=safe_only)
+        payload = run_next_action_queue_item(vault_dir, safe_only=safe_only, pack_name=pack_name)
         results.append(payload)
         if not payload.get("ran"):
             stopped_reason = str(payload.get("reason") or "stopped")
@@ -2047,6 +2091,7 @@ def run_action_queue(vault_dir: Path | str, *, limit: int = 5, safe_only: bool =
     return {
         "limit": limit,
         "safe_only": safe_only,
+        "requested_pack": str(pack_name or ""),
         "ran_count": sum(1 for item in results if item.get("ran")),
         "stopped_reason": stopped_reason,
         "results": results,
@@ -2074,7 +2119,12 @@ def _attach_action_queue_state(vault_dir: Path | str, items: list[dict[str, Any]
             if action is not None:
                 recommended["queue_status"] = action.get("status", "")
                 recommended["action_id"] = action.get("action_id", "")
-                recommended["queue_path"] = "/actions"
+                action_pack = str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME)
+                recommended["queue_path"] = (
+                    "/actions"
+                    if action_pack == DEFAULT_WORKFLOW_PACK_NAME
+                    else f"/actions?pack={quote(action_pack, safe='')}"
+                )
                 recommended["safe_to_run"] = bool(action.get("safe_to_run"))
             enriched["recommended_action"] = recommended
         annotated.append(enriched)
@@ -2793,14 +2843,20 @@ def list_contradictions(
     return items
 
 
-def _eligible_evolution_object_ids(vault_dir: Path | str) -> list[str]:
+def _eligible_evolution_object_ids(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> list[str]:
     promoted_object_ids = {
         item["object_id"]
         for objects in _deep_dive_object_map(vault_dir).values()
         for item in objects
         if item.get("object_id")
     }
-    existing_object_ids = {item["object_id"] for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE)}
+    existing_object_ids = {
+        item["object_id"] for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE, pack_name=pack_name)
+    }
     return sorted(promoted_object_ids.intersection(existing_object_ids))
 
 
@@ -2808,12 +2864,18 @@ def _compute_evolution_candidates(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in (object_ids or []) if object_id))
     scoped_object_id_set = set(normalized_object_ids)
 
-    open_contradictions = list_contradictions(vault_dir, limit=MAX_PAGE_SIZE, status="open")
+    open_contradictions = list_contradictions(
+        vault_dir,
+        pack_name=pack_name,
+        limit=MAX_PAGE_SIZE,
+        status="open",
+    )
     if scoped_object_id_set:
         open_contradictions = [
             item
@@ -2830,7 +2892,11 @@ def _compute_evolution_candidates(
             for claim in (item["positive_claims"] + item["negative_claims"])
         }
     )
-    contradiction_object_paths = _batch_object_rows(vault_dir, contradiction_object_ids)
+    contradiction_object_paths = _batch_object_rows(
+        vault_dir,
+        contradiction_object_ids,
+        pack_name=pack_name,
+    )
     contradiction_source_paths = _page_paths_for_slugs(
         vault_dir,
         [
@@ -2932,11 +2998,12 @@ def _compute_evolution_candidates(
 
     stale_summaries = list_stale_summaries(
         vault_dir,
+        pack_name=pack_name,
         object_ids=normalized_object_ids or None,
         limit=MAX_PAGE_SIZE,
     )
     for item in stale_summaries:
-        traceability = get_object_traceability(vault_dir, item["object_id"])
+        traceability = get_object_traceability(vault_dir, item["object_id"], pack_name=pack_name)
         earlier_path = traceability["object"]["canonical_path"]
         earlier_date = _note_date_text(vault_dir, earlier_path)
         earlier_key = _note_date_sort_key(earlier_date)
@@ -3001,9 +3068,12 @@ def _compute_evolution_candidates(
         }
         candidates.append(record)
 
-    candidate_object_ids = normalized_object_ids or _eligible_evolution_object_ids(vault_dir)
+    candidate_object_ids = normalized_object_ids or _eligible_evolution_object_ids(
+        vault_dir,
+        pack_name=pack_name,
+    )
     for object_id in candidate_object_ids:
-        traceability = get_object_traceability(vault_dir, object_id)
+        traceability = get_object_traceability(vault_dir, object_id, pack_name=pack_name)
         earlier_path = traceability["object"]["canonical_path"]
         earlier_date = _note_date_text(vault_dir, earlier_path)
         earlier_key = _note_date_sort_key(earlier_date)
@@ -3069,18 +3139,24 @@ def _all_evolution_candidates(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     resolved_vault = resolve_vault_dir(vault_dir)
     normalized_object_ids = tuple(dict.fromkeys(object_id for object_id in (object_ids or []) if object_id))
     cache_key = (
         str(resolved_vault.resolve()),
         _evolution_dependency_signature(resolved_vault),
+        _truth_pack_name(pack_name),
         normalized_object_ids,
     )
     cached = _EVOLUTION_CANDIDATE_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    result = _compute_evolution_candidates(resolved_vault, object_ids=list(normalized_object_ids))
+    result = _compute_evolution_candidates(
+        resolved_vault,
+        object_ids=list(normalized_object_ids),
+        pack_name=pack_name,
+    )
     _EVOLUTION_CANDIDATE_CACHE[cache_key] = result
     return result
 
@@ -3089,6 +3165,7 @@ def list_evolution_candidates(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
     query: str | None = None,
     link_type: str | None = None,
     status: str = "candidate",
@@ -3101,7 +3178,7 @@ def list_evolution_candidates(
     normalized_query = (query or "").strip().lower()
     unique_candidates = [
         item
-        for item in _all_evolution_candidates(vault_dir, object_ids=object_ids)
+        for item in _all_evolution_candidates(vault_dir, object_ids=object_ids, pack_name=pack_name)
         if (not link_type or item["link_type"] == link_type)
         and (not normalized_query or _evolution_candidate_matches_query(item, normalized_query))
     ]
@@ -3112,6 +3189,7 @@ def list_evolution_links(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
     query: str | None = None,
     link_type: str | None = None,
     status: str | None = None,
@@ -3119,7 +3197,7 @@ def list_evolution_links(
 ) -> list[dict[str, Any]]:
     normalized_query = (query or "").strip().lower()
     latest_by_evolution_id: dict[str, dict[str, Any]] = {}
-    for action in list_evolution_review_actions(vault_dir, object_ids=object_ids):
+    for action in list_evolution_review_actions(vault_dir, object_ids=object_ids, pack_name=pack_name):
         evolution_id = str(action.get("evolution_id") or "")
         if not evolution_id or evolution_id in latest_by_evolution_id:
             continue
@@ -3145,6 +3223,7 @@ def review_evolution_candidate(
     *,
     evolution_id: str,
     status: str,
+    pack_name: str | None = None,
     note: str = "",
     link_type: str | None = None,
 ) -> dict[str, Any]:
@@ -3155,7 +3234,11 @@ def review_evolution_candidate(
     if link_type and link_type not in {"replaces", "enriches", "confirms", "challenges"}:
         raise ValueError("invalid evolution link_type")
     candidate = next(
-        (item for item in _all_evolution_candidates(vault_dir) if item["evolution_id"] == evolution_id),
+        (
+            item
+            for item in _all_evolution_candidates(vault_dir, pack_name=pack_name)
+            if item["evolution_id"] == evolution_id
+        ),
         None,
     )
     if candidate is None:
@@ -3172,6 +3255,7 @@ def review_evolution_candidate(
         "subject_id": candidate["subject_id"],
         "earlier_ref": candidate["earlier_ref"],
         "later_ref": candidate["later_ref"],
+        "pack": _truth_pack_name(pack_name),
     }
     record_review_action(
         vault_dir,

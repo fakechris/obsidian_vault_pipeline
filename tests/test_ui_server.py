@@ -516,6 +516,84 @@ def test_ui_server_evolution_endpoint_returns_payload(temp_vault):
     assert payload["count"] >= 1
 
 
+def test_ui_server_evolution_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    captured: dict[str, str | None] = {}
+
+    def fake_build_evolution_browser_payload(vault_dir, *, pack_name=None, query=None, status="all", link_type=None):
+        captured["pack_name"] = pack_name
+        captured["query"] = query
+        captured["status"] = status
+        captured["link_type"] = link_type
+        return {
+            "screen": "evolution/browser",
+            "requested_pack": pack_name or "",
+            "query": query or "",
+            "status": status,
+            "link_type": link_type or "",
+            "items": [],
+            "candidate_items": [],
+            "accepted_links": [],
+            "rejected_links": [],
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "count": 0,
+            "type_counts": {},
+            "link_types": [],
+        }
+
+    monkeypatch.setattr(ui_server, "build_evolution_browser_payload", fake_build_evolution_browser_payload)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/evolution?pack=default-knowledge&q=alpha&status=all&link_type=enriches")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert captured == {
+        "pack_name": "default-knowledge",
+        "query": "alpha",
+        "status": "all",
+        "link_type": "enriches",
+    }
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_evolution_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/evolution?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/?pack=default-knowledge"' in body
+    assert "name='pack' value='default-knowledge'" in body
+
+
 def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -1013,8 +1091,9 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
     monkeypatch.setattr(
         ui_server,
         "build_action_queue_payload",
-        lambda vault_dir, status=None, query=None: {
+        lambda vault_dir, *, pack_name=None, status=None, query=None: {
             "screen": "actions/browser",
+            "requested_pack": pack_name or "",
             "items": [
                 {
                     "action_id": "action::demo",
@@ -1063,6 +1142,103 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
     assert "Quality hooks: quality" in body
 
 
+def test_ui_server_actions_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    captured: dict[str, str | None] = {}
+
+    def fake_build_action_queue_payload(vault_dir, *, pack_name=None, status=None, query=None):
+        captured["pack_name"] = pack_name
+        captured["status"] = status
+        captured["query"] = query
+        return {
+            "screen": "actions/browser",
+            "requested_pack": pack_name or "",
+            "items": [],
+            "count": 0,
+            "query": query or "",
+            "status": status or "",
+            "status_counts": {},
+            "queued_safe_count": 0,
+            "failed_count": 0,
+            "failure_buckets": {},
+        }
+
+    monkeypatch.setattr(ui_server, "build_action_queue_payload", fake_build_action_queue_payload)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/actions?pack=default-knowledge&q=alpha&status=queued")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert captured == {
+        "pack_name": "default-knowledge",
+        "status": "queued",
+        "query": "alpha",
+    }
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_action_queue_payload",
+        lambda vault_dir, *, pack_name=None, status=None, query=None: {
+            "screen": "actions/browser",
+            "requested_pack": pack_name or "",
+            "items": [
+                {
+                    "action_id": "action::demo",
+                    "status": "queued",
+                    "action_kind": "deep_dive_workflow",
+                    "title": "Create deep dive",
+                    "safe_to_run": True,
+                }
+            ],
+            "count": 1,
+            "query": query or "",
+            "status": status or "",
+            "status_counts": {"queued": 1},
+            "queued_safe_count": 1,
+            "failed_count": 0,
+            "failure_buckets": {},
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/actions?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/?pack=default-knowledge"' in body
+    assert "name='pack' value='default-knowledge'" in body
+    assert "value='/actions?pack=default-knowledge'" in body
+
+
 def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
     import openclaw_pipeline.commands.ui_server as ui_server
     from openclaw_pipeline.commands.ui_server import create_server
@@ -1070,9 +1246,10 @@ def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
     monkeypatch.setattr(
         ui_server,
         "run_next_action_queue_item",
-        lambda vault_dir, *, safe_only=False: {
+        lambda vault_dir, *, safe_only=False, pack_name=None: {
             "ran": True,
             "safe_only": safe_only,
+            "requested_pack": pack_name or "",
             "action": {
                 "action_id": "action::demo",
                 "action_kind": "deep_dive_workflow",
@@ -1112,12 +1289,13 @@ def test_ui_server_can_run_action_batch_via_api(temp_vault, monkeypatch):
     monkeypatch.setattr(
         ui_server,
         "run_action_queue",
-        lambda vault_dir, *, limit, safe_only=False: {
+        lambda vault_dir, *, limit, safe_only=False, pack_name=None: {
             "ran_count": 2,
             "stopped_reason": "no_queued_actions",
             "results": [],
             "limit": limit,
             "safe_only": safe_only,
+            "requested_pack": pack_name or "",
         },
     )
 
@@ -1153,10 +1331,11 @@ def test_ui_server_can_run_safe_action_batch_via_api(temp_vault, monkeypatch):
     monkeypatch.setattr(
         ui_server,
         "run_action_queue",
-        lambda vault_dir, *, limit, safe_only=False: {
+        lambda vault_dir, *, limit, safe_only=False, pack_name=None: {
             "ran_count": 1,
             "limit": limit,
             "safe_only": safe_only,
+            "requested_pack": pack_name or "",
         },
     )
 
