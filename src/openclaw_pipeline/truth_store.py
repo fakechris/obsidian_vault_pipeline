@@ -8,7 +8,7 @@ import re
 
 TRUTH_STORE_SCHEMA = """
 CREATE TABLE objects (
-  pack TEXT NOT NULL DEFAULT 'research-tech',
+  pack TEXT NOT NULL,
   object_id TEXT NOT NULL,
   object_kind TEXT NOT NULL,
   title TEXT NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE objects (
 );
 
 CREATE TABLE claims (
-  pack TEXT NOT NULL DEFAULT 'research-tech',
+  pack TEXT NOT NULL,
   claim_id TEXT NOT NULL,
   object_id TEXT NOT NULL,
   claim_kind TEXT NOT NULL,
@@ -30,7 +30,7 @@ CREATE TABLE claims (
 CREATE INDEX idx_claims_pack_object ON claims(pack, object_id);
 
 CREATE TABLE claim_evidence (
-  pack TEXT NOT NULL DEFAULT 'research-tech',
+  pack TEXT NOT NULL,
   claim_id TEXT NOT NULL,
   source_slug TEXT NOT NULL,
   evidence_kind TEXT NOT NULL,
@@ -40,7 +40,7 @@ CREATE TABLE claim_evidence (
 CREATE INDEX idx_claim_evidence_pack_claim ON claim_evidence(pack, claim_id);
 
 CREATE TABLE relations (
-  pack TEXT NOT NULL DEFAULT 'research-tech',
+  pack TEXT NOT NULL,
   source_object_id TEXT NOT NULL,
   target_object_id TEXT NOT NULL,
   relation_type TEXT NOT NULL,
@@ -51,7 +51,7 @@ CREATE INDEX idx_relations_pack_source ON relations(pack, source_object_id);
 CREATE INDEX idx_relations_pack_target ON relations(pack, target_object_id);
 
 CREATE TABLE compiled_summaries (
-  pack TEXT NOT NULL DEFAULT 'research-tech',
+  pack TEXT NOT NULL,
   object_id TEXT NOT NULL,
   summary_text TEXT NOT NULL,
   source_slug TEXT NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE compiled_summaries (
 );
 
 CREATE TABLE contradictions (
-  pack TEXT NOT NULL DEFAULT 'research-tech',
+  pack TEXT NOT NULL,
   contradiction_id TEXT NOT NULL,
   subject_key TEXT NOT NULL,
   positive_claim_ids_json TEXT NOT NULL,
@@ -73,7 +73,7 @@ CREATE TABLE contradictions (
 CREATE INDEX idx_contradictions_pack_subject ON contradictions(pack, subject_key);
 
 CREATE TABLE graph_edges (
-  pack TEXT NOT NULL DEFAULT 'research-tech',
+  pack TEXT NOT NULL,
   edge_id TEXT NOT NULL,
   source_object_id TEXT NOT NULL,
   target_object_id TEXT NOT NULL,
@@ -87,7 +87,7 @@ CREATE INDEX idx_graph_edges_pack_source ON graph_edges(pack, source_object_id);
 CREATE INDEX idx_graph_edges_pack_target ON graph_edges(pack, target_object_id);
 
 CREATE TABLE graph_clusters (
-  pack TEXT NOT NULL DEFAULT 'research-tech',
+  pack TEXT NOT NULL,
   cluster_id TEXT NOT NULL,
   cluster_kind TEXT NOT NULL,
   label TEXT NOT NULL,

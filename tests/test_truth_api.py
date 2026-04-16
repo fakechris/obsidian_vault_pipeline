@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
 
 
@@ -144,6 +146,24 @@ def test_truth_api_avoids_datetime_utc_import_for_python_310_compatibility():
     assert "from datetime import UTC" not in source
     assert "datetime.now(UTC)" not in source
     assert "datetime.UTC" not in source
+
+
+def test_truth_store_schema_requires_explicit_pack():
+    from openclaw_pipeline.truth_store import TRUTH_STORE_SCHEMA
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(TRUTH_STORE_SCHEMA)
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("alpha", "evergreen", "Alpha", "10-Knowledge/Evergreen/Alpha.md", "alpha"),
+            )
+    finally:
+        conn.close()
 
 
 def test_truth_api_reads_review_actions_from_jsonl_without_knowledge_db(temp_vault):

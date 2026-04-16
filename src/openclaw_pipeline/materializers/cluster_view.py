@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ..derived.paths import compiled_view_path
 from ..runtime import VaultLayout, resolve_vault_dir
-from ..ui.view_models import build_cluster_browser_payload, build_cluster_detail_payload
+from ..ui.view_models import build_cluster_browser_payload
 
 
 def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str) -> Path:
@@ -30,11 +30,6 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
         lines.append("- (none)")
     else:
         for row in rows:
-            detail = build_cluster_detail_payload(
-                resolved_vault,
-                cluster_id=str(row["cluster_id"]),
-                pack_name=pack_name,
-            )
             lines.extend(
                 [
                     f"### {row.get('display_title') or row['label']}",
@@ -74,23 +69,23 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     "",
                 ]
             )
-            for bullet in detail["summary_bullets"]:
+            for bullet in row["summary_bullets"]:
                 lines.append(f"- {bullet}")
             lines.extend(
                 [
                     "",
                     "#### Structural Label",
                     "",
-                    f"- kind: {detail['structural_label']['kind']}",
-                    f"- title: {detail['structural_label']['title']}",
-                    f"- reason: {detail['structural_label']['reason']}",
+                    f"- kind: {row['structural_label']['kind']}",
+                    f"- title: {row['structural_label']['title']}",
+                    f"- reason: {row['structural_label']['reason']}",
                     "",
                     "#### Relation Patterns",
                     "",
                 ]
             )
-            if detail["relation_pattern_items"]:
-                for item in detail["relation_pattern_items"]:
+            if row["relation_pattern_items"]:
+                for item in row["relation_pattern_items"]:
                     lines.append(f"- {item['display_name']} ({item['count']})")
             else:
                 lines.append("- (none)")
@@ -101,13 +96,13 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     "",
                 ]
             )
-            if detail["next_read_cluster"]:
+            if row["next_read_cluster"]:
                 lines.extend(
                     [
-                        f"- title: {detail['next_read_cluster']['display_title']}",
-                        f"- bridge_kind: {detail['next_read_cluster']['bridge_kind']}",
-                        f"- bridge_band: {detail['next_read_cluster']['bridge_band']}",
-                        f"- reason: {detail['next_read_cluster']['reason']}",
+                        f"- title: {row['next_read_cluster']['display_title']}",
+                        f"- bridge_kind: {row['next_read_cluster']['bridge_kind']}",
+                        f"- bridge_band: {row['next_read_cluster']['bridge_band']}",
+                        f"- reason: {row['next_read_cluster']['reason']}",
                     ]
                 )
             else:
@@ -119,8 +114,8 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     "",
                 ]
             )
-            if detail["related_cluster_groups"]:
-                for item in detail["related_cluster_groups"]:
+            if row["related_cluster_groups"]:
+                for item in row["related_cluster_groups"]:
                     lines.append(f"- {item['bridge_kind']} ({item['count']})")
             else:
                 lines.append("- (none)")
@@ -131,8 +126,8 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     "",
                 ]
             )
-            if detail["related_clusters"]:
-                for item in detail["related_clusters"]:
+            if row["related_clusters"]:
+                for item in row["related_clusters"]:
                     lines.append(
                         f"- {item['display_title']} [{item['bridge_kind']} / {item['bridge_band']}: {item['reason']}]"
                     )
@@ -143,17 +138,17 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     "",
                     "#### Coverage",
                     "",
-                    f"- source_note_count: {detail['review_context']['source_note_count']}",
-                    f"- moc_count: {detail['review_context']['moc_count']}",
-                    f"- open_contradiction_count: {detail['review_context']['open_contradiction_count']}",
-                    f"- stale_summary_count: {detail['review_context']['stale_summary_count']}",
+                    f"- source_note_count: {row['review_context']['source_note_count']}",
+                    f"- moc_count: {row['review_context']['moc_count']}",
+                    f"- open_contradiction_count: {row['review_context']['open_contradiction_count']}",
+                    f"- stale_summary_count: {row['review_context']['stale_summary_count']}",
                     "",
                     "#### Top Source Notes",
                     "",
                 ]
             )
-            if detail["top_source_notes"]:
-                for item in detail["top_source_notes"]:
+            if row["top_source_notes"]:
+                for item in row["top_source_notes"]:
                     lines.append(f"- {item['title']} ({item['object_count']} objects)")
             else:
                 lines.append("- (none)")
@@ -164,8 +159,8 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     "",
                 ]
             )
-            if detail["top_mocs"]:
-                for item in detail["top_mocs"]:
+            if row["top_mocs"]:
+                for item in row["top_mocs"]:
                     lines.append(f"- {item['title']} ({item['object_count']} objects)")
             else:
                 lines.append("- (none)")

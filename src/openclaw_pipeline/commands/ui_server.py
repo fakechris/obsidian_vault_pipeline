@@ -1528,7 +1528,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<p><a href='{escape(payload['browser_path'])}'>Back to clusters</a></p>"
             f"<section class='card'><h2>{escape(payload.get('display_title') or cluster['label'])}</h2>"
             f"<p class='muted'>Pack: {escape(cluster['pack'])} · Kind: {escape(cluster['cluster_kind'])} · Score: {cluster['score']:.1f}</p>"
-            f"<p class='muted'>Canonical cluster id: {escape(cluster['label'])}</p>"
+            f"<p class='muted'>Canonical cluster id: {escape(cluster['cluster_id'])}</p>"
             f"<p>Center: <a href='{escape(cluster['center_object_path'])}'>{escape(cluster['center_title'])}</a></p>"
             f"<p class='muted'>{cluster['member_count']} member objects.</p>"
             "</section>"

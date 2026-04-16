@@ -47,8 +47,9 @@ def _subject_key(claim_text: str) -> str:
     return lowered.split(".", 1)[0].strip()
 
 
-def _contradiction_id_for_subject(subject: str) -> str:
-    return f"contradiction::{hashlib.sha1(subject.encode('utf-8')).hexdigest()[:12]}"
+def _contradiction_id_for_subject(pack_name: str, subject: str) -> str:
+    fingerprint = f"{pack_name}:{subject}"
+    return f"contradiction::{hashlib.sha1(fingerprint.encode('utf-8')).hexdigest()[:12]}"
 
 
 def _is_negative_claim(claim_text: str) -> bool:
@@ -77,7 +78,7 @@ def _detect_contradictions(
         negatives = [claim_id for claim_id, text in rows if _is_negative_claim(text)]
         if not positives or not negatives:
             continue
-        contradiction_id = _contradiction_id_for_subject(subject)
+        contradiction_id = _contradiction_id_for_subject(pack_name, subject)
         contradictions.append(
             (
                 pack_name,

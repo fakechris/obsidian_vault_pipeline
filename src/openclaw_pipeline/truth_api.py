@@ -1175,6 +1175,7 @@ def list_graph_clusters(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="graph_clusters")
+    requested_pack = pack_name or pack_candidates[0]
     normalized_query = _escape_like(query.strip().lower()) if query else ""
 
     sql = """
@@ -1241,7 +1242,8 @@ def list_graph_clusters(
                     for object_id in member_object_ids
                 ],
                 "score": float(score or 0.0),
-                "pack": cluster_pack,
+                "pack": requested_pack,
+                "row_pack": cluster_pack,
             }
         )
         if len(items) >= limit:
@@ -1257,6 +1259,7 @@ def get_graph_cluster_detail(
 ) -> dict[str, Any]:
     db_path = _db_path(vault_dir)
     pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="graph_clusters")
+    requested_pack = pack_name or pack_candidates[0]
 
     truth_pack = ""
     cluster_row = None
@@ -1312,7 +1315,8 @@ def get_graph_cluster_detail(
                 for object_id in member_object_ids
             ],
             "score": float(cluster_row[5] or 0.0),
-            "pack": truth_pack,
+            "pack": requested_pack,
+            "row_pack": truth_pack,
         },
         "edges": [
             {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import quote
 
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import build_cluster_detail_payload
@@ -9,7 +10,11 @@ from ..ui.view_models import build_cluster_detail_payload
 def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: str) -> Path:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
-    output_path = layout.compiled_views_dir / pack_name / "clusters" / f"{cluster_id}.md"
+    output_dir = (layout.compiled_views_dir / pack_name / "clusters").resolve()
+    safe_cluster_id = quote(cluster_id, safe="")
+    output_path = (output_dir / f"{safe_cluster_id}.md").resolve()
+    if output_dir not in output_path.parents:
+        raise ValueError("cluster_id must not escape the clusters output directory")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     payload = build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name)

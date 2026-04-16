@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import pytest
 
 
@@ -374,21 +376,22 @@ Baseline note.
     with sqlite3.connect(layout.knowledge_db) as conn:
         conn.execute(
             """
-            INSERT INTO objects (object_id, object_kind, title, canonical_path, source_slug)
-            VALUES ('agent_note', 'evergreen', 'Agent Note', '10-Knowledge/Evergreen/Agent Note.md', 'agent_note')
+            INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug)
+            VALUES ('research-tech', 'agent_note', 'evergreen', 'Agent Note', '10-Knowledge/Evergreen/Agent Note.md', 'agent_note')
             """
         )
         conn.execute(
             """
-            INSERT INTO compiled_summaries (object_id, summary_text, source_slug)
-            VALUES ('agent_note', 'Agent note documents an unrelated system.', 'agent_note')
+            INSERT INTO compiled_summaries (pack, object_id, summary_text, source_slug)
+            VALUES ('research-tech', 'agent_note', 'Agent note documents an unrelated system.', 'agent_note')
             """
         )
         conn.execute(
             """
             INSERT INTO contradictions (
-              contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
+              pack, contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
             ) VALUES (
+              'research-tech',
               'contradiction::underscore',
               'agent platform',
               '[\"agentXnote::positive\"]',
@@ -696,7 +699,10 @@ Target note captures downstream effects.
 
     layout = VaultLayout.from_vault(temp_vault)
     content = (
-        layout.compiled_views_dir / "default-knowledge" / "clusters" / f"{cluster['cluster_id']}.md"
+        layout.compiled_views_dir
+        / "default-knowledge"
+        / "clusters"
+        / f"{quote(cluster['cluster_id'], safe='')}.md"
     ).read_text(encoding="utf-8")
 
     assert result == 0
@@ -713,6 +719,69 @@ Target note captures downstream effects.
     assert "cluster around" in content
     assert "Source Note" in content
     assert "Target Note" in content
+
+
+def test_build_views_command_materializes_cluster_crystal_to_safe_path(temp_vault):
+    from openclaw_pipeline.commands.build_views import main
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Links to [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    cluster = list_graph_clusters(temp_vault, pack_name="default-knowledge")[0]
+
+    result = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--view",
+            "cluster/crystal",
+            "--cluster-id",
+            cluster["cluster_id"],
+        ]
+    )
+
+    layout = VaultLayout.from_vault(temp_vault)
+    output_path = (
+        layout.compiled_views_dir
+        / "default-knowledge"
+        / "clusters"
+        / f"{quote(cluster['cluster_id'], safe='')}.md"
+    )
+
+    assert result == 0
+    assert ":" not in output_path.name
+    assert output_path.exists()
 
 
 def test_build_views_command_cluster_crystal_includes_related_clusters(temp_vault):
@@ -835,7 +904,10 @@ date: 2026-04-10
 
     layout = VaultLayout.from_vault(temp_vault)
     content = (
-        layout.compiled_views_dir / "default-knowledge" / "clusters" / f"{cluster['cluster_id']}.md"
+        layout.compiled_views_dir
+        / "default-knowledge"
+        / "clusters"
+        / f"{quote(cluster['cluster_id'], safe='')}.md"
     ).read_text(encoding="utf-8")
 
     assert result == 0

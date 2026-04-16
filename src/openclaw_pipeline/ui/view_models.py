@@ -11,6 +11,7 @@ from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
 from ..truth_api import (
     CONTRADICTION_STATUS_EXPLANATIONS,
+    MAX_PAGE_SIZE,
     SIGNAL_TYPE_EXPLANATIONS,
     count_objects,
     get_briefing_snapshot,
@@ -196,6 +197,19 @@ def _collect_cluster_provenance(
     }
 
 
+def _build_cluster_provenance_index(
+    vault_dir: Path | str,
+    cluster_rows: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        str(row["cluster_id"]): _collect_cluster_provenance(
+            vault_dir,
+            [str(member["object_id"]) for member in row["members"]],
+        )
+        for row in cluster_rows
+    }
+
+
 def _build_related_cluster_items(
     vault_dir: Path | str,
     *,
@@ -203,17 +217,24 @@ def _build_related_cluster_items(
     requested_pack: str,
     current_source_note_items: dict[str, dict[str, Any]],
     current_moc_items: dict[str, dict[str, Any]],
+    cluster_rows: list[dict[str, Any]] | None = None,
+    cluster_provenance_index: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     current_source_slugs = set(current_source_note_items)
     current_moc_slugs = set(current_moc_items)
     if not current_source_slugs and not current_moc_slugs:
         return []
     related_items: list[dict[str, Any]] = []
-    for row in list_graph_clusters(vault_dir, pack_name=requested_pack, limit=200):
+    rows = cluster_rows if cluster_rows is not None else list_graph_clusters(vault_dir, pack_name=requested_pack, limit=200)
+    for row in rows:
         if str(row["cluster_id"]) == cluster_id:
             continue
-        member_object_ids = [str(member["object_id"]) for member in row["members"]]
-        provenance = _collect_cluster_provenance(vault_dir, member_object_ids)
+        provenance = None
+        if cluster_provenance_index is not None:
+            provenance = cluster_provenance_index.get(str(row["cluster_id"]))
+        if provenance is None:
+            member_object_ids = [str(member["object_id"]) for member in row["members"]]
+            provenance = _collect_cluster_provenance(vault_dir, member_object_ids)
         shared_source_slugs = sorted(current_source_slugs & set(provenance["source_note_items"]))
         shared_moc_slugs = sorted(current_moc_slugs & set(provenance["moc_items"]))
         if not shared_source_slugs and not shared_moc_slugs:
@@ -351,6 +372,185 @@ def _build_reading_routes(related_clusters: list[dict[str, Any]]) -> list[dict[s
             }
         )
     return routes
+
+
+def _build_cluster_surface_sections(
+    vault_dir: Path | str,
+    *,
+    cluster: dict[str, Any],
+    edges: list[dict[str, Any]],
+    requested_pack: str,
+    cluster_rows: list[dict[str, Any]] | None = None,
+    cluster_provenance_index: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    member_object_ids = [str(member["object_id"]) for member in cluster["members"]]
+    edge_kind_counts = Counter(edge["edge_kind"] for edge in edges)
+    edge_summary_items = [
+        {
+            "edge_kind": edge_kind,
+            "edge_family": _edge_kind_parts(edge_kind)[0],
+            "edge_subtype": _edge_kind_parts(edge_kind)[1],
+            "display_name": (
+                "contradiction links"
+                if _edge_kind_parts(edge_kind)[0] == "contradiction"
+                else (
+                    f"{_edge_kind_parts(edge_kind)[1].replace('_', ' ')} links"
+                    if _edge_kind_parts(edge_kind)[0] == "relation" and _edge_kind_parts(edge_kind)[1]
+                    else edge_kind.replace(":", " ")
+                )
+            ),
+            "count": count,
+        }
+        for edge_kind, count in sorted(edge_kind_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    object_kind_counts = Counter(
+        str(member["object_kind"])
+        for member in cluster["members"]
+        if member.get("object_kind")
+    )
+    review_context = get_review_context(vault_dir, member_object_ids)
+    open_contradictions = [
+        {
+            "contradiction_id": item["contradiction_id"],
+            "subject_key": item["subject_key"],
+            "object_ids": _object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"]),
+            "path": f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
+        }
+        for item in list_contradictions(vault_dir, status="open", limit=MAX_PAGE_SIZE)
+        if set(_object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"])) & set(member_object_ids)
+    ][:5]
+    stale_summaries = list_stale_summaries(vault_dir, object_ids=member_object_ids, limit=5)
+    provenance = (
+        cluster_provenance_index.get(str(cluster["cluster_id"]))
+        if cluster_provenance_index is not None and str(cluster["cluster_id"]) in cluster_provenance_index
+        else _collect_cluster_provenance(vault_dir, member_object_ids)
+    )
+    source_note_counts = provenance["source_note_counts"]
+    source_note_items = provenance["source_note_items"]
+    moc_counts = provenance["moc_counts"]
+    moc_items = provenance["moc_items"]
+
+    top_edge_kind = next(iter(sorted(edge_kind_counts.items(), key=lambda item: (-item[1], item[0]))), None)
+    kind_summary = ", ".join(
+        f"{kind} {count}"
+        for kind, count in sorted(object_kind_counts.items(), key=lambda item: (-item[1], item[0]))
+    )
+    summary_bullets = [
+        f"{cluster['member_count']} objects in a {cluster['cluster_kind']} cluster centered on {cluster['center_title']}.",
+    ]
+    if top_edge_kind:
+        summary_bullets.append(
+            f"{len(edges)} internal edges across {len(edge_kind_counts)} edge kinds; dominant edge kind is {top_edge_kind[0]} ({top_edge_kind[1]})."
+        )
+    if kind_summary:
+        summary_bullets.append(f"Object kinds in scope: {kind_summary}.")
+    if review_context["source_note_count"] or review_context["moc_count"]:
+        summary_bullets.append(
+            f"Coverage currently includes {review_context['source_note_count']} source/deep-dive notes and {review_context['moc_count']} atlas pages."
+        )
+    if review_context["open_contradiction_count"] or review_context["stale_summary_count"]:
+        summary_bullets.append(
+            f"Review pressure: {review_context['open_contradiction_count']} open contradictions and {review_context['stale_summary_count']} stale summaries in this cluster scope."
+        )
+    structural_label = _derive_cluster_structural_label(
+        center_title=str(cluster["center_title"]),
+        edge_summary_items=edge_summary_items,
+    )
+    relation_pattern_items = _build_relation_pattern_items(edge_summary_items)
+    relation_pattern_preview = _relation_pattern_preview(relation_pattern_items)
+    related_clusters = _build_related_cluster_items(
+        vault_dir,
+        cluster_id=str(cluster["cluster_id"]),
+        requested_pack=requested_pack,
+        current_source_note_items=source_note_items,
+        current_moc_items=moc_items,
+        cluster_rows=cluster_rows,
+        cluster_provenance_index=cluster_provenance_index,
+    )
+    related_cluster_groups = _build_related_cluster_groups(related_clusters)
+    reading_routes = _build_reading_routes(related_clusters)
+    next_read_cluster = related_clusters[0] if related_clusters else None
+
+    return {
+        "display_title": structural_label["title"],
+        "edge_count": len(edges),
+        "edge_kind_counts": dict(edge_kind_counts),
+        "edge_summary_items": edge_summary_items,
+        "relation_pattern_items": relation_pattern_items,
+        "relation_pattern_preview": relation_pattern_preview,
+        "object_kind_counts": dict(object_kind_counts),
+        "structural_label": structural_label,
+        "review_context": review_context,
+        "open_contradictions": open_contradictions,
+        "stale_summaries": stale_summaries,
+        "related_clusters": related_clusters,
+        "related_cluster_groups": related_cluster_groups,
+        "reading_routes": reading_routes,
+        "next_read_cluster": next_read_cluster,
+        "top_source_notes": _top_counter_items(source_note_counts, source_note_items),
+        "top_mocs": _top_counter_items(moc_counts, moc_items),
+        "summary_bullets": summary_bullets,
+    }
+
+
+def build_cluster_summary_payload(
+    vault_dir: Path | str,
+    *,
+    cluster_id: str,
+    pack_name: str | None = None,
+    cluster_rows: list[dict[str, Any]] | None = None,
+    cluster_provenance_index: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    detail = get_graph_cluster_detail(vault_dir, cluster_id, pack_name=pack_name)
+    cluster = detail["cluster"]
+    requested_pack = pack_name or str(cluster["pack"])
+    member_index = {str(member["object_id"]): member for member in cluster["members"]}
+    detail_path = (
+        f"/cluster?id={quote(str(cluster['cluster_id']), safe='')}"
+        f"&pack={quote(requested_pack, safe='')}"
+    )
+    enriched_cluster = {
+        **cluster,
+        "detail_path": detail_path,
+        "center_object_path": f"/object?id={quote(str(cluster['center_object_id']), safe='')}",
+        "member_links": [
+            {
+                **member,
+                "path": f"/object?id={quote(str(member['object_id']), safe='')}",
+            }
+            for member in cluster["members"]
+        ],
+    }
+    enriched_edges = [
+        {
+            **edge,
+            "source_title": member_index.get(str(edge["source_object_id"]), {}).get(
+                "title",
+                str(edge["source_object_id"]),
+            ),
+            "target_title": member_index.get(str(edge["target_object_id"]), {}).get(
+                "title",
+                str(edge["target_object_id"]),
+            ),
+            "source_path": f"/object?id={quote(str(edge['source_object_id']), safe='')}",
+            "target_path": f"/object?id={quote(str(edge['target_object_id']), safe='')}",
+        }
+        for edge in detail["edges"]
+    ]
+    sections = _build_cluster_surface_sections(
+        vault_dir,
+        cluster=enriched_cluster,
+        edges=enriched_edges,
+        requested_pack=requested_pack,
+        cluster_rows=cluster_rows,
+        cluster_provenance_index=cluster_provenance_index,
+    )
+    return {
+        "requested_pack": requested_pack,
+        "cluster": enriched_cluster,
+        "edges": enriched_edges,
+        **sections,
+    }
 
 
 def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
@@ -831,21 +1031,24 @@ def build_cluster_browser_payload(
     limit: int = DEFAULT_TRACEABILITY_BROWSER_LIMIT,
 ) -> dict[str, Any]:
     items = list_graph_clusters(vault_dir, pack_name=pack_name, query=query, limit=limit)
+    cluster_provenance_index = _build_cluster_provenance_index(vault_dir, items)
     cluster_kind_counts = Counter(item["cluster_kind"] for item in items)
     largest_cluster_size = max((int(item["member_count"]) for item in items), default=0)
     enriched_items = []
     for item in items:
         requested_pack = pack_name or str(item["pack"])
-        detail = build_cluster_detail_payload(
+        summary = build_cluster_summary_payload(
             vault_dir,
             cluster_id=str(item["cluster_id"]),
             pack_name=requested_pack,
+            cluster_rows=items,
+            cluster_provenance_index=cluster_provenance_index,
         )
-        review_context = detail["review_context"]
+        review_context = summary["review_context"]
         dominant_edge_kind = next(
             iter(
                 sorted(
-                    detail["edge_kind_counts"].items(),
+                    summary["edge_kind_counts"].items(),
                     key=lambda pair: (-pair[1], pair[0]),
                 )
             ),
@@ -855,11 +1058,11 @@ def build_cluster_browser_payload(
             review_context["open_contradiction_count"] * 100
             + review_context["stale_summary_count"] * 40
             + int(item["member_count"]) * 10
-            + len(detail["edges"]) * 3
+            + int(summary["edge_count"]) * 3
             + review_context["source_note_count"]
             + review_context["moc_count"]
         )
-        if detail["reading_routes"]:
+        if summary["reading_routes"]:
             priority_score += 15
         if review_context["open_contradiction_count"] > 0 or review_context["stale_summary_count"] > 0:
             priority_band = "attention"
@@ -873,21 +1076,21 @@ def build_cluster_browser_payload(
         else:
             priority_band = "reference"
             priority_reason = f"{review_context['source_note_count']} source notes in scope"
-        strongest_related = detail["related_clusters"][0] if detail["related_clusters"] else None
-        top_reading_route = detail["reading_routes"][0] if detail["reading_routes"] else None
+        strongest_related = summary["related_clusters"][0] if summary["related_clusters"] else None
+        top_reading_route = summary["reading_routes"][0] if summary["reading_routes"] else None
         enriched_items.append(
             {
                 **item,
-                "row_pack": str(item["pack"]),
+                "row_pack": str(item.get("row_pack") or item["pack"]),
                 "pack": requested_pack,
-                "detail_path": detail["cluster"]["detail_path"],
-                "center_object_path": detail["cluster"]["center_object_path"],
-                "member_links": detail["cluster"]["member_links"],
-                "display_title": detail["display_title"],
-                "relation_pattern_preview": detail["relation_pattern_preview"],
-                "related_cluster_count": len(detail["related_clusters"]),
+                "detail_path": summary["cluster"]["detail_path"],
+                "center_object_path": summary["cluster"]["center_object_path"],
+                "member_links": summary["cluster"]["member_links"],
+                "display_title": summary["display_title"],
+                "relation_pattern_preview": summary["relation_pattern_preview"],
+                "related_cluster_count": len(summary["related_clusters"]),
                 "related_cluster_preview": ", ".join(
-                    related["display_title"] for related in detail["related_clusters"][:2]
+                    related["display_title"] for related in summary["related_clusters"][:2]
                 ),
                 "neighborhood_score": strongest_related["score"] if strongest_related else 0,
                 "neighborhood_reason": strongest_related["reason"] if strongest_related else "",
@@ -900,14 +1103,30 @@ def build_cluster_browser_payload(
                 "top_reading_route_title": top_reading_route["display_title"] if top_reading_route else "",
                 "top_reading_route_reason": top_reading_route["route_reason"] if top_reading_route else "",
                 "has_reading_route": bool(top_reading_route),
-                "reading_intent_count": len(detail["reading_routes"]),
+                "reading_intent_count": len(summary["reading_routes"]),
                 "reading_intent_preview": ", ".join(
-                    route["display_name"] for route in detail["reading_routes"]
+                    route["display_name"] for route in summary["reading_routes"]
                 ),
+                "summary_bullets": summary["summary_bullets"],
+                "structural_label": summary["structural_label"],
+                "edge_kind_counts": summary["edge_kind_counts"],
+                "edge_summary_items": summary["edge_summary_items"],
+                "edge_count": summary["edge_count"],
+                "relation_pattern_items": summary["relation_pattern_items"],
+                "review_context": summary["review_context"],
+                "open_contradictions": summary["open_contradictions"],
+                "stale_summaries": summary["stale_summaries"],
+                "related_clusters": summary["related_clusters"],
+                "related_cluster_groups": summary["related_cluster_groups"],
+                "reading_routes": summary["reading_routes"],
+                "next_read_cluster": summary["next_read_cluster"],
+                "top_source_notes": summary["top_source_notes"],
+                "top_mocs": summary["top_mocs"],
+                "object_kind_counts": summary["object_kind_counts"],
                 "priority_score": priority_score,
                 "priority_band": priority_band,
                 "priority_reason": priority_reason,
-                "top_summary_bullet": detail["summary_bullets"][0] if detail["summary_bullets"] else "",
+                "top_summary_bullet": summary["summary_bullets"][0] if summary["summary_bullets"] else "",
                 "dominant_edge_kind": dominant_edge_kind[0] if dominant_edge_kind is not None else "",
             }
         )
@@ -940,6 +1159,8 @@ def build_cluster_detail_payload(
     *,
     cluster_id: str,
     pack_name: str | None = None,
+    cluster_rows: list[dict[str, Any]] | None = None,
+    cluster_provenance_index: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     detail = get_graph_cluster_detail(vault_dir, cluster_id, pack_name=pack_name)
     cluster = detail["cluster"]
@@ -978,110 +1199,22 @@ def build_cluster_detail_payload(
         }
         for edge in detail["edges"]
     ]
-    edge_kind_counts = Counter(edge["edge_kind"] for edge in enriched_edges)
-    edge_summary_items = [
-        {
-            "edge_kind": edge_kind,
-            "edge_family": _edge_kind_parts(edge_kind)[0],
-            "edge_subtype": _edge_kind_parts(edge_kind)[1],
-            "display_name": (
-                "contradiction links"
-                if _edge_kind_parts(edge_kind)[0] == "contradiction"
-                else (
-                    f"{_edge_kind_parts(edge_kind)[1].replace('_', ' ')} links"
-                    if _edge_kind_parts(edge_kind)[0] == "relation" and _edge_kind_parts(edge_kind)[1]
-                    else edge_kind.replace(":", " ")
-                )
-            ),
-            "count": count,
-        }
-        for edge_kind, count in sorted(edge_kind_counts.items(), key=lambda item: (-item[1], item[0]))
-    ]
-    object_kind_counts = Counter(
-        str(member["object_kind"])
-        for member in cluster["members"]
-        if member.get("object_kind")
-    )
-    review_context = get_review_context(vault_dir, member_object_ids)
-    open_contradictions = [
-        {
-            "contradiction_id": item["contradiction_id"],
-            "subject_key": item["subject_key"],
-            "object_ids": _object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"]),
-            "path": f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
-        }
-        for item in list_contradictions(vault_dir, status="open", limit=20)
-        if set(_object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"])) & set(member_object_ids)
-    ][:5]
-    stale_summaries = list_stale_summaries(vault_dir, object_ids=member_object_ids, limit=5)
-    provenance = _collect_cluster_provenance(vault_dir, member_object_ids)
-    source_note_counts = provenance["source_note_counts"]
-    source_note_items = provenance["source_note_items"]
-    moc_counts = provenance["moc_counts"]
-    moc_items = provenance["moc_items"]
-
-    top_edge_kind = next(iter(sorted(edge_kind_counts.items(), key=lambda item: (-item[1], item[0]))), None)
-    kind_summary = ", ".join(
-        f"{kind} {count}"
-        for kind, count in sorted(object_kind_counts.items(), key=lambda item: (-item[1], item[0]))
-    )
-    summary_bullets = [
-        f"{cluster['member_count']} objects in a {cluster['cluster_kind']} cluster centered on {cluster['center_title']}.",
-    ]
-    if top_edge_kind:
-        summary_bullets.append(
-            f"{len(enriched_edges)} internal edges across {len(edge_kind_counts)} edge kinds; dominant edge kind is {top_edge_kind[0]} ({top_edge_kind[1]})."
-        )
-    if kind_summary:
-        summary_bullets.append(f"Object kinds in scope: {kind_summary}.")
-    if review_context["source_note_count"] or review_context["moc_count"]:
-        summary_bullets.append(
-            f"Coverage currently includes {review_context['source_note_count']} source/deep-dive notes and {review_context['moc_count']} atlas pages."
-        )
-    if review_context["open_contradiction_count"] or review_context["stale_summary_count"]:
-        summary_bullets.append(
-            f"Review pressure: {review_context['open_contradiction_count']} open contradictions and {review_context['stale_summary_count']} stale summaries in this cluster scope."
-        )
-    structural_label = _derive_cluster_structural_label(
-        center_title=str(cluster["center_title"]),
-        edge_summary_items=edge_summary_items,
-    )
-    relation_pattern_items = _build_relation_pattern_items(edge_summary_items)
-    relation_pattern_preview = _relation_pattern_preview(relation_pattern_items)
-    related_clusters = _build_related_cluster_items(
+    sections = _build_cluster_surface_sections(
         vault_dir,
-        cluster_id=str(cluster["cluster_id"]),
+        cluster=enriched_cluster,
+        edges=enriched_edges,
         requested_pack=requested_pack,
-        current_source_note_items=source_note_items,
-        current_moc_items=moc_items,
+        cluster_rows=cluster_rows,
+        cluster_provenance_index=cluster_provenance_index,
     )
-    related_cluster_groups = _build_related_cluster_groups(related_clusters)
-    reading_routes = _build_reading_routes(related_clusters)
-    next_read_cluster = related_clusters[0] if related_clusters else None
 
     return {
         "screen": "graph/cluster-detail",
         "requested_pack": requested_pack,
         "cluster": enriched_cluster,
         "browser_path": f"/clusters?pack={quote(requested_pack, safe='')}",
-        "display_title": structural_label["title"],
         "edges": enriched_edges,
-        "edge_kind_counts": dict(edge_kind_counts),
-        "edge_summary_items": edge_summary_items,
-        "relation_pattern_items": relation_pattern_items,
-        "relation_pattern_preview": relation_pattern_preview,
-        "object_kind_counts": dict(object_kind_counts),
-        "structural_label": structural_label,
-        "review_context": review_context,
-        "open_contradictions": open_contradictions,
-        "stale_summaries": stale_summaries,
-        "related_clusters": related_clusters,
-        "related_cluster_groups": related_cluster_groups,
-        "reading_routes": reading_routes,
-        "next_read_cluster": next_read_cluster,
-        "top_source_notes": _top_counter_items(source_note_counts, source_note_items),
-        "top_mocs": _top_counter_items(moc_counts, moc_items),
-        "summary_bullets": summary_bullets,
+        **sections,
         "model_notes": [
             "Cluster detail currently reflects pack-owned graph seed structure, not a final semantic subgraph model.",
             "Edges are filtered to the cluster's own member set inside the requested pack projection.",

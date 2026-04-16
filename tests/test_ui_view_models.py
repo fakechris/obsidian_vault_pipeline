@@ -439,6 +439,21 @@ date: 2026-04-13
     assert "Full Context Route" in item["reading_intent_preview"]
 
 
+def test_build_cluster_browser_payload_does_not_call_full_detail_builder(temp_vault, monkeypatch):
+    from openclaw_pipeline.ui import view_models
+
+    _seed_truth_store(temp_vault)
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("cluster browser should not call full detail builder")
+
+    monkeypatch.setattr(view_models, "build_cluster_detail_payload", _explode)
+
+    payload = view_models.build_cluster_browser_payload(temp_vault)
+
+    assert payload["items"]
+
+
 def test_build_cluster_detail_payload(temp_vault):
     from openclaw_pipeline.truth_api import list_graph_clusters
     from openclaw_pipeline.ui.view_models import build_cluster_detail_payload
@@ -503,6 +518,49 @@ date: 2026-04-13
     assert payload["stale_summaries"]
     assert payload["top_source_notes"][0]["slug"] == "source-deep-dive"
     assert payload["top_mocs"][0]["slug"] == "atlas-index"
+
+
+def test_build_cluster_detail_payload_filters_relevant_contradictions_before_slicing(
+    temp_vault,
+    monkeypatch,
+):
+    from openclaw_pipeline.truth_api import list_graph_clusters
+    from openclaw_pipeline.ui import view_models
+
+    _seed_truth_store(temp_vault)
+    cluster = list_graph_clusters(temp_vault)[0]
+
+    relevant = {
+        "contradiction_id": "contradiction::relevant",
+        "subject_key": "alpha",
+        "positive_claim_ids": ["alpha::p"],
+        "negative_claim_ids": ["conflict::n"],
+    }
+    unrelated = [
+        {
+            "contradiction_id": f"contradiction::other::{index}",
+            "subject_key": f"other-{index}",
+            "positive_claim_ids": [f"other-{index}::p"],
+            "negative_claim_ids": [f"other-{index}::n"],
+        }
+        for index in range(20)
+    ]
+
+    def _fake_list_contradictions(_vault_dir, *, status=None, query=None, limit=100, **kwargs):
+        assert status == "open"
+        rows = [*unrelated, relevant]
+        return rows if limit is None else rows[:limit]
+
+    monkeypatch.setattr(view_models, "list_contradictions", _fake_list_contradictions)
+
+    payload = view_models.build_cluster_detail_payload(
+        temp_vault,
+        cluster_id=cluster["cluster_id"],
+        pack_name=cluster["pack"],
+    )
+
+    assert payload["open_contradictions"]
+    assert payload["open_contradictions"][0]["contradiction_id"] == "contradiction::relevant"
 
 
 def test_build_cluster_detail_payload_includes_related_clusters(temp_vault):

@@ -38,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
 
     clusters_parser = subparsers.add_parser("clusters", help="List graph clusters")
     clusters_parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
+    clusters_parser.add_argument("--pack", default=None, help="Pack namespace for the cluster list")
     clusters_parser.add_argument("--limit", type=int, default=100)
     clusters_parser.add_argument("--query", default=None, help="Case-insensitive cluster search")
 
@@ -77,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = {
                 "items": list_graph_clusters(
                     vault_dir,
+                    pack_name=args.pack,
                     limit=args.limit,
                     query=args.query,
                 )

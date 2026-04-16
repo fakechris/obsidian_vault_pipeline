@@ -122,6 +122,19 @@ def test_truth_api_command_lists_graph_clusters(temp_vault, capsys):
     assert "alpha" in payload["items"][0]["member_object_ids"]
 
 
+def test_truth_api_command_lists_graph_clusters_for_requested_pack(temp_vault, capsys):
+    from openclaw_pipeline.commands.truth_api import main
+
+    _seed_truth_store(temp_vault)
+
+    exit_code = main(["clusters", "--vault-dir", str(temp_vault), "--pack", "default-knowledge"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["items"]
+    assert all(item["pack"] == "default-knowledge" for item in payload["items"])
+
+
 def test_truth_api_command_returns_graph_cluster_detail(temp_vault, capsys):
     from openclaw_pipeline.commands.truth_api import main
     from openclaw_pipeline.truth_api import list_graph_clusters

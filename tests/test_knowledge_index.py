@@ -349,6 +349,55 @@ date: 2026-04-15
     assert default_stats["objects"] == 2
 
 
+def test_rebuild_knowledge_index_makes_contradiction_ids_distinct_per_pack(temp_vault):
+    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from openclaw_pipeline.runtime import VaultLayout
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    negative = temp_vault / "10-Knowledge" / "Evergreen" / "Negative.md"
+
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-15
+---
+
+# Source Note
+
+Agent harness supports local-first execution.
+""",
+        encoding="utf-8",
+    )
+    negative.write_text(
+        """---
+note_id: negative-note
+title: Negative Note
+type: evergreen
+date: 2026-04-15
+---
+
+# Negative Note
+
+Agent harness does not support local-first execution.
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault, pack_name="research-tech")
+    rebuild_knowledge_index(temp_vault, pack_name="default-knowledge")
+
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT pack, contradiction_id FROM contradictions ORDER BY pack"
+        ).fetchall()
+
+    assert [row[0] for row in rows] == ["default-knowledge", "research-tech"]
+    assert rows[0][1] != rows[1][1]
+
+
 def test_knowledge_index_help_includes_expected_arguments(capsys):
     from openclaw_pipeline.commands.knowledge_index import main
 

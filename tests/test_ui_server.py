@@ -413,6 +413,30 @@ date: 2026-04-13
     assert payload["reading_routes"][0]["route_reason"]
 
 
+def test_ui_server_cluster_detail_page_shows_canonical_cluster_id(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    _seed_truth_store(temp_vault)
+    cluster = list_graph_clusters(temp_vault)[0]
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", f"/cluster?id={cluster['cluster_id']}&pack={cluster['pack']}")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert f"Canonical cluster id: {cluster['cluster_id']}" in body
+
+
 def test_ui_server_clusters_endpoint_includes_related_cluster_summary(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
