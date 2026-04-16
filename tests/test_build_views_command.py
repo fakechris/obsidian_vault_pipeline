@@ -551,6 +551,38 @@ Target note captures downstream effects.
 """,
         encoding="utf-8",
     )
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-10
+---
+
+# Source Deep Dive
+
+Mentions [[source-note]] and [[target-note]].
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-10
+---
+
+# Atlas Index
+
+- [[source-note]]
+- [[target-note]]
+""",
+        encoding="utf-8",
+    )
 
     rebuild_knowledge_index(temp_vault)
 
@@ -573,6 +605,10 @@ Target note captures downstream effects.
     assert "## Graph Clusters" in content
     assert "Source Note" in content
     assert "Target Note" in content
+    assert "#### Cluster Synthesis" in content
+    assert "#### Coverage" in content
+    assert "Source Deep Dive" in content
+    assert "Atlas Index" in content
 
 
 def test_build_views_command_can_materialize_contradictions_overview(temp_vault):

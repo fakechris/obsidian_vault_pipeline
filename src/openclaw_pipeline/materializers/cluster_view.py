@@ -5,6 +5,7 @@ from pathlib import Path
 from ..derived.paths import compiled_view_path
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_api import list_graph_clusters
+from ..ui.view_models import build_cluster_detail_payload
 
 
 def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str) -> Path:
@@ -29,6 +30,11 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
         lines.append("- (none)")
     else:
         for row in rows:
+            detail = build_cluster_detail_payload(
+                resolved_vault,
+                cluster_id=str(row["cluster_id"]),
+                pack_name=pack_name,
+            )
             lines.extend(
                 [
                     f"### {row['label']}",
@@ -46,6 +52,46 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
             if row["members"]:
                 for member in row["members"]:
                     lines.append(f"- [[{member['object_id']}]] ({member['title']})")
+            else:
+                lines.append("- (none)")
+            lines.extend(
+                [
+                    "",
+                    "#### Cluster Synthesis",
+                    "",
+                ]
+            )
+            for bullet in detail["summary_bullets"]:
+                lines.append(f"- {bullet}")
+            lines.extend(
+                [
+                    "",
+                    "#### Coverage",
+                    "",
+                    f"- source_note_count: {detail['review_context']['source_note_count']}",
+                    f"- moc_count: {detail['review_context']['moc_count']}",
+                    f"- open_contradiction_count: {detail['review_context']['open_contradiction_count']}",
+                    f"- stale_summary_count: {detail['review_context']['stale_summary_count']}",
+                    "",
+                    "#### Top Source Notes",
+                    "",
+                ]
+            )
+            if detail["top_source_notes"]:
+                for item in detail["top_source_notes"]:
+                    lines.append(f"- {item['title']} ({item['object_count']} objects)")
+            else:
+                lines.append("- (none)")
+            lines.extend(
+                [
+                    "",
+                    "#### Top Atlas Pages",
+                    "",
+                ]
+            )
+            if detail["top_mocs"]:
+                for item in detail["top_mocs"]:
+                    lines.append(f"- {item['title']} ({item['object_count']} objects)")
             else:
                 lines.append("- (none)")
             lines.append("")
