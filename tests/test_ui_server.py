@@ -305,6 +305,7 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/objects?pack=default-knowledge"' in body
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/atlas?pack=default-knowledge"' in body
+    assert 'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
 
 
 def test_ui_server_note_page_preserves_pack_scope_in_shell_nav(temp_vault):
@@ -613,6 +614,7 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/atlas?pack=default-knowledge"' in body
+    assert 'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
 
 
 def test_ui_server_atlas_endpoint_accepts_pack_scope(temp_vault):
@@ -1248,6 +1250,41 @@ def test_ui_server_production_endpoint_accepts_pack_scope(temp_vault):
 
     assert response.status == 200
     assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_production_page_preserves_pack_scope_in_note_links(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/production?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md&amp;pack=default-knowledge"' in body
 
 
 def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, monkeypatch):

@@ -697,7 +697,7 @@ def _render_evolution_candidates(
     rows = []
     for item in items[: 3 if compact else len(items)]:
         source_paths = ", ".join(
-            f'<a href="{escape(_note_href(path))}">{escape(path)}</a>'
+            f'<a href="{escape(_note_href(path, requested_pack))}">{escape(path)}</a>'
             for path in item["source_paths"]
         ) or "<span class='muted'>None</span>"
         evidence = ", ".join(
@@ -793,7 +793,12 @@ def _render_review_history(items: list[dict[str, object]], *, title: str = "Revi
     )
 
 
-def _render_production_summary_card(summary: dict[str, object], *, title: str = "Production Contribution") -> str:
+def _render_production_summary_card(
+    summary: dict[str, object],
+    *,
+    title: str = "Production Contribution",
+    requested_pack: str = "",
+) -> str:
     signal_items = "".join(
         f"<li>{escape(str(signal['label']))}: {int(signal['count'])}</li>"
         for signal in summary["signals"]
@@ -811,9 +816,9 @@ def _render_production_summary_card(summary: dict[str, object], *, title: str = 
         f"<h2>{escape(title)}</h2>"
         "<dl class='meta-list'>"
         f"<div><dt>Objects in scope</dt><dd>{int(summary['object_count'])}</dd></div>"
-        f"<div><dt>Top Source Notes</dt><dd>{_render_named_note_links(summary['top_source_notes'])}</dd></div>"
-        f"<div><dt>Top Deep Dives</dt><dd>{_render_named_note_links(summary['top_deep_dives'])}</dd></div>"
-        f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(summary['top_atlas_pages'])}</dd></div>"
+        f"<div><dt>Top Source Notes</dt><dd>{_render_named_note_links(summary['top_source_notes'], requested_pack=requested_pack)}</dd></div>"
+        f"<div><dt>Top Deep Dives</dt><dd>{_render_named_note_links(summary['top_deep_dives'], requested_pack=requested_pack)}</dd></div>"
+        f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(summary['top_atlas_pages'], requested_pack=requested_pack)}</dd></div>"
         "</dl>"
         f"<ul class='list-tight'>{count_items}{signal_items}</ul>"
         "</section>"
@@ -840,10 +845,15 @@ def _render_dashboard(payload: dict) -> str:
         f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
         for item in payload["stale_summaries"]["items"]
     ) or "<li>None</li>"
-    evolution_items = _render_evolution_candidates(payload["evolution"]["items"], compact=False)
+    evolution_items = _render_evolution_candidates(
+        payload["evolution"]["items"],
+        compact=False,
+        requested_pack=requested_pack,
+        next_path=_shell_href("/evolution", requested_pack),
+    )
     production_gap_items = "".join(
         f'<li><span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
-        f'<a href="{escape(_note_href(item["note_path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["note_path"], requested_pack))}">{escape(item["title"])}</a>'
         f"<div class='muted'>Missing: {escape(item['detail'])}</div></li>"
         for item in payload["production"]["weak_points"]
     ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
@@ -884,7 +894,7 @@ def _render_dashboard(payload: dict) -> str:
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
             f"<section class='card'><h2>Needs Attention Now</h2><ul class='list-tight'>{priority_items}</ul></section>"
-            f"<section class='card'><h2><a href='/evolution'>Evolution</a></h2>{evolution_items}</section>"
+            f"<section class='card'><h2><a href='{escape(_shell_href('/evolution', requested_pack))}'>Evolution</a></h2>{evolution_items}</section>"
             f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
             f"<section class='card'><h2><a href='{escape(payload['events']['browser_path'])}'>Recent Events</a></h2><ul class='list-tight'>{event_items}</ul></section>"
             f"<section class='card'><h2><a href='{escape(payload['stale_summaries']['browser_path'])}'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
@@ -933,24 +943,22 @@ def _render_objects_index(payload: dict) -> str:
 
 def _render_object_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
-    next_path = f"/object?id={quote(str(payload['object']['object_id']), safe='')}" + (
-        f"&pack={quote(requested_pack, safe='')}" if requested_pack else ""
-    )
+    next_path = _shell_href(f"/object?id={quote(str(payload['object']['object_id']), safe='')}", requested_pack)
     evergreen_path = payload["provenance"]["evergreen_path"]
     evergreen_html = (
-        f'<a href="{escape(_note_href(evergreen_path))}">{escape(evergreen_path)}</a>'
+        f'<a href="{escape(_note_href(evergreen_path, requested_pack))}">{escape(evergreen_path)}</a>'
         if evergreen_path
         else "<span class='muted'>None</span>"
     )
     canonical_path = payload["context"]["canonical_path"]
     canonical_path_html = (
-        f'<a href="{escape(_note_href(canonical_path))}">{escape(canonical_path)}</a>'
+        f'<a href="{escape(_note_href(canonical_path, requested_pack))}">{escape(canonical_path)}</a>'
         if canonical_path
         else "<span class='muted'>None</span>"
     )
     claims = "".join(f"<li>{escape(item['claim_text'])}</li>" for item in payload["claims"]) or "<li>None</li>"
     relations = "".join(
-        f'<li><a href="{escape(_object_href(item["target_object_id"], item.get("target_path", "")))}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
+        f'<li><a href="{escape(_object_href(item["target_object_id"], item.get("target_path", ""), requested_pack=requested_pack))}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
         f' <span class="muted">({escape(item["relation_type"])})</span></li>'
         for item in payload["relations"]
     ) or "<li>None</li>"
@@ -964,12 +972,12 @@ def _render_object_page(payload: dict) -> str:
         for reason in item["reason_texts"]
     ) or "<li class='muted'>No stale summary signals for this object.</li>"
     source_notes = "".join(
-        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
         f"<span class='muted'>({escape(item['note_type'])})</span></li>"
         for item in payload["provenance"]["source_notes"]
     ) or "<li>None</li>"
     mocs = "".join(
-        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a></li>'
+        f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a></li>'
         for item in payload["provenance"]["mocs"]
     ) or "<li>None</li>"
     summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
@@ -1061,13 +1069,13 @@ def _render_object_page(payload: dict) -> str:
             )
             + "</p>"
             f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
-            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True)}"
+            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True, requested_pack=requested_pack, next_path=next_path)}"
             "</section>"
             "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
-            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'])}</dd></div>"
-            f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'])}</dd></div>"
+            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'], requested_pack=requested_pack)}</dd></div>"
             f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
-            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'])}</dd></div>"
+            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
             "</dl></section>"
             f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>"
             f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>"
@@ -1081,15 +1089,14 @@ def _render_object_page(payload: dict) -> str:
 
 def _render_topic_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
-    next_path = f"/topic?id={quote(str(payload['center']['object_id']), safe='')}" + (
-        f"&pack={quote(requested_pack, safe='')}" if requested_pack else ""
-    )
+    next_path = _shell_href(f"/topic?id={quote(str(payload['center']['object_id']), safe='')}", requested_pack)
     neighbors = "".join(
-        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a></li>'
+        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a></li>'
         for item in payload["neighbors"]
     ) or "<li>None</li>"
     mocs = "".join(
-        f"<li>{escape(item['title'])}</li>" for item in payload["provenance"]["mocs"]
+        f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a></li>'
+        for item in payload["provenance"]["mocs"]
     ) or "<li>None</li>"
     evolution = payload.get(
         "evolution",
@@ -1142,9 +1149,9 @@ def _render_topic_page(payload: dict) -> str:
             )
             + "</p>"
             f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
-            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True)}"
+            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True, requested_pack=requested_pack, next_path=next_path)}"
             "</section>"
-            f"{_render_production_summary_card(payload['production_summary'])}"
+            f"{_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack)}"
             f"{_render_review_context_card(payload['review_context'])}"
             f"{_render_review_history(payload['review_history'])}"
             "<section class='card'><h2>Quick Maintenance</h2>"
@@ -1204,12 +1211,12 @@ def _render_events_page(payload: dict) -> str:
                     else ""
                 )
                 + (
-                    f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
+                    f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path'], requested_pack))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
                     if item["provenance"]["evergreen_path"]
                     else "<div class='muted'>Evergreen: <span class='muted'>None</span></div>"
                 )
-                + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
-                + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+                + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
+                + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
                 + "<div class='link-row'>"
                 + f"<a href='{escape(item['review_links']['topic_path'])}'>Topic</a>"
                 + f"<a href='{escape(item['review_links']['contradictions_path'])}'>Contradictions</a>"
@@ -1233,11 +1240,13 @@ def _render_events_page(payload: dict) -> str:
         if payload["scoped_stale_summary_ids"]
         else "<p class='muted'>No stale summaries in the visible event scope.</p>"
     )
+    contradiction_query_path = _shell_href(f"/contradictions?q={quote(query, safe='')}", requested_pack)
+    contradiction_browser_path = _shell_href("/contradictions", requested_pack)
     contradiction_entry = (
-        f"<div class='link-row'><a href='/contradictions?q={escape(query)}'>Review visible contradictions</a></div>"
+        f"<div class='link-row'><a href='{escape(contradiction_query_path)}'>Review visible contradictions</a></div>"
         if payload["scoped_open_contradiction_ids"] and query
         else (
-            "<div class='link-row'><a href='/contradictions'>Review visible contradictions</a></div>"
+            f"<div class='link-row'><a href='{escape(contradiction_browser_path)}'>Review visible contradictions</a></div>"
             if payload["scoped_open_contradiction_ids"]
             else "<p class='muted'>No open contradictions in the visible event scope.</p>"
         )
@@ -1261,7 +1270,7 @@ def _render_events_page(payload: dict) -> str:
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
                 f"<div class='link-row'>{type_breakdown}</div>",
-                f"{_render_production_summary_card(payload['production_summary'])}",
+                f"{_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack)}",
                 f"{_render_review_context_card(payload['review_context'])}",
                 f"{_render_review_history(payload['review_history'])}",
                 "<section class='card'><h2>Quick Maintenance</h2>",
@@ -1289,14 +1298,14 @@ def _render_atlas_page(payload: dict) -> str:
     )
     items = "".join(
         "<li>"
-        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{item['member_count']} objects</span>"
         + f" <span class='pill'>{len(item['deep_dives'])} deep dives</span>"
         + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
-                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", "")))}">{escape(member["title"])}</a>'
+                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
                 for member in item["members"]
             )
             + "</span>"
@@ -1306,8 +1315,8 @@ def _render_atlas_page(payload: dict) -> str:
             if item["preview_titles"]
             else ""
         )
-        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'])}</div>"
-        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['deep_dives'])}</div>"
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['deep_dives'], requested_pack=requested_pack)}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"
@@ -1346,14 +1355,14 @@ def _render_derivations_page(payload: dict) -> str:
     )
     items = "".join(
         "<li>"
-        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{item['derived_object_count']} derived objects</span>"
         + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
         + f" <span class='pill'>{len(item['atlas_pages'])} atlas pages</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
-                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", "")))}">{escape(member["title"])}</a>'
+                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
                 for member in item["derived_objects"]
             )
             + "</span>"
@@ -1363,8 +1372,8 @@ def _render_derivations_page(payload: dict) -> str:
             if item["preview_titles"]
             else ""
         )
-        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'])}</div>"
-        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['atlas_pages'])}</div>"
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['atlas_pages'], requested_pack=requested_pack)}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"
@@ -1403,21 +1412,21 @@ def _render_production_browser_page(payload: dict) -> str:
     )
     items = "".join(
         "<li>"
-        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{escape(item['stage_label'].replace('_', ' '))}</span>"
         + f" <span class='pill'>{item['traceability']['counts']['deep_dives']} deep dives</span>"
         + f" <span class='pill'>{item['traceability']['counts']['objects']} objects</span>"
         + f" <span class='pill'>{item['traceability']['counts']['atlas_pages']} atlas pages</span>"
-        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'])}</div>"
-        + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'])}</div>"
-        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'])}</div>"
+        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'], requested_pack=requested_pack)}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li class='muted'>No production chains found.</li>"
     weak_points = "".join(
         "<li>"
         f'<span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
-        f'<a href="{escape(_note_href(item["note_path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["note_path"], requested_pack))}">{escape(item["title"])}</a>'
         f"<div class='muted'>Missing: {escape(item['detail'])}</div>"
         "</li>"
         for item in payload["weak_points"]
