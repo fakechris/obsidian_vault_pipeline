@@ -506,6 +506,8 @@ date: 2026-04-13
     assert item["top_reading_route_kind"] == "full_context_route"
     assert item["top_reading_route_title"]
     assert item["has_reading_route"] is True
+    assert item["reading_intent_count"] >= 1
+    assert "Full Context Route" in item["reading_intent_preview"]
 
 
 def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):

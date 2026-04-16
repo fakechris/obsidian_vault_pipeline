@@ -900,6 +900,10 @@ def build_cluster_browser_payload(
                 "top_reading_route_title": top_reading_route["display_title"] if top_reading_route else "",
                 "top_reading_route_reason": top_reading_route["route_reason"] if top_reading_route else "",
                 "has_reading_route": bool(top_reading_route),
+                "reading_intent_count": len(detail["reading_routes"]),
+                "reading_intent_preview": ", ".join(
+                    route["display_name"] for route in detail["reading_routes"]
+                ),
                 "priority_score": priority_score,
                 "priority_band": priority_band,
                 "priority_reason": priority_reason,

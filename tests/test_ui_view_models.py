@@ -435,6 +435,8 @@ date: 2026-04-13
     assert item["top_reading_route_title"]
     assert item["top_reading_route_reason"]
     assert item["has_reading_route"] is True
+    assert item["reading_intent_count"] >= 1
+    assert "Full Context Route" in item["reading_intent_preview"]
 
 
 def test_build_cluster_detail_payload(temp_vault):

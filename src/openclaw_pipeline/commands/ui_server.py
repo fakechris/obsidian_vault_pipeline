@@ -1370,6 +1370,11 @@ def _render_clusters_page(payload: dict) -> str:
             else ""
         )
         + (
+            f"<div class='muted'>Reading intents: {item['reading_intent_count']} · {escape(item['reading_intent_preview'])}</div>"
+            if item.get("reading_intent_count")
+            else ""
+        )
+        + (
             f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
             if item.get("top_summary_bullet")
             else ""

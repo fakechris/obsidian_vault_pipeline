@@ -55,6 +55,8 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
                     f"- top_reading_route_kind: {row['top_reading_route_kind']}",
                     f"- top_reading_route_title: {row['top_reading_route_title']}",
                     f"- has_reading_route: {row['has_reading_route']}",
+                    f"- reading_intent_count: {row['reading_intent_count']}",
+                    f"- reading_intent_preview: {row['reading_intent_preview']}",
                     "",
                     "#### Members",
                     "",

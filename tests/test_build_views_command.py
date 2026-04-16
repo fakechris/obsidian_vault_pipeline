@@ -632,6 +632,7 @@ date: 2026-04-10
     assert "#### Next Reading Route" in content
     assert "- top_reading_route_kind:" in content
     assert "- has_reading_route:" in content
+    assert "- reading_intent_count:" in content
     assert "- priority_band:" in content
     assert "- neighborhood_score:" in content
     assert "#### Coverage" in content
