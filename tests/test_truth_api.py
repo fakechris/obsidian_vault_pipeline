@@ -2556,7 +2556,9 @@ def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, mo
         ],
     )
 
-    payload = truth_api._research_tech_build_briefing_snapshot(vault, limit=8)
+    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
+
+    payload = research_surfaces.build_briefing_snapshot(vault, limit=8)
 
     assert len(payload["insights"]) == 1
     assert len(payload["priority_items"]) == 1
@@ -2604,7 +2606,9 @@ def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault,
     )
     monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24, pack_name=None: [])
 
-    payload = truth_api._research_tech_build_briefing_snapshot(vault, limit=8)
+    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
+
+    payload = research_surfaces.build_briefing_snapshot(vault, limit=8)
 
     assert payload["priority_items"][0]["kind"] == "contradiction_open"
 
@@ -2964,30 +2968,38 @@ def test_truth_api_list_signals_dispatches_via_observation_surface_registry(temp
     assert calls == [("signals", "default-knowledge")]
 
 
-def test_research_tech_build_signal_entries_uses_pack_aware_core_surfaces(temp_vault, monkeypatch):
+def test_truth_api_no_longer_exposes_research_pack_surface_shims():
     import openclaw_pipeline.truth_api as truth_api_source
+
+    assert not hasattr(truth_api_source, "_research_tech_build_signal_entries")
+    assert not hasattr(truth_api_source, "_research_tech_build_briefing_snapshot")
+    assert not hasattr(truth_api_source, "_research_tech_list_production_chains")
+
+
+def test_research_tech_build_signal_entries_uses_pack_aware_core_surfaces(temp_vault, monkeypatch):
+    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
 
     contradiction_calls: list[str | None] = []
     stale_summary_calls: list[str | None] = []
     production_calls: list[str | None] = []
 
     monkeypatch.setattr(
-        truth_api_source,
+        research_surfaces.core,
         "list_contradictions",
         lambda vault_dir, *, pack_name=None, **kwargs: contradiction_calls.append(pack_name) or [],
     )
     monkeypatch.setattr(
-        truth_api_source,
+        research_surfaces.core,
         "list_stale_summaries",
         lambda vault_dir, *, pack_name=None, **kwargs: stale_summary_calls.append(pack_name) or [],
     )
     monkeypatch.setattr(
-        truth_api_source,
+        research_surfaces.core,
         "list_production_chains",
         lambda vault_dir, *, pack_name=None, **kwargs: production_calls.append(pack_name) or [],
     )
 
-    items = truth_api_source._research_tech_build_signal_entries(
+    items = research_surfaces.build_signal_entries(
         temp_vault,
         pack_name="default-knowledge",
     )
@@ -2998,9 +3010,8 @@ def test_research_tech_build_signal_entries_uses_pack_aware_core_surfaces(temp_v
     assert production_calls == ["default-knowledge"]
 
 
-def test_research_tech_build_signal_entries_delegates_to_pack_surface_module(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api_source
-    from openclaw_pipeline.packs.research_tech import surfaces
+def test_research_tech_observation_surface_build_signals_delegates_to_surface_module(temp_vault, monkeypatch):
+    from openclaw_pipeline.packs.research_tech import observation_surfaces, surfaces
 
     calls: list[tuple[Path, str | None]] = []
 
@@ -3010,8 +3021,8 @@ def test_research_tech_build_signal_entries_delegates_to_pack_surface_module(tem
         lambda vault_dir, *, pack_name=None: calls.append((vault_dir, pack_name)) or [{"signal_id": "signal::delegated"}],
     )
 
-    items = truth_api_source._research_tech_build_signal_entries(
-        temp_vault,
+    items = observation_surfaces.build_signals(
+        vault_dir=temp_vault,
         pack_name="default-knowledge",
     )
 
@@ -3041,9 +3052,8 @@ def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_regi
     assert payload["priority_item_count"] == 1
 
 
-def test_research_tech_build_briefing_snapshot_delegates_to_pack_surface_module(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api_source
-    from openclaw_pipeline.packs.research_tech import surfaces
+def test_research_tech_observation_surface_build_briefing_delegates_to_surface_module(temp_vault, monkeypatch):
+    from openclaw_pipeline.packs.research_tech import observation_surfaces, surfaces
 
     calls: list[tuple[Path, str | None, int]] = []
 
@@ -3054,8 +3064,8 @@ def test_research_tech_build_briefing_snapshot_delegates_to_pack_surface_module(
         or {"generated_at": "2026-04-16T00:00:00Z", "priority_item_count": 2},
     )
 
-    payload = truth_api_source._research_tech_build_briefing_snapshot(
-        temp_vault,
+    payload = observation_surfaces.build_briefing(
+        vault_dir=temp_vault,
         pack_name="default-knowledge",
         limit=5,
     )
@@ -3090,9 +3100,11 @@ def test_truth_api_list_production_chains_dispatches_via_observation_surface_reg
     assert calls == [("production_chains", "default-knowledge", "chain")]
 
 
-def test_research_tech_list_production_chains_delegates_to_pack_surface_module(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api_source
-    from openclaw_pipeline.packs.research_tech import surfaces
+def test_research_tech_observation_surface_build_production_chains_delegates_to_surface_module(
+    temp_vault,
+    monkeypatch,
+):
+    from openclaw_pipeline.packs.research_tech import observation_surfaces, surfaces
 
     calls: list[tuple[Path, str | None, str | None, int]] = []
 
@@ -3103,8 +3115,8 @@ def test_research_tech_list_production_chains_delegates_to_pack_surface_module(t
         or [{"title": "delegated chain"}],
     )
 
-    items = truth_api_source._research_tech_list_production_chains(
-        temp_vault,
+    items = observation_surfaces.build_production_chains(
+        vault_dir=temp_vault,
         pack_name="default-knowledge",
         query="chain",
         limit=5,
@@ -3115,13 +3127,13 @@ def test_research_tech_list_production_chains_delegates_to_pack_surface_module(t
 
 
 def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
 
     calls = {"chains": 0}
 
-    monkeypatch.setattr(truth_api, "list_contradictions", lambda *args, **kwargs: [])
-    monkeypatch.setattr(truth_api, "list_stale_summaries", lambda *args, **kwargs: [])
-    monkeypatch.setattr(truth_api, "list_review_actions", lambda *args, **kwargs: [])
+    monkeypatch.setattr(research_surfaces.core, "list_contradictions", lambda *args, **kwargs: [])
+    monkeypatch.setattr(research_surfaces.core, "list_stale_summaries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(research_surfaces.core, "list_review_actions", lambda *args, **kwargs: [])
 
     def fake_chains(vault_dir, *, pack_name=None, query=None, limit=100):
         calls["chains"] += 1
@@ -3162,14 +3174,14 @@ def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, m
             },
         ]
 
-    monkeypatch.setattr(truth_api, "list_production_chains", fake_chains)
+    monkeypatch.setattr(research_surfaces.core, "list_production_chains", fake_chains)
     monkeypatch.setattr(
-        truth_api,
+        research_surfaces.core,
         "list_production_gaps",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not call list_production_gaps")),
     )
 
-    items = truth_api._research_tech_build_signal_entries(temp_vault)
+    items = research_surfaces.build_signal_entries(temp_vault)
 
     assert calls["chains"] == 1
     assert {item["signal_type"] for item in items} >= {
@@ -3181,6 +3193,7 @@ def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, m
 
 def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch):
     import openclaw_pipeline.truth_api as truth_api
+    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
 
     calls: list[tuple[str, ...]] = []
     action_queue_calls: list[str | None] = []
@@ -3227,7 +3240,7 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
 
     monkeypatch.setattr(truth_api, "_batch_object_rows", fake_batch)
 
-    payload = truth_api._research_tech_build_briefing_snapshot(
+    payload = research_surfaces.build_briefing_snapshot(
         temp_vault,
         pack_name="default-knowledge",
         limit=8,

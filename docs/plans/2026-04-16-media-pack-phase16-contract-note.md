@@ -1,6 +1,10 @@
 # Media Pack: Phase 16 Contract Note
 
-Status: Active guidance
+Status: Reference guidance after implemented `Phase 16`
+
+Closeout:
+
+- [[2026-04-16-phase16-multi-pack-runtime-closeout]]
 
 ## Why This Exists
 

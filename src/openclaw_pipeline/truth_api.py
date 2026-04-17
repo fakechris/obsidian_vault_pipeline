@@ -2188,19 +2188,6 @@ def _production_gap_items_from_chains(
     return weak_points[:limit]
 
 
-def _research_tech_build_signal_entries(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None = None,
-) -> list[dict[str, Any]]:
-    from .packs.research_tech import surfaces
-
-    return surfaces.build_signal_entries(
-        resolve_vault_dir(vault_dir),
-        pack_name=pack_name,
-    )
-
-
 def _compute_signal_entries(
     vault_dir: Path | str,
     *,
@@ -2301,21 +2288,6 @@ def _list_signals_from_ledger(
             if len(items) >= limit:
                 break
     return _attach_action_queue_state(vault_dir, items)
-
-
-def _research_tech_build_briefing_snapshot(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None = None,
-    limit: int = 8,
-) -> dict[str, Any]:
-    from .packs.research_tech import surfaces
-
-    return surfaces.build_briefing_snapshot(
-        resolve_vault_dir(vault_dir),
-        pack_name=pack_name,
-        limit=limit,
-    )
 
 
 def get_briefing_snapshot(
@@ -2678,23 +2650,6 @@ def get_object_traceability(
             "atlas_pages": len(detail["provenance"]["mocs"]),
         },
     }
-
-
-def _research_tech_list_production_chains(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None = None,
-    query: str | None = None,
-    limit: int = 100,
-) -> list[dict[str, Any]]:
-    from .packs.research_tech import surfaces
-
-    return surfaces.list_production_chains(
-        resolve_vault_dir(vault_dir),
-        pack_name=pack_name,
-        query=query,
-        limit=limit,
-    )
 
 
 def list_production_chains(
