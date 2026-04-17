@@ -219,6 +219,102 @@ def _render_surface_contract_card(payload: dict) -> str:
     return f"<section class='card'><h2>Surface Contract</h2><p class='muted'>{detail}</p>{extra}</section>"
 
 
+def _render_assembly_contract_card(payload: dict) -> str:
+    contract = payload.get("assembly_contract")
+    if not isinstance(contract, dict) or not contract:
+        return ""
+    recipe_name = str(contract.get("recipe_name") or "")
+    provider_name = str(contract.get("provider_name") or "")
+    provider_pack = str(contract.get("provider_pack") or "")
+    status = str(contract.get("status") or "")
+    recipe_kind = str(contract.get("recipe_kind") or "")
+    source_contract_kind = str(contract.get("source_contract_kind") or "")
+    source_contract_name = str(contract.get("source_contract_name") or "")
+    source_provider_pack = str(contract.get("source_provider_pack") or "")
+    source_provider_name = str(contract.get("source_provider_name") or "")
+    publish_target = str(contract.get("publish_target") or "")
+    output_mode = str(contract.get("output_mode") or "")
+    description = str(contract.get("description") or "")
+    if status == "declared":
+        detail = (
+            f"This access artifact resolves as {escape(recipe_name)} "
+            f"declared by {escape(provider_name)} in {escape(provider_pack)}."
+        )
+    elif status == "inherited":
+        detail = (
+            f"This access artifact resolves as {escape(recipe_name)} "
+            f"inherited from {escape(provider_name)} in {escape(provider_pack)}."
+        )
+    else:
+        detail = f"This access artifact has no provider for {escape(recipe_name)} in the current pack scope."
+    facts = "".join(
+        item
+        for item in (
+            f"<li>Recipe kind: {escape(recipe_kind)}</li>" if recipe_kind else "",
+            f"<li>Source contract: {escape(source_contract_kind)} · {escape(source_contract_name)}</li>"
+            if source_contract_kind or source_contract_name
+            else "",
+            f"<li>Source provider: {escape(source_provider_pack)} · {escape(source_provider_name)}</li>"
+            if source_provider_pack or source_provider_name
+            else "",
+            f"<li>Output: {escape(output_mode)} → {escape(publish_target)}</li>"
+            if output_mode or publish_target
+            else "",
+        )
+    )
+    description_html = f"<p class='muted'>{escape(description)}</p>" if description else ""
+    facts_html = f"<ul class='list-tight'>{facts}</ul>" if facts else ""
+    return (
+        f"<section class='card'><h2>Assembly Contract</h2><p class='muted'>{detail}</p>"
+        f"{description_html}{facts_html}</section>"
+    )
+
+
+def _render_governance_contract_card(payload: dict) -> str:
+    contract = payload.get("governance_contract")
+    if not isinstance(contract, dict) or not contract:
+        return ""
+    provider_name = str(contract.get("provider_name") or "")
+    provider_pack = str(contract.get("provider_pack") or "")
+    status = str(contract.get("status") or "")
+    description = str(contract.get("description") or "")
+    review_queue_names = [str(item) for item in contract.get("review_queue_names", []) if str(item)]
+    signal_rule_names = [str(item) for item in contract.get("signal_rule_names", []) if str(item)]
+    resolver_rule_names = [str(item) for item in contract.get("resolver_rule_names", []) if str(item)]
+    if status == "declared":
+        detail = f"This governance contract is declared by {escape(provider_name)} in {escape(provider_pack)}."
+    elif status == "inherited":
+        detail = f"This governance contract is inherited from {escape(provider_name)} in {escape(provider_pack)}."
+    else:
+        detail = "This runtime surface has no governance contract in the current pack scope."
+    facts = "".join(
+        item
+        for item in (
+            (
+                f"<li>Review queues: {int(contract.get('review_queue_count') or 0)}"
+                + (f" · {escape(', '.join(review_queue_names[:4]))}" if review_queue_names else "")
+                + "</li>"
+            ),
+            (
+                f"<li>Signal rules: {int(contract.get('signal_rule_count') or 0)}"
+                + (f" · {escape(', '.join(signal_rule_names[:4]))}" if signal_rule_names else "")
+                + "</li>"
+            ),
+            (
+                f"<li>Resolver rules: {int(contract.get('resolver_rule_count') or 0)}"
+                + (f" · {escape(', '.join(resolver_rule_names[:4]))}" if resolver_rule_names else "")
+                + "</li>"
+            ),
+        )
+    )
+    description_html = f"<p class='muted'>{escape(description)}</p>" if description else ""
+    facts_html = f"<ul class='list-tight'>{facts}</ul>" if facts else ""
+    return (
+        f"<section class='card'><h2>Governance Contract</h2><p class='muted'>{detail}</p>"
+        f"{description_html}{facts_html}</section>"
+    )
+
+
 def _unsupported_route_payload(route_path: str, requested_pack: str = "") -> dict[str, str]:
     normalized_pack = requested_pack.strip()
     return {
@@ -1079,6 +1175,7 @@ def _render_object_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
     next_path = _shell_href(f"/object?id={quote(str(payload['object']['object_id']), safe='')}", requested_pack)
+    assembly_contract_card = _render_assembly_contract_card(payload)
     evergreen_path = payload["provenance"]["evergreen_path"]
     evergreen_html = (
         f'<a href="{escape(_note_href(evergreen_path, requested_pack))}">{escape(evergreen_path)}</a>'
@@ -1235,7 +1332,8 @@ def _render_object_page(payload: dict) -> str:
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
             + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
-            f"<nav class='subnav'>{section_nav}</nav>"
+            + assembly_contract_card
+            + f"<nav class='subnav'>{section_nav}</nav>"
             + f"<section class='grid stats'>{''.join(stats_cards)}</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
@@ -1255,6 +1353,7 @@ def _render_topic_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
     next_path = _shell_href(f"/topic?id={quote(str(payload['center']['object_id']), safe='')}", requested_pack)
+    assembly_contract_card = _render_assembly_contract_card(payload)
     neighbors = "".join(
         f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a></li>'
         for item in payload["neighbors"]
@@ -1334,7 +1433,8 @@ def _render_topic_page(payload: dict) -> str:
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
             + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
-            "<section class='grid two-col'>"
+            + assembly_contract_card
+            + "<section class='grid two-col'>"
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
             f"{''.join(right_sections)}"
@@ -1347,6 +1447,7 @@ def _render_topic_page(payload: dict) -> str:
 def _render_events_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
+    assembly_contract_card = _render_assembly_contract_card(payload)
     limit_note = (
         f" Showing the most recent {payload['limit']} timeline rows in this dossier window."
         if payload.get("is_limited")
@@ -1449,6 +1550,7 @@ def _render_events_page(payload: dict) -> str:
                 f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
+                assembly_contract_card,
                 f"<div class='link-row'>{type_breakdown}</div>",
                 f"{_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack)}",
                 f"{_render_review_context_card(payload['review_context'])}",
@@ -1938,6 +2040,7 @@ def _render_signals_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     next_path = "/signals" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     surface_contract_card = _render_surface_contract_card(payload)
+    governance_contract_card = _render_governance_contract_card(payload)
     options = ["", *sorted(payload["signal_type_explanations"].keys())]
     option_html = "".join(
         f"<option value='{escape(option)}' {'selected' if option == selected_type else ''}>"
@@ -1960,6 +2063,32 @@ def _render_signals_page(payload: dict) -> str:
                     if item["recommended_action"].get("executable")
                     else " <span class='pill'>manual</span>"
                 )
+            )
+            + (
+                f"<div class='muted'>Resolver: {escape(str(item['recommended_action']['resolution_kind']))}</div>"
+                if item["recommended_action"].get("resolution_kind")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Dispatch: {escape(str(item['recommended_action']['dispatch_mode']))}</div>"
+                if item["recommended_action"].get("dispatch_mode")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Rule: {escape(str(item['recommended_action']['resolver_rule_name']))}</div>"
+                if item["recommended_action"].get("resolver_rule_name")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Governance contract: {escape(str(item['recommended_action']['governance_provider_name']))} · {escape(str(item['recommended_action']['governance_provider_pack']))}</div>"
+                if item["recommended_action"].get("governance_provider_name")
+                or item["recommended_action"].get("governance_provider_pack")
+                else ""
+            )
+            + (
+                "<div class='muted'>Governance: safe</div>"
+                if item["recommended_action"].get("safe_to_run")
+                else ""
             )
             + "</div>"
             if item.get("recommended_action")
@@ -2010,6 +2139,7 @@ def _render_signals_page(payload: dict) -> str:
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
                 surface_contract_card,
+                governance_contract_card,
                 f"<section class='card'><h2>Signal Types</h2><ul class='list-tight'>{explanations}</ul></section>",
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
@@ -2022,6 +2152,8 @@ def _render_briefing_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     next_path = "/briefing" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     surface_contract_card = _render_surface_contract_card(payload)
+    assembly_contract_card = _render_assembly_contract_card(payload)
+    governance_contract_card = _render_governance_contract_card(payload)
     first_useful_sign = payload.get("first_useful_sign")
     first_useful_sign_html = (
         "<li>"
@@ -2066,6 +2198,32 @@ def _render_briefing_page(payload: dict) -> str:
                     if item["recommended_action"].get("executable")
                     else " <span class='pill'>manual</span>"
                 )
+            )
+            + (
+                f"<div class='muted'>Resolver: {escape(str(item['recommended_action']['resolution_kind']))}</div>"
+                if item["recommended_action"].get("resolution_kind")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Dispatch: {escape(str(item['recommended_action']['dispatch_mode']))}</div>"
+                if item["recommended_action"].get("dispatch_mode")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Rule: {escape(str(item['recommended_action']['resolver_rule_name']))}</div>"
+                if item["recommended_action"].get("resolver_rule_name")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Governance contract: {escape(str(item['recommended_action']['governance_provider_name']))} · {escape(str(item['recommended_action']['governance_provider_pack']))}</div>"
+                if item["recommended_action"].get("governance_provider_name")
+                or item["recommended_action"].get("governance_provider_pack")
+                else ""
+            )
+            + (
+                "<div class='muted'>Governance: safe</div>"
+                if item["recommended_action"].get("safe_to_run")
+                else ""
             )
             + "</div>"
             if item.get("recommended_action")
@@ -2117,6 +2275,8 @@ def _render_briefing_page(payload: dict) -> str:
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
                 surface_contract_card,
+                assembly_contract_card,
+                governance_contract_card,
                 f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
                 f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>",
                 f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>",
@@ -2147,6 +2307,7 @@ def _render_actions_page(payload: dict) -> str:
     selected_status = payload.get("status", "")
     requested_pack = payload.get("requested_pack", "")
     next_path = _shell_href("/actions", requested_pack)
+    governance_contract_card = _render_governance_contract_card(payload)
     options = ["", "queued", "running", "succeeded", "failed", "dismissed", "obsolete"]
     option_html = "".join(
         f"<option value='{escape(option)}' {'selected' if option == selected_status else ''}>"
@@ -2187,6 +2348,26 @@ def _render_actions_page(payload: dict) -> str:
         + (
             f"<div class='muted'>Processor: {escape(str(item['processor_mode']))}</div>"
             if item.get("processor_mode")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Resolver: {escape(str(item['resolution_kind']))}</div>"
+            if item.get("resolution_kind")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Dispatch: {escape(str(item['dispatch_mode']))}</div>"
+            if item.get("dispatch_mode")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Rule: {escape(str(item['resolver_rule_name']))}</div>"
+            if item.get("resolver_rule_name")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Governance contract: {escape(str(item['governance_provider_name']))} · {escape(str(item['governance_provider_pack']))}</div>"
+            if item.get("governance_provider_name") or item.get("governance_provider_pack")
             else ""
         )
         + (
@@ -2272,6 +2453,7 @@ def _render_actions_page(payload: dict) -> str:
                 "<button type='submit'>Filter</button>",
                 "</form>",
                 f"<p class='muted'>{payload['count']} actions in the current execution surface. {payload.get('queued_safe_count', 0)} queued safe actions. {payload.get('failed_count', 0)} failed actions.</p>",
+                governance_contract_card,
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
@@ -2284,6 +2466,7 @@ def _render_contradictions_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
     next_path = "/contradictions" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    assembly_contract_card = _render_assembly_contract_card(payload)
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     scope_summary = payload["scope_summary"]
     scope_summary_items = (
@@ -2454,6 +2637,7 @@ def _render_contradictions_page(payload: dict) -> str:
                 f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
+                assembly_contract_card,
                 f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
                 "<section class='card'>",
                 "<h2>Batch Resolve</h2>",

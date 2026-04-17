@@ -4,6 +4,10 @@ import argparse
 import json
 from pathlib import Path
 
+from ..artifact_registry import list_effective_artifact_specs
+from ..assembly_recipe_registry import resolve_assembly_source_contract
+from ..assembly_recipe_registry import list_effective_assembly_recipes
+from ..governance_registry import describe_governance_contract, list_effective_governance_specs
 from ..observation_surface_registry import (
     UI_SHELL_SURFACE_KINDS,
     compute_declared_observation_surface_integrity,
@@ -219,6 +223,167 @@ def _processor_contract_payload(spec: object) -> dict[str, object]:
         "quality_hooks": list(getattr(spec, "quality_hooks", ()) or ()),
         "entrypoint": getattr(spec, "entrypoint", ""),
         "description": getattr(spec, "description", ""),
+    }
+
+
+def _artifact_spec_payload(spec: object, *, status: str = "declared", provider_pack: str | None = None) -> dict[str, object]:
+    identity_policy = getattr(spec, "identity_policy", None)
+    evidence_policy = getattr(spec, "evidence_policy", None)
+    storage_policy = getattr(spec, "storage_policy", None)
+    lifecycle_policy = getattr(spec, "lifecycle_policy", None)
+    resolved_provider_pack = provider_pack if provider_pack is not None else getattr(spec, "pack", "")
+    return {
+        "name": getattr(spec, "name", ""),
+        "pack": getattr(spec, "pack", ""),
+        "provider_pack": resolved_provider_pack,
+        "status": status,
+        "layer": getattr(spec, "layer", ""),
+        "family": getattr(spec, "family", ""),
+        "object_kind": getattr(spec, "object_kind", None),
+        "description": getattr(spec, "description", ""),
+        "fields": [
+            {
+                "name": getattr(field, "name", ""),
+                "field_type": getattr(field, "field_type", ""),
+                "required": bool(getattr(field, "required", False)),
+            }
+            for field in list(getattr(spec, "fields", ()) or ())
+        ],
+        "identity_policy": {
+            "id_strategy": getattr(identity_policy, "id_strategy", ""),
+            "id_fields": list(getattr(identity_policy, "id_fields", ()) or ()),
+            "subject_fields": list(getattr(identity_policy, "subject_fields", ()) or ()),
+        },
+        "evidence_policy": {
+            "requires_evidence": bool(getattr(evidence_policy, "requires_evidence", True)),
+            "require_quote": bool(getattr(evidence_policy, "require_quote", True)),
+            "require_source_slug": bool(getattr(evidence_policy, "require_source_slug", True)),
+            "require_traceability_links": bool(
+                getattr(evidence_policy, "require_traceability_links", True)
+            ),
+        },
+        "storage_policy": {
+            "storage_mode": getattr(storage_policy, "storage_mode", ""),
+            "canonical_path_template": getattr(storage_policy, "canonical_path_template", None),
+            "truth_row_family": getattr(storage_policy, "truth_row_family", None),
+            "review_queue_name": getattr(storage_policy, "review_queue_name", None),
+        },
+        "lifecycle_policy": {
+            "mutable": bool(getattr(lifecycle_policy, "mutable", True)),
+            "review_required_on_create": bool(
+                getattr(lifecycle_policy, "review_required_on_create", False)
+            ),
+            "review_required_on_update": bool(
+                getattr(lifecycle_policy, "review_required_on_update", False)
+            ),
+            "projection_rebuild_policy": getattr(
+                lifecycle_policy,
+                "projection_rebuild_policy",
+                "",
+            ),
+        },
+    }
+
+
+def _assembly_recipe_payload(
+    spec: object,
+    *,
+    status: str = "declared",
+    provider_pack: str | None = None,
+    requested_pack: str | None = None,
+) -> dict[str, object]:
+    audience = getattr(spec, "audience", None)
+    freshness_policy = getattr(spec, "freshness_policy", None)
+    output = getattr(spec, "output", None)
+    resolved_provider_pack = provider_pack if provider_pack is not None else getattr(spec, "pack", "")
+    requested_scope = requested_pack if requested_pack is not None else getattr(spec, "pack", None)
+    try:
+        source_contract = resolve_assembly_source_contract(pack_name=requested_scope, recipe=spec)
+    except ValueError:
+        source_contract = {
+            "source_provider_pack": "",
+            "source_provider_name": "",
+            "source_status": "missing",
+        }
+    return {
+        "name": getattr(spec, "name", ""),
+        "pack": getattr(spec, "pack", ""),
+        "provider_pack": resolved_provider_pack,
+        "status": status,
+        "recipe_kind": getattr(spec, "recipe_kind", ""),
+        "description": getattr(spec, "description", ""),
+        "source_contract_kind": getattr(spec, "source_contract_kind", ""),
+        "source_contract_name": getattr(spec, "source_contract_name", ""),
+        **source_contract,
+        "inputs": [
+            {
+                "source_kind": getattr(item, "source_kind", ""),
+                "description": getattr(item, "description", ""),
+                "required": bool(getattr(item, "required", False)),
+            }
+            for item in list(getattr(spec, "inputs", ()) or ())
+        ],
+        "audience": {
+            "audience": getattr(audience, "audience", ""),
+            "interaction_mode": getattr(audience, "interaction_mode", ""),
+        },
+        "freshness_policy": {
+            "cache_mode": getattr(freshness_policy, "cache_mode", ""),
+            "invalidation_signals": list(getattr(freshness_policy, "invalidation_signals", ()) or ()),
+        },
+        "output": {
+            "output_mode": getattr(output, "output_mode", ""),
+            "publish_target": getattr(output, "publish_target", ""),
+        },
+    }
+
+
+def _governance_spec_payload(
+    spec: object,
+    *,
+    status: str = "declared",
+    provider_pack: str | None = None,
+) -> dict[str, object]:
+    resolved_provider_pack = provider_pack if provider_pack is not None else getattr(spec, "pack", "")
+    return {
+        "name": getattr(spec, "name", ""),
+        "pack": getattr(spec, "pack", ""),
+        "provider_pack": resolved_provider_pack,
+        "status": status,
+        "description": getattr(spec, "description", ""),
+        "review_queues": [
+            {
+                "name": getattr(queue, "name", ""),
+                "description": getattr(queue, "description", ""),
+                "operation_profiles": list(getattr(queue, "operation_profiles", ()) or ()),
+                "proposal_types": list(getattr(queue, "proposal_types", ()) or ()),
+                "review_mode": getattr(queue, "review_mode", ""),
+            }
+            for queue in list(getattr(spec, "review_queues", ()) or ())
+        ],
+        "signal_rules": [
+            {
+                "signal_type": getattr(rule, "signal_type", ""),
+                "description": getattr(rule, "description", ""),
+                "source_contract_kind": getattr(rule, "source_contract_kind", ""),
+                "source_contract_name": getattr(rule, "source_contract_name", ""),
+                "resolver_rule": getattr(rule, "resolver_rule", None),
+                "auto_queue": bool(getattr(rule, "auto_queue", False)),
+            }
+            for rule in list(getattr(spec, "signal_rules", ()) or ())
+        ],
+        "resolver_rules": [
+            {
+                "name": getattr(rule, "name", ""),
+                "description": getattr(rule, "description", ""),
+                "resolution_kind": getattr(rule, "resolution_kind", ""),
+                "target_name": getattr(rule, "target_name", ""),
+                "dispatch_mode": getattr(rule, "dispatch_mode", ""),
+                "executable": bool(getattr(rule, "executable", False)),
+                "safe_to_run": bool(getattr(rule, "safe_to_run", False)),
+            }
+            for rule in list(getattr(spec, "resolver_rules", ()) or ())
+        ],
     }
 
 
@@ -446,6 +611,7 @@ def _shell_payload(pack_name: str) -> dict[str, object]:
         for item in _EMBEDDED_RESEARCH_CAPABILITIES
     ]
     return {
+        "governance_contract": describe_governance_contract(pack_name=pack_name),
         "shared_routes": shared_routes,
         "research_routes": research_routes,
         "shared_mutations": shared_mutations,
@@ -470,6 +636,16 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
     declared_truth_projection = _truth_projection_payload(pack.truth_projection())
     declared_surfaces = [_observation_surface_payload(spec) for spec in pack.observation_surfaces()]
     declared_processor_contracts = [_processor_contract_payload(spec) for spec in pack.processor_contracts()]
+    declared_artifact_specs = [
+        _artifact_spec_payload(spec, provider_pack=pack.name) for spec in pack.artifact_specs()
+    ]
+    declared_assembly_recipes = [
+        _assembly_recipe_payload(spec, provider_pack=pack.name, requested_pack=pack.name)
+        for spec in pack.assembly_recipes()
+    ]
+    declared_governance_specs = [
+        _governance_spec_payload(spec, provider_pack=pack.name) for spec in pack.governance_specs()
+    ]
     declared_wiki_views = [_wiki_view_payload(spec) for spec in pack.wiki_views()]
     declared_extraction_profiles = [_extraction_profile_payload(spec) for spec in pack.extraction_profiles()]
     declared_operation_profiles = [_operation_profile_payload(spec) for spec in pack.operation_profiles()]
@@ -497,6 +673,34 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
         _processor_contract_payload(spec)
         for spec in list_effective_processor_contracts(pack_name=pack_name)
     ]
+    declared_artifact_names = {spec.name for spec in pack.artifact_specs()}
+    effective_artifact_specs = [
+        _artifact_spec_payload(
+            spec,
+            status="declared" if spec.name in declared_artifact_names else "inherited",
+            provider_pack=spec.pack,
+        )
+        for spec in list_effective_artifact_specs(pack_name=pack_name)
+    ]
+    declared_assembly_recipe_names = {spec.name for spec in pack.assembly_recipes()}
+    effective_assembly_recipes = [
+        _assembly_recipe_payload(
+            spec,
+            status="declared" if spec.name in declared_assembly_recipe_names else "inherited",
+            provider_pack=spec.pack,
+            requested_pack=pack.name,
+        )
+        for spec in list_effective_assembly_recipes(pack_name=pack_name)
+    ]
+    declared_governance_names = {spec.name for spec in pack.governance_specs()}
+    effective_governance_specs = [
+        _governance_spec_payload(
+            spec,
+            status="declared" if spec.name in declared_governance_names else "inherited",
+            provider_pack=spec.pack,
+        )
+        for spec in list_effective_governance_specs(pack_name=pack_name)
+    ]
     effective_execution_contracts = [
         _execution_contract_payload(spec)
         for spec in list_effective_execution_contracts(pack_name=pack_name)
@@ -510,6 +714,9 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "truth_projection": declared_truth_projection,
             "observation_surfaces": declared_surfaces,
             "processor_contracts": declared_processor_contracts,
+            "artifact_specs": declared_artifact_specs,
+            "assembly_recipes": declared_assembly_recipes,
+            "governance_specs": declared_governance_specs,
             "wiki_views": declared_wiki_views,
             "extraction_profiles": declared_extraction_profiles,
             "operation_profiles": declared_operation_profiles,
@@ -521,6 +728,9 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             ),
             "observation_surfaces": effective_surfaces,
             "processor_contracts": effective_processor_contracts,
+            "artifact_specs": effective_artifact_specs,
+            "assembly_recipes": effective_assembly_recipes,
+            "governance_specs": effective_governance_specs,
             "execution_contracts": effective_execution_contracts,
         },
         "workflow_profiles": declared_workflow_profiles,
@@ -531,6 +741,9 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
         "truth_projection_contract": _truth_projection_contract_payload(pack_name),
         "shell": _shell_payload(pack_name),
         "object_kinds": declared_object_kinds,
+        "artifact_specs": declared_artifact_specs,
+        "assembly_recipes": declared_assembly_recipes,
+        "governance_specs": declared_governance_specs,
         "wiki_views": declared_wiki_views,
         "extraction_profiles": declared_extraction_profiles,
         "operation_profiles": declared_operation_profiles,
@@ -592,6 +805,22 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 "order and autopilot support explicitly instead of depending on hidden runtime "
                 "defaults."
             ),
+            "artifact_contract_behavior": (
+                "Artifact specs are pack-owned declarations for canonical, access, and "
+                "governance artifact families. They should make persistent knowledge shapes "
+                "explicit instead of relying on truth-store rows alone as the architecture."
+            ),
+            "assembly_recipe_behavior": (
+                "Assembly recipes are pack-owned declarations for operator and reader-facing "
+                "compiled products. They should connect observation surfaces and wiki views "
+                "to explicit access-layer products instead of leaving those products implicit."
+            ),
+            "governance_contract_behavior": (
+                "Governance specs are pack-owned declarations for review queues, signal "
+                "semantics, and resolver rules explicit. They should make follow-up routing explicit "
+                "instead of leaving queue ownership and action reachability scattered across "
+                "runtime modules."
+            ),
         },
     }
 
@@ -612,6 +841,9 @@ def _payload(pack_name: str, vault_dir: Path | None) -> dict[str, object]:
             "workflow_profiles": [profile.name for profile in pack.workflow_profiles()],
             "extraction_profiles": [profile.name for profile in pack.extraction_profiles()],
             "operation_profiles": [profile.name for profile in pack.operation_profiles()],
+            "artifact_specs": [spec.name for spec in pack.artifact_specs()],
+            "assembly_recipes": [spec.name for spec in pack.assembly_recipes()],
+            "governance_specs": [spec.name for spec in pack.governance_specs()],
             "wiki_views": [view.name for view in pack.wiki_views()],
         },
         "storage": {

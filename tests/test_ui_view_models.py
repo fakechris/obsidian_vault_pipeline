@@ -91,6 +91,12 @@ def test_build_object_page_payload(temp_vault):
     assert payload["links"]["contradictions_path"] == "/contradictions?q=alpha"
     assert payload["links"]["summaries_path"] == "/summaries?q=alpha"
     assert payload["context"]["source_slug"] == "alpha"
+    assert payload["assembly_contract"]["recipe_name"] == "object_brief"
+    assert payload["assembly_contract"]["status"] == "declared"
+    assert payload["assembly_contract"]["provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_contract_name"] == "object/page"
+    assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_name"] == "object/page"
     assert payload["section_nav"][0]["href"] == "#summary"
     assert payload["review_context"]["object_count"] == 1
     assert payload["review_context"]["open_contradiction_count"] == 1
@@ -107,6 +113,10 @@ def test_build_object_page_payload_preserves_requested_pack(temp_vault):
     payload = build_object_page_payload(temp_vault, "alpha", pack_name="default-knowledge")
 
     assert payload["requested_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["status"] == "inherited"
+    assert payload["assembly_contract"]["provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["source_provider_name"] == "object/page"
     assert payload["links"]["topic_path"] == "/topic?id=alpha&pack=default-knowledge"
     assert payload["links"]["events_path"] == "/events?q=alpha&pack=default-knowledge"
     assert payload["links"]["deep_dives_path"] == "/deep-dives?q=alpha&pack=default-knowledge"
@@ -210,6 +220,11 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["center"]["object_id"] == "alpha"
     assert [item["object_id"] for item in payload["neighbors"]] == ["beta"]
     assert payload["edge_count"] == 1
+    assert payload["assembly_contract"]["recipe_name"] == "topic_overview"
+    assert payload["assembly_contract"]["status"] == "declared"
+    assert payload["assembly_contract"]["source_contract_name"] == "overview/topic"
+    assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_name"] == "overview/topic"
     assert payload["links"]["center_object_path"] == "/object?id=alpha"
     assert payload["links"]["events_path"] == "/events?q=alpha"
     assert payload["center_summary"] == "Alpha supports local-first execution."
@@ -229,6 +244,10 @@ def test_build_topic_overview_payload_preserves_requested_pack(temp_vault):
     payload = build_topic_overview_payload(temp_vault, "alpha", pack_name="default-knowledge")
 
     assert payload["requested_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["status"] == "inherited"
+    assert payload["assembly_contract"]["provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["source_provider_name"] == "overview/topic"
     assert payload["links"]["center_object_path"] == "/object?id=alpha&pack=default-knowledge"
     assert payload["links"]["deep_dives_path"] == "/deep-dives?q=alpha&pack=default-knowledge"
     assert payload["neighbors"][0]["object_path"] == "/object?id=beta&pack=default-knowledge"
@@ -311,6 +330,11 @@ def test_build_event_dossier_payload(temp_vault):
     payload = build_event_dossier_payload(temp_vault)
 
     assert payload["screen"] == "event/dossier"
+    assert payload["assembly_contract"]["recipe_name"] == "event_dossier"
+    assert payload["assembly_contract"]["status"] == "declared"
+    assert payload["assembly_contract"]["source_contract_name"] == "event/dossier"
+    assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_name"] == "event/dossier"
     assert payload["event_count"] == 3
     assert payload["dates"] == ["2026-04-13"]
     assert payload["events"][0]["object_id"] == "alpha"
@@ -343,6 +367,10 @@ def test_build_event_dossier_payload_preserves_requested_pack(temp_vault):
     payload = build_event_dossier_payload(temp_vault, pack_name="default-knowledge")
 
     assert payload["requested_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["status"] == "inherited"
+    assert payload["assembly_contract"]["provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["source_provider_name"] == "event/dossier"
 
 
 def test_build_cluster_browser_payload(temp_vault):
@@ -867,6 +895,11 @@ def test_build_contradiction_browser_payload(temp_vault):
     payload = build_contradiction_browser_payload(temp_vault)
 
     assert payload["screen"] == "truth/contradictions"
+    assert payload["assembly_contract"]["recipe_name"] == "contradiction_view"
+    assert payload["assembly_contract"]["status"] == "declared"
+    assert payload["assembly_contract"]["source_contract_name"] == "truth/contradictions"
+    assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_name"] == "truth/contradictions"
     assert payload["count"] == 1
     assert payload["items"][0]["subject_key"] == "alpha"
     assert payload["open_count"] == 1
@@ -891,6 +924,10 @@ def test_build_contradiction_browser_payload_preserves_requested_pack(temp_vault
     payload = build_contradiction_browser_payload(temp_vault, pack_name="default-knowledge")
 
     assert payload["requested_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["status"] == "inherited"
+    assert payload["assembly_contract"]["provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["source_provider_name"] == "truth/contradictions"
 
 
 def test_build_contradiction_browser_payload_empty_state_explains_zero(temp_vault):
@@ -1189,6 +1226,11 @@ Processed source note without downstream chain.
 
     assert payload["screen"] == "signals/browser"
     assert payload["count"] >= 2
+    assert payload["governance_contract"]["status"] == "declared"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["provider_name"] == "research_governance"
+    assert payload["governance_contract"]["signal_rule_count"] >= 1
+    assert "contradiction_open" in payload["governance_contract"]["signal_rule_names"]
     assert payload["type_counts"]["contradiction_open"] >= 1
     assert any(item["signal_type"] == "production_gap" for item in payload["items"])
 
@@ -1206,6 +1248,9 @@ def test_build_signal_browser_payload_preserves_requested_pack(temp_vault):
     assert payload["surface_contract"]["status"] == "inherited"
     assert payload["surface_contract"]["provider_pack"] == "research-tech"
     assert payload["surface_contract"]["provider_name"] == "research-tech-signals"
+    assert payload["governance_contract"]["status"] == "inherited"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["provider_name"] == "research_governance"
 
 
 def test_build_signal_browser_payload_handles_missing_surface_contract(temp_vault, monkeypatch):
@@ -1232,6 +1277,7 @@ def test_build_signal_browser_payload_handles_missing_surface_contract(temp_vaul
     payload = view_models.build_signal_browser_payload(temp_vault, pack_name="media-editorial")
 
     assert payload["surface_contract"]["status"] == "missing"
+    assert payload["governance_contract"]["status"] == "missing"
     assert payload["surface_error"] == "Pack 'media-editorial' does not expose a shared shell 'signals' surface."
     assert payload["items"] == []
     assert payload["count"] == 0
@@ -1273,6 +1319,9 @@ def test_build_action_queue_payload_preserves_requested_pack(temp_vault, monkeyp
     }
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["items"][0]["pack"] == "default-knowledge"
+    assert payload["governance_contract"]["status"] == "inherited"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["provider_name"] == "research_governance"
 
 
 def test_build_briefing_payload(temp_vault):
@@ -1295,6 +1344,16 @@ def test_build_briefing_payload(temp_vault):
     payload = build_briefing_payload(temp_vault)
 
     assert payload["screen"] == "briefing/intelligence"
+    assert payload["assembly_contract"]["recipe_name"] == "operator_briefing"
+    assert payload["assembly_contract"]["status"] == "declared"
+    assert payload["assembly_contract"]["source_contract_kind"] == "observation_surface"
+    assert payload["assembly_contract"]["source_contract_name"] == "briefing"
+    assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_name"] == "research-tech-briefing"
+    assert payload["governance_contract"]["status"] == "declared"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["provider_name"] == "research_governance"
+    assert payload["governance_contract"]["resolver_rule_count"] >= 1
     assert payload["recent_signal_count"] >= 1
     assert payload["recent_signals"]
     assert payload["active_topics"]
@@ -1312,10 +1371,17 @@ def test_build_briefing_payload_preserves_requested_pack(temp_vault):
 
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["screen"] == "briefing/intelligence"
+    assert payload["assembly_contract"]["status"] == "inherited"
+    assert payload["assembly_contract"]["provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_name"] == "research-tech-briefing"
     assert payload["surface_contract"]["surface_kind"] == "briefing"
     assert payload["surface_contract"]["status"] == "inherited"
     assert payload["surface_contract"]["provider_pack"] == "research-tech"
     assert payload["surface_contract"]["provider_name"] == "research-tech-briefing"
+    assert payload["governance_contract"]["status"] == "inherited"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["provider_name"] == "research_governance"
 
 
 def test_build_briefing_payload_handles_missing_surface_contract(temp_vault, monkeypatch):
@@ -1342,6 +1408,9 @@ def test_build_briefing_payload_handles_missing_surface_contract(temp_vault, mon
     payload = view_models.build_briefing_payload(temp_vault, pack_name="media-editorial")
 
     assert payload["surface_contract"]["status"] == "missing"
+    assert payload["assembly_contract"]["status"] == "missing"
+    assert payload["assembly_contract"]["source_provider_pack"] == ""
+    assert payload["governance_contract"]["status"] == "missing"
     assert payload["surface_error"] == "Pack 'media-editorial' does not expose a shared shell 'briefing' surface."
     assert payload["recent_signal_count"] == 0
     assert payload["priority_items"] == []

@@ -5,17 +5,42 @@ import json
 import shutil
 from pathlib import Path
 
+from ..assembly_recipe_registry import resolve_assembly_recipe_spec, resolve_assembly_source_contract
 from ..packs.loader import PRIMARY_PACK_NAME, load_pack
 from ..runtime import resolve_vault_dir
 from ..wiki_views.runtime import build_view
 
 
-TARGET_TO_VIEW = {
-    "object-page": "object/page",
-    "topic-overview": "overview/topic",
-    "event-dossier": "event/dossier",
-    "contradictions": "truth/contradictions",
+TARGET_TO_RECIPE = {
+    "object-page": "object_brief",
+    "topic-overview": "topic_overview",
+    "event-dossier": "event_dossier",
+    "contradictions": "contradiction_view",
 }
+
+
+def _resolve_export_recipe(pack, target: str) -> tuple[object, object]:
+    recipe_name = TARGET_TO_RECIPE[target]
+    recipe = resolve_assembly_recipe_spec(pack_name=pack, recipe_name=recipe_name)
+    return load_pack(recipe.pack), recipe
+
+
+def _resolve_export_view(pack, recipe_provider_pack, recipe) -> tuple[object, object]:
+    if getattr(recipe, "source_contract_kind", "") != "wiki_view":
+        raise ValueError(
+            f"assembly recipe '{recipe.name}' for pack '{recipe_provider_pack.name}' "
+            f"is not exportable via wiki views"
+        )
+    source = resolve_assembly_source_contract(pack_name=pack, recipe=recipe)
+    provider_pack_name = str(source.get("source_provider_pack") or "")
+    view_name = str(source.get("source_provider_name") or getattr(recipe, "source_contract_name", ""))
+    if not provider_pack_name:
+        raise ValueError(
+            f"assembly recipe '{recipe.name}' for pack '{recipe_provider_pack.name}' "
+            f"has no resolved wiki-view provider"
+        )
+    provider_pack = load_pack(provider_pack_name)
+    return provider_pack, provider_pack.wiki_view(view_name)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,18 +49,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
     parser.add_argument("--pack", default=PRIMARY_PACK_NAME, help=f"Pack name (default: {PRIMARY_PACK_NAME})")
-    parser.add_argument("--target", required=True, choices=sorted(TARGET_TO_VIEW), help="Export target")
+    parser.add_argument("--target", required=True, choices=sorted(TARGET_TO_RECIPE), help="Export target")
     parser.add_argument("--object-id", help="Required for object-page exports")
     parser.add_argument("--output-path", type=Path, required=True, help="Where to write the exported artifact")
     args = parser.parse_args(argv)
 
     vault_dir = resolve_vault_dir(args.vault_dir)
     pack = load_pack(args.pack)
-    view_name = TARGET_TO_VIEW[args.target]
     try:
-        view = pack.wiki_view(view_name)
+        recipe_provider_pack, recipe = _resolve_export_recipe(pack, args.target)
     except Exception as exc:
-        parser.error(f"failed to resolve view '{view_name}' for pack '{pack.name}': {exc}")
+        parser.error(f"failed to resolve export recipe for target '{args.target}' and pack '{pack.name}': {exc}")
+    try:
+        view_provider_pack, view = _resolve_export_view(pack, recipe_provider_pack, recipe)
+    except Exception as exc:
+        parser.error(
+            f"failed to resolve export view '{getattr(recipe, 'source_contract_name', None)}' "
+            f"for target '{args.target}' and pack '{pack.name}': {exc}"
+        )
 
     if args.target == "object-page" and not args.object_id:
         parser.error("the --object-id argument is required for object-page exports")
@@ -44,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         source_path = build_view(vault_dir, view, object_id=args.object_id)
     except Exception as exc:
         parser.error(
-            f"failed to build export target '{args.target}' for view '{view_name}' "
+            f"failed to build export target '{args.target}' for view '{getattr(view, 'name', None)}' "
             f"and object_id={args.object_id!r}: {exc}"
         )
     output_path = args.output_path.expanduser().resolve()
@@ -56,6 +87,10 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "target": args.target,
                 "pack": pack.name,
+                "recipe_name": getattr(recipe, "name", ""),
+                "recipe_provider_pack": getattr(recipe_provider_pack, "name", ""),
+                "view_name": getattr(view, "name", ""),
+                "view_provider_pack": getattr(view_provider_pack, "name", ""),
                 "source_path": str(source_path),
                 "output_path": str(output_path),
             },

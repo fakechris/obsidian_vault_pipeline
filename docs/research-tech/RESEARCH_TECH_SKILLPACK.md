@@ -7,6 +7,22 @@
 - source ingestion from pinboard, clippings, repos, papers, and articles
 - interpretation into deep-dive notes
 - truth-aware indexing and compiled summaries
+- explicit artifact families for:
+  - canonical objects
+  - claims
+  - evidence
+  - compiled overviews
+  - review items
+- explicit assembly recipes for:
+  - operator briefing
+  - topic overview
+  - object brief
+  - event dossier
+  - contradiction view
+- explicit governance contracts for:
+  - review queues
+  - signal rules
+  - resolver rules
 - materialized views:
   - object pages
   - topic overviews
@@ -29,6 +45,17 @@
 - `ovp-doctor --pack research-tech --json`
 - `ovp-truth objects --vault-dir /path/to/vault`
 - `ovp-ui --vault-dir /path/to/vault --port 8787`
+
+## How To Inspect Contracts
+
+- `ovp-doctor --pack research-tech --json`
+  - 看 `declared` / `effective` contract families
+  - 看 shared shell 解析到的 `governance_contract`
+- `ovp-ui --vault-dir /path/to/vault --port 8787`
+  - 看页面级 `Assembly Contract` / `Governance Contract`
+  - 看 signals / actions / briefing 上的 item-level provenance
+- `ovp-export --pack research-tech --target topic-overview --output-path out/topic.md`
+  - 看 export target 走到的 `assembly recipe -> source contract -> source provider` 链路
 
 ## What This Pack Is Not
 

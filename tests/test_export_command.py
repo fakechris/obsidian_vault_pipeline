@@ -103,6 +103,42 @@ def test_export_command_can_export_topic_overview(temp_vault, tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert payload["target"] == "topic-overview"
+    assert payload["recipe_name"] == "topic_overview"
+    assert payload["recipe_provider_pack"] == "research-tech"
+    assert payload["view_name"] == "overview/topic"
+    assert payload["view_provider_pack"] == "research-tech"
+    assert output_path.exists()
+    assert "# overview/topic" in output_path.read_text(encoding="utf-8")
+
+
+def test_export_command_can_use_inherited_assembly_recipe_for_compatibility_pack(
+    temp_vault, tmp_path, capsys
+):
+    from openclaw_pipeline.commands.export_artifact import main
+
+    _seed_truth_store(temp_vault)
+    output_path = tmp_path / "compat-topic.md"
+
+    exit_code = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--target",
+            "topic-overview",
+            "--output-path",
+            str(output_path),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["pack"] == "default-knowledge"
+    assert payload["recipe_name"] == "topic_overview"
+    assert payload["recipe_provider_pack"] == "research-tech"
+    assert payload["view_name"] == "overview/topic"
+    assert payload["view_provider_pack"] == "default-knowledge"
     assert output_path.exists()
     assert "# overview/topic" in output_path.read_text(encoding="utf-8")
 

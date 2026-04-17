@@ -13,6 +13,11 @@ from urllib.parse import quote
 import yaml
 
 from .execution_contract_registry import resolve_focused_action_execution_contract
+from .governance_registry import (
+    describe_resolver_rule_contract,
+    describe_signal_rule_contract,
+    list_effective_governance_specs,
+)
 from .handler_registry import execute_focused_action_handler
 from .knowledge_index import ensure_knowledge_db_current
 from .observation_surface_registry import execute_observation_surface_builder
@@ -55,7 +60,7 @@ SIGNAL_TYPE_EXPLANATIONS = {
     "source_needs_deep_dive": "A processed source note exists without any derived deep dive, so the next extraction step is still missing.",
     "deep_dive_needs_objects": "A deep dive exists without any derived evergreen objects, so absorb-style extraction has not completed yet.",
 }
-AUTO_QUEUE_SIGNAL_TYPES = {
+_LEGACY_AUTO_QUEUE_SIGNAL_TYPES = {
     "source_needs_deep_dive",
     "deep_dive_needs_objects",
 }
@@ -1630,6 +1635,70 @@ def _is_safe_action_kind(action_kind: str, *, pack_name: str | None = None) -> b
     return bool(metadata["safe_to_run"])
 
 
+def _auto_queue_signal_types_for_pack(pack_name: str | None = None) -> set[str]:
+    signal_types: set[str] = set()
+    for governance_spec in list_effective_governance_specs(
+        pack_name=pack_name or DEFAULT_WORKFLOW_PACK_NAME,
+    ):
+        for signal_rule in governance_spec.signal_rules:
+            if bool(getattr(signal_rule, "auto_queue", False)):
+                signal_type = str(getattr(signal_rule, "signal_type", "") or "").strip()
+                if signal_type:
+                    signal_types.add(signal_type)
+    if signal_types:
+        return signal_types
+    return set(_LEGACY_AUTO_QUEUE_SIGNAL_TYPES)
+
+
+def _resolver_rule_metadata_for_action_kind(
+    action_kind: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    normalized_action_kind = str(action_kind or "").strip()
+    if not normalized_action_kind:
+        return {}
+    contract = describe_resolver_rule_contract(
+        pack_name=pack_name or DEFAULT_WORKFLOW_PACK_NAME,
+        rule_name=normalized_action_kind,
+    )
+    if str(contract.get("status") or "") != "missing":
+        return {
+            "resolution_kind": str(contract.get("resolution_kind") or ""),
+            "dispatch_mode": str(contract.get("dispatch_mode") or ""),
+            "executable": bool(contract.get("executable", False)),
+            "safe_to_run": bool(contract.get("safe_to_run", False)),
+            "governance_provider_pack": str(contract.get("provider_pack") or ""),
+            "governance_provider_name": str(contract.get("provider_name") or ""),
+            "governance_status": str(contract.get("status") or ""),
+            "resolver_rule_name": str(contract.get("rule_name") or ""),
+        }
+    return {}
+
+
+def _signal_rule_metadata_for_signal_type(
+    signal_type: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    normalized_signal_type = str(signal_type or "").strip()
+    if not normalized_signal_type:
+        return {}
+    contract = describe_signal_rule_contract(
+        pack_name=pack_name or DEFAULT_WORKFLOW_PACK_NAME,
+        signal_type=normalized_signal_type,
+    )
+    if str(contract.get("status") or "") != "missing":
+        return {
+            "governance_provider_pack": str(contract.get("provider_pack") or ""),
+            "governance_provider_name": str(contract.get("provider_name") or ""),
+            "governance_status": str(contract.get("status") or ""),
+            "resolver_rule_name": str(contract.get("resolver_rule") or ""),
+            "auto_queue": bool(contract.get("auto_queue", False)),
+        }
+    return {}
+
+
 def _classify_action_error(error: str) -> str:
     normalized = (error or "").strip().lower()
     if not normalized:
@@ -1690,9 +1759,19 @@ def list_action_queue(
 
 def _normalize_action_queue_item(item: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(item)
+    action_kind = str(normalized.get("action_kind") or "")
+    pack_name = str(normalized.get("pack") or DEFAULT_WORKFLOW_PACK_NAME)
+    resolver_metadata = _resolver_rule_metadata_for_action_kind(
+        action_kind,
+        pack_name=pack_name,
+    )
+    for key, value in resolver_metadata.items():
+        current = normalized.get(key)
+        if key not in normalized or current in (None, "", False):
+            normalized[key] = value
     metadata = _focused_action_contract_metadata(
-        str(normalized.get("action_kind") or ""),
-        pack_name=str(normalized.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+        action_kind,
+        pack_name=pack_name,
     )
     for key, value in metadata.items():
         current = normalized.get(key)
@@ -1816,6 +1895,7 @@ def _backfill_auto_queue_actions(
     pack_name: str | None = None,
     signals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    auto_queue_signal_types = _auto_queue_signal_types_for_pack(pack_name)
     active_signals = (
         signals
         if signals is not None
@@ -1824,7 +1904,7 @@ def _backfill_auto_queue_actions(
     candidates = [
         item
         for item in active_signals
-        if str(item.get("signal_type") or "") in AUTO_QUEUE_SIGNAL_TYPES
+        if str(item.get("signal_type") or "") in auto_queue_signal_types
     ]
     if not candidates:
         return {"created_count": 0, "created_action_ids": []}
@@ -2109,15 +2189,37 @@ def _action_queue_state_map(vault_dir: Path | str) -> dict[str, dict[str, Any]]:
     return state_map
 
 
-def _attach_action_queue_state(vault_dir: Path | str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _attach_action_queue_state(
+    vault_dir: Path | str,
+    items: list[dict[str, Any]],
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, Any]]:
     queue_state = _action_queue_state_map(vault_dir)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
     annotated: list[dict[str, Any]] = []
     for item in items:
         enriched = dict(item)
+        signal_rule_metadata = _signal_rule_metadata_for_signal_type(
+            str(item.get("signal_type") or ""),
+            pack_name=normalized_pack,
+        )
+        for key, value in signal_rule_metadata.items():
+            current = enriched.get(key)
+            if key not in enriched or current in (None, "", False):
+                enriched[key] = value
         recommended_action = item.get("recommended_action")
         if isinstance(recommended_action, dict):
             action = queue_state.get(str(item.get("signal_id") or ""))
             recommended = dict(recommended_action)
+            resolver_metadata = _resolver_rule_metadata_for_action_kind(
+                str(recommended.get("kind") or ""),
+                pack_name=normalized_pack,
+            )
+            for key, value in resolver_metadata.items():
+                current = recommended.get(key)
+                if key not in recommended or current in (None, "", False):
+                    recommended[key] = value
             if action is not None:
                 recommended["queue_status"] = action.get("status", "")
                 recommended["action_id"] = action.get("action_id", "")
@@ -2255,6 +2357,7 @@ def list_signals(
     return _list_signals_from_ledger(
         resolved_vault,
         ledger_path=ledger_path,
+        pack_name=normalized_pack,
         signal_type=signal_type,
         query=query,
         limit=limit,
@@ -2265,11 +2368,13 @@ def _list_signals_from_ledger(
     vault_dir: Path | str,
     *,
     ledger_path: Path,
+    pack_name: str | None = None,
     signal_type: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
     normalized_query = (query or "").strip().lower()
     items: list[dict[str, Any]] = []
     with signal_ledger_write_lock(resolved_vault):
@@ -2287,7 +2392,7 @@ def _list_signals_from_ledger(
             items.append(item)
             if len(items) >= limit:
                 break
-    return _attach_action_queue_state(vault_dir, items)
+    return _attach_action_queue_state(vault_dir, items, pack_name=normalized_pack)
 
 
 def get_briefing_snapshot(

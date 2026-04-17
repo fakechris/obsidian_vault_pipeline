@@ -109,6 +109,89 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
         and item["proposal_types"][0]["queue_name"] == "contradictions"
         for item in payload["contracts"]["operation_profiles"]
     )
+    assert any(
+        item["name"] == "operator_briefing"
+        and item["recipe_kind"] == "operator_briefing"
+        and item["source_contract_kind"] == "observation_surface"
+        and item["source_contract_name"] == "briefing"
+        and item["source_provider_pack"] == "research-tech"
+        and item["source_provider_name"] == "research-tech-briefing"
+        and item["output"]["output_mode"] == "json"
+        and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["declared"]["assembly_recipes"]
+    )
+    assert any(
+        item["name"] == "topic_overview"
+        and item["recipe_kind"] == "topic_overview"
+        and item["source_contract_kind"] == "wiki_view"
+        and item["source_contract_name"] == "overview/topic"
+        and item["source_provider_pack"] == "research-tech"
+        and item["source_provider_name"] == "overview/topic"
+        and item["output"]["publish_target"] == "compiled_markdown"
+        for item in payload["contracts"]["declared"]["assembly_recipes"]
+    )
+    assert {
+        item["name"] for item in payload["contracts"]["effective"]["assembly_recipes"]
+    } >= {
+        "operator_briefing",
+        "topic_overview",
+        "object_brief",
+        "event_dossier",
+        "contradiction_view",
+    }
+    assert any(
+        item["family"] == "object"
+        and item["layer"] == "canonical"
+        and item["pack"] == "research-tech"
+        and item["provider_pack"] == "research-tech"
+        and item["storage_policy"]["storage_mode"] == "markdown_note"
+        for item in payload["contracts"]["declared"]["artifact_specs"]
+    )
+    assert any(
+        item["family"] == "review_item"
+        and item["layer"] == "governance"
+        and item["lifecycle_policy"]["review_required_on_create"] is True
+        for item in payload["contracts"]["declared"]["artifact_specs"]
+    )
+    assert {
+        item["family"] for item in payload["contracts"]["effective"]["artifact_specs"]
+    } >= {"object", "claim", "evidence", "overview", "review_item"}
+    assert any(
+        item["name"] == "research_governance"
+        and item["pack"] == "research-tech"
+        and item["provider_pack"] == "research-tech"
+        and {queue["name"] for queue in item["review_queues"]} >= {"review", "contradictions", "stale-summaries"}
+        and any(
+            signal["signal_type"] == "source_needs_deep_dive"
+            and signal["resolver_rule"] == "deep_dive_workflow"
+            and signal["auto_queue"] is True
+            for signal in item["signal_rules"]
+        )
+        and any(
+            rule["name"] == "review_contradiction"
+            and rule["resolution_kind"] == "review_mutation"
+            and rule["dispatch_mode"] == "direct"
+            and rule["executable"] is True
+            for rule in item["resolver_rules"]
+        )
+        and any(
+            rule["name"] == "deep_dive_workflow"
+            and rule["resolution_kind"] == "focused_action"
+            and rule["dispatch_mode"] == "queue_only"
+            and rule["safe_to_run"] is True
+            for rule in item["resolver_rules"]
+        )
+        for item in payload["contracts"]["declared"]["governance_specs"]
+    )
+    assert any(
+        item["name"] == "research_governance"
+        and item["status"] == "declared"
+        for item in payload["contracts"]["effective"]["governance_specs"]
+    )
+    assert payload["contracts"]["shell"]["governance_contract"]["status"] == "declared"
+    assert payload["contracts"]["shell"]["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["contracts"]["shell"]["governance_contract"]["provider_name"] == "research_governance"
+    assert payload["contracts"]["shell"]["governance_contract"]["resolver_rule_count"] >= 1
     assert (
         payload["contracts"]["truth_projection_contract"]["effective_builder"]["pack"]
         == "research-tech"
@@ -210,6 +293,41 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
         and item["proposal_types"][0]["queue_name"] == "review"
         for item in payload["contracts"]["operation_profiles"]
     )
+    assert payload["contracts"]["declared"]["assembly_recipes"] == []
+    assert any(
+        item["name"] == "operator_briefing"
+        and item["provider_pack"] == "research-tech"
+        and item["source_provider_pack"] == "research-tech"
+        and item["source_provider_name"] == "research-tech-briefing"
+        and item["status"] == "inherited"
+        for item in payload["contracts"]["effective"]["assembly_recipes"]
+    )
+    assert any(
+        item["name"] == "topic_overview"
+        and item["provider_pack"] == "research-tech"
+        and item["source_provider_pack"] == "default-knowledge"
+        and item["source_provider_name"] == "overview/topic"
+        and item["status"] == "inherited"
+        for item in payload["contracts"]["effective"]["assembly_recipes"]
+    )
+    assert payload["contracts"]["declared"]["artifact_specs"] == []
+    assert any(
+        item["family"] == "object"
+        and item["pack"] == "research-tech"
+        and item["provider_pack"] == "research-tech"
+        and item["status"] == "inherited"
+        for item in payload["contracts"]["effective"]["artifact_specs"]
+    )
+    assert payload["contracts"]["declared"]["governance_specs"] == []
+    assert any(
+        item["name"] == "research_governance"
+        and item["provider_pack"] == "research-tech"
+        and item["status"] == "inherited"
+        for item in payload["contracts"]["effective"]["governance_specs"]
+    )
+    assert payload["contracts"]["shell"]["governance_contract"]["status"] == "inherited"
+    assert payload["contracts"]["shell"]["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["contracts"]["shell"]["governance_contract"]["provider_name"] == "research_governance"
     assert (
         payload["contracts"]["truth_projection_contract"]["declared_builder"] is None
     )
@@ -231,6 +349,7 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
     assert "record shapes, grounding rules, review queues, and proposal flows" in payload["contracts"]["contract_notes"]["profile_contract_behavior"].lower()
     assert "canonical and discoverable" in payload["contracts"]["contract_notes"]["object_kind_behavior"].lower()
     assert "stage order and autopilot support explicitly" in payload["contracts"]["contract_notes"]["workflow_profile_behavior"].lower()
+    assert "review queues, signal semantics, and resolver rules explicit" in payload["contracts"]["contract_notes"]["governance_contract_behavior"].lower()
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):

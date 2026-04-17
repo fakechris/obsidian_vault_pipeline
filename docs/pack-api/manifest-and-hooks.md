@@ -92,6 +92,15 @@ class BaseDomainPack:
     def workflow_profiles(self) -> list[WorkflowProfile]:
         ...
 
+    def artifact_specs(self) -> list[ArtifactSpec]:
+        ...
+
+    def assembly_recipes(self) -> list[AssemblyRecipeSpec]:
+        ...
+
+    def governance_specs(self) -> list[GovernanceSpec]:
+        ...
+
     def discovery_hooks(self) -> DiscoveryHooks:
         ...
 
@@ -110,6 +119,101 @@ class BaseDomainPack:
     def prompts_dir(self) -> Path:
         ...
 ```
+
+### Contract Families: Minimal Examples
+
+`ArtifactSpec` 声明 pack 真正拥有的持久 artifact family：
+
+```python
+ArtifactSpec(
+    name="research_claim",
+    pack="research-tech",
+    layer="canonical",
+    family="claim",
+    object_kind="claim",
+    description="Source-grounded claim rows and canonical note fields.",
+    storage_policy=ArtifactStoragePolicy(
+        storage_mode="truth_row",
+        truth_row_family="claims",
+    ),
+)
+```
+
+`AssemblyRecipeSpec` 声明 pack 能稳定编译出的 access artifact：
+
+```python
+AssemblyRecipeSpec(
+    name="topic_overview",
+    pack="research-tech",
+    recipe_kind="topic_overview",
+    description="Compile a topic-facing overview page.",
+    source_contract_kind="wiki_view",
+    source_contract_name="overview/topic",
+    output=AssemblyOutputSpec(
+        output_mode="markdown",
+        publish_target="compiled_markdown",
+    ),
+)
+```
+
+`GovernanceSpec` 声明 pack 暴露的 review / signal / resolver policy：
+
+```python
+GovernanceSpec(
+    name="research_governance",
+    pack="research-tech",
+    description="Review queues, signal semantics, and resolver rules.",
+    review_queues=[
+        ReviewQueueSpec(name="contradictions", description="Contradiction review queue"),
+    ],
+    signal_rules=[
+        SignalRuleSpec(
+            signal_type="source_needs_deep_dive",
+            description="Processed source note missing a deep dive.",
+            resolver_rule="deep_dive_workflow",
+            auto_queue=True,
+        ),
+    ],
+    resolver_rules=[
+        ResolverRuleSpec(
+            name="deep_dive_workflow",
+            description="Queue a deep-dive workflow.",
+            resolution_kind="focused_action",
+            target_name="deep_dive_workflow",
+            dispatch_mode="queue_only",
+            executable=True,
+            safe_to_run=True,
+        ),
+    ],
+)
+```
+
+### Declared / Inherited / Missing
+
+- `declared`: 当前 pack 自己声明了这个 contract family。
+- `inherited`: 当前 pack 没有声明，但 compatibility chain 上游 pack 提供了可生效 contract。
+- `missing`: 当前 pack scope 下没有可解析的 contract；UI / export / doctor 应该把它当成真实缺口，而不是静默回退。
+
+兼容 pack 的规则应该始终按这个顺序理解：
+
+1. 先看当前 pack `declared`
+2. 再看 compatibility base 上的 `inherited`
+3. 最后才是 `missing`
+
+### Pack 作者怎么验证
+
+- `ovp-doctor --pack <pack> --json`
+  - 看 `contracts.declared.*` 确认 pack 自己声明了什么
+  - 看 `contracts.effective.*` 确认 compatibility chain 实际生效了什么
+  - 看 `contracts.shell.governance_contract` 确认 shared shell 的治理合同来自谁
+- `ovp-export --pack <pack> --target <target>`
+  - 验证 export target 是否能解析到 `assembly recipe -> source contract -> source provider`
+- `ovp-ui --vault-dir <vault>`
+  - 验证页面级 `Assembly Contract` / `Governance Contract`
+  - 验证 signals / actions / briefing 等 item-level provenance 是否显示
+    - `resolver_rule_name`
+    - `governance_provider_name`
+    - `governance_provider_pack`
 
 ## 4. Object Kind Spec
 

@@ -71,6 +71,148 @@ class ProcessorContractSpec:
     description: str = ""
 
 
+@dataclass(frozen=True)
+class ArtifactFieldSpec:
+    name: str
+    field_type: str
+    description: str
+    required: bool = False
+
+
+@dataclass(frozen=True)
+class ArtifactIdentityPolicy:
+    id_strategy: str = "deterministic"
+    id_fields: list[str] = field(default_factory=list)
+    subject_fields: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ArtifactEvidencePolicy:
+    requires_evidence: bool = True
+    require_quote: bool = True
+    require_source_slug: bool = True
+    require_traceability_links: bool = True
+
+
+@dataclass(frozen=True)
+class ArtifactStoragePolicy:
+    storage_mode: str
+    canonical_path_template: str | None = None
+    truth_row_family: str | None = None
+    review_queue_name: str | None = None
+
+
+@dataclass(frozen=True)
+class ArtifactLifecyclePolicy:
+    mutable: bool = True
+    review_required_on_create: bool = False
+    review_required_on_update: bool = False
+    projection_rebuild_policy: str = "on_derived_refresh"
+
+
+@dataclass(frozen=True)
+class ArtifactSpec:
+    name: str
+    pack: str
+    layer: str
+    family: str
+    object_kind: str | None = None
+    description: str = ""
+    fields: list[ArtifactFieldSpec] = field(default_factory=list)
+    identity_policy: ArtifactIdentityPolicy = field(default_factory=ArtifactIdentityPolicy)
+    evidence_policy: ArtifactEvidencePolicy = field(default_factory=ArtifactEvidencePolicy)
+    storage_policy: ArtifactStoragePolicy = field(
+        default_factory=lambda: ArtifactStoragePolicy(storage_mode="markdown_note")
+    )
+    lifecycle_policy: ArtifactLifecyclePolicy = field(default_factory=ArtifactLifecyclePolicy)
+
+
+@dataclass(frozen=True)
+class AssemblyInputSpec:
+    source_kind: str
+    description: str
+    required: bool = True
+
+
+@dataclass(frozen=True)
+class AssemblyAudienceSpec:
+    audience: str
+    interaction_mode: str = "read_only"
+
+
+@dataclass(frozen=True)
+class AssemblyFreshnessPolicy:
+    cache_mode: str = "on_demand"
+    invalidation_signals: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AssemblyOutputSpec:
+    output_mode: str
+    publish_target: str
+
+
+@dataclass(frozen=True)
+class AssemblyRecipeSpec:
+    name: str
+    pack: str
+    recipe_kind: str
+    description: str
+    source_contract_kind: str
+    source_contract_name: str
+    inputs: list[AssemblyInputSpec] = field(default_factory=list)
+    audience: AssemblyAudienceSpec = field(
+        default_factory=lambda: AssemblyAudienceSpec(audience="operator")
+    )
+    freshness_policy: AssemblyFreshnessPolicy = field(default_factory=AssemblyFreshnessPolicy)
+    output: AssemblyOutputSpec = field(
+        default_factory=lambda: AssemblyOutputSpec(
+            output_mode="markdown",
+            publish_target="compiled_markdown",
+        )
+    )
+
+
+@dataclass(frozen=True)
+class ReviewQueueSpec:
+    name: str
+    description: str
+    operation_profiles: list[str] = field(default_factory=list)
+    proposal_types: list[str] = field(default_factory=list)
+    review_mode: str = "human_review"
+
+
+@dataclass(frozen=True)
+class SignalRuleSpec:
+    signal_type: str
+    description: str
+    source_contract_kind: str = "observation_surface"
+    source_contract_name: str = "signals"
+    resolver_rule: str | None = None
+    auto_queue: bool = False
+
+
+@dataclass(frozen=True)
+class ResolverRuleSpec:
+    name: str
+    description: str
+    resolution_kind: str
+    target_name: str
+    dispatch_mode: str = "navigate"
+    executable: bool = False
+    safe_to_run: bool = False
+
+
+@dataclass(frozen=True)
+class GovernanceSpec:
+    name: str
+    pack: str
+    description: str = ""
+    review_queues: list[ReviewQueueSpec] = field(default_factory=list)
+    signal_rules: list[SignalRuleSpec] = field(default_factory=list)
+    resolver_rules: list[ResolverRuleSpec] = field(default_factory=list)
+
+
 @dataclass
 class BaseDomainPack:
     name: str
@@ -88,6 +230,9 @@ class BaseDomainPack:
     _truth_projection: TruthProjectionSpec | None = None
     _observation_surfaces: list[ObservationSurfaceSpec] = field(default_factory=list)
     _processor_contracts: list[ProcessorContractSpec] = field(default_factory=list)
+    _artifact_specs: list[ArtifactSpec] = field(default_factory=list)
+    _assembly_recipes: list[AssemblyRecipeSpec] = field(default_factory=list)
+    _governance_specs: list[GovernanceSpec] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.role not in ALLOWED_PACK_ROLES:
@@ -121,6 +266,21 @@ class BaseDomainPack:
             if spec.pack != self.name:
                 raise ValueError(
                     f"Pack '{self.name}' declares processor contract for '{spec.pack}'"
+                )
+        for spec in self._artifact_specs:
+            if spec.pack != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares artifact spec for '{spec.pack}'"
+                )
+        for spec in self._assembly_recipes:
+            if spec.pack != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares assembly recipe for '{spec.pack}'"
+                )
+        for spec in self._governance_specs:
+            if spec.pack != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares governance spec for '{spec.pack}'"
                 )
         for spec in self._extraction_profiles:
             if getattr(spec, "pack", self.name) != self.name:
@@ -193,3 +353,30 @@ class BaseDomainPack:
 
     def processor_contracts(self) -> list[ProcessorContractSpec]:
         return list(self._processor_contracts)
+
+    def artifact_specs(self) -> list[ArtifactSpec]:
+        return list(self._artifact_specs)
+
+    def artifact_spec(self, name: str) -> ArtifactSpec:
+        for spec in self._artifact_specs:
+            if spec.name == name:
+                return spec
+        raise ValueError(f"Unknown artifact spec '{name}' for pack '{self.name}'")
+
+    def assembly_recipes(self) -> list[AssemblyRecipeSpec]:
+        return list(self._assembly_recipes)
+
+    def assembly_recipe(self, name: str) -> AssemblyRecipeSpec:
+        for spec in self._assembly_recipes:
+            if spec.name == name:
+                return spec
+        raise ValueError(f"Unknown assembly recipe '{name}' for pack '{self.name}'")
+
+    def governance_specs(self) -> list[GovernanceSpec]:
+        return list(self._governance_specs)
+
+    def governance_spec(self, name: str) -> GovernanceSpec:
+        for spec in self._governance_specs:
+            if spec.name == name:
+                return spec
+        raise ValueError(f"Unknown governance spec '{name}' for pack '{self.name}'")
