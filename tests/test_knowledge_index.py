@@ -870,6 +870,33 @@ Body text.
     assert stats["embedding_chunks"] == 1
 
 
+def test_knowledge_db_supports_pack_schema_requires_timeline_events(tmp_path):
+    from openclaw_pipeline.knowledge_index import _knowledge_db_supports_pack_schema
+
+    db_path = tmp_path / "knowledge.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE objects (pack TEXT, object_id TEXT);
+            CREATE TABLE claims (pack TEXT, claim_id TEXT);
+            CREATE TABLE claim_evidence (pack TEXT, claim_id TEXT);
+            CREATE TABLE relations (pack TEXT, relation_id TEXT);
+            CREATE TABLE compiled_summaries (pack TEXT, object_id TEXT);
+            CREATE TABLE contradictions (pack TEXT, contradiction_id TEXT);
+            CREATE TABLE graph_edges (pack TEXT, edge_id TEXT);
+            CREATE TABLE graph_clusters (pack TEXT, cluster_id TEXT);
+            CREATE TABLE truth_projections (
+                pack TEXT,
+                owner_pack TEXT,
+                builder_name TEXT,
+                built_at TEXT
+            );
+            """
+        )
+
+    assert _knowledge_db_supports_pack_schema(db_path) is False
+
+
 def test_recent_audit_events_returns_newest_rows_first(temp_vault):
     from openclaw_pipeline.knowledge_index import rebuild_knowledge_index, recent_audit_events
     from openclaw_pipeline.runtime import VaultLayout

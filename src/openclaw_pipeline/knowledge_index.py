@@ -434,6 +434,7 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
     if not db_path.exists():
         return False
     required_columns = {
+        "timeline_events": {"slug", "event_date", "event_type", "heading", "payload_json"},
         "objects": {"pack"},
         "claims": {"pack"},
         "claim_evidence": {"pack"},

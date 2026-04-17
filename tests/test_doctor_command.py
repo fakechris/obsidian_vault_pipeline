@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -279,10 +280,11 @@ def test_doctor_help_mentions_pglite(capsys):
 def test_doctor_module_cli_emits_json():
     env = dict(os.environ)
     env["PYTHONPATH"] = "src"
+    repo_root = Path(__file__).resolve().parents[1]
 
     result = subprocess.run(
         [sys.executable, "-m", "openclaw_pipeline.commands.doctor", "--json"],
-        cwd="/Users/chris/Documents/openclaw-template",
+        cwd=repo_root,
         capture_output=True,
         text=True,
         check=True,
