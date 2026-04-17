@@ -63,6 +63,7 @@ def resolve_workflow_profile(
     profile_name: str | None = None,
     default_profile: str,
     require_autopilot: bool = False,
+    runtime_adapter: str = "pipeline_step",
 ) -> tuple[BaseDomainPack, WorkflowProfile]:
     """Resolve a pack/profile pair with stable defaults."""
 
@@ -77,5 +78,21 @@ def resolve_workflow_profile(
             f"Workflow profile '{resolved_profile_name}' for pack '{resolved_pack_name}' "
             "does not support autopilot"
         )
+
+    from ..execution_contract_registry import resolve_stage_execution_contract
+
+    for stage in profile.stages:
+        try:
+            resolve_stage_execution_contract(
+                pack_name=pack,
+                stage=stage,
+                runtime_adapter=runtime_adapter,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Workflow profile '{profile.name}' for pack '{pack.name}' is missing "
+                f"execution contract for stage '{stage}' "
+                f"(runtime_adapter={runtime_adapter})"
+            ) from exc
 
     return pack, profile

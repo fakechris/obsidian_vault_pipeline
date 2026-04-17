@@ -211,6 +211,67 @@ def test_run_pipeline_restores_pack_and_profile_after_override(tmp_path, monkeyp
     assert pipeline.workflow_profile_name == original_profile
 
 
+def test_run_pipeline_uses_profile_stages_when_steps_omitted(tmp_path, monkeypatch):
+    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_source
+    from openclaw_pipeline.packs.base import BaseDomainPack, WorkflowProfile
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(
+        pipeline,
+        "_count_output_files",
+        lambda step, before_counts, cmd_result: {"produced": 1},
+    )
+
+    calls: list[str] = []
+
+    def fake_execute_profile_stage_handler(pipeline_runtime, stage, **kwargs):
+        calls.append(stage)
+        return {"success": True}
+
+    monkeypatch.setattr(
+        pipeline_source,
+        "execute_profile_stage_handler",
+        fake_execute_profile_stage_handler,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pipeline_source,
+        "resolve_workflow_profile",
+        lambda **kwargs: (
+            BaseDomainPack(
+                name="research-tech",
+                version="0.1.0",
+                api_version=1,
+                _workflow_profiles=[],
+            ),
+            WorkflowProfile(
+                name="full",
+                description="Custom staged profile",
+                stages=["articles", "quality", "knowledge_index"],
+            ),
+        ),
+        raising=False,
+    )
+
+    results = pipeline.run_pipeline(
+        dry_run=True,
+        pack_name="research-tech",
+        profile_name="full",
+    )
+
+    expected_steps = ["articles", "quality", "knowledge_index"]
+
+    assert list(results) == expected_steps
+    assert calls == expected_steps
+
+
 def test_detect_pinboard_processor_routes_gist_to_article_stack():
     content = """---
 title: "GBrain.md"

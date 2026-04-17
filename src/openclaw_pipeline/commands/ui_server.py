@@ -17,6 +17,8 @@ from markdown_it import MarkdownIt
 
 from ..identity import canonicalize_note_id
 from ..knowledge_index import contradiction_object_ids, rebuild_compiled_summaries, resolve_contradictions
+from ..pack_resolution import iter_compatible_packs
+from ..packs.loader import PRIMARY_PACK_NAME
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import (
     build_action_queue_payload,
@@ -55,7 +57,50 @@ _GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
 _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
 
 
-def _layout(title: str, body: str) -> str:
+def _shell_href(path: str, requested_pack: str = "") -> str:
+    if not requested_pack:
+        return path
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}pack={quote(requested_pack, safe='')}"
+
+
+def _shell_supports_research_nav(requested_pack: str = "") -> bool:
+    try:
+        return any(pack.name == PRIMARY_PACK_NAME for pack in iter_compatible_packs(requested_pack or None))
+    except ValueError:
+        return False
+
+
+def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
+    items = [
+        ("Home", "/"),
+        ("Objects", "/objects"),
+        ("Search", "/search"),
+        ("Signals", "/signals"),
+        ("Briefing", "/briefing"),
+        ("Actions", "/actions"),
+        ("Production", "/production"),
+    ]
+    if _shell_supports_research_nav(requested_pack):
+        items.extend(
+            [
+                ("Evolution", "/evolution"),
+                ("Clusters", "/clusters"),
+                ("Atlas", "/atlas"),
+                ("Deep Dives", "/deep-dives"),
+                ("Event Dossier", "/events"),
+                ("Contradictions", "/contradictions"),
+                ("Stale Summaries", "/summaries"),
+            ]
+        )
+    return items
+
+
+def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
+    nav_items = "".join(
+        f'<a href="{escape(_shell_href(path, requested_pack))}">{escape(label)}</a>'
+        for label, path in _shell_nav_items(requested_pack)
+    )
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -115,20 +160,7 @@ def _layout(title: str, body: str) -> str:
       <div class="shell">
         <div class="shell-head">
           <nav>
-            <a href="/">Home</a>
-            <a href="/objects">Objects</a>
-            <a href="/search">Search</a>
-            <a href="/signals">Signals</a>
-            <a href="/briefing">Briefing</a>
-            <a href="/actions">Actions</a>
-            <a href="/evolution">Evolution</a>
-            <a href="/production">Production</a>
-            <a href="/clusters">Clusters</a>
-            <a href="/atlas">Atlas</a>
-            <a href="/deep-dives">Deep Dives</a>
-            <a href="/events">Event Dossier</a>
-            <a href="/contradictions">Contradictions</a>
-            <a href="/summaries">Stale Summaries</a>
+            {nav_items}
           </nav>
         </div>
         <div class="shell-body">
@@ -141,16 +173,89 @@ def _layout(title: str, body: str) -> str:
 """
 
 
-def _note_href(path: str) -> str:
-    return f"/note?path={quote(path, safe='')}"
+def _note_href(path: str, requested_pack: str = "") -> str:
+    return _shell_href(f"/note?path={quote(path, safe='')}", requested_pack)
 
 
 def _asset_href(path: str) -> str:
     return f"/asset?path={quote(path, safe='')}"
 
 
-def _search_href(query: str) -> str:
-    return f"/search?q={quote(query, safe='')}"
+def _search_href(query: str, requested_pack: str = "") -> str:
+    return _shell_href(f"/search?q={quote(query, safe='')}", requested_pack)
+
+
+def _object_href(object_id: str, path: str = "", requested_pack: str = "") -> str:
+    if path:
+        return path
+    return _shell_href(f"/object?id={quote(str(object_id), safe='')}", requested_pack)
+
+
+def _render_surface_contract_card(payload: dict) -> str:
+    contract = payload.get("surface_contract")
+    if not isinstance(contract, dict) or not contract:
+        return ""
+    provider_name = str(contract.get("provider_name") or "")
+    provider_pack = str(contract.get("provider_pack") or "")
+    status = str(contract.get("status") or "")
+    surface_kind = str(contract.get("surface_kind") or "")
+    if status == "declared":
+        detail = (
+            f"This shared shell surface resolves as {escape(surface_kind)} "
+            f"declared by {escape(provider_name)} in {escape(provider_pack)}."
+        )
+    elif status == "inherited":
+        detail = (
+            f"This shared shell surface resolves as {escape(surface_kind)} "
+            f"inherited from {escape(provider_name)} in {escape(provider_pack)}."
+        )
+    else:
+        detail = (
+            f"This shared shell surface has no provider for {escape(surface_kind)} "
+            f"in the current pack scope."
+        )
+    error_text = str(payload.get("surface_error") or "").strip()
+    extra = f"<p class='muted'>{escape(error_text)}</p>" if error_text else ""
+    return f"<section class='card'><h2>Surface Contract</h2><p class='muted'>{detail}</p>{extra}</section>"
+
+
+def _unsupported_route_payload(route_path: str, requested_pack: str = "") -> dict[str, str]:
+    normalized_pack = requested_pack.strip()
+    return {
+        "status": "unsupported_pack",
+        "route": route_path,
+        "requested_pack": normalized_pack,
+        "error": (
+            f"Route '{route_path}' is not available in the shared shell for pack '{normalized_pack}'."
+            if normalized_pack
+            else f"Route '{route_path}' is not available in the shared shell."
+        ),
+    }
+
+
+def _render_unsupported_route_page(route_path: str, requested_pack: str = "") -> str:
+    payload = _unsupported_route_payload(route_path, requested_pack)
+    return _layout(
+        "Route Unavailable",
+        "".join(
+            [
+                "<h1>Route Unavailable</h1>",
+                f"<p class='muted'>{escape(payload['error'])}</p>",
+                "<section class='card'><h2>Why</h2><p class='muted'>This route currently belongs to the research-specific observation shell. Shared shell routes remain available, but research-only routes stay hidden until the current pack declares equivalent semantics.</p></section>",
+            ]
+        ),
+        requested_pack=requested_pack,
+    )
+
+
+def _render_research_scope_notice(requested_pack: str = "") -> str:
+    pack_label = f" for pack '{requested_pack}'" if requested_pack else ""
+    return (
+        "<section class='card'><h2>Research Review</h2>"
+        f"<p class='muted'>Research-specific review surfaces stay hidden{escape(pack_label)}. "
+        "This page still shows shared object/topic context, but contradiction, summary, evolution, and related research affordances only appear when the current pack declares those semantics.</p>"
+        "</section>"
+    )
 
 
 def _read_vault_note(vault_dir: Path, relative_path: str) -> tuple[Path, str]:
@@ -175,7 +280,7 @@ def _read_vault_asset(vault_dir: Path, relative_path: str) -> tuple[bytes, str]:
     return candidate.read_bytes(), mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
 
 
-def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | None:
+def _lookup_wikilink_target(vault_dir: Path, target: str, *, requested_pack: str = "") -> tuple[str, str] | None:
     db_path = VaultLayout.from_vault(vault_dir).knowledge_db
     if not db_path.exists():
         return None
@@ -235,8 +340,11 @@ def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | N
                 continue
             relative_path = str(candidate.resolve().relative_to(vault_dir.resolve()))
             if "10-Knowledge/Evergreen/" in relative_path:
-                return (f"/object?id={quote(canonicalize_note_id(stem), safe='')}", canonicalize_note_id(stem))
-            return (_note_href(relative_path), relative_path)
+                return (
+                    _shell_href(f"/object?id={quote(canonicalize_note_id(stem), safe='')}", requested_pack),
+                    canonicalize_note_id(stem),
+                )
+            return (_note_href(relative_path, requested_pack), relative_path)
         return None
 
     slug, _title, note_type, path = sorted(rows, key=rank)[0]
@@ -249,8 +357,8 @@ def _lookup_wikilink_target(vault_dir: Path, target: str) -> tuple[str, str] | N
             relative_path = path
 
     if note_type == "evergreen":
-        return (f"/object?id={quote(slug, safe='')}", slug)
-    return (_note_href(relative_path), relative_path)
+        return (_shell_href(f"/object?id={quote(slug, safe='')}", requested_pack), slug)
+    return (_note_href(relative_path, requested_pack), relative_path)
 
 
 def _is_search_href(href: str) -> bool:
@@ -319,13 +427,13 @@ def _render_frontmatter(frontmatter: dict[str, object]) -> str:
     )
 
 
-def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str) -> str:
+def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str, *, requested_pack: str = "") -> str:
     def replace_match(match: re.Match[str]) -> str:
         raw_inner = match.group(1)
         target_part, _, label_part = raw_inner.partition("|")
         label = label_part.strip() or target_part.split("#", 1)[0].strip()
-        resolved = _lookup_wikilink_target(vault_dir, target_part)
-        href = resolved[0] if resolved else _search_href(target_part.split("#", 1)[0].strip() or label)
+        resolved = _lookup_wikilink_target(vault_dir, target_part, requested_pack=requested_pack)
+        href = resolved[0] if resolved else _search_href(target_part.split("#", 1)[0].strip() or label, requested_pack)
         emoji = "🔍" if _is_search_href(href) else "🎯"
         safe_label = label.replace("[", "\\[").replace("]", "\\]")
         return f"[{emoji} {safe_label}]({href})"
@@ -428,7 +536,7 @@ def _convert_box_table_fences(markdown: str, *, github_repo_base: str | None) ->
     return "\n".join(output)
 
 
-def _linkify_keywords(markdown: str) -> str:
+def _linkify_keywords(markdown: str, *, requested_pack: str = "") -> str:
     output: list[str] = []
     keyword_re = re.compile(r"^(\*\*关键词\*\*|关键词)\s*[：:]\s*(.+)$")
     for line in markdown.splitlines():
@@ -442,12 +550,12 @@ def _linkify_keywords(markdown: str) -> str:
             keyword = raw.strip()
             if not keyword:
                 continue
-            rendered.append(_smart_markdown_link(keyword, _search_href(keyword)))
+            rendered.append(_smart_markdown_link(keyword, _search_href(keyword, requested_pack)))
         output.append(f"{prefix}：{'，'.join(rendered)}")
     return "\n".join(output)
 
 
-def _linkify_related_knowledge_section(vault_dir: Path, markdown: str) -> str:
+def _linkify_related_knowledge_section(vault_dir: Path, markdown: str, *, requested_pack: str = "") -> str:
     output_lines: list[str] = []
     in_related = False
 
@@ -460,8 +568,8 @@ def _linkify_related_knowledge_section(vault_dir: Path, markdown: str) -> str:
         if in_related and re.match(r"^- [^\[][^—]+ — ", stripped):
             concept, sep, remainder = stripped[2:].partition(" — ")
             concept = concept.strip()
-            resolved = _lookup_wikilink_target(vault_dir, concept)
-            href = resolved[0] if resolved else _search_href(concept)
+            resolved = _lookup_wikilink_target(vault_dir, concept, requested_pack=requested_pack)
+            href = resolved[0] if resolved else _search_href(concept, requested_pack)
             emoji = "🔍" if _is_search_href(href) else "🎯"
             output_lines.append(f'- [{emoji} {concept}]({href}) — {remainder}')
             continue
@@ -470,14 +578,14 @@ def _linkify_related_knowledge_section(vault_dir: Path, markdown: str) -> str:
     return "\n".join(output_lines)
 
 
-def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
+def _render_markdown_note(vault_dir: Path, markdown: str, *, requested_pack: str = "") -> tuple[str, str]:
     frontmatter, body = _parse_frontmatter(markdown)
     github_repo_base = _infer_github_repo_base(frontmatter, body)
     rendered_body = _convert_box_table_fences(body, github_repo_base=github_repo_base)
     rendered_body = _rewrite_local_image_links(vault_dir, rendered_body)
-    rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, rendered_body)
-    rendered_body = _linkify_related_knowledge_section(vault_dir, rendered_body)
-    rendered_body = _linkify_keywords(rendered_body).strip()
+    rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, rendered_body, requested_pack=requested_pack)
+    rendered_body = _linkify_related_knowledge_section(vault_dir, rendered_body, requested_pack=requested_pack)
+    rendered_body = _linkify_keywords(rendered_body, requested_pack=requested_pack).strip()
     if not rendered_body:
         html_body = "<p class='muted'>Empty note.</p>"
     else:
@@ -486,7 +594,8 @@ def _render_markdown_note(vault_dir: Path, markdown: str) -> tuple[str, str]:
 
 
 def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payload: dict | None = None) -> str:
-    frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown)
+    requested_pack = payload.get("requested_pack", "") if payload else ""
+    frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown, requested_pack=requested_pack)
     source_note = None
     derived_notes: list[dict[str, str]] = []
     production_chain = None
@@ -501,7 +610,7 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             "<h2>Provenance</h2>"
             "<dl class='meta-list'>"
             "<div><dt>Original Source Note</dt><dd>"
-            f'<a href="{escape(_note_href(source_note["path"]))}">{escape(source_note["title"])}</a>'
+            f'<a href="{escape(_note_href(source_note["path"], requested_pack))}">{escape(source_note["title"])}</a>'
             f"<div class='muted'>{escape(source_note['path'])}</div>"
             "</dd></div>"
             "</dl>"
@@ -509,7 +618,7 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
         )
     if derived_notes:
         derived_list = "".join(
-            f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+            f'<li><a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
             f"<div class='muted'>{escape(item['path'])}</div></li>"
             for item in derived_notes
         )
@@ -526,10 +635,10 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             "<h2>Production Chain</h2>"
             "<dl class='meta-list'>"
             f"<div><dt>Current Note</dt><dd>{escape(production_chain['note']['title'])}<div class='muted'>{escape(production_chain['note']['path'])}</div></dd></div>"
-            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'])}</dd></div>"
-            f"<div><dt>Deep Dives</dt><dd>{_render_named_note_links(production_chain['deep_dives'])}</dd></div>"
-            f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'])}</dd></div>"
-            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(production_chain['atlas_pages'])}</dd></div>"
+            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Deep Dives</dt><dd>{_render_named_note_links(production_chain['deep_dives'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(production_chain['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
             "</dl>"
             "</section>"
         )
@@ -545,51 +654,62 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             f"{production_chain_html}"
             f"<section class='card'>{note_html}</section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_search_page(payload: dict) -> str:
     query = payload["query"]
+    requested_pack = payload.get("requested_pack", "")
     object_items = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(item.get("object_path") or _object_href(item["object_id"], requested_pack=requested_pack))}">{escape(item["title"])}</a> '
         f'<span class="muted">({escape(item["object_id"])})</span></li>'
         for item in payload["objects"]
     ) or "<li class='muted'>No object hits.</li>"
     note_items = "".join(
-        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
         f'<span class="pill">{escape(item["note_type"])}</span></li>'
         for item in payload["notes"]
     ) or "<li class='muted'>No note hits.</li>"
     return _layout(
         f"Search: {query}",
-        (
-            "<h1>Search</h1>"
-            "<form method='get' action='/search'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['object_count']} object hits, {payload['note_count']} note hits.</p>"
-            "<section class='grid two-col'>"
-            f"<section class='card'><h2>Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
-            f"<section class='card'><h2>Notes</h2><ul class='list-tight'>{note_items}</ul></section>"
-            "</section>"
+        "".join(
+            [
+                "<h1>Search</h1>",
+                "<form method='get' action='/search'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' /> "
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['object_count']} object hits, {payload['note_count']} note hits.</p>",
+                "<section class='grid two-col'>",
+                f"<section class='card'><h2>Objects</h2><ul class='list-tight'>{object_items}</ul></section>",
+                f"<section class='card'><h2>Notes</h2><ul class='list-tight'>{note_items}</ul></section>",
+                "</section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
-def _render_named_note_links(items: list[dict[str, str]]) -> str:
+def _render_named_note_links(items: list[dict[str, str]], *, requested_pack: str = "") -> str:
     if not items:
         return "<span class='muted'>None</span>"
     return ", ".join(
-        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>' for item in items
+        f'<a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
+        for item in items
     )
 
 
-def _render_object_links(items: list[dict[str, str]]) -> str:
+def _render_object_links(items: list[dict[str, str]], *, requested_pack: str = "") -> str:
     if not items:
         return "<span class='muted'>None</span>"
     return ", ".join(
-        f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a>'
         for item in items
     )
 
@@ -601,16 +721,33 @@ def _render_evolution_link_type_select(selected: str) -> str:
     ) + "</select>"
 
 
-def _render_evolution_review_form(item: dict[str, object]) -> str:
+def _render_evolution_review_form(
+    item: dict[str, object],
+    *,
+    requested_pack: str = "",
+    next_path: str = "",
+) -> str:
     link_type = str(item.get("link_type") or "")
-    return (
-        "<form method='post' action='/evolution/review' class='link-row'>"
-        f"<input type='hidden' name='evolution_id' value='{escape(str(item['evolution_id']))}' />"
-        f"{_render_evolution_link_type_select(link_type)}"
-        "<input type='text' name='note' placeholder='Review note' />"
-        "<button type='submit' name='status' value='accepted'>Accept</button>"
-        "<button type='submit' name='status' value='rejected'>Reject</button>"
-        "</form>"
+    return "".join(
+        [
+            "<form method='post' action='/evolution/review' class='link-row'>",
+            f"<input type='hidden' name='evolution_id' value='{escape(str(item['evolution_id']))}' />",
+            (
+                f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                if requested_pack
+                else ""
+            ),
+            (
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+                if next_path
+                else ""
+            ),
+            _render_evolution_link_type_select(link_type),
+            "<input type='text' name='note' placeholder='Review note' />",
+            "<button type='submit' name='status' value='accepted'>Accept</button>",
+            "<button type='submit' name='status' value='rejected'>Reject</button>",
+            "</form>",
+        ]
     )
 
 
@@ -639,13 +776,20 @@ def _render_evolution_links(items: list[dict[str, object]], *, empty_text: str) 
     return "<ul class='list-tight'>" + "".join(rows) + "</ul>"
 
 
-def _render_evolution_candidates(items: list[dict[str, object]], *, compact: bool = False, reviewable: bool = False) -> str:
+def _render_evolution_candidates(
+    items: list[dict[str, object]],
+    *,
+    compact: bool = False,
+    reviewable: bool = False,
+    requested_pack: str = "",
+    next_path: str = "",
+) -> str:
     if not items:
         return "<p class='muted'>No evolution candidates surfaced for this scope.</p>"
     rows = []
     for item in items[: 3 if compact else len(items)]:
         source_paths = ", ".join(
-            f'<a href="{escape(_note_href(path))}">{escape(path)}</a>'
+            f'<a href="{escape(_note_href(path, requested_pack))}">{escape(path)}</a>'
             for path in item["source_paths"]
         ) or "<span class='muted'>None</span>"
         evidence = ", ".join(
@@ -661,7 +805,15 @@ def _render_evolution_candidates(items: list[dict[str, object]], *, compact: boo
             f"<div class='muted'>Reasons: {escape(', '.join(str(code) for code in item['reason_codes']))}</div>"
             f"<div class='muted'>Sources: {source_paths}</div>"
             + (f"<div class='muted'>Evidence: {evidence}</div>" if evidence else "")
-            + (_render_evolution_review_form(item) if reviewable else "")
+            + (
+                _render_evolution_review_form(
+                    item,
+                    requested_pack=requested_pack,
+                    next_path=next_path,
+                )
+                if reviewable
+                else ""
+            )
             + "</li>"
         )
     return "<ul class='list-tight'>" + "".join(rows) + "</ul>"
@@ -733,7 +885,12 @@ def _render_review_history(items: list[dict[str, object]], *, title: str = "Revi
     )
 
 
-def _render_production_summary_card(summary: dict[str, object], *, title: str = "Production Contribution") -> str:
+def _render_production_summary_card(
+    summary: dict[str, object],
+    *,
+    title: str = "Production Contribution",
+    requested_pack: str = "",
+) -> str:
     signal_items = "".join(
         f"<li>{escape(str(signal['label']))}: {int(signal['count'])}</li>"
         for signal in summary["signals"]
@@ -751,9 +908,9 @@ def _render_production_summary_card(summary: dict[str, object], *, title: str = 
         f"<h2>{escape(title)}</h2>"
         "<dl class='meta-list'>"
         f"<div><dt>Objects in scope</dt><dd>{int(summary['object_count'])}</dd></div>"
-        f"<div><dt>Top Source Notes</dt><dd>{_render_named_note_links(summary['top_source_notes'])}</dd></div>"
-        f"<div><dt>Top Deep Dives</dt><dd>{_render_named_note_links(summary['top_deep_dives'])}</dd></div>"
-        f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(summary['top_atlas_pages'])}</dd></div>"
+        f"<div><dt>Top Source Notes</dt><dd>{_render_named_note_links(summary['top_source_notes'], requested_pack=requested_pack)}</dd></div>"
+        f"<div><dt>Top Deep Dives</dt><dd>{_render_named_note_links(summary['top_deep_dives'], requested_pack=requested_pack)}</dd></div>"
+        f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(summary['top_atlas_pages'], requested_pack=requested_pack)}</dd></div>"
         "</dl>"
         f"<ul class='list-tight'>{count_items}{signal_items}</ul>"
         "</section>"
@@ -761,8 +918,13 @@ def _render_production_summary_card(summary: dict[str, object], *, title: str = 
 
 
 def _render_dashboard(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    research_overview = payload.get("research_overview", {})
+    research_overview_supported = research_overview.get("status") == "supported"
+    signals_surface_contract = _render_surface_contract_card(payload["signals"])
+    production_surface_contract = _render_surface_contract_card(payload["production"])
     object_items = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a></li>'
         for item in payload["objects"]["items"]
     ) or "<li>None</li>"
     contradiction_items = "".join(
@@ -771,18 +933,23 @@ def _render_dashboard(payload: dict) -> str:
     ) or "<li>None</li>"
     event_items = "".join(
         f"<li>{escape(item['event_date'])} - "
-        f'<a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+        f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a></li>'
         for item in payload["events"]["items"]
     ) or "<li>None</li>"
     stale_summary_items = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(item["object_path"])}">{escape(item["title"])}</a> '
         f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
         for item in payload["stale_summaries"]["items"]
     ) or "<li>None</li>"
-    evolution_items = _render_evolution_candidates(payload["evolution"]["items"], compact=False)
+    evolution_items = _render_evolution_candidates(
+        payload["evolution"]["items"],
+        compact=False,
+        requested_pack=requested_pack,
+        next_path=_shell_href("/evolution", requested_pack),
+    )
     production_gap_items = "".join(
         f'<li><span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
-        f'<a href="{escape(_note_href(item["note_path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["note_path"], requested_pack))}">{escape(item["title"])}</a>'
         f"<div class='muted'>Missing: {escape(item['detail'])}</div></li>"
         for item in payload["production"]["weak_points"]
     ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
@@ -798,50 +965,91 @@ def _render_dashboard(payload: dict) -> str:
         f"<div class='muted'>{escape(item['detail'])}</div></li>"
         for item in payload["priorities"]
     ) or "<li class='muted'>No urgent maintenance items surfaced.</li>"
+    stats_cards = [
+        "<div class='card'><h2>Objects Indexed</h2>"
+        f"<p>{payload['objects']['count']}</p></div>",
+        "<div class='card'><h2>Signals</h2>"
+        f"<p>{payload['signals']['count']}</p></div>",
+        "<div class='card'><h2>Production Weak Points</h2>"
+        f"<p>{payload['production']['weak_point_count']}</p></div>",
+    ]
+    if research_overview_supported:
+        stats_cards[1:1] = [
+            "<div class='card'><h2>Contradictions Open</h2>"
+            f"<p>{payload['contradictions']['open_count']}</p></div>",
+            "<div class='card'><h2>Recent Events</h2>"
+            f"<p>{payload['events']['count']}</p></div>",
+            "<div class='card'><h2>Stale Summaries</h2>"
+            f"<p>{payload['stale_summaries']['count']}</p></div>",
+            "<div class='card'><h2>Evolution Candidates</h2>"
+            f"<p>{payload['evolution']['candidate_count']}</p></div>",
+        ]
+    research_overview_card = (
+        ""
+        if research_overview_supported
+        else (
+            "<section class='card'><h2>Research Overview</h2>"
+            f"<p class='muted'>{escape(str(research_overview.get('reason') or ''))}</p>"
+            "</section>"
+        )
+    )
+    left_sections = [
+        f"<section class='card'><h2>Needs Attention Now</h2><ul class='list-tight'>{priority_items}</ul></section>",
+        f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>",
+    ]
+    if research_overview_supported:
+        left_sections.extend(
+            [
+                f"<section class='card'><h2><a href='{escape(_shell_href('/evolution', requested_pack))}'>Evolution</a></h2>{evolution_items}</section>",
+                f"<section class='card'><h2><a href='{escape(payload['events']['browser_path'])}'>Recent Events</a></h2><ul class='list-tight'>{event_items}</ul></section>",
+                f"<section class='card'><h2><a href='{escape(payload['stale_summaries']['browser_path'])}'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>",
+            ]
+        )
+    else:
+        left_sections.append(research_overview_card)
+    right_sections = [
+        signals_surface_contract,
+        f"<section class='card'><h2><a href='{escape(payload['signals']['browser_path'])}'>Signals</a></h2><ul class='list-tight'>{signal_items}</ul></section>",
+        production_surface_contract,
+        f"<section class='card'><h2><a href='{escape(payload['production']['browser_path'])}'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>",
+    ]
+    if research_overview_supported:
+        right_sections.append(
+            f"<section class='card'><h2><a href='{escape(payload['contradictions']['browser_path'])}'>Contradiction Queue</a></h2><ul class='list-tight'>{contradiction_items}</ul></section>"
+        )
+    right_sections.append(_render_review_history(payload['recent_review_actions'], title='Recent Review Actions'))
+    dashboard_body = "".join(
+        [
+            "<section class='hero'>",
+            "<h1>OpenClaw Truth UI</h1>",
+            "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
+            f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
+            "</section>",
+            "<section class='grid stats'>",
+            "".join(stats_cards),
+            "</section>",
+            "<section class='grid two-col'>",
+            "<div class='section-stack'>",
+            "".join(left_sections),
+            "</div>",
+            "<div class='section-stack'>",
+            "".join(right_sections),
+            "</div>",
+            "</section>",
+        ]
+    )
     return _layout(
         "OpenClaw Truth UI",
-        (
-            "<section class='hero'>"
-            "<h1>OpenClaw Truth UI</h1>"
-            "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.</p>"
-            "</section>"
-            "<section class='grid stats'>"
-            "<div class='card'><h2>Objects Indexed</h2>"
-            f"<p>{payload['objects']['count']}</p></div>"
-            "<div class='card'><h2>Contradictions Open</h2>"
-            f"<p>{payload['contradictions']['open_count']}</p></div>"
-            "<div class='card'><h2>Recent Events</h2>"
-            f"<p>{payload['events']['count']}</p></div>"
-            "<div class='card'><h2>Stale Summaries</h2>"
-            f"<p>{payload['stale_summaries']['count']}</p></div>"
-            "<div class='card'><h2>Evolution Candidates</h2>"
-            f"<p>{payload['evolution']['candidate_count']}</p></div>"
-            "<div class='card'><h2>Signals</h2>"
-            f"<p>{payload['signals']['count']}</p></div>"
-            "</section>"
-            "<section class='grid two-col'>"
-            "<div class='section-stack'>"
-            f"<section class='card'><h2>Needs Attention Now</h2><ul class='list-tight'>{priority_items}</ul></section>"
-            f"<section class='card'><h2><a href='/evolution'>Evolution</a></h2>{evolution_items}</section>"
-            f"<section class='card'><h2>Recent Objects</h2><ul class='list-tight'>{object_items}</ul></section>"
-            f"<section class='card'><h2>Recent Events</h2><ul class='list-tight'>{event_items}</ul></section>"
-            f"<section class='card'><h2><a href='/summaries'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>"
-            "</div>"
-            "<div class='section-stack'>"
-            f"<section class='card'><h2><a href='/signals'>Signals</a></h2><ul class='list-tight'>{signal_items}</ul></section>"
-            f"<section class='card'><h2><a href='/production'>Production Weak Points</a></h2><ul class='list-tight'>{production_gap_items}</ul></section>"
-            f"<section class='card'><h2>Contradiction Queue</h2><ul class='list-tight'>{contradiction_items}</ul></section>"
-            f"{_render_review_history(payload['recent_review_actions'], title='Recent Review Actions')}"
-            "</div>"
-            "</section>"
-        ),
+        dashboard_body,
+        requested_pack=requested_pack,
     )
 
 
 def _render_objects_index(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     items = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a> '
         f'<span class="muted">({escape(item["object_id"])})</span></li>'
         for item in payload["items"]
     )
@@ -849,32 +1057,43 @@ def _render_objects_index(payload: dict) -> str:
         "Objects",
         (
             "<h1>Objects</h1>"
-            "<form method='get' action='/objects'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} objects in current page.</p>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+            + "<form method='get' action='/objects'>"
+            + (
+                f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                if requested_pack
+                else ""
+            )
+            + f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
+            + "<button type='submit'>Search</button>"
+            + "</form>"
+            + f"<p class='muted'>{payload['count']} objects in current page."
+            + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
+            + "</p>"
+            + f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_object_page(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
+    next_path = _shell_href(f"/object?id={quote(str(payload['object']['object_id']), safe='')}", requested_pack)
     evergreen_path = payload["provenance"]["evergreen_path"]
     evergreen_html = (
-        f'<a href="{escape(_note_href(evergreen_path))}">{escape(evergreen_path)}</a>'
+        f'<a href="{escape(_note_href(evergreen_path, requested_pack))}">{escape(evergreen_path)}</a>'
         if evergreen_path
         else "<span class='muted'>None</span>"
     )
     canonical_path = payload["context"]["canonical_path"]
     canonical_path_html = (
-        f'<a href="{escape(_note_href(canonical_path))}">{escape(canonical_path)}</a>'
+        f'<a href="{escape(_note_href(canonical_path, requested_pack))}">{escape(canonical_path)}</a>'
         if canonical_path
         else "<span class='muted'>None</span>"
     )
     claims = "".join(f"<li>{escape(item['claim_text'])}</li>" for item in payload["claims"]) or "<li>None</li>"
     relations = "".join(
-        f'<li><a href="/object?id={escape(item["target_object_id"])}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
+        f'<li><a href="{escape(_object_href(item["target_object_id"], item.get("target_path", ""), requested_pack=requested_pack))}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
         f' <span class="muted">({escape(item["relation_type"])})</span></li>'
         for item in payload["relations"]
     ) or "<li>None</li>"
@@ -888,12 +1107,12 @@ def _render_object_page(payload: dict) -> str:
         for reason in item["reason_texts"]
     ) or "<li class='muted'>No stale summary signals for this object.</li>"
     source_notes = "".join(
-        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a> '
+        f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
         f"<span class='muted'>({escape(item['note_type'])})</span></li>"
         for item in payload["provenance"]["source_notes"]
     ) or "<li>None</li>"
     mocs = "".join(
-        f'<li><a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a></li>'
+        f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a></li>'
         for item in payload["provenance"]["mocs"]
     ) or "<li>None</li>"
     summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
@@ -901,8 +1120,11 @@ def _render_object_page(payload: dict) -> str:
         "evolution",
         {"candidate_items": [], "accepted_links": [], "accepted_count": 0, "candidate_count": 0, "link_types": []},
     )
+    section_nav_items = [
+        item for item in payload["section_nav"] if research_shell_enabled or item["href"] != "#contradictions"
+    ]
     section_nav = "".join(
-        f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>' for item in payload["section_nav"]
+        f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>' for item in section_nav_items
     )
     contradiction_form = (
         "<form method='post' action='/contradictions/resolve' class='link-row'>"
@@ -910,6 +1132,7 @@ def _render_object_page(payload: dict) -> str:
             f"<input type='hidden' name='contradiction_id' value='{escape(contradiction_id)}' />"
             for contradiction_id in payload["open_contradiction_ids"]
         )
+        + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<select name='status'>"
         + "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
         + "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
@@ -926,85 +1149,119 @@ def _render_object_page(payload: dict) -> str:
     summary_form = (
         "<form method='post' action='/summaries/rebuild' class='link-row'>"
         + f"<input type='hidden' name='object_id' value='{escape(payload['object']['object_id'])}' />"
+        + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<button type='submit'>Rebuild This Summary</button>"
         + "</form>"
         if payload["stale_summary_details"]
         else "<p class='muted'>No stale summary action needed for this object.</p>"
     )
+    hero_links = [
+        f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>",
+    ]
+    if research_shell_enabled:
+        hero_links.extend(
+            [
+                f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>",
+                f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>",
+                f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>",
+                f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>",
+                f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>",
+            ]
+        )
+    stats_cards = [
+        f"<div class='card'><h2>Claims</h2><p>{payload['claim_count']}</p></div>",
+        f"<div class='card'><h2>Relations</h2><p>{payload['relation_count']}</p></div>",
+    ]
+    if research_shell_enabled:
+        stats_cards.append(f"<div class='card'><h2>Contradictions</h2><p>{payload['contradiction_count']}</p></div>")
+    right_sections = []
+    if research_shell_enabled:
+        right_sections.extend(
+            [
+                _render_review_context_card(payload['review_context']),
+                _render_review_history(payload['review_history']),
+                "<section class='card'><h2>Quick Maintenance</h2>"
+                f"{contradiction_form}"
+                f"{summary_form}"
+                "</section>",
+                "<section class='card'><h2>Evolution</h2>"
+                f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
+                + (
+                    f" Link types: {escape(', '.join(evolution['link_types']))}."
+                    if evolution["link_types"]
+                    else ""
+                )
+                + "</p>"
+                + f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
+                + f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True, requested_pack=requested_pack, next_path=next_path)}"
+                + "</section>",
+            ]
+        )
+    else:
+        right_sections.append(_render_research_scope_notice(requested_pack))
+    right_sections.extend(
+        [
+            "<section class='card'><h2>Context</h2><dl class='meta-list'>"
+            f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
+            f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
+            f"<div><dt>Canonical Path</dt><dd>{canonical_path_html}</dd></div>"
+            "</dl></section>",
+            "<section class='card'><h2>Provenance</h2><dl class='meta-list'>"
+            f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
+            f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
+            f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
+            "</dl></section>",
+            "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
+            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'], requested_pack=requested_pack)}</dd></div>"
+            f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
+            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
+            "</dl></section>",
+            f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>",
+        ]
+    )
+    if research_shell_enabled:
+        right_sections.extend(
+            [
+                f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>",
+                f"<section class='card'><h2>Stale Summary Signals</h2><ul class='list-tight'>{stale_summary_signals}</ul></section>",
+            ]
+        )
     return _layout(
         f"Object: {payload['object']['title']}",
         (
             f"<section class='hero'><h1>Object: {escape(payload['object']['title'])}</h1>"
-            f"<p class='muted'>{escape(payload['object']['object_id'])}</p>"
-            "<div class='link-row'>"
-            f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>"
-            f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
-            f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
-            f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
-            f"<a href='/deep-dives?q={escape(payload['object']['object_id'])}'>Source deep dives</a>"
-            f"<a href='/atlas?q={escape(payload['object']['object_id'])}'>Atlas / MOC</a>"
-            "</div></section>"
+            f"<p class='muted'>{escape(payload['object']['object_id'])}"
+            + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
+            + "</p>"
+            + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
             f"<nav class='subnav'>{section_nav}</nav>"
-            "<section class='grid stats'>"
-            f"<div class='card'><h2>Claims</h2><p>{payload['claim_count']}</p></div>"
-            f"<div class='card'><h2>Relations</h2><p>{payload['relation_count']}</p></div>"
-            f"<div class='card'><h2>Contradictions</h2><p>{payload['contradiction_count']}</p></div>"
-            "</section>"
+            + f"<section class='grid stats'>{''.join(stats_cards)}</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
             f"<section id='summary' class='card'><h2>Compiled Summary</h2><p>{escape(summary_text)}</p></section>"
             f"<section id='claims' class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
-            f"{_render_review_context_card(payload['review_context'])}"
-            f"{_render_review_history(payload['review_history'])}"
-            "<section class='card'><h2>Quick Maintenance</h2>"
-            f"{contradiction_form}"
-            f"{summary_form}"
-            "</section>"
-            "<section class='card'><h2>Context</h2><dl class='meta-list'>"
-            f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
-            f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
-            f"<div><dt>Canonical Path</dt><dd>{canonical_path_html}</dd></div>"
-            "</dl></section>"
-            "<section class='card'><h2>Provenance</h2><dl class='meta-list'>"
-            f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
-            f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
-            f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
-            "</dl></section>"
-            "<section class='card'><h2>Evolution</h2>"
-            f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
-            + (
-                f" Link types: {escape(', '.join(evolution['link_types']))}."
-                if evolution["link_types"]
-                else ""
-            )
-            + "</p>"
-            f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
-            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True)}"
-            "</section>"
-            "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
-            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'])}</dd></div>"
-            f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'])}</dd></div>"
-            f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
-            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'])}</dd></div>"
-            "</dl></section>"
-            f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>"
-            f"<section id='contradictions' class='card'><h2>Contradictions</h2><ul class='list-tight'>{contradictions}</ul></section>"
-            f"<section class='card'><h2>Stale Summary Signals</h2><ul class='list-tight'>{stale_summary_signals}</ul></section>"
+            f"{''.join(right_sections)}"
             "</div>"
             "</section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_topic_page(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
+    next_path = _shell_href(f"/topic?id={quote(str(payload['center']['object_id']), safe='')}", requested_pack)
     neighbors = "".join(
-        f'<li><a href="/object?id={escape(item["object_id"])}">{escape(item["title"])}</a></li>'
+        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a></li>'
         for item in payload["neighbors"]
     ) or "<li>None</li>"
     mocs = "".join(
-        f"<li>{escape(item['title'])}</li>" for item in payload["provenance"]["mocs"]
+        f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a></li>'
+        for item in payload["provenance"]["mocs"]
     ) or "<li>None</li>"
     evolution = payload.get(
         "evolution",
@@ -1016,6 +1273,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
             for object_id in payload["scoped_stale_summary_ids"]
         )
+        + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<button type='submit'>Rebuild Scoped Summaries</button>"
         + "</form>"
         if payload["scoped_stale_summary_ids"]
@@ -1028,48 +1286,67 @@ def _render_topic_page(payload: dict) -> str:
         if payload["scoped_open_contradiction_ids"]
         else "<p class='muted'>No open contradictions in this topic scope.</p>"
     )
+    hero_links = [
+        f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>",
+    ]
+    if research_shell_enabled:
+        hero_links.extend(
+            [
+                f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>",
+                f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>",
+                f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>",
+                f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>",
+                f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>",
+            ]
+        )
+    right_sections = []
+    if research_shell_enabled:
+        right_sections.extend(
+            [
+                f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>",
+                "<section class='card'><h2>Evolution</h2>"
+                f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
+                + (
+                    f" Link types: {escape(', '.join(evolution['link_types']))}."
+                    if evolution["link_types"]
+                    else ""
+                )
+                + "</p>"
+                + f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
+                + f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True, requested_pack=requested_pack, next_path=next_path)}"
+                + "</section>",
+                _render_review_context_card(payload['review_context']),
+                _render_review_history(payload['review_history']),
+                "<section class='card'><h2>Quick Maintenance</h2>"
+                f"{contradiction_entry}"
+                f"{summary_form}"
+                "</section>",
+            ]
+        )
+    else:
+        right_sections.append(_render_research_scope_notice(requested_pack))
+    right_sections.append(_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack))
     return _layout(
         f"Topic: {payload['center']['title']}",
         (
             f"<section class='hero'><h1>Topic: {escape(payload['center']['title'])}</h1>"
-            f"<p class='muted'>{payload['neighbor_count']} neighbors, {payload['edge_count']} edges.</p>"
-            "<div class='link-row'>"
-            f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>"
-            f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>"
-            f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>"
-            f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>"
-            f"<a href='/deep-dives?q={escape(payload['center']['object_id'])}'>Source deep dives</a>"
-            f"<a href='/atlas?q={escape(payload['center']['object_id'])}'>Atlas / MOC</a>"
-            "</div></section>"
+            f"<p class='muted'>{payload['neighbor_count']} neighbors, {payload['edge_count']} edges."
+            + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
+            + "</p>"
+            + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
             "<section class='grid two-col'>"
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
-            f"<section class='card'><h2>Atlas / MOC</h2><ul class='list-tight'>{mocs}</ul></section>"
-            "<section class='card'><h2>Evolution</h2>"
-            f"<p class='muted'>{evolution['accepted_count']} accepted links and {evolution['candidate_count']} candidate links in scope."
-            + (
-                f" Link types: {escape(', '.join(evolution['link_types']))}."
-                if evolution["link_types"]
-                else ""
-            )
-            + "</p>"
-            f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
-            f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True)}"
-            "</section>"
-            f"{_render_production_summary_card(payload['production_summary'])}"
-            f"{_render_review_context_card(payload['review_context'])}"
-            f"{_render_review_history(payload['review_history'])}"
-            "<section class='card'><h2>Quick Maintenance</h2>"
-            f"{contradiction_entry}"
-            f"{summary_form}"
-            "</section>"
+            f"{''.join(right_sections)}"
             "</section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_events_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     limit_note = (
         f" Showing the most recent {payload['limit']} timeline rows in this dossier window."
         if payload.get("is_limited")
@@ -1114,12 +1391,12 @@ def _render_events_page(payload: dict) -> str:
                     else ""
                 )
                 + (
-                    f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path']))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
+                    f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path'], requested_pack))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
                     if item["provenance"]["evergreen_path"]
                     else "<div class='muted'>Evergreen: <span class='muted'>None</span></div>"
                 )
-                + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
-                + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+                + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
+                + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
                 + "<div class='link-row'>"
                 + f"<a href='{escape(item['review_links']['topic_path'])}'>Topic</a>"
                 + f"<a href='{escape(item['review_links']['contradictions_path'])}'>Contradictions</a>"
@@ -1143,44 +1420,57 @@ def _render_events_page(payload: dict) -> str:
         if payload["scoped_stale_summary_ids"]
         else "<p class='muted'>No stale summaries in the visible event scope.</p>"
     )
+    contradiction_query_path = _shell_href(f"/contradictions?q={quote(query, safe='')}", requested_pack)
+    contradiction_browser_path = _shell_href("/contradictions", requested_pack)
     contradiction_entry = (
-        f"<div class='link-row'><a href='/contradictions?q={escape(query)}'>Review visible contradictions</a></div>"
+        f"<div class='link-row'><a href='{escape(contradiction_query_path)}'>Review visible contradictions</a></div>"
         if payload["scoped_open_contradiction_ids"] and query
         else (
-            "<div class='link-row'><a href='/contradictions'>Review visible contradictions</a></div>"
+            f"<div class='link-row'><a href='{escape(contradiction_browser_path)}'>Review visible contradictions</a></div>"
             if payload["scoped_open_contradiction_ids"]
             else "<p class='muted'>No open contradictions in the visible event scope.</p>"
         )
     )
     return _layout(
         "Event Dossier",
-        (
-            "<h1>Event Dossier</h1>"
-            "<p class='muted'>A timeline-oriented view over dated truth objects, not a separate event object model.</p>"
-            "<form method='get' action='/events'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.{escape(limit_note)}</p>"
-            f"<div class='link-row'>{type_breakdown}</div>"
-            f"{_render_production_summary_card(payload['production_summary'])}"
-            f"{_render_review_context_card(payload['review_context'])}"
-            f"{_render_review_history(payload['review_history'])}"
-            "<section class='card'><h2>Quick Maintenance</h2>"
-            f"{contradiction_entry}"
-            f"{summary_form}"
-            "</section>"
-            "<section class='card'><h2>Event Clusters</h2><p class='muted'>Rows for the same object and date are grouped into a single cluster so the dossier reads as an object timeline instead of raw timeline rows.</p></section>"
-            f"<section class='card'><h2>Timeline Contract</h2><ul class='list-tight'>{timeline_contract_items}</ul></section>"
-            f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
-            f"<nav class='subnav'>{date_nav}</nav>"
-            f"{events}"
+        "".join(
+            [
+                "<h1>Event Dossier</h1>",
+                "<p class='muted'>A timeline-oriented view over dated truth objects, not a separate event object model.</p>",
+                "<form method='get' action='/events'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                f"<div class='link-row'>{type_breakdown}</div>",
+                f"{_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack)}",
+                f"{_render_review_context_card(payload['review_context'])}",
+                f"{_render_review_history(payload['review_history'])}",
+                "<section class='card'><h2>Quick Maintenance</h2>",
+                f"{contradiction_entry}",
+                f"{summary_form}",
+                "</section>",
+                "<section class='card'><h2>Event Clusters</h2><p class='muted'>Rows for the same object and date are grouped into a single cluster so the dossier reads as an object timeline instead of raw timeline rows.</p></section>",
+                f"<section class='card'><h2>Timeline Contract</h2><ul class='list-tight'>{timeline_contract_items}</ul></section>",
+                f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>",
+                f"<nav class='subnav'>{date_nav}</nav>",
+                f"{events}",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_atlas_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     limit_note = (
         f" Showing the most recent {payload['limit']} atlas pages in this browser window."
         if payload.get("is_limited")
@@ -1188,14 +1478,14 @@ def _render_atlas_page(payload: dict) -> str:
     )
     items = "".join(
         "<li>"
-        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{item['member_count']} objects</span>"
         + f" <span class='pill'>{len(item['deep_dives'])} deep dives</span>"
         + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
-                f'<a href="/object?id={escape(member["object_id"])}">{escape(member["title"])}</a>'
+                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
                 for member in item["members"]
             )
             + "</span>"
@@ -1205,28 +1495,39 @@ def _render_atlas_page(payload: dict) -> str:
             if item["preview_titles"]
             else ""
         )
-        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'])}</div>"
-        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['deep_dives'])}</div>"
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['deep_dives'], requested_pack=requested_pack)}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"
     return _layout(
         "Atlas / MOC Browser",
-        (
-            "<h1>Atlas / MOC Browser</h1>"
-            "<form method='get' action='/atlas'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter MOCs or objects' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} atlas/moc pages linked to indexed objects.{escape(limit_note)}</p>"
-            "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each Atlas page now shows the source notes and deep dives that feed the objects it organizes.</p></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Atlas / MOC Browser</h1>",
+                "<form method='get' action='/atlas'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter MOCs or objects' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} atlas/moc pages linked to indexed objects.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each Atlas page now shows the source notes and deep dives that feed the objects it organizes.</p></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_derivations_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
     limit_note = (
         f" Showing the most recent {payload['limit']} deep dives in this browser window."
         if payload.get("is_limited")
@@ -1234,14 +1535,14 @@ def _render_derivations_page(payload: dict) -> str:
     )
     items = "".join(
         "<li>"
-        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{item['derived_object_count']} derived objects</span>"
         + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
         + f" <span class='pill'>{len(item['atlas_pages'])} atlas pages</span>"
         + (
             " <span class='muted'>"
             + ", ".join(
-                f'<a href="/object?id={escape(member["object_id"])}">{escape(member["title"])}</a>'
+                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
                 for member in item["derived_objects"]
             )
             + "</span>"
@@ -1251,28 +1552,40 @@ def _render_derivations_page(payload: dict) -> str:
             if item["preview_titles"]
             else ""
         )
-        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'])}</div>"
-        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['atlas_pages'])}</div>"
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['atlas_pages'], requested_pack=requested_pack)}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li>None</li>"
     return _layout(
         "Deep Dive Derivations",
-        (
-            "<h1>Deep Dive Derivations</h1>"
-            "<form method='get' action='/deep-dives'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter deep dives or objects' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.{escape(limit_note)}</p>"
-            "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each deep dive now shows upstream source notes and downstream Atlas reach, not just derived objects.</p></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Deep Dive Derivations</h1>",
+                "<form method='get' action='/deep-dives'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter deep dives or objects' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each deep dive now shows upstream source notes and downstream Atlas reach, not just derived objects.</p></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_production_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
+    surface_contract_card = _render_surface_contract_card(payload)
     limit_note = (
         f" Showing the most recent {payload['limit']} production-chain entries in this browser window."
         if payload.get("is_limited")
@@ -1280,38 +1593,49 @@ def _render_production_browser_page(payload: dict) -> str:
     )
     items = "".join(
         "<li>"
-        f'<a href="{escape(_note_href(item["path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{escape(item['stage_label'].replace('_', ' '))}</span>"
         + f" <span class='pill'>{item['traceability']['counts']['deep_dives']} deep dives</span>"
         + f" <span class='pill'>{item['traceability']['counts']['objects']} objects</span>"
         + f" <span class='pill'>{item['traceability']['counts']['atlas_pages']} atlas pages</span>"
-        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'])}</div>"
-        + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'])}</div>"
-        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'])}</div>"
+        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'], requested_pack=requested_pack)}</div>"
         + "</li>"
         for item in payload["items"]
     ) or "<li class='muted'>No production chains found.</li>"
     weak_points = "".join(
         "<li>"
         f'<span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
-        f'<a href="{escape(_note_href(item["note_path"]))}">{escape(item["title"])}</a>'
+        f'<a href="{escape(_note_href(item["note_path"], requested_pack))}">{escape(item["title"])}</a>'
         f"<div class='muted'>Missing: {escape(item['detail'])}</div>"
         "</li>"
         for item in payload["weak_points"]
     ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
     return _layout(
         "Production Browser",
-        (
-            "<h1>Production Browser</h1>"
-            "<form method='get' action='/production'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter source notes, deep dives, objects, or atlas' /> "
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.{escape(limit_note)}</p>"
-            "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>"
-            f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Production Browser</h1>",
+                "<form method='get' action='/production'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter source notes, deep dives, objects, or atlas' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                f"{escape(limit_note)}</p>",
+                surface_contract_card,
+                "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>",
+                f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1405,11 +1729,13 @@ def _render_clusters_page(payload: dict) -> str:
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_cluster_detail_page(payload: dict) -> str:
     cluster = payload["cluster"]
+    requested_pack = payload.get("requested_pack", "")
     edge_kind_counts = "".join(
         f"<span class='pill'>{escape(edge_kind)}: {count}</span>"
         for edge_kind, count in payload["edge_kind_counts"].items()
@@ -1554,6 +1880,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Internal Edges</h2><ul class='list-tight'>{edges}</ul></section>"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -1561,43 +1888,56 @@ def _render_evolution_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
     status = payload.get("status", "all")
     selected_link_type = payload.get("link_type", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = _shell_href("/evolution", requested_pack)
     type_counts = "".join(
         f"<span class='pill'>{escape(link_type)}: {count}</span>"
         for link_type, count in payload["type_counts"].items()
     ) or "<span class='muted'>None</span>"
     return _layout(
         "Evolution Browser",
-        (
-            "<h1>Evolution Browser</h1>"
-            "<form method='get' action='/evolution' class='link-row'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter evolution links' />"
-            "<select name='status'>"
-            + "".join(
-                f"<option value='{escape(option)}' {'selected' if status == option else ''}>{escape(option)}</option>"
-                for option in ("all", "candidate", "accepted", "rejected")
-            )
-            + "</select>"
-            "<select name='link_type'>"
-            "<option value=''>all link types</option>"
-            + "".join(
-                f"<option value='{escape(option)}' {'selected' if selected_link_type == option else ''}>{escape(option)}</option>"
-                for option in _EVOLUTION_LINK_TYPES
-            )
-            + "</select>"
-            "<button type='submit'>Search</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} evolution records in the current view.</p>"
-            f"<section class='card'><h2>Link Types</h2><div class='link-row'>{type_counts}</div></section>"
-            f"<section class='card'><h2>Accepted Links</h2>{_render_evolution_links(payload['accepted_links'], empty_text='No accepted evolution links yet.')}</section>"
-            f"<section class='card'><h2>Rejected Links</h2>{_render_evolution_links(payload['rejected_links'], empty_text='No rejected evolution links yet.')}</section>"
-            f"<section class='card'><h2>Candidate Links</h2>{_render_evolution_candidates(payload['candidate_items'], reviewable=True)}</section>"
+        "".join(
+            [
+                "<h1>Evolution Browser</h1>",
+                "<form method='get' action='/evolution' class='link-row'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter evolution links' />",
+                "<select name='status'>",
+                "".join(
+                    f"<option value='{escape(option)}' {'selected' if status == option else ''}>{escape(option)}</option>"
+                    for option in ("all", "candidate", "accepted", "rejected")
+                ),
+                "</select>",
+                "<select name='link_type'>",
+                "<option value=''>all link types</option>",
+                "".join(
+                    f"<option value='{escape(option)}' {'selected' if selected_link_type == option else ''}>{escape(option)}</option>"
+                    for option in _EVOLUTION_LINK_TYPES
+                ),
+                "</select>",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} evolution records in the current view.</p>",
+                f"<section class='card'><h2>Link Types</h2><div class='link-row'>{type_counts}</div></section>",
+                f"<section class='card'><h2>Accepted Links</h2>{_render_evolution_links(payload['accepted_links'], empty_text='No accepted evolution links yet.')}</section>",
+                f"<section class='card'><h2>Rejected Links</h2>{_render_evolution_links(payload['rejected_links'], empty_text='No rejected evolution links yet.')}</section>",
+                f"<section class='card'><h2>Candidate Links</h2>{_render_evolution_candidates(payload['candidate_items'], reviewable=True, requested_pack=requested_pack, next_path=next_path)}</section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_signals_page(payload: dict) -> str:
     query = payload.get("query", "")
     selected_type = payload.get("signal_type", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = "/signals" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    surface_contract_card = _render_surface_contract_card(payload)
     options = ["", *sorted(payload["signal_type_explanations"].keys())]
     option_html = "".join(
         f"<option value='{escape(option)}' {'selected' if option == selected_type else ''}>"
@@ -1628,7 +1968,7 @@ def _render_signals_page(payload: dict) -> str:
         + (
             "<form method='post' action='/actions/enqueue' class='link-row'>"
             + f"<input type='hidden' name='signal_id' value='{escape(item['signal_id'])}' />"
-            + "<input type='hidden' name='next' value='/signals' />"
+            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Queue action</button>"
             + "</form>"
             if item.get("recommended_action") and not item["recommended_action"].get("queue_status")
@@ -1653,21 +1993,35 @@ def _render_signals_page(payload: dict) -> str:
     )
     return _layout(
         "Active Signals",
-        (
-            "<h1>Active Signals</h1>"
-            "<form method='get' action='/signals' class='link-row'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search signals' />"
-            f"<select name='type'>{option_html}</select>"
-            "<button type='submit'>Filter</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} active signals.</p>"
-            f"<section class='card'><h2>Signal Types</h2><ul class='list-tight'>{explanations}</ul></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Active Signals</h1>",
+                "<form method='get' action='/signals' class='link-row'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Search signals' />",
+                f"<select name='type'>{option_html}</select>",
+                "<button type='submit'>Filter</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} active signals.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                "</p>",
+                surface_contract_card,
+                f"<section class='card'><h2>Signal Types</h2><ul class='list-tight'>{explanations}</ul></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_briefing_page(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    next_path = "/briefing" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    surface_contract_card = _render_surface_contract_card(payload)
     first_useful_sign = payload.get("first_useful_sign")
     first_useful_sign_html = (
         "<li>"
@@ -1720,7 +2074,7 @@ def _render_briefing_page(payload: dict) -> str:
         + (
             "<form method='post' action='/actions/enqueue' class='link-row'>"
             + f"<input type='hidden' name='signal_id' value='{escape(str(item['signal_id']))}' />"
-            + "<input type='hidden' name='next' value='/briefing' />"
+            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Queue action</button>"
             + "</form>"
             if item.get("signal_id") and item.get("recommended_action") and not item["recommended_action"].get("queue_status")
@@ -1756,35 +2110,43 @@ def _render_briefing_page(payload: dict) -> str:
     ) or "<li class='muted'>No failed actions.</li>"
     return _layout(
         "Working Memory Snapshot",
-        (
-            "<h1>Working Memory Snapshot</h1>"
-            f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.</p>"
-            f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>"
-            f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>"
-            f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>"
-            "<section class='card'><h2>Execution Surface</h2>"
-            f"<p class='muted'>{queue_summary.get('queued_count', 0)} queued, "
-            f"{queue_summary.get('safe_queued_count', 0)} safe to auto-run, "
-            f"{queue_summary.get('running_count', 0)} running, "
-            f"{queue_summary.get('failed_count', 0)} failed.</p>"
-            "<form method='post' action='/actions/run-batch' class='link-row'>"
-            "<input type='hidden' name='limit' value='5' />"
-            "<input type='hidden' name='safe_only' value='1' />"
-            "<input type='hidden' name='next' value='/briefing' />"
-            "<button type='submit'>Run 5 safe queued actions</button>"
-            "</form>"
-            f"<ul class='list-tight'>{failure_buckets}</ul></section>"
-            f"<section class='card'><h2>Recent Signals</h2><ul class='list-tight'>{recent_signals}</ul></section>"
-            f"<section class='card'><h2>Unresolved Issues</h2><ul class='list-tight'>{unresolved}</ul></section>"
-            f"<section class='card'><h2>Changed Objects</h2><ul class='list-tight'>{changed_objects}</ul></section>"
-            f"<section class='card'><h2>Active Topics</h2><ul class='list-tight'>{active_topics}</ul></section>"
+        "".join(
+            [
+                "<h1>Working Memory Snapshot</h1>",
+                f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                "</p>",
+                surface_contract_card,
+                f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
+                f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>",
+                f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>",
+                "<section class='card'><h2>Execution Surface</h2>",
+                f"<p class='muted'>{queue_summary.get('queued_count', 0)} queued, ",
+                f"{queue_summary.get('safe_queued_count', 0)} safe to auto-run, ",
+                f"{queue_summary.get('running_count', 0)} running, ",
+                f"{queue_summary.get('failed_count', 0)} failed.</p>",
+                "<form method='post' action='/actions/run-batch' class='link-row'>",
+                "<input type='hidden' name='limit' value='5' />",
+                "<input type='hidden' name='safe_only' value='1' />",
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Run 5 safe queued actions</button>",
+                "</form>",
+                f"<ul class='list-tight'>{failure_buckets}</ul></section>",
+                f"<section class='card'><h2>Recent Signals</h2><ul class='list-tight'>{recent_signals}</ul></section>",
+                f"<section class='card'><h2>Unresolved Issues</h2><ul class='list-tight'>{unresolved}</ul></section>",
+                f"<section class='card'><h2>Changed Objects</h2><ul class='list-tight'>{changed_objects}</ul></section>",
+                f"<section class='card'><h2>Active Topics</h2><ul class='list-tight'>{active_topics}</ul></section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_actions_page(payload: dict) -> str:
     query = payload.get("query", "")
     selected_status = payload.get("status", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = _shell_href("/actions", requested_pack)
     options = ["", "queued", "running", "succeeded", "failed", "dismissed", "obsolete"]
     option_html = "".join(
         f"<option value='{escape(option)}' {'selected' if option == selected_status else ''}>"
@@ -1823,8 +2185,29 @@ def _render_actions_page(payload: dict) -> str:
             else ""
         )
         + (
+            f"<div class='muted'>Processor: {escape(str(item['processor_mode']))}</div>"
+            if item.get("processor_mode")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Inputs: {escape(', '.join(str(value) for value in item['processor_inputs']))}</div>"
+            if item.get("processor_inputs")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Outputs: {escape(', '.join(str(value) for value in item['processor_outputs']))}</div>"
+            if item.get("processor_outputs")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Quality hooks: {escape(', '.join(str(value) for value in item['processor_quality_hooks']))}</div>"
+            if item.get("processor_quality_hooks")
+            else ""
+        )
+        + (
             "<form method='post' action='/actions/retry' class='link-row'>"
             + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
+            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Retry</button>"
             + "</form>"
             if item.get("status") in {"failed", "obsolete"}
@@ -1833,6 +2216,7 @@ def _render_actions_page(payload: dict) -> str:
         + (
             "<form method='post' action='/actions/dismiss' class='link-row'>"
             + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
+            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Dismiss</button>"
             + "</form>"
             if item.get("status") in {"queued", "failed", "obsolete", "running"}
@@ -1843,37 +2227,63 @@ def _render_actions_page(payload: dict) -> str:
     ) or "<li class='muted'>No queued actions yet.</li>"
     return _layout(
         "Action Queue",
-        (
-            "<h1>Action Queue</h1>"
-            "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m openclaw_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>"
-            "<form method='post' action='/actions/run-next' class='link-row'>"
-            "<button type='submit'>Run next queued action</button>"
-            "</form>"
-            "<form method='post' action='/actions/run-batch' class='link-row'>"
-            "<input type='hidden' name='limit' value='5' />"
-            "<button type='submit'>Run 5 queued actions</button>"
-            "</form>"
-            "<form method='post' action='/actions/run-batch' class='link-row'>"
-            "<input type='hidden' name='limit' value='5' />"
-            "<input type='hidden' name='safe_only' value='1' />"
-            "<button type='submit'>Run 5 safe queued actions</button>"
-            "</form>"
-            "<form method='get' action='/actions' class='link-row'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Search actions' />"
-            f"<select name='status'>{option_html}</select>"
-            "<button type='submit'>Filter</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} actions in the current execution surface. "
-            f"{payload.get('queued_safe_count', 0)} queued safe actions. "
-            f"{payload.get('failed_count', 0)} failed actions.</p>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Action Queue</h1>",
+                "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m openclaw_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>",
+                "<form method='post' action='/actions/run-next' class='link-row'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Run next queued action</button>",
+                "</form>",
+                "<form method='post' action='/actions/run-batch' class='link-row'>",
+                "<input type='hidden' name='limit' value='5' />",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Run 5 queued actions</button>",
+                "</form>",
+                "<form method='post' action='/actions/run-batch' class='link-row'>",
+                "<input type='hidden' name='limit' value='5' />",
+                "<input type='hidden' name='safe_only' value='1' />",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Run 5 safe queued actions</button>",
+                "</form>",
+                "<form method='get' action='/actions' class='link-row'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Search actions' />",
+                f"<select name='status'>{option_html}</select>",
+                "<button type='submit'>Filter</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} actions in the current execution surface. {payload.get('queued_safe_count', 0)} queued safe actions. {payload.get('failed_count', 0)} failed actions.</p>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = "/contradictions" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     scope_summary = payload["scope_summary"]
     scope_summary_items = (
@@ -1922,8 +2332,8 @@ def _render_contradictions_page(payload: dict) -> str:
             if item["object_links"]
             else ""
         )
-        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'])}</div>"
-        + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'])}</div>"
+        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
+        + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
         + (
             "<details><summary>Ranked Evidence</summary><ol class='list-tight'>"
             + "".join(
@@ -2005,6 +2415,7 @@ def _render_contradictions_page(payload: dict) -> str:
         + (
             "<form method='post' action='/contradictions/resolve' class='link-row'>"
             f"<input type='hidden' name='contradiction_id' value='{escape(item['contradiction_id'])}' />"
+            f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             "<select name='status'>"
             "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
             "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
@@ -2023,42 +2434,55 @@ def _render_contradictions_page(payload: dict) -> str:
     ) or f"<li>{escape(payload['empty_state'])}</li>"
     return _layout(
         "Contradictions",
-        (
-            "<h1>Contradictions</h1>"
-            "<form method='get' action='/contradictions'>"
-            "<select name='status'>"
-            f"<option value=''{' selected' if not status else ''}>all</option>"
-            f"<option value='open'{' selected' if status == 'open' else ''}>open</option>"
-            f"<option value='resolved'{' selected' if status == 'resolved' else ''}>resolved</option>"
-            "</select> "
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter contradictions' /> "
-            "<button type='submit'>Filter</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.</p>"
-            f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
-            "<section class='card'>"
-            "<h2>Batch Resolve</h2>"
-            "<form id='contradiction-batch-form' method='post' action='/contradictions/resolve' class='link-row'>"
-            "<select name='status'>"
-            "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
-            "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
-            "<option value='dismissed'>dismissed</option>"
-            "<option value='needs_human'>needs_human</option>"
-            "</select>"
-            "<input type='text' name='note' placeholder='Resolution note for selected rows' />"
-            "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>"
-            "<button type='submit'>Resolve Selected</button>"
-            "</form>"
-            "</section>"
-            f"<section class='card'><h2>Scope Summary</h2><ul class='list-tight'>{scope_summary_items}</ul></section>"
-            f"<section class='card'><h2>Detection Contract</h2><ul class='list-tight'>{detection_contract_items}</ul></section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Contradictions</h1>",
+                "<form method='get' action='/contradictions'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                "<select name='status'>",
+                f"<option value=''{' selected' if not status else ''}>all</option>",
+                f"<option value='open'{' selected' if status == 'open' else ''}>open</option>",
+                f"<option value='resolved'{' selected' if status == 'resolved' else ''}>resolved</option>",
+                "</select> ",
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter contradictions' /> ",
+                "<button type='submit'>Filter</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                "</p>",
+                f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
+                "<section class='card'>",
+                "<h2>Batch Resolve</h2>",
+                "<form id='contradiction-batch-form' method='post' action='/contradictions/resolve' class='link-row'>",
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<select name='status'>",
+                "<option value='resolved_keep_positive'>resolved_keep_positive</option>",
+                "<option value='resolved_keep_negative'>resolved_keep_negative</option>",
+                "<option value='dismissed'>dismissed</option>",
+                "<option value='needs_human'>needs_human</option>",
+                "</select>",
+                "<input type='text' name='note' placeholder='Resolution note for selected rows' />",
+                "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>",
+                "<button type='submit'>Resolve Selected</button>",
+                "</form>",
+                "</section>",
+                f"<section class='card'><h2>Scope Summary</h2><ul class='list-tight'>{scope_summary_items}</ul></section>",
+                f"<section class='card'><h2>Detection Contract</h2><ul class='list-tight'>{detection_contract_items}</ul></section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
 def _render_stale_summaries_page(payload: dict) -> str:
     query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
+    next_path = "/summaries" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     items = "".join(
         "<li>"
@@ -2093,6 +2517,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
         )
         + "<form method='post' action='/summaries/rebuild' class='link-row'>"
         + f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
+        + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<button type='submit'>Rebuild Summary</button>"
         + "</form>"
         + "</li>"
@@ -2100,24 +2525,35 @@ def _render_stale_summaries_page(payload: dict) -> str:
     ) or "<li class='muted'>No stale summaries detected.</li>"
     return _layout(
         "Stale Summaries",
-        (
-            "<h1>Stale Summaries</h1>"
-            "<form method='get' action='/summaries'>"
-            f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter stale summaries' /> "
-            "<button type='submit'>Filter</button>"
-            "</form>"
-            f"<p class='muted'>{payload['count']} stale summary candidates.</p>"
-            f"{_render_review_context_card(payload['review_context'])}"
-            f"{_render_review_history(payload['review_history'])}"
-            f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>"
-            "<section class='card'>"
-            "<h2>Batch Rebuild</h2>"
-            "<form id='summary-batch-form' method='post' action='/summaries/rebuild' class='link-row'>"
-            "<button type='submit'>Rebuild Selected</button>"
-            "</form>"
-            "</section>"
-            f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        "".join(
+            [
+                "<h1>Stale Summaries</h1>",
+                "<form method='get' action='/summaries'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter stale summaries' /> ",
+                "<button type='submit'>Filter</button>",
+                "</form>",
+                f"<p class='muted'>{payload['count']} stale summary candidates.",
+                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                "</p>",
+                f"{_render_review_context_card(payload['review_context'])}",
+                f"{_render_review_history(payload['review_history'])}",
+                f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
+                "<section class='card'>",
+                "<h2>Batch Rebuild</h2>",
+                "<form id='summary-batch-form' method='post' action='/summaries/rebuild' class='link-row'>",
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />",
+                "<button type='submit'>Rebuild Selected</button>",
+                "</form>",
+                "</section>",
+                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
+            ]
         ),
+        requested_pack=requested_pack,
     )
 
 
@@ -2135,165 +2571,269 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
 
             try:
                 if path == "/":
-                    payload = build_truth_dashboard_payload(resolved_vault)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_truth_dashboard_payload(resolved_vault, pack_name=pack_name)
                     self._write_html(_render_dashboard(payload))
                     return
                 if path == "/api/objects":
                     limit = int(query.get("limit", ["100"])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
                     self._write_json(
-                        build_objects_index_payload(resolved_vault, limit=limit, offset=offset, query=q)
+                        build_objects_index_payload(
+                            resolved_vault,
+                            limit=limit,
+                            offset=offset,
+                            query=q,
+                            pack_name=pack_name,
+                        )
                     )
                     return
                 if path == "/objects":
                     limit = int(query.get("limit", ["100"])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
                     payload = build_objects_index_payload(
-                        resolved_vault, limit=limit, offset=offset, query=q
+                        resolved_vault,
+                        limit=limit,
+                        offset=offset,
+                        query=q,
+                        pack_name=pack_name,
                     )
                     self._write_html(_render_objects_index(payload))
                     return
                 if path == "/api/search":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_search_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_search_payload(resolved_vault, query=q, pack_name=pack_name))
                     return
                 if path == "/search":
                     q = query.get("q", [""])[0]
-                    payload = build_search_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_search_payload(resolved_vault, query=q, pack_name=pack_name)
                     self._write_html(_render_search_page(payload))
                     return
                 if path == "/api/briefing":
-                    self._write_json(build_briefing_payload(resolved_vault))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_briefing_payload(resolved_vault, pack_name=pack_name))
                     return
                 if path == "/briefing":
-                    self._write_html(_render_briefing_page(build_briefing_payload(resolved_vault)))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_html(_render_briefing_page(build_briefing_payload(resolved_vault, pack_name=pack_name)))
                     return
                 if path == "/api/signals":
                     q = query.get("q", [""])[0]
                     signal_type = query.get("type", [""])[0] or None
-                    self._write_json(build_signal_browser_payload(resolved_vault, signal_type=signal_type, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(
+                        build_signal_browser_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            signal_type=signal_type,
+                            query=q,
+                        )
+                    )
                     return
                 if path == "/signals":
                     q = query.get("q", [""])[0]
                     signal_type = query.get("type", [""])[0] or None
-                    payload = build_signal_browser_payload(resolved_vault, signal_type=signal_type, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_signal_browser_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        signal_type=signal_type,
+                        query=q,
+                    )
                     self._write_html(_render_signals_page(payload))
                     return
                 if path == "/api/evolution":
                     q = query.get("q", [""])[0]
                     status = query.get("status", ["all"])[0] or "all"
                     link_type = query.get("link_type", [""])[0] or None
-                    self._write_json(build_evolution_browser_payload(resolved_vault, query=q, status=status, link_type=link_type))
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution", api=True):
+                        return
+                    self._write_json(
+                        build_evolution_browser_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            query=q,
+                            status=status,
+                            link_type=link_type,
+                        )
+                    )
                     return
                 if path == "/evolution":
                     q = query.get("q", [""])[0]
                     status = query.get("status", ["all"])[0] or "all"
                     link_type = query.get("link_type", [""])[0] or None
-                    payload = build_evolution_browser_payload(resolved_vault, query=q, status=status, link_type=link_type)
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution", api=False):
+                        return
+                    payload = build_evolution_browser_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
+                        status=status,
+                        link_type=link_type,
+                    )
                     self._write_html(_render_evolution_browser_page(payload))
                     return
                 if path == "/api/object":
                     object_id = self._required(query, "id")
-                    self._write_json(build_object_page_payload(resolved_vault, object_id))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_object_page_payload(resolved_vault, object_id, pack_name=pack_name))
                     return
                 if path == "/object":
                     object_id = self._required(query, "id")
-                    payload = build_object_page_payload(resolved_vault, object_id)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_object_page_payload(resolved_vault, object_id, pack_name=pack_name)
                     self._write_html(_render_object_page(payload))
                     return
                 if path == "/api/topic":
                     object_id = self._required(query, "id")
-                    self._write_json(build_topic_overview_payload(resolved_vault, object_id))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_topic_overview_payload(resolved_vault, object_id, pack_name=pack_name))
                     return
                 if path == "/topic":
                     object_id = self._required(query, "id")
-                    payload = build_topic_overview_payload(resolved_vault, object_id)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_topic_overview_payload(resolved_vault, object_id, pack_name=pack_name)
                     self._write_html(_render_topic_page(payload))
                     return
                 if path == "/api/events":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_event_dossier_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/events", api=True):
+                        return
+                    self._write_json(build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/events":
                     q = query.get("q", [""])[0]
-                    payload = build_event_dossier_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/events", api=False):
+                        return
+                    payload = build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_events_page(payload))
                     return
                 if path == "/api/atlas":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_atlas_browser_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/atlas", api=True):
+                        return
+                    self._write_json(build_atlas_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/atlas":
                     q = query.get("q", [""])[0]
-                    payload = build_atlas_browser_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/atlas", api=False):
+                        return
+                    payload = build_atlas_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_atlas_page(payload))
                     return
                 if path == "/api/deep-dives":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_derivation_browser_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/deep-dives", api=True):
+                        return
+                    self._write_json(build_derivation_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/deep-dives":
                     q = query.get("q", [""])[0]
-                    payload = build_derivation_browser_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/deep-dives", api=False):
+                        return
+                    payload = build_derivation_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_derivations_page(payload))
                     return
                 if path == "/api/production":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_production_browser_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(build_production_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/production":
                     q = query.get("q", [""])[0]
-                    payload = build_production_browser_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_production_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_production_browser_page(payload))
                     return
                 if path == "/api/clusters":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/clusters", api=True):
+                        return
                     self._write_json(build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/clusters":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/clusters", api=False):
+                        return
                     payload = build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_clusters_page(payload))
                     return
                 if path == "/api/cluster":
                     cluster_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/cluster", api=True):
+                        return
                     self._write_json(build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name))
                     return
                 if path == "/cluster":
                     cluster_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/cluster", api=False):
+                        return
                     payload = build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name)
                     self._write_html(_render_cluster_detail_page(payload))
                     return
                 if path == "/api/actions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
-                    self._write_json(build_action_queue_payload(resolved_vault, status=status, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    self._write_json(
+                        build_action_queue_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            status=status,
+                            query=q,
+                        )
+                    )
                     return
                 if path == "/actions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
-                    payload = build_action_queue_payload(resolved_vault, status=status, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_action_queue_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        status=status,
+                        query=q,
+                    )
                     self._write_html(_render_actions_page(payload))
                     return
                 if path == "/api/summaries":
                     q = query.get("q", [""])[0]
-                    self._write_json(build_stale_summary_browser_payload(resolved_vault, query=q))
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries", api=True):
+                        return
+                    self._write_json(build_stale_summary_browser_payload(resolved_vault, pack_name=pack_name, query=q))
                     return
                 if path == "/summaries":
                     q = query.get("q", [""])[0]
-                    payload = build_stale_summary_browser_payload(resolved_vault, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries", api=False):
+                        return
+                    payload = build_stale_summary_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_stale_summaries_page(payload))
                     return
                 if path == "/note":
                     relative_path = self._required(query, "path")
+                    pack_name = query.get("pack", [""])[0] or None
                     _, markdown = _read_vault_note(resolved_vault, relative_path)
-                    payload = build_note_page_payload(resolved_vault, note_path=relative_path)
+                    payload = build_note_page_payload(resolved_vault, note_path=relative_path, pack_name=pack_name)
                     self._write_html(_render_note_page(resolved_vault, relative_path, markdown, payload))
                     return
                 if path == "/asset":
@@ -2304,14 +2844,30 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/contradictions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions", api=True):
+                        return
                     self._write_json(
-                        build_contradiction_browser_payload(resolved_vault, status=status, query=q)
+                        build_contradiction_browser_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            status=status,
+                            query=q,
+                        )
                     )
                     return
                 if path == "/contradictions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
-                    payload = build_contradiction_browser_payload(resolved_vault, status=status, query=q)
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions", api=False):
+                        return
+                    payload = build_contradiction_browser_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        status=status,
+                        query=q,
+                    )
                     self._write_html(_render_contradictions_page(payload))
                     return
                 self.send_error(404, "Not Found")
@@ -2324,25 +2880,43 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             try:
                 form = self._read_form()
                 if path == "/api/contradictions/resolve":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions/resolve", api=True):
+                        return
                     self._write_json(self._resolve_contradiction_action(form))
                     return
                 if path == "/contradictions/resolve":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions/resolve", api=False):
+                        return
                     self._resolve_contradiction_action(form)
-                    self._redirect("/contradictions?status=resolved")
+                    self._redirect(self._form_first(form, "next").strip() or "/contradictions?status=resolved")
                     return
                 if path == "/api/summaries/rebuild":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries/rebuild", api=True):
+                        return
                     self._write_json(self._rebuild_summary_action(form))
                     return
                 if path == "/summaries/rebuild":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries/rebuild", api=False):
+                        return
                     self._rebuild_summary_action(form)
-                    self._redirect("/summaries")
+                    self._redirect(self._form_first(form, "next").strip() or "/summaries")
                     return
                 if path == "/api/evolution/review":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution/review", api=True):
+                        return
                     self._write_json(self._review_evolution_action(form))
                     return
                 if path == "/evolution/review":
-                    self._review_evolution_action(form)
-                    self._redirect("/evolution")
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution/review", api=False):
+                        return
+                    payload = self._review_evolution_action(form)
+                    self._redirect(str(payload["next_path"]))
                     return
                 if path == "/api/actions/enqueue":
                     self._write_json(self._enqueue_signal_action(form))
@@ -2353,37 +2927,63 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/api/actions/run-next":
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
-                    self._write_json(run_next_action_queue_item(resolved_vault, safe_only=safe_only))
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    self._write_json(
+                        run_next_action_queue_item(
+                            resolved_vault,
+                            safe_only=safe_only,
+                            pack_name=pack_name,
+                        )
+                    )
                     return
                 if path == "/actions/run-next":
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
-                    run_next_action_queue_item(resolved_vault, safe_only=safe_only)
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    run_next_action_queue_item(
+                        resolved_vault,
+                        safe_only=safe_only,
+                        pack_name=pack_name,
+                    )
                     self._redirect(self._form_first(form, "next").strip() or "/actions")
                     return
                 if path == "/api/actions/run-batch":
                     limit = int(self._form_first(form, "limit").strip() or "5")
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
-                    self._write_json(run_action_queue(resolved_vault, limit=limit, safe_only=safe_only))
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    self._write_json(
+                        run_action_queue(
+                            resolved_vault,
+                            limit=limit,
+                            safe_only=safe_only,
+                            pack_name=pack_name,
+                        )
+                    )
                     return
                 if path == "/actions/run-batch":
                     limit = int(self._form_first(form, "limit").strip() or "5")
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
-                    run_action_queue(resolved_vault, limit=limit, safe_only=safe_only)
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    run_action_queue(
+                        resolved_vault,
+                        limit=limit,
+                        safe_only=safe_only,
+                        pack_name=pack_name,
+                    )
                     self._redirect(self._form_first(form, "next").strip() or "/actions")
                     return
                 if path == "/api/actions/retry":
                     self._write_json(self._retry_action(form))
                     return
                 if path == "/actions/retry":
-                    self._retry_action(form)
-                    self._redirect("/actions")
+                    payload = self._retry_action(form)
+                    self._redirect(str(payload["next_path"]))
                     return
                 if path == "/api/actions/dismiss":
                     self._write_json(self._dismiss_action(form))
                     return
                 if path == "/actions/dismiss":
-                    self._dismiss_action(form)
-                    self._redirect("/actions")
+                    payload = self._dismiss_action(form)
+                    self._redirect(str(payload["next_path"]))
                     return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
@@ -2406,6 +3006,17 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
 
         def _form_all(self, form: dict[str, list[str]], key: str) -> list[str]:
             return form.get(key, [])
+
+        def _guard_research_route(self, *, pack_name: str | None, route_path: str, api: bool) -> bool:
+            requested_pack = pack_name or ""
+            if _shell_supports_research_nav(requested_pack):
+                return False
+            payload = _unsupported_route_payload(route_path, requested_pack)
+            if api:
+                self._write_json(payload, status=409)
+            else:
+                self._write_html(_render_unsupported_route_page(route_path, requested_pack))
+            return True
 
         def _resolve_contradiction_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             contradiction_ids = [item.strip() for item in self._form_all(form, "contradiction_id") if item.strip()]
@@ -2474,13 +3085,20 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             status = self._form_first(form, "status").strip()
             note = self._form_first(form, "note").strip()
             link_type = self._form_first(form, "link_type").strip() or None
-            return review_evolution_candidate(
+            pack_name = self._form_first(form, "pack").strip() or None
+            payload = review_evolution_candidate(
                 resolved_vault,
                 evolution_id=evolution_id,
                 status=status,
+                pack_name=pack_name,
                 note=note,
                 link_type=link_type,
             )
+            payload["next_path"] = self._form_first(form, "next").strip() or _shell_href(
+                "/evolution",
+                pack_name or "",
+            )
+            return payload
 
         def _enqueue_signal_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             signal_id = self._form_first(form, "signal_id").strip()
@@ -2494,25 +3112,29 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             action_id = self._form_first(form, "action_id").strip()
             if not action_id:
                 raise ValueError("missing action_id")
-            return retry_action_queue_item(resolved_vault, action_id=action_id)
+            payload = retry_action_queue_item(resolved_vault, action_id=action_id)
+            payload["next_path"] = self._form_first(form, "next").strip() or "/actions"
+            return payload
 
         def _dismiss_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             action_id = self._form_first(form, "action_id").strip()
             if not action_id:
                 raise ValueError("missing action_id")
-            return dismiss_action_queue_item(resolved_vault, action_id=action_id)
+            payload = dismiss_action_queue_item(resolved_vault, action_id=action_id)
+            payload["next_path"] = self._form_first(form, "next").strip() or "/actions"
+            return payload
 
-        def _write_json(self, payload: dict) -> None:
+        def _write_json(self, payload: dict, *, status: int = 200) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
-        def _write_html(self, html: str) -> None:
+        def _write_html(self, html: str, *, status: int = 200) -> None:
             body = html.encode("utf-8")
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()

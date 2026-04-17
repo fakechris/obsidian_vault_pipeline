@@ -12,7 +12,9 @@ from urllib.parse import quote
 
 import yaml
 
-from .handler_registry import execute_focused_action_handler, resolve_focused_action_handler
+from .execution_contract_registry import resolve_focused_action_execution_contract
+from .handler_registry import execute_focused_action_handler
+from .knowledge_index import ensure_knowledge_db_current
 from .observation_surface_registry import execute_observation_surface_builder
 from .pack_resolution import iter_compatible_packs
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
@@ -33,7 +35,10 @@ _SOURCE_NOTE_INDEX_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dic
 _PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
 _SIGNAL_LEDGER_SYNC_CACHE: dict[tuple[str, str, tuple[tuple[str, int, int], ...]], dict[str, Any]] = {}
-_EVOLUTION_CANDIDATE_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...], tuple[str, ...]], list[dict[str, Any]]] = {}
+_EVOLUTION_CANDIDATE_CACHE: dict[
+    tuple[str, tuple[tuple[str, int, int], ...], str, tuple[str, ...]],
+    list[dict[str, Any]],
+] = {}
 CONTRADICTION_STATUS_EXPLANATIONS = {
     "open": "Active contradiction awaiting review.",
     "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
@@ -78,8 +83,7 @@ _BRIEFING_EVOLUTION_PRIORITY = {
 
 
 def _db_path(vault_dir: Path | str) -> Path:
-    resolved = resolve_vault_dir(vault_dir)
-    return VaultLayout.from_vault(resolved).knowledge_db
+    return ensure_knowledge_db_current(vault_dir)
 
 
 def _truth_pack_name(pack_name: str | None = None) -> str:
@@ -352,13 +356,18 @@ def _batch_object_rows(
     return items
 
 
-def get_object_provenance_map(vault_dir: Path | str, object_ids: list[str]) -> dict[str, dict[str, Any]]:
+def get_object_provenance_map(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, dict[str, Any]]:
     if not object_ids:
         return {}
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     ordered_object_ids = list(dict.fromkeys(object_ids))
-    object_rows = _batch_object_rows(vault_dir, ordered_object_ids)
+    object_rows = _batch_object_rows(vault_dir, ordered_object_ids, pack_name=pack_name)
     placeholders = ",".join("?" for _ in ordered_object_ids)
     with sqlite3.connect(db_path) as conn:
         mention_rows = conn.execute(
@@ -396,7 +405,12 @@ def get_object_provenance_map(vault_dir: Path | str, object_ids: list[str]) -> d
     return provenance
 
 
-def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
+def get_review_context(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     if not normalized_object_ids:
         return {
@@ -414,7 +428,7 @@ def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str
             "recent_review_actions": [],
         }
 
-    provenance_map = get_object_provenance_map(vault_dir, normalized_object_ids)
+    provenance_map = get_object_provenance_map(vault_dir, normalized_object_ids, pack_name=pack_name)
     source_notes: dict[str, dict[str, Any]] = {}
     mocs: dict[str, dict[str, Any]] = {}
     for provenance in provenance_map.values():
@@ -425,22 +439,30 @@ def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str
 
     db_path = _db_path(vault_dir)
     placeholders = ",".join("?" for _ in normalized_object_ids)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
     with sqlite3.connect(db_path) as conn:
         stale_rows = conn.execute(
             f"""
             SELECT objects.object_id, objects.title, compiled_summaries.summary_text,
                    COALESCE(rel.outgoing_count, 0) AS outgoing_count
             FROM objects
-            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+            LEFT JOIN compiled_summaries
+              ON compiled_summaries.pack = objects.pack
+             AND compiled_summaries.object_id = objects.object_id
             LEFT JOIN (
-                SELECT source_object_id, COUNT(*) AS outgoing_count
+                SELECT pack, source_object_id, COUNT(*) AS outgoing_count
                 FROM relations
-                GROUP BY source_object_id
-            ) AS rel ON rel.source_object_id = objects.object_id
+                GROUP BY pack, source_object_id
+            ) AS rel ON rel.pack = objects.pack AND rel.source_object_id = objects.object_id
             WHERE objects.object_id IN ({placeholders})
-            ORDER BY objects.object_id
+              AND objects.pack IN ({pack_placeholders})
+            ORDER BY CASE objects.pack
+              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              ELSE {len(pack_candidates)}
+            END, objects.object_id
             """,
-            tuple(normalized_object_ids),
+            tuple([*normalized_object_ids, *pack_candidates, *pack_candidates]),
         ).fetchall()
         event_row = conn.execute(
             f"""
@@ -451,15 +473,24 @@ def get_review_context(vault_dir: Path | str, object_ids: list[str]) -> dict[str
             tuple(normalized_object_ids),
         ).fetchone()
         contradiction_rows = conn.execute(
-            """
+            f"""
             SELECT contradiction_id, positive_claim_ids_json, negative_claim_ids_json, status
             FROM contradictions
-            ORDER BY contradiction_id
-            """
+            WHERE pack IN ({pack_placeholders})
+            ORDER BY CASE pack
+              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              ELSE {len(pack_candidates)}
+            END, contradiction_id
+            """,
+            tuple([*pack_candidates, *pack_candidates]),
         ).fetchall()
 
     stale_summaries: list[dict[str, Any]] = []
+    seen_stale_object_ids: set[str] = set()
     for object_id, title, summary_text, outgoing_count in stale_rows:
+        if str(object_id) in seen_stale_object_ids:
+            continue
+        seen_stale_object_ids.add(str(object_id))
         summary = str(summary_text or "").strip()
         if outgoing_count > 0:
             continue
@@ -789,6 +820,7 @@ def search_vault_surface(
     normalized_query = query.strip()
     object_limit, _ = _validate_page_args(limit=object_limit, offset=0)
     note_limit, _ = _validate_page_args(limit=note_limit, offset=0)
+    requested_pack = _truth_pack_name(pack_name)
     if not normalized_query:
         return {
             "query": "",
@@ -797,12 +829,12 @@ def search_vault_surface(
         }
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
-    truth_pack = _truth_pack_name(pack_name)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
     escaped_query = _escape_like(normalized_query.lower())
     with sqlite3.connect(db_path) as conn:
         object_rows = conn.execute(
-            """
-            SELECT DISTINCT objects.object_id, objects.object_kind, objects.title, objects.canonical_path, objects.source_slug
+            f"""
+            SELECT DISTINCT objects.object_id, objects.object_kind, objects.title, objects.canonical_path, objects.source_slug, objects.pack
             FROM objects
             LEFT JOIN compiled_summaries
               ON compiled_summaries.pack = objects.pack
@@ -810,7 +842,7 @@ def search_vault_surface(
             LEFT JOIN claims
               ON claims.pack = objects.pack
              AND claims.object_id = objects.object_id
-            WHERE objects.pack = ?
+            WHERE objects.pack IN ({",".join("?" for _ in pack_candidates)})
               AND (
                 lower(objects.object_id) LIKE ? ESCAPE '\\'
                 OR lower(objects.title) LIKE ? ESCAPE '\\'
@@ -822,7 +854,7 @@ def search_vault_surface(
             LIMIT ?
             """,
             (
-                truth_pack,
+                *pack_candidates,
                 f"%{escaped_query}%",
                 f"%{escaped_query}%",
                 f"%{escaped_query}%",
@@ -865,7 +897,8 @@ def search_vault_surface(
             "title": row[2],
             "canonical_path": _vault_relative_path(resolved_vault, row[3]),
             "source_slug": row[4],
-            "pack": truth_pack,
+            "pack": requested_pack,
+            "row_pack": row[5],
         }
         for row in object_rows
     ]
@@ -926,6 +959,7 @@ def _surface_page_query_clauses(*, note_type: str, normalized_query: str) -> tup
 def _list_surface_groups(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     note_type: str,
     query: str | None,
     limit: int,
@@ -935,6 +969,8 @@ def _list_surface_groups(
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
     where_sql, base_params = _surface_page_query_clauses(
         note_type=note_type,
         normalized_query=normalized_query,
@@ -947,11 +983,11 @@ def _list_surface_groups(
             FROM pages_index
             JOIN page_links ON page_links.source_slug = pages_index.slug
             JOIN objects ON objects.object_id = page_links.target_slug
-            WHERE {where_sql}
+            WHERE objects.pack IN ({pack_placeholders}) AND {where_sql}
             ORDER BY pages_index.slug
             LIMIT ?
             """,
-            tuple([*base_params, limit]),
+            tuple([*pack_candidates, *base_params, limit]),
         ).fetchall()
         selected_slugs = [row[0] for row in selected_rows]
         if not selected_slugs:
@@ -959,18 +995,24 @@ def _list_surface_groups(
         placeholders = ",".join("?" for _ in selected_slugs)
         rows = conn.execute(
             f"""
-            SELECT pages_index.slug, pages_index.title, pages_index.note_type, pages_index.path, objects.object_id, objects.title
+            SELECT pages_index.slug, pages_index.title, pages_index.note_type, pages_index.path, objects.pack, objects.object_id, objects.title
             FROM pages_index
             JOIN page_links ON page_links.source_slug = pages_index.slug
             JOIN objects ON objects.object_id = page_links.target_slug
             WHERE pages_index.slug IN ({placeholders})
-            ORDER BY pages_index.slug, objects.object_id
+              AND objects.pack IN ({pack_placeholders})
+            ORDER BY pages_index.slug,
+              CASE objects.pack
+                {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+                ELSE {len(pack_candidates)}
+              END,
+              objects.object_id
             """,
-            tuple(selected_slugs),
+            tuple([*selected_slugs, *pack_candidates, *pack_candidates]),
         ).fetchall()
 
     grouped: dict[str, dict[str, Any]] = {}
-    for slug, title, row_note_type, path, object_id, object_title in rows:
+    for slug, title, row_note_type, path, object_pack, object_id, object_title in rows:
         item = grouped.setdefault(
             slug,
             {
@@ -981,7 +1023,11 @@ def _list_surface_groups(
                 object_list_key: [],
             },
         )
-        item[object_list_key].append({"object_id": object_id, "title": object_title})
+        if any(existing["object_id"] == object_id for existing in item[object_list_key]):
+            continue
+        item[object_list_key].append(
+            {"object_id": object_id, "title": object_title, "pack": object_pack}
+        )
     return list(grouped.values())
 
 
@@ -1496,8 +1542,10 @@ def list_evolution_review_actions(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     normalized_object_ids = set(object_id for object_id in (object_ids or []) if object_id)
+    normalized_pack = _truth_pack_name(pack_name)
     resolved_vault = resolve_vault_dir(vault_dir)
     rows = [
         (
@@ -1515,6 +1563,7 @@ def list_evolution_review_actions(
                     VaultLayout.from_vault(resolved_vault).logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"
                 )
                 if item.get("event_type") == "ui_evolution_reviewed"
+                and str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) == normalized_pack
             ],
             key=lambda item: str(item.get("timestamp") or ""),
             reverse=True,
@@ -1549,15 +1598,36 @@ def _recommended_action(*, kind: str, label: str, path: str, executable: bool) -
     }
 
 
-def _is_safe_action_kind(action_kind: str, *, pack_name: str | None = None) -> bool:
+def _focused_action_contract_metadata(
+    action_kind: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     try:
-        spec = resolve_focused_action_handler(
+        contract = resolve_focused_action_execution_contract(
             pack_name=pack_name or DEFAULT_WORKFLOW_PACK_NAME,
             action_kind=action_kind,
         )
     except ValueError:
-        return False
-    return bool(spec.safe_to_run)
+        return {
+            "safe_to_run": False,
+            "processor_mode": "",
+            "processor_inputs": [],
+            "processor_outputs": [],
+            "processor_quality_hooks": [],
+        }
+    return {
+        "safe_to_run": bool(contract.handler_spec.safe_to_run),
+        "processor_mode": str(contract.processor_contract.mode or ""),
+        "processor_inputs": list(contract.processor_contract.inputs or ()),
+        "processor_outputs": list(contract.processor_contract.outputs or ()),
+        "processor_quality_hooks": list(contract.processor_contract.quality_hooks or ()),
+    }
+
+
+def _is_safe_action_kind(action_kind: str, *, pack_name: str | None = None) -> bool:
+    metadata = _focused_action_contract_metadata(action_kind, pack_name=pack_name)
+    return bool(metadata["safe_to_run"])
 
 
 def _classify_action_error(error: str) -> str:
@@ -1588,15 +1658,20 @@ def _write_action_queue_rows_unlocked(vault_dir: Path | str, actions: list[dict[
 def list_action_queue(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     status: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     normalized_query = (query or "").strip().lower()
+    normalized_pack = str(pack_name or "").strip()
     items: list[dict[str, Any]] = []
     with action_queue_write_lock(vault_dir):
         for item in _read_action_queue_rows_unlocked(vault_dir):
+            item = _normalize_action_queue_item(item)
+            if normalized_pack and str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) != normalized_pack:
+                continue
             if status and item.get("status") != status:
                 continue
             if normalized_query:
@@ -1611,6 +1686,19 @@ def list_action_queue(
             if len(items) >= limit:
                 break
     return items
+
+
+def _normalize_action_queue_item(item: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(item)
+    metadata = _focused_action_contract_metadata(
+        str(normalized.get("action_kind") or ""),
+        pack_name=str(normalized.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+    )
+    for key, value in metadata.items():
+        current = normalized.get(key)
+        if key not in normalized or current in (None, "", []):
+            normalized[key] = value
+    return normalized
 
 
 def _signal_by_id(
@@ -1684,6 +1772,10 @@ def _enqueue_action_from_signal(
         "object_ids": list(signal.get("object_ids", [])),
     }
     normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    contract_metadata = _focused_action_contract_metadata(
+        str(recommended_action["kind"]),
+        pack_name=normalized_pack,
+    )
     action_id = _action_id(
         signal_id,
         str(recommended_action["kind"]),
@@ -1711,12 +1803,9 @@ def _enqueue_action_from_signal(
         "error": "",
         "failure_bucket": "",
         "retry_count": 0,
-        "safe_to_run": _is_safe_action_kind(
-            str(recommended_action["kind"]),
-            pack_name=normalized_pack,
-        ),
         "payload": payload,
         "session_id": session_id,
+        **contract_metadata,
     }
     return True, action
 
@@ -1794,19 +1883,41 @@ def _action_by_id(vault_dir: Path | str, action_id: str) -> dict[str, Any] | Non
         return _action_by_id_unlocked(vault_dir, action_id)
 
 
-def _next_queued_action_unlocked(vault_dir: Path | str) -> dict[str, Any] | None:
-    queued = [item for item in _read_action_queue_rows_unlocked(vault_dir) if item.get("status") == "queued"]
+def _next_queued_action_unlocked(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_pack = str(pack_name or "").strip()
+    queued = [
+        item
+        for item in _read_action_queue_rows_unlocked(vault_dir)
+        if item.get("status") == "queued"
+        and (
+            not normalized_pack
+            or str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) == normalized_pack
+        )
+    ]
     if not queued:
         return None
     queued.sort(key=lambda item: (str(item.get("created_at", "")), str(item.get("action_id", ""))))
     return dict(queued[0])
 
 
-def _next_safe_queued_action_unlocked(vault_dir: Path | str) -> dict[str, Any] | None:
+def _next_safe_queued_action_unlocked(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_pack = str(pack_name or "").strip()
     queued = [
         item
         for item in _read_action_queue_rows_unlocked(vault_dir)
         if item.get("status") == "queued" and bool(item.get("safe_to_run"))
+        and (
+            not normalized_pack
+            or str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) == normalized_pack
+        )
     ]
     if not queued:
         return None
@@ -1871,15 +1982,25 @@ def _refresh_truth_after_action(
         sync_signal_ledger(vault_dir, pack_name=pack_name)
 
 
-def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False) -> dict[str, Any]:
+def run_next_action_queue_item(
+    vault_dir: Path | str,
+    *,
+    safe_only: bool = False,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     with action_queue_write_lock(vault_dir):
         action = (
-            _next_safe_queued_action_unlocked(vault_dir)
+            _next_safe_queued_action_unlocked(vault_dir, pack_name=pack_name)
             if safe_only
-            else _next_queued_action_unlocked(vault_dir)
+            else _next_queued_action_unlocked(vault_dir, pack_name=pack_name)
         )
         if action is None:
-            return {"ran": False, "reason": "no_queued_actions", "safe_only": safe_only}
+            return {
+                "ran": False,
+                "reason": "no_queued_actions",
+                "safe_only": safe_only,
+                "requested_pack": str(pack_name or ""),
+            }
 
         started_at = _utc_now_text()
         action["status"] = "running"
@@ -1901,7 +2022,7 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
         return {"ran": False, "reason": "obsolete_signal", "action": action, "safe_only": safe_only}
 
     try:
-        spec = resolve_focused_action_handler(
+        contract = resolve_focused_action_execution_contract(
             pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
             action_kind=str(action.get("action_kind") or ""),
         )
@@ -1921,12 +2042,20 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
             action,
             pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
         )
-        if getattr(spec, "requires_truth_refresh", False) or getattr(spec, "requires_signal_resync", False):
+        if getattr(contract.handler_spec, "requires_truth_refresh", False) or getattr(
+            contract.handler_spec,
+            "requires_signal_resync",
+            False,
+        ):
             _refresh_truth_after_action(
                 vault_dir,
                 pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
-                requires_truth_refresh=bool(getattr(spec, "requires_truth_refresh", False)),
-                requires_signal_resync=bool(getattr(spec, "requires_signal_resync", False)),
+                requires_truth_refresh=bool(
+                    getattr(contract.handler_spec, "requires_truth_refresh", False)
+                ),
+                requires_signal_resync=bool(
+                    getattr(contract.handler_spec, "requires_signal_resync", False)
+                ),
             )
         with action_queue_write_lock(vault_dir):
             action["status"] = "succeeded"
@@ -1945,12 +2074,18 @@ def run_next_action_queue_item(vault_dir: Path | str, *, safe_only: bool = False
         return {"ran": False, "reason": "execution_failed", "action": action, "safe_only": safe_only}
 
 
-def run_action_queue(vault_dir: Path | str, *, limit: int = 5, safe_only: bool = False) -> dict[str, Any]:
+def run_action_queue(
+    vault_dir: Path | str,
+    *,
+    limit: int = 5,
+    safe_only: bool = False,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     limit = max(1, min(int(limit), MAX_PAGE_SIZE))
     results: list[dict[str, Any]] = []
     stopped_reason = "limit_reached"
     for _ in range(limit):
-        payload = run_next_action_queue_item(vault_dir, safe_only=safe_only)
+        payload = run_next_action_queue_item(vault_dir, safe_only=safe_only, pack_name=pack_name)
         results.append(payload)
         if not payload.get("ran"):
             stopped_reason = str(payload.get("reason") or "stopped")
@@ -1958,6 +2093,7 @@ def run_action_queue(vault_dir: Path | str, *, limit: int = 5, safe_only: bool =
     return {
         "limit": limit,
         "safe_only": safe_only,
+        "requested_pack": str(pack_name or ""),
         "ran_count": sum(1 for item in results if item.get("ran")),
         "stopped_reason": stopped_reason,
         "results": results,
@@ -1985,7 +2121,12 @@ def _attach_action_queue_state(vault_dir: Path | str, items: list[dict[str, Any]
             if action is not None:
                 recommended["queue_status"] = action.get("status", "")
                 recommended["action_id"] = action.get("action_id", "")
-                recommended["queue_path"] = "/actions"
+                action_pack = str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME)
+                recommended["queue_path"] = (
+                    "/actions"
+                    if action_pack == DEFAULT_WORKFLOW_PACK_NAME
+                    else f"/actions?pack={quote(action_pack, safe='')}"
+                )
                 recommended["safe_to_run"] = bool(action.get("safe_to_run"))
             enriched["recommended_action"] = recommended
         annotated.append(enriched)
@@ -2045,269 +2186,6 @@ def _production_gap_items_from_chains(
         )
     weak_points.sort(key=lambda item: (-item["severity"], item["stage_label"], item["title"].lower()))
     return weak_points[:limit]
-
-
-def _research_tech_build_signal_entries(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None = None,
-) -> list[dict[str, Any]]:
-    resolved_vault = resolve_vault_dir(vault_dir)
-    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
-    timestamp = _utc_now_text()
-    signals: list[dict[str, Any]] = []
-
-    for item in list_contradictions(resolved_vault, status="open", limit=MAX_PAGE_SIZE):
-        object_ids = list(
-            dict.fromkeys(
-                claim_id.split("::", 1)[0]
-                for claim_id in (item["positive_claim_ids"] + item["negative_claim_ids"])
-            )
-        )
-        signals.append(
-            {
-                "signal_id": _signal_id("contradiction_open", item["contradiction_id"]),
-                "signal_type": "contradiction_open",
-                "detected_at": timestamp,
-                "status": "active",
-                "title": item["subject_key"],
-                "detail": (
-                    f"{item['scope_summary']['object_count']} objects, "
-                    f"{len(item['ranked_evidence'])} ranked evidence rows"
-                ),
-                "explanation": SIGNAL_TYPE_EXPLANATIONS["contradiction_open"],
-                "source_path": "/contradictions",
-                "source_label": "Contradictions",
-                "object_ids": object_ids,
-                "note_paths": [],
-                "downstream_effects": [
-                    {"label": "Review contradiction", "path": f"/contradictions?q={quote(item['subject_key'], safe='')}"},
-                    *[
-                        {"label": f"Object: {claim['object_title']}", "path": f"/object?id={claim['object_id']}"}
-                        for claim in item["positive_claims"][:1] + item["negative_claims"][:1]
-                    ],
-                ],
-                "recommended_action": _recommended_action(
-                    kind="review_contradiction",
-                    label="Review contradiction",
-                    path=f"/contradictions?q={quote(item['subject_key'], safe='')}",
-                    executable=True,
-                ),
-                "payload": {
-                    "contradiction_id": item["contradiction_id"],
-                    "scope_summary": item["scope_summary"],
-                    "status_bucket": item["status_bucket"],
-                },
-            }
-        )
-
-    for item in list_stale_summaries(resolved_vault, limit=MAX_PAGE_SIZE):
-        signals.append(
-            {
-                "signal_id": _signal_id("stale_summary", item["object_id"]),
-                "signal_type": "stale_summary",
-                "detected_at": timestamp,
-                "status": "active",
-                "title": item["title"],
-                "detail": ", ".join(item["reason_texts"]),
-                "explanation": SIGNAL_TYPE_EXPLANATIONS["stale_summary"],
-                "source_path": f"/summaries?q={quote(item['object_id'], safe='')}",
-                "source_label": "Stale Summaries",
-                "object_ids": [item["object_id"]],
-                "note_paths": [],
-                "downstream_effects": [
-                    {"label": "Open object", "path": item["object_path"]},
-                    {"label": "Review stale summary", "path": f"/summaries?q={quote(item['object_id'], safe='')}"},
-                ],
-                "recommended_action": _recommended_action(
-                    kind="rebuild_summary",
-                    label="Rebuild summary",
-                    path=f"/summaries?q={quote(item['object_id'], safe='')}",
-                    executable=True,
-                ),
-                "payload": {
-                    "reason_codes": item["reason_codes"],
-                    "latest_event_date": item["latest_event_date"],
-                },
-            }
-        )
-
-    production_chains = list_production_chains(
-        resolved_vault,
-        pack_name=normalized_pack,
-        limit=MAX_PAGE_SIZE,
-    )
-    for item in _production_gap_items_from_chains(production_chains, limit=MAX_PAGE_SIZE):
-        object_ids = [entry["object_id"] for entry in item["traceability"]["objects"]]
-        signals.append(
-            {
-                "signal_id": item["signal_id"],
-                "signal_type": "production_gap",
-                "detected_at": timestamp,
-                "status": "active",
-                "title": item["title"],
-                "detail": item["detail"],
-                "explanation": SIGNAL_TYPE_EXPLANATIONS["production_gap"],
-                "source_path": f"/note?path={quote(item['note_path'], safe='')}",
-                "source_label": "Production",
-                "object_ids": object_ids,
-                "note_paths": [item["note_path"]],
-                "downstream_effects": [
-                    {"label": "Open note", "path": f"/note?path={quote(item['note_path'], safe='')}"},
-                    {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
-                ],
-                "recommended_action": _recommended_action(
-                    kind="inspect_production_gap",
-                    label="Inspect production gap",
-                    path=f"/production?q={quote(item['title'], safe='')}",
-                    executable=False,
-                ),
-                "payload": {
-                    "stage_label": item["stage_label"],
-                    "missing": item["missing"],
-                    "traceability_counts": item["traceability"]["counts"],
-                },
-            }
-        )
-
-    for item in production_chains:
-        traceability = item["traceability"]
-        if item["stage_label"] == "source_note" and not traceability["deep_dives"]:
-            signals.append(
-                {
-                    "signal_id": _signal_id("source_needs_deep_dive", item["path"]),
-                    "signal_type": "source_needs_deep_dive",
-                    "detected_at": timestamp,
-                    "status": "active",
-                    "title": item["title"],
-                    "detail": "Processed source note has no derived deep dive yet.",
-                    "explanation": SIGNAL_TYPE_EXPLANATIONS["source_needs_deep_dive"],
-                    "source_path": f"/note?path={quote(item['path'], safe='')}",
-                    "source_label": "Production",
-                    "object_ids": [],
-                    "note_paths": [item["path"]],
-                    "downstream_effects": [
-                        {"label": "Open source note", "path": f"/note?path={quote(item['path'], safe='')}"},
-                        {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
-                    ],
-                    "recommended_action": _recommended_action(
-                        kind="deep_dive_workflow",
-                        label="Create deep dive",
-                        path=f"/note?path={quote(item['path'], safe='')}",
-                        executable=False,
-                    ),
-                    "payload": {
-                        "stage_label": item["stage_label"],
-                        "traceability_counts": traceability["counts"],
-                    },
-                }
-            )
-        if item["stage_label"] == "deep_dive" and not traceability["objects"]:
-            signals.append(
-                {
-                    "signal_id": _signal_id("deep_dive_needs_objects", item["path"]),
-                    "signal_type": "deep_dive_needs_objects",
-                    "detected_at": timestamp,
-                    "status": "active",
-                    "title": item["title"],
-                    "detail": "Deep dive has not produced any evergreen objects yet.",
-                    "explanation": SIGNAL_TYPE_EXPLANATIONS["deep_dive_needs_objects"],
-                    "source_path": f"/note?path={quote(item['path'], safe='')}",
-                    "source_label": "Production",
-                    "object_ids": [],
-                    "note_paths": [item["path"]],
-                    "downstream_effects": [
-                        {"label": "Open deep dive", "path": f"/note?path={quote(item['path'], safe='')}"},
-                        {"label": "Inspect production chain", "path": f"/production?q={quote(item['title'], safe='')}"},
-                    ],
-                    "recommended_action": _recommended_action(
-                        kind="object_extraction_workflow",
-                        label="Extract evergreen objects",
-                        path=f"/note?path={quote(item['path'], safe='')}",
-                        executable=False,
-                    ),
-                    "payload": {
-                        "stage_label": item["stage_label"],
-                        "traceability_counts": traceability["counts"],
-                    },
-                }
-            )
-
-    for item in list_review_actions(resolved_vault, limit=MAX_PAGE_SIZE):
-        if item["event_type"] == "ui_contradictions_resolved":
-            status = item["status"] or "reviewed"
-            signals.append(
-                {
-                    "signal_id": _signal_id("contradiction_reviewed", f"{item['timestamp']}::{','.join(item['contradiction_ids'])}"),
-                    "signal_type": "contradiction_reviewed",
-                    "detected_at": item["timestamp"],
-                    "status": "active",
-                    "title": "Contradiction reviewed",
-                    "detail": f"{len(item['contradiction_ids'])} contradictions moved to {status}.",
-                    "explanation": SIGNAL_TYPE_EXPLANATIONS["contradiction_reviewed"],
-                    "source_path": "/contradictions?status=resolved",
-                    "source_label": "Review Actions",
-                    "object_ids": item["object_ids"],
-                    "note_paths": [],
-                    "downstream_effects": [
-                        {"label": "Open resolved contradictions", "path": "/contradictions?status=resolved"},
-                        *[
-                            {"label": f"Object: {object_id}", "path": f"/object?id={object_id}"}
-                            for object_id in item["object_ids"][:2]
-                        ],
-                    ],
-                    "recommended_action": _recommended_action(
-                        kind="review_resolution",
-                        label="Inspect resolved contradictions",
-                        path="/contradictions?status=resolved",
-                        executable=False,
-                    ),
-                    "payload": {
-                        "event_type": item["event_type"],
-                        "contradiction_ids": item["contradiction_ids"],
-                        "status": status,
-                        "rebuilt_object_ids": item["rebuilt_object_ids"],
-                    },
-                }
-            )
-        elif item["event_type"] == "ui_summaries_rebuilt":
-            rebuilt_count = item["objects_rebuilt"] or len(item["rebuilt_object_ids"])
-            signals.append(
-                {
-                    "signal_id": _signal_id("summary_rebuilt", f"{item['timestamp']}::{','.join(item['rebuilt_object_ids'])}"),
-                    "signal_type": "summary_rebuilt",
-                    "detected_at": item["timestamp"],
-                    "status": "active",
-                    "title": "Summary rebuilt",
-                    "detail": f"{rebuilt_count} summaries rebuilt.",
-                    "explanation": SIGNAL_TYPE_EXPLANATIONS["summary_rebuilt"],
-                    "source_path": "/summaries",
-                    "source_label": "Review Actions",
-                    "object_ids": item["object_ids"],
-                    "note_paths": [],
-                    "downstream_effects": [
-                        {"label": "Open stale summaries", "path": "/summaries"},
-                        *[
-                            {"label": f"Object: {object_id}", "path": f"/object?id={object_id}"}
-                            for object_id in item["rebuilt_object_ids"][:2]
-                        ],
-                    ],
-                    "recommended_action": _recommended_action(
-                        kind="review_rebuilt_summary",
-                        label="Inspect rebuilt summaries",
-                        path="/summaries",
-                        executable=False,
-                    ),
-                    "payload": {
-                        "event_type": item["event_type"],
-                        "objects_rebuilt": rebuilt_count,
-                        "rebuilt_object_ids": item["rebuilt_object_ids"],
-                    },
-                }
-            )
-
-    signals.sort(key=lambda item: (item["signal_type"], item["title"].lower(), item["signal_id"]))
-    return signals
 
 
 def _compute_signal_entries(
@@ -2412,203 +2290,6 @@ def _list_signals_from_ledger(
     return _attach_action_queue_state(vault_dir, items)
 
 
-def _research_tech_build_briefing_snapshot(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None = None,
-    limit: int = 8,
-) -> dict[str, Any]:
-    limit, _ = _validate_page_args(limit=limit, offset=0)
-    resolved_vault = resolve_vault_dir(vault_dir)
-    recent_signals = _list_signals_from_ledger(
-        resolved_vault,
-        ledger_path=_signal_ledger_path(
-            resolved_vault,
-            pack_name=str(pack_name or DEFAULT_WORKFLOW_PACK_NAME),
-        ),
-        limit=limit,
-    )
-    unresolved_signal_types = {
-        "contradiction_open",
-        "stale_summary",
-        "production_gap",
-        "source_needs_deep_dive",
-        "deep_dive_needs_objects",
-    }
-    unresolved_issues = [item for item in recent_signals if item["signal_type"] in unresolved_signal_types]
-    unresolved_issues.sort(
-        key=lambda item: (
-            _briefing_priority_score(item),
-            str(item.get("title") or "").lower(),
-            str(item.get("signal_id") or ""),
-        ),
-        reverse=True,
-    )
-    unresolved_issues = unresolved_issues[:limit]
-    changed_signals = [
-        item
-        for item in recent_signals
-        if item["signal_type"] in {"contradiction_reviewed", "summary_rebuilt"}
-    ]
-    changed_object_ids = list(
-        dict.fromkeys(
-            object_id
-            for item in changed_signals
-            for object_id in item.get("object_ids", [])
-            if object_id
-        )
-    )
-    topic_counts: Counter[str] = Counter()
-    for item in recent_signals:
-        for object_id in item.get("object_ids", []):
-            topic_counts[object_id] += 1
-    active_topic_ids = [object_id for object_id, _ in topic_counts.most_common(limit)]
-    object_rows = _batch_object_rows(
-        vault_dir,
-        list(dict.fromkeys([*changed_object_ids, *active_topic_ids])),
-    )
-    changed_objects = [
-        {
-            "object_id": object_id,
-            "title": object_rows.get(object_id, {}).get("title", object_id),
-            "path": f"/object?id={object_id}",
-        }
-        for object_id in changed_object_ids[:limit]
-    ]
-    active_topics = [
-        {
-            "object_id": object_id,
-            "title": object_rows.get(object_id, {}).get("title") or object_id,
-            "signal_count": count,
-            "path": f"/topic?id={object_id}",
-        }
-        for object_id, count in topic_counts.most_common(limit)
-    ]
-    evolution_candidates = list_evolution_candidates(vault_dir, limit=min(MAX_PAGE_SIZE, limit * 3))
-    evolution_object_ids = list(
-        dict.fromkeys(
-            object_id
-            for item in evolution_candidates
-            for object_id in item.get("object_ids", [])
-            if object_id
-        )
-    )
-    evolution_rows = _batch_object_rows(vault_dir, evolution_object_ids)
-    merged_insights: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for item in evolution_candidates:
-        primary_object_id = next((object_id for object_id in item.get("object_ids", []) if object_id), "")
-        primary_title = (
-            evolution_rows.get(primary_object_id, {}).get("title")
-            or object_rows.get(primary_object_id, {}).get("title")
-            or str(item.get("subject_id") or primary_object_id)
-        )
-        path = (
-            "/evolution?link_type="
-            + quote(str(item["link_type"]), safe="")
-            + "&q="
-            + quote(str(primary_title), safe="")
-        )
-        insight = {
-            "kind": f"evolution_{item['link_type']}",
-            "link_type": item["link_type"],
-            "title": str(primary_title),
-            "detail": EVOLUTION_LINK_EXPLANATIONS.get(
-                item["link_type"], "Knowledge evolution was detected."
-            ),
-            "path": path,
-            "source_paths": [path for path in item.get("source_paths", []) if path][:3],
-            "object_ids": list(item.get("object_ids", [])),
-            "recommended_action": _recommended_action(
-                kind="review_evolution",
-                label="Review evolution",
-                path=path,
-                executable=True,
-            ),
-        }
-        key = (str(insight["kind"]), str(insight["title"]), str(insight["path"]))
-        existing = merged_insights.get(key)
-        if existing is None:
-            merged_insights[key] = insight
-        else:
-            existing["source_paths"] = list(
-                dict.fromkeys([*existing.get("source_paths", []), *insight.get("source_paths", [])])
-            )[:3]
-            existing["object_ids"] = list(
-                dict.fromkeys([*existing.get("object_ids", []), *insight.get("object_ids", [])])
-            )
-    insights = list(merged_insights.values())
-    insights.sort(
-        key=lambda item: (
-            _briefing_evolution_score(item),
-            str(item.get("title") or "").lower(),
-            str(item.get("path") or ""),
-        ),
-        reverse=True,
-    )
-    insights = insights[:limit]
-
-    priority_items: list[dict[str, Any]] = []
-    for item in unresolved_issues:
-        priority_items.append(
-            {
-                "signal_id": item["signal_id"],
-                "kind": item["signal_type"],
-                "title": item["title"],
-                "detail": item["detail"],
-                "path": item["source_path"],
-                "source_paths": list(item.get("note_paths", [])),
-                "object_ids": list(item.get("object_ids", [])),
-                "recommended_action": item.get("recommended_action"),
-            }
-        )
-        if len(priority_items) >= limit:
-            break
-    seen_priority_keys = {(item["kind"], item["title"], item["path"]) for item in priority_items}
-    for item in insights:
-        key = (item["kind"], item["title"], item["path"])
-        if key in seen_priority_keys:
-            continue
-        priority_items.append(item)
-        seen_priority_keys.add(key)
-        if len(priority_items) >= limit:
-            break
-    first_useful_sign = insights[0] if insights else (priority_items[0] if priority_items else None)
-    action_items = list_action_queue(vault_dir, limit=MAX_PAGE_SIZE)
-    queue_summary = {
-        "queued_count": sum(1 for item in action_items if item.get("status") == "queued"),
-        "safe_queued_count": sum(
-            1 for item in action_items if item.get("status") == "queued" and bool(item.get("safe_to_run"))
-        ),
-        "running_count": sum(1 for item in action_items if item.get("status") == "running"),
-        "failed_count": sum(1 for item in action_items if item.get("status") == "failed"),
-        "failure_buckets": dict(
-            Counter(
-                str(item.get("failure_bucket") or "")
-                for item in action_items
-                if item.get("status") == "failed" and str(item.get("failure_bucket") or "")
-            )
-        ),
-    }
-
-    return {
-        "generated_at": _utc_now_text(),
-        "recent_signal_count": len(recent_signals),
-        "unresolved_issue_count": len(unresolved_issues),
-        "changed_object_count": len(changed_objects),
-        "active_topic_count": len(active_topics),
-        "recent_signals": recent_signals,
-        "unresolved_issues": unresolved_issues,
-        "changed_objects": changed_objects,
-        "active_topics": active_topics,
-        "insight_count": len(insights),
-        "priority_item_count": len(priority_items),
-        "insights": insights,
-        "priority_items": priority_items,
-        "first_useful_sign": first_useful_sign,
-        "queue_summary": queue_summary,
-    }
-
-
 def get_briefing_snapshot(
     vault_dir: Path | str,
     *,
@@ -2681,9 +2362,14 @@ def _deep_dive_objects_for_path(vault_dir: Path | str, note_path: str) -> list[d
     return list(_deep_dive_object_map(vault_dir).get(normalized_target, []))
 
 
-def _atlas_pages_for_object_ids(vault_dir: Path | str, object_ids: list[str]) -> list[dict[str, str]]:
+def _atlas_pages_for_object_ids(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, str]]:
     atlas_pages: dict[str, dict[str, str]] = {}
-    for provenance in get_object_provenance_map(vault_dir, object_ids).values():
+    for provenance in get_object_provenance_map(vault_dir, object_ids, pack_name=pack_name).values():
         for item in provenance["mocs"]:
             atlas_pages.setdefault(item["slug"], item)
     return list(atlas_pages.values())
@@ -2876,7 +2562,12 @@ def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> li
     return items
 
 
-def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+def get_note_traceability(
+    vault_dir: Path | str,
+    *,
+    note_path: str,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     note = _page_row_by_path(vault_dir, note_path)
     provenance = get_note_provenance(vault_dir, note_path=note_path)
     deep_dives: list[dict[str, str]] = []
@@ -2889,7 +2580,7 @@ def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str,
         if provenance["original_source_note"]:
             source_notes = [provenance["original_source_note"]]
     elif note["note_type"] == "evergreen":
-        object_traceability = get_object_traceability(vault_dir, note["slug"])
+        object_traceability = get_object_traceability(vault_dir, note["slug"], pack_name=pack_name)
         deep_dives = object_traceability["deep_dives"]
         source_notes = object_traceability["source_notes"]
         objects = [
@@ -2911,7 +2602,11 @@ def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str,
                 object_map.setdefault(item["object_id"], item)
         objects = list(object_map.values())
     if not atlas_pages:
-        atlas_pages = _atlas_pages_for_object_ids(vault_dir, [item["object_id"] for item in objects])
+        atlas_pages = _atlas_pages_for_object_ids(
+            vault_dir,
+            [item["object_id"] for item in objects],
+            pack_name=pack_name,
+        )
     return {
         "note": note,
         "source_notes": source_notes,
@@ -2927,8 +2622,13 @@ def get_note_traceability(vault_dir: Path | str, *, note_path: str) -> dict[str,
     }
 
 
-def get_object_traceability(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
-    detail = get_object_detail(vault_dir, object_id)
+def get_object_traceability(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    detail = get_object_detail(vault_dir, object_id, pack_name=pack_name)
     deep_dives = _promoted_deep_dives_for_object(vault_dir, object_id)
     source_note_map: dict[str, dict[str, str]] = {}
     for deep_dive in deep_dives:
@@ -2952,89 +2652,6 @@ def get_object_traceability(vault_dir: Path | str, object_id: str) -> dict[str, 
     }
 
 
-def _research_tech_list_production_chains(
-    vault_dir: Path | str,
-    *,
-    query: str | None = None,
-    limit: int = 100,
-) -> list[dict[str, Any]]:
-    limit, _ = _validate_page_args(limit=limit, offset=0)
-    db_path = _db_path(vault_dir)
-    resolved_vault = resolve_vault_dir(vault_dir)
-    normalized_query = (query or "").strip().lower()
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT slug, title, note_type, path
-            FROM pages_index
-            WHERE note_type = 'deep_dive'
-            ORDER BY note_type, slug
-            """
-        ).fetchall()
-
-    candidates: list[dict[str, str]] = []
-    seen_paths: set[str] = set()
-    for slug, title, note_type, path in rows:
-        relative_path = _vault_relative_path(resolved_vault, path)
-        seen_paths.add(relative_path)
-        candidates.append(
-            {
-                "slug": str(slug),
-                "title": str(title),
-                "note_type": str(note_type),
-                "path": relative_path,
-                "stage_label": "deep_dive",
-            }
-        )
-
-    processed_root = resolved_vault / "50-Inbox" / "03-Processed"
-    if processed_root.exists():
-        for candidate in sorted(processed_root.rglob("*.md")):
-            relative_path = str(candidate.resolve().relative_to(resolved_vault.resolve()))
-            if relative_path in seen_paths:
-                continue
-            frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
-            candidates.append(
-                {
-                    "slug": candidate.stem,
-                    "title": str(frontmatter.get("title") or candidate.stem).strip(),
-                    "note_type": "note",
-                    "path": relative_path,
-                    "stage_label": "source_note",
-                }
-            )
-
-    items: list[dict[str, Any]] = []
-    for candidate in candidates:
-        relative_path = candidate["path"]
-        chain = get_note_traceability(vault_dir, note_path=relative_path)
-        if normalized_query:
-            haystacks = [
-                str(candidate["title"]).lower(),
-                str(candidate["slug"]).lower(),
-                relative_path.lower(),
-                *(item["title"].lower() for item in chain["deep_dives"]),
-                *(item["title"].lower() for item in chain["objects"]),
-                *(item["title"].lower() for item in chain["atlas_pages"]),
-                *(item["title"].lower() for item in chain["source_notes"]),
-            ]
-            if not any(normalized_query in haystack for haystack in haystacks):
-                continue
-        items.append(
-            {
-                "slug": candidate["slug"],
-                "title": candidate["title"],
-                "note_type": candidate["note_type"],
-                "path": relative_path,
-                "stage_label": candidate["stage_label"],
-                "traceability": chain,
-            }
-        )
-        if len(items) >= limit:
-            break
-    return items
-
-
 def list_production_chains(
     vault_dir: Path | str,
     *,
@@ -3055,6 +2672,7 @@ def list_production_chains(
 def list_contradictions(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     limit: int = 100,
     status: str | None = None,
     query: str | None = None,
@@ -3062,18 +2680,25 @@ def list_contradictions(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="contradictions")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
     sql = """
         SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
         FROM contradictions
     """
-    params: list[Any] = []
-    where_clauses: list[str] = []
+    params: list[Any] = [*pack_candidates]
+    where_clauses: list[str] = [f"pack IN ({pack_placeholders})"]
     if normalized_query:
         where_clauses.append("lower(subject_key) LIKE ? ESCAPE '\\'")
         params.append(f"%{normalized_query}%")
     if where_clauses:
         sql += " WHERE " + " AND ".join(where_clauses)
-    sql += " ORDER BY subject_key"
+    sql += (
+        " ORDER BY CASE pack "
+        + "".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))
+        + f"ELSE {len(pack_candidates)} END, subject_key"
+    )
+    params.extend(pack_candidates)
     if status is None:
         sql += " LIMIT ?"
         params.append(limit)
@@ -3175,14 +2800,20 @@ def list_contradictions(
     return items
 
 
-def _eligible_evolution_object_ids(vault_dir: Path | str) -> list[str]:
+def _eligible_evolution_object_ids(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> list[str]:
     promoted_object_ids = {
         item["object_id"]
         for objects in _deep_dive_object_map(vault_dir).values()
         for item in objects
         if item.get("object_id")
     }
-    existing_object_ids = {item["object_id"] for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE)}
+    existing_object_ids = {
+        item["object_id"] for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE, pack_name=pack_name)
+    }
     return sorted(promoted_object_ids.intersection(existing_object_ids))
 
 
@@ -3190,12 +2821,18 @@ def _compute_evolution_candidates(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in (object_ids or []) if object_id))
     scoped_object_id_set = set(normalized_object_ids)
 
-    open_contradictions = list_contradictions(vault_dir, limit=MAX_PAGE_SIZE, status="open")
+    open_contradictions = list_contradictions(
+        vault_dir,
+        pack_name=pack_name,
+        limit=MAX_PAGE_SIZE,
+        status="open",
+    )
     if scoped_object_id_set:
         open_contradictions = [
             item
@@ -3212,7 +2849,11 @@ def _compute_evolution_candidates(
             for claim in (item["positive_claims"] + item["negative_claims"])
         }
     )
-    contradiction_object_paths = _batch_object_rows(vault_dir, contradiction_object_ids)
+    contradiction_object_paths = _batch_object_rows(
+        vault_dir,
+        contradiction_object_ids,
+        pack_name=pack_name,
+    )
     contradiction_source_paths = _page_paths_for_slugs(
         vault_dir,
         [
@@ -3314,11 +2955,12 @@ def _compute_evolution_candidates(
 
     stale_summaries = list_stale_summaries(
         vault_dir,
+        pack_name=pack_name,
         object_ids=normalized_object_ids or None,
         limit=MAX_PAGE_SIZE,
     )
     for item in stale_summaries:
-        traceability = get_object_traceability(vault_dir, item["object_id"])
+        traceability = get_object_traceability(vault_dir, item["object_id"], pack_name=pack_name)
         earlier_path = traceability["object"]["canonical_path"]
         earlier_date = _note_date_text(vault_dir, earlier_path)
         earlier_key = _note_date_sort_key(earlier_date)
@@ -3383,9 +3025,12 @@ def _compute_evolution_candidates(
         }
         candidates.append(record)
 
-    candidate_object_ids = normalized_object_ids or _eligible_evolution_object_ids(vault_dir)
+    candidate_object_ids = normalized_object_ids or _eligible_evolution_object_ids(
+        vault_dir,
+        pack_name=pack_name,
+    )
     for object_id in candidate_object_ids:
-        traceability = get_object_traceability(vault_dir, object_id)
+        traceability = get_object_traceability(vault_dir, object_id, pack_name=pack_name)
         earlier_path = traceability["object"]["canonical_path"]
         earlier_date = _note_date_text(vault_dir, earlier_path)
         earlier_key = _note_date_sort_key(earlier_date)
@@ -3451,18 +3096,24 @@ def _all_evolution_candidates(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     resolved_vault = resolve_vault_dir(vault_dir)
     normalized_object_ids = tuple(dict.fromkeys(object_id for object_id in (object_ids or []) if object_id))
     cache_key = (
         str(resolved_vault.resolve()),
         _evolution_dependency_signature(resolved_vault),
+        _truth_pack_name(pack_name),
         normalized_object_ids,
     )
     cached = _EVOLUTION_CANDIDATE_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    result = _compute_evolution_candidates(resolved_vault, object_ids=list(normalized_object_ids))
+    result = _compute_evolution_candidates(
+        resolved_vault,
+        object_ids=list(normalized_object_ids),
+        pack_name=pack_name,
+    )
     _EVOLUTION_CANDIDATE_CACHE[cache_key] = result
     return result
 
@@ -3471,6 +3122,7 @@ def list_evolution_candidates(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
     query: str | None = None,
     link_type: str | None = None,
     status: str = "candidate",
@@ -3483,7 +3135,7 @@ def list_evolution_candidates(
     normalized_query = (query or "").strip().lower()
     unique_candidates = [
         item
-        for item in _all_evolution_candidates(vault_dir, object_ids=object_ids)
+        for item in _all_evolution_candidates(vault_dir, object_ids=object_ids, pack_name=pack_name)
         if (not link_type or item["link_type"] == link_type)
         and (not normalized_query or _evolution_candidate_matches_query(item, normalized_query))
     ]
@@ -3494,6 +3146,7 @@ def list_evolution_links(
     vault_dir: Path | str,
     *,
     object_ids: list[str] | None = None,
+    pack_name: str | None = None,
     query: str | None = None,
     link_type: str | None = None,
     status: str | None = None,
@@ -3501,7 +3154,7 @@ def list_evolution_links(
 ) -> list[dict[str, Any]]:
     normalized_query = (query or "").strip().lower()
     latest_by_evolution_id: dict[str, dict[str, Any]] = {}
-    for action in list_evolution_review_actions(vault_dir, object_ids=object_ids):
+    for action in list_evolution_review_actions(vault_dir, object_ids=object_ids, pack_name=pack_name):
         evolution_id = str(action.get("evolution_id") or "")
         if not evolution_id or evolution_id in latest_by_evolution_id:
             continue
@@ -3527,6 +3180,7 @@ def review_evolution_candidate(
     *,
     evolution_id: str,
     status: str,
+    pack_name: str | None = None,
     note: str = "",
     link_type: str | None = None,
 ) -> dict[str, Any]:
@@ -3537,7 +3191,11 @@ def review_evolution_candidate(
     if link_type and link_type not in {"replaces", "enriches", "confirms", "challenges"}:
         raise ValueError("invalid evolution link_type")
     candidate = next(
-        (item for item in _all_evolution_candidates(vault_dir) if item["evolution_id"] == evolution_id),
+        (
+            item
+            for item in _all_evolution_candidates(vault_dir, pack_name=pack_name)
+            if item["evolution_id"] == evolution_id
+        ),
         None,
     )
     if candidate is None:
@@ -3554,6 +3212,7 @@ def review_evolution_candidate(
         "subject_id": candidate["subject_id"],
         "earlier_ref": candidate["earlier_ref"],
         "later_ref": candidate["later_ref"],
+        "pack": _truth_pack_name(pack_name),
     }
     record_review_action(
         vault_dir,
@@ -3571,32 +3230,43 @@ def review_evolution_candidate(
     }
 
 
-def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int = 1) -> dict[str, Any]:
+def get_topic_neighborhood(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+    depth: int = 1,
+) -> dict[str, Any]:
     if depth != 1:
         raise ValueError("Only depth=1 is currently supported")
 
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_order = "".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))
     with sqlite3.connect(db_path) as conn:
         center = conn.execute(
-            """
-            SELECT object_id, object_kind, title, canonical_path, source_slug
+            f"""
+            SELECT pack, object_id, object_kind, title, canonical_path, source_slug
             FROM objects
-            WHERE object_id = ?
+            WHERE pack IN ({",".join("?" for _ in pack_candidates)}) AND object_id = ?
+            ORDER BY CASE pack {pack_order}ELSE {len(pack_candidates)} END
+            LIMIT 1
             """,
-            (object_id,),
+            (*pack_candidates, object_id, *pack_candidates),
         ).fetchone()
         if center is None:
             raise ValueError(f"Unknown object_id: {object_id}")
+        truth_pack = str(center[0])
 
         edge_rows = conn.execute(
             """
             SELECT source_object_id, target_object_id, relation_type, evidence_source_slug
             FROM relations
-            WHERE source_object_id = ?
+            WHERE pack = ? AND source_object_id = ?
             ORDER BY target_object_id
             """,
-            (object_id,),
+            (truth_pack, object_id),
         ).fetchall()
         neighbor_ids = [row[1] for row in edge_rows]
         if neighbor_ids:
@@ -3605,21 +3275,22 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
                 f"""
                 SELECT object_id, object_kind, title, canonical_path, source_slug
                 FROM objects
-                WHERE object_id IN ({placeholders})
+                WHERE pack = ? AND object_id IN ({placeholders})
                 ORDER BY object_id
                 """,
-                tuple(neighbor_ids),
+                (truth_pack, *neighbor_ids),
             ).fetchall()
         else:
             neighbor_rows = []
 
     return {
         "center": {
-            "object_id": center[0],
-            "object_kind": center[1],
-            "title": center[2],
-            "canonical_path": _vault_relative_path(resolved_vault, center[3]),
-            "source_slug": center[4],
+            "object_id": center[1],
+            "object_kind": center[2],
+            "title": center[3],
+            "canonical_path": _vault_relative_path(resolved_vault, center[4]),
+            "source_slug": center[5],
+            "row_pack": truth_pack,
         },
         "neighbors": [
             {
@@ -3628,6 +3299,7 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
                 "title": row[2],
                 "canonical_path": _vault_relative_path(resolved_vault, row[3]),
                 "source_slug": row[4],
+                "row_pack": truth_pack,
             }
             for row in neighbor_rows
         ],
@@ -3646,11 +3318,13 @@ def get_topic_neighborhood(vault_dir: Path | str, object_id: str, *, depth: int 
 def list_atlas_memberships(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     items = _list_surface_groups(
         vault_dir,
+        pack_name=pack_name,
         note_type="moc",
         query=query,
         limit=limit,
@@ -3670,6 +3344,7 @@ def list_atlas_memberships(
 def list_deep_dive_derivations(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -3689,11 +3364,24 @@ def list_deep_dive_derivations(
         ).fetchall()
 
     derivation_map = _deep_dive_object_map(vault_dir)
+    object_rows = _batch_object_rows(
+        vault_dir,
+        [item["object_id"] for items in derivation_map.values() for item in items],
+        pack_name=pack_name,
+    )
 
     items: list[dict[str, Any]] = []
     for slug, title, note_type, path in deep_dive_rows:
         relative_path = _vault_relative_path(resolved_vault, path)
-        derived_objects = list(derivation_map.get(relative_path, []))
+        derived_objects = [
+            {
+                "object_id": item["object_id"],
+                "title": str(object_rows[item["object_id"]]["title"]),
+                "pack": str(object_rows[item["object_id"]]["pack"]),
+            }
+            for item in derivation_map.get(relative_path, [])
+            if item["object_id"] in object_rows
+        ]
         if normalized_query:
             haystacks = [
                 slug.lower(),
@@ -3721,9 +3409,80 @@ def list_deep_dive_derivations(
     return items
 
 
+def list_timeline_events(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    limit, _ = _validate_page_args(limit=limit, offset=0)
+    db_path = _db_path(vault_dir)
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
+    candidate_limit = min(MAX_PAGE_SIZE, max(limit * max(1, len(pack_candidates)), limit))
+    sql = f"""
+        SELECT timeline_events.event_date, timeline_events.event_type, timeline_events.heading,
+               timeline_events.payload_json, objects.pack, objects.object_id, objects.title, compiled_summaries.summary_text
+        FROM timeline_events
+        JOIN objects ON objects.object_id = timeline_events.slug
+        LEFT JOIN compiled_summaries
+          ON compiled_summaries.object_id = objects.object_id
+         AND compiled_summaries.pack = objects.pack
+        WHERE objects.pack IN ({pack_placeholders})
+    """
+    params: list[Any] = [*pack_candidates]
+    if normalized_query:
+        sql += """
+            AND (
+                lower(objects.object_id) LIKE ? ESCAPE '\\'
+                OR lower(objects.title) LIKE ? ESCAPE '\\'
+                OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
+            )
+        """
+        params.extend([f"%{normalized_query}%"] * 3)
+    sql += f"""
+        ORDER BY timeline_events.event_date DESC,
+          CASE objects.pack
+            {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+            ELSE {len(pack_candidates)}
+          END,
+          objects.object_id
+        LIMIT ?
+    """
+    params.extend([*pack_candidates, candidate_limit])
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for event_date, event_type, heading, payload_json, row_pack, object_id, title, summary_text in rows:
+        key = (str(event_date or ""), str(event_type or ""), str(object_id))
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(
+            {
+                "event_date": str(event_date or ""),
+                "event_type": str(event_type or ""),
+                "heading": str(heading or ""),
+                "payload_json": str(payload_json or ""),
+                "row_pack": str(row_pack or ""),
+                "object_id": str(object_id),
+                "title": str(title or object_id),
+                "summary_text": str(summary_text or ""),
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
 def list_stale_summaries(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     object_ids: list[str] | None = None,
     limit: int = 100,
@@ -3731,19 +3490,23 @@ def list_stale_summaries(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
     sql = """
         SELECT objects.object_id, objects.title, compiled_summaries.summary_text,
                COALESCE(rel.outgoing_count, 0) AS outgoing_count
         FROM objects
-        LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
+        LEFT JOIN compiled_summaries
+          ON compiled_summaries.pack = objects.pack
+         AND compiled_summaries.object_id = objects.object_id
         LEFT JOIN (
-            SELECT source_object_id, COUNT(*) AS outgoing_count
+            SELECT pack, source_object_id, COUNT(*) AS outgoing_count
             FROM relations
-            GROUP BY source_object_id
-        ) AS rel ON rel.source_object_id = objects.object_id
+            GROUP BY pack, source_object_id
+        ) AS rel ON rel.pack = objects.pack AND rel.source_object_id = objects.object_id
     """
-    params: list[Any] = []
-    where_clauses: list[str] = []
+    params: list[Any] = [*pack_candidates]
+    where_clauses: list[str] = [f"objects.pack IN ({pack_placeholders})"]
     if object_ids:
         normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
         if not normalized_object_ids:
@@ -3764,7 +3527,12 @@ def list_stale_summaries(
         params.extend([f"%{normalized_query}%"] * 3)
     if where_clauses:
         sql += " WHERE " + " AND ".join(where_clauses)
-    sql += " ORDER BY objects.object_id LIMIT ?"
+    sql += (
+        " ORDER BY CASE objects.pack "
+        + "".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))
+        + f"ELSE {len(pack_candidates)} END, objects.object_id LIMIT ?"
+    )
+    params.extend(pack_candidates)
     params.append(limit)
 
     with sqlite3.connect(db_path) as conn:
@@ -3779,7 +3547,11 @@ def list_stale_summaries(
     latest_event_map = {str(slug): str(event_date or "") for slug, event_date in latest_event_rows}
 
     items: list[dict[str, Any]] = []
+    seen_object_ids: set[str] = set()
     for object_id, title, summary_text, outgoing_count in rows:
+        if str(object_id) in seen_object_ids:
+            continue
+        seen_object_ids.add(str(object_id))
         summary = str(summary_text or "").strip()
         if outgoing_count > 0:
             continue

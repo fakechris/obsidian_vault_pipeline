@@ -7,12 +7,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from ..observation_surface_registry import describe_observation_surface_contract
+from ..pack_resolution import iter_compatible_packs
+from ..packs.loader import PRIMARY_PACK_NAME
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
 from ..truth_api import (
     CONTRADICTION_STATUS_EXPLANATIONS,
     MAX_PAGE_SIZE,
     SIGNAL_TYPE_EXPLANATIONS,
+    _batch_object_rows,
     count_objects,
     get_briefing_snapshot,
     get_graph_cluster_detail,
@@ -36,6 +40,7 @@ from ..truth_api import (
     list_production_chains,
     list_signals,
     list_stale_summaries,
+    list_timeline_events,
     search_vault_surface,
 )
 
@@ -43,12 +48,31 @@ DEFAULT_EVENT_DOSSIER_LIMIT = 50
 DEFAULT_TRACEABILITY_BROWSER_LIMIT = 50
 
 
+def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
+    if not pack_name:
+        return path
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}pack={quote(pack_name, safe='')}"
+
+
+def _supports_research_shell(pack_name: str | None = None) -> bool:
+    try:
+        return any(pack.name == PRIMARY_PACK_NAME for pack in iter_compatible_packs(pack_name))
+    except ValueError:
+        return False
+
+
 def _db_path(vault_dir: Path | str) -> Path:
     resolved = resolve_vault_dir(vault_dir)
     return VaultLayout.from_vault(resolved).knowledge_db
 
 
-def _existing_object_rows(vault_dir: Path | str, object_ids: list[str]) -> dict[str, str]:
+def _existing_object_rows(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, str]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     if not normalized_object_ids:
         return {}
@@ -66,22 +90,20 @@ def _existing_object_rows(vault_dir: Path | str, object_ids: list[str]) -> dict[
     return {str(object_id): str(title) for object_id, title in rows}
 
 
-def _object_scope_paths(vault_dir: Path | str, object_ids: list[str]) -> dict[str, str]:
+def _object_scope_paths(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, str]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
     if not normalized_object_ids:
         return {}
-    db_path = _db_path(vault_dir)
-    placeholders = ",".join("?" for _ in normalized_object_ids)
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            f"""
-            SELECT object_id, canonical_path
-            FROM objects
-            WHERE object_id IN ({placeholders})
-            """,
-            tuple(normalized_object_ids),
-        ).fetchall()
-    return {str(object_id): str(path or "") for object_id, path in rows}
+    rows = _batch_object_rows(vault_dir, normalized_object_ids, pack_name=pack_name)
+    return {
+        str(object_id): str(rows.get(object_id, {}).get("canonical_path") or "")
+        for object_id in normalized_object_ids
+    }
 
 
 def _object_ids_from_claim_ids(*claim_id_lists: list[str]) -> list[str]:
@@ -408,7 +430,7 @@ def _build_cluster_surface_sections(
         for member in cluster["members"]
         if member.get("object_kind")
     )
-    review_context = get_review_context(vault_dir, member_object_ids)
+    review_context = get_review_context(vault_dir, member_object_ids, pack_name=requested_pack)
     open_contradictions = [
         {
             "contradiction_id": item["contradiction_id"],
@@ -416,10 +438,20 @@ def _build_cluster_surface_sections(
             "object_ids": _object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"]),
             "path": f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
         }
-        for item in list_contradictions(vault_dir, status="open", limit=MAX_PAGE_SIZE)
+        for item in list_contradictions(
+            vault_dir,
+            pack_name=requested_pack,
+            status="open",
+            limit=MAX_PAGE_SIZE,
+        )
         if set(_object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"])) & set(member_object_ids)
     ][:5]
-    stale_summaries = list_stale_summaries(vault_dir, object_ids=member_object_ids, limit=5)
+    stale_summaries = list_stale_summaries(
+        vault_dir,
+        pack_name=requested_pack,
+        object_ids=member_object_ids,
+        limit=5,
+    )
     provenance = (
         cluster_provenance_index.get(str(cluster["cluster_id"]))
         if cluster_provenance_index is not None and str(cluster["cluster_id"]) in cluster_provenance_index
@@ -512,11 +544,17 @@ def build_cluster_summary_payload(
     enriched_cluster = {
         **cluster,
         "detail_path": detail_path,
-        "center_object_path": f"/object?id={quote(str(cluster['center_object_id']), safe='')}",
+        "center_object_path": _scoped_path(
+            f"/object?id={quote(str(cluster['center_object_id']), safe='')}",
+            pack_name=requested_pack,
+        ),
         "member_links": [
             {
                 **member,
-                "path": f"/object?id={quote(str(member['object_id']), safe='')}",
+                "path": _scoped_path(
+                    f"/object?id={quote(str(member['object_id']), safe='')}",
+                    pack_name=requested_pack,
+                ),
             }
             for member in cluster["members"]
         ],
@@ -532,8 +570,14 @@ def build_cluster_summary_payload(
                 "title",
                 str(edge["target_object_id"]),
             ),
-            "source_path": f"/object?id={quote(str(edge['source_object_id']), safe='')}",
-            "target_path": f"/object?id={quote(str(edge['target_object_id']), safe='')}",
+            "source_path": _scoped_path(
+                f"/object?id={quote(str(edge['source_object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+            "target_path": _scoped_path(
+                f"/object?id={quote(str(edge['target_object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
         }
         for edge in detail["edges"]
     ]
@@ -553,9 +597,17 @@ def build_cluster_summary_payload(
     }
 
 
-def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> dict[str, Any]:
+def _build_production_summary(
+    vault_dir: Path | str,
+    object_ids: list[str],
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
-    object_traceability = [get_object_traceability(vault_dir, object_id) for object_id in normalized_object_ids]
+    object_traceability = [
+        get_object_traceability(vault_dir, object_id, pack_name=pack_name)
+        for object_id in normalized_object_ids
+    ]
     source_note_counts: Counter[str] = Counter()
     deep_dive_counts: Counter[str] = Counter()
     atlas_page_counts: Counter[str] = Counter()
@@ -647,25 +699,36 @@ def _build_production_summary(vault_dir: Path | str, object_ids: list[str]) -> d
 def _build_production_weak_points(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
-    return list_production_gaps(vault_dir, query=query, limit=limit)
+    return list_production_gaps(vault_dir, pack_name=pack_name, query=query, limit=limit)
 
 
 def _build_evolution_section(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     link_type: str | None = None,
     status: str = "candidate",
     scoped_object_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     normalized_object_ids = list(dict.fromkeys(object_id for object_id in (scoped_object_ids or []) if object_id))
-    canonical_paths = {path for path in _object_scope_paths(vault_dir, normalized_object_ids).values() if path}
+    canonical_paths = {
+        path
+        for path in _object_scope_paths(
+            vault_dir,
+            normalized_object_ids,
+            pack_name=pack_name,
+        ).values()
+        if path
+    }
     reviewed_links = list_evolution_links(
         vault_dir,
         object_ids=normalized_object_ids or None,
+        pack_name=pack_name,
         query=query,
         link_type=link_type,
     )
@@ -677,6 +740,7 @@ def _build_evolution_section(
         for item in list_evolution_candidates(
             vault_dir,
             object_ids=normalized_object_ids or None,
+            pack_name=pack_name,
             query=query,
             link_type=link_type,
             status="candidate",
@@ -739,12 +803,36 @@ def _build_evolution_section(
 def build_signal_browser_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     signal_type: str | None = None,
     query: str | None = None,
 ) -> dict[str, Any]:
-    items = list_signals(vault_dir, signal_type=signal_type, query=query)
+    requested_pack = pack_name or ""
+    surface_contract = describe_observation_surface_contract(
+        pack_name=pack_name,
+        surface_kind="signals",
+    )
+    if surface_contract["status"] == "missing":
+        return {
+            "screen": "signals/browser",
+            "requested_pack": requested_pack,
+            "surface_contract": surface_contract,
+            "surface_error": (
+                f"Pack '{surface_contract['requested_pack']}' does not expose a shared shell "
+                f"'signals' surface."
+            ),
+            "items": [],
+            "count": 0,
+            "query": query or "",
+            "signal_type": signal_type or "",
+            "type_counts": {},
+            "signal_type_explanations": SIGNAL_TYPE_EXPLANATIONS,
+        }
+    items = list_signals(vault_dir, pack_name=pack_name, signal_type=signal_type, query=query)
     return {
         "screen": "signals/browser",
+        "requested_pack": requested_pack,
+        "surface_contract": surface_contract,
         "items": items,
         "count": len(items),
         "query": query or "",
@@ -757,12 +845,15 @@ def build_signal_browser_payload(
 def build_action_queue_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     status: str | None = None,
     query: str | None = None,
 ) -> dict[str, Any]:
-    items = list_action_queue(vault_dir, status=status, query=query)
+    requested_pack = pack_name or ""
+    items = list_action_queue(vault_dir, pack_name=pack_name, status=status, query=query)
     return {
         "screen": "actions/browser",
+        "requested_pack": requested_pack,
         "items": items,
         "count": len(items),
         "query": query or "",
@@ -780,33 +871,124 @@ def build_action_queue_payload(
     }
 
 
-def build_briefing_payload(vault_dir: Path | str) -> dict[str, Any]:
+def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = None) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    surface_contract = describe_observation_surface_contract(
+        pack_name=pack_name,
+        surface_kind="briefing",
+    )
+    if surface_contract["status"] == "missing":
+        return {
+            "screen": "briefing/intelligence",
+            "requested_pack": requested_pack,
+            "surface_contract": surface_contract,
+            "surface_error": (
+                f"Pack '{surface_contract['requested_pack']}' does not expose a shared shell "
+                f"'briefing' surface."
+            ),
+            "generated_at": "",
+            "recent_signal_count": 0,
+            "unresolved_issue_count": 0,
+            "changed_object_count": 0,
+            "active_topic_count": 0,
+            "recent_signals": [],
+            "unresolved_issues": [],
+            "changed_objects": [],
+            "active_topics": [],
+            "insight_count": 0,
+            "priority_item_count": 0,
+            "insights": [],
+            "priority_items": [],
+            "first_useful_sign": None,
+            "queue_summary": {
+                "queued_count": 0,
+                "safe_queued_count": 0,
+                "running_count": 0,
+                "failed_count": 0,
+                "failure_buckets": {},
+            },
+        }
     return {
         "screen": "briefing/intelligence",
-        **get_briefing_snapshot(vault_dir),
+        "requested_pack": requested_pack,
+        "surface_contract": surface_contract,
+        **get_briefing_snapshot(vault_dir, pack_name=pack_name),
     }
 
-
-def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
-    detail = get_object_detail(vault_dir, object_id)
-    neighborhood = get_topic_neighborhood(vault_dir, object_id)
-    review_context = get_review_context(vault_dir, [object_id])
+def build_object_page_payload(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    research_shell_enabled = _supports_research_shell(pack_name)
+    detail = get_object_detail(vault_dir, object_id, pack_name=pack_name)
+    neighborhood = get_topic_neighborhood(vault_dir, object_id, pack_name=pack_name)
+    review_context = get_review_context(vault_dir, [object_id], pack_name=pack_name) if research_shell_enabled else {}
     neighbor_titles = {item["object_id"]: item["title"] for item in neighborhood["neighbors"]}
     relations = [
         {
             **item,
             "target_title": neighbor_titles.get(item["target_object_id"], item["target_object_id"]),
+            "target_path": _scoped_path(
+                f"/object?id={quote(str(item['target_object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
         }
         for item in detail["relations"]
     ]
+    research_links = {
+        "events_path": _scoped_path(f"/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
+        "contradictions_path": _scoped_path(
+            f"/contradictions?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "summaries_path": _scoped_path(
+            f"/summaries?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "deep_dives_path": _scoped_path(
+            f"/deep-dives?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
+    } if research_shell_enabled else {
+        "events_path": "",
+        "contradictions_path": "",
+        "summaries_path": "",
+        "deep_dives_path": "",
+        "atlas_path": "",
+    }
+    evolution_section = (
+        _build_evolution_section(
+            vault_dir,
+            pack_name=pack_name,
+            status="all",
+            scoped_object_ids=[object_id],
+        )
+        if research_shell_enabled
+        else {
+            "accepted_links": [],
+            "rejected_links": [],
+            "candidate_items": [],
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "link_types": [],
+            "status": "all",
+        }
+    )
     return {
         "screen": "object/page",
+        "requested_pack": requested_pack,
+        "research_shell_enabled": research_shell_enabled,
         **detail,
-        "production_chain": get_object_traceability(vault_dir, object_id),
+        "production_chain": get_object_traceability(vault_dir, object_id, pack_name=pack_name),
         "relations": relations,
         "claim_count": len(detail["claims"]),
         "relation_count": len(relations),
-        "contradiction_count": len(detail["contradictions"]),
+        "contradiction_count": len(detail["contradictions"]) if research_shell_enabled else 0,
         "evidence_count": len(detail["evidence"]),
         "context": {
             "object_kind": detail["object"]["object_kind"],
@@ -815,66 +997,170 @@ def build_object_page_payload(vault_dir: Path | str, object_id: str) -> dict[str
         },
         "provenance": detail["provenance"],
         "review_context": review_context,
-        "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8),
-        "evolution": _build_evolution_section(vault_dir, status="all", scoped_object_ids=[object_id]),
-        "stale_summary_details": list_stale_summaries(vault_dir, object_ids=[object_id], limit=10),
-        "open_contradiction_ids": [
-            item["contradiction_id"] for item in detail["contradictions"] if item["status"] == "open"
-        ],
+        "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8) if research_shell_enabled else [],
+        "evolution": evolution_section,
+        "stale_summary_details": (
+            list_stale_summaries(
+                vault_dir,
+                pack_name=pack_name,
+                object_ids=[object_id],
+                limit=10,
+            )
+            if research_shell_enabled
+            else []
+        ),
+        "open_contradiction_ids": (
+            [item["contradiction_id"] for item in detail["contradictions"] if item["status"] == "open"]
+            if research_shell_enabled
+            else []
+        ),
         "links": {
-            "topic_path": f"/topic?id={object_id}",
-            "events_path": f"/events?q={object_id}",
-            "contradictions_path": f"/contradictions?q={object_id}",
-            "summaries_path": f"/summaries?q={object_id}",
+            "topic_path": _scoped_path(f"/topic?id={quote(object_id, safe='')}", pack_name=requested_pack),
+            **research_links,
         },
-        "section_nav": [
-            {"href": "#summary", "label": "Summary"},
-            {"href": "#claims", "label": "Claims"},
-            {"href": "#relations", "label": "Relations"},
-            {"href": "#contradictions", "label": "Contradictions"},
-        ],
+        "section_nav": (
+            [
+                {"href": "#summary", "label": "Summary"},
+                {"href": "#claims", "label": "Claims"},
+                {"href": "#relations", "label": "Relations"},
+                {"href": "#contradictions", "label": "Contradictions"},
+            ]
+            if research_shell_enabled
+            else [
+                {"href": "#summary", "label": "Summary"},
+                {"href": "#claims", "label": "Claims"},
+                {"href": "#relations", "label": "Relations"},
+            ]
+        ),
     }
 
 
-def build_topic_overview_payload(vault_dir: Path | str, object_id: str) -> dict[str, Any]:
-    neighborhood = get_topic_neighborhood(vault_dir, object_id)
-    detail = get_object_detail(vault_dir, object_id)
+def build_topic_overview_payload(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    research_shell_enabled = _supports_research_shell(pack_name)
+    neighborhood = get_topic_neighborhood(vault_dir, object_id, pack_name=pack_name)
+    detail = get_object_detail(vault_dir, object_id, pack_name=pack_name)
     scoped_object_ids = [object_id, *[item["object_id"] for item in neighborhood["neighbors"]]]
-    review_context = get_review_context(
-        vault_dir,
-        scoped_object_ids,
+    review_context = (
+        get_review_context(
+            vault_dir,
+            scoped_object_ids,
+            pack_name=pack_name,
+        )
+        if research_shell_enabled
+        else {}
     )
-    scoped_stale_summaries = list_stale_summaries(vault_dir, object_ids=scoped_object_ids, limit=50)
-    scoped_contradictions = [
-        item
-        for item in list_contradictions(vault_dir, limit=100)
-        if set(item["positive_claim_ids"] + item["negative_claim_ids"])
-        and any(claim_id.split("::", 1)[0] in set(scoped_object_ids) for claim_id in item["positive_claim_ids"] + item["negative_claim_ids"])
-        and item["status"] == "open"
+    scoped_stale_summaries = (
+        list_stale_summaries(
+            vault_dir,
+            pack_name=pack_name,
+            object_ids=scoped_object_ids,
+            limit=50,
+        )
+        if research_shell_enabled
+        else []
+    )
+    scoped_contradictions = (
+        [
+            item
+            for item in list_contradictions(vault_dir, pack_name=pack_name, limit=100)
+            if set(item["positive_claim_ids"] + item["negative_claim_ids"])
+            and any(claim_id.split("::", 1)[0] in set(scoped_object_ids) for claim_id in item["positive_claim_ids"] + item["negative_claim_ids"])
+            and item["status"] == "open"
+        ]
+        if research_shell_enabled
+        else []
+    )
+    neighbors = [
+        {
+            **item,
+            "object_path": _scoped_path(
+                f"/object?id={quote(str(item['object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in neighborhood["neighbors"]
     ]
+    research_links = {
+        "events_path": _scoped_path(f"/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
+        "contradictions_path": _scoped_path(
+            f"/contradictions?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "summaries_path": _scoped_path(
+            f"/summaries?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "deep_dives_path": _scoped_path(
+            f"/deep-dives?q={quote(object_id, safe='')}",
+            pack_name=requested_pack,
+        ),
+        "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
+    } if research_shell_enabled else {
+        "events_path": "",
+        "contradictions_path": "",
+        "summaries_path": "",
+        "deep_dives_path": "",
+        "atlas_path": "",
+    }
     return {
         "screen": "overview/topic",
+        "requested_pack": requested_pack,
+        "research_shell_enabled": research_shell_enabled,
         **neighborhood,
+        "neighbors": neighbors,
         "edge_count": len(neighborhood["edges"]),
-        "neighbor_count": len(neighborhood["neighbors"]),
+        "neighbor_count": len(neighbors),
         "center_summary": detail["summary"]["summary_text"] if detail["summary"] else "",
         "provenance": detail["provenance"],
-        "production_summary": _build_production_summary(vault_dir, scoped_object_ids),
-        "review_context": review_context,
-        "review_history": list_review_actions(
+        "production_summary": _build_production_summary(
             vault_dir,
-            object_ids=scoped_object_ids,
-            limit=8,
+            scoped_object_ids,
+            pack_name=pack_name,
         ),
-        "evolution": _build_evolution_section(vault_dir, status="all", scoped_object_ids=scoped_object_ids),
+        "review_context": review_context,
+        "review_history": (
+            list_review_actions(
+                vault_dir,
+                object_ids=scoped_object_ids,
+                limit=8,
+            )
+            if research_shell_enabled
+            else []
+        ),
+        "evolution": (
+            _build_evolution_section(
+                vault_dir,
+                pack_name=pack_name,
+                status="all",
+                scoped_object_ids=scoped_object_ids,
+            )
+            if research_shell_enabled
+            else {
+                "accepted_links": [],
+                "rejected_links": [],
+                "candidate_items": [],
+                "candidate_count": 0,
+                "accepted_count": 0,
+                "rejected_count": 0,
+                "link_types": [],
+                "status": "all",
+            }
+        ),
         "scoped_object_ids": scoped_object_ids,
         "scoped_stale_summary_ids": [item["object_id"] for item in scoped_stale_summaries],
         "scoped_open_contradiction_ids": [item["contradiction_id"] for item in scoped_contradictions],
         "links": {
-            "center_object_path": f"/object?id={object_id}",
-            "events_path": f"/events?q={object_id}",
-            "contradictions_path": f"/contradictions?q={object_id}",
-            "summaries_path": f"/summaries?q={object_id}",
+            "center_object_path": _scoped_path(
+                f"/object?id={quote(object_id, safe='')}",
+                pack_name=requested_pack,
+            ),
+            **research_links,
         },
     }
 
@@ -886,61 +1172,59 @@ def _escape_like(value: str) -> str:
 def build_event_dossier_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    db_path = _db_path(vault_dir)
-    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    requested_pack = pack_name or ""
     effective_limit = DEFAULT_EVENT_DOSSIER_LIMIT if limit is None else limit
-    with sqlite3.connect(db_path) as conn:
-        sql = """
-            SELECT timeline_events.event_date, timeline_events.event_type, timeline_events.heading,
-                   timeline_events.payload_json, objects.object_id, objects.title, compiled_summaries.summary_text
-            FROM timeline_events
-            JOIN objects ON objects.object_id = timeline_events.slug
-            LEFT JOIN compiled_summaries ON compiled_summaries.object_id = objects.object_id
-        """
-        params: list[Any] = []
-        if normalized_query:
-            sql += """
-                WHERE lower(objects.object_id) LIKE ? ESCAPE '\\'
-                   OR lower(objects.title) LIKE ? ESCAPE '\\'
-                   OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
-            """
-            params.extend(
-                [
-                    f"%{normalized_query}%",
-                    f"%{normalized_query}%",
-                    f"%{normalized_query}%",
-                ]
-            )
-        sql += " ORDER BY timeline_events.event_date DESC, objects.object_id"
-        if effective_limit is not None:
-            sql += " LIMIT ?"
-            params.append(effective_limit)
-        rows = conn.execute(sql, tuple(params)).fetchall()
-
     events = [
         _build_timeline_event_item(row)
-        for row in rows
+        for row in list_timeline_events(
+            vault_dir,
+            pack_name=pack_name,
+            query=query,
+            limit=effective_limit or DEFAULT_EVENT_DOSSIER_LIMIT,
+        )
     ]
-    provenance_map = get_object_provenance_map(vault_dir, [event["object_id"] for event in events])
+    provenance_map = get_object_provenance_map(
+        vault_dir,
+        [event["object_id"] for event in events],
+        pack_name=pack_name,
+    )
     scoped_object_ids = [event["object_id"] for event in events]
-    review_context = get_review_context(vault_dir, scoped_object_ids)
-    scoped_stale_summaries = list_stale_summaries(vault_dir, object_ids=scoped_object_ids, limit=100)
+    review_context = get_review_context(vault_dir, scoped_object_ids, pack_name=pack_name)
+    scoped_stale_summaries = list_stale_summaries(
+        vault_dir,
+        pack_name=pack_name,
+        object_ids=scoped_object_ids,
+        limit=100,
+    )
     scoped_contradictions = [
         item
-        for item in list_contradictions(vault_dir, limit=200)
+        for item in list_contradictions(vault_dir, pack_name=pack_name, limit=200)
         if any(claim_id.split("::", 1)[0] in set(scoped_object_ids) for claim_id in item["positive_claim_ids"] + item["negative_claim_ids"])
         and item["status"] == "open"
     ]
     for event in events:
-        event["object_path"] = f"/object?id={event['object_id']}"
+        event["object_path"] = _scoped_path(
+            f"/object?id={quote(str(event['object_id']), safe='')}",
+            pack_name=requested_pack,
+        )
         event["review_links"] = {
             "object_path": event["object_path"],
-            "topic_path": f"/topic?id={event['object_id']}",
-            "contradictions_path": f"/contradictions?q={event['object_id']}",
-            "summaries_path": f"/summaries?q={event['object_id']}",
+            "topic_path": _scoped_path(
+                f"/topic?id={quote(str(event['object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+            "contradictions_path": _scoped_path(
+                f"/contradictions?q={quote(str(event['object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+            "summaries_path": _scoped_path(
+                f"/summaries?q={quote(str(event['object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
         }
         event["provenance"] = provenance_map.get(
             event["object_id"],
@@ -962,6 +1246,7 @@ def build_event_dossier_payload(
     semantic_roles = Counter(event["semantic_role"] for event in events)
     return {
         "screen": "event/dossier",
+        "requested_pack": requested_pack,
         "events": events,
         "event_count": len(events),
         "cluster_count": sum(len(section["clusters"]) for section in cluster_sections),
@@ -975,7 +1260,11 @@ def build_event_dossier_payload(
             "row_type_counts": dict(row_type_counts),
             "semantic_roles": dict(semantic_roles),
         },
-        "production_summary": _build_production_summary(vault_dir, scoped_object_ids),
+        "production_summary": _build_production_summary(
+            vault_dir,
+            scoped_object_ids,
+            pack_name=pack_name,
+        ),
         "review_context": review_context,
         "review_history": list_review_actions(vault_dir, object_ids=scoped_object_ids, limit=8),
         "scoped_object_ids": list(dict.fromkeys(scoped_object_ids)),
@@ -992,11 +1281,19 @@ def build_event_dossier_payload(
 def build_evolution_browser_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     query: str | None = None,
     status: str = "all",
     link_type: str | None = None,
 ) -> dict[str, Any]:
-    evolution = _build_evolution_section(vault_dir, query=query, link_type=link_type, status=status)
+    requested_pack = pack_name or ""
+    evolution = _build_evolution_section(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        link_type=link_type,
+        status=status,
+    )
     type_counts = Counter(
         item["link_type"]
         for item in [
@@ -1007,6 +1304,7 @@ def build_evolution_browser_payload(
     )
     return {
         "screen": "evolution/browser",
+        "requested_pack": requested_pack,
         "query": query or "",
         "status": status,
         "link_type": link_type or "",
@@ -1174,11 +1472,17 @@ def build_cluster_detail_payload(
     enriched_cluster = {
         **cluster,
         "detail_path": detail_path,
-        "center_object_path": f"/object?id={quote(str(cluster['center_object_id']), safe='')}",
+        "center_object_path": _scoped_path(
+            f"/object?id={quote(str(cluster['center_object_id']), safe='')}",
+            pack_name=requested_pack,
+        ),
         "member_links": [
             {
                 **member,
-                "path": f"/object?id={quote(str(member['object_id']), safe='')}",
+                "path": _scoped_path(
+                    f"/object?id={quote(str(member['object_id']), safe='')}",
+                    pack_name=requested_pack,
+                ),
             }
             for member in cluster["members"]
         ],
@@ -1194,8 +1498,14 @@ def build_cluster_detail_payload(
                 "title",
                 str(edge["target_object_id"]),
             ),
-            "source_path": f"/object?id={quote(str(edge['source_object_id']), safe='')}",
-            "target_path": f"/object?id={quote(str(edge['target_object_id']), safe='')}",
+            "source_path": _scoped_path(
+                f"/object?id={quote(str(edge['source_object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+            "target_path": _scoped_path(
+                f"/object?id={quote(str(edge['target_object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
         }
         for edge in detail["edges"]
     ]
@@ -1225,10 +1535,12 @@ def build_cluster_detail_payload(
 def build_contradiction_browser_payload(
     vault_dir: Path | str,
     *,
+    pack_name: str | None = None,
     status: str | None = None,
     query: str | None = None,
 ) -> dict[str, Any]:
-    raw_items = list_contradictions(vault_dir, status=status, query=query)
+    requested_pack = pack_name or ""
+    raw_items = list_contradictions(vault_dir, pack_name=pack_name, status=status, query=query)
     provenance_map = get_object_provenance_map(
         vault_dir,
         _object_ids_from_claim_ids(
@@ -1237,6 +1549,7 @@ def build_contradiction_browser_payload(
                 for item in raw_items
             )
         ),
+        pack_name=pack_name,
     )
     items = []
     for item in raw_items:
@@ -1260,7 +1573,14 @@ def build_contradiction_browser_payload(
                 "object_ids": object_ids,
                 "object_titles": object_titles,
                 "object_links": [
-                    {"object_id": object_id, "path": f"/object?id={object_id}"} for object_id in object_ids
+                    {
+                        "object_id": object_id,
+                        "path": _scoped_path(
+                            f"/object?id={quote(object_id, safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                    }
+                    for object_id in object_ids
                 ],
                 "provenance": {
                     "source_notes": list(source_notes.values()),
@@ -1271,6 +1591,7 @@ def build_contradiction_browser_payload(
     status_counts = Counter(item["status"] for item in items)
     return {
         "screen": "truth/contradictions",
+        "requested_pack": requested_pack,
         "items": items,
         "count": len(items),
         "open_count": status_counts.get("open", 0),
@@ -1306,11 +1627,25 @@ def build_contradiction_browser_payload(
     }
 
 
-def _build_timeline_event_item(row: tuple[Any, ...]) -> dict[str, Any]:
-    payload = json.loads(row[3] or "{}")
-    event_type = str(row[1])
-    title = str(row[5])
-    heading = str(row[2] or "").strip()
+def _build_timeline_event_item(row: tuple[Any, ...] | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(row, dict):
+        payload = json.loads(str(row.get("payload_json") or "{}"))
+        event_date = str(row.get("event_date") or "")
+        event_type = str(row.get("event_type") or "")
+        heading = str(row.get("heading") or "").strip()
+        object_id = str(row.get("object_id") or "")
+        title = str(row.get("title") or object_id)
+        summary_text = str(row.get("summary_text") or "")
+        row_pack = str(row.get("row_pack") or "")
+    else:
+        payload = json.loads(row[3] or "{}")
+        event_date = str(row[0] or "")
+        event_type = str(row[1])
+        heading = str(row[2] or "").strip()
+        object_id = str(row[4])
+        title = str(row[5])
+        summary_text = str(row[6] or "")
+        row_pack = ""
     if event_type == "page_date":
         timeline_anchor_kind = "note"
         timeline_anchor_label = str(payload.get("title") or title)
@@ -1324,7 +1659,7 @@ def _build_timeline_event_item(row: tuple[Any, ...]) -> dict[str, Any]:
         event_kind = "dated_heading"
         event_label = "Dated Heading"
     return {
-        "event_date": row[0],
+        "event_date": event_date,
         "event_type": event_type,
         "row_type": event_type,
         "event_kind": event_kind,
@@ -1332,9 +1667,10 @@ def _build_timeline_event_item(row: tuple[Any, ...]) -> dict[str, Any]:
         "semantic_role": semantic_role,
         "timeline_anchor_kind": timeline_anchor_kind,
         "timeline_anchor_label": timeline_anchor_label,
-        "object_id": row[4],
+        "object_id": object_id,
         "title": title,
-        "summary_text": row[6] or "",
+        "summary_text": summary_text,
+        "row_pack": row_pack,
     }
 
 
@@ -1374,44 +1710,101 @@ def _cluster_timeline_events(events: list[dict[str, Any]]) -> list[dict[str, Any
     return sorted(clusters.values(), key=lambda item: (str(item["event_date"]), str(item["object_id"])))
 
 
-def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
-    objects = build_objects_index_payload(vault_dir, limit=12, offset=0)
-    contradictions = build_contradiction_browser_payload(vault_dir)
-    events = build_event_dossier_payload(vault_dir, limit=8)
-    stale_summaries = build_stale_summary_browser_payload(vault_dir)
-    evolution = build_evolution_browser_payload(vault_dir, status="all")
-    signals = build_signal_browser_payload(vault_dir)
-    production_weak_points = _build_production_weak_points(vault_dir)
+def build_truth_dashboard_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    objects = build_objects_index_payload(vault_dir, limit=12, offset=0, pack_name=pack_name)
+    signals = build_signal_browser_payload(vault_dir, pack_name=pack_name)
+    production = build_production_browser_payload(vault_dir, pack_name=pack_name)
+    production_weak_points = production["weak_points"]
+    research_overview_supported = _supports_research_shell(pack_name)
+    if research_overview_supported:
+        contradictions = build_contradiction_browser_payload(vault_dir, pack_name=pack_name)
+        events = build_event_dossier_payload(vault_dir, pack_name=pack_name, limit=8)
+        stale_summaries = build_stale_summary_browser_payload(vault_dir, pack_name=pack_name)
+        evolution = build_evolution_browser_payload(vault_dir, pack_name=pack_name, status="all")
+    else:
+        contradictions = {
+            "count": 0,
+            "open_count": 0,
+            "items": [],
+            "browser_path": _scoped_path("/contradictions", pack_name=requested_pack),
+        }
+        events = {
+            "count": 0,
+            "items": [],
+            "dates": [],
+            "browser_path": _scoped_path("/events", pack_name=requested_pack),
+        }
+        stale_summaries = {
+            "count": 0,
+            "items": [],
+            "browser_path": _scoped_path("/summaries", pack_name=requested_pack),
+        }
+        evolution = {
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "items": [],
+        }
     priorities: list[dict[str, Any]] = []
-    for item in contradictions["items"][:4]:
-        priorities.append(
-            {
-                "kind": "contradiction",
-                "label": item["subject_key"],
-                "path": f"/contradictions?q={item['subject_key']}",
-                "detail": f"{len(item['object_ids'])} objects in scope",
-            }
-        )
-    for item in stale_summaries["items"][:4]:
-        priorities.append(
-            {
-                "kind": "stale_summary",
-                "label": item["title"],
-                "path": item["object_path"],
-                "detail": ", ".join(item["reason_codes"]),
-            }
-        )
+    if research_overview_supported:
+        for item in contradictions["items"][:4]:
+            priorities.append(
+                {
+                    "kind": "contradiction",
+                    "label": item["subject_key"],
+                    "path": _scoped_path(
+                        f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": f"{len(item['object_ids'])} objects in scope",
+                }
+            )
+        for item in stale_summaries["items"][:4]:
+            priorities.append(
+                {
+                    "kind": "stale_summary",
+                    "label": item["title"],
+                    "path": item["object_path"],
+                    "detail": ", ".join(item["reason_codes"]),
+                }
+            )
+    else:
+        for item in signals["items"][:4]:
+            priorities.append(
+                {
+                    "kind": item["signal_type"],
+                    "label": item["title"],
+                    "path": item["source_path"],
+                    "detail": item["detail"],
+                }
+            )
     for item in production_weak_points[:4]:
         priorities.append(
             {
                 "kind": "production_gap",
                 "label": item["title"],
-                "path": f"/note?path={quote(item['note_path'], safe='')}",
+                "path": _scoped_path(
+                    f"/note?path={quote(item['note_path'], safe='')}",
+                    pack_name=requested_pack,
+                ),
                 "detail": item["detail"],
             }
         )
     return {
         "screen": "truth/dashboard",
+        "requested_pack": requested_pack,
+        "research_overview": {
+            "status": "supported" if research_overview_supported else "shared_shell_only",
+            "reason": (
+                "Research-specific overview surfaces are available because this pack resolves through research-tech."
+                if research_overview_supported
+                else "This pack currently gets the shared home shell only; research-specific overview panels stay hidden until the pack defines its own equivalents."
+            ),
+        },
         "objects": {
             "count": objects["total_count"],
             "items": objects["items"],
@@ -1420,15 +1813,18 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
             "count": contradictions["count"],
             "open_count": contradictions["open_count"],
             "items": contradictions["items"][:8],
+            "browser_path": _scoped_path("/contradictions", pack_name=requested_pack),
         },
         "events": {
             "count": events["event_count"],
             "items": events["events"][:8],
             "dates": events["dates"],
+            "browser_path": _scoped_path("/events", pack_name=requested_pack),
         },
         "stale_summaries": {
             "count": stale_summaries["count"],
             "items": stale_summaries["items"][:8],
+            "browser_path": _scoped_path("/summaries", pack_name=requested_pack),
         },
         "evolution": {
             "candidate_count": evolution["candidate_count"],
@@ -1436,13 +1832,14 @@ def build_truth_dashboard_payload(vault_dir: Path | str) -> dict[str, Any]:
             "items": evolution["candidate_items"][:6],
         },
         "production": {
-            "weak_points": production_weak_points,
+            **production,
+            "browser_path": _scoped_path("/production", pack_name=requested_pack),
             "weak_point_count": len(production_weak_points),
         },
         "signals": {
-            "count": signals["count"],
+            **signals,
             "items": signals["items"][:8],
-            "type_counts": signals["type_counts"],
+            "browser_path": _scoped_path("/signals", pack_name=requested_pack),
         },
         "recent_review_actions": list_review_actions(vault_dir, limit=8),
         "priorities": priorities[:8],
@@ -1455,11 +1852,23 @@ def build_objects_index_payload(
     limit: int = 100,
     offset: int = 0,
     query: str | None = None,
+    pack_name: str | None = None,
 ) -> dict[str, Any]:
-    items = list_objects(vault_dir, limit=limit, offset=offset, query=query)
-    total_count = count_objects(vault_dir, query=query)
+    requested_pack = pack_name or ""
+    items = [
+        {
+            **item,
+            "object_path": _scoped_path(
+                f"/object?id={quote(str(item['object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in list_objects(vault_dir, limit=limit, offset=offset, query=query, pack_name=pack_name)
+    ]
+    total_count = count_objects(vault_dir, query=query, pack_name=pack_name)
     return {
         "screen": "objects/index",
+        "requested_pack": requested_pack,
         "items": items,
         "count": len(items),
         "total_count": total_count,
@@ -1469,13 +1878,28 @@ def build_objects_index_payload(
     }
 
 
-def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
-    items = list_atlas_memberships(vault_dir, query=query, limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT)
-    derivations = list_deep_dive_derivations(vault_dir, limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT)
+def build_atlas_browser_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    items = list_atlas_memberships(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+    )
+    derivations = list_deep_dive_derivations(
+        vault_dir,
+        pack_name=pack_name,
+        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+    )
     object_to_deep_dives: dict[str, dict[str, dict[str, str]]] = {}
     object_to_source_notes: dict[str, dict[str, dict[str, str]]] = {}
     for item in derivations:
-        source_notes = get_note_traceability(vault_dir, note_path=item["path"])["source_notes"]
+        source_notes = get_note_traceability(vault_dir, note_path=item["path"], pack_name=pack_name)["source_notes"]
         for derived in item["derived_objects"]:
             object_to_deep_dives.setdefault(derived["object_id"], {})[item["slug"]] = {
                 "slug": item["slug"],
@@ -1488,8 +1912,18 @@ def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = No
                 object_to_source_notes[derived["object_id"]][source["path"]] = source
     enriched_items = []
     for item in items:
-        preview_titles = [member["title"] for member in item["members"][:5]]
-        member_object_ids = [member["object_id"] for member in item["members"]]
+        enriched_members = [
+            {
+                **member,
+                "object_path": _scoped_path(
+                    f"/object?id={quote(str(member['object_id']), safe='')}",
+                    pack_name=requested_pack,
+                ),
+            }
+            for member in item["members"]
+        ]
+        preview_titles = [member["title"] for member in enriched_members[:5]]
+        member_object_ids = [member["object_id"] for member in enriched_members]
         source_note_map: dict[str, dict[str, str]] = {}
         deep_dive_map: dict[str, dict[str, str]] = {}
         for member_object_id in member_object_ids:
@@ -1500,7 +1934,8 @@ def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = No
         enriched_items.append(
             {
                 **item,
-                "member_count": len(item["members"]),
+                "members": enriched_members,
+                "member_count": len(enriched_members),
                 "preview_titles": preview_titles,
                 "source_notes": list(source_note_map.values()),
                 "deep_dives": list(deep_dive_map.values()),
@@ -1508,6 +1943,7 @@ def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = No
         )
     return {
         "screen": "atlas/browser",
+        "requested_pack": requested_pack,
         "items": enriched_items,
         "count": len(enriched_items),
         "query": query or "",
@@ -1516,29 +1952,43 @@ def build_atlas_browser_payload(vault_dir: Path | str, *, query: str | None = No
     }
 
 
-def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
-    items = list_deep_dive_derivations(vault_dir, query=query, limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT)
+def build_derivation_browser_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    items = list_deep_dive_derivations(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+    )
     enriched_items = []
     for item in items:
-        existing_object_rows = _existing_object_rows(
-            vault_dir,
-            [member["object_id"] for member in item["derived_objects"]],
-        )
         derived_objects = [
             {
                 "object_id": member["object_id"],
-                "title": existing_object_rows.get(member["object_id"], member["title"]),
+                "title": member["title"],
+                "object_path": _scoped_path(
+                    f"/object?id={quote(str(member['object_id']), safe='')}",
+                    pack_name=requested_pack,
+                ),
             }
             for member in item["derived_objects"]
-            if member["object_id"] in existing_object_rows
         ]
         preview_titles = [member["title"] for member in derived_objects[:5]]
-        provenance_map = get_object_provenance_map(vault_dir, [member["object_id"] for member in derived_objects])
+        provenance_map = get_object_provenance_map(
+            vault_dir,
+            [member["object_id"] for member in derived_objects],
+            pack_name=pack_name,
+        )
         atlas_page_map: dict[str, dict[str, str]] = {}
         for provenance in provenance_map.values():
             for atlas_page in provenance["mocs"]:
                 atlas_page_map.setdefault(atlas_page["slug"], atlas_page)
-        source_notes = get_note_traceability(vault_dir, note_path=item["path"])["source_notes"]
+        source_notes = get_note_traceability(vault_dir, note_path=item["path"], pack_name=pack_name)["source_notes"]
         enriched_items.append(
             {
                 **item,
@@ -1551,6 +2001,7 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
         )
     return {
         "screen": "derivations/browser",
+        "requested_pack": requested_pack,
         "items": enriched_items,
         "count": len(enriched_items),
         "query": query or "",
@@ -1559,13 +2010,52 @@ def build_derivation_browser_payload(vault_dir: Path | str, *, query: str | None
     }
 
 
-def build_production_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
-    items = list_production_chains(vault_dir, query=query, limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT)
+def build_production_browser_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    surface_contract = describe_observation_surface_contract(
+        pack_name=pack_name,
+        surface_kind="production_chains",
+    )
+    if surface_contract["status"] == "missing":
+        return {
+            "screen": "production/browser",
+            "requested_pack": requested_pack,
+            "surface_contract": surface_contract,
+            "surface_error": (
+                f"Pack '{surface_contract['requested_pack']}' does not expose a shared shell "
+                f"'production_chains' surface."
+            ),
+            "items": [],
+            "source_items": [],
+            "deep_dive_items": [],
+            "weak_points": [],
+            "count": 0,
+            "query": query or "",
+            "limit": DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+            "is_limited": True,
+            "counts": {
+                "source_notes": 0,
+                "deep_dives": 0,
+            },
+        }
+    items = list_production_chains(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+    )
     source_items = [item for item in items if item["stage_label"] == "source_note"]
     deep_dive_items = [item for item in items if item["stage_label"] == "deep_dive"]
-    weak_points = _build_production_weak_points(vault_dir, query=query)
+    weak_points = _build_production_weak_points(vault_dir, pack_name=pack_name, query=query)
     return {
         "screen": "production/browser",
+        "requested_pack": requested_pack,
+        "surface_contract": surface_contract,
         "items": items,
         "source_items": source_items,
         "deep_dive_items": deep_dive_items,
@@ -1581,11 +2071,27 @@ def build_production_browser_payload(vault_dir: Path | str, *, query: str | None
     }
 
 
-def build_stale_summary_browser_payload(vault_dir: Path | str, *, query: str | None = None) -> dict[str, Any]:
-    items = list_stale_summaries(vault_dir, query=query)
-    review_context = get_review_context(vault_dir, [item["object_id"] for item in items])
+def build_stale_summary_browser_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    items = [
+        {
+            **item,
+            "object_path": _scoped_path(
+                f"/object?id={quote(str(item['object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in list_stale_summaries(vault_dir, pack_name=pack_name, query=query)
+    ]
+    review_context = get_review_context(vault_dir, [item["object_id"] for item in items], pack_name=pack_name)
     return {
         "screen": "truth/stale-summaries",
+        "requested_pack": requested_pack,
         "items": items,
         "count": len(items),
         "query": query or "",
@@ -1598,21 +2104,96 @@ def build_stale_summary_browser_payload(vault_dir: Path | str, *, query: str | N
     }
 
 
-def build_search_payload(vault_dir: Path | str, *, query: str) -> dict[str, Any]:
-    results = search_vault_surface(vault_dir, query=query)
+def build_search_payload(
+    vault_dir: Path | str,
+    *,
+    query: str,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    results = search_vault_surface(vault_dir, query=query, pack_name=pack_name)
     return {
         "screen": "search/results",
+        "requested_pack": requested_pack,
         **results,
+        "objects": [
+            {
+                **item,
+                "object_path": _scoped_path(
+                    f"/object?id={quote(str(item['object_id']), safe='')}",
+                    pack_name=requested_pack,
+                ),
+            }
+            for item in results["objects"]
+        ],
+        "notes": [
+            {
+                **item,
+                "note_path": _scoped_path(
+                    f"/note?path={quote(str(item['path']), safe='')}",
+                    pack_name=requested_pack,
+                ),
+            }
+            for item in results["notes"]
+        ],
         "object_count": len(results["objects"]),
         "note_count": len(results["notes"]),
     }
 
 
-def build_note_page_payload(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+def build_note_page_payload(
+    vault_dir: Path | str,
+    *,
+    note_path: str,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
     provenance = get_note_provenance(vault_dir, note_path=note_path)
+    production_chain = get_note_traceability(vault_dir, note_path=note_path, pack_name=pack_name)
+    production_chain["source_notes"] = [
+        {
+            **item,
+            "note_path": _scoped_path(
+                f"/note?path={quote(str(item['path']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in production_chain["source_notes"]
+    ]
+    production_chain["deep_dives"] = [
+        {
+            **item,
+            "note_path": _scoped_path(
+                f"/note?path={quote(str(item['path']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in production_chain["deep_dives"]
+    ]
+    production_chain["objects"] = [
+        {
+            **item,
+            "object_path": _scoped_path(
+                f"/object?id={quote(str(item['object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in production_chain["objects"]
+    ]
+    production_chain["atlas_pages"] = [
+        {
+            **item,
+            "note_path": _scoped_path(
+                f"/note?path={quote(str(item['path']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in production_chain["atlas_pages"]
+    ]
     return {
         "screen": "note/page",
+        "requested_pack": requested_pack,
         "note_path": note_path,
         "provenance": provenance,
-        "production_chain": get_note_traceability(vault_dir, note_path=note_path),
+        "production_chain": production_chain,
     }

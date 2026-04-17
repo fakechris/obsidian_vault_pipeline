@@ -192,7 +192,8 @@ def _preserve_existing_truth_rows(
                 (exclude_pack,),
             ).fetchall()
     except sqlite3.OperationalError as exc:
-        if "no such table" not in str(exc).lower():
+        error_text = str(exc).lower()
+        if "no such table" not in error_text and "no such column" not in error_text:
             raise
         metadata_rows = []
     except sqlite3.DatabaseError:
@@ -424,9 +425,43 @@ def _initialize_database(db_path: Path) -> sqlite3.Connection:
 def _ensure_knowledge_db(vault_dir: Path) -> tuple[Path, VaultLayout]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
-    if not layout.knowledge_db.exists():
+    if not layout.knowledge_db.exists() or not _knowledge_db_supports_pack_schema(layout.knowledge_db):
         rebuild_knowledge_index(resolved_vault)
     return resolved_vault, layout
+
+
+def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
+    if not db_path.exists():
+        return False
+    required_columns = {
+        "timeline_events": {"slug", "event_date", "event_type", "heading", "payload_json"},
+        "objects": {"pack"},
+        "claims": {"pack"},
+        "claim_evidence": {"pack"},
+        "relations": {"pack"},
+        "compiled_summaries": {"pack"},
+        "contradictions": {"pack"},
+        "graph_edges": {"pack"},
+        "graph_clusters": {"pack"},
+        "truth_projections": {"pack", "owner_pack", "builder_name", "built_at"},
+    }
+    try:
+        with sqlite3.connect(db_path) as conn:
+            for table_name, expected_columns in required_columns.items():
+                rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+                if not rows:
+                    return False
+                existing_columns = {str(row[1]) for row in rows}
+                if not expected_columns.issubset(existing_columns):
+                    return False
+    except sqlite3.DatabaseError:
+        return False
+    return True
+
+
+def ensure_knowledge_db_current(vault_dir: Path | str) -> Path:
+    _, layout = _ensure_knowledge_db(resolve_vault_dir(vault_dir))
+    return layout.knowledge_db
 
 
 def _read_jsonl_items(path: Path) -> list[dict[str, object]]:

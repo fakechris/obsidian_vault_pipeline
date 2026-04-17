@@ -451,6 +451,12 @@ Architecture follow-up:
   domain truth projection, and domain UI semantics so the product does not remain implicitly bound
   to `research-tech` while it grows beyond the first in-repo pack.
 
+Status: **Implemented**
+
+Closeout:
+
+- [[2026-04-16-phase16-multi-pack-runtime-closeout]]
+
 Implementation sequence:
 
 1. `Stage Handler Registry`
@@ -491,11 +497,11 @@ Closeout:
 
 The historical Phase 10 -> Phase 15 ordering below is now complete and should be treated as archived milestone history, not as the active follow-up plan.
 
-Use the `Architecture follow-up` and `Implementation sequence` sections above as the current next-step order:
+Use the `Architecture follow-up` closeout above as completed platform history. Do not reopen it unless a new pack/runtime ownership bug appears.
 
-1. `Stage Handler Registry`
-2. `Pack-Aware Truth Projection`
-3. `Pack-Aware Observation Surfaces`
+The next-step order after that closeout starts at the next product phase rather than repeating:
+
+1. `Phase 17`
 
 ## Non-Recommended Paths Right Now
 

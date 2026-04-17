@@ -84,6 +84,31 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert "/api/objects" in body
 
 
+def test_ui_server_root_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Pack scope: default-knowledge" in body
+    assert "/signals?pack=default-knowledge" in body
+    assert "inherited from research-tech-signals" in body
+    assert "inherited from research-tech-production-chains" in body
+
+
 def test_ui_server_objects_endpoint_returns_json(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -147,6 +172,72 @@ Mentions [[alpha]].
     assert any(item["note_type"] == "deep_dive" for item in payload["notes"])
 
 
+def test_ui_server_search_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+title: Agent Harness Deep Dive
+source: https://example.com/agent-harness
+date: 2026-04-13
+type: deep_dive
+---
+
+# Agent Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/search?q=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["objects"][0]["object_path"] == "/object?id=alpha&pack=default-knowledge"
+    assert any(item["note_path"].endswith("&pack=default-knowledge") for item in payload["notes"])
+
+
+def test_ui_server_search_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/search?q=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/search?pack=default-knowledge"' in body
+    assert "name='pack' value='default-knowledge'" in body or 'name="pack" value="default-knowledge"' in body
+    assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
+
+
 def test_ui_server_object_endpoint_returns_detail_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -170,6 +261,155 @@ def test_ui_server_object_endpoint_returns_detail_payload(temp_vault):
     assert payload["relation_count"] == 1
 
 
+def test_ui_server_object_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/object?id=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["links"]["topic_path"] == "/topic?id=alpha&pack=default-knowledge"
+
+
+def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/object?id=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/objects?pack=default-knowledge"' in body
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/atlas?pack=default-knowledge"' in body
+    assert 'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
+
+
+def test_ui_server_note_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                '{"event_type":"article_processed","file":"Harness.md","output":"'
+                + str(deep_dive)
+                + '"}',
+                '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Harness_深度解读.md","mutation":{"target_slug":"alpha"}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "GET",
+            "/note?path=50-Inbox%2F03-Processed%2F2026-04%2FHarness.md&pack=default-knowledge",
+        )
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/search?pack=default-knowledge"' in body
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
+    assert 'href="/note?path=20-Areas%2FAI-Research%2FTopics%2F2026-04%2FHarness_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md&amp;pack=default-knowledge"' in body
+
+
 def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -191,6 +431,28 @@ def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
     assert response.status == 200
     assert payload["count"] == 1
     assert payload["items"][0]["subject_key"] == "alpha"
+
+
+def test_ui_server_contradictions_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/contradictions?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
 
 
 def test_ui_server_signals_endpoint_returns_payload(temp_vault):
@@ -229,6 +491,334 @@ Processed source note without downstream chain.
     assert "contradiction_open" in payload["type_counts"]
 
 
+def test_ui_server_signals_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/signals?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/signals?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/events?pack=default-knowledge"' in body
+    assert 'href="/summaries?pack=default-knowledge"' in body
+    assert "inherited from research-tech-signals" in body
+
+
+def test_ui_server_signals_page_renders_missing_surface_contract_error(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_signal_browser_payload",
+        lambda vault_dir, *, pack_name=None, signal_type=None, query=None: {
+            "screen": "signals/browser",
+            "requested_pack": pack_name or "",
+            "surface_contract": {
+                "surface_kind": "signals",
+                "requested_pack": "media-editorial",
+                "status": "missing",
+                "provider_pack": "",
+                "provider_name": "",
+                "description": "",
+            },
+            "surface_error": "Pack 'media-editorial' does not expose a shared shell 'signals' surface.",
+            "items": [],
+            "count": 0,
+            "query": "",
+            "signal_type": "",
+            "type_counts": {},
+            "signal_type_explanations": {},
+        },
+    )
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/signals?pack=media-editorial")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "has no provider for signals" in body
+    assert "does not expose a shared shell &#x27;signals&#x27; surface" in body
+
+
+def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_signal_browser_payload",
+        lambda vault_dir, *, pack_name=None, signal_type=None, query=None: {
+            "screen": "signals/browser",
+            "requested_pack": pack_name or "",
+            "surface_contract": {
+                "surface_kind": "signals",
+                "requested_pack": pack_name or "",
+                "status": "missing",
+                "provider_pack": "",
+                "provider_name": "",
+                "description": "",
+            },
+            "surface_error": "Pack 'media-editorial' does not expose a shared shell 'signals' surface.",
+            "items": [],
+            "count": 0,
+            "query": "",
+            "signal_type": "",
+            "type_counts": {},
+            "signal_type_explanations": {},
+        },
+    )
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/signals?pack=media-editorial")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/signals?pack=media-editorial"' in body
+    assert 'href="/production?pack=media-editorial"' in body
+    assert 'href="/clusters?pack=media-editorial"' not in body
+    assert 'href="/contradictions?pack=media-editorial"' not in body
+    assert 'href="/events?pack=media-editorial"' not in body
+
+
+def test_ui_server_research_api_route_rejects_non_research_pack(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_cluster_browser_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cluster builder should not run")),
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/clusters?pack=media-editorial")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 409
+    assert payload["status"] == "unsupported_pack"
+    assert payload["route"] == "/clusters"
+    assert payload["requested_pack"] == "media-editorial"
+
+
+def test_ui_server_research_html_route_rejects_non_research_pack(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_cluster_browser_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cluster builder should not run")),
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/clusters?pack=media-editorial")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Route Unavailable" in body
+    assert "research-specific observation shell" in body
+    assert "media-editorial" in body
+
+
+def test_ui_server_summaries_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
+    note.write_text(
+        """---
+note_id: thin-note
+title: Thin Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Thin Note
+
+Thin note.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/summaries?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_events_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/events?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/events?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/atlas?pack=default-knowledge"' in body
+    assert 'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
+
+
+def test_ui_server_atlas_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/atlas?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_deep_dives_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/deep-dives?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+
+
 def test_ui_server_evolution_endpoint_returns_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -250,6 +840,84 @@ def test_ui_server_evolution_endpoint_returns_payload(temp_vault):
     assert response.status == 200
     assert payload["screen"] == "evolution/browser"
     assert payload["count"] >= 1
+
+
+def test_ui_server_evolution_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    captured: dict[str, str | None] = {}
+
+    def fake_build_evolution_browser_payload(vault_dir, *, pack_name=None, query=None, status="all", link_type=None):
+        captured["pack_name"] = pack_name
+        captured["query"] = query
+        captured["status"] = status
+        captured["link_type"] = link_type
+        return {
+            "screen": "evolution/browser",
+            "requested_pack": pack_name or "",
+            "query": query or "",
+            "status": status,
+            "link_type": link_type or "",
+            "items": [],
+            "candidate_items": [],
+            "accepted_links": [],
+            "rejected_links": [],
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "count": 0,
+            "type_counts": {},
+            "link_types": [],
+        }
+
+    monkeypatch.setattr(ui_server, "build_evolution_browser_payload", fake_build_evolution_browser_payload)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/evolution?pack=default-knowledge&q=alpha&status=all&link_type=enriches")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert captured == {
+        "pack_name": "default-knowledge",
+        "query": "alpha",
+        "status": "all",
+        "link_type": "enriches",
+    }
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_evolution_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/evolution?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/?pack=default-knowledge"' in body
+    assert "name='pack' value='default-knowledge'" in body
 
 
 def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
@@ -279,6 +947,29 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
     assert payload["items"][0]["priority_reason"]
     assert payload["items"][0]["display_title"]
     assert payload["items"][0]["relation_pattern_preview"]
+
+
+def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/clusters?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/briefing?pack=default-knowledge"' in body
+    assert 'href="/atlas?pack=default-knowledge"' in body
 
 
 def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
@@ -606,6 +1297,52 @@ def test_ui_server_briefing_endpoint_returns_payload(temp_vault):
     assert payload["active_topics"]
 
 
+def test_ui_server_briefing_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/briefing?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/briefing?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/clusters?pack=default-knowledge"' in body
+    assert "inherited from research-tech-briefing" in body
+
+
 def test_ui_server_can_enqueue_signal_action_via_api(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
     from openclaw_pipeline.truth_api import list_signals
@@ -652,6 +1389,219 @@ Processed source note without downstream chain.
     assert payload["action"]["status"] == "queued"
 
 
+def test_ui_server_production_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/production?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_production_page_preserves_pack_scope_in_note_links(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/production?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md&amp;pack=default-knowledge"' in body
+    assert "inherited from research-tech-production-chains" in body
+
+
+def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_action_queue_payload",
+        lambda vault_dir, *, pack_name=None, status=None, query=None: {
+            "screen": "actions/browser",
+            "requested_pack": pack_name or "",
+            "items": [
+                {
+                    "action_id": "action::demo",
+                    "status": "queued",
+                    "action_kind": "deep_dive_workflow",
+                    "title": "Create deep dive",
+                    "target_ref": "50-Inbox/03-Processed/Loose Source.md",
+                    "created_at": "2026-04-16T00:00:00Z",
+                    "retry_count": 0,
+                    "failure_bucket": "",
+                    "safe_to_run": True,
+                    "processor_mode": "llm_structured",
+                    "processor_inputs": ["source_note"],
+                    "processor_outputs": ["deep_dive"],
+                    "processor_quality_hooks": ["quality"],
+                }
+            ],
+            "count": 1,
+            "query": "",
+            "status": "",
+            "status_counts": {"queued": 1},
+            "queued_safe_count": 1,
+            "failed_count": 0,
+            "failure_buckets": {},
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/actions")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Processor: llm_structured" in body
+    assert "Inputs: source_note" in body
+    assert "Outputs: deep_dive" in body
+    assert "Quality hooks: quality" in body
+
+
+def test_ui_server_actions_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    captured: dict[str, str | None] = {}
+
+    def fake_build_action_queue_payload(vault_dir, *, pack_name=None, status=None, query=None):
+        captured["pack_name"] = pack_name
+        captured["status"] = status
+        captured["query"] = query
+        return {
+            "screen": "actions/browser",
+            "requested_pack": pack_name or "",
+            "items": [],
+            "count": 0,
+            "query": query or "",
+            "status": status or "",
+            "status_counts": {},
+            "queued_safe_count": 0,
+            "failed_count": 0,
+            "failure_buckets": {},
+        }
+
+    monkeypatch.setattr(ui_server, "build_action_queue_payload", fake_build_action_queue_payload)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/actions?pack=default-knowledge&q=alpha&status=queued")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert captured == {
+        "pack_name": "default-knowledge",
+        "status": "queued",
+        "query": "alpha",
+    }
+    assert payload["requested_pack"] == "default-knowledge"
+
+
+def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_action_queue_payload",
+        lambda vault_dir, *, pack_name=None, status=None, query=None: {
+            "screen": "actions/browser",
+            "requested_pack": pack_name or "",
+            "items": [
+                {
+                    "action_id": "action::demo",
+                    "status": "queued",
+                    "action_kind": "deep_dive_workflow",
+                    "title": "Create deep dive",
+                    "safe_to_run": True,
+                }
+            ],
+            "count": 1,
+            "query": query or "",
+            "status": status or "",
+            "status_counts": {"queued": 1},
+            "queued_safe_count": 1,
+            "failed_count": 0,
+            "failure_buckets": {},
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/actions?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/?pack=default-knowledge"' in body
+    assert "name='pack' value='default-knowledge'" in body
+    assert "value='/actions?pack=default-knowledge'" in body
+
+
 def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
     import openclaw_pipeline.commands.ui_server as ui_server
     from openclaw_pipeline.commands.ui_server import create_server
@@ -659,9 +1609,10 @@ def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
     monkeypatch.setattr(
         ui_server,
         "run_next_action_queue_item",
-        lambda vault_dir, *, safe_only=False: {
+        lambda vault_dir, *, safe_only=False, pack_name=None: {
             "ran": True,
             "safe_only": safe_only,
+            "requested_pack": pack_name or "",
             "action": {
                 "action_id": "action::demo",
                 "action_kind": "deep_dive_workflow",
@@ -701,12 +1652,13 @@ def test_ui_server_can_run_action_batch_via_api(temp_vault, monkeypatch):
     monkeypatch.setattr(
         ui_server,
         "run_action_queue",
-        lambda vault_dir, *, limit, safe_only=False: {
+        lambda vault_dir, *, limit, safe_only=False, pack_name=None: {
             "ran_count": 2,
             "stopped_reason": "no_queued_actions",
             "results": [],
             "limit": limit,
             "safe_only": safe_only,
+            "requested_pack": pack_name or "",
         },
     )
 
@@ -742,10 +1694,11 @@ def test_ui_server_can_run_safe_action_batch_via_api(temp_vault, monkeypatch):
     monkeypatch.setattr(
         ui_server,
         "run_action_queue",
-        lambda vault_dir, *, limit, safe_only=False: {
+        lambda vault_dir, *, limit, safe_only=False, pack_name=None: {
             "ran_count": 1,
             "limit": limit,
             "safe_only": safe_only,
+            "requested_pack": pack_name or "",
         },
     )
 
@@ -1068,6 +2021,48 @@ Thin note.
     assert payload["object_ids"] == ["fragile-note", "thin-note"]
 
 
+def test_ui_server_research_mutation_rejects_non_research_pack(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "resolve_contradictions",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("contradiction resolver should not run")),
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode(
+            {
+                "contradiction_id": "contradiction::demo",
+                "status": "dismissed",
+                "pack": "media-editorial",
+            }
+        )
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/contradictions/resolve",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 409
+    assert payload["status"] == "unsupported_pack"
+    assert payload["route"] == "/contradictions/resolve"
+    assert payload["requested_pack"] == "media-editorial"
+
+
 def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -1095,6 +2090,90 @@ def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):
     assert topic_payload["center"]["object_id"] == "alpha"
     assert event_response.status == 200
     assert event_payload["event_count"] == 3
+
+
+def test_ui_server_topic_endpoint_accepts_pack_scope(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/topic?id=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["links"]["center_object_path"] == "/object?id=alpha&pack=default-knowledge"
+
+
+def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/topic?id=alpha&pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/summaries?pack=default-knowledge"' in body
+
+
+def test_render_object_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+    payload = build_object_page_payload(temp_vault, "alpha")
+    payload["requested_pack"] = "media-editorial"
+    payload["research_shell_enabled"] = False
+    monkeypatch.setattr(ui_server, "_shell_supports_research_nav", lambda requested_pack="": False)
+
+    body = ui_server._render_object_page(payload)
+
+    assert "Research-specific review surfaces stay hidden" in body
+    assert "Related events" not in body
+    assert "Resolve Open Contradictions" not in body
+    assert "<h2>Evolution</h2>" not in body
+    assert "<h2>Contradictions</h2>" not in body
+
+
+def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+
+    _seed_truth_store(temp_vault)
+    payload = build_topic_overview_payload(temp_vault, "alpha")
+    payload["requested_pack"] = "media-editorial"
+    payload["research_shell_enabled"] = False
+    monkeypatch.setattr(ui_server, "_shell_supports_research_nav", lambda requested_pack="": False)
+
+    body = ui_server._render_topic_page(payload)
+
+    assert "Research-specific review surfaces stay hidden" in body
+    assert "Related events" not in body
+    assert "Review scoped contradictions" not in body
+    assert "<h2>Evolution</h2>" not in body
+    assert "<h2>Atlas / MOC</h2>" not in body
 
 
 def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, monkeypatch):

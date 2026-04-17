@@ -44,6 +44,88 @@ def test_base_domain_pack_rejects_stage_handler_from_other_pack():
         )
 
 
+def test_base_domain_pack_rejects_processor_contract_from_other_pack():
+    from openclaw_pipeline.packs.base import BaseDomainPack, ProcessorContractSpec
+
+    with pytest.raises(ValueError, match="declares processor contract"):
+        BaseDomainPack(
+            name="broken",
+            version="0.1.0",
+            api_version=1,
+            _processor_contracts=[
+                ProcessorContractSpec(
+                    name="articles",
+                    pack="other-pack",
+                    stage="articles",
+                    mode="llm_structured",
+                    inputs=("source_note",),
+                    outputs=("deep_dive",),
+                    entrypoint="tests.fake:handler",
+                )
+            ],
+        )
+
+
+def test_base_domain_pack_rejects_extraction_profile_from_other_pack():
+    from openclaw_pipeline.extraction.specs import ExtractionFieldSpec, ExtractionProfileSpec
+    from openclaw_pipeline.packs.base import BaseDomainPack
+
+    with pytest.raises(ValueError, match="declares extraction profile"):
+        BaseDomainPack(
+            name="broken",
+            version="0.1.0",
+            api_version=1,
+            _extraction_profiles=[
+                ExtractionProfileSpec(
+                    name="media/news_timeline",
+                    pack="other-pack",
+                    input_object_kinds=["document"],
+                    output_mode="record_list",
+                    fields=[ExtractionFieldSpec("claim", "string", "Claim", required=True)],
+                )
+            ],
+        )
+
+
+def test_base_domain_pack_rejects_operation_profile_from_other_pack():
+    from openclaw_pipeline.operations.specs import OperationProfileSpec
+    from openclaw_pipeline.packs.base import BaseDomainPack
+
+    with pytest.raises(ValueError, match="declares operation profile"):
+        BaseDomainPack(
+            name="broken",
+            version="0.1.0",
+            api_version=1,
+            _operation_profiles=[
+                OperationProfileSpec(
+                    name="vault/review_queue",
+                    pack="other-pack",
+                    scope="vault",
+                )
+            ],
+        )
+
+
+def test_base_domain_pack_rejects_wiki_view_from_other_pack():
+    from openclaw_pipeline.packs.base import BaseDomainPack
+    from openclaw_pipeline.wiki_views.specs import WikiViewSpec
+
+    with pytest.raises(ValueError, match="declares wiki view"):
+        BaseDomainPack(
+            name="broken",
+            version="0.1.0",
+            api_version=1,
+            _wiki_views=[
+                WikiViewSpec(
+                    name="overview/topic",
+                    pack="other-pack",
+                    purpose_path="90-Templates/purpose/topic.md",
+                    schema_path="90-Templates/schema/topic.md",
+                )
+            ],
+        )
+
+
 def test_load_default_pack_returns_pack_contract():
     from openclaw_pipeline.packs.base import BaseDomainPack
     from openclaw_pipeline.packs.loader import load_default_pack
@@ -107,3 +189,30 @@ def test_load_builtin_pack_rejects_unknown_pack_with_clear_error():
 
     with pytest.raises(ValueError, match="Unknown builtin pack"):
         load_builtin_pack("unknown-pack")
+
+
+def test_resolve_workflow_profile_rejects_profile_without_execution_contract(monkeypatch):
+    from openclaw_pipeline.packs.base import BaseDomainPack, WorkflowProfile
+    import openclaw_pipeline.packs.loader as loader
+
+    broken_pack = BaseDomainPack(
+        name="broken-pack",
+        version="0.1.0",
+        api_version=1,
+        _workflow_profiles=[
+            WorkflowProfile(
+                name="full",
+                description="Broken profile",
+                stages=["ghost_stage"],
+            )
+        ],
+    )
+
+    monkeypatch.setattr(loader, "load_pack", lambda name: broken_pack)
+
+    with pytest.raises(ValueError, match="missing execution contract"):
+        loader.resolve_workflow_profile(
+            pack_name="broken-pack",
+            profile_name="full",
+            default_profile="full",
+        )
