@@ -1378,6 +1378,108 @@ def get_graph_cluster_detail(
     }
 
 
+def _graph_scope_limit(value: int, *, default: int, maximum: int) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        normalized = default
+    return max(1, min(normalized, maximum))
+
+
+def get_graph_cluster_scope(
+    vault_dir: Path | str,
+    cluster_id: str,
+    *,
+    pack_name: str | None = None,
+    object_limit: int = 10,
+    edge_limit: int = 48,
+) -> dict[str, Any]:
+    detail = get_graph_cluster_detail(vault_dir, cluster_id, pack_name=pack_name)
+    object_limit = _graph_scope_limit(object_limit, default=10, maximum=48)
+    edge_limit = _graph_scope_limit(edge_limit, default=48, maximum=192)
+
+    cluster = detail["cluster"]
+    edges = detail["edges"]
+    member_rows = {str(member["object_id"]): member for member in cluster["members"]}
+    degree_counts: Counter[str] = Counter()
+    for edge in edges:
+        degree_counts[str(edge["source_object_id"])] += 1
+        degree_counts[str(edge["target_object_id"])] += 1
+
+    center_object_id = str(cluster["center_object_id"])
+    ordered_member_ids = [center_object_id]
+    ordered_member_ids.extend(
+        object_id
+        for object_id, _member in sorted(
+            (
+                (str(member["object_id"]), member)
+                for member in cluster["members"]
+                if str(member["object_id"]) != center_object_id
+            ),
+            key=lambda item: (
+                -degree_counts.get(item[0], 0),
+                str(item[1].get("title") or item[0]).lower(),
+                item[0],
+            ),
+        )
+    )
+    visible_member_ids = ordered_member_ids[:object_limit]
+    visible_member_id_set = set(visible_member_ids)
+    visible_edges = [
+        edge
+        for edge in edges
+        if str(edge["source_object_id"]) in visible_member_id_set
+        and str(edge["target_object_id"]) in visible_member_id_set
+    ][:edge_limit]
+
+    return {
+        "cluster": cluster,
+        "visible_members": [
+            {
+                **member_rows[object_id],
+                "graph_degree": degree_counts.get(object_id, 0),
+                "is_center": object_id == center_object_id,
+            }
+            for object_id in visible_member_ids
+            if object_id in member_rows
+        ],
+        "visible_edges": visible_edges,
+        "member_limit": object_limit,
+        "edge_limit": edge_limit,
+        "hidden_member_count": max(0, int(cluster["member_count"]) - len(visible_member_ids)),
+        "hidden_edge_count": max(0, len(edges) - len(visible_edges)),
+    }
+
+
+def get_graph_object_scope(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+    neighbor_limit: int = 10,
+    edge_limit: int = 48,
+) -> dict[str, Any]:
+    neighbor_limit = _graph_scope_limit(neighbor_limit, default=10, maximum=48)
+    edge_limit = _graph_scope_limit(edge_limit, default=48, maximum=192)
+    neighborhood = get_topic_neighborhood(vault_dir, object_id, pack_name=pack_name, depth=1)
+    visible_neighbors = neighborhood["neighbors"][:neighbor_limit]
+    visible_neighbor_ids = {str(item["object_id"]) for item in visible_neighbors}
+    visible_edges = [
+        edge
+        for edge in neighborhood["edges"]
+        if str(edge["target_object_id"]) in visible_neighbor_ids
+    ][:edge_limit]
+    return {
+        "center": neighborhood["center"],
+        "visible_neighbors": visible_neighbors,
+        "visible_edges": visible_edges,
+        "neighbor_limit": neighbor_limit,
+        "edge_limit": edge_limit,
+        "hidden_neighbor_count": max(0, len(neighborhood["neighbors"]) - len(visible_neighbors)),
+        "hidden_edge_count": max(0, len(neighborhood["edges"]) - len(visible_edges)),
+    }
+
+
 def _find_note_by_source(vault_dir: Path, *, source_url: str, exclude_path: str) -> dict[str, str] | None:
     cache_key = (str(vault_dir.resolve()), _search_root_signatures(vault_dir))
     source_index = _SOURCE_NOTE_INDEX_CACHE.get(cache_key)
