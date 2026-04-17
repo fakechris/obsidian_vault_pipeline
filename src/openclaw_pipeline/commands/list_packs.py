@@ -41,13 +41,14 @@ def main(argv: list[str] | None = None) -> int:
         for pack in discover_entrypoint_packs().values()
         if pack.name not in builtin_names
     ]
+    entrypoint_names = {item["name"] for item in entrypoint}
 
     manifest_env = os.environ.get("OPENCLAW_PACK_MANIFESTS", "")
     manifest_paths = [Path(item) for item in manifest_env.split(os.pathsep) if item]
     manifests = []
     if manifest_paths:
         for manifest in discover_plugin_manifests(manifest_paths).values():
-            if manifest.name in builtin_names or any(item["name"] == manifest.name for item in entrypoint):
+            if manifest.name in builtin_names or manifest.name in entrypoint_names:
                 continue
             manifests.append(
                 {
