@@ -192,6 +192,7 @@ class AutoPilotDaemon:
             profile_name=profile,
             default_profile="autopilot",
             require_autopilot=True,
+            runtime_adapter="autopilot_stage",
         )
 
         # 组件初始化

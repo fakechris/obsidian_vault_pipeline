@@ -398,6 +398,7 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
         pack_name=pack_name,
         profile_name=profile_name,
         default_profile="full",
+        runtime_adapter="pipeline_step",
     )
     selected_steps = pipeline_steps(include_refine=include_refine, base_steps=profile.stages)
     pinboard_selected_steps = [step for step in selected_steps if step != "clippings"]
@@ -1562,6 +1563,7 @@ class EnhancedPipeline:
             pack_name=pack_name or self.workflow_pack_name,
             profile_name=profile_name or self.workflow_profile_name,
             default_profile=self.workflow_profile_name or "full",
+            runtime_adapter="pipeline_step",
         )
 
         # 确定要运行的步骤

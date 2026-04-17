@@ -213,7 +213,7 @@ def test_run_pipeline_restores_pack_and_profile_after_override(tmp_path, monkeyp
 
 def test_run_pipeline_uses_profile_stages_when_steps_omitted(tmp_path, monkeypatch):
     import openclaw_pipeline.unified_pipeline_enhanced as pipeline_source
-    from openclaw_pipeline.packs.loader import load_pack
+    from openclaw_pipeline.packs.base import BaseDomainPack, WorkflowProfile
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
@@ -241,14 +241,32 @@ def test_run_pipeline_uses_profile_stages_when_steps_omitted(tmp_path, monkeypat
         fake_execute_profile_stage_handler,
         raising=False,
     )
+    monkeypatch.setattr(
+        pipeline_source,
+        "resolve_workflow_profile",
+        lambda **kwargs: (
+            BaseDomainPack(
+                name="research-tech",
+                version="0.1.0",
+                api_version=1,
+                _workflow_profiles=[],
+            ),
+            WorkflowProfile(
+                name="full",
+                description="Custom staged profile",
+                stages=["articles", "quality", "knowledge_index"],
+            ),
+        ),
+        raising=False,
+    )
 
     results = pipeline.run_pipeline(
         dry_run=True,
         pack_name="research-tech",
-        profile_name="autopilot",
+        profile_name="full",
     )
 
-    expected_steps = load_pack("research-tech").profile("autopilot").stages
+    expected_steps = ["articles", "quality", "knowledge_index"]
 
     assert list(results) == expected_steps
     assert calls == expected_steps

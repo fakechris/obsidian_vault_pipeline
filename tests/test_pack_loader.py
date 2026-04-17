@@ -129,3 +129,30 @@ def test_load_builtin_pack_rejects_unknown_pack_with_clear_error():
 
     with pytest.raises(ValueError, match="Unknown builtin pack"):
         load_builtin_pack("unknown-pack")
+
+
+def test_resolve_workflow_profile_rejects_profile_without_execution_contract(monkeypatch):
+    from openclaw_pipeline.packs.base import BaseDomainPack, WorkflowProfile
+    import openclaw_pipeline.packs.loader as loader
+
+    broken_pack = BaseDomainPack(
+        name="broken-pack",
+        version="0.1.0",
+        api_version=1,
+        _workflow_profiles=[
+            WorkflowProfile(
+                name="full",
+                description="Broken profile",
+                stages=["ghost_stage"],
+            )
+        ],
+    )
+
+    monkeypatch.setattr(loader, "load_pack", lambda name: broken_pack)
+
+    with pytest.raises(ValueError, match="missing execution contract"):
+        loader.resolve_workflow_profile(
+            pack_name="broken-pack",
+            profile_name="full",
+            default_profile="full",
+        )
