@@ -1556,24 +1556,29 @@ class EnhancedPipeline:
     ) -> dict:
         """运行Pipeline（基于实际产出检测状态）"""
         results = {}
+        original_pack_name = self.workflow_pack_name
+        original_profile_name = self.workflow_profile_name
+        resolved_pack, resolved_profile = resolve_workflow_profile(
+            pack_name=pack_name or self.workflow_pack_name,
+            profile_name=profile_name or self.workflow_profile_name,
+            default_profile=self.workflow_profile_name or "full",
+        )
 
         # 确定要运行的步骤
         if steps:
             steps_to_run = steps
         else:
+            available_steps = pipeline_steps(base_steps=resolved_profile.stages)
             start_idx = 0
-            if from_step and normalize_step_name(from_step) in pipeline_steps():
-                start_idx = pipeline_steps().index(normalize_step_name(from_step))
-            steps_to_run = pipeline_steps()[start_idx:]
+            normalized_from_step = normalize_step_name(from_step)
+            if normalized_from_step and normalized_from_step in available_steps:
+                start_idx = available_steps.index(normalized_from_step)
+            steps_to_run = available_steps[start_idx:]
 
         print(f"\nPipeline steps to run: {', '.join(steps_to_run)}")
 
-        original_pack_name = self.workflow_pack_name
-        original_profile_name = self.workflow_profile_name
-        if pack_name:
-            self.workflow_pack_name = pack_name
-        if profile_name:
-            self.workflow_profile_name = profile_name
+        self.workflow_pack_name = resolved_pack.name
+        self.workflow_profile_name = resolved_profile.name
 
         try:
             # 获取执行前的文件计数
