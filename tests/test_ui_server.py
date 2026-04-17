@@ -949,6 +949,79 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
     assert payload["items"][0]["relation_pattern_preview"]
 
 
+def test_ui_server_graph_endpoint_returns_payload(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/graph?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["screen"] == "graph/canvas"
+    assert payload["scope"] == "clusters"
+    assert payload["nodes"]
+    assert payload["controls"]["edge_filter_items"]
+
+
+def test_ui_server_graph_page_renders_canvas(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+    from openclaw_pipeline.truth_api import list_graph_clusters
+
+    _seed_truth_store(temp_vault)
+    cluster = list_graph_clusters(temp_vault)[0]
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", f"/graph?cluster_id={cluster['cluster_id']}&pack={cluster['pack']}")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "id='graph-stage'" in body or 'id="graph-stage"' in body
+    assert "Graph Scope" in body
+    assert "Expand graph" in body or "Fully expanded for current bound" in body
+
+
+def test_ui_server_graph_route_is_guarded_for_non_research_packs(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/graph?pack=media-editorial")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 409
+    assert payload["status"] == "unsupported_pack"
+
+
 def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 

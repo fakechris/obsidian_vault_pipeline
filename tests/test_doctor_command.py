@@ -58,6 +58,10 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
         for item in payload["contracts"]["shell"]["research_routes"]
     )
     assert any(
+        item["path"] == "/graph" and item["status"] == "declared" and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["research_routes"]
+    )
+    assert any(
         item["path"] == "/actions/run-next" and item["status"] == "always_available"
         for item in payload["contracts"]["shell"]["shared_mutations"]
     )
@@ -157,6 +161,10 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
     )
     assert any(
         item["path"] == "/clusters" and item["status"] == "inherited" and item["provider_pack"] == "research-tech"
+        for item in payload["contracts"]["shell"]["research_routes"]
+    )
+    assert any(
+        item["path"] == "/graph" and item["status"] == "inherited" and item["provider_pack"] == "research-tech"
         for item in payload["contracts"]["shell"]["research_routes"]
     )
     assert any(

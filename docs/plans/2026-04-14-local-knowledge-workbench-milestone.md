@@ -503,6 +503,11 @@ The next-step order after that closeout starts at the next product phase rather 
 
 1. `Phase 17`
 
+Closeout:
+
+- [[2026-04-16-phase17-research-graph-visualization-plan]]
+- [[2026-04-16-phase17-research-graph-visualization-closeout]]
+
 ## Non-Recommended Paths Right Now
 
 Do **not** prioritize these before Milestones 3-5:
