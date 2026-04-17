@@ -66,6 +66,66 @@ def test_base_domain_pack_rejects_processor_contract_from_other_pack():
         )
 
 
+def test_base_domain_pack_rejects_extraction_profile_from_other_pack():
+    from openclaw_pipeline.extraction.specs import ExtractionFieldSpec, ExtractionProfileSpec
+    from openclaw_pipeline.packs.base import BaseDomainPack
+
+    with pytest.raises(ValueError, match="declares extraction profile"):
+        BaseDomainPack(
+            name="broken",
+            version="0.1.0",
+            api_version=1,
+            _extraction_profiles=[
+                ExtractionProfileSpec(
+                    name="media/news_timeline",
+                    pack="other-pack",
+                    input_object_kinds=["document"],
+                    output_mode="record_list",
+                    fields=[ExtractionFieldSpec("claim", "string", "Claim", required=True)],
+                )
+            ],
+        )
+
+
+def test_base_domain_pack_rejects_operation_profile_from_other_pack():
+    from openclaw_pipeline.operations.specs import OperationProfileSpec
+    from openclaw_pipeline.packs.base import BaseDomainPack
+
+    with pytest.raises(ValueError, match="declares operation profile"):
+        BaseDomainPack(
+            name="broken",
+            version="0.1.0",
+            api_version=1,
+            _operation_profiles=[
+                OperationProfileSpec(
+                    name="vault/review_queue",
+                    pack="other-pack",
+                    scope="vault",
+                )
+            ],
+        )
+
+
+def test_base_domain_pack_rejects_wiki_view_from_other_pack():
+    from openclaw_pipeline.packs.base import BaseDomainPack
+    from openclaw_pipeline.wiki_views.specs import WikiViewSpec
+
+    with pytest.raises(ValueError, match="declares wiki view"):
+        BaseDomainPack(
+            name="broken",
+            version="0.1.0",
+            api_version=1,
+            _wiki_views=[
+                WikiViewSpec(
+                    name="overview/topic",
+                    pack="other-pack",
+                    purpose_path="90-Templates/purpose/topic.md",
+                    schema_path="90-Templates/schema/topic.md",
+                )
+            ],
+        )
+
+
 def test_load_default_pack_returns_pack_contract():
     from openclaw_pipeline.packs.base import BaseDomainPack
     from openclaw_pipeline.packs.loader import load_default_pack

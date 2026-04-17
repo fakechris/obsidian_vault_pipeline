@@ -122,6 +122,21 @@ class BaseDomainPack:
                 raise ValueError(
                     f"Pack '{self.name}' declares processor contract for '{spec.pack}'"
                 )
+        for spec in self._extraction_profiles:
+            if getattr(spec, "pack", self.name) != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares extraction profile for '{getattr(spec, 'pack', None)}'"
+                )
+        for spec in self._operation_profiles:
+            if getattr(spec, "pack", self.name) != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares operation profile for '{getattr(spec, 'pack', None)}'"
+                )
+        for spec in self._wiki_views:
+            if getattr(spec, "pack", self.name) != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares wiki view for '{getattr(spec, 'pack', None)}'"
+                )
 
     def object_kinds(self) -> list[ObjectKindSpec]:
         return list(self._object_kinds)
