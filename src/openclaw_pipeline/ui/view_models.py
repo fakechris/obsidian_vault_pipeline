@@ -71,6 +71,55 @@ def _assembly_contract(recipe_name: str, *, pack_name: str | None = None) -> dic
     return describe_assembly_recipe_contract(pack_name=pack_name, recipe_name=recipe_name)
 
 
+def _compiled_section(
+    section_id: str,
+    label: str,
+    *,
+    summary: str,
+    items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_items = list(items or [])
+    return {
+        "id": section_id,
+        "label": label,
+        "anchor": section_id.replace("_", "-"),
+        "summary": summary,
+        "item_count": len(normalized_items),
+        "items": normalized_items,
+    }
+
+
+def _section_nav_from_compiled_sections(sections: list[dict[str, Any]]) -> list[dict[str, str]]:
+    return [
+        {
+            "href": f"#{str(section.get('anchor') or str(section.get('id') or '').replace('_', '-'))}",
+            "label": str(section.get("label") or section.get("id") or ""),
+        }
+        for section in sections
+    ]
+
+
+def _compiled_section_by_id(
+    sections: list[dict[str, Any]],
+    section_id: str,
+) -> dict[str, Any]:
+    return next((section for section in sections if str(section.get("id") or "") == section_id), {})
+
+
+def _remap_compiled_section(
+    section: dict[str, Any],
+    *,
+    section_id: str,
+    label: str,
+    summary: str,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    items = list(section.get("items") or [])
+    if limit is not None:
+        items = items[:limit]
+    return _compiled_section(section_id, label, summary=summary, items=items)
+
+
 def _db_path(vault_dir: Path | str) -> Path:
     resolved = resolve_vault_dir(vault_dir)
     return VaultLayout.from_vault(resolved).knowledge_db
@@ -890,7 +939,7 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         pack_name=pack_name,
         surface_kind="briefing",
     )
-    assembly_contract = _assembly_contract("operator_briefing", pack_name=pack_name)
+    assembly_contract = _assembly_contract("orientation_brief", pack_name=pack_name)
     governance_contract = describe_governance_contract(pack_name=pack_name)
     if surface_contract["status"] == "missing":
         return {
@@ -916,6 +965,8 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
             "priority_item_count": 0,
             "insights": [],
             "priority_items": [],
+            "compiled_sections": [],
+            "section_nav": [],
             "first_useful_sign": None,
             "queue_summary": {
                 "queued_count": 0,
@@ -925,13 +976,93 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
                 "failure_buckets": {},
             },
         }
+    snapshot = get_briefing_snapshot(vault_dir, pack_name=pack_name)
+    changed_items = [
+        {
+            "kind": "changed_object",
+            "label": str(item["title"]),
+            "path": str(item["path"]),
+            "detail": f"Changed object · {item['object_id']}",
+        }
+        for item in snapshot.get("changed_objects", [])[:5]
+    ]
+    what_matters_items = [
+        {
+            "kind": "active_topic",
+            "label": str(item["title"]),
+            "path": str(item["path"]),
+            "detail": f"{int(item['signal_count'])} signals in scope",
+        }
+        for item in snapshot.get("active_topics", [])[:5]
+    ]
+    needs_review_items = [
+        {
+            "kind": str(item["signal_type"]),
+            "label": str(item["title"]),
+            "path": str(item["source_path"]),
+            "detail": str(item["detail"]),
+        }
+        for item in snapshot.get("unresolved_issues", [])[:5]
+    ]
+    next_read_items = [
+        {
+            "kind": str(item["kind"]),
+            "label": str(item["title"]),
+            "path": str(item["path"]),
+            "detail": str(item["detail"]),
+        }
+        for item in snapshot.get("insights", [])[:5]
+    ]
+    next_action_items = [
+        {
+            "kind": str(item["kind"]),
+            "label": str(item["title"]),
+            "path": str(((item.get("recommended_action") or {}).get("path")) or item.get("path") or ""),
+            "detail": str(((item.get("recommended_action") or {}).get("label")) or item.get("detail") or ""),
+        }
+        for item in snapshot.get("priority_items", [])[:5]
+    ]
+    compiled_sections = [
+        _compiled_section(
+            "what_changed",
+            "What Changed",
+            summary=f"{len(changed_items)} changed objects surfaced recently.",
+            items=changed_items,
+        ),
+        _compiled_section(
+            "what_matters",
+            "What Matters",
+            summary=f"{len(what_matters_items)} active topics currently dominate the signal surface.",
+            items=what_matters_items,
+        ),
+        _compiled_section(
+            "needs_review",
+            "Needs Review",
+            summary=f"{len(needs_review_items)} unresolved issues currently deserve attention.",
+            items=needs_review_items,
+        ),
+        _compiled_section(
+            "next_reads",
+            "Next Reads",
+            summary=f"{len(next_read_items)} compiled next-read routes were surfaced from current evidence.",
+            items=next_read_items,
+        ),
+        _compiled_section(
+            "next_actions",
+            "Next Actions",
+            summary=f"{len(next_action_items)} next actions are currently available from the queue and briefing logic.",
+            items=next_action_items,
+        ),
+    ]
     return {
         "screen": "briefing/intelligence",
         "requested_pack": requested_pack,
         "surface_contract": surface_contract,
         "assembly_contract": assembly_contract,
         "governance_contract": governance_contract,
-        **get_briefing_snapshot(vault_dir, pack_name=pack_name),
+        **snapshot,
+        "compiled_sections": compiled_sections,
+        "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
 
 def build_object_page_payload(
@@ -998,6 +1129,142 @@ def build_object_page_payload(
             "status": "all",
         }
     )
+    summary_text = detail["summary"]["summary_text"] if detail["summary"] else ""
+    stale_summary_details = (
+        list_stale_summaries(
+            vault_dir,
+            pack_name=pack_name,
+            object_ids=[object_id],
+            limit=10,
+        )
+        if research_shell_enabled
+        else []
+    )
+    compiled_sections = [
+        _compiled_section(
+            "current_state",
+            "Current State",
+            summary=summary_text or "No compiled summary yet.",
+            items=[
+                {
+                    "kind": "summary",
+                    "label": detail["object"]["title"],
+                    "path": "",
+                    "detail": summary_text or "No compiled summary yet.",
+                },
+                {"kind": "claims", "label": "Claims", "path": "", "detail": f"{len(detail['claims'])} claims"},
+                {"kind": "relations", "label": "Relations", "path": "", "detail": f"{len(relations)} relations"},
+            ],
+        ),
+        _compiled_section(
+            "why_it_matters",
+            "Why It Matters",
+            summary=f"{len(detail['contradictions']) if research_shell_enabled else 0} contradictions and {review_context.get('stale_summary_count', 0)} stale summaries shape current maintenance urgency.",
+            items=[
+                {
+                    "kind": "topic",
+                    "label": "Explore topic",
+                    "path": _scoped_path(f"/topic?id={quote(object_id, safe='')}", pack_name=requested_pack),
+                    "detail": "Open the surrounding topic neighborhood.",
+                },
+                *(
+                    [
+                        {
+                            "kind": "events",
+                            "label": "Related events",
+                            "path": research_links["events_path"],
+                            "detail": "See timeline context for this object.",
+                        }
+                    ]
+                    if research_shell_enabled
+                    else []
+                ),
+            ],
+        ),
+        _compiled_section(
+            "evidence_traceability",
+            "Evidence Traceability",
+            summary=f"{len(detail['evidence'])} evidence rows, {len(detail['provenance']['source_notes'])} source notes, {len(detail['provenance']['mocs'])} atlas pages.",
+            items=[
+                {
+                    "kind": "evergreen",
+                    "label": "Evergreen note",
+                    "path": _scoped_path(
+                        f"/note?path={quote(detail['provenance']['evergreen_path'], safe='')}",
+                        pack_name=requested_pack,
+                    )
+                    if detail["provenance"]["evergreen_path"]
+                    else "",
+                    "detail": detail["provenance"]["evergreen_path"] or "No evergreen markdown path",
+                },
+                *[
+                    {
+                        "kind": "source_note",
+                        "label": item["title"],
+                        "path": _scoped_path(f"/note?path={quote(item['path'], safe='')}", pack_name=requested_pack),
+                        "detail": item["note_type"],
+                    }
+                    for item in detail["provenance"]["source_notes"][:3]
+                ],
+            ],
+        ),
+        _compiled_section(
+            "open_tensions",
+            "Open Tensions",
+            summary=f"{len(detail['contradictions']) if research_shell_enabled else 0} contradictions and {len(stale_summary_details) if research_shell_enabled else 0} stale-summary signals remain.",
+            items=[
+                *[
+                    {
+                        "kind": "contradiction",
+                        "label": item["subject_key"],
+                        "path": research_links["contradictions_path"],
+                        "detail": item["status"],
+                    }
+                    for item in detail["contradictions"][:3]
+                ],
+                *[
+                    {
+                        "kind": "stale_summary",
+                        "label": item["title"],
+                        "path": research_links["summaries_path"],
+                        "detail": ", ".join(item["reason_texts"]),
+                    }
+                    for item in stale_summary_details[:2]
+                ],
+            ],
+        ),
+        _compiled_section(
+            "where_to_go_next",
+            "Where To Go Next",
+            summary="Use the surrounding compiled products to continue reading or review.",
+            items=[
+                {
+                    "kind": "topic",
+                    "label": "Topic overview",
+                    "path": _scoped_path(f"/topic?id={quote(object_id, safe='')}", pack_name=requested_pack),
+                    "detail": "Open the surrounding topic page.",
+                },
+                *(
+                    [
+                        {
+                            "kind": "events",
+                            "label": "Event dossier",
+                            "path": research_links["events_path"],
+                            "detail": "See event and time context.",
+                        },
+                        {
+                            "kind": "contradictions",
+                            "label": "Contradiction review",
+                            "path": research_links["contradictions_path"],
+                            "detail": "Inspect open conflicts.",
+                        },
+                    ]
+                    if research_shell_enabled
+                    else []
+                ),
+            ],
+        ),
+    ]
     return {
         "screen": "object/page",
         "requested_pack": requested_pack,
@@ -1019,16 +1286,7 @@ def build_object_page_payload(
         "review_context": review_context,
         "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8) if research_shell_enabled else [],
         "evolution": evolution_section,
-        "stale_summary_details": (
-            list_stale_summaries(
-                vault_dir,
-                pack_name=pack_name,
-                object_ids=[object_id],
-                limit=10,
-            )
-            if research_shell_enabled
-            else []
-        ),
+        "stale_summary_details": stale_summary_details,
         "open_contradiction_ids": (
             [item["contradiction_id"] for item in detail["contradictions"] if item["status"] == "open"]
             if research_shell_enabled
@@ -1039,20 +1297,8 @@ def build_object_page_payload(
             "graph_path": _graph_path(pack_name=requested_pack, object_id=object_id),
             **research_links,
         },
-        "section_nav": (
-            [
-                {"href": "#summary", "label": "Summary"},
-                {"href": "#claims", "label": "Claims"},
-                {"href": "#relations", "label": "Relations"},
-                {"href": "#contradictions", "label": "Contradictions"},
-            ]
-            if research_shell_enabled
-            else [
-                {"href": "#summary", "label": "Summary"},
-                {"href": "#claims", "label": "Claims"},
-                {"href": "#relations", "label": "Relations"},
-            ]
-        ),
+        "compiled_sections": compiled_sections,
+        "section_nav": [{"href": "#summary", "label": "Summary"}, *_section_nav_from_compiled_sections(compiled_sections)],
     }
 
 
@@ -1131,6 +1377,136 @@ def build_topic_overview_payload(
         "atlas_path": "",
         "graph_path": _graph_path(pack_name=requested_pack, object_id=object_id),
     }
+    compiled_sections = [
+        _compiled_section(
+            "current_state",
+            "Current State",
+            summary=f"{len(neighbors)} neighbors and {len(neighborhood['edges'])} edges define this topic view.",
+            items=[
+                {
+                    "kind": "center_object",
+                    "label": detail["object"]["title"],
+                    "path": _scoped_path(f"/object?id={quote(object_id, safe='')}", pack_name=requested_pack),
+                    "detail": detail["summary"]["summary_text"] if detail["summary"] else "No compiled summary yet.",
+                },
+                *[
+                    {
+                        "kind": "neighbor",
+                        "label": item["title"],
+                        "path": item["object_path"],
+                        "detail": "Neighbor in current topic scope",
+                    }
+                    for item in neighbors[:3]
+                ],
+            ],
+        ),
+        _compiled_section(
+            "why_it_matters",
+            "Why It Matters",
+            summary=f"{review_context.get('open_contradiction_count', 0)} contradictions and {review_context.get('stale_summary_count', 0)} stale summaries currently shape this topic.",
+            items=[
+                *(
+                    [
+                        {
+                            "kind": "events",
+                            "label": "Event dossier",
+                            "path": research_links["events_path"],
+                            "detail": "See time-bounded activity around this topic.",
+                        },
+                        {
+                            "kind": "deep_dives",
+                            "label": "Source deep dives",
+                            "path": research_links["deep_dives_path"],
+                            "detail": "Inspect supporting analysis.",
+                        },
+                    ]
+                    if research_shell_enabled
+                    else []
+                ),
+            ],
+        ),
+        _compiled_section(
+            "evidence_traceability",
+            "Evidence Traceability",
+            summary=f"{len(detail['provenance']['source_notes'])} source notes and {len(detail['provenance']['mocs'])} atlas pages anchor this topic.",
+            items=[
+                *[
+                    {
+                        "kind": "source_note",
+                        "label": item["title"],
+                        "path": _scoped_path(f"/note?path={quote(item['path'], safe='')}", pack_name=requested_pack),
+                        "detail": item["note_type"],
+                    }
+                    for item in detail["provenance"]["source_notes"][:3]
+                ],
+                *[
+                    {
+                        "kind": "atlas_page",
+                        "label": item["title"],
+                        "path": _scoped_path(f"/note?path={quote(item['path'], safe='')}", pack_name=requested_pack),
+                        "detail": "Atlas / MOC",
+                    }
+                    for item in detail["provenance"]["mocs"][:3]
+                ],
+            ],
+        ),
+        _compiled_section(
+            "open_tensions",
+            "Open Tensions",
+            summary=f"{len(scoped_contradictions)} open contradictions and {len(scoped_stale_summaries)} stale summaries remain in this topic scope.",
+            items=[
+                *[
+                    {
+                        "kind": "contradiction",
+                        "label": item["subject_key"],
+                        "path": research_links["contradictions_path"],
+                        "detail": item["status"],
+                    }
+                    for item in scoped_contradictions[:3]
+                ],
+                *[
+                    {
+                        "kind": "stale_summary",
+                        "label": item["title"],
+                        "path": research_links["summaries_path"],
+                        "detail": ", ".join(item["reason_texts"]),
+                    }
+                    for item in scoped_stale_summaries[:2]
+                ],
+            ],
+        ),
+        _compiled_section(
+            "where_to_go_next",
+            "Where To Go Next",
+            summary="Jump from the topic hub into the most useful next compiled products.",
+            items=[
+                {
+                    "kind": "center_object",
+                    "label": "Center object",
+                    "path": _scoped_path(f"/object?id={quote(object_id, safe='')}", pack_name=requested_pack),
+                    "detail": "Open the canonical object page.",
+                },
+                *(
+                    [
+                        {
+                            "kind": "contradictions",
+                            "label": "Contradictions",
+                            "path": research_links["contradictions_path"],
+                            "detail": "Review open tensions.",
+                        },
+                        {
+                            "kind": "atlas",
+                            "label": "Atlas / MOC",
+                            "path": research_links["atlas_path"],
+                            "detail": "Open atlas reach.",
+                        },
+                    ]
+                    if research_shell_enabled
+                    else []
+                ),
+            ],
+        ),
+    ]
     return {
         "screen": "overview/topic",
         "requested_pack": requested_pack,
@@ -1187,6 +1563,8 @@ def build_topic_overview_payload(
             "graph_path": _graph_path(pack_name=requested_pack, object_id=object_id),
             **research_links,
         },
+        "compiled_sections": compiled_sections,
+        "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
 
 
@@ -1269,6 +1647,97 @@ def build_event_dossier_payload(
     event_type_counts = Counter(event["event_kind"] for event in events)
     row_type_counts = Counter(event["row_type"] for event in events)
     semantic_roles = Counter(event["semantic_role"] for event in events)
+    compiled_sections = [
+        _compiled_section(
+            "current_state",
+            "Current State",
+            summary=f"{len(events)} timeline rows grouped into {sum(len(section['clusters']) for section in cluster_sections)} visible event clusters.",
+            items=[
+                *[
+                    {
+                        "kind": "event_cluster",
+                        "label": item["title"],
+                        "path": item["review_links"]["topic_path"],
+                        "detail": f"{item['row_count']} timeline rows",
+                    }
+                    for section in cluster_sections[:2]
+                    for item in section["clusters"][:2]
+                ]
+            ],
+        ),
+        _compiled_section(
+            "why_it_matters",
+            "Why It Matters",
+            summary=f"{review_context.get('open_contradiction_count', 0)} contradictions and {review_context.get('stale_summary_count', 0)} stale summaries appear in the visible event scope.",
+            items=[
+                {"kind": "query", "label": query or "All events", "path": "", "detail": "Current dossier filter scope."},
+                {
+                    "kind": "contradictions",
+                    "label": "Contradiction review",
+                    "path": _scoped_path(f"/contradictions?q={quote(query or '', safe='')}", pack_name=requested_pack) if query else _scoped_path("/contradictions", pack_name=requested_pack),
+                    "detail": "Inspect tensions in the visible event scope.",
+                },
+            ],
+        ),
+        _compiled_section(
+            "evidence_traceability",
+            "Evidence Traceability",
+            summary=f"{len({note['slug'] for event in events for note in event['provenance']['source_notes']})} source notes and {len({moc['slug'] for event in events for moc in event['provenance']['mocs']})} atlas pages anchor the visible event scope.",
+            items=[
+                *[
+                    {
+                        "kind": "source_note",
+                        "label": note["title"],
+                        "path": _scoped_path(f"/note?path={quote(note['path'], safe='')}", pack_name=requested_pack),
+                        "detail": note["note_type"],
+                    }
+                    for event in events[:3]
+                    for note in event["provenance"]["source_notes"][:1]
+                ]
+            ],
+        ),
+        _compiled_section(
+            "open_tensions",
+            "Open Tensions",
+            summary=f"{len(scoped_contradictions)} contradictions and {len(scoped_stale_summaries)} stale summaries remain visible in this dossier.",
+            items=[
+                *[
+                    {
+                        "kind": "contradiction",
+                        "label": item["subject_key"],
+                        "path": _scoped_path(f"/contradictions?q={quote(item['subject_key'], safe='')}", pack_name=requested_pack),
+                        "detail": item["status"],
+                    }
+                    for item in scoped_contradictions[:3]
+                ],
+                *[
+                    {
+                        "kind": "stale_summary",
+                        "label": item["title"],
+                        "path": item["object_path"],
+                        "detail": ", ".join(item["reason_texts"]),
+                    }
+                    for item in scoped_stale_summaries[:2]
+                ],
+            ],
+        ),
+        _compiled_section(
+            "where_to_go_next",
+            "Where To Go Next",
+            summary="Continue from the timeline into object, contradiction, and summary review surfaces.",
+            items=[
+                *[
+                    {
+                        "kind": "topic",
+                        "label": item["title"],
+                        "path": item["review_links"]["topic_path"],
+                        "detail": "Open topic context for this event cluster.",
+                    }
+                    for item in events[:3]
+                ]
+            ],
+        ),
+    ]
     return {
         "screen": "event/dossier",
         "requested_pack": requested_pack,
@@ -1301,6 +1770,8 @@ def build_event_dossier_payload(
             "page_date rows come from note-level dates; heading_date rows come from dated section headings.",
         ],
         "query": query or "",
+        "compiled_sections": compiled_sections,
+        "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
 
 
@@ -2257,8 +2728,86 @@ def build_contradiction_browser_payload(
                     "mocs": list(mocs.values()),
                 },
             }
-        )
+    )
     status_counts = Counter(item["status"] for item in items)
+    compiled_sections = [
+        _compiled_section(
+            "current_state",
+            "Current State",
+            summary=f"{len(items)} contradiction rows are currently visible, with {status_counts.get('open', 0)} still open.",
+            items=[
+                *[
+                    {
+                        "kind": "contradiction",
+                        "label": item["subject_key"],
+                        "path": _scoped_path(f"/contradictions?q={quote(item['subject_key'], safe='')}", pack_name=requested_pack),
+                        "detail": item["status"],
+                    }
+                    for item in items[:4]
+                ]
+            ],
+        ),
+        _compiled_section(
+            "why_it_matters",
+            "Why It Matters",
+            summary=f"{len({object_id for item in items for object_id in item['object_ids']})} objects and {len({note['slug'] for item in items for note in item['provenance']['source_notes']})} source notes are affected by the visible contradiction scope.",
+            items=[
+                {"kind": "filter", "label": status or "all", "path": "", "detail": "Current contradiction filter."},
+                {"kind": "query", "label": query or "all", "path": "", "detail": "Current query scope."},
+            ],
+        ),
+        _compiled_section(
+            "evidence_traceability",
+            "Evidence Traceability",
+            summary="Contradictions are anchored by ranked evidence and provenance across source notes and atlas pages.",
+            items=[
+                *[
+                    {
+                        "kind": "source_note",
+                        "label": note["title"],
+                        "path": _scoped_path(f"/note?path={quote(note['path'], safe='')}", pack_name=requested_pack),
+                        "detail": note["note_type"],
+                    }
+                    for item in items[:3]
+                    for note in item["provenance"]["source_notes"][:1]
+                ]
+            ],
+        ),
+        _compiled_section(
+            "open_tensions",
+            "Open Tensions",
+            summary=f"{status_counts.get('open', 0)} open rows still require review or dismissal.",
+            items=[
+                *[
+                    {
+                        "kind": "open_contradiction",
+                        "label": item["subject_key"],
+                        "path": _scoped_path(f"/contradictions?q={quote(item['subject_key'], safe='')}", pack_name=requested_pack),
+                        "detail": item["status_explanation"],
+                    }
+                    for item in items[:4]
+                    if item["status"] == "open"
+                ]
+            ],
+        ),
+        _compiled_section(
+            "where_to_go_next",
+            "Where To Go Next",
+            summary="Route from contradiction review into object pages and downstream maintenance.",
+            items=[
+                *[
+                    {
+                        "kind": "object",
+                        "label": item["object_titles"].get(link["object_id"], link["object_id"]),
+                        "path": link["path"],
+                        "detail": "Open affected object page.",
+                    }
+                    for item in items[:2]
+                    for link in item["object_links"][:2]
+                ]
+            ],
+        ),
+    ]
     return {
         "screen": "truth/contradictions",
         "requested_pack": requested_pack,
@@ -2295,6 +2844,8 @@ def build_contradiction_browser_payload(
         "empty_state": "Zero results usually means the current heuristic did not detect a conflict, not that the vault is globally contradiction-free.",
         "status": status or "",
         "query": query or "",
+        "compiled_sections": compiled_sections,
+        "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
 
 
@@ -2465,6 +3016,68 @@ def build_truth_dashboard_payload(
                 "detail": item["detail"],
             }
         )
+    orientation = build_briefing_payload(vault_dir, pack_name=pack_name)
+    orientation_sections = list(orientation.get("compiled_sections") or [])
+    entry_sections = [
+        _remap_compiled_section(
+            _compiled_section_by_id(orientation_sections, "what_changed"),
+            section_id="what_changed_recently",
+            label="What Changed Recently",
+            summary=f"{orientation.get('changed_object_count', 0)} changed objects and {orientation.get('recent_signal_count', 0)} recent signals surfaced.",
+            limit=4,
+        ),
+        _remap_compiled_section(
+            _compiled_section_by_id(orientation_sections, "next_actions"),
+            section_id="important_right_now",
+            label="Important Right Now",
+            summary=f"{len(orientation.get('priority_items', []))} priority items are currently surfaced.",
+            limit=4,
+        ),
+        _remap_compiled_section(
+            _compiled_section_by_id(orientation_sections, "needs_review"),
+            section_id="deserves_review",
+            label="Deserves Review",
+            summary=f"{orientation.get('unresolved_issue_count', 0)} review-oriented items are currently in scope.",
+            limit=4,
+        ),
+        _compiled_section(
+            "recommended_next_steps",
+            "Recommended Next Steps",
+            summary="Start with the orientation brief, then move into the highest-signal compiled surfaces.",
+            items=[
+                {
+                    "kind": "orientation",
+                    "label": "Orientation Brief",
+                    "path": _scoped_path("/briefing", pack_name=requested_pack),
+                    "detail": "Open the current knowledge entry product.",
+                },
+                {
+                    "kind": "signals",
+                    "label": "Signals",
+                    "path": _scoped_path("/signals", pack_name=requested_pack),
+                    "detail": "Review current active signals.",
+                },
+                {
+                    "kind": "production",
+                    "label": "Production",
+                    "path": _scoped_path("/production", pack_name=requested_pack),
+                    "detail": "Inspect production weak points.",
+                },
+                *(
+                    [
+                        {
+                            "kind": "graph",
+                            "label": "Clusters",
+                            "path": _scoped_path("/clusters", pack_name=requested_pack),
+                            "detail": "Explore graph clusters.",
+                        }
+                    ]
+                    if research_overview_supported
+                    else []
+                ),
+            ],
+        ),
+    ]
     return {
         "screen": "truth/dashboard",
         "requested_pack": requested_pack,
@@ -2512,6 +3125,8 @@ def build_truth_dashboard_payload(
             "items": signals["items"][:8],
             "browser_path": _scoped_path("/signals", pack_name=requested_pack),
         },
+        "orientation": orientation,
+        "entry_sections": entry_sections,
         "recent_review_actions": list_review_actions(vault_dir, limit=8),
         "priorities": priorities[:8],
     }

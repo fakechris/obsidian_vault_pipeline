@@ -32,6 +32,26 @@ def build_assembly_recipes(pack_name: str = "research-tech") -> list[AssemblyRec
             output=AssemblyOutputSpec(output_mode="json", publish_target="ui_payload"),
         ),
         AssemblyRecipeSpec(
+            name="orientation_brief",
+            pack=pack_name,
+            recipe_kind="orientation_brief",
+            description="User-facing orientation brief over current knowledge state, changes, and next steps.",
+            source_contract_kind="observation_surface",
+            source_contract_name="briefing",
+            inputs=[
+                AssemblyInputSpec(
+                    source_kind="signals",
+                    description="Current signal ledger and briefing prioritization state",
+                )
+            ],
+            audience=AssemblyAudienceSpec(audience="operator", interaction_mode="read_only"),
+            freshness_policy=AssemblyFreshnessPolicy(
+                cache_mode="derived_cache",
+                invalidation_signals=["signals", "actions", "review_queue"],
+            ),
+            output=AssemblyOutputSpec(output_mode="json", publish_target="compiled_json"),
+        ),
+        AssemblyRecipeSpec(
             name="topic_overview",
             pack=pack_name,
             recipe_kind="topic_overview",

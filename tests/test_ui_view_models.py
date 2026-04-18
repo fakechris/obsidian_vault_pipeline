@@ -97,6 +97,13 @@ def test_build_object_page_payload(temp_vault):
     assert payload["assembly_contract"]["source_contract_name"] == "object/page"
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["assembly_contract"]["source_provider_name"] == "object/page"
+    assert [section["id"] for section in payload["compiled_sections"]] == [
+        "current_state",
+        "why_it_matters",
+        "evidence_traceability",
+        "open_tensions",
+        "where_to_go_next",
+    ]
     assert payload["section_nav"][0]["href"] == "#summary"
     assert payload["review_context"]["object_count"] == 1
     assert payload["review_context"]["open_contradiction_count"] == 1
@@ -142,10 +149,13 @@ def test_build_object_page_payload_hides_research_affordances_when_research_shel
     assert payload["review_history"] == []
     assert payload["stale_summary_details"] == []
     assert payload["open_contradiction_ids"] == []
-    assert payload["section_nav"] == [
-        {"href": "#summary", "label": "Summary"},
-        {"href": "#claims", "label": "Claims"},
-        {"href": "#relations", "label": "Relations"},
+    assert [item["label"] for item in payload["section_nav"]] == [
+        "Summary",
+        "Current State",
+        "Why It Matters",
+        "Evidence Traceability",
+        "Open Tensions",
+        "Where To Go Next",
     ]
     assert payload["evolution"]["candidate_count"] == 0
     assert payload["evolution"]["accepted_count"] == 0
@@ -225,6 +235,13 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["assembly_contract"]["source_contract_name"] == "overview/topic"
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["assembly_contract"]["source_provider_name"] == "overview/topic"
+    assert [section["id"] for section in payload["compiled_sections"]] == [
+        "current_state",
+        "why_it_matters",
+        "evidence_traceability",
+        "open_tensions",
+        "where_to_go_next",
+    ]
     assert payload["links"]["center_object_path"] == "/object?id=alpha"
     assert payload["links"]["events_path"] == "/events?q=alpha"
     assert payload["center_summary"] == "Alpha supports local-first execution."
@@ -335,6 +352,13 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["assembly_contract"]["source_contract_name"] == "event/dossier"
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["assembly_contract"]["source_provider_name"] == "event/dossier"
+    assert [section["id"] for section in payload["compiled_sections"]] == [
+        "current_state",
+        "why_it_matters",
+        "evidence_traceability",
+        "open_tensions",
+        "where_to_go_next",
+    ]
     assert payload["event_count"] == 3
     assert payload["dates"] == ["2026-04-13"]
     assert payload["events"][0]["object_id"] == "alpha"
@@ -974,6 +998,13 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["assembly_contract"]["source_contract_name"] == "truth/contradictions"
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["assembly_contract"]["source_provider_name"] == "truth/contradictions"
+    assert [section["id"] for section in payload["compiled_sections"]] == [
+        "current_state",
+        "why_it_matters",
+        "evidence_traceability",
+        "open_tensions",
+        "where_to_go_next",
+    ]
     assert payload["count"] == 1
     assert payload["items"][0]["subject_key"] == "alpha"
     assert payload["open_count"] == 1
@@ -1135,6 +1166,13 @@ Thin note.
     payload = build_truth_dashboard_payload(temp_vault)
 
     assert payload["screen"] == "truth/dashboard"
+    assert payload["orientation"]["assembly_contract"]["recipe_name"] == "orientation_brief"
+    assert [section["id"] for section in payload["entry_sections"]] == [
+        "what_changed_recently",
+        "important_right_now",
+        "deserves_review",
+        "recommended_next_steps",
+    ]
     assert payload["objects"]["count"] == 4
     assert payload["contradictions"]["count"] == 1
     assert payload["events"]["count"] == 4
@@ -1147,6 +1185,11 @@ Thin note.
     production_gap = next(item for item in payload["priorities"] if item["kind"] == "production_gap")
     assert production_gap["path"].startswith("/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md")
     assert payload["recent_review_actions"] == []
+    orientation_sections = {section["id"]: section for section in payload["orientation"]["compiled_sections"]}
+    entry_sections = {section["id"]: section for section in payload["entry_sections"]}
+    assert entry_sections["what_changed_recently"]["items"] == orientation_sections["what_changed"]["items"][:4]
+    assert entry_sections["important_right_now"]["items"] == orientation_sections["next_actions"]["items"][:4]
+    assert entry_sections["deserves_review"]["items"] == orientation_sections["needs_review"]["items"][:4]
 
 
 def test_build_truth_dashboard_payload_preserves_requested_pack(temp_vault):
@@ -1418,7 +1461,7 @@ def test_build_briefing_payload(temp_vault):
     payload = build_briefing_payload(temp_vault)
 
     assert payload["screen"] == "briefing/intelligence"
-    assert payload["assembly_contract"]["recipe_name"] == "operator_briefing"
+    assert payload["assembly_contract"]["recipe_name"] == "orientation_brief"
     assert payload["assembly_contract"]["status"] == "declared"
     assert payload["assembly_contract"]["source_contract_kind"] == "observation_surface"
     assert payload["assembly_contract"]["source_contract_name"] == "briefing"
@@ -1433,6 +1476,20 @@ def test_build_briefing_payload(temp_vault):
     assert payload["active_topics"]
     assert payload["insights"]
     assert payload["priority_items"]
+    assert [section["id"] for section in payload["compiled_sections"]] == [
+        "what_changed",
+        "what_matters",
+        "needs_review",
+        "next_reads",
+        "next_actions",
+    ]
+    assert [item["href"] for item in payload["section_nav"]] == [
+        "#what-changed",
+        "#what-matters",
+        "#needs-review",
+        "#next-reads",
+        "#next-actions",
+    ]
     assert payload["queue_summary"]["queued_count"] >= 0
 
 
@@ -1447,6 +1504,7 @@ def test_build_briefing_payload_preserves_requested_pack(temp_vault):
     assert payload["screen"] == "briefing/intelligence"
     assert payload["assembly_contract"]["status"] == "inherited"
     assert payload["assembly_contract"]["provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["recipe_name"] == "orientation_brief"
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["assembly_contract"]["source_provider_name"] == "research-tech-briefing"
     assert payload["surface_contract"]["surface_kind"] == "briefing"
