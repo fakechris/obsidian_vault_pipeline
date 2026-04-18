@@ -88,6 +88,46 @@ def test_transaction_manager_tracks_step_progress_and_percent(tmp_path):
     assert payload["run_ledger"]["last_meaningful_event"]["event_type"] == "absorb_file_processed"
 
 
+def test_transaction_step_transition_resets_previous_progress_fields():
+    from openclaw_pipeline.txn import build_transaction_payload, heartbeat_transaction, update_transaction_step
+
+    payload = build_transaction_payload("txn-1", "enhanced-pipeline", "demo")
+    update_transaction_step(
+        payload,
+        "absorb",
+        "in_progress",
+        progress_mode="counted",
+        work_units_total=10,
+        work_units_done=4,
+        work_units_failed=1,
+        current_item="Alpha_深度解读.md",
+        progress_summary="4/10 files processed",
+    )
+
+    update_transaction_step(payload, "moc", "in_progress")
+
+    current = payload["run_ledger"]["current_step"]
+    assert current["step_name"] == "moc"
+    assert current["progress_mode"] == "indeterminate"
+    assert current["work_units_total"] is None
+    assert current["work_units_done"] == 0
+    assert current["work_units_failed"] == 0
+    assert current["current_item"] is None
+    assert current["progress_percent"] is None
+    assert current["progress_summary"] == "Progress is currently indeterminate."
+
+    heartbeat_transaction(payload, step_name="knowledge_index")
+
+    current = payload["run_ledger"]["current_step"]
+    assert current["step_name"] == "knowledge_index"
+    assert current["progress_mode"] == "indeterminate"
+    assert current["work_units_total"] is None
+    assert current["work_units_done"] == 0
+    assert current["work_units_failed"] == 0
+    assert current["current_item"] is None
+    assert current["progress_percent"] is None
+
+
 def test_classify_run_ledgers_separates_active_and_stale(tmp_path):
     from openclaw_pipeline.txn import classify_run_ledgers
 

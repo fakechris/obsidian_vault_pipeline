@@ -211,7 +211,7 @@ def update_transaction_step(
     current = dict(run_ledger.get("current_step") or {})
     previous_step = current.get("step_name")
     if previous_step != step_name:
-        current["step_started_at"] = ts
+        current = {"step_started_at": ts}
     current["step_name"] = step_name
     current["step_state"] = _normalize_step_state(status)
     current["step_heartbeat_at"] = ts
@@ -300,6 +300,9 @@ def heartbeat_transaction(
     run_ledger = payload["run_ledger"]
     current = dict(run_ledger.get("current_step") or {})
     effective_step = step_name or current.get("step_name") or payload.get("checkpoint") or "initialized"
+    previous_step = current.get("step_name")
+    if previous_step != effective_step:
+        current = {"step_started_at": ts}
     current["step_name"] = effective_step
     current["step_state"] = current.get("step_state") or "running"
     current["step_started_at"] = current.get("step_started_at") or ts
