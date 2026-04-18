@@ -1083,47 +1083,16 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         }
         for item in snapshot.get("priority_items", [])[:5]
     ]
+    impact_counts = _impact_counts(snapshot.get("recent_signals", []))
     loop_summary = {
-        "productive_count": sum(
-            1
-            for item in snapshot.get("recent_signals", [])
-            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "productive"
-        ),
-        "waiting_count": sum(
-            1
-            for item in snapshot.get("recent_signals", [])
-            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "waiting"
-        ),
-        "running_count": sum(
-            1
-            for item in snapshot.get("recent_signals", [])
-            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "running"
-        ),
-        "ready_count": sum(
-            1
-            for item in snapshot.get("recent_signals", [])
-            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "ready"
-        ),
-        "completed_count": sum(
-            1
-            for item in snapshot.get("recent_signals", [])
-            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "completed"
-        ),
-        "failed_count": sum(
-            1
-            for item in snapshot.get("recent_signals", [])
-            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "failed"
-        ),
-        "stalled_count": sum(
-            1
-            for item in snapshot.get("recent_signals", [])
-            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "stalled"
-        ),
-        "review_only_count": sum(
-            1
-            for item in snapshot.get("recent_signals", [])
-            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "review_only"
-        ),
+        "productive_count": impact_counts.get("productive", 0),
+        "waiting_count": impact_counts.get("waiting", 0),
+        "running_count": impact_counts.get("running", 0),
+        "ready_count": impact_counts.get("ready", 0),
+        "completed_count": impact_counts.get("completed", 0),
+        "failed_count": impact_counts.get("failed", 0),
+        "stalled_count": impact_counts.get("stalled", 0),
+        "review_only_count": impact_counts.get("review_only", 0),
     }
     signal_loop_items = [
         {

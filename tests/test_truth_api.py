@@ -324,6 +324,115 @@ Processed source note without downstream chain.
     assert source_signal["capture_summary"]["summary"].startswith("Observed 1 inbound capture event")
 
 
+def test_truth_api_marks_non_executable_recommended_actions_as_review_only():
+    from openclaw_pipeline.truth_api import _build_signal_impact_summary
+
+    review_only = _build_signal_impact_summary(
+        {
+            "recommended_action": {
+                "kind": "inspect_production_gap",
+                "label": "Inspect production gap",
+                "path": "/production?q=gap",
+                "executable": False,
+            }
+        }
+    )
+    ready = _build_signal_impact_summary(
+        {
+            "recommended_action": {
+                "kind": "review_contradiction",
+                "label": "Review contradiction",
+                "path": "/contradictions?q=alpha",
+                "executable": True,
+            }
+        }
+    )
+
+    assert review_only["impact_status"] == "review_only"
+    assert review_only["lifecycle_stage"] == "manual_review"
+    assert ready["impact_status"] == "ready"
+    assert ready["lifecycle_stage"] == "recommendation_only"
+
+
+def test_truth_api_aggregates_note_capture_summaries_with_single_log_scan_per_file(
+    temp_vault,
+    monkeypatch,
+):
+    import openclaw_pipeline.truth_api as truth_api
+
+    note_alpha = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Alpha_深度解读.md"
+    note_beta = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Beta_深度解读.md"
+    note_alpha.parent.mkdir(parents=True, exist_ok=True)
+    note_alpha.write_text(
+        """---
+note_id: alpha-deep-dive
+title: Alpha Deep Dive
+type: deep_dive
+---
+""",
+        encoding="utf-8",
+    )
+    note_beta.write_text(
+        """---
+note_id: beta-deep-dive
+title: Beta Deep Dive
+type: deep_dive
+---
+""",
+        encoding="utf-8",
+    )
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text("", encoding="utf-8")
+    (logs_dir / "refine-mutations.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T11:00:00Z",
+                        "event_type": "refine_mutation_applied",
+                        "targets": ["alpha-deep-dive"],
+                        "mode": "focused",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T11:05:00Z",
+                        "event_type": "refine_mutation_applied",
+                        "targets": ["beta-deep-dive"],
+                        "mode": "focused",
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    read_paths: list[str] = []
+    original_read_jsonl_items = truth_api._read_jsonl_items
+
+    def counting_read_jsonl_items(path):
+        read_paths.append(Path(path).name)
+        return original_read_jsonl_items(path)
+
+    monkeypatch.setattr(truth_api, "_read_jsonl_items", counting_read_jsonl_items)
+
+    payload = truth_api._aggregate_note_capture_summaries(
+        temp_vault,
+        [
+            "20-Areas/AI-Research/Topics/2026-04/Alpha_深度解读.md",
+            "20-Areas/AI-Research/Topics/2026-04/Beta_深度解读.md",
+        ],
+    )
+
+    assert payload["captured_event_count"] == 2
+    assert sorted(read_paths) == ["pipeline.jsonl", "refine-mutations.jsonl"]
+
+
 def test_truth_api_avoids_datetime_utc_import_for_python_310_compatibility():
     source = (
         Path(__file__).resolve().parents[1]

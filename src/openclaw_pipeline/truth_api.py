@@ -1932,22 +1932,22 @@ def _build_signal_impact_summary(
         return _build_action_impact_summary(action)
     if bool(recommended_action.get("executable")):
         return {
-            "impact_status": "review_only",
-            "lifecycle_stage": "manual_review",
+            "impact_status": "ready",
+            "lifecycle_stage": "recommendation_only",
             "action_kind": str(recommended_action.get("kind") or ""),
             "action_status": "",
-            "impact_label": "Review-only signal",
-            "impact_detail": "This signal currently routes to an operator review flow instead of queued execution.",
+            "impact_label": "Action available",
+            "impact_detail": "An executable action exists for this signal, but nothing is currently queued.",
             "produced_artifact_count": 0,
             "produced_artifact_types": [],
         }
     return {
-        "impact_status": "ready",
-        "lifecycle_stage": "recommendation_only",
+        "impact_status": "review_only",
+        "lifecycle_stage": "manual_review",
         "action_kind": str(recommended_action.get("kind") or ""),
         "action_status": "",
-        "impact_label": "Action available",
-        "impact_detail": "A queueable action exists for this signal, but nothing is currently queued.",
+        "impact_label": "Review-only signal",
+        "impact_detail": "This signal currently routes to an operator review flow instead of queued execution.",
         "produced_artifact_count": 0,
         "produced_artifact_types": [],
     }
@@ -2734,9 +2734,12 @@ def _match_note_capture_event(
     relative_path_field = _vault_relative_path(vault_dir, str(payload.get("path") or ""))
     file_name = Path(str(payload.get("file") or "")).name
     source_name = Path(str(payload.get("source") or "")).name
+    staged_name = Path(relative_staged).name
+    archived_name = Path(relative_archived).name
+    restored_name = Path(relative_restored).name
 
     if event_type == "source_staged_for_processing" and (
-        relative_source == note_path or relative_staged == note_path or note_name in {Path(relative_source).name, Path(relative_staged).name}
+        relative_source == note_path or relative_staged == note_path or note_name in {source_name, staged_name}
     ):
         return _note_capture_item(
             kind="source_staged",
@@ -2745,7 +2748,7 @@ def _match_note_capture_event(
             detail="Source note was staged for processing.",
         )
     if event_type == "source_archived_to_processed" and (
-        relative_source == note_path or relative_archived == note_path or note_name in {Path(relative_source).name, Path(relative_archived).name}
+        relative_source == note_path or relative_archived == note_path or note_name in {source_name, archived_name}
     ):
         return _note_capture_item(
             kind="processed_source",
@@ -2754,7 +2757,7 @@ def _match_note_capture_event(
             detail="Source note was archived into the processed intake.",
         )
     if event_type == "source_restored_to_raw" and (
-        relative_source == note_path or relative_restored == note_path or note_name in {Path(relative_source).name, Path(relative_restored).name}
+        relative_source == note_path or relative_restored == note_path or note_name in {source_name, restored_name}
     ):
         return _note_capture_item(
             kind="source_restored",
@@ -2851,25 +2854,10 @@ def _match_note_capture_event(
     return None
 
 
-def get_note_inbound_capture_summary(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
-    resolved_vault = resolve_vault_dir(vault_dir)
-    layout = VaultLayout.from_vault(resolved_vault)
-    targets = _note_capture_targets(resolved_vault, note_path)
-    derived_note_names: set[str] = {str(targets["note_name"])}
-    items: list[dict[str, Any]] = []
-    for log_path in (layout.pipeline_log, layout.logs_dir / "refine-mutations.jsonl"):
-        if not log_path.exists():
-            continue
-        for payload in _read_jsonl_items(log_path):
-            item = _match_note_capture_event(
-                resolved_vault,
-                payload=payload,
-                targets=targets,
-                derived_note_names=derived_note_names,
-            )
-            if item is not None:
-                items.append(item)
-
+def _capture_summary_payload(
+    note_path: str,
+    items: list[dict[str, Any]],
+) -> dict[str, Any]:
     items.sort(key=lambda item: (str(item.get("timestamp") or ""), str(item.get("kind") or "")))
     captured_event_count = len(items)
     produced_artifact_count = sum(int(item.get("produced_artifact_count") or 0) for item in items)
@@ -2902,6 +2890,49 @@ def get_note_inbound_capture_summary(vault_dir: Path | str, *, note_path: str) -
     }
 
 
+def _collect_note_capture_summaries(
+    vault_dir: Path | str,
+    note_paths: list[str],
+) -> dict[str, dict[str, Any]]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    target_state: dict[str, dict[str, Any]] = {}
+    for note_path in note_paths:
+        normalized_path = str(note_path)
+        if not normalized_path.strip() or normalized_path in target_state:
+            continue
+        targets = _note_capture_targets(resolved_vault, normalized_path)
+        target_state[normalized_path] = {
+            "targets": targets,
+            "derived_note_names": {str(targets["note_name"])},
+            "items": [],
+        }
+    for log_path in (layout.pipeline_log, layout.logs_dir / "refine-mutations.jsonl"):
+        if not log_path.exists():
+            continue
+        for payload in _read_jsonl_items(log_path):
+            for state in target_state.values():
+                item = _match_note_capture_event(
+                    resolved_vault,
+                    payload=payload,
+                    targets=state["targets"],
+                    derived_note_names=state["derived_note_names"],
+                )
+                if item is not None:
+                    state["items"].append(item)
+    return {
+        note_path: _capture_summary_payload(note_path, list(state["items"]))
+        for note_path, state in target_state.items()
+    }
+
+
+def get_note_inbound_capture_summary(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+    return _collect_note_capture_summaries(vault_dir, [str(note_path)]).get(
+        str(note_path),
+        _capture_summary_payload(str(note_path), []),
+    )
+
+
 def _aggregate_note_capture_summaries(
     vault_dir: Path | str,
     note_paths: list[str],
@@ -2925,7 +2956,8 @@ def _aggregate_note_capture_summaries(
         payload["note_paths"] = normalized_paths
         return payload
 
-    summaries = [get_note_inbound_capture_summary(vault_dir, note_path=item) for item in normalized_paths]
+    summary_map = _collect_note_capture_summaries(vault_dir, normalized_paths)
+    summaries = [summary_map[item] for item in normalized_paths]
     captured_event_count = sum(item["captured_event_count"] for item in summaries)
     produced_artifact_count = sum(item["produced_artifact_count"] for item in summaries)
     candidate_count = sum(item["candidate_count"] for item in summaries)
