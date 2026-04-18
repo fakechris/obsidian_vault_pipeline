@@ -2667,7 +2667,7 @@ def _render_briefing_page(payload: dict) -> str:
         for bucket, count in queue_summary.get("failure_buckets", {}).items()
     ) or "<li class='muted'>No failed actions.</li>"
     return _layout(
-        "Working Memory Snapshot",
+        "Orientation Brief",
         "".join(
             [
                 "<h1>Orientation Brief</h1>",
