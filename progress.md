@@ -33,7 +33,7 @@
   - Switched the local editable install to the `phase25-observable-runtime-run-ledger` worktree
   - Stopped the legacy black-box local run that had lost transaction truth but was still burning CPU
   - Repaired historical stuck transactions with `ovp-repair --transactions --write`
-  - Ran a real local `ovp --incremental` validation on `/Users/chris/Documents/openclaw-vault`
+  - Ran a real local `ovp --incremental` validation on `{LOCAL_VAULT_PATH}`
   - Verified that `watch_progress`, `/api/runtime`, and `/` all reported the same active run and counted progress during the live run
 - Files created/modified:
   - docs/plans/2026-04-18-phase25-observable-runtime-and-run-ledger.md

@@ -23,7 +23,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -551,17 +551,32 @@ def _collect_absorb_targets(
             return []
         return sorted(directory.glob("*_深度解读.md"))
     if recent:
-        areas = ["AI-Research", "Tools", "Investing", "Programming"]
+        areas_root = layout.vault_dir / "20-Areas"
+        area_dirs = (
+            sorted(path for path in areas_root.iterdir() if path.is_dir() and (path / "Topics").exists())
+            if areas_root.exists()
+            else []
+        )
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=recent)
+        month_names = {
+            (now - timedelta(days=days_ago)).strftime("%Y-%m")
+            for days_ago in range(recent)
+        }
         ordered: list[Path] = []
         seen: set[str] = set()
-        for area in areas:
-            for days_ago in range(recent):
-                month_dir = layout.vault_dir / "20-Areas" / area / "Topics" / (
-                    datetime.now() - __import__("datetime").timedelta(days=days_ago)
-                ).strftime("%Y-%m")
+        for area_dir in area_dirs:
+            for month_name in sorted(month_names):
+                month_dir = area_dir / "Topics" / month_name
                 if not month_dir.exists():
                     continue
                 for candidate in sorted(month_dir.glob("*_深度解读.md")):
+                    try:
+                        modified_at = datetime.fromtimestamp(candidate.stat().st_mtime, tz=timezone.utc)
+                    except OSError:
+                        continue
+                    if modified_at < cutoff:
+                        continue
                     key = str(candidate.resolve())
                     if key in seen:
                         continue

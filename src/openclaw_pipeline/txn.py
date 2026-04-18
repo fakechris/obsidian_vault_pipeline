@@ -256,7 +256,7 @@ def mark_transaction_completed(payload: dict[str, Any], *, timestamp: str | None
         if current.get("progress_mode") == "counted" and current.get("work_units_total") is not None:
             current["work_units_done"] = current.get("work_units_total")
             current["progress_percent"] = 100.0
-            current["progress_summary"] = progress_summary = _derive_progress_summary(
+            current["progress_summary"] = _derive_progress_summary(
                 progress_mode="counted",
                 work_units_done=current.get("work_units_done"),
                 work_units_total=current.get("work_units_total"),
@@ -334,7 +334,7 @@ def classify_run_ledgers(
     now_iso: str | None = None,
     stale_after_seconds: int = RUN_STALE_AFTER_SECONDS,
 ) -> dict[str, list[dict[str, Any]]]:
-    now = _parse_timestamp(now_iso) if now_iso else datetime.now(timezone.utc)
+    now = (_parse_timestamp(now_iso) if now_iso else None) or datetime.now(timezone.utc)
     active: list[dict[str, Any]] = []
     stale: list[dict[str, Any]] = []
 
@@ -344,7 +344,7 @@ def classify_run_ledgers(
     for txn_file in sorted(transactions_dir.glob("*.json")):
         try:
             payload = json.loads(txn_file.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+        except (OSError, json.JSONDecodeError):
             continue
         if payload.get("status") != "in_progress":
             continue
@@ -357,11 +357,13 @@ def classify_run_ledgers(
         ledger["stale"] = is_stale
         (stale if is_stale else active).append(payload)
 
-    key_fn = lambda item: (
-        item.get("run_ledger", {}).get("heartbeat_at")
-        or item.get("last_updated")
-        or ""
-    )
+    def key_fn(item: dict[str, Any]) -> str:
+        return (
+            item.get("run_ledger", {}).get("heartbeat_at")
+            or item.get("last_updated")
+            or ""
+        )
+
     active.sort(key=key_fn, reverse=True)
     stale.sort(key=key_fn, reverse=True)
     return {"active": active, "stale": stale}

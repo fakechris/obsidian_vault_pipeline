@@ -3088,12 +3088,24 @@ def build_runtime_home_payload(
     requested_pack = pack_name or ""
     runtime = get_runtime_status(vault_dir)
     research_overview_supported = _supports_research_shell(pack_name)
-    objects = build_objects_index_payload(vault_dir, limit=8, offset=0, pack_name=pack_name)
+    try:
+        objects = build_objects_index_payload(vault_dir, limit=8, offset=0, pack_name=pack_name)
+    except (OSError, sqlite3.Error):
+        objects = {
+            "total_count": 0,
+            "items": [],
+            "error": "object_index_unavailable",
+        }
     active_run = runtime.get("active_run") if isinstance(runtime.get("active_run"), dict) else {}
     run_ledger = active_run.get("run_ledger") if isinstance(active_run, dict) and isinstance(active_run.get("run_ledger"), dict) else {}
     current_step = run_ledger.get("current_step") if isinstance(run_ledger.get("current_step"), dict) else {}
     current_step_name = str(current_step.get("step_name") or run_ledger.get("current_step_name") or active_run.get("checkpoint") or "")
-    progress_summary = str(current_step.get("progress_summary") or "No active workflow is currently recorded in the canonical run ledger.")
+    if current_step.get("progress_summary"):
+        progress_summary = str(current_step["progress_summary"])
+    elif active_run:
+        progress_summary = f"Active run at step {current_step_name or 'unknown'}."
+    else:
+        progress_summary = "No active workflow is currently recorded in the canonical run ledger."
     current_item = str(current_step.get("current_item") or "").strip()
     entry_sections = [
         _compiled_section(
@@ -3182,7 +3194,9 @@ def build_runtime_home_payload(
         "entry_sections": entry_sections,
         "objects": {
             "count": objects["total_count"],
+            "total_count": objects["total_count"],
             "items": objects["items"],
+            **({"error": objects["error"]} if objects.get("error") else {}),
         },
         "orientation": {
             "assembly_contract": _assembly_contract("orientation_brief", pack_name=pack_name),

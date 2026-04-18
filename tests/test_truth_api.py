@@ -256,6 +256,7 @@ def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
 
     payload = get_runtime_status(temp_vault, now_iso="2026-04-09T00:20:00Z")
 
+    assert payload["generated_at"] == "2026-04-09T00:20:00Z"
     assert payload["active_run"]["id"] == "txn-1"
     assert payload["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 25.0
     assert payload["active_run"]["run_ledger"]["current_step"]["current_item"] == "Alpha.md"

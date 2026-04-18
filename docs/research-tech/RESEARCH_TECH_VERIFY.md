@@ -8,10 +8,15 @@ Use this checklist when validating the primary `research-tech` pack.
 ovp-packs --json
 ovp-doctor --pack research-tech --json
 ovp-truth objects --vault-dir /path/to/vault
-ovp-ui --vault-dir /path/to/vault --port 8787
 python3 -m openclaw_pipeline.commands.watch_progress --vault-dir /path/to/vault --once
 ovp --help
 ovp-autopilot --help
+```
+
+Start the UI server in a separate terminal before browser or `/api/runtime` checks:
+
+```bash
+ovp-ui --vault-dir /path/to/vault --port 8787
 ```
 
 Expected:
@@ -48,10 +53,16 @@ ovp --incremental --pack research-tech --vault-dir /path/to/vault
 While it is running, inspect the same run through all three operator readers:
 
 ```bash
+# Terminal A, keep running:
+ovp-ui --vault-dir /path/to/vault --port 8787
+
+# Terminal B:
 python3 -m openclaw_pipeline.commands.watch_progress --vault-dir /path/to/vault --once
 curl -s http://127.0.0.1:8787/api/runtime | jq
 open http://127.0.0.1:8787/
 ```
+
+`curl /api/runtime` and the root page require `ovp-ui` to be running in Terminal A.
 
 Expected:
 

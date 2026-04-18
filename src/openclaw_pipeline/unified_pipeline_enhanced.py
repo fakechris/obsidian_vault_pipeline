@@ -150,6 +150,13 @@ def _extract_json_suffix(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _load_env(vault_dir: Path | None = None) -> bool:
     """加载 .env 文件，返回是否成功
 
@@ -553,8 +560,34 @@ class TransactionManager:
     def _write(self, txn_id: str, txn_data: dict[str, Any]) -> None:
         txn_file = self._txn_file(txn_id)
         txn_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(txn_file, "w", encoding="utf-8") as f:
-            json.dump(txn_data, f, indent=2, ensure_ascii=False)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=txn_file.parent,
+            prefix=f".{txn_file.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp_file = Path(f.name)
+            try:
+                json.dump(txn_data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            except Exception:
+                try:
+                    tmp_file.unlink()
+                except OSError:
+                    pass
+                raise
+        try:
+            os.replace(tmp_file, txn_file)
+        finally:
+            if tmp_file.exists():
+                try:
+                    tmp_file.unlink()
+                except OSError:
+                    pass
 
     def start(
         self,
@@ -848,13 +881,14 @@ class EnhancedPipeline:
                     env=self._subprocess_env(),
                 )
                 started = time.monotonic()
-                poll_interval = min(1.0, max(0.1, float(timeout) / 10.0))
+                timeout_seconds = float(timeout)
+                poll_interval = min(1.0, max(0.1, timeout_seconds / 10.0))
                 while True:
                     returncode = process.poll()
                     if returncode is not None:
                         break
                     elapsed = time.monotonic() - started
-                    if elapsed > timeout:
+                    if elapsed > timeout_seconds:
                         process.kill()
                         process.wait()
                         self.logger.log("command_timeout", {"step": step_name, "timeout": timeout})
@@ -1063,6 +1097,21 @@ class EnhancedPipeline:
                     "pinboard_process_file_started",
                     {"file": f.name, "index": index, "total": total_files},
                 )
+                if self.txn_id:
+                    self.txn.heartbeat(
+                        self.txn_id,
+                        step_name="pinboard_process",
+                        progress_mode="counted",
+                        work_units_total=total_files,
+                        work_units_done=index - 1,
+                        work_units_failed=results["failed"],
+                        current_item=f.name,
+                        progress_summary=f"{index - 1}/{total_files} files processed",
+                        last_meaningful_event={
+                            "event_type": "pinboard_process_file_started",
+                            "file": f.name,
+                        },
+                    )
                 content = f.read_text(encoding="utf-8")
                 url_type = detect_pinboard_processor(content)
                 if not url_type:
@@ -1169,16 +1218,9 @@ class EnhancedPipeline:
                     continue
 
                 # 执行处理器
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd=str(self.vault_dir),
-                    timeout=600,
-                    env=self._subprocess_env(),
-                )
+                result = self.run_command(cmd, "pinboard_process", timeout=600)
 
-                if result.returncode == 0:
+                if result.get("success"):
                     print(f"  ✅ {url_type}: {f.name}")
                     results["processed"] += 1
 
@@ -1205,9 +1247,10 @@ class EnhancedPipeline:
                         )
                 else:
                     print(f"  ❌ {url_type} 处理失败: {f.name}")
-                    print(f"     {result.stderr[:100]}")
+                    stderr = str(result.get("stderr") or result.get("error") or "")
+                    print(f"     {stderr[:100]}")
                     results["failed"] += 1
-                    self.logger.log("pinboard_process_file_failed", {"file": f.name, "processor": url_type, "error": result.stderr[:500]})
+                    self.logger.log("pinboard_process_file_failed", {"file": f.name, "processor": url_type, "error": stderr[:500]})
                     if self.txn_id:
                         self.txn.heartbeat(
                             self.txn_id,
@@ -1549,26 +1592,38 @@ class EnhancedPipeline:
             self.logger.log("command_error", {"step": "absorb", "error": str(exc)})
             return {"success": False, "error": str(exc)}
 
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        error_count = _safe_int(summary.get("errors"))
+        error_count += _safe_int(summary.get("failed"))
+        error_count += _safe_int(summary.get("files_failed"))
+        if error_count == 0:
+            error_count = sum(1 for item in results if isinstance(item, dict) and item.get("error"))
+        success = error_count == 0
         stdout = json.dumps(payload, ensure_ascii=False)
+        stderr = "" if success else f"{error_count} absorb file(s) failed"
         self.logger.log(
             "command_completed",
             {
                 "step": "absorb",
-                "success": True,
+                "success": success,
                 "mode": "direct_workflow",
                 "directory": str(directory) if directory else "",
                 "recent": recent,
                 "total_files": total_files,
                 "stdout": stdout[-1000:],
-                "stderr": "",
+                "stderr": stderr,
             },
         )
-        return {
-            "success": True,
+        result = {
+            "success": success,
             "stdout": stdout,
-            "stderr": "",
+            "stderr": stderr,
             **payload,
         }
+        if not success:
+            result["error"] = stderr
+        return result
 
     def step_absorb(
         self,

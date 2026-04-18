@@ -320,7 +320,10 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
     if not isinstance(runtime, dict):
         return ""
     active_run = runtime.get("active_run")
-    stale_count = int(runtime.get("stale_count") or 0)
+    try:
+        stale_count = int(runtime.get("stale_count") or 0)
+    except (TypeError, ValueError):
+        stale_count = 0
     if not isinstance(active_run, dict):
         detail = "No active workflow is currently recorded in the canonical run ledger."
         stale_html = (
@@ -3065,7 +3068,20 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     )
                     return
                 if path == "/api/runtime":
-                    self._write_json(get_runtime_status(resolved_vault))
+                    try:
+                        self._write_json(get_runtime_status(resolved_vault))
+                    except (OSError, sqlite3.Error) as exc:
+                        self._write_json(
+                            {
+                                "active_count": 0,
+                                "stale_count": 0,
+                                "active_run": None,
+                                "stale_runs": [],
+                                "error": "runtime_status_unavailable",
+                                "detail": str(exc),
+                            },
+                            status=503,
+                        )
                     return
                 if path == "/objects":
                     limit = int(query.get("limit", ["100"])[0])

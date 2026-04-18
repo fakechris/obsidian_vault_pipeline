@@ -189,6 +189,41 @@ def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
     assert payload["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 25.0
 
 
+def test_ui_server_runtime_endpoint_returns_structured_error(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+
+    def fail_runtime_status(_vault_dir):
+        raise OSError("ledger read failed")
+
+    monkeypatch.setattr(ui_server, "get_runtime_status", fail_runtime_status)
+    server = ui_server.create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/runtime")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 503
+    assert payload["active_run"] is None
+    assert payload["stale_count"] == 0
+    assert payload["error"] == "runtime_status_unavailable"
+
+
+def test_render_runtime_card_tolerates_malformed_stale_count():
+    from openclaw_pipeline.commands.ui_server import _render_runtime_card
+
+    html = _render_runtime_card({"active_run": None, "stale_count": "not-a-number"})
+
+    assert "No active workflow is currently recorded" in html
+
+
 def test_ui_server_root_accepts_pack_scope(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 

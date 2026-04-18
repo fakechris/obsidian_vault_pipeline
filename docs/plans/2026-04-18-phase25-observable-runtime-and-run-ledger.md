@@ -6,6 +6,8 @@
 
 **Status:** Complete
 
+Related: [[2026-04-14-local-knowledge-workbench-milestone|Local Knowledge Workbench Milestone]], [[2026-04-18-phase24-brain-first-lookup-and-backlink-legibility|Phase 24]], [[2026-04-17-phase22-active-signal-impact-accounting|Phase 22]]
+
 ## What Landed
 
 - `txn.py`
@@ -56,7 +58,7 @@ This phase was closed only after synthetic tests **and** a real local incrementa
 Validated command:
 
 ```bash
-ovp --incremental --pack research-tech --vault-dir /Users/chris/Documents/openclaw-vault
+ovp --incremental --pack research-tech --vault-dir /path/to/vault
 ```
 
 Verified during the live run:

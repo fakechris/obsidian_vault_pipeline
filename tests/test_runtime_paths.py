@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from argparse import Namespace
 from datetime import datetime
+import json
+import os
 from pathlib import Path
 import sys
 
@@ -834,6 +836,38 @@ def test_step_absorb_updates_txn_ledger_with_counted_progress(tmp_path, monkeypa
     assert payload["run_ledger"]["last_meaningful_event"]["event_type"] == "absorb_file_processed"
 
 
+def test_run_absorb_workflow_direct_reports_file_level_errors(tmp_path, monkeypatch):
+    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_module
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    def fake_run_absorb_workflow(*_args, **_kwargs):
+        return {
+            "summary": {
+                "files_processed": 1,
+                "errors": 1,
+            },
+            "results": [
+                {
+                    "file": "broken_深度解读.md",
+                    "error": "extract failed",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(pipeline_module, "run_absorb_workflow", fake_run_absorb_workflow)
+
+    result = pipeline._run_absorb_workflow_direct(dry_run=False, recent=7, total_files=1)
+
+    assert result["success"] is False
+    assert result["error"] == "1 absorb file(s) failed"
+
+
 def test_step_absorb_rejects_non_positive_batch_size(tmp_path):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
@@ -862,6 +896,52 @@ def test_run_command_timeout_is_failure(tmp_path):
 
     assert result["success"] is False
     assert result["timeout"] is True
+
+
+def test_step_pinboard_process_heartbeats_current_item_before_processor_runs(tmp_path, monkeypatch):
+    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_module
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "50-Inbox" / "02-Pinboard").mkdir(parents=True)
+    (vault / "50-Inbox" / "02-Pinboard-Archive").mkdir(parents=True)
+    (vault / "60-Logs").mkdir(parents=True)
+    pinboard_file = vault / "50-Inbox" / "02-Pinboard" / "sample.md"
+    pinboard_file.write_text(
+        """---
+title: Sample
+type: pinboard-article
+source: https://example.com/sample
+---
+
+# Sample
+""",
+        encoding="utf-8",
+    )
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Pinboard processor heartbeat")
+    current_items_seen: list[str | None] = []
+
+    def direct_subprocess_run_is_not_allowed(*_args, **_kwargs):
+        raise AssertionError("pinboard processors must run through run_command")
+
+    def fake_run_command(_cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        assert step_name == "pinboard_process"
+        assert timeout == 600
+        payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+        current_items_seen.append(payload["run_ledger"]["current_step"].get("current_item"))
+        return {"success": True, "stdout": "ok", "stderr": ""}
+
+    monkeypatch.setattr(pipeline_module.subprocess, "run", direct_subprocess_run_is_not_allowed)
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_pinboard_process(dry_run=False)
+
+    assert result["success"] is True
+    assert current_items_seen == ["sample.md"]
+    assert not pinboard_file.exists()
 
 
 def test_step_pinboard_decomposes_cross_day_history_into_daily_requests(tmp_path, monkeypatch):
@@ -893,6 +973,25 @@ def test_step_pinboard_decomposes_cross_day_history_into_daily_requests(tmp_path
     assert captured_cmds[0][-5:] == ["--start-date", "2026-04-01", "--end-date", "2026-04-01", "--dry-run=false"]
     assert captured_cmds[1][-5:] == ["--start-date", "2026-04-02", "--end-date", "2026-04-02", "--dry-run=false"]
     assert captured_cmds[2][-5:] == ["--start-date", "2026-04-03", "--end-date", "2026-04-03", "--dry-run=false"]
+
+
+def test_collect_absorb_targets_recent_filters_by_file_mtime(tmp_path):
+    from openclaw_pipeline.auto_evergreen_extractor import _collect_absorb_targets
+
+    vault = tmp_path / "vault"
+    layout = VaultLayout.from_vault(vault)
+    month_dir = layout.vault_dir / "20-Areas" / "AI-Research" / "Topics" / datetime.now().strftime("%Y-%m")
+    month_dir.mkdir(parents=True, exist_ok=True)
+    recent_file = month_dir / "recent_深度解读.md"
+    old_file = month_dir / "old_深度解读.md"
+    recent_file.write_text("# recent\n", encoding="utf-8")
+    old_file.write_text("# old\n", encoding="utf-8")
+    old_ts = datetime.now().timestamp() - (30 * 24 * 60 * 60)
+    os.utime(old_file, (old_ts, old_ts))
+
+    targets = _collect_absorb_targets(layout, recent=7)
+
+    assert targets == [recent_file]
 
 
 def test_before_counts_include_monthly_processed_files(tmp_path):

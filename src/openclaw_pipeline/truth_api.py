@@ -98,7 +98,7 @@ def get_runtime_status(
     layout = VaultLayout.from_vault(resolved_vault)
     classified = classify_run_ledgers(layout.transactions_dir, now_iso=now_iso)
     return {
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "active_count": len(classified["active"]),
         "stale_count": len(classified["stale"]),
         "active_run": classified["active"][0] if classified["active"] else None,

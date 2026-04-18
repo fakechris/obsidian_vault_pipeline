@@ -345,14 +345,14 @@ Current slice:
 - review-action-derived change signals for contradiction resolution and summary rebuild,
 - extraction-trigger signals for missing deep dives and missing downstream objects,
 - briefing-ready snapshot payloads over recent signals, unresolved issues, changed objects, and active topics.
-- `Phase 22` landed active signal impact accounting across `/signals`, `/actions`, and `/briefing`
-- `Phase 23` landed inbound-capture audit visibility for notes, signals, and briefing surfaces
-- `Phase 25` now hardens the runtime itself with:
+- [[2026-04-17-phase22-active-signal-impact-accounting|Phase 22]] landed active signal impact accounting across `/signals`, `/actions`, and `/briefing`
+- [[2026-04-18-phase23-inbound-capture-audit-visibility|Phase 23]] landed inbound-capture audit visibility for notes, signals, and briefing surfaces
+- [[2026-04-18-phase25-observable-runtime-and-run-ledger|Phase 25]] now hardens the runtime itself with:
   - canonical run-ledger state
   - watcher/API/UI reader unification
   - counted progress for `pinboard_process` and `absorb`
   - explicit stale-run classification
-- `Phase 25` is now complete:
+- [[2026-04-18-phase25-observable-runtime-and-run-ledger|Phase 25]] is now complete:
   - real local `ovp --incremental` validation confirmed the same active run and counted progress in:
     - `watch_progress`
     - `/api/runtime`
@@ -361,7 +361,7 @@ Current slice:
 
 Next slice:
 
-- `Phase 24: brain-first lookup + backlink legibility`
+- [[2026-04-18-phase24-brain-first-lookup-and-backlink-legibility|Phase 24: brain-first lookup + backlink legibility]]
 - This is no longer gated on runtime validation.
 
 ### Milestone 8: Knowledge Evolution Layer

@@ -51,11 +51,12 @@ tags: [paper]
 
     captured: list[list[str]] = []
 
-    def fake_run(cmd, capture_output, text, cwd, timeout, env=None):
+    def fake_run_command(cmd, step_name, timeout=None):
+        assert step_name == "pinboard_process"
         captured.append(cmd)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return {"success": True, "stdout": "", "stderr": ""}
 
-    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
 
     result = pipeline.step_pinboard_process(dry_run=False)
 
@@ -91,13 +92,14 @@ example/repo
     txn = TransactionManager(temp_vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(temp_vault, logger, txn)
 
-    captured: list[int] = []
+    captured: list[int | None] = []
 
-    def fake_run(cmd, capture_output, text, cwd, timeout, env=None):
+    def fake_run_command(cmd, step_name, timeout=None):
+        assert step_name == "pinboard_process"
         captured.append(timeout)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return {"success": True, "stdout": "", "stderr": ""}
 
-    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
 
     result = pipeline.step_pinboard_process(dry_run=False)
 
@@ -126,19 +128,9 @@ example/repo
     txn = TransactionManager(temp_vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(temp_vault, logger, txn)
 
-    captured_envs: list[dict[str, str]] = []
+    env = pipeline._subprocess_env()
 
-    def fake_run(cmd, capture_output, text, cwd, timeout, env):
-        captured_envs.append(env)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
-
-    result = pipeline.step_pinboard_process(dry_run=False)
-
-    assert result["processed"] == 1
-    assert captured_envs
-    assert str((Path(__file__).resolve().parents[1] / "src")) in captured_envs[0]["PYTHONPATH"]
+    assert str((Path(__file__).resolve().parents[1] / "src")) in env["PYTHONPATH"]
 
 
 def test_sanitize_generated_markdown_unwraps_fenced_frontmatter():

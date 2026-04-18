@@ -177,6 +177,69 @@ def test_build_object_page_payload_hides_research_affordances_when_research_shel
     assert payload["evolution"]["accepted_count"] == 0
 
 
+def test_build_runtime_home_payload_keeps_runtime_when_objects_index_fails(temp_vault, monkeypatch):
+    import openclaw_pipeline.ui.view_models as view_models
+
+    monkeypatch.setattr(
+        view_models,
+        "get_runtime_status",
+        lambda _vault_dir: {
+            "generated_at": "2026-04-18T12:00:00Z",
+            "active_count": 0,
+            "stale_count": 0,
+            "active_run": None,
+            "stale_runs": [],
+        },
+    )
+
+    def fail_objects_index(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(view_models, "build_objects_index_payload", fail_objects_index)
+
+    payload = view_models.build_runtime_home_payload(temp_vault)
+
+    assert payload["runtime"]["generated_at"] == "2026-04-18T12:00:00Z"
+    assert payload["objects"]["total_count"] == 0
+    assert payload["objects"]["items"] == []
+    assert payload["objects"]["error"] == "object_index_unavailable"
+
+
+def test_build_runtime_home_payload_uses_active_step_fallback_without_progress_summary(temp_vault, monkeypatch):
+    import openclaw_pipeline.ui.view_models as view_models
+
+    monkeypatch.setattr(
+        view_models,
+        "get_runtime_status",
+        lambda _vault_dir: {
+            "generated_at": "2026-04-18T12:00:00Z",
+            "active_count": 1,
+            "stale_count": 0,
+            "active_run": {
+                "id": "txn-1",
+                "status": "in_progress",
+                "checkpoint": "pinboard_process",
+                "run_ledger": {
+                    "current_step_name": "pinboard_process",
+                    "current_step": {
+                        "step_name": "pinboard_process",
+                    },
+                },
+            },
+            "stale_runs": [],
+        },
+    )
+    monkeypatch.setattr(
+        view_models,
+        "build_objects_index_payload",
+        lambda *_args, **_kwargs: {"total_count": 0, "items": []},
+    )
+
+    payload = view_models.build_runtime_home_payload(temp_vault)
+
+    assert payload["entry_sections"][0]["summary"] == "Active run at step pinboard_process."
+
+
 def test_build_object_page_payload_includes_provenance(temp_vault):
     from openclaw_pipeline.ui.view_models import build_object_page_payload
 
