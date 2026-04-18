@@ -42,6 +42,7 @@ _RESEARCH_SHELL_ROUTES = [
     "/evolution",
     "/clusters",
     "/cluster",
+    "/graph",
     "/atlas",
     "/deep-dives",
     "/events",

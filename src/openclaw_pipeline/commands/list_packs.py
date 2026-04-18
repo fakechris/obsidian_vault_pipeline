@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from ..packs.loader import list_builtin_packs
-from ..plugins import discover_plugin_manifests
+from ..plugins import discover_entrypoint_packs, discover_plugin_manifests
 
 
 def _serialize_pack(pack: object, *, source: str) -> dict[str, object]:
@@ -34,12 +34,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     builtin = [_serialize_pack(pack, source="builtin") for pack in list_builtin_packs()]
+    builtin_names = {item["name"] for item in builtin}
+
+    entrypoint = [
+        _serialize_pack(pack, source="entrypoint")
+        for pack in discover_entrypoint_packs().values()
+        if pack.name not in builtin_names
+    ]
+    entrypoint_names = {item["name"] for item in entrypoint}
 
     manifest_env = os.environ.get("OPENCLAW_PACK_MANIFESTS", "")
     manifest_paths = [Path(item) for item in manifest_env.split(os.pathsep) if item]
     manifests = []
     if manifest_paths:
         for manifest in discover_plugin_manifests(manifest_paths).values():
+            if manifest.name in builtin_names or manifest.name in entrypoint_names:
+                continue
             manifests.append(
                 {
                     "name": manifest.name,
@@ -53,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
 
-    payload = {"builtin": builtin, "external": manifests}
+    payload = {"builtin": builtin, "external": entrypoint + manifests}
     if args.json:
         print(json.dumps(payload, ensure_ascii=False))
         return 0
@@ -63,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
         if item["compatibility_base"]:
             line += f" -> {item['compatibility_base']}"
         line += f" profiles={','.join(item['profiles'])}"
+        print(line)
+    for item in entrypoint:
+        line = f"{item['name']} [{item['role']}]"
+        if item["compatibility_base"]:
+            line += f" -> {item['compatibility_base']}"
+        line += f" profiles={','.join(item['profiles'])} source=entrypoint"
         print(line)
     for item in manifests:
         print(f"{item['name']} [external] manifest={item['manifest_path']}")

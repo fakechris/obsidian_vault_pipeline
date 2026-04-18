@@ -381,6 +381,50 @@ def test_truth_api_lists_research_graph_clusters(temp_vault):
     assert "target-note" in clusters[0]["member_object_ids"]
 
 
+def test_truth_api_builds_bounded_graph_cluster_scope(temp_vault):
+    from openclaw_pipeline.truth_api import get_graph_cluster_scope, list_graph_clusters
+
+    vault = _seed_truth_vault(temp_vault)
+    cluster = list_graph_clusters(vault, pack_name="research-tech")[0]
+
+    scope = get_graph_cluster_scope(
+        vault,
+        cluster["cluster_id"],
+        pack_name="research-tech",
+        object_limit=2,
+        edge_limit=4,
+    )
+
+    assert scope["cluster"]["cluster_id"] == cluster["cluster_id"]
+    assert len(scope["visible_members"]) == 2
+    assert scope["visible_members"][0]["is_center"] is True
+    visible_ids = {item["object_id"] for item in scope["visible_members"]}
+    assert "source-note" in visible_ids
+    assert all(edge["source_object_id"] in visible_ids and edge["target_object_id"] in visible_ids for edge in scope["visible_edges"])
+    assert scope["hidden_member_count"] == 1
+
+
+def test_truth_api_builds_bounded_graph_object_scope(temp_vault):
+    from openclaw_pipeline.truth_api import get_graph_object_scope
+
+    vault = _seed_truth_vault(temp_vault)
+
+    scope = get_graph_object_scope(
+        vault,
+        "source-note",
+        pack_name="research-tech",
+        neighbor_limit=1,
+        edge_limit=2,
+    )
+
+    assert scope["center"]["object_id"] == "source-note"
+    assert len(scope["visible_neighbors"]) == 1
+    assert scope["visible_neighbors"][0]["object_id"] == "target-note"
+    assert len(scope["visible_edges"]) == 1
+    assert scope["visible_edges"][0]["target_object_id"] == "target-note"
+    assert scope["hidden_neighbor_count"] == 0
+
+
 def test_truth_api_does_not_fallback_when_requested_pack_is_materialized(temp_vault, monkeypatch):
     from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
     from openclaw_pipeline.truth_api import get_object_detail, list_graph_clusters, list_objects

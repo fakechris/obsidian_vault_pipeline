@@ -4,7 +4,7 @@
 
 **Goal:** Turn the existing research graph into a first-class visual exploration surface with an infinite canvas, progressive drill-down, and usable graph navigation that does not collapse under data volume.
 
-**Architecture:** `Phase 15` already built the graph substrate, cluster detail, crystal views, and research navigation hints. `Phase 16` made pack/runtime ownership explicit. `Phase 17` should stay inside `research-tech` and spend that foundation on a graph visualization product layer: cluster-first entry points, bounded subgraph loading, canvas-native navigation, and rich side-panel detail instead of dumping the full graph at once.
+**Architecture:** `Phase 15` already built the graph substrate, cluster detail, crystal views, and research navigation hints. `Phase 16` made pack/runtime ownership explicit. `Phase 17` stays inside `research-tech` and spends that foundation on a graph visualization product layer: cluster-first entry points, bounded subgraph loading, canvas-native navigation, and rich side-panel detail instead of dumping the full graph at once.
 
 **Tech Stack:** Existing `truth_api.py` graph endpoints, `ui/view_models.py`, `ui_server.py`, pack-owned `research-tech` truth projection and surfaces, compiled cluster artifacts, local UI shell.
 
@@ -209,7 +209,6 @@ The meaning is straightforward:
 - the graph becomes an actual research instrument
 - cluster intelligence becomes easier to trust and act on
 - the product starts to feel substantially more powerful than a text-only local console
-
 ## Exit Condition
 
 `Phase 17` is complete when all of the following are true:
@@ -223,7 +222,6 @@ The meaning is straightforward:
 - the default graph view stays performant on real vault data
 - the graph uses progressive disclosure instead of flooding the screen
 - graph exploration and crystal/detail reading reinforce each other
-
 ## What Comes After Phase 17
 
 If `Phase 17` succeeds, the next major priorities are likely:

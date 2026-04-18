@@ -30,6 +30,7 @@ from ..ui.view_models import (
     build_derivation_browser_payload,
     build_evolution_browser_payload,
     build_event_dossier_payload,
+    build_graph_canvas_payload,
     build_note_page_payload,
     build_object_page_payload,
     build_objects_index_payload,
@@ -86,6 +87,7 @@ def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
             [
                 ("Evolution", "/evolution"),
                 ("Clusters", "/clusters"),
+                ("Graph", "/graph"),
                 ("Atlas", "/atlas"),
                 ("Deep Dives", "/deep-dives"),
                 ("Event Dossier", "/events"),
@@ -1254,6 +1256,7 @@ def _render_object_page(payload: dict) -> str:
     )
     hero_links = [
         f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>",
+        f"<a href='{escape(payload['links']['graph_path'])}'>Open in graph</a>",
     ]
     if research_shell_enabled:
         hero_links.extend(
@@ -1387,6 +1390,7 @@ def _render_topic_page(payload: dict) -> str:
     )
     hero_links = [
         f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>",
+        f"<a href='{escape(payload['links']['graph_path'])}'>Open in graph</a>",
     ]
     if research_shell_enabled:
         hero_links.extend(
@@ -1744,6 +1748,7 @@ def _render_production_browser_page(payload: dict) -> str:
 def _render_clusters_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
+    graph_path = payload.get("graph_path", _shell_href("/graph", requested_pack))
     limit_note = (
         f" Showing the first {payload['limit']} graph clusters in this browser window."
         if payload.get("is_limited")
@@ -1801,6 +1806,11 @@ def _render_clusters_page(payload: dict) -> str:
             else ""
         )
         + (
+            f"<div class='muted'><a href='{escape(item['graph_path'])}'>Open this cluster in graph</a></div>"
+            if item.get("graph_path")
+            else ""
+        )
+        + (
             f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
             if item.get("top_summary_bullet")
             else ""
@@ -1823,6 +1833,7 @@ def _render_clusters_page(payload: dict) -> str:
                 f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter clusters or members' /> ",
                 "<button type='submit'>Search</button>",
                 "</form>",
+                f"<p><a href='{escape(graph_path)}'>Open cluster overview graph</a></p>",
                 f"<p class='muted'>{payload['count']} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
@@ -1838,6 +1849,7 @@ def _render_clusters_page(payload: dict) -> str:
 def _render_cluster_detail_page(payload: dict) -> str:
     cluster = payload["cluster"]
     requested_pack = payload.get("requested_pack", "")
+    graph_path = payload.get("graph_path", "")
     edge_kind_counts = "".join(
         f"<span class='pill'>{escape(edge_kind)}: {count}</span>"
         for edge_kind, count in payload["edge_kind_counts"].items()
@@ -1953,7 +1965,9 @@ def _render_cluster_detail_page(payload: dict) -> str:
         "Graph Cluster",
         (
             "<h1>Graph Cluster</h1>"
-            f"<p><a href='{escape(payload['browser_path'])}'>Back to clusters</a></p>"
+            f"<p><a href='{escape(payload['browser_path'])}'>Back to clusters</a>"
+            + (f" · <a href='{escape(graph_path)}'>Open in graph</a>" if graph_path else "")
+            + "</p>"
             f"<section class='card'><h2>{escape(payload.get('display_title') or cluster['label'])}</h2>"
             f"<p class='muted'>Pack: {escape(cluster['pack'])} · Kind: {escape(cluster['cluster_kind'])} · Score: {cluster['score']:.1f}</p>"
             f"<p class='muted'>Canonical cluster id: {escape(cluster['cluster_id'])}</p>"
@@ -1981,6 +1995,328 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Members</h2><ul class='list-tight'>{members}</ul></section>"
             f"<section class='card'><h2>Internal Edges</h2><ul class='list-tight'>{edges}</ul></section>"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
+        ),
+        requested_pack=requested_pack,
+    )
+
+
+def _render_graph_page(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    controls = payload["controls"]
+    entry_links = "".join(
+        f"<a href='{escape(item['path'])}'>{escape(item['label'])}</a>"
+        for item in payload["entry_links"]
+    ) or "<span class='muted'>No entry links.</span>"
+    stats = payload["stats"]
+    stat_pills = "".join(
+        [
+            f"<span class='pill'>{stats['node_count']} nodes</span>",
+            f"<span class='pill'>{stats['edge_count']} edges</span>",
+        ]
+        + (
+            [f"<span class='pill'>{stats['hidden_member_count']} hidden members</span>"]
+            if stats.get("hidden_member_count")
+            else []
+        )
+        + (
+            [f"<span class='pill'>{stats['hidden_neighbor_count']} hidden neighbors</span>"]
+            if stats.get("hidden_neighbor_count")
+            else []
+        )
+        + (
+            [f"<span class='pill'>{stats['hidden_node_count']} additional clusters off-canvas</span>"]
+            if stats.get("hidden_node_count")
+            else []
+        )
+    )
+    filter_options = "".join(
+        f"<option value='{escape(item['value'])}'{' selected' if item['value'] == controls['edge_filter'] else ''}>{escape(item['label'])}</option>"
+        for item in controls["edge_filter_items"]
+    )
+    model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
+    payload_json = json.dumps(payload).replace("</", "<\\/")
+    return _layout(
+        f"Graph: {payload['title']}",
+        "".join(
+            [
+                """
+<style>
+.graph-shell { display: grid; gap: 1rem; }
+.graph-toolbar { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+.graph-toolbar button, .graph-toolbar select, .graph-toolbar a {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  text-decoration: none;
+  font: inherit;
+}
+.graph-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.8fr); gap: 1rem; align-items: start; }
+.graph-canvas-card { padding: 0; overflow: hidden; }
+.graph-canvas-header { padding: 1rem 1rem 0; }
+.graph-stage-wrap { position: relative; height: 72vh; min-height: 540px; background: linear-gradient(180deg, #fffdfa 0%, #f7f6f2 100%); border-top: 1px solid var(--border); }
+.graph-stage { width: 100%; height: 100%; display: block; cursor: grab; }
+.graph-stage.dragging { cursor: grabbing; }
+.graph-side { position: sticky; top: 1rem; }
+.graph-side .meta-list { margin: 0; }
+.graph-side .meta-list div { display: grid; grid-template-columns: 120px 1fr; gap: 0.5rem; padding: 0.25rem 0; }
+.graph-side .meta-list dt { color: var(--muted); }
+.graph-side .meta-list dd { margin: 0; }
+.graph-empty { color: var(--muted); }
+.graph-node-label { font-size: 13px; font-weight: 700; text-anchor: middle; pointer-events: none; fill: var(--text); }
+.graph-node-secondary { font-size: 11px; text-anchor: middle; pointer-events: none; fill: var(--muted); }
+.graph-edge-label { font-size: 11px; text-anchor: middle; pointer-events: none; fill: var(--muted); }
+</style>
+""",
+                f"<section class='hero'><h1>{escape(payload['title'])}</h1>",
+                f"<p class='muted'>{escape(payload['subtitle'])}"
+                + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
+                + "</p>",
+                f"<div class='link-row'>{entry_links}</div></section>",
+                f"<section class='card'><h2>Graph Scope</h2><div class='link-row'>{stat_pills}</div><ul class='list-tight'>{model_notes}</ul></section>",
+                "<section class='graph-shell'>",
+                "<section class='card graph-canvas-card'>",
+                "<div class='graph-canvas-header'>",
+                "<div class='graph-toolbar'>",
+                "<button type='button' id='graph-zoom-in'>Zoom in</button>",
+                "<button type='button' id='graph-zoom-out'>Zoom out</button>",
+                "<button type='button' id='graph-recenter'>Recenter</button>",
+                (
+                    f"<a href='{escape(controls['expand_path'])}' id='graph-expand'>Expand graph</a>"
+                    if controls.get("can_expand") and controls.get("expand_path")
+                    else "<span class='pill'>Fully expanded for current bound</span>"
+                ),
+                f"<label class='muted'>Edges <select id='graph-filter'>{filter_options}</select></label>",
+                "</div></div>",
+                "<div class='graph-layout'>",
+                "<div class='graph-stage-wrap'>",
+                "<svg id='graph-stage' class='graph-stage' viewBox='-900 -700 1800 1400' role='img' aria-label='Research graph canvas'>",
+                "<g id='graph-viewport'><g id='graph-edges'></g><g id='graph-nodes'></g></g>",
+                "</svg></div>",
+                "<aside class='card graph-side'>",
+                "<h2 id='graph-side-title'>Selection</h2>",
+                "<p id='graph-side-subtitle' class='muted'>Choose a node in the graph.</p>",
+                "<div id='graph-side-badges' class='link-row'></div>",
+                "<ul id='graph-side-summary' class='list-tight'></ul>",
+                "<dl id='graph-side-meta' class='meta-list'></dl>",
+                "<div id='graph-side-actions' class='link-row'></div>",
+                "</aside></div></section></section>",
+                f"<script id='graph-payload' type='application/json'>{payload_json}</script>",
+                """
+<script>
+(() => {
+  const payload = JSON.parse(document.getElementById('graph-payload').textContent);
+  const svg = document.getElementById('graph-stage');
+  const viewport = document.getElementById('graph-viewport');
+  const edgesLayer = document.getElementById('graph-edges');
+  const nodesLayer = document.getElementById('graph-nodes');
+  const state = { scale: 1, tx: 0, ty: 0, dragging: false, dragX: 0, dragY: 0, selectedId: payload.default_selection_id || "" };
+  const nodeMap = new Map(payload.nodes.map((node) => [node.id, node]));
+
+  const tonePalette = {
+    attention: { fill: '#f7c4bf', stroke: '#9f4f24' },
+    active: { fill: '#f4dfd2', stroke: '#9f4f24' },
+    reference: { fill: '#ece7e0', stroke: '#71675d' },
+    center: { fill: '#f6e8a4', stroke: '#8a6f00' },
+    neutral: { fill: '#ffffff', stroke: '#71675d' },
+    strong: { fill: '#dde9ff', stroke: '#315da8' },
+    medium: { fill: '#eef2ff', stroke: '#4b63a6' },
+    light: { fill: '#f6f7fb', stroke: '#7a8091' }
+  };
+
+  function applyTransform() {
+    viewport.setAttribute('transform', `translate(${state.tx} ${state.ty}) scale(${state.scale})`);
+  }
+
+  function clear(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+  }
+
+  function makeSvg(tag, attrs = {}) {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value));
+    return el;
+  }
+
+  function updateSidePanel(node) {
+    const title = document.getElementById('graph-side-title');
+    const subtitle = document.getElementById('graph-side-subtitle');
+    const badges = document.getElementById('graph-side-badges');
+    const summary = document.getElementById('graph-side-summary');
+    const meta = document.getElementById('graph-side-meta');
+    const actions = document.getElementById('graph-side-actions');
+    title.textContent = node?.detail?.title || 'Selection';
+    subtitle.textContent = node?.detail?.subtitle || 'Choose a node in the graph.';
+    badges.innerHTML = '';
+    summary.innerHTML = '';
+    meta.innerHTML = '';
+    actions.innerHTML = '';
+    (node?.badges || []).forEach((item) => {
+      const span = document.createElement('span');
+      span.className = 'pill';
+      span.textContent = item;
+      badges.appendChild(span);
+    });
+    const summaryLines = node?.detail?.summary_lines || [];
+    if (!summaryLines.length) {
+      const li = document.createElement('li');
+      li.className = 'graph-empty';
+      li.textContent = 'No additional summary for this node.';
+      summary.appendChild(li);
+    } else {
+      summaryLines.forEach((line) => {
+        const li = document.createElement('li');
+        li.textContent = line;
+        summary.appendChild(li);
+      });
+    }
+    (node?.detail?.meta_rows || []).forEach((line) => {
+      const wrap = document.createElement('div');
+      const dt = document.createElement('dt');
+      const dd = document.createElement('dd');
+      const parts = String(line).split(':');
+      dt.textContent = parts.length > 1 ? parts.shift() : 'Info';
+      dd.textContent = parts.length > 0 ? parts.join(':').trim() : String(line);
+      wrap.appendChild(dt);
+      wrap.appendChild(dd);
+      meta.appendChild(wrap);
+    });
+    (node?.detail?.actions || []).forEach((item) => {
+      const link = document.createElement('a');
+      link.href = item.path;
+      link.textContent = item.label;
+      actions.appendChild(link);
+    });
+  }
+
+  function selectNode(nodeId) {
+    state.selectedId = nodeId;
+    render();
+  }
+
+  function render() {
+    clear(edgesLayer);
+    clear(nodesLayer);
+    payload.edges.forEach((edge) => {
+      const source = nodeMap.get(edge.source);
+      const target = nodeMap.get(edge.target);
+      if (!source || !target) return;
+      const line = makeSvg('line', {
+        x1: source.x,
+        y1: source.y,
+        x2: target.x,
+        y2: target.y,
+        stroke: edge.edge_type === 'contradiction' ? '#c0504d' : edge.edge_type === 'bridge' ? '#315da8' : '#c7beb2',
+        'stroke-width': edge.edge_type === 'bridge' ? 3 : 2,
+        'stroke-dasharray': edge.edge_type === 'bridge' ? '8 6' : '',
+        opacity: state.scale < 0.55 ? 0.35 : 0.85
+      });
+      edgesLayer.appendChild(line);
+      if (state.scale >= 0.8) {
+        const label = makeSvg('text', {
+          x: (source.x + target.x) / 2,
+          y: (source.y + target.y) / 2 - 8,
+          class: 'graph-edge-label'
+        });
+        label.textContent = edge.label;
+        edgesLayer.appendChild(label);
+      }
+    });
+    payload.nodes.forEach((node) => {
+      const group = makeSvg('g', { transform: `translate(${node.x} ${node.y})`, tabindex: 0 });
+      const palette = tonePalette[node.tone] || tonePalette.neutral;
+      const selected = node.id === state.selectedId;
+      const shape = (node.node_type === 'cluster' || node.node_type === 'cluster_root' || node.node_type === 'related_cluster')
+        ? makeSvg('rect', {
+            x: -node.size,
+            y: -node.size * 0.55,
+            rx: 18,
+            ry: 18,
+            width: node.size * 2,
+            height: node.size * 1.1,
+            fill: palette.fill,
+            stroke: selected ? '#1f1a17' : palette.stroke,
+            'stroke-width': selected ? 4 : 2
+          })
+        : makeSvg('circle', {
+            cx: 0,
+            cy: 0,
+            r: node.size,
+            fill: palette.fill,
+            stroke: selected ? '#1f1a17' : palette.stroke,
+            'stroke-width': selected ? 4 : 2
+          });
+      group.appendChild(shape);
+      if (state.scale >= 0.45) {
+        const label = makeSvg('text', { x: 0, y: 4, class: 'graph-node-label' });
+        label.textContent = node.label;
+        group.appendChild(label);
+      }
+      if (state.scale >= 0.85 && node.secondary_label) {
+        const secondary = makeSvg('text', { x: 0, y: node.size + 20, class: 'graph-node-secondary' });
+        secondary.textContent = node.secondary_label;
+        group.appendChild(secondary);
+      }
+      group.addEventListener('click', () => selectNode(node.id));
+      group.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          selectNode(node.id);
+        }
+      });
+      nodesLayer.appendChild(group);
+    });
+    updateSidePanel(nodeMap.get(state.selectedId));
+    applyTransform();
+  }
+
+  function zoom(delta) {
+    state.scale = Math.max(0.35, Math.min(2.6, state.scale + delta));
+    render();
+  }
+
+  svg.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    zoom(event.deltaY < 0 ? 0.12 : -0.12);
+  });
+  svg.addEventListener('mousedown', (event) => {
+    state.dragging = true;
+    state.dragX = event.clientX;
+    state.dragY = event.clientY;
+    svg.classList.add('dragging');
+  });
+  window.addEventListener('mousemove', (event) => {
+    if (!state.dragging) return;
+    state.tx += event.clientX - state.dragX;
+    state.ty += event.clientY - state.dragY;
+    state.dragX = event.clientX;
+    state.dragY = event.clientY;
+    applyTransform();
+  });
+  window.addEventListener('mouseup', () => {
+    state.dragging = false;
+    svg.classList.remove('dragging');
+  });
+  document.getElementById('graph-zoom-in').addEventListener('click', () => zoom(0.15));
+  document.getElementById('graph-zoom-out').addEventListener('click', () => zoom(-0.15));
+  document.getElementById('graph-recenter').addEventListener('click', () => {
+    state.scale = 1;
+    state.tx = 0;
+    state.ty = 0;
+    render();
+  });
+  document.getElementById('graph-filter').addEventListener('change', (event) => {
+    const next = new URL(window.location.href);
+    if (event.target.value === 'all') next.searchParams.delete('edge_filter');
+    else next.searchParams.set('edge_filter', event.target.value);
+    window.location.href = next.toString();
+  });
+  render();
+})();
+</script>
+""",
+            ]
         ),
         requested_pack=requested_pack,
     )
@@ -2957,6 +3293,43 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                         return
                     payload = build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_clusters_page(payload))
+                    return
+                if path == "/api/graph":
+                    pack_name = query.get("pack", [""])[0] or None
+                    cluster_id = query.get("cluster_id", [""])[0] or None
+                    object_id = query.get("object_id", [""])[0] or None
+                    expand = query.get("expand", ["0"])[0] or "0"
+                    edge_filter = query.get("edge_filter", ["all"])[0] or "all"
+                    if self._guard_research_route(pack_name=pack_name, route_path="/graph", api=True):
+                        return
+                    self._write_json(
+                        build_graph_canvas_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            cluster_id=cluster_id,
+                            object_id=object_id,
+                            expand=expand,
+                            edge_filter=edge_filter,
+                        )
+                    )
+                    return
+                if path == "/graph":
+                    pack_name = query.get("pack", [""])[0] or None
+                    cluster_id = query.get("cluster_id", [""])[0] or None
+                    object_id = query.get("object_id", [""])[0] or None
+                    expand = query.get("expand", ["0"])[0] or "0"
+                    edge_filter = query.get("edge_filter", ["all"])[0] or "all"
+                    if self._guard_research_route(pack_name=pack_name, route_path="/graph", api=False):
+                        return
+                    payload = build_graph_canvas_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        cluster_id=cluster_id,
+                        object_id=object_id,
+                        expand=expand,
+                        edge_filter=edge_filter,
+                    )
+                    self._write_html(_render_graph_page(payload))
                     return
                 if path == "/api/cluster":
                     cluster_id = self._required(query, "id")

@@ -655,6 +655,80 @@ date: 2026-04-13
     assert payload["top_mocs"][0]["slug"] == "atlas-index"
 
 
+def test_build_graph_canvas_payload_cluster_overview(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_graph_canvas_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_graph_canvas_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["screen"] == "graph/canvas"
+    assert payload["scope"] == "clusters"
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["nodes"]
+    assert payload["nodes"][0]["detail"]["actions"]
+    assert payload["controls"]["edge_filter_items"]
+    assert payload["entry_links"][0]["path"].startswith("/clusters")
+
+
+def test_build_graph_canvas_payload_cluster_scope(temp_vault):
+    from openclaw_pipeline.truth_api import list_graph_clusters
+    from openclaw_pipeline.ui.view_models import build_graph_canvas_payload
+
+    _seed_truth_store(temp_vault)
+    cluster = list_graph_clusters(temp_vault)[0]
+
+    payload = build_graph_canvas_payload(
+        temp_vault,
+        pack_name=cluster["pack"],
+        cluster_id=cluster["cluster_id"],
+    )
+
+    assert payload["scope"] == "cluster"
+    assert payload["default_selection_id"].startswith("cluster-root:")
+    assert any(node["node_type"] == "cluster_root" for node in payload["nodes"])
+    assert any(node["node_type"] == "object" for node in payload["nodes"])
+    assert payload["controls"]["edge_filter_items"]
+    assert payload["entry_links"][0]["path"].startswith("/cluster?id=")
+
+
+def test_build_graph_canvas_payload_object_scope(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_graph_canvas_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_graph_canvas_payload(
+        temp_vault,
+        pack_name="default-knowledge",
+        object_id="alpha",
+    )
+
+    assert payload["scope"] == "object"
+    assert payload["default_selection_id"] == "object:alpha"
+    assert payload["nodes"][0]["detail"]["actions"][0]["path"].startswith("/object?id=alpha")
+    assert payload["controls"]["edge_filter_items"][0]["value"] == "all"
+
+
+def test_build_object_page_payload_includes_graph_link(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_object_page_payload(temp_vault, "alpha", pack_name="default-knowledge")
+
+    assert payload["links"]["graph_path"] == "/graph?object_id=alpha&pack=default-knowledge"
+
+
+def test_build_topic_overview_payload_includes_graph_link(temp_vault):
+    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+
+    _seed_truth_store(temp_vault)
+
+    payload = build_topic_overview_payload(temp_vault, "alpha", pack_name="default-knowledge")
+
+    assert payload["links"]["graph_path"] == "/graph?object_id=alpha&pack=default-knowledge"
+
+
 def test_build_cluster_detail_payload_filters_relevant_contradictions_before_slicing(
     temp_vault,
     monkeypatch,
