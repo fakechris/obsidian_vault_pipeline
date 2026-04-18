@@ -1958,6 +1958,11 @@ Processed source note with no downstream chain.
     assert contradiction["source_path"].endswith("pack=research-tech")
     assert contradiction["downstream_effects"]
     assert contradiction["recommended_action"]["executable"] is True
+    assert contradiction["recommended_action"]["resolution_kind"] == "review_mutation"
+    assert contradiction["recommended_action"]["dispatch_mode"] == "direct"
+    assert contradiction["recommended_action"]["resolver_rule_name"] == "review_contradiction"
+    assert contradiction["recommended_action"]["governance_provider_name"] == "research_governance"
+    assert contradiction["recommended_action"]["governance_provider_pack"] == "research-tech"
     stale = next(item for item in items if item["signal_type"] == "stale_summary")
     assert stale["object_ids"] == ["thin-note"]
     assert stale["source_path"] == "/summaries?q=thin-note&pack=research-tech"
@@ -2063,13 +2068,63 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
     assert source_signal["recommended_action"]["kind"] == "deep_dive_workflow"
     assert source_signal["recommended_action"]["label"] == "Create deep dive"
     assert source_signal["recommended_action"]["executable"] is False
+    assert source_signal["recommended_action"]["resolution_kind"] == "focused_action"
+    assert source_signal["recommended_action"]["dispatch_mode"] == "queue_only"
+    assert source_signal["recommended_action"]["resolver_rule_name"] == "deep_dive_workflow"
+    assert source_signal["recommended_action"]["governance_provider_name"] == "research_governance"
+    assert source_signal["recommended_action"]["governance_provider_pack"] == "research-tech"
+    assert source_signal["recommended_action"]["safe_to_run"] is True
     assert source_signal["recommended_action"]["queue_status"] == "queued"
     assert source_signal["recommended_action"]["action_id"]
     assert deep_dive_signal["recommended_action"]["kind"] == "object_extraction_workflow"
     assert deep_dive_signal["recommended_action"]["label"] == "Extract evergreen objects"
     assert deep_dive_signal["recommended_action"]["executable"] is False
+    assert deep_dive_signal["recommended_action"]["resolution_kind"] == "focused_action"
+    assert deep_dive_signal["recommended_action"]["dispatch_mode"] == "queue_only"
+    assert deep_dive_signal["recommended_action"]["resolver_rule_name"] == "object_extraction_workflow"
+    assert deep_dive_signal["recommended_action"]["governance_provider_name"] == "research_governance"
+    assert deep_dive_signal["recommended_action"]["governance_provider_pack"] == "research-tech"
+    assert deep_dive_signal["recommended_action"]["safe_to_run"] is True
     assert deep_dive_signal["recommended_action"]["queue_status"] == "queued"
     assert deep_dive_signal["recommended_action"]["action_id"]
+
+
+def test_truth_api_auto_queue_signal_types_follow_governance_contract():
+    from openclaw_pipeline import truth_api
+
+    assert truth_api._auto_queue_signal_types_for_pack("research-tech") == {
+        "source_needs_deep_dive",
+        "deep_dive_needs_objects",
+    }
+    assert truth_api._auto_queue_signal_types_for_pack("default-knowledge") == {
+        "source_needs_deep_dive",
+        "deep_dive_needs_objects",
+    }
+
+
+def test_truth_api_auto_queue_signal_types_respect_explicit_opt_out(monkeypatch):
+    from openclaw_pipeline import truth_api
+    from openclaw_pipeline.packs.base import GovernanceSpec, SignalRuleSpec
+
+    monkeypatch.setattr(
+        truth_api,
+        "list_effective_governance_specs",
+        lambda *, pack_name: [
+            GovernanceSpec(
+                name="opt_out_governance",
+                pack="opt-out-pack",
+                signal_rules=[
+                    SignalRuleSpec(
+                        signal_type="source_needs_deep_dive",
+                        description="Explicitly not auto-queued.",
+                        auto_queue=False,
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert truth_api._auto_queue_signal_types_for_pack("opt-out-pack") == set()
 
 
 def test_truth_api_backfills_active_auto_queue_signals_without_duplicates(temp_vault):
@@ -2150,6 +2205,8 @@ Processed source note without downstream chain.
     action = next(item for item in list_action_queue(vault) if item["action_kind"] == "deep_dive_workflow")
 
     assert action["safe_to_run"] is True
+    assert action["resolution_kind"] == "focused_action"
+    assert action["dispatch_mode"] == "queue_only"
     assert action["processor_mode"] == "llm_structured"
     assert action["processor_inputs"] == ["source_note"]
     assert action["processor_outputs"] == ["deep_dive"]
@@ -2185,6 +2242,8 @@ def test_truth_api_list_action_queue_backfills_execution_contract_metadata_for_l
 
     action = list_action_queue(temp_vault)[0]
 
+    assert action["resolution_kind"] == "focused_action"
+    assert action["dispatch_mode"] == "queue_only"
     assert action["processor_mode"] == "llm_structured"
     assert action["processor_inputs"] == ["source_note"]
     assert action["processor_outputs"] == ["deep_dive"]
@@ -2687,6 +2746,9 @@ Processed source note without any derived deep dive.
     assert first["action"]["action_id"] == second["action"]["action_id"]
     assert len(actions) == 1
     assert actions[0]["status"] == "queued"
+    assert actions[0]["resolver_rule_name"] == "deep_dive_workflow"
+    assert actions[0]["governance_provider_name"] == "research_governance"
+    assert actions[0]["governance_provider_pack"] == "research-tech"
     assert refreshed_signal["recommended_action"]["queue_status"] == "queued"
     assert refreshed_signal["recommended_action"]["action_id"] == actions[0]["action_id"]
 

@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from ..assembly_recipe_registry import describe_assembly_recipe_contract
+from ..governance_registry import describe_governance_contract
 from ..observation_surface_registry import describe_observation_surface_contract
 from ..pack_resolution import iter_compatible_packs
 from ..packs.loader import PRIMARY_PACK_NAME
@@ -63,6 +65,10 @@ def _supports_research_shell(pack_name: str | None = None) -> bool:
         return any(pack.name == PRIMARY_PACK_NAME for pack in iter_compatible_packs(pack_name))
     except ValueError:
         return False
+
+
+def _assembly_contract(recipe_name: str, *, pack_name: str | None = None) -> dict[str, str]:
+    return describe_assembly_recipe_contract(pack_name=pack_name, recipe_name=recipe_name)
 
 
 def _db_path(vault_dir: Path | str) -> Path:
@@ -811,6 +817,7 @@ def build_signal_browser_payload(
     query: str | None = None,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
+    governance_contract = describe_governance_contract(pack_name=pack_name)
     surface_contract = describe_observation_surface_contract(
         pack_name=pack_name,
         surface_kind="signals",
@@ -820,6 +827,7 @@ def build_signal_browser_payload(
             "screen": "signals/browser",
             "requested_pack": requested_pack,
             "surface_contract": surface_contract,
+            "governance_contract": governance_contract,
             "surface_error": (
                 f"Pack '{surface_contract['requested_pack']}' does not expose a shared shell "
                 f"'signals' surface."
@@ -836,6 +844,7 @@ def build_signal_browser_payload(
         "screen": "signals/browser",
         "requested_pack": requested_pack,
         "surface_contract": surface_contract,
+        "governance_contract": governance_contract,
         "items": items,
         "count": len(items),
         "query": query or "",
@@ -857,6 +866,7 @@ def build_action_queue_payload(
     return {
         "screen": "actions/browser",
         "requested_pack": requested_pack,
+        "governance_contract": describe_governance_contract(pack_name=pack_name),
         "items": items,
         "count": len(items),
         "query": query or "",
@@ -880,11 +890,15 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         pack_name=pack_name,
         surface_kind="briefing",
     )
+    assembly_contract = _assembly_contract("operator_briefing", pack_name=pack_name)
+    governance_contract = describe_governance_contract(pack_name=pack_name)
     if surface_contract["status"] == "missing":
         return {
             "screen": "briefing/intelligence",
             "requested_pack": requested_pack,
             "surface_contract": surface_contract,
+            "assembly_contract": assembly_contract,
+            "governance_contract": governance_contract,
             "surface_error": (
                 f"Pack '{surface_contract['requested_pack']}' does not expose a shared shell "
                 f"'briefing' surface."
@@ -915,6 +929,8 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         "screen": "briefing/intelligence",
         "requested_pack": requested_pack,
         "surface_contract": surface_contract,
+        "assembly_contract": assembly_contract,
+        "governance_contract": governance_contract,
         **get_briefing_snapshot(vault_dir, pack_name=pack_name),
     }
 
@@ -985,6 +1001,7 @@ def build_object_page_payload(
     return {
         "screen": "object/page",
         "requested_pack": requested_pack,
+        "assembly_contract": _assembly_contract("object_brief", pack_name=pack_name),
         "research_shell_enabled": research_shell_enabled,
         **detail,
         "production_chain": get_object_traceability(vault_dir, object_id, pack_name=pack_name),
@@ -1117,6 +1134,7 @@ def build_topic_overview_payload(
     return {
         "screen": "overview/topic",
         "requested_pack": requested_pack,
+        "assembly_contract": _assembly_contract("topic_overview", pack_name=pack_name),
         "research_shell_enabled": research_shell_enabled,
         **neighborhood,
         "neighbors": neighbors,
@@ -1254,6 +1272,7 @@ def build_event_dossier_payload(
     return {
         "screen": "event/dossier",
         "requested_pack": requested_pack,
+        "assembly_contract": _assembly_contract("event_dossier", pack_name=pack_name),
         "events": events,
         "event_count": len(events),
         "cluster_count": sum(len(section["clusters"]) for section in cluster_sections),
@@ -2243,6 +2262,7 @@ def build_contradiction_browser_payload(
     return {
         "screen": "truth/contradictions",
         "requested_pack": requested_pack,
+        "assembly_contract": _assembly_contract("contradiction_view", pack_name=pack_name),
         "items": items,
         "count": len(items),
         "open_count": status_counts.get("open", 0),

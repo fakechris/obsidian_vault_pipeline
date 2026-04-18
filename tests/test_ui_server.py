@@ -308,6 +308,11 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/atlas?pack=default-knowledge"' in body
     assert 'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
+    assert "Assembly Contract" in body
+    assert "inherited from object_brief in research-tech" in body
+    assert "Source contract: wiki_view · object/page" in body
+    assert "Source provider: default-knowledge · object/page" in body
+    assert "Source contract: wiki_view · object/page" in body
 
 
 def test_ui_server_note_page_preserves_pack_scope_in_shell_nav(temp_vault):
@@ -455,6 +460,31 @@ def test_ui_server_contradictions_endpoint_accepts_pack_scope(temp_vault):
     assert payload["requested_pack"] == "default-knowledge"
 
 
+def test_ui_server_contradictions_page_renders_assembly_contract(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/contradictions?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Assembly Contract" in body
+    assert "inherited from contradiction_view in research-tech" in body
+    assert "Source contract: wiki_view · truth/contradictions" in body
+    assert "Source provider: default-knowledge · truth/contradictions" in body
+
+
 def test_ui_server_signals_endpoint_returns_payload(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
@@ -511,6 +541,9 @@ def test_ui_server_signals_endpoint_accepts_pack_scope(temp_vault):
 
     assert response.status == 200
     assert payload["requested_pack"] == "default-knowledge"
+    assert payload["governance_contract"]["status"] == "inherited"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["provider_name"] == "research_governance"
 
 
 def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
@@ -773,6 +806,10 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/atlas?pack=default-knowledge"' in body
     assert 'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
+    assert "Assembly Contract" in body
+    assert "inherited from event_dossier in research-tech" in body
+    assert "Source contract: wiki_view · event/dossier" in body
+    assert "Source provider: default-knowledge · event/dossier" in body
 
 
 def test_ui_server_atlas_endpoint_accepts_pack_scope(temp_vault):
@@ -1390,6 +1427,11 @@ def test_ui_server_briefing_endpoint_accepts_pack_scope(temp_vault):
 
     assert response.status == 200
     assert payload["requested_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["status"] == "inherited"
+    assert payload["assembly_contract"]["provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["status"] == "inherited"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["provider_name"] == "research_governance"
 
 
 def test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav(temp_vault):
@@ -1414,6 +1456,98 @@ def test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/clusters?pack=default-knowledge"' in body
     assert "inherited from research-tech-briefing" in body
+    assert "inherited from operator_briefing in research-tech" in body
+    assert "Source contract: observation_surface · briefing" in body
+    assert "Source provider: research-tech · research-tech-briefing" in body
+    assert "Governance Contract" in body
+    assert "inherited from research_governance in research-tech" in body
+
+
+def test_ui_server_briefing_page_renders_governance_resolver_metadata(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_briefing_payload",
+        lambda vault_dir, *, pack_name=None: {
+            "screen": "briefing/dashboard",
+            "requested_pack": pack_name or "",
+            "surface_contract": {
+                "surface_kind": "briefing",
+                "requested_pack": pack_name or "",
+                "status": "declared",
+                "provider_pack": "research-tech",
+                "provider_name": "research-tech-briefing",
+                "description": "Briefing surface",
+            },
+            "governance_contract": {
+                "requested_pack": pack_name or "",
+                "status": "declared",
+                "provider_pack": "research-tech",
+                "provider_name": "research_governance",
+                "description": "Governance contract",
+                "review_queue_count": 2,
+                "signal_rule_count": 3,
+                "resolver_rule_count": 4,
+                "review_queue_names": ["contradictions", "stale-summaries"],
+                "signal_rule_names": ["source_needs_deep_dive"],
+                "resolver_rule_names": ["deep_dive_workflow"],
+            },
+            "generated_at": "2026-04-17T00:00:00Z",
+            "recent_signal_count": 1,
+            "unresolved_issue_count": 1,
+            "first_useful_sign": None,
+            "insights": [],
+            "priority_items": [
+                {
+                    "kind": "source_needs_deep_dive",
+                    "path": "/note?path=50-Inbox%2F03-Processed%2FLoose%20Source.md",
+                    "title": "Loose Source",
+                    "detail": "Processed source note has no derived deep dive yet.",
+                    "signal_id": "signal::demo",
+                    "recommended_action": {
+                        "kind": "deep_dive_workflow",
+                        "label": "Create deep dive",
+                        "path": "/note?path=50-Inbox%2F03-Processed%2FLoose%20Source.md",
+                        "executable": False,
+                        "resolution_kind": "focused_action",
+                        "dispatch_mode": "queue_only",
+                        "resolver_rule_name": "deep_dive_workflow",
+                        "governance_provider_name": "research_governance",
+                        "governance_provider_pack": "research-tech",
+                        "safe_to_run": True,
+                    },
+                }
+            ],
+            "recent_signals": [],
+            "unresolved_issues": [],
+            "changed_objects": [],
+            "active_topics": [],
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/briefing")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Resolver: focused_action" in body
+    assert "Dispatch: queue_only" in body
+    assert "Rule: deep_dive_workflow" in body
+    assert "Governance contract: research_governance · research-tech" in body
+    assert "Governance Contract" in body
+    assert "declared by research_governance in research-tech" in body
 
 
 def test_ui_server_can_enqueue_signal_action_via_api(temp_vault):
@@ -1530,6 +1664,19 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
         lambda vault_dir, *, pack_name=None, status=None, query=None: {
             "screen": "actions/browser",
             "requested_pack": pack_name or "",
+            "governance_contract": {
+                "requested_pack": pack_name or "",
+                "status": "declared",
+                "provider_pack": "research-tech",
+                "provider_name": "research_governance",
+                "description": "Governance contract",
+                "review_queue_count": 2,
+                "signal_rule_count": 3,
+                "resolver_rule_count": 4,
+                "review_queue_names": ["contradictions", "stale-summaries"],
+                "signal_rule_names": ["source_needs_deep_dive"],
+                "resolver_rule_names": ["deep_dive_workflow"],
+            },
             "items": [
                 {
                     "action_id": "action::demo",
@@ -1541,6 +1688,11 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
                     "retry_count": 0,
                     "failure_bucket": "",
                     "safe_to_run": True,
+                    "resolution_kind": "focused_action",
+                    "dispatch_mode": "queue_only",
+                    "resolver_rule_name": "deep_dive_workflow",
+                    "governance_provider_name": "research_governance",
+                    "governance_provider_pack": "research-tech",
                     "processor_mode": "llm_structured",
                     "processor_inputs": ["source_note"],
                     "processor_outputs": ["deep_dive"],
@@ -1572,10 +1724,101 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
         thread.join(timeout=5)
 
     assert response.status == 200
+    assert "Resolver: focused_action" in body
+    assert "Dispatch: queue_only" in body
+    assert "Rule: deep_dive_workflow" in body
+    assert "Governance contract: research_governance · research-tech" in body
     assert "Processor: llm_structured" in body
     assert "Inputs: source_note" in body
     assert "Outputs: deep_dive" in body
     assert "Quality hooks: quality" in body
+    assert "Governance Contract" in body
+    assert "declared by research_governance in research-tech" in body
+
+
+def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_signal_browser_payload",
+        lambda vault_dir, *, pack_name=None, signal_type=None, query=None: {
+            "screen": "signals/browser",
+            "requested_pack": pack_name or "",
+            "surface_contract": {
+                "surface_kind": "signals",
+                "requested_pack": pack_name or "",
+                "status": "declared",
+                "provider_pack": "research-tech",
+                "provider_name": "research-tech-signals",
+                "description": "Signal browser",
+            },
+            "governance_contract": {
+                "requested_pack": pack_name or "",
+                "status": "declared",
+                "provider_pack": "research-tech",
+                "provider_name": "research_governance",
+                "description": "Governance contract",
+                "review_queue_count": 2,
+                "signal_rule_count": 3,
+                "resolver_rule_count": 4,
+                "review_queue_names": ["contradictions", "stale-summaries"],
+                "signal_rule_names": ["source_needs_deep_dive"],
+                "resolver_rule_names": ["deep_dive_workflow"],
+            },
+            "items": [
+                {
+                    "signal_id": "signal::demo",
+                    "signal_type": "source_needs_deep_dive",
+                    "title": "Loose Source",
+                    "detail": "Processed source note has no derived deep dive yet.",
+                    "source_path": "/note?path=50-Inbox%2F03-Processed%2FLoose%20Source.md",
+                    "downstream_effects": [],
+                    "recommended_action": {
+                        "kind": "deep_dive_workflow",
+                        "label": "Create deep dive",
+                        "path": "/note?path=50-Inbox%2F03-Processed%2FLoose%20Source.md",
+                        "executable": False,
+                        "resolution_kind": "focused_action",
+                        "dispatch_mode": "queue_only",
+                        "resolver_rule_name": "deep_dive_workflow",
+                        "governance_provider_name": "research_governance",
+                        "governance_provider_pack": "research-tech",
+                        "safe_to_run": True,
+                    },
+                }
+            ],
+            "count": 1,
+            "query": query or "",
+            "signal_type": signal_type or "",
+            "type_counts": {"source_needs_deep_dive": 1},
+            "signal_type_explanations": {"source_needs_deep_dive": "demo"},
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/signals")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Resolver: focused_action" in body
+    assert "Dispatch: queue_only" in body
+    assert "Rule: deep_dive_workflow" in body
+    assert "Governance contract: research_governance · research-tech" in body
+    assert "safe" in body
+    assert "Governance Contract" in body
+    assert "declared by research_governance in research-tech" in body
 
 
 def test_ui_server_actions_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
@@ -1591,12 +1834,38 @@ def test_ui_server_actions_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
         return {
             "screen": "actions/browser",
             "requested_pack": pack_name or "",
-            "items": [],
+            "governance_contract": {
+                "requested_pack": pack_name or "",
+                "status": "inherited",
+                "provider_pack": "research-tech",
+                "provider_name": "research_governance",
+                "description": "Governance contract",
+                "review_queue_count": 2,
+                "signal_rule_count": 3,
+                "resolver_rule_count": 4,
+                "review_queue_names": ["contradictions", "stale-summaries"],
+                "signal_rule_names": ["source_needs_deep_dive"],
+                "resolver_rule_names": ["deep_dive_workflow"],
+            },
+            "items": [
+                {
+                    "action_id": "action::demo",
+                    "status": "queued",
+                    "action_kind": "deep_dive_workflow",
+                    "title": "Create deep dive",
+                    "safe_to_run": True,
+                    "resolution_kind": "focused_action",
+                    "dispatch_mode": "queue_only",
+                    "resolver_rule_name": "deep_dive_workflow",
+                    "governance_provider_name": "research_governance",
+                    "governance_provider_pack": "research-tech",
+                }
+            ],
             "count": 0,
             "query": query or "",
             "status": status or "",
-            "status_counts": {},
-            "queued_safe_count": 0,
+            "status_counts": {"queued": 1},
+            "queued_safe_count": 1,
             "failed_count": 0,
             "failure_buckets": {},
         }
@@ -1624,6 +1893,218 @@ def test_ui_server_actions_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
         "query": "alpha",
     }
     assert payload["requested_pack"] == "default-knowledge"
+    assert payload["governance_contract"]["status"] == "inherited"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["provider_name"] == "research_governance"
+    assert payload["items"][0]["resolver_rule_name"] == "deep_dive_workflow"
+    assert payload["items"][0]["governance_provider_name"] == "research_governance"
+    assert payload["items"][0]["governance_provider_pack"] == "research-tech"
+
+
+def test_ui_server_briefing_endpoint_preserves_contract_metadata(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_briefing_payload",
+        lambda vault_dir, *, pack_name=None: {
+            "screen": "briefing/intelligence",
+            "requested_pack": pack_name or "",
+            "surface_contract": {
+                "surface_kind": "briefing",
+                "requested_pack": pack_name or "",
+                "status": "inherited",
+                "provider_pack": "research-tech",
+                "provider_name": "research-tech-briefing",
+                "description": "Briefing surface",
+            },
+            "assembly_contract": {
+                "recipe_name": "operator_briefing",
+                "requested_pack": pack_name or "",
+                "status": "inherited",
+                "provider_pack": "research-tech",
+                "provider_name": "operator_briefing",
+                "recipe_kind": "operator_briefing",
+                "description": "Operator briefing recipe",
+                "source_contract_kind": "observation_surface",
+                "source_contract_name": "briefing",
+                "source_provider_pack": "research-tech",
+                "source_provider_name": "research-tech-briefing",
+                "source_status": "inherited",
+                "publish_target": "json_payload",
+                "output_mode": "json",
+            },
+            "governance_contract": {
+                "requested_pack": pack_name or "",
+                "status": "inherited",
+                "provider_pack": "research-tech",
+                "provider_name": "research_governance",
+                "description": "Governance contract",
+                "review_queue_count": 2,
+                "signal_rule_count": 3,
+                "resolver_rule_count": 4,
+                "review_queue_names": ["contradictions", "stale-summaries"],
+                "signal_rule_names": ["source_needs_deep_dive"],
+                "resolver_rule_names": ["deep_dive_workflow"],
+            },
+            "generated_at": "2026-04-17T00:00:00Z",
+            "recent_signal_count": 1,
+            "unresolved_issue_count": 0,
+            "changed_object_count": 0,
+            "active_topic_count": 0,
+            "recent_signals": [],
+            "unresolved_issues": [],
+            "changed_objects": [],
+            "active_topics": [],
+            "insight_count": 0,
+            "priority_item_count": 1,
+            "insights": [],
+            "priority_items": [
+                {
+                    "kind": "source_needs_deep_dive",
+                    "title": "Loose Source",
+                    "detail": "Processed source note has no derived deep dive yet.",
+                    "signal_id": "signal::demo",
+                    "recommended_action": {
+                        "kind": "deep_dive_workflow",
+                        "label": "Create deep dive",
+                        "path": "/note?path=50-Inbox%2F03-Processed%2FLoose%20Source.md",
+                        "executable": False,
+                        "resolution_kind": "focused_action",
+                        "dispatch_mode": "queue_only",
+                        "resolver_rule_name": "deep_dive_workflow",
+                        "governance_provider_name": "research_governance",
+                        "governance_provider_pack": "research-tech",
+                        "safe_to_run": True,
+                    },
+                }
+            ],
+            "first_useful_sign": None,
+            "queue_summary": {
+                "queued_count": 0,
+                "safe_queued_count": 0,
+                "running_count": 0,
+                "failed_count": 0,
+                "failure_buckets": {},
+            },
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/briefing?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["assembly_contract"]["status"] == "inherited"
+    assert payload["assembly_contract"]["provider_pack"] == "research-tech"
+    assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
+    assert payload["governance_contract"]["status"] == "inherited"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["priority_items"][0]["recommended_action"]["resolver_rule_name"] == "deep_dive_workflow"
+    assert (
+        payload["priority_items"][0]["recommended_action"]["governance_provider_name"]
+        == "research_governance"
+    )
+    assert (
+        payload["priority_items"][0]["recommended_action"]["governance_provider_pack"]
+        == "research-tech"
+    )
+
+
+def test_ui_server_signals_endpoint_preserves_contract_metadata(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_signal_browser_payload",
+        lambda vault_dir, *, pack_name=None, signal_type=None, query=None: {
+            "screen": "signals/browser",
+            "requested_pack": pack_name or "",
+            "surface_contract": {
+                "surface_kind": "signals",
+                "requested_pack": pack_name or "",
+                "status": "inherited",
+                "provider_pack": "research-tech",
+                "provider_name": "research-tech-signals",
+                "description": "Signal browser",
+            },
+            "governance_contract": {
+                "requested_pack": pack_name or "",
+                "status": "inherited",
+                "provider_pack": "research-tech",
+                "provider_name": "research_governance",
+                "description": "Governance contract",
+                "review_queue_count": 2,
+                "signal_rule_count": 3,
+                "resolver_rule_count": 4,
+                "review_queue_names": ["contradictions", "stale-summaries"],
+                "signal_rule_names": ["source_needs_deep_dive"],
+                "resolver_rule_names": ["deep_dive_workflow"],
+            },
+            "items": [
+                {
+                    "signal_id": "signal::demo",
+                    "signal_type": "source_needs_deep_dive",
+                    "title": "Loose Source",
+                    "detail": "Processed source note has no derived deep dive yet.",
+                    "source_path": "/note?path=50-Inbox%2F03-Processed%2FLoose%20Source.md",
+                    "downstream_effects": [],
+                    "recommended_action": {
+                        "kind": "deep_dive_workflow",
+                        "label": "Create deep dive",
+                        "path": "/note?path=50-Inbox%2F03-Processed%2FLoose%20Source.md",
+                        "executable": False,
+                        "resolution_kind": "focused_action",
+                        "dispatch_mode": "queue_only",
+                        "resolver_rule_name": "deep_dive_workflow",
+                        "governance_provider_name": "research_governance",
+                        "governance_provider_pack": "research-tech",
+                        "safe_to_run": True,
+                    },
+                }
+            ],
+            "count": 1,
+            "query": query or "",
+            "signal_type": signal_type or "",
+            "type_counts": {"source_needs_deep_dive": 1},
+            "signal_type_explanations": {"source_needs_deep_dive": "demo"},
+        },
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/signals?pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["governance_contract"]["status"] == "inherited"
+    assert payload["governance_contract"]["provider_pack"] == "research-tech"
+    assert payload["items"][0]["recommended_action"]["resolver_rule_name"] == "deep_dive_workflow"
+    assert payload["items"][0]["recommended_action"]["governance_provider_name"] == "research_governance"
+    assert payload["items"][0]["recommended_action"]["governance_provider_pack"] == "research-tech"
 
 
 def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, monkeypatch):
@@ -2209,6 +2690,10 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/summaries?pack=default-knowledge"' in body
+    assert "Assembly Contract" in body
+    assert "inherited from topic_overview in research-tech" in body
+    assert "Source contract: wiki_view · overview/topic" in body
+    assert "Source provider: default-knowledge · overview/topic" in body
 
 
 def test_render_object_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):

@@ -50,6 +50,9 @@ Pack 负责领域语义。
 Pack 定义：
 
 - 对象类型
+- artifact families
+- assembly recipes
+- governance contracts
 - schema
 - discovery 规则
 - absorb / refine 规则
@@ -190,6 +193,36 @@ ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic
 - doctor / verify
 - recipes
 - exportable compiled artifacts
+- inspectable artifact contracts
+- inspectable assembly/access contracts
+- inspectable governance/routing contracts
+
+其中 `ovp-export` 当前已经开始消费 pack 声明：
+
+- CLI target 先解析到 assembly recipe
+- assembly recipe 再解析到 source contract（当前是 wiki view）
+- compatibility pack 可以继承 recipe，但仍然使用自己声明的 view spec
+- access contract 现在会同时暴露：
+  - recipe provider
+  - source contract provider
+
+也就是说，compiled artifact export 不应该长期依赖 core 里的硬编码 target-to-view 表。
+
+同一套 assembly contract 现在也开始进入 UI access layer：
+
+- `object/page`
+- `overview/topic`
+- `event/dossier`
+- `truth/contradictions`
+- `briefing/intelligence`
+
+这些 payload 当前都会暴露 `assembly_contract`，shared shell 页面也会直接渲染 recipe provider、source contract、output mode。
+
+`ovp-doctor` 现在也会展示同一条链：
+
+- recipe provider
+- source contract kind/name
+- source contract provider
 
 对第三方 pack 来说，推荐优先提供 entry point；manifest 适合开发期和未安装场景。
 
@@ -253,6 +286,14 @@ Pack 可以定义领域逻辑，但不能破坏 core 的硬边界。
 
 1. 建立 OpenClaw 自己的领域扩展体系
 2. 让我们自己的媒体项目先按这套体系落地，逼出真实接口
+
+补充约束：
+
+- `AssemblyRecipeSpec` 负责解释 access artifact 是怎么被编译出来的
+- `GovernanceSpec` 负责解释 runtime/operator surface 为什么会出现某个 queue、signal、resolver path
+- 共享 UI shell 里的 `/signals`、`/actions`、`/briefing` 现在会显式渲染 `Governance Contract`
+- 具体的 recommended action / queued action 也会暴露它命中的 resolver rule 和 governance provider
+- pack 不只是在声明“能做什么”，也在声明“这些运行时行为为什么存在”
 
 也就是说：
 

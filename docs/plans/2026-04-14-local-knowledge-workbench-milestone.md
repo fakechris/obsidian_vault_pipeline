@@ -502,6 +502,29 @@ Use the `Architecture follow-up` closeout above as completed platform history. D
 The next-step order after that closeout starts at the next product phase rather than repeating:
 
 1. `Phase 17`
+2. `Phase 18`
+
+Reference plan:
+
+- [[2026-04-16-phase17-research-graph-visualization-plan]]
+- [[2026-04-17-phase18-knowledge-compiler-contract-consolidation-plan]]
+
+Relationship between them:
+
+- `Phase 17` is the graph-product follow-up on top of the completed graph substrate
+- `Phase 18` is the contract-consolidation follow-up that turns the current runtime pieces into explicit knowledge-compiler contracts
+  - current status: complete / ready to close
+
+Sequence rule:
+
+- do not reopen `Phase 16` runtime hardening inside `Phase 17`
+- let `Phase 17` finish the graph exploration surface
+- then let `Phase 18` consolidate:
+  - artifact contracts
+  - assembly contracts
+  - governance contracts
+
+This keeps product exploration and architecture consolidation from getting mixed into one oversized phase.
 
 Closeout:
 
@@ -518,6 +541,15 @@ Do **not** prioritize these before Milestones 3-5:
 - multi-user features,
 - heavy frontend rewrite,
 - speculative graph visualization for its own sake.
+
+Also do **not** treat every externally borrowed module as an immediate build track.
+
+Before `Phase 18` is complete, defer:
+
+- full temporal truth modeling,
+- harness/session memory backends,
+- heavyweight benchmark platforms,
+- broad onboarding/product-shell redesign beyond what the current product surface needs.
 
 Those are downstream, not current blockers.
 

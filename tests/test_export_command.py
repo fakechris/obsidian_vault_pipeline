@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 
 def _seed_truth_store(temp_vault):
@@ -103,6 +104,42 @@ def test_export_command_can_export_topic_overview(temp_vault, tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert payload["target"] == "topic-overview"
+    assert payload["recipe_name"] == "topic_overview"
+    assert payload["recipe_provider_pack"] == "research-tech"
+    assert payload["view_name"] == "overview/topic"
+    assert payload["view_provider_pack"] == "research-tech"
+    assert output_path.exists()
+    assert "# overview/topic" in output_path.read_text(encoding="utf-8")
+
+
+def test_export_command_can_use_inherited_assembly_recipe_for_compatibility_pack(
+    temp_vault, tmp_path, capsys
+):
+    from openclaw_pipeline.commands.export_artifact import main
+
+    _seed_truth_store(temp_vault)
+    output_path = tmp_path / "compat-topic.md"
+
+    exit_code = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--target",
+            "topic-overview",
+            "--output-path",
+            str(output_path),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["pack"] == "default-knowledge"
+    assert payload["recipe_name"] == "topic_overview"
+    assert payload["recipe_provider_pack"] == "research-tech"
+    assert payload["view_name"] == "overview/topic"
+    assert payload["view_provider_pack"] == "default-knowledge"
     assert output_path.exists()
     assert "# overview/topic" in output_path.read_text(encoding="utf-8")
 
@@ -176,6 +213,27 @@ def test_export_command_requires_object_id_for_object_page(temp_vault, tmp_path)
         assert exc.code == 2
     else:
         raise AssertionError("expected object-page export to require --object-id")
+
+
+def test_export_command_resolve_view_errors_when_source_provider_missing(monkeypatch):
+    from openclaw_pipeline.commands import export_artifact
+    from openclaw_pipeline.packs.loader import load_pack
+
+    pack = load_pack("research-tech")
+    recipe_provider_pack, recipe = export_artifact._resolve_export_recipe(pack, "topic-overview")
+
+    monkeypatch.setattr(
+        export_artifact,
+        "resolve_assembly_source_contract",
+        lambda *, pack_name, recipe: {
+            "source_provider_pack": "",
+            "source_provider_name": "",
+            "source_status": "missing",
+        },
+    )
+
+    with pytest.raises(ValueError, match="has no resolved wiki-view provider"):
+        export_artifact._resolve_export_view(pack, recipe_provider_pack, recipe)
 
 
 def test_export_command_handles_missing_contradictions_table(temp_vault, tmp_path, capsys):
