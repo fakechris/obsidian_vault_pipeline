@@ -175,10 +175,10 @@ def _get_version() -> str:
         pyproject = Path(__file__).parent.parent.parent / "pyproject.toml"
         if pyproject.exists():
             data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-            return data.get("project", {}).get("version", "0.3.2")
+            return data.get("project", {}).get("version", "0.8.14")
     except Exception:
         pass
-    return "0.3.2"
+    return "0.8.14"
 
 
 def _check_api_key() -> tuple[bool, str]:
