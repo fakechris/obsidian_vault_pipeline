@@ -111,6 +111,29 @@ def test_ui_server_root_accepts_pack_scope(temp_vault):
     assert "inherited from research-tech-production-chains" in body
 
 
+def test_ui_server_briefing_page_uses_orientation_title(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/briefing")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "<title>Orientation Brief</title>" in body
+    assert "<h1>Orientation Brief</h1>" in body
+
+
 def test_ui_server_objects_endpoint_returns_json(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
