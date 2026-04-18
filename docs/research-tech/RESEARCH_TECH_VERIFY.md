@@ -52,16 +52,22 @@ Inspect:
 
 ```bash
 ovp-export --pack research-tech --vault-dir /path/to/vault --target topic-overview --output-path /tmp/topic.md
+ovp-export --pack research-tech --vault-dir /path/to/vault --target orientation-brief --output-path /tmp/orientation.json
 ```
 
 Expected:
 
-- export completes
-- output file exists
-- content is a compiled markdown artifact, not a raw database dump
-- JSON payload includes both:
+- both exports complete
+- both output files exist
+- `topic-overview` is a compiled markdown artifact, not a raw database dump
+- `orientation-brief` is a compiled JSON artifact, not a raw observation snapshot
+- orientation JSON includes:
+  - `assembly_contract`
+  - stable `compiled_sections`
+  - `section_nav`
+- export metadata includes both:
   - the resolved assembly recipe name/provider pack
-  - the resolved wiki view name/provider pack
+  - the resolved source contract name/provider pack
 
 ## UI Contract Checks
 
@@ -71,6 +77,7 @@ ovp-ui --pack default-knowledge --vault-dir /path/to/vault --port 8787
 
 Inspect:
 
+- `/?pack=default-knowledge`
 - `/object?id=<object-id>&pack=default-knowledge`
 - `/topic?id=<object-id>&pack=default-knowledge`
 - `/events?pack=default-knowledge`
@@ -81,9 +88,20 @@ Inspect:
 
 Expected:
 
+- `/` renders a workbench entry surface with:
+  - `Where To Start`
+  - `Orientation Brief`
+  - `entry_sections`
 - shared shell pages keep the requested pack scope in links/forms
 - assembly contract card is visible on each page
 - governance contract card is visible on runtime/operator pages
+- `/briefing` behaves as an orientation product rather than a raw operator snapshot
+- object/topic/event/contradiction pages expose compiled sections for:
+  - current state
+  - why it matters
+  - evidence traceability
+  - open tensions
+  - where to go next
 - compatibility-pack pages show assembly recipe inheritance from `research-tech`
 - compatibility-pack pages also show when the source contract provider resolves to `default-knowledge`
 - compatibility-pack runtime pages show governance inheritance from `research-tech`
@@ -116,7 +134,7 @@ Expected:
 
 - `provider_pack` can stay `research-tech`
 - `source_provider_pack` can differ and resolve to `default-knowledge`
-- `operator_briefing` keeps both recipe provider and source provider on `research-tech`
+- `orientation_brief` keeps both recipe provider and source provider on `research-tech`
 - effective `governance_specs` stay inherited from `research-tech` for `default-knowledge`
 - shell governance summary also resolves as inherited from `research-tech`
 
@@ -133,6 +151,8 @@ Expected:
 - `/api/briefing` includes:
   - `assembly_contract`
   - `governance_contract`
+  - stable `compiled_sections`
+  - `section_nav`
   - item-level `recommended_action.resolver_rule_name`
   - item-level `recommended_action.governance_provider_*`
 - `/api/signals` includes:

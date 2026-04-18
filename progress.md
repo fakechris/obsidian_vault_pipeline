@@ -2,6 +2,32 @@
 
 ## Session: 2026-04-17
 
+### Phase 19: Orientation And Compiled Knowledge Products
+- **Status:** complete
+- Actions taken:
+  - Added a first-class `orientation_brief` assembly recipe to `research-tech`
+  - Extended `ovp-export` with an `orientation-brief` target that emits a compiled JSON entry product
+  - Turned `/briefing` into an orientation page with stable compiled sections and section navigation
+  - Added stable compiled-page sections to object/topic/event/contradiction payload builders
+  - Upgraded the workbench home `/` into an entry surface with `Where To Start`, `Orientation Brief`, and explicit entry sections
+  - Updated the shared UI shell to render compiled sections and section navigation across the new entry products
+  - Closed out `Phase 19` docs and verify checklists for orientation and compiled-page contracts
+- Files created/modified:
+  - docs/plans/2026-04-17-phase19-orientation-and-compiled-knowledge-products.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - docs/pack-api/README.md
+  - docs/research-tech/RESEARCH_TECH_SKILLPACK.md
+  - docs/research-tech/RESEARCH_TECH_VERIFY.md
+  - progress.md
+  - task_plan.md
+  - src/openclaw_pipeline/packs/research_tech/assembly_recipes.py
+  - src/openclaw_pipeline/commands/export_artifact.py
+  - src/openclaw_pipeline/ui/view_models.py
+  - src/openclaw_pipeline/commands/ui_server.py
+  - tests/test_export_command.py
+  - tests/test_ui_view_models.py
+  - tests/test_ui_server.py
+
 ### Phase 1: Local Project Context
 - **Status:** complete
 - **Started:** 2026-04-17 America/Los_Angeles
@@ -165,6 +191,17 @@
     - `governance_contract`
     - item-level resolver/governance provenance
   - Marked `Phase 18` as complete / ready to close in the phase plan and the milestone sequencing doc
+  - Researched `HKUDS/DeepTutor` and added Round 20, classifying it as a tutoring-oriented context-assembly and compiled-learning-product system rather than a knowledge compiler
+  - Verified in code that DeepTutor’s KB path is conventional llamaindex indexing:
+    - `raw/` staging
+    - PDF/text parsing
+    - fixed chunking
+    - embeddings
+    - persisted vector index in `llamaindex_storage/`
+  - Verified that the older “numbered item” extraction path for definitions/theorems/equations is now explicitly deprecated/no-op in the active llamaindex-only route
+  - Identified the strongest transferable idea in `services/session/turn_runtime.py`: one turn composes notebook context, history context, lightweight memory, conversation history, attachments, and selected KBs into a single `UnifiedContext`
+  - Verified that notebook references are not injected raw; they are first compressed by `NotebookAnalysisAgent` into a question-targeted observation note
+  - Verified that notebook records and deep research outputs are treated as reusable work artifacts rather than canonical truth objects
 - Files created/modified:
   - docs/plans/2026-04-17-external-project-discovery-log.md
   - docs/plans/2026-04-17-ovp-architecture-mapping.md

@@ -499,32 +499,38 @@ The historical Phase 10 -> Phase 15 ordering below is now complete and should be
 
 Use the `Architecture follow-up` closeout above as completed platform history. Do not reopen it unless a new pack/runtime ownership bug appears.
 
-The next-step order after that closeout starts at the next product phase rather than repeating:
+The just-finished sequence was:
 
 1. `Phase 17`
 2. `Phase 18`
+3. `Phase 19`
 
-Reference plan:
+Completed references:
 
 - [[2026-04-16-phase17-research-graph-visualization-plan]]
 - [[2026-04-17-phase18-knowledge-compiler-contract-consolidation-plan]]
+- [[2026-04-17-phase19-orientation-and-compiled-knowledge-products]]
 
-Relationship between them:
+What those phases accomplished:
 
-- `Phase 17` is the graph-product follow-up on top of the completed graph substrate
-- `Phase 18` is the contract-consolidation follow-up that turns the current runtime pieces into explicit knowledge-compiler contracts
-  - current status: complete / ready to close
+- `Phase 17` made the research graph explorable as a real bounded product surface
+- `Phase 18` made the current runtime legible as explicit knowledge-compiler contracts
+- `Phase 19` turned those contracts into entry products: orientation brief, compiled-page sections, and a real workbench home
+
+What this sequence closed:
+
+- graph exploration is no longer the missing piece
+- contract boundaries are no longer the missing piece
+- orientation on entry is no longer the obvious missing piece
+- the current product surface now has a clearer default entry path and stronger compiled pages
 
 Sequence rule:
 
-- do not reopen `Phase 16` runtime hardening inside `Phase 17`
-- let `Phase 17` finish the graph exploration surface
-- then let `Phase 18` consolidate:
-  - artifact contracts
-  - assembly contracts
-  - governance contracts
+- do not reopen `Phase 17` graph-canvas internals unless a real product gap appears
+- do not reopen `Phase 18` contract plumbing unless a new contract family ambiguity appears
+- do not reopen `Phase 19` product-semantic work unless a new entry-surface/product-contract gap appears
 
-This keeps product exploration and architecture consolidation from getting mixed into one oversized phase.
+This keeps the roadmap moving from substrate -> contracts -> entry products, instead of looping back into infrastructure.
 
 ## Non-Recommended Paths Right Now
 
@@ -539,7 +545,7 @@ Do **not** prioritize these before Milestones 3-5:
 
 Also do **not** treat every externally borrowed module as an immediate build track.
 
-Before `Phase 18` is complete, defer:
+After `Phase 19`, still defer:
 
 - full temporal truth modeling,
 - harness/session memory backends,

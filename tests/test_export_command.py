@@ -112,6 +112,44 @@ def test_export_command_can_export_topic_overview(temp_vault, tmp_path, capsys):
     assert "# overview/topic" in output_path.read_text(encoding="utf-8")
 
 
+def test_export_command_can_export_orientation_brief(temp_vault, tmp_path, capsys):
+    from openclaw_pipeline.commands.export_artifact import main
+
+    _seed_truth_store(temp_vault)
+    output_path = tmp_path / "orientation-brief.json"
+
+    exit_code = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--target",
+            "orientation-brief",
+            "--output-path",
+            str(output_path),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    exported = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["target"] == "orientation-brief"
+    assert payload["recipe_name"] == "orientation_brief"
+    assert payload["recipe_provider_pack"] == "research-tech"
+    assert payload["source_name"] == "briefing"
+    assert payload["source_provider_pack"] == "research-tech"
+    assert payload["source_provider_name"] == "research-tech-briefing"
+    assert output_path.exists()
+    assert exported["screen"] == "briefing/intelligence"
+    assert exported["assembly_contract"]["recipe_name"] == "orientation_brief"
+    assert [section["id"] for section in exported["compiled_sections"]] == [
+        "what_changed",
+        "what_matters",
+        "needs_review",
+        "next_reads",
+        "next_actions",
+    ]
+
+
 def test_export_command_can_use_inherited_assembly_recipe_for_compatibility_pack(
     temp_vault, tmp_path, capsys
 ):

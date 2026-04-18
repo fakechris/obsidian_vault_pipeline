@@ -315,6 +315,42 @@ def _render_governance_contract_card(payload: dict) -> str:
     )
 
 
+def _render_compiled_sections(sections: list[dict[str, object]]) -> str:
+    if not sections:
+        return ""
+    rendered_sections: list[str] = []
+    for section in sections:
+        label = str(section.get("label") or section.get("id") or "")
+        anchor = str(section.get("anchor") or str(section.get("id") or "").replace("_", "-"))
+        summary = str(section.get("summary") or "")
+        items = section.get("items") or []
+        item_html = "".join(
+            "<li>"
+            + (
+                f'<a href="{escape(str(item.get("path") or ""))}">{escape(str(item.get("label") or ""))}</a>'
+                if str(item.get("path") or "")
+                else escape(str(item.get("label") or ""))
+            )
+            + (
+                f"<div class='muted'>{escape(str(item.get('detail') or ''))}</div>"
+                if str(item.get("detail") or "")
+                else ""
+            )
+            + "</li>"
+            for item in items
+            if isinstance(item, dict)
+        ) or "<li class='muted'>No items surfaced.</li>"
+        summary_html = f"<p class='muted'>{escape(summary)}</p>" if summary else ""
+        rendered_sections.append(
+            f"<section id='{escape(anchor)}' class='card'>"
+            f"<h2>{escape(label)}</h2>"
+            f"{summary_html}"
+            f"<ul class='list-tight'>{item_html}</ul>"
+            "</section>"
+        )
+    return "".join(rendered_sections)
+
+
 def _unsupported_route_payload(route_path: str, requested_pack: str = "") -> dict[str, str]:
     normalized_pack = requested_pack.strip()
     return {
@@ -1017,8 +1053,12 @@ def _render_dashboard(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     research_overview = payload.get("research_overview", {})
     research_overview_supported = research_overview.get("status") == "supported"
+    orientation = payload.get("orientation", {})
     signals_surface_contract = _render_surface_contract_card(payload["signals"])
     production_surface_contract = _render_surface_contract_card(payload["production"])
+    orientation_assembly_contract = _render_assembly_contract_card(orientation) if isinstance(orientation, dict) else ""
+    orientation_governance_contract = _render_governance_contract_card(orientation) if isinstance(orientation, dict) else ""
+    entry_sections_html = _render_compiled_sections(payload.get("entry_sections", []))
     object_items = "".join(
         f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a></li>'
         for item in payload["objects"]["items"]
@@ -1120,9 +1160,16 @@ def _render_dashboard(payload: dict) -> str:
             "<h1>OpenClaw Truth UI</h1>",
             "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
+            f"<div class='link-row'><a href='{escape(_shell_href('/briefing', requested_pack))}'>Orientation Brief</a></div>",
             "</section>",
             "<section class='grid stats'>",
             "".join(stats_cards),
+            "</section>",
+            "<section class='section-stack'>",
+            "<section class='card'><h2>Where To Start</h2><p class='muted'>Use the orientation brief and the compiled entry sections below to decide what to read, review, or do next.</p></section>",
+            orientation_assembly_contract,
+            orientation_governance_contract,
+            entry_sections_html,
             "</section>",
             "<section class='grid two-col'>",
             "<div class='section-stack'>",
@@ -1338,6 +1385,7 @@ def _render_object_page(payload: dict) -> str:
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
             f"<section id='summary' class='card'><h2>Compiled Summary</h2><p>{escape(summary_text)}</p></section>"
+            f"{_render_compiled_sections(payload.get('compiled_sections', []))}"
             f"<section id='claims' class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
@@ -1365,6 +1413,10 @@ def _render_topic_page(payload: dict) -> str:
     evolution = payload.get(
         "evolution",
         {"candidate_items": [], "accepted_links": [], "accepted_count": 0, "candidate_count": 0, "link_types": []},
+    )
+    section_nav = "".join(
+        f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
+        for item in payload.get("section_nav", [])
     )
     summary_form = (
         "<form method='post' action='/summaries/rebuild' class='link-row'>"
@@ -1434,7 +1486,9 @@ def _render_topic_page(payload: dict) -> str:
             + "</p>"
             + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
             + assembly_contract_card
+            + (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "")
             + "<section class='grid two-col'>"
+            f"{_render_compiled_sections(payload.get('compiled_sections', []))}"
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
             f"{''.join(right_sections)}"
@@ -1473,6 +1527,10 @@ def _render_events_page(payload: dict) -> str:
     date_nav = "".join(
         f"<a href='#date-{escape(section['date'])}'>{escape(section['date'])}</a>"
         for section in payload["cluster_sections"]
+    )
+    section_nav = "".join(
+        f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
+        for item in payload.get("section_nav", [])
     )
     events = "".join(
         f'<section id="date-{escape(section["date"])}" class="card"><h2>{escape(section["date"])}</h2><ul class="list-tight">'
@@ -1551,6 +1609,8 @@ def _render_events_page(payload: dict) -> str:
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
                 assembly_contract_card,
+                (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else ""),
+                _render_compiled_sections(payload.get("compiled_sections", [])),
                 f"<div class='link-row'>{type_breakdown}</div>",
                 f"{_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack)}",
                 f"{_render_review_context_card(payload['review_context'])}",
@@ -2261,6 +2321,10 @@ def _render_briefing_page(payload: dict) -> str:
         f"<span class='muted'>({item['signal_count']} signals)</span></li>"
         for item in payload["active_topics"]
     ) or "<li class='muted'>No active topics surfaced.</li>"
+    section_nav = "".join(
+        f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
+        for item in payload.get("section_nav", [])
+    )
     queue_summary = payload.get("queue_summary", {})
     failure_buckets = "".join(
         f"<li><span class='pill'>{escape(bucket)}</span> {count}</li>"
@@ -2270,13 +2334,15 @@ def _render_briefing_page(payload: dict) -> str:
         "Working Memory Snapshot",
         "".join(
             [
-                "<h1>Working Memory Snapshot</h1>",
+                "<h1>Orientation Brief</h1>",
                 f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
                 surface_contract_card,
                 assembly_contract_card,
                 governance_contract_card,
+                f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "",
+                _render_compiled_sections(payload.get("compiled_sections", [])),
                 f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
                 f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>",
                 f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>",
@@ -2487,6 +2553,10 @@ def _render_contradictions_page(payload: dict) -> str:
             for status_name, text in detection_contract["status_explanations"].items()
         )
     )
+    section_nav = "".join(
+        f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
+        for item in payload.get("section_nav", [])
+    )
     items = "".join(
         "<li>"
         + (
@@ -2638,6 +2708,8 @@ def _render_contradictions_page(payload: dict) -> str:
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
                 assembly_contract_card,
+                f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "",
+                _render_compiled_sections(payload.get("compiled_sections", [])),
                 f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
                 "<section class='card'>",
                 "<h2>Batch Resolve</h2>",

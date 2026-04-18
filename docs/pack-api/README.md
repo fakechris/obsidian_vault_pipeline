@@ -53,6 +53,7 @@ Pack 定义：
 - artifact families
 - assembly recipes
 - governance contracts
+- compiled page contracts and entry products
 - schema
 - discovery 规则
 - absorb / refine 规则
@@ -186,6 +187,7 @@ ovp-packs --json
 ```bash
 ovp-doctor --pack research-tech --json
 ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic.md
+ovp-export --pack research-tech --target orientation-brief --output-path /tmp/orientation.json
 ```
 
 这些命令不是 Pack API 本身，但它们定义了 pack 在真实运行时应该具备的 operator surface：
@@ -210,6 +212,7 @@ ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic
 
 同一套 assembly contract 现在也开始进入 UI access layer：
 
+- `/`
 - `object/page`
 - `overview/topic`
 - `event/dossier`
@@ -218,6 +221,21 @@ ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic
 
 这些 payload 当前都会暴露 `assembly_contract`，shared shell 页面也会直接渲染 recipe provider、source contract、output mode。
 
+从 `Phase 19` 开始，pack 还需要把 access contract 花在真正的 entry products 上，而不只是“能导出一个页面”：
+
+- `/briefing` 现在应该被视为 orientation product，而不是 operator-only snapshot
+- `/` workbench home 现在应该回答：
+  - what changed recently
+  - what is important right now
+  - what deserves review
+  - what the system recommends next
+- object/topic/event/contradiction pages 现在应该暴露稳定的 `compiled_sections`
+  - `current_state`
+  - `why_it_matters`
+  - `evidence_traceability`
+  - `open_tensions`
+  - `where_to_go_next`
+
 `ovp-doctor` 现在也会展示同一条链：
 
 - recipe provider
@@ -225,6 +243,13 @@ ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic
 - source contract provider
 
 对第三方 pack 来说，推荐优先提供 entry point；manifest 适合开发期和未安装场景。
+
+如果 pack 要支持 orientation-style entry products，推荐至少做到：
+
+- 声明一个 `orientation_brief` assembly recipe
+- 让 `ovp-export --target orientation-brief` 能导出编译后的 JSON 产物
+- 让 shared shell 的 `/briefing` 和 `/` 使用同一套 contract 解释自己
+- 让 compiled page payload 暴露稳定的 `compiled_sections` / `section_nav`
 
 ---
 

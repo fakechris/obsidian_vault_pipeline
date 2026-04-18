@@ -81,6 +81,8 @@ def test_ui_server_root_serves_html_shell(temp_vault):
 
     assert response.status == 200
     assert "OpenClaw Truth UI" in body
+    assert "Where To Start" in body
+    assert "Orientation Brief" in body
     assert "/api/objects" in body
 
 
@@ -312,6 +314,8 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert "inherited from object_brief in research-tech" in body
     assert "Source contract: wiki_view · object/page" in body
     assert "Source provider: default-knowledge · object/page" in body
+    assert "Why It Matters" in body
+    assert "Where To Go Next" in body
     assert "Source contract: wiki_view · object/page" in body
 
 
@@ -483,6 +487,8 @@ def test_ui_server_contradictions_page_renders_assembly_contract(temp_vault):
     assert "inherited from contradiction_view in research-tech" in body
     assert "Source contract: wiki_view · truth/contradictions" in body
     assert "Source provider: default-knowledge · truth/contradictions" in body
+    assert "Why It Matters" in body
+    assert "Where To Go Next" in body
 
 
 def test_ui_server_signals_endpoint_returns_payload(temp_vault):
@@ -1332,6 +1338,14 @@ def test_ui_server_briefing_endpoint_returns_payload(temp_vault):
     assert response.status == 200
     assert payload["recent_signal_count"] >= 1
     assert payload["active_topics"]
+    assert payload["assembly_contract"]["recipe_name"] == "orientation_brief"
+    assert [section["id"] for section in payload["compiled_sections"]] == [
+        "what_changed",
+        "what_matters",
+        "needs_review",
+        "next_reads",
+        "next_actions",
+    ]
 
 
 def test_ui_server_briefing_endpoint_accepts_pack_scope(temp_vault):
@@ -1383,11 +1397,13 @@ def test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/clusters?pack=default-knowledge"' in body
     assert "inherited from research-tech-briefing" in body
-    assert "inherited from operator_briefing in research-tech" in body
+    assert "inherited from orientation_brief in research-tech" in body
     assert "Source contract: observation_surface · briefing" in body
     assert "Source provider: research-tech · research-tech-briefing" in body
     assert "Governance Contract" in body
     assert "inherited from research_governance in research-tech" in body
+    assert "What Changed" in body
+    assert "Next Actions" in body
 
 
 def test_ui_server_briefing_page_renders_governance_resolver_metadata(temp_vault, monkeypatch):
@@ -1847,13 +1863,13 @@ def test_ui_server_briefing_endpoint_preserves_contract_metadata(temp_vault, mon
                 "description": "Briefing surface",
             },
             "assembly_contract": {
-                "recipe_name": "operator_briefing",
+                "recipe_name": "orientation_brief",
                 "requested_pack": pack_name or "",
                 "status": "inherited",
                 "provider_pack": "research-tech",
-                "provider_name": "operator_briefing",
-                "recipe_kind": "operator_briefing",
-                "description": "Operator briefing recipe",
+                "provider_name": "orientation_brief",
+                "recipe_kind": "orientation_brief",
+                "description": "Orientation briefing recipe",
                 "source_contract_kind": "observation_surface",
                 "source_contract_name": "briefing",
                 "source_provider_pack": "research-tech",
@@ -2625,12 +2641,11 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
 
 def test_render_object_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):
     import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
+    import openclaw_pipeline.ui.view_models as view_models
 
     _seed_truth_store(temp_vault)
-    payload = build_object_page_payload(temp_vault, "alpha")
-    payload["requested_pack"] = "media-editorial"
-    payload["research_shell_enabled"] = False
+    monkeypatch.setattr(view_models, "_supports_research_shell", lambda pack_name=None: False, raising=False)
+    payload = view_models.build_object_page_payload(temp_vault, "alpha", pack_name="default-knowledge")
     monkeypatch.setattr(ui_server, "_shell_supports_research_nav", lambda requested_pack="": False)
 
     body = ui_server._render_object_page(payload)
