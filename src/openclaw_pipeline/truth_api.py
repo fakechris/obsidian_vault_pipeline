@@ -19,6 +19,7 @@ from .governance_registry import (
     list_effective_governance_specs,
 )
 from .handler_registry import execute_focused_action_handler
+from .identity import canonicalize_note_id
 from .knowledge_index import ensure_knowledge_db_current
 from .observation_surface_registry import execute_observation_surface_builder
 from .pack_resolution import iter_compatible_packs
@@ -1383,108 +1384,6 @@ def get_graph_cluster_detail(
     }
 
 
-def _graph_scope_limit(value: int, *, default: int, maximum: int) -> int:
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        normalized = default
-    return max(1, min(normalized, maximum))
-
-
-def get_graph_cluster_scope(
-    vault_dir: Path | str,
-    cluster_id: str,
-    *,
-    pack_name: str | None = None,
-    object_limit: int = 10,
-    edge_limit: int = 48,
-) -> dict[str, Any]:
-    detail = get_graph_cluster_detail(vault_dir, cluster_id, pack_name=pack_name)
-    object_limit = _graph_scope_limit(object_limit, default=10, maximum=48)
-    edge_limit = _graph_scope_limit(edge_limit, default=48, maximum=192)
-
-    cluster = detail["cluster"]
-    edges = detail["edges"]
-    member_rows = {str(member["object_id"]): member for member in cluster["members"]}
-    degree_counts: Counter[str] = Counter()
-    for edge in edges:
-        degree_counts[str(edge["source_object_id"])] += 1
-        degree_counts[str(edge["target_object_id"])] += 1
-
-    center_object_id = str(cluster["center_object_id"])
-    ordered_member_ids = [center_object_id]
-    ordered_member_ids.extend(
-        object_id
-        for object_id, _member in sorted(
-            (
-                (str(member["object_id"]), member)
-                for member in cluster["members"]
-                if str(member["object_id"]) != center_object_id
-            ),
-            key=lambda item: (
-                -degree_counts.get(item[0], 0),
-                str(item[1].get("title") or item[0]).lower(),
-                item[0],
-            ),
-        )
-    )
-    visible_member_ids = ordered_member_ids[:object_limit]
-    visible_member_id_set = set(visible_member_ids)
-    visible_edges = [
-        edge
-        for edge in edges
-        if str(edge["source_object_id"]) in visible_member_id_set
-        and str(edge["target_object_id"]) in visible_member_id_set
-    ][:edge_limit]
-
-    return {
-        "cluster": cluster,
-        "visible_members": [
-            {
-                **member_rows[object_id],
-                "graph_degree": degree_counts.get(object_id, 0),
-                "is_center": object_id == center_object_id,
-            }
-            for object_id in visible_member_ids
-            if object_id in member_rows
-        ],
-        "visible_edges": visible_edges,
-        "member_limit": object_limit,
-        "edge_limit": edge_limit,
-        "hidden_member_count": max(0, int(cluster["member_count"]) - len(visible_member_ids)),
-        "hidden_edge_count": max(0, len(edges) - len(visible_edges)),
-    }
-
-
-def get_graph_object_scope(
-    vault_dir: Path | str,
-    object_id: str,
-    *,
-    pack_name: str | None = None,
-    neighbor_limit: int = 10,
-    edge_limit: int = 48,
-) -> dict[str, Any]:
-    neighbor_limit = _graph_scope_limit(neighbor_limit, default=10, maximum=48)
-    edge_limit = _graph_scope_limit(edge_limit, default=48, maximum=192)
-    neighborhood = get_topic_neighborhood(vault_dir, object_id, pack_name=pack_name, depth=1)
-    visible_neighbors = neighborhood["neighbors"][:neighbor_limit]
-    visible_neighbor_ids = {str(item["object_id"]) for item in visible_neighbors}
-    visible_edges = [
-        edge
-        for edge in neighborhood["edges"]
-        if str(edge["target_object_id"]) in visible_neighbor_ids
-    ][:edge_limit]
-    return {
-        "center": neighborhood["center"],
-        "visible_neighbors": visible_neighbors,
-        "visible_edges": visible_edges,
-        "neighbor_limit": neighbor_limit,
-        "edge_limit": edge_limit,
-        "hidden_neighbor_count": max(0, len(neighborhood["neighbors"]) - len(visible_neighbors)),
-        "hidden_edge_count": max(0, len(neighborhood["edges"]) - len(visible_edges)),
-    }
-
-
 def _find_note_by_source(vault_dir: Path, *, source_url: str, exclude_path: str) -> dict[str, str] | None:
     cache_key = (str(vault_dir.resolve()), _search_root_signatures(vault_dir))
     source_index = _SOURCE_NOTE_INDEX_CACHE.get(cache_key)
@@ -1880,7 +1779,178 @@ def _normalize_action_queue_item(item: dict[str, Any]) -> dict[str, Any]:
         current = normalized.get(key)
         if key not in normalized or current in (None, "", []):
             normalized[key] = value
+    normalized["impact_summary"] = _build_action_impact_summary(normalized)
     return normalized
+
+
+def _count_nonempty_strings(value: Any) -> int:
+    if isinstance(value, str):
+        return 1 if value.strip() else 0
+    if isinstance(value, (list, tuple, set)):
+        return sum(1 for item in value if isinstance(item, str) and item.strip())
+    return 0
+
+
+def _count_sequence_items(value: Any) -> int:
+    if isinstance(value, (list, tuple, set)):
+        return sum(1 for item in value if item)
+    return 0
+
+
+def _result_artifact_summary(action: dict[str, Any]) -> tuple[int, list[str]]:
+    result = action.get("result")
+    if not isinstance(result, dict):
+        return 0, []
+    processor_outputs = {str(item) for item in action.get("processor_outputs", []) if item}
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+
+    note_output_count = max(
+        _count_nonempty_strings(result.get("output_path")),
+        _count_nonempty_strings(result.get("output")),
+        _count_nonempty_strings(result.get("output_paths")),
+    )
+    object_output_count = max(
+        _count_sequence_items(result.get("object_ids")),
+        _count_sequence_items(result.get("created_object_ids")),
+        _count_sequence_items(result.get("promoted_object_ids")),
+        _count_sequence_items(result.get("rebuilt_object_ids")),
+        int(summary.get("concepts_promoted") or 0) + int(summary.get("concepts_created") or 0),
+        int(summary.get("objects_rebuilt") or 0),
+    )
+
+    artifact_types: list[str] = []
+    if note_output_count > 0:
+        artifact_types.append("deep_dive" if "deep_dive" in processor_outputs else "note_artifact")
+    if object_output_count > 0:
+        if "evergreen_object" in processor_outputs:
+            artifact_types.append("evergreen_object")
+        else:
+            artifact_types.append("knowledge_artifact")
+    return note_output_count + object_output_count, artifact_types
+
+
+def _build_action_impact_summary(action: dict[str, Any]) -> dict[str, Any]:
+    action_status = str(action.get("status") or "")
+    action_kind = str(action.get("action_kind") or "")
+    produced_artifact_count, produced_artifact_types = _result_artifact_summary(action)
+    base = {
+        "impact_status": "unknown",
+        "lifecycle_stage": action_status or "unknown",
+        "action_kind": action_kind,
+        "action_status": action_status,
+        "impact_label": "Unknown execution state",
+        "impact_detail": "The action queue item does not currently expose a recognized lifecycle state.",
+        "produced_artifact_count": produced_artifact_count,
+        "produced_artifact_types": produced_artifact_types,
+    }
+    if action_status == "queued":
+        return {
+            **base,
+            "impact_status": "waiting",
+            "lifecycle_stage": "queued",
+            "impact_label": "Waiting on queue execution",
+            "impact_detail": "A queueable action exists and is currently waiting to run.",
+        }
+    if action_status == "running":
+        return {
+            **base,
+            "impact_status": "running",
+            "lifecycle_stage": "running",
+            "impact_label": "Execution in progress",
+            "impact_detail": "The queued action is currently running.",
+        }
+    if action_status == "failed":
+        bucket = str(action.get("failure_bucket") or "")
+        detail = "Execution failed."
+        if bucket:
+            detail = f"Execution failed in bucket '{bucket}'."
+        return {
+            **base,
+            "impact_status": "failed",
+            "lifecycle_stage": "failed",
+            "impact_label": "Execution failed",
+            "impact_detail": detail,
+        }
+    if action_status in {"dismissed", "obsolete"}:
+        detail = (
+            "Execution was dismissed before completion."
+            if action_status == "dismissed"
+            else "Execution became obsolete because the source signal disappeared."
+        )
+        return {
+            **base,
+            "impact_status": "stalled",
+            "lifecycle_stage": action_status,
+            "impact_label": "Execution stopped",
+            "impact_detail": detail,
+        }
+    if action_status == "succeeded":
+        if produced_artifact_count > 0:
+            noun = "artifact" if produced_artifact_count == 1 else "artifacts"
+            type_detail = (
+                f" ({', '.join(str(item) for item in produced_artifact_types)})"
+                if produced_artifact_types
+                else ""
+            )
+            return {
+                **base,
+                "impact_status": "productive",
+                "lifecycle_stage": "succeeded",
+                "impact_label": "Produced downstream change",
+                "impact_detail": (
+                    f"Execution completed and produced {produced_artifact_count} tracked {noun}{type_detail}."
+                ),
+            }
+        return {
+            **base,
+            "impact_status": "completed",
+            "lifecycle_stage": "succeeded",
+            "impact_label": "Execution completed",
+            "impact_detail": "Execution completed without a tracked downstream artifact.",
+        }
+    return base
+
+
+def _build_signal_impact_summary(
+    signal: dict[str, Any],
+    *,
+    action: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    recommended_action = signal.get("recommended_action")
+    if not isinstance(recommended_action, dict) or not recommended_action.get("kind"):
+        return {
+            "impact_status": "review_only",
+            "lifecycle_stage": "manual_review",
+            "action_kind": "",
+            "action_status": "",
+            "impact_label": "Review-only signal",
+            "impact_detail": "This signal currently has no execution path and remains an operator review item.",
+            "produced_artifact_count": 0,
+            "produced_artifact_types": [],
+        }
+    if action is not None:
+        return _build_action_impact_summary(action)
+    if bool(recommended_action.get("executable")):
+        return {
+            "impact_status": "review_only",
+            "lifecycle_stage": "manual_review",
+            "action_kind": str(recommended_action.get("kind") or ""),
+            "action_status": "",
+            "impact_label": "Review-only signal",
+            "impact_detail": "This signal currently routes to an operator review flow instead of queued execution.",
+            "produced_artifact_count": 0,
+            "produced_artifact_types": [],
+        }
+    return {
+        "impact_status": "ready",
+        "lifecycle_stage": "recommendation_only",
+        "action_kind": str(recommended_action.get("kind") or ""),
+        "action_status": "",
+        "impact_label": "Action available",
+        "impact_detail": "A queueable action exists for this signal, but nothing is currently queued.",
+        "produced_artifact_count": 0,
+        "produced_artifact_types": [],
+    }
 
 
 def _signal_by_id(
@@ -2312,8 +2382,10 @@ def _attach_action_queue_state(
             if key not in enriched or current in (None, "", False):
                 enriched[key] = value
         recommended_action = item.get("recommended_action")
+        matched_action: dict[str, Any] | None = None
         if isinstance(recommended_action, dict):
             action = queue_state.get(str(item.get("signal_id") or ""))
+            matched_action = action
             recommended = dict(recommended_action)
             resolver_metadata = _resolver_rule_metadata_for_action_kind(
                 str(recommended.get("kind") or ""),
@@ -2334,6 +2406,27 @@ def _attach_action_queue_state(
                 )
                 recommended["safe_to_run"] = bool(action.get("safe_to_run"))
             enriched["recommended_action"] = recommended
+        note_paths = [
+            str(path)
+            for path in enriched.get("note_paths", [])
+            if isinstance(path, str) and path.strip()
+        ]
+        try:
+            enriched["capture_summary"] = _aggregate_note_capture_summaries(vault_dir, note_paths)
+        except Exception:
+            enriched["capture_summary"] = {
+                "status": "missing",
+                "captured_event_count": 0,
+                "produced_artifact_count": 0,
+                "candidate_count": 0,
+                "error_count": 0,
+                "skipped_count": 0,
+                "latest_timestamp": "",
+                "summary": "No inbound capture audit was found for this note yet.",
+                "items": [],
+                "note_paths": note_paths,
+            }
+        enriched["impact_summary"] = _build_signal_impact_summary(enriched, action=matched_action)
         annotated.append(enriched)
     return annotated
 
@@ -2533,6 +2626,343 @@ def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, A
         "note_path": note_path,
         "original_source_note": original_source_note,
         "derived_deep_dives": derived_deep_dives,
+    }
+
+
+def _capture_summary_status(
+    *,
+    event_count: int,
+    produced_artifact_count: int,
+    error_count: int,
+    skipped_count: int,
+) -> str:
+    if produced_artifact_count > 0:
+        return "productive"
+    if error_count > 0:
+        return "failed"
+    if skipped_count > 0:
+        return "skipped"
+    if event_count > 0:
+        return "observed"
+    return "missing"
+
+
+def _capture_summary_text(
+    *,
+    status: str,
+    event_count: int,
+    produced_artifact_count: int,
+    candidate_count: int,
+    error_count: int,
+) -> str:
+    if status == "productive":
+        artifact_noun = "artifact" if produced_artifact_count == 1 else "artifacts"
+        candidate_text = (
+            f" and surfaced {candidate_count} candidate" + ("" if candidate_count == 1 else "s")
+            if candidate_count
+            else ""
+        )
+        return (
+            f"Captured {event_count} inbound events and produced "
+            f"{produced_artifact_count} downstream {artifact_noun}{candidate_text}."
+        )
+    if status == "failed":
+        issue_noun = "error" if error_count == 1 else "errors"
+        return f"Observed {event_count} inbound capture events with {error_count} {issue_noun}."
+    if status == "skipped":
+        return f"Observed {event_count} inbound capture events, but the run stopped before downstream output."
+    if status == "observed":
+        noun = "event" if event_count == 1 else "events"
+        return f"Observed {event_count} inbound capture {noun} but no downstream artifact yet."
+    return "No inbound capture audit was found for this note yet."
+
+
+def _note_capture_item(
+    *,
+    kind: str,
+    label: str,
+    timestamp: str,
+    detail: str,
+    path: str = "",
+    produced_artifact_count: int = 0,
+    candidate_count: int = 0,
+    error_count: int = 0,
+    skipped_count: int = 0,
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "label": label,
+        "timestamp": timestamp,
+        "detail": detail,
+        "path": path,
+        "produced_artifact_count": produced_artifact_count,
+        "candidate_count": candidate_count,
+        "error_count": error_count,
+        "skipped_count": skipped_count,
+    }
+
+
+def _note_capture_targets(vault_dir: Path | str, note_path: str) -> dict[str, Any]:
+    relative_path = str(note_path)
+    note_name = Path(relative_path).name
+    frontmatter = _read_note_frontmatter(vault_dir, relative_path)
+    note_slug = canonicalize_note_id(str(frontmatter.get("note_id") or Path(relative_path).stem))
+    return {
+        "note_path": relative_path,
+        "note_name": note_name,
+        "note_slug": note_slug,
+    }
+
+
+def _match_note_capture_event(
+    vault_dir: Path | str,
+    *,
+    payload: dict[str, Any],
+    targets: dict[str, Any],
+    derived_note_names: set[str],
+) -> dict[str, Any] | None:
+    note_path = str(targets["note_path"])
+    note_name = str(targets["note_name"])
+    note_slug = str(targets["note_slug"])
+    event_type = str(payload.get("event_type") or "").strip()
+    timestamp = str(payload.get("timestamp") or "")
+    relative_source = _vault_relative_path(vault_dir, str(payload.get("source") or ""))
+    relative_staged = _vault_relative_path(vault_dir, str(payload.get("staged") or ""))
+    relative_archived = _vault_relative_path(vault_dir, str(payload.get("archived") or ""))
+    relative_restored = _vault_relative_path(vault_dir, str(payload.get("restored") or ""))
+    relative_output = _vault_relative_path(vault_dir, str(payload.get("output") or ""))
+    relative_path_field = _vault_relative_path(vault_dir, str(payload.get("path") or ""))
+    file_name = Path(str(payload.get("file") or "")).name
+    source_name = Path(str(payload.get("source") or "")).name
+
+    if event_type == "source_staged_for_processing" and (
+        relative_source == note_path or relative_staged == note_path or note_name in {Path(relative_source).name, Path(relative_staged).name}
+    ):
+        return _note_capture_item(
+            kind="source_staged",
+            label="Source staged",
+            timestamp=timestamp,
+            detail="Source note was staged for processing.",
+        )
+    if event_type == "source_archived_to_processed" and (
+        relative_source == note_path or relative_archived == note_path or note_name in {Path(relative_source).name, Path(relative_archived).name}
+    ):
+        return _note_capture_item(
+            kind="processed_source",
+            label="Source processed",
+            timestamp=timestamp,
+            detail="Source note was archived into the processed intake.",
+        )
+    if event_type == "source_restored_to_raw" and (
+        relative_source == note_path or relative_restored == note_path or note_name in {Path(relative_source).name, Path(relative_restored).name}
+    ):
+        return _note_capture_item(
+            kind="source_restored",
+            label="Source restored",
+            timestamp=timestamp,
+            detail="Source note was restored to raw intake before downstream output landed.",
+            skipped_count=1,
+        )
+    if event_type == "article_processed" and (relative_output == note_path or file_name == note_name):
+        if relative_output:
+            derived_note_names.add(Path(relative_output).name)
+        return _note_capture_item(
+            kind="deep_dive_created",
+            label="Deep dive created",
+            timestamp=timestamp,
+            detail=(
+                f"Created downstream deep dive at {relative_output}."
+                if relative_output
+                else "Created downstream deep dive."
+            ),
+            path=relative_output,
+            produced_artifact_count=1,
+        )
+    if event_type == "article_abstained" and file_name == note_name:
+        return _note_capture_item(
+            kind="capture_abstained",
+            label="Capture abstained",
+            timestamp=timestamp,
+            detail=f"Interpretation abstained: {str(payload.get('reason') or 'unspecified')}.",
+            skipped_count=1,
+        )
+    if event_type in {"article_error", "candidate_upsert_error", "evergreen_error"} and (
+        file_name == note_name or Path(str(payload.get("file") or "")).name == note_name
+    ):
+        return _note_capture_item(
+            kind="capture_error",
+            label="Capture error",
+            timestamp=timestamp,
+            detail=str(payload.get("error") or "Capture error."),
+            error_count=1,
+        )
+    if event_type == "candidates_upserted" and file_name == note_name:
+        candidates = [str(item) for item in payload.get("candidates", []) if str(item).strip()]
+        return _note_capture_item(
+            kind="candidate_upserted",
+            label="Candidate surfaced",
+            timestamp=timestamp,
+            detail=(
+                f"Surfaced {len(candidates)} candidate"
+                + ("" if len(candidates) == 1 else "s")
+                + (f": {', '.join(candidates)}." if candidates else ".")
+            ),
+            candidate_count=len(candidates),
+        )
+    if event_type in {"evergreen_auto_promoted", "evergreen_created"} and (
+        relative_path_field == note_path
+        or canonicalize_note_id(str(payload.get("concept") or payload.get("mutation", {}).get("target_slug") or "")) == note_slug
+        or source_name == note_name
+        or source_name in derived_note_names
+    ):
+        object_id = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
+        label = "Evergreen promoted" if event_type == "evergreen_auto_promoted" else "Evergreen created"
+        detail = (
+            f"Promoted evergreen object {object_id}."
+            if event_type == "evergreen_auto_promoted" and object_id
+            else (
+                f"Created evergreen object {object_id}."
+                if object_id
+                else "Created evergreen output."
+            )
+        )
+        return _note_capture_item(
+            kind="evergreen_promoted" if event_type == "evergreen_auto_promoted" else "evergreen_created",
+            label=label,
+            timestamp=timestamp,
+            detail=detail,
+            path=relative_path_field,
+            produced_artifact_count=1,
+        )
+    if event_type == "refine_mutation_applied":
+        targets_list = [
+            canonicalize_note_id(str(item))
+            for item in payload.get("targets", [])
+            if isinstance(item, str) and item.strip()
+        ]
+        if note_slug in targets_list:
+            return _note_capture_item(
+                kind="refine_mutation",
+                label="Refine mutation",
+                timestamp=timestamp,
+                detail=f"Applied refine mutation in mode {str(payload.get('mode') or 'unknown')}.",
+                produced_artifact_count=1,
+            )
+    return None
+
+
+def get_note_inbound_capture_summary(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    targets = _note_capture_targets(resolved_vault, note_path)
+    derived_note_names: set[str] = {str(targets["note_name"])}
+    items: list[dict[str, Any]] = []
+    for log_path in (layout.pipeline_log, layout.logs_dir / "refine-mutations.jsonl"):
+        if not log_path.exists():
+            continue
+        for payload in _read_jsonl_items(log_path):
+            item = _match_note_capture_event(
+                resolved_vault,
+                payload=payload,
+                targets=targets,
+                derived_note_names=derived_note_names,
+            )
+            if item is not None:
+                items.append(item)
+
+    items.sort(key=lambda item: (str(item.get("timestamp") or ""), str(item.get("kind") or "")))
+    captured_event_count = len(items)
+    produced_artifact_count = sum(int(item.get("produced_artifact_count") or 0) for item in items)
+    candidate_count = sum(int(item.get("candidate_count") or 0) for item in items)
+    error_count = sum(int(item.get("error_count") or 0) for item in items)
+    skipped_count = sum(int(item.get("skipped_count") or 0) for item in items)
+    status = _capture_summary_status(
+        event_count=captured_event_count,
+        produced_artifact_count=produced_artifact_count,
+        error_count=error_count,
+        skipped_count=skipped_count,
+    )
+    return {
+        "note_path": str(note_path),
+        "status": status,
+        "captured_event_count": captured_event_count,
+        "produced_artifact_count": produced_artifact_count,
+        "candidate_count": candidate_count,
+        "error_count": error_count,
+        "skipped_count": skipped_count,
+        "latest_timestamp": str(items[-1]["timestamp"]) if items else "",
+        "summary": _capture_summary_text(
+            status=status,
+            event_count=captured_event_count,
+            produced_artifact_count=produced_artifact_count,
+            candidate_count=candidate_count,
+            error_count=error_count,
+        ),
+        "items": items[:8],
+    }
+
+
+def _aggregate_note_capture_summaries(
+    vault_dir: Path | str,
+    note_paths: list[str],
+) -> dict[str, Any]:
+    normalized_paths = [str(item) for item in note_paths if str(item).strip()]
+    if not normalized_paths:
+        return {
+            "status": "missing",
+            "captured_event_count": 0,
+            "produced_artifact_count": 0,
+            "candidate_count": 0,
+            "error_count": 0,
+            "skipped_count": 0,
+            "latest_timestamp": "",
+            "summary": "No inbound capture audit was found for this note yet.",
+            "items": [],
+            "note_paths": [],
+        }
+    if len(normalized_paths) == 1:
+        payload = get_note_inbound_capture_summary(vault_dir, note_path=normalized_paths[0])
+        payload["note_paths"] = normalized_paths
+        return payload
+
+    summaries = [get_note_inbound_capture_summary(vault_dir, note_path=item) for item in normalized_paths]
+    captured_event_count = sum(item["captured_event_count"] for item in summaries)
+    produced_artifact_count = sum(item["produced_artifact_count"] for item in summaries)
+    candidate_count = sum(item["candidate_count"] for item in summaries)
+    error_count = sum(item["error_count"] for item in summaries)
+    skipped_count = sum(item["skipped_count"] for item in summaries)
+    latest_timestamp = max((str(item["latest_timestamp"]) for item in summaries if item["latest_timestamp"]), default="")
+    status = _capture_summary_status(
+        event_count=captured_event_count,
+        produced_artifact_count=produced_artifact_count,
+        error_count=error_count,
+        skipped_count=skipped_count,
+    )
+    return {
+        "status": status,
+        "captured_event_count": captured_event_count,
+        "produced_artifact_count": produced_artifact_count,
+        "candidate_count": candidate_count,
+        "error_count": error_count,
+        "skipped_count": skipped_count,
+        "latest_timestamp": latest_timestamp,
+        "summary": _capture_summary_text(
+            status=status,
+            event_count=captured_event_count,
+            produced_artifact_count=produced_artifact_count,
+            candidate_count=candidate_count,
+            error_count=error_count,
+        ),
+        "items": [
+            {
+                "kind": "capture_note",
+                "label": Path(item["note_path"]).name,
+                "path": item["note_path"],
+                "detail": item["summary"],
+            }
+            for item in summaries
+        ][:8],
+        "note_paths": normalized_paths,
     }
 
 
@@ -2815,12 +3245,56 @@ def get_note_traceability(
             [item["object_id"] for item in objects],
             pack_name=pack_name,
         )
+    note_type = str(note.get("note_type") or "")
+    if note_type == "deep_dive":
+        stage_label = "deep_dive"
+        stage_presence = {
+            "source_notes": bool(source_notes),
+            "deep_dives": True,
+            "objects": bool(objects),
+            "atlas_pages": bool(atlas_pages),
+        }
+        chain_summary = (
+            f"Deep dive currently traces to {len(source_notes)} source notes, "
+            f"{len(objects)} objects, {len(atlas_pages)} atlas pages."
+        )
+    elif note_type == "evergreen":
+        stage_label = "evergreen_note"
+        stage_presence = {
+            "source_notes": bool(source_notes),
+            "deep_dives": bool(deep_dives),
+            "objects": True,
+            "atlas_pages": bool(atlas_pages),
+        }
+        chain_summary = (
+            f"Evergreen note currently traces to {len(source_notes)} source notes, "
+            f"{len(deep_dives)} deep dives, {len(objects)} objects, {len(atlas_pages)} atlas pages."
+        )
+    else:
+        stage_label = "source_note"
+        stage_presence = {
+            "source_notes": True,
+            "deep_dives": bool(deep_dives),
+            "objects": bool(objects),
+            "atlas_pages": bool(atlas_pages),
+        }
+        chain_summary = (
+            f"Source note currently traces to {len(deep_dives)} deep dives, "
+            f"{len(objects)} objects, {len(atlas_pages)} atlas pages."
+        )
+    missing_stages = [stage for stage, present in stage_presence.items() if not present]
+    chain_status = "complete" if not missing_stages else "partial"
     return {
         "note": note,
+        "stage_label": stage_label,
         "source_notes": source_notes,
         "deep_dives": deep_dives,
         "objects": objects,
         "atlas_pages": atlas_pages,
+        "stage_presence": stage_presence,
+        "missing_stages": missing_stages,
+        "chain_status": chain_status,
+        "chain_summary": chain_summary,
         "counts": {
             "source_notes": len(source_notes),
             "deep_dives": len(deep_dives),
@@ -2843,8 +3317,16 @@ def get_object_traceability(
         original = get_note_provenance(vault_dir, note_path=deep_dive["path"])["original_source_note"]
         if original:
             source_note_map.setdefault(original["path"], original)
+    stage_presence = {
+        "source_notes": bool(source_note_map),
+        "deep_dives": bool(deep_dives),
+        "atlas_pages": bool(detail["provenance"]["mocs"]),
+    }
+    missing_stages = [stage for stage, present in stage_presence.items() if not present]
+    chain_status = "complete" if not missing_stages else "partial"
     return {
         "object": detail["object"],
+        "stage_label": "evergreen_object",
         "evergreen_note": {
             "title": detail["object"]["title"],
             "path": detail["provenance"]["evergreen_path"],
@@ -2852,6 +3334,13 @@ def get_object_traceability(
         "source_notes": list(source_note_map.values()),
         "deep_dives": deep_dives,
         "atlas_pages": detail["provenance"]["mocs"],
+        "stage_presence": stage_presence,
+        "missing_stages": missing_stages,
+        "chain_status": chain_status,
+        "chain_summary": (
+            f"Object currently traces to {len(source_note_map)} source notes, "
+            f"{len(deep_dives)} deep dives, {len(detail['provenance']['mocs'])} atlas pages."
+        ),
         "counts": {
             "source_notes": len(source_note_map),
             "deep_dives": len(deep_dives),
@@ -2991,19 +3480,40 @@ def list_contradictions(
             item["status"],
             "Reviewed contradiction state.",
         )
+        source_note_count = len(
+            {
+                evidence["source_slug"]
+                for claim in item["positive_claims"] + item["negative_claims"]
+                for evidence in claim["evidence"]
+            }
+        )
+        quote_count = sum(
+            1
+            for claim in item["positive_claims"] + item["negative_claims"]
+            for evidence in claim["evidence"]
+            if str(evidence.get("quote_text") or "").strip()
+        )
         item["scope_summary"] = {
             "object_count": len(object_ids),
             "positive_claim_count": len(item["positive_claims"]),
             "negative_claim_count": len(item["negative_claims"]),
-            "source_note_count": len(
-                {
-                    evidence["source_slug"]
-                    for claim in item["positive_claims"] + item["negative_claims"]
-                    for evidence in claim["evidence"]
-                }
-            ),
+            "source_note_count": source_note_count,
         }
         item["ranked_evidence"] = _rank_contradiction_evidence(item)
+        item["polarity_summary"] = {
+            "positive_claim_count": len(item["positive_claims"]),
+            "negative_claim_count": len(item["negative_claims"]),
+            "object_count": len(object_ids),
+        }
+        item["evidence_summary"] = {
+            "ranked_evidence_count": len(item["ranked_evidence"]),
+            "source_note_count": source_note_count,
+            "quote_count": quote_count,
+        }
+        item["tension_summary"] = (
+            f"{len(item['positive_claims'])} positive claims vs "
+            f"{len(item['negative_claims'])} negative claims across {len(object_ids)} objects."
+        )
         item["review_history"] = list_review_actions(vault_dir, object_ids=object_ids, limit=5)
     return items
 

@@ -181,7 +181,147 @@ def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vau
 
     assert signals[0]["signal_id"] == "source_needs_deep_dive::demo"
     assert signals[0]["recommended_action"]["queue_status"] == "queued"
+    assert signals[0]["impact_summary"]["impact_status"] == "waiting"
+    assert signals[0]["impact_summary"]["lifecycle_stage"] == "queued"
+    assert signals[0]["impact_summary"]["action_status"] == "queued"
     assert actions[0]["action_id"] == "action::demo"
+    assert actions[0]["impact_summary"]["impact_status"] == "waiting"
+    assert actions[0]["impact_summary"]["lifecycle_stage"] == "queued"
+
+
+def test_truth_api_builds_note_inbound_capture_summary_and_attaches_it_to_signals(temp_vault):
+    from openclaw_pipeline.truth_api import get_note_inbound_capture_summary, list_signals
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T09:00:00Z",
+                        "event_type": "source_archived_to_processed",
+                        "source": "50-Inbox/02-Processing/Harness.md",
+                        "archived": str(processed),
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T09:10:00Z",
+                        "event_type": "article_processed",
+                        "file": "Harness.md",
+                        "output": str(deep_dive),
+                        "classification": "AI-Research",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T09:11:00Z",
+                        "event_type": "candidates_upserted",
+                        "file": "Harness.md",
+                        "candidates": ["agent-harness"],
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T09:12:00Z",
+                        "event_type": "evergreen_auto_promoted",
+                        "concept": "alpha",
+                        "source": "Harness_深度解读.md",
+                        "mutation": {"target_slug": "alpha"},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    capture = get_note_inbound_capture_summary(
+        temp_vault,
+        note_path="50-Inbox/03-Processed/2026-04/Harness.md",
+    )
+
+    assert capture["status"] == "productive"
+    assert capture["captured_event_count"] == 4
+    assert capture["produced_artifact_count"] == 2
+    assert capture["candidate_count"] == 1
+    assert capture["latest_timestamp"] == "2026-04-18T09:12:00Z"
+    assert [item["kind"] for item in capture["items"]] == [
+        "processed_source",
+        "deep_dive_created",
+        "candidate_upserted",
+        "evergreen_promoted",
+    ]
+
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    with (logs_dir / "pipeline.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "timestamp": "2026-04-18T10:00:00Z",
+                    "event_type": "source_archived_to_processed",
+                    "source": "50-Inbox/02-Processing/Loose Source.md",
+                    "archived": str(loose_source),
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+    rebuild_knowledge_index(temp_vault)
+
+    source_signal = next(
+        item for item in list_signals(temp_vault) if item["signal_type"] == "source_needs_deep_dive"
+    )
+
+    assert source_signal["capture_summary"]["status"] == "observed"
+    assert source_signal["capture_summary"]["captured_event_count"] == 1
+    assert source_signal["capture_summary"]["produced_artifact_count"] == 0
+    assert source_signal["capture_summary"]["summary"].startswith("Observed 1 inbound capture event")
 
 
 def test_truth_api_avoids_datetime_utc_import_for_python_310_compatibility():
@@ -381,50 +521,6 @@ def test_truth_api_lists_research_graph_clusters(temp_vault):
     assert "target-note" in clusters[0]["member_object_ids"]
 
 
-def test_truth_api_builds_bounded_graph_cluster_scope(temp_vault):
-    from openclaw_pipeline.truth_api import get_graph_cluster_scope, list_graph_clusters
-
-    vault = _seed_truth_vault(temp_vault)
-    cluster = list_graph_clusters(vault, pack_name="research-tech")[0]
-
-    scope = get_graph_cluster_scope(
-        vault,
-        cluster["cluster_id"],
-        pack_name="research-tech",
-        object_limit=2,
-        edge_limit=4,
-    )
-
-    assert scope["cluster"]["cluster_id"] == cluster["cluster_id"]
-    assert len(scope["visible_members"]) == 2
-    assert scope["visible_members"][0]["is_center"] is True
-    visible_ids = {item["object_id"] for item in scope["visible_members"]}
-    assert "source-note" in visible_ids
-    assert all(edge["source_object_id"] in visible_ids and edge["target_object_id"] in visible_ids for edge in scope["visible_edges"])
-    assert scope["hidden_member_count"] == 1
-
-
-def test_truth_api_builds_bounded_graph_object_scope(temp_vault):
-    from openclaw_pipeline.truth_api import get_graph_object_scope
-
-    vault = _seed_truth_vault(temp_vault)
-
-    scope = get_graph_object_scope(
-        vault,
-        "source-note",
-        pack_name="research-tech",
-        neighbor_limit=1,
-        edge_limit=2,
-    )
-
-    assert scope["center"]["object_id"] == "source-note"
-    assert len(scope["visible_neighbors"]) == 1
-    assert scope["visible_neighbors"][0]["object_id"] == "target-note"
-    assert len(scope["visible_edges"]) == 1
-    assert scope["visible_edges"][0]["target_object_id"] == "target-note"
-    assert scope["hidden_neighbor_count"] == 0
-
-
 def test_truth_api_does_not_fallback_when_requested_pack_is_materialized(temp_vault, monkeypatch):
     from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
     from openclaw_pipeline.truth_api import get_object_detail, list_graph_clusters, list_objects
@@ -505,6 +601,15 @@ def test_truth_api_lists_contradictions(temp_vault):
     assert items[0]["scope_summary"]["positive_claim_count"] == 1
     assert items[0]["scope_summary"]["negative_claim_count"] == 1
     assert items[0]["ranked_evidence"][0]["rank"] == 1
+    assert items[0]["polarity_summary"] == {
+        "positive_claim_count": 1,
+        "negative_claim_count": 1,
+        "object_count": 2,
+    }
+    assert items[0]["evidence_summary"]["ranked_evidence_count"] == len(items[0]["ranked_evidence"])
+    assert items[0]["evidence_summary"]["source_note_count"] == 2
+    assert items[0]["evidence_summary"]["quote_count"] == 2
+    assert items[0]["tension_summary"] == "1 positive claims vs 1 negative claims across 2 objects."
     assert items[0]["positive_claim_ids"]
     assert items[0]["negative_claim_ids"]
 
@@ -1468,6 +1573,16 @@ date: 2026-04-13
     assert [item["title"] for item in traceability["deep_dives"]] == ["Harness Deep Dive"]
     assert [item["object_id"] for item in traceability["objects"]] == ["alpha"]
     assert [item["slug"] for item in traceability["atlas_pages"]] == ["atlas-index"]
+    assert traceability["stage_label"] == "source_note"
+    assert traceability["chain_status"] == "complete"
+    assert traceability["missing_stages"] == []
+    assert traceability["stage_presence"] == {
+        "source_notes": True,
+        "deep_dives": True,
+        "objects": True,
+        "atlas_pages": True,
+    }
+    assert "1 deep dives, 1 objects, 1 atlas pages" in traceability["chain_summary"]
 
 
 def test_truth_api_returns_object_traceability(temp_vault):
@@ -1555,6 +1670,15 @@ date: 2026-04-13
     assert [item["slug"] for item in traceability["deep_dives"]] == ["harness-deep-dive"]
     assert [item["path"] for item in traceability["source_notes"]] == ["50-Inbox/03-Processed/2026-04/Harness.md"]
     assert [item["slug"] for item in traceability["atlas_pages"]] == ["atlas-index"]
+    assert traceability["stage_label"] == "evergreen_object"
+    assert traceability["chain_status"] == "complete"
+    assert traceability["missing_stages"] == []
+    assert traceability["stage_presence"] == {
+        "source_notes": True,
+        "deep_dives": True,
+        "atlas_pages": True,
+    }
+    assert "1 source notes, 1 deep dives, 1 atlas pages" in traceability["chain_summary"]
 
 
 def test_truth_api_object_traceability_excludes_incidental_deep_dive_mentions(temp_vault):
@@ -2296,6 +2420,9 @@ Processed source note without any derived deep dive.
     assert payload["action"]["finished_at"]
     assert calls == ["deep_dive_workflow"]
     assert actions[0]["status"] == "succeeded"
+    assert actions[0]["impact_summary"]["impact_status"] == "productive"
+    assert actions[0]["impact_summary"]["produced_artifact_count"] == 1
+    assert actions[0]["impact_summary"]["produced_artifact_types"] == ["deep_dive"]
 
 
 def test_truth_api_run_next_action_queue_item_marks_obsolete_when_signal_is_gone(temp_vault, monkeypatch):
@@ -2519,6 +2646,8 @@ Processed source note without any derived deep dive.
     assert failed_action["status"] == "failed"
     assert failed_action["retry_count"] == 1
     assert failed_action["failure_bucket"] == "missing_target"
+    assert failed_action["impact_summary"]["impact_status"] == "failed"
+    assert failed_action["impact_summary"]["lifecycle_stage"] == "failed"
 
 
 def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkeypatch):

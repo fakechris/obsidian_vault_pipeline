@@ -81,6 +81,10 @@ def test_ui_server_root_serves_html_shell(temp_vault):
 
     assert response.status == 200
     assert "OpenClaw Truth UI" in body
+    assert "Workflow Map" in body
+    assert "Orient" in body
+    assert "Inspect" in body
+    assert "Review" in body
     assert "Where To Start" in body
     assert "Orientation Brief" in body
     assert "/api/objects" in body
@@ -106,32 +110,10 @@ def test_ui_server_root_accepts_pack_scope(temp_vault):
 
     assert response.status == 200
     assert "Pack scope: default-knowledge" in body
+    assert 'href="/briefing?pack=default-knowledge"' in body
     assert "/signals?pack=default-knowledge" in body
     assert "inherited from research-tech-signals" in body
     assert "inherited from research-tech-production-chains" in body
-
-
-def test_ui_server_briefing_page_uses_orientation_title(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-
-    _seed_truth_store(temp_vault)
-    server = create_server(temp_vault, host="127.0.0.1", port=0)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/briefing")
-        response = conn.getresponse()
-        body = response.read().decode("utf-8")
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-    assert response.status == 200
-    assert "<title>Orientation Brief</title>" in body
-    assert "<h1>Orientation Brief</h1>" in body
 
 
 def test_ui_server_objects_endpoint_returns_json(temp_vault):
@@ -340,6 +322,7 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert "Why It Matters" in body
     assert "Where To Go Next" in body
     assert "Source contract: wiki_view · object/page" in body
+    assert body.index("Current State") < body.index("Next Actions") < body.index("Why It Matters")
 
 
 def test_ui_server_note_page_preserves_pack_scope_in_shell_nav(temp_vault):
@@ -408,9 +391,27 @@ date: 2026-04-13
     (logs_dir / "pipeline.jsonl").write_text(
         "\n".join(
             [
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T09:00:00Z",
+                        "event_type": "source_archived_to_processed",
+                        "source": "50-Inbox/02-Processing/Harness.md",
+                        "archived": str(processed),
+                    },
+                    ensure_ascii=False,
+                ),
                 '{"event_type":"article_processed","file":"Harness.md","output":"'
                 + str(deep_dive)
                 + '"}',
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T09:11:00Z",
+                        "event_type": "candidates_upserted",
+                        "file": "Harness.md",
+                        "candidates": ["agent-harness"],
+                    },
+                    ensure_ascii=False,
+                ),
                 '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Harness_深度解读.md","mutation":{"target_slug":"alpha"}}',
             ]
         )
@@ -440,6 +441,13 @@ date: 2026-04-13
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
     assert 'href="/note?path=20-Areas%2FAI-Research%2FTopics%2F2026-04%2FHarness_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md&amp;pack=default-knowledge"' in body
+    assert "Current State" in body
+    assert "Inbound Capture" in body
+    assert "Captured 4 inbound events" in body
+    assert "Evidence Traceability" in body
+    assert "Production Chain" in body
+    assert "Next Actions" in body
+    assert body.index("Current State") < body.index("Next Actions") < body.index("Inbound Capture")
 
 
 def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
@@ -597,6 +605,7 @@ def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/events?pack=default-knowledge"' in body
     assert 'href="/summaries?pack=default-knowledge"' in body
     assert "inherited from research-tech-signals" in body
+    assert body.index("Next Actions") < body.index("Signal Types")
 
 
 def test_ui_server_signals_page_renders_missing_surface_contract_error(temp_vault, monkeypatch):
@@ -839,6 +848,9 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert "inherited from event_dossier in research-tech" in body
     assert "Source contract: wiki_view · event/dossier" in body
     assert "Source provider: default-knowledge · event/dossier" in body
+    assert "Grouping kind: object_date_rollup" in body
+    assert "Anchor kind note: 3" in body
+    assert "not a canonical event entity store" in body
 
 
 def test_ui_server_atlas_endpoint_accepts_pack_scope(temp_vault):
@@ -1013,79 +1025,6 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
     assert payload["items"][0]["priority_reason"]
     assert payload["items"][0]["display_title"]
     assert payload["items"][0]["relation_pattern_preview"]
-
-
-def test_ui_server_graph_endpoint_returns_payload(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-
-    _seed_truth_store(temp_vault)
-    server = create_server(temp_vault, host="127.0.0.1", port=0)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/api/graph?pack=default-knowledge")
-        response = conn.getresponse()
-        payload = json.loads(response.read().decode("utf-8"))
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-    assert response.status == 200
-    assert payload["screen"] == "graph/canvas"
-    assert payload["scope"] == "clusters"
-    assert payload["nodes"]
-    assert payload["controls"]["edge_filter_items"]
-
-
-def test_ui_server_graph_page_renders_canvas(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import list_graph_clusters
-
-    _seed_truth_store(temp_vault)
-    cluster = list_graph_clusters(temp_vault)[0]
-    server = create_server(temp_vault, host="127.0.0.1", port=0)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", f"/graph?cluster_id={cluster['cluster_id']}&pack={cluster['pack']}")
-        response = conn.getresponse()
-        body = response.read().decode("utf-8")
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-    assert response.status == 200
-    assert "id='graph-stage'" in body or 'id="graph-stage"' in body
-    assert "Graph Scope" in body
-    assert "Expand graph" in body or "Fully expanded for current bound" in body
-
-
-def test_ui_server_graph_route_is_guarded_for_non_research_packs(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-
-    _seed_truth_store(temp_vault)
-    server = create_server(temp_vault, host="127.0.0.1", port=0)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/api/graph?pack=media-editorial")
-        response = conn.getresponse()
-        payload = json.loads(response.read().decode("utf-8"))
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-    assert response.status == 409
-    assert payload["status"] == "unsupported_pack"
 
 
 def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
@@ -1436,6 +1375,8 @@ def test_ui_server_briefing_endpoint_returns_payload(temp_vault):
     assert payload["active_topics"]
     assert payload["assembly_contract"]["recipe_name"] == "orientation_brief"
     assert [section["id"] for section in payload["compiled_sections"]] == [
+        "signal_loop",
+        "inbound_capture",
         "what_changed",
         "what_matters",
         "needs_review",
@@ -1475,6 +1416,34 @@ def test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-04-18T10:00:00Z",
+                "event_type": "source_archived_to_processed",
+                "source": "50-Inbox/02-Processing/Loose Source.md",
+                "archived": str(loose_source),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1498,8 +1467,11 @@ def test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert "Source provider: research-tech · research-tech-briefing" in body
     assert "Governance Contract" in body
     assert "inherited from research_governance in research-tech" in body
+    assert "Signal Loop" in body
+    assert "Inbound Capture" in body
     assert "What Changed" in body
     assert "Next Actions" in body
+    assert body.index("Signal Loop") < body.index("Next Actions") < body.index("Inbound Capture")
 
 
 def test_ui_server_briefing_page_renders_governance_resolver_metadata(temp_vault, monkeypatch):
@@ -1691,6 +1663,36 @@ Processed source note without downstream chain.
     assert response.status == 200
     assert 'href="/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md&amp;pack=default-knowledge"' in body
     assert "inherited from research-tech-production-chains" in body
+    assert "Chain status:" in body
+    assert "Missing stages:" in body
+    assert "Current State" in body
+    assert "Chain Gaps" in body
+    assert "Next Actions" in body
+    assert body.index("Current State") < body.index("Next Actions") < body.index("Chain Gaps")
+
+
+def test_ui_server_contradictions_page_renders_detection_semantics(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/contradictions")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Polarity semantics:" in body
+    assert "Evidence semantics:" in body
+    assert "1 positive claims vs 1 negative claims across 2 objects." in body
 
 
 def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, monkeypatch):
@@ -1736,12 +1738,20 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
                     "processor_inputs": ["source_note"],
                     "processor_outputs": ["deep_dive"],
                     "processor_quality_hooks": ["quality"],
+                    "impact_summary": {
+                        "impact_status": "waiting",
+                        "lifecycle_stage": "queued",
+                        "impact_label": "Waiting on queue execution",
+                        "impact_detail": "A queueable action exists and is currently waiting to run.",
+                        "produced_artifact_count": 0,
+                    },
                 }
             ],
             "count": 1,
             "query": "",
             "status": "",
             "status_counts": {"queued": 1},
+            "impact_counts": {"waiting": 1},
             "queued_safe_count": 1,
             "failed_count": 0,
             "failure_buckets": {},
@@ -1770,6 +1780,7 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
     assert "Processor: llm_structured" in body
     assert "Inputs: source_note" in body
     assert "Outputs: deep_dive" in body
+    assert "Impact: Waiting on queue execution" in body
     assert "Quality hooks: quality" in body
     assert "Governance Contract" in body
     assert "declared by research_governance in research-tech" in body
@@ -1813,6 +1824,12 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
                     "title": "Loose Source",
                     "detail": "Processed source note has no derived deep dive yet.",
                     "source_path": "/note?path=50-Inbox%2F03-Processed%2FLoose%20Source.md",
+                    "capture_summary": {
+                        "status": "observed",
+                        "summary": "Observed 1 inbound capture event but no downstream artifact yet.",
+                        "captured_event_count": 1,
+                        "produced_artifact_count": 0,
+                    },
                     "downstream_effects": [],
                     "recommended_action": {
                         "kind": "deep_dive_workflow",
@@ -1826,13 +1843,28 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
                         "governance_provider_pack": "research-tech",
                         "safe_to_run": True,
                     },
+                    "impact_summary": {
+                        "impact_status": "waiting",
+                        "lifecycle_stage": "queued",
+                        "impact_label": "Waiting on queue execution",
+                        "impact_detail": "A queueable action exists and is currently waiting to run.",
+                        "produced_artifact_count": 0,
+                    },
                 }
             ],
             "count": 1,
             "query": query or "",
             "signal_type": signal_type or "",
             "type_counts": {"source_needs_deep_dive": 1},
+            "impact_counts": {"waiting": 1},
             "signal_type_explanations": {"source_needs_deep_dive": "demo"},
+            "operator_rail": [
+                {
+                    "label": "Action Queue",
+                    "path": "/actions",
+                    "detail": "Run or inspect queued actions derived from signals.",
+                }
+            ],
         },
     )
 
@@ -1858,6 +1890,9 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
     assert "safe" in body
     assert "Governance Contract" in body
     assert "declared by research_governance in research-tech" in body
+    assert "Next Actions" in body
+    assert "Impact: Waiting on queue execution" in body
+    assert "Inbound capture: Observed 1 inbound capture event but no downstream artifact yet." in body
 
 
 def test_ui_server_actions_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
@@ -2770,6 +2805,19 @@ def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_s
     assert "Review scoped contradictions" not in body
     assert "<h2>Evolution</h2>" not in body
     assert "<h2>Atlas / MOC</h2>" not in body
+
+
+def test_render_topic_page_includes_production_chain_section(temp_vault):
+    import openclaw_pipeline.commands.ui_server as ui_server
+    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+
+    _seed_truth_store(temp_vault)
+    payload = build_topic_overview_payload(temp_vault, "alpha")
+
+    body = ui_server._render_topic_page(payload)
+
+    assert "<h2>Production Chain</h2>" in body
+    assert "Missing source notes" in body or "Missing deep dives" in body or "Missing Atlas / MOC reach" in body
 
 
 def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, monkeypatch):

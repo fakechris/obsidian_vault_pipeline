@@ -89,19 +89,55 @@ Inspect:
 Expected:
 
 - `/` renders a workbench entry surface with:
+  - `Workflow Map`
+  - `Orient`
+  - `Inspect`
+  - `Review`
+  - `Trace`
+  - `Explore`
   - `Where To Start`
   - `Orientation Brief`
   - `entry_sections`
 - shared shell pages keep the requested pack scope in links/forms
+- key operator pages render `Next Actions`
 - assembly contract card is visible on each page
 - governance contract card is visible on runtime/operator pages
 - `/briefing` behaves as an orientation product rather than a raw operator snapshot
+- `/briefing` includes a leading `Signal Loop` compiled section
+- `/briefing` also includes an `Inbound Capture` compiled section when recent signals carry note-level capture audit
+- note/object/briefing/production pages lead with:
+  - a lead compiled section
+  - then `Next Actions`
+  - then deeper evidence/review sections
+- note pages expose an `Inbound Capture` compiled section when pipeline/refine audit exists for the note
+- `/signals` exposes:
+  - impact counts
+  - item-level `Impact`
+  - item-level `Inbound capture`
+  - the same lifecycle language as `/actions`
+- `/actions` exposes:
+  - impact counts
+  - item-level `Impact`
+  - queue/result lifecycle phrased the same way as `/signals`
 - object/topic/event/contradiction pages expose compiled sections for:
   - current state
   - why it matters
   - evidence traceability
+  - production chain
   - open tensions
   - where to go next
+- note/object/topic/production pages make chain state visible without CLI/DB inspection:
+  - `chain_status`
+  - `missing_stages`
+  - `chain_summary`
+- `/events` explains:
+  - grouping kind
+  - anchor kind counts
+  - why grouped rows are events instead of only dated-note projections
+- `/contradictions` explains:
+  - polarity semantics
+  - evidence semantics
+  - per-row tension summary
 - compatibility-pack pages show assembly recipe inheritance from `research-tech`
 - compatibility-pack pages also show when the source contract provider resolves to `default-knowledge`
 - compatibility-pack runtime pages show governance inheritance from `research-tech`
@@ -153,13 +189,20 @@ Expected:
   - `governance_contract`
   - stable `compiled_sections`
   - `section_nav`
+  - `loop_summary`
+  - an `inbound_capture` compiled section when recent signals carry capture audit
   - item-level `recommended_action.resolver_rule_name`
   - item-level `recommended_action.governance_provider_*`
 - `/api/signals` includes:
   - `governance_contract`
+  - `impact_counts`
+  - item-level `impact_summary`
+  - item-level `capture_summary`
   - item-level `recommended_action.resolver_rule_name`
   - item-level `recommended_action.governance_provider_*`
 - `/api/actions` includes:
   - `governance_contract`
+  - `impact_counts`
+  - item-level `impact_summary`
   - item-level `resolver_rule_name`
   - item-level `governance_provider_*`

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import math
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -22,11 +21,10 @@ from ..truth_api import (
     _batch_object_rows,
     count_objects,
     get_briefing_snapshot,
-    get_graph_cluster_scope,
     get_graph_cluster_detail,
-    get_graph_object_scope,
     get_object_detail,
     get_object_traceability,
+    get_note_inbound_capture_summary,
     get_note_provenance,
     get_note_traceability,
     get_object_provenance_map,
@@ -89,6 +87,46 @@ def _compiled_section(
     }
 
 
+def _workflow_group(
+    group_id: str,
+    title: str,
+    summary: str,
+    items: list[dict[str, str]],
+) -> dict[str, Any]:
+    return {
+        "id": group_id,
+        "title": title,
+        "summary": summary,
+        "items": items,
+    }
+
+
+def _operator_action(label: str, path: str, detail: str) -> dict[str, str]:
+    return {
+        "label": label,
+        "path": path,
+        "detail": detail,
+    }
+
+
+def _impact_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    return dict(
+        Counter(
+            str((item.get("impact_summary") or {}).get("impact_status") or "unknown")
+            for item in items
+        )
+    )
+
+
+def _capture_status_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    return dict(
+        Counter(
+            str((item.get("capture_summary") or {}).get("status") or "missing")
+            for item in items
+        )
+    )
+
+
 def _section_nav_from_compiled_sections(sections: list[dict[str, Any]]) -> list[dict[str, str]]:
     return [
         {
@@ -97,27 +135,6 @@ def _section_nav_from_compiled_sections(sections: list[dict[str, Any]]) -> list[
         }
         for section in sections
     ]
-
-
-def _compiled_section_by_id(
-    sections: list[dict[str, Any]],
-    section_id: str,
-) -> dict[str, Any]:
-    return next((section for section in sections if str(section.get("id") or "") == section_id), {})
-
-
-def _remap_compiled_section(
-    section: dict[str, Any],
-    *,
-    section_id: str,
-    label: str,
-    summary: str,
-    limit: int | None = None,
-) -> dict[str, Any]:
-    items = list(section.get("items") or [])
-    if limit is not None:
-        items = items[:limit]
-    return _compiled_section(section_id, label, summary=summary, items=items)
 
 
 def _db_path(vault_dir: Path | str) -> Path:
@@ -877,6 +894,7 @@ def build_signal_browser_payload(
             "requested_pack": requested_pack,
             "surface_contract": surface_contract,
             "governance_contract": governance_contract,
+            "operator_rail": [],
             "surface_error": (
                 f"Pack '{surface_contract['requested_pack']}' does not expose a shared shell "
                 f"'signals' surface."
@@ -886,6 +904,7 @@ def build_signal_browser_payload(
             "query": query or "",
             "signal_type": signal_type or "",
             "type_counts": {},
+            "impact_counts": {},
             "signal_type_explanations": SIGNAL_TYPE_EXPLANATIONS,
         }
     items = list_signals(vault_dir, pack_name=pack_name, signal_type=signal_type, query=query)
@@ -894,11 +913,42 @@ def build_signal_browser_payload(
         "requested_pack": requested_pack,
         "surface_contract": surface_contract,
         "governance_contract": governance_contract,
+        "operator_rail": [
+            _operator_action(
+                "Action Queue",
+                _scoped_path("/actions", pack_name=requested_pack),
+                "Run or inspect queued actions.",
+            ),
+            _operator_action(
+                "Production Browser",
+                _scoped_path("/production", pack_name=requested_pack),
+                "Trace current production weak points.",
+            ),
+            _operator_action(
+                "Contradictions",
+                _scoped_path(
+                    "/contradictions" if _supports_research_shell(pack_name) else "/search",
+                    pack_name=requested_pack,
+                ),
+                (
+                    "Review semantic tensions."
+                    if _supports_research_shell(pack_name)
+                    else "Shared-shell search fallback."
+                ),
+            ),
+            _operator_action(
+                "Orientation Brief",
+                _scoped_path("/briefing", pack_name=requested_pack),
+                "Return to the current entry product.",
+            ),
+        ],
         "items": items,
         "count": len(items),
         "query": query or "",
         "signal_type": signal_type or "",
         "type_counts": dict(Counter(item["signal_type"] for item in items)),
+        "impact_counts": _impact_counts(items),
+        "capture_status_counts": _capture_status_counts(items),
         "signal_type_explanations": SIGNAL_TYPE_EXPLANATIONS,
     }
 
@@ -921,6 +971,7 @@ def build_action_queue_payload(
         "query": query or "",
         "status": status or "",
         "status_counts": dict(Counter(str(item["status"]) for item in items)),
+        "impact_counts": _impact_counts(items),
         "queued_safe_count": sum(1 for item in items if item.get("status") == "queued" and item.get("safe_to_run")),
         "failed_count": sum(1 for item in items if item.get("status") == "failed"),
         "failure_buckets": dict(
@@ -968,6 +1019,16 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
             "compiled_sections": [],
             "section_nav": [],
             "first_useful_sign": None,
+            "loop_summary": {
+                "productive_count": 0,
+                "waiting_count": 0,
+                "running_count": 0,
+                "ready_count": 0,
+                "completed_count": 0,
+                "failed_count": 0,
+                "stalled_count": 0,
+                "review_only_count": 0,
+            },
             "queue_summary": {
                 "queued_count": 0,
                 "safe_queued_count": 0,
@@ -1022,7 +1083,140 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         }
         for item in snapshot.get("priority_items", [])[:5]
     ]
+    loop_summary = {
+        "productive_count": sum(
+            1
+            for item in snapshot.get("recent_signals", [])
+            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "productive"
+        ),
+        "waiting_count": sum(
+            1
+            for item in snapshot.get("recent_signals", [])
+            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "waiting"
+        ),
+        "running_count": sum(
+            1
+            for item in snapshot.get("recent_signals", [])
+            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "running"
+        ),
+        "ready_count": sum(
+            1
+            for item in snapshot.get("recent_signals", [])
+            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "ready"
+        ),
+        "completed_count": sum(
+            1
+            for item in snapshot.get("recent_signals", [])
+            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "completed"
+        ),
+        "failed_count": sum(
+            1
+            for item in snapshot.get("recent_signals", [])
+            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "failed"
+        ),
+        "stalled_count": sum(
+            1
+            for item in snapshot.get("recent_signals", [])
+            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "stalled"
+        ),
+        "review_only_count": sum(
+            1
+            for item in snapshot.get("recent_signals", [])
+            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "review_only"
+        ),
+    }
+    signal_loop_items = [
+        {
+            "kind": "productive",
+            "label": "Productive",
+            "path": _scoped_path("/signals", pack_name=requested_pack),
+            "detail": f"{loop_summary['productive_count']} signals produced visible downstream change.",
+        },
+        {
+            "kind": "waiting",
+            "label": "Waiting",
+            "path": _scoped_path("/actions", pack_name=requested_pack),
+            "detail": f"{loop_summary['waiting_count']} signals currently have queued execution waiting.",
+        },
+        {
+            "kind": "running",
+            "label": "Running",
+            "path": _scoped_path("/actions", pack_name=requested_pack),
+            "detail": f"{loop_summary['running_count']} signals are currently executing.",
+        },
+        {
+            "kind": "blocked",
+            "label": "Blocked",
+            "path": _scoped_path("/actions", pack_name=requested_pack),
+            "detail": (
+                f"{loop_summary['failed_count'] + loop_summary['stalled_count']} signals are failed or stalled."
+            ),
+        },
+        {
+            "kind": "review_only",
+            "label": "Review Only",
+            "path": _scoped_path("/signals", pack_name=requested_pack),
+            "detail": f"{loop_summary['review_only_count']} signals currently route to review rather than queued execution.",
+        },
+    ]
+    productive_signal = next(
+        (
+            item
+            for item in snapshot.get("recent_signals", [])
+            if str((item.get("impact_summary") or {}).get("impact_status") or "") == "productive"
+        ),
+        None,
+    )
+    first_useful_sign = (
+        {
+            "signal_id": str(productive_signal.get("signal_id") or ""),
+            "kind": str(productive_signal.get("signal_type") or ""),
+            "title": str(productive_signal.get("title") or ""),
+            "detail": str((productive_signal.get("impact_summary") or {}).get("impact_detail") or ""),
+            "path": str(
+                ((productive_signal.get("recommended_action") or {}).get("queue_path"))
+                or ((productive_signal.get("recommended_action") or {}).get("path"))
+                or productive_signal.get("source_path")
+                or ""
+            ),
+            "source_paths": list(productive_signal.get("note_paths", [])),
+            "object_ids": list(productive_signal.get("object_ids", [])),
+            "recommended_action": productive_signal.get("recommended_action"),
+        }
+        if productive_signal is not None
+        else snapshot.get("first_useful_sign")
+    )
+    inbound_capture_items = [
+        {
+            "kind": "capture_signal",
+            "label": str(item.get("title") or ""),
+            "path": str(item.get("source_path") or ""),
+            "detail": str((item.get("capture_summary") or {}).get("summary") or ""),
+        }
+        for item in snapshot.get("recent_signals", [])
+        if str((item.get("capture_summary") or {}).get("status") or "") != "missing"
+    ]
     compiled_sections = [
+        _compiled_section(
+            "signal_loop",
+            "Signal Loop",
+            summary=(
+                f"{loop_summary['productive_count']} productive, "
+                f"{loop_summary['waiting_count']} waiting, "
+                f"{loop_summary['failed_count'] + loop_summary['stalled_count']} blocked/stalled."
+            ),
+            items=signal_loop_items,
+        ),
+        _compiled_section(
+            "inbound_capture",
+            "Inbound Capture",
+            summary=(
+                f"{len(inbound_capture_items)} recent signals currently expose deterministic inbound capture audit."
+                if inbound_capture_items
+                else "No recent signals currently carry inbound capture audit."
+            ),
+            items=inbound_capture_items,
+        ),
         _compiled_section(
             "what_changed",
             "What Changed",
@@ -1054,6 +1248,28 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
             items=next_action_items,
         ),
     ]
+    operator_rail = [
+        _operator_action(
+            "Signals",
+            _scoped_path("/signals", pack_name=requested_pack),
+            "Open active signal review from the current shell.",
+        ),
+        _operator_action(
+            "Action Queue",
+            _scoped_path("/actions", pack_name=requested_pack),
+            "Run or inspect queued actions.",
+        ),
+        _operator_action(
+            "Production Browser",
+            _scoped_path("/production", pack_name=requested_pack),
+            "Inspect production-chain weak points and reach.",
+        ),
+        _operator_action(
+            "Search",
+            _scoped_path("/search", pack_name=requested_pack),
+            "Jump into freeform search from the current orientation pass.",
+        ),
+    ]
     return {
         "screen": "briefing/intelligence",
         "requested_pack": requested_pack,
@@ -1061,6 +1277,9 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         "assembly_contract": assembly_contract,
         "governance_contract": governance_contract,
         **snapshot,
+        "first_useful_sign": first_useful_sign,
+        "loop_summary": loop_summary,
+        "operator_rail": operator_rail,
         "compiled_sections": compiled_sections,
         "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
@@ -1140,6 +1359,7 @@ def build_object_page_payload(
         if research_shell_enabled
         else []
     )
+    production_chain = get_object_traceability(vault_dir, object_id, pack_name=pack_name)
     compiled_sections = [
         _compiled_section(
             "current_state",
@@ -1209,6 +1429,53 @@ def build_object_page_payload(
             ],
         ),
         _compiled_section(
+            "production_chain",
+            "Production Chain",
+            summary=str(production_chain.get("chain_summary") or ""),
+            items=[
+                {
+                    "kind": "chain_status",
+                    "label": "Chain status",
+                    "path": "",
+                    "detail": str(production_chain.get("chain_status") or ""),
+                },
+                {
+                    "kind": "missing_stages",
+                    "label": "Missing stages",
+                    "path": "",
+                    "detail": ", ".join(
+                        str(item).replace("_", " ")
+                        for item in production_chain.get("missing_stages", [])
+                    )
+                    or "None",
+                },
+                *[
+                    {
+                        "kind": "deep_dive",
+                        "label": item["title"],
+                        "path": _scoped_path(
+                            f"/note?path={quote(item['path'], safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                        "detail": "Downstream deep dive",
+                    }
+                    for item in production_chain["deep_dives"][:2]
+                ],
+                *[
+                    {
+                        "kind": "atlas_page",
+                        "label": item["title"],
+                        "path": _scoped_path(
+                            f"/note?path={quote(item['path'], safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                        "detail": "Atlas / MOC reach",
+                    }
+                    for item in production_chain["atlas_pages"][:2]
+                ],
+            ],
+        ),
+        _compiled_section(
             "open_tensions",
             "Open Tensions",
             summary=f"{len(detail['contradictions']) if research_shell_enabled else 0} contradictions and {len(stale_summary_details) if research_shell_enabled else 0} stale-summary signals remain.",
@@ -1265,13 +1532,43 @@ def build_object_page_payload(
             ],
         ),
     ]
+    operator_rail = [
+        _operator_action(
+            "Topic overview",
+            _scoped_path(f"/topic?id={quote(object_id, safe='')}", pack_name=requested_pack),
+            "Open the surrounding topic page.",
+        ),
+        _operator_action(
+            "Event dossier" if research_shell_enabled else "Signals",
+            research_links["events_path"] if research_shell_enabled else _scoped_path("/signals", pack_name=requested_pack),
+            (
+                "See timeline context for this object."
+                if research_shell_enabled
+                else "Open active signal review."
+            ),
+        ),
+        _operator_action(
+            "Contradiction review" if research_shell_enabled else "Search",
+            research_links["contradictions_path"] if research_shell_enabled else _scoped_path("/search", pack_name=requested_pack),
+            (
+                "Inspect open contradictions for this object."
+                if research_shell_enabled
+                else "Search laterally from this object."
+            ),
+        ),
+        _operator_action(
+            "Production Browser",
+            _scoped_path("/production", pack_name=requested_pack),
+            "Inspect downstream production chain state.",
+        ),
+    ]
     return {
         "screen": "object/page",
         "requested_pack": requested_pack,
         "assembly_contract": _assembly_contract("object_brief", pack_name=pack_name),
         "research_shell_enabled": research_shell_enabled,
         **detail,
-        "production_chain": get_object_traceability(vault_dir, object_id, pack_name=pack_name),
+        "production_chain": production_chain,
         "relations": relations,
         "claim_count": len(detail["claims"]),
         "relation_count": len(relations),
@@ -1294,9 +1591,9 @@ def build_object_page_payload(
         ),
         "links": {
             "topic_path": _scoped_path(f"/topic?id={quote(object_id, safe='')}", pack_name=requested_pack),
-            "graph_path": _graph_path(pack_name=requested_pack, object_id=object_id),
             **research_links,
         },
+        "operator_rail": operator_rail,
         "compiled_sections": compiled_sections,
         "section_nav": [{"href": "#summary", "label": "Summary"}, *_section_nav_from_compiled_sections(compiled_sections)],
     }
@@ -1353,6 +1650,11 @@ def build_topic_overview_payload(
         }
         for item in neighborhood["neighbors"]
     ]
+    production_summary = _build_production_summary(
+        vault_dir,
+        scoped_object_ids,
+        pack_name=pack_name,
+    )
     research_links = {
         "events_path": _scoped_path(f"/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
         "contradictions_path": _scoped_path(
@@ -1368,14 +1670,12 @@ def build_topic_overview_payload(
             pack_name=requested_pack,
         ),
         "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
-        "graph_path": _graph_path(pack_name=requested_pack, object_id=object_id),
     } if research_shell_enabled else {
         "events_path": "",
         "contradictions_path": "",
         "summaries_path": "",
         "deep_dives_path": "",
         "atlas_path": "",
-        "graph_path": _graph_path(pack_name=requested_pack, object_id=object_id),
     }
     compiled_sections = [
         _compiled_section(
@@ -1451,6 +1751,54 @@ def build_topic_overview_payload(
             ],
         ),
         _compiled_section(
+            "production_chain",
+            "Production Chain",
+            summary=(
+                f"{production_summary['object_count']} objects in scope currently resolve to "
+                f"{production_summary['counts']['source_notes']} source notes, "
+                f"{production_summary['counts']['deep_dives']} deep dives, and "
+                f"{production_summary['counts']['atlas_pages']} atlas pages."
+            ),
+            items=[
+                *[
+                    {
+                        "kind": "top_deep_dive",
+                        "label": item["title"],
+                        "path": _scoped_path(
+                            f"/note?path={quote(item['path'], safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                        "detail": f"Supports {item['object_count']} objects in this topic scope.",
+                    }
+                    for item in production_summary["top_deep_dives"][:2]
+                ],
+                *[
+                    {
+                        "kind": "top_atlas_page",
+                        "label": item["title"],
+                        "path": _scoped_path(
+                            f"/note?path={quote(item['path'], safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                        "detail": f"Reaches {item['object_count']} objects in this topic scope.",
+                    }
+                    for item in production_summary["top_atlas_pages"][:2]
+                ],
+                *[
+                    {
+                        "kind": "gap_signal",
+                        "label": item["label"],
+                        "path": _scoped_path(
+                            f"/production?q={quote(object_id, safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                        "detail": f"{item['count']} objects in this topic scope.",
+                    }
+                    for item in production_summary["signals"][:3]
+                ],
+            ],
+        ),
+        _compiled_section(
             "open_tensions",
             "Open Tensions",
             summary=f"{len(scoped_contradictions)} open contradictions and {len(scoped_stale_summaries)} stale summaries remain in this topic scope.",
@@ -1507,6 +1855,36 @@ def build_topic_overview_payload(
             ],
         ),
     ]
+    operator_rail = [
+        _operator_action(
+            "Center object",
+            _scoped_path(f"/object?id={quote(object_id, safe='')}", pack_name=requested_pack),
+            "Open the canonical object page.",
+        ),
+        _operator_action(
+            "Event dossier" if research_shell_enabled else "Signals",
+            research_links["events_path"] if research_shell_enabled else _scoped_path("/signals", pack_name=requested_pack),
+            (
+                "See time-bounded activity around this topic."
+                if research_shell_enabled
+                else "Review active shell signals."
+            ),
+        ),
+        _operator_action(
+            "Contradictions" if research_shell_enabled else "Search",
+            research_links["contradictions_path"] if research_shell_enabled else _scoped_path("/search", pack_name=requested_pack),
+            (
+                "Review open tensions in topic scope."
+                if research_shell_enabled
+                else "Search laterally from this topic."
+            ),
+        ),
+        _operator_action(
+            "Production Browser",
+            _scoped_path("/production", pack_name=requested_pack),
+            "Inspect production-chain weak points in the current shell.",
+        ),
+    ]
     return {
         "screen": "overview/topic",
         "requested_pack": requested_pack,
@@ -1518,11 +1896,7 @@ def build_topic_overview_payload(
         "neighbor_count": len(neighbors),
         "center_summary": detail["summary"]["summary_text"] if detail["summary"] else "",
         "provenance": detail["provenance"],
-        "production_summary": _build_production_summary(
-            vault_dir,
-            scoped_object_ids,
-            pack_name=pack_name,
-        ),
+        "production_summary": production_summary,
         "review_context": review_context,
         "review_history": (
             list_review_actions(
@@ -1560,9 +1934,9 @@ def build_topic_overview_payload(
                 f"/object?id={quote(object_id, safe='')}",
                 pack_name=requested_pack,
             ),
-            "graph_path": _graph_path(pack_name=requested_pack, object_id=object_id),
             **research_links,
         },
+        "operator_rail": operator_rail,
         "compiled_sections": compiled_sections,
         "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
@@ -1580,6 +1954,7 @@ def build_event_dossier_payload(
     limit: int | None = None,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
+    research_shell_enabled = _supports_research_shell(pack_name)
     effective_limit = DEFAULT_EVENT_DOSSIER_LIMIT if limit is None else limit
     events = [
         _build_timeline_event_item(row)
@@ -1646,6 +2021,7 @@ def build_event_dossier_payload(
     ]
     event_type_counts = Counter(event["event_kind"] for event in events)
     row_type_counts = Counter(event["row_type"] for event in events)
+    anchor_kind_counts = Counter(event["timeline_anchor_kind"] for event in events)
     semantic_roles = Counter(event["semantic_role"] for event in events)
     compiled_sections = [
         _compiled_section(
@@ -1738,6 +2114,37 @@ def build_event_dossier_payload(
             ],
         ),
     ]
+    operator_rail = [
+        _operator_action(
+            "Production Browser",
+            _scoped_path("/production", pack_name=requested_pack),
+            "Inspect production chains behind the visible timeline scope.",
+        ),
+        _operator_action(
+            "Contradictions",
+            _scoped_path(
+                f"/contradictions?q={quote(query or '', safe='')}",
+                pack_name=requested_pack,
+            )
+            if query
+            else _scoped_path("/contradictions", pack_name=requested_pack),
+            "Review contradiction rows for the current dossier scope.",
+        ),
+        _operator_action(
+            "Signals",
+            _scoped_path("/signals", pack_name=requested_pack),
+            "Open the active signal queue.",
+        ),
+        _operator_action(
+            "Clusters" if research_shell_enabled else "Search",
+            _scoped_path("/clusters" if research_shell_enabled else "/search", pack_name=requested_pack),
+            (
+                "Explore graph clusters connected to current work."
+                if research_shell_enabled
+                else "Search laterally from the current shell."
+            ),
+        ),
+    ]
     return {
         "screen": "event/dossier",
         "requested_pack": requested_pack,
@@ -1752,8 +2159,14 @@ def build_event_dossier_payload(
         "is_limited": effective_limit is not None,
         "timeline_contract": {
             "timeline_kind": "dated_note_projection",
+            "grouping_kind": "object_date_rollup",
             "row_type_counts": dict(row_type_counts),
+            "anchor_kind_counts": dict(anchor_kind_counts),
             "semantic_roles": dict(semantic_roles),
+            "event_vs_note_explanation": (
+                "Event Dossier groups dated note and heading projections by object and date; "
+                "it is not a canonical event entity store."
+            ),
         },
         "production_summary": _build_production_summary(
             vault_dir,
@@ -1769,6 +2182,7 @@ def build_event_dossier_payload(
             "Event Dossier is a timeline over dated notes projected from indexed pages, not a separate event entity system.",
             "page_date rows come from note-level dates; heading_date rows come from dated section headings.",
         ],
+        "operator_rail": operator_rail,
         "query": query or "",
         "compiled_sections": compiled_sections,
         "section_nav": _section_nav_from_compiled_sections(compiled_sections),
@@ -1879,10 +2293,6 @@ def build_cluster_browser_payload(
                 "row_pack": str(item.get("row_pack") or item["pack"]),
                 "pack": requested_pack,
                 "detail_path": summary["cluster"]["detail_path"],
-                "graph_path": _graph_path(
-                    pack_name=requested_pack,
-                    cluster_id=str(item["cluster_id"]),
-                ),
                 "center_object_path": summary["cluster"]["center_object_path"],
                 "member_links": summary["cluster"]["member_links"],
                 "display_title": summary["display_title"],
@@ -1939,7 +2349,6 @@ def build_cluster_browser_payload(
     return {
         "screen": "graph/clusters",
         "requested_pack": pack_name or "",
-        "graph_path": _graph_path(pack_name=pack_name or ""),
         "query": query or "",
         "limit": limit,
         "is_limited": True,
@@ -2025,10 +2434,6 @@ def build_cluster_detail_payload(
         "requested_pack": requested_pack,
         "cluster": enriched_cluster,
         "browser_path": f"/clusters?pack={quote(requested_pack, safe='')}",
-        "graph_path": _graph_path(
-            pack_name=requested_pack,
-            cluster_id=str(cluster["cluster_id"]),
-        ),
         "edges": enriched_edges,
         **sections,
         "model_notes": [
@@ -2036,641 +2441,6 @@ def build_cluster_detail_payload(
             "Edges are filtered to the cluster's own member set inside the requested pack projection.",
         ],
     }
-
-
-DEFAULT_GRAPH_CANVAS_CLUSTER_LIMIT = 12
-DEFAULT_GRAPH_CANVAS_MEMBER_LIMIT = 10
-DEFAULT_GRAPH_CANVAS_RELATED_LIMIT = 4
-DEFAULT_GRAPH_CANVAS_EXPAND_STEP = 6
-MAX_GRAPH_CANVAS_EXPAND_LEVEL = 4
-
-
-def _graph_expand_level(value: int | str | None) -> int:
-    try:
-        normalized = int(value or 0)
-    except (TypeError, ValueError):
-        normalized = 0
-    return max(0, min(normalized, MAX_GRAPH_CANVAS_EXPAND_LEVEL))
-
-
-def _graph_path(
-    *,
-    pack_name: str,
-    cluster_id: str | None = None,
-    object_id: str | None = None,
-    expand: int = 0,
-    edge_filter: str = "all",
-) -> str:
-    query_items = []
-    if cluster_id:
-        query_items.append(f"cluster_id={quote(cluster_id, safe='')}")
-    if object_id:
-        query_items.append(f"object_id={quote(object_id, safe='')}")
-    if expand:
-        query_items.append(f"expand={expand}")
-    if edge_filter and edge_filter != "all":
-        query_items.append(f"edge_filter={quote(edge_filter, safe='')}")
-    if pack_name:
-        query_items.append(f"pack={quote(pack_name, safe='')}")
-    return "/graph" + (f"?{'&'.join(query_items)}" if query_items else "")
-
-
-def _graph_node_id(kind: str, raw_id: str) -> str:
-    return f"{kind}:{raw_id}"
-
-
-def _ring_layout(
-    node_ids: list[str],
-    *,
-    center_x: float = 0.0,
-    center_y: float = 0.0,
-    start_radius: float = 260.0,
-    ring_step: float = 180.0,
-    slots_per_ring: int = 8,
-) -> dict[str, dict[str, float]]:
-    positions: dict[str, dict[str, float]] = {}
-    if not node_ids:
-        return positions
-    for index, node_id in enumerate(node_ids):
-        ring = index // slots_per_ring
-        slot = index % slots_per_ring
-        slot_count = min(slots_per_ring, len(node_ids) - ring * slots_per_ring)
-        angle = (2 * math.pi * slot / max(1, slot_count)) - (math.pi / 2)
-        radius = start_radius + ring * ring_step
-        positions[node_id] = {
-            "x": center_x + math.cos(angle) * radius,
-            "y": center_y + math.sin(angle) * radius,
-        }
-    return positions
-
-
-def _overview_layout(node_ids: list[str]) -> dict[str, dict[str, float]]:
-    if not node_ids:
-        return {}
-    positions = {node_ids[0]: {"x": 0.0, "y": 0.0}}
-    positions.update(_ring_layout(node_ids[1:], start_radius=360.0, ring_step=220.0, slots_per_ring=6))
-    return positions
-
-
-def _graph_edge_family(edge_kind: str) -> str:
-    family, _subtype = _edge_kind_parts(edge_kind)
-    return family
-
-
-def _detail_action(label: str, path: str) -> dict[str, str]:
-    return {"label": label, "path": path}
-
-
-def _graph_node(
-    *,
-    node_id: str,
-    label: str,
-    node_type: str,
-    x: float,
-    y: float,
-    size: float,
-    tone: str,
-    detail: dict[str, Any],
-    secondary_label: str = "",
-    badges: list[str] | None = None,
-) -> dict[str, Any]:
-    return {
-        "id": node_id,
-        "label": label,
-        "secondary_label": secondary_label,
-        "node_type": node_type,
-        "x": round(x, 2),
-        "y": round(y, 2),
-        "size": size,
-        "tone": tone,
-        "badges": badges or [],
-        "detail": detail,
-    }
-
-
-def _graph_controls(
-    *,
-    requested_pack: str,
-    expand_level: int,
-    can_expand: bool,
-    cluster_id: str | None = None,
-    object_id: str | None = None,
-    edge_filter: str = "all",
-    edge_filter_items: list[dict[str, str]] | None = None,
-) -> dict[str, Any]:
-    next_expand = expand_level + 1
-    return {
-        "expand_level": expand_level,
-        "can_expand": can_expand,
-        "expand_path": (
-            _graph_path(
-                pack_name=requested_pack,
-                cluster_id=cluster_id,
-                object_id=object_id,
-                expand=next_expand,
-                edge_filter=edge_filter,
-            )
-            if can_expand
-            else ""
-        ),
-        "reset_path": _graph_path(
-            pack_name=requested_pack,
-            cluster_id=cluster_id,
-            object_id=object_id,
-        ),
-        "edge_filter": edge_filter,
-        "edge_filter_items": edge_filter_items or [{"value": "all", "label": "All edges"}],
-    }
-
-
-def _build_cluster_overview_graph_payload(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None = None,
-    expand_level: int = 0,
-    edge_filter: str = "all",
-) -> dict[str, Any]:
-    requested_pack = pack_name or ""
-    cluster_limit = DEFAULT_GRAPH_CANVAS_CLUSTER_LIMIT + expand_level * DEFAULT_GRAPH_CANVAS_EXPAND_STEP
-    browser = build_cluster_browser_payload(vault_dir, pack_name=pack_name, limit=cluster_limit)
-    items = browser["items"]
-    node_id_by_cluster = {
-        str(item["cluster_id"]): _graph_node_id("cluster", str(item["cluster_id"]))
-        for item in items
-    }
-    positions = _overview_layout([node_id_by_cluster[str(item["cluster_id"])] for item in items])
-    nodes = []
-    for item in items:
-        cluster_id = str(item["cluster_id"])
-        node_id = node_id_by_cluster[cluster_id]
-        graph_path = _graph_path(pack_name=requested_pack, cluster_id=cluster_id)
-        detail = {
-            "title": item.get("display_title") or item["label"],
-            "subtitle": f"{item['member_count']} objects · {item['priority_reason']}",
-            "summary_lines": item["summary_bullets"][:3],
-            "meta_rows": [
-                f"Cluster kind: {item['cluster_kind']}",
-                f"Priority band: {item['priority_band']}",
-                f"Related clusters: {item['related_cluster_count']}",
-            ],
-            "actions": [
-                _detail_action("Open cluster detail", item["detail_path"]),
-                _detail_action("Open cluster graph", graph_path),
-                _detail_action("Open center object", item["center_object_path"]),
-            ],
-        }
-        tone = "attention" if item["priority_band"] == "attention" else "active"
-        nodes.append(
-            _graph_node(
-                node_id=node_id,
-                label=item.get("display_title") or item["label"],
-                node_type="cluster",
-                x=positions[node_id]["x"],
-                y=positions[node_id]["y"],
-                size=46.0 if cluster_id == str(items[0]["cluster_id"]) else 36.0,
-                tone=tone,
-                secondary_label=item["priority_band"],
-                badges=[item["priority_band"], f"{item['member_count']} objects"],
-                detail=detail,
-            )
-        )
-
-    cluster_priority = {str(item["cluster_id"]): str(item["priority_band"]) for item in items}
-    edges: list[dict[str, Any]] = []
-    seen_edges: set[tuple[str, str]] = set()
-    for item in items:
-        source_cluster_id = str(item["cluster_id"])
-        for related in item["related_clusters"]:
-            target_cluster_id = str(related["cluster_id"])
-            if target_cluster_id not in node_id_by_cluster:
-                continue
-            edge_key = tuple(sorted((source_cluster_id, target_cluster_id)))
-            if edge_key in seen_edges:
-                continue
-            seen_edges.add(edge_key)
-            if edge_filter == "strong" and str(related["bridge_band"]) != "strong":
-                continue
-            if edge_filter == "attention" and not (
-                cluster_priority.get(source_cluster_id) == "attention"
-                or cluster_priority.get(target_cluster_id) == "attention"
-            ):
-                continue
-            edges.append(
-                {
-                    "id": f"bridge:{edge_key[0]}:{edge_key[1]}",
-                    "source": node_id_by_cluster[source_cluster_id],
-                    "target": node_id_by_cluster[target_cluster_id],
-                    "edge_type": "cluster_bridge",
-                    "label": str(related["bridge_kind"]).replace("_", " "),
-                    "strength": str(related["bridge_band"]),
-                    "weight": float(related["score"]),
-                }
-            )
-
-    edge_filter_items = [
-        {"value": "all", "label": "All bridges"},
-        {"value": "strong", "label": "Strong bridges"},
-        {"value": "attention", "label": "Attention clusters"},
-    ]
-    return {
-        "screen": "graph/canvas",
-        "requested_pack": requested_pack,
-        "scope": "clusters",
-        "title": "Research Graph",
-        "subtitle": f"{len(nodes)} clusters in view with bounded bridge rendering.",
-        "nodes": nodes,
-        "edges": edges,
-        "default_selection_id": nodes[0]["id"] if nodes else "",
-        "stats": {
-            "node_count": len(nodes),
-            "edge_count": len(edges),
-            "hidden_node_count": max(0, browser["count"] - len(nodes)),
-        },
-        "entry_links": [
-            _detail_action("Back to clusters", _scoped_path("/clusters", pack_name=requested_pack)),
-            _detail_action("Back to briefing", _scoped_path("/briefing", pack_name=requested_pack)),
-        ],
-        "controls": _graph_controls(
-            requested_pack=requested_pack,
-            expand_level=expand_level,
-            can_expand=bool(browser.get("is_limited")) and len(nodes) >= cluster_limit,
-            edge_filter=edge_filter,
-            edge_filter_items=edge_filter_items,
-        ),
-        "model_notes": [
-            "The overview graph is bounded to the top-ranked clusters in the current browser window.",
-            "Bridge edges are derived from pack-scoped related-cluster evidence, not a global full-vault render.",
-        ],
-    }
-
-
-def _build_cluster_graph_payload(
-    vault_dir: Path | str,
-    *,
-    cluster_id: str,
-    pack_name: str | None = None,
-    expand_level: int = 0,
-    edge_filter: str = "all",
-) -> dict[str, Any]:
-    requested_pack = pack_name or ""
-    member_limit = DEFAULT_GRAPH_CANVAS_MEMBER_LIMIT + expand_level * DEFAULT_GRAPH_CANVAS_EXPAND_STEP
-    related_limit = DEFAULT_GRAPH_CANVAS_RELATED_LIMIT + expand_level * 2
-    scope = get_graph_cluster_scope(vault_dir, cluster_id, pack_name=pack_name, object_limit=member_limit)
-    summary = build_cluster_detail_payload(vault_dir, cluster_id=cluster_id, pack_name=pack_name)
-    cluster = summary["cluster"]
-    root_id = _graph_node_id("cluster-root", str(cluster["cluster_id"]))
-    member_node_ids = {
-        str(member["object_id"]): _graph_node_id("object", str(member["object_id"]))
-        for member in scope["visible_members"]
-    }
-    related_clusters = summary["related_clusters"][:related_limit]
-    related_node_ids = {
-        str(item["cluster_id"]): _graph_node_id("cluster", str(item["cluster_id"]))
-        for item in related_clusters
-    }
-    positions = {root_id: {"x": 0.0, "y": 0.0}}
-    positions.update(_ring_layout(list(member_node_ids.values()), start_radius=280.0, ring_step=150.0, slots_per_ring=8))
-    positions.update(
-        _ring_layout(
-            list(related_node_ids.values()),
-            start_radius=620.0,
-            ring_step=190.0,
-            slots_per_ring=6,
-        )
-    )
-
-    nodes = [
-        _graph_node(
-            node_id=root_id,
-            label=summary["display_title"],
-            node_type="cluster_root",
-            x=0.0,
-            y=0.0,
-            size=54.0,
-            tone="attention" if summary["review_context"]["open_contradiction_count"] else "active",
-            secondary_label=cluster["cluster_kind"],
-            badges=[
-                f"{cluster['member_count']} members",
-                f"{summary['review_context']['open_contradiction_count']} contradictions",
-            ],
-            detail={
-                "title": summary["display_title"],
-                "subtitle": f"{cluster['member_count']} objects · {summary['edge_count']} internal edges",
-                "summary_lines": summary["summary_bullets"][:4],
-                "meta_rows": [
-                    f"Structural label: {summary['structural_label']['title']}",
-                    f"Review pressure: {summary['review_context']['open_contradiction_count']} contradictions / {summary['review_context']['stale_summary_count']} stale summaries",
-                    f"Coverage: {summary['review_context']['source_note_count']} source notes / {summary['review_context']['moc_count']} atlas pages",
-                ],
-                "actions": [
-                    _detail_action("Open cluster detail", cluster["detail_path"]),
-                    _detail_action("Back to clusters", summary["browser_path"]),
-                ],
-            },
-        )
-    ]
-    for member in scope["visible_members"]:
-        object_id = str(member["object_id"])
-        node_id = member_node_ids[object_id]
-        graph_path = _graph_path(pack_name=requested_pack, object_id=object_id)
-        nodes.append(
-            _graph_node(
-                node_id=node_id,
-                label=str(member["title"]),
-                node_type="object",
-                x=positions[node_id]["x"],
-                y=positions[node_id]["y"],
-                size=32.0 if member["is_center"] else 24.0,
-                tone="center" if member["is_center"] else "neutral",
-                secondary_label=str(member["object_kind"]),
-                badges=(["center"] if member["is_center"] else []) + [f"degree {member['graph_degree']}"],
-                detail={
-                    "title": str(member["title"]),
-                    "subtitle": f"{member['object_kind']} · degree {member['graph_degree']}",
-                    "summary_lines": [],
-                    "meta_rows": [
-                        f"Object id: {object_id}",
-                        f"Graph role: {'center object' if member['is_center'] else 'cluster member'}",
-                    ],
-                    "actions": [
-                        _detail_action("Open object", _scoped_path(f"/object?id={quote(object_id, safe='')}", pack_name=requested_pack)),
-                        _detail_action("Open topic", _scoped_path(f"/topic?id={quote(object_id, safe='')}", pack_name=requested_pack)),
-                        _detail_action("Open object graph", graph_path),
-                    ],
-                },
-            )
-        )
-    for item in related_clusters:
-        related_cluster_id = str(item["cluster_id"])
-        node_id = related_node_ids[related_cluster_id]
-        nodes.append(
-            _graph_node(
-                node_id=node_id,
-                label=str(item["display_title"]),
-                node_type="related_cluster",
-                x=positions[node_id]["x"],
-                y=positions[node_id]["y"],
-                size=26.0,
-                tone=str(item["bridge_band"]),
-                secondary_label=str(item["bridge_kind"]).replace("_", " "),
-                badges=[str(item["bridge_band"]), f"{item['member_count']} objects"],
-                detail={
-                    "title": str(item["display_title"]),
-                    "subtitle": f"{item['member_count']} objects · {item['reason']}",
-                    "summary_lines": [],
-                    "meta_rows": [
-                        f"Bridge kind: {item['bridge_kind']}",
-                        f"Shared source notes: {item['shared_source_count']}",
-                        f"Shared atlas pages: {item['shared_moc_count']}",
-                    ],
-                    "actions": [
-                        _detail_action("Open related cluster", item["detail_path"]),
-                        _detail_action("Open related cluster graph", _graph_path(pack_name=requested_pack, cluster_id=related_cluster_id)),
-                    ],
-                },
-            )
-        )
-
-    edges = [
-        {
-            "id": f"cluster-center:{cluster['cluster_id']}:{cluster['center_object_id']}",
-            "source": root_id,
-            "target": member_node_ids[str(cluster["center_object_id"])],
-            "edge_type": "cluster_center",
-            "label": "center",
-            "strength": "strong",
-            "weight": 1.0,
-        }
-    ] if str(cluster["center_object_id"]) in member_node_ids else []
-    for edge in scope["visible_edges"]:
-        edge_family = _graph_edge_family(str(edge["edge_kind"]))
-        if edge_filter != "all" and edge_filter != edge_family:
-            continue
-        edges.append(
-            {
-                "id": str(edge["edge_id"]),
-                "source": member_node_ids[str(edge["source_object_id"])],
-                "target": member_node_ids[str(edge["target_object_id"])],
-                "edge_type": edge_family,
-                "label": str(edge["edge_kind"]).replace(":", " · "),
-                "strength": "medium",
-                "weight": float(edge["weight"]),
-            }
-        )
-    if edge_filter in {"all", "bridges"}:
-        for item in related_clusters:
-            edges.append(
-                {
-                    "id": f"bridge:{cluster['cluster_id']}:{item['cluster_id']}",
-                    "source": root_id,
-                    "target": related_node_ids[str(item["cluster_id"])],
-                    "edge_type": "bridge",
-                    "label": str(item["bridge_kind"]).replace("_", " "),
-                    "strength": str(item["bridge_band"]),
-                    "weight": float(item["score"]),
-                }
-            )
-    edge_filter_items = [
-        {"value": "all", "label": "All edges"},
-        {"value": "relation", "label": "Relations"},
-        {"value": "contradiction", "label": "Contradictions"},
-        {"value": "bridges", "label": "Related cluster bridges"},
-    ]
-    return {
-        "screen": "graph/canvas",
-        "requested_pack": requested_pack,
-        "scope": "cluster",
-        "title": summary["display_title"],
-        "subtitle": f"Bounded cluster graph with {len(scope['visible_members'])} visible members and {len(related_clusters)} surfaced neighbor clusters.",
-        "nodes": nodes,
-        "edges": edges,
-        "default_selection_id": root_id,
-        "stats": {
-            "node_count": len(nodes),
-            "edge_count": len(edges),
-            "hidden_member_count": scope["hidden_member_count"],
-            "hidden_edge_count": scope["hidden_edge_count"],
-        },
-        "entry_links": [
-            _detail_action("Back to cluster detail", cluster["detail_path"]),
-            _detail_action("Back to clusters", summary["browser_path"]),
-        ],
-        "controls": _graph_controls(
-            requested_pack=requested_pack,
-            cluster_id=str(cluster["cluster_id"]),
-            expand_level=expand_level,
-            can_expand=scope["hidden_member_count"] > 0 or len(summary["related_clusters"]) > len(related_clusters),
-            edge_filter=edge_filter,
-            edge_filter_items=edge_filter_items,
-        ),
-        "model_notes": [
-            "Cluster graph rendering is intentionally bounded; expand reveals more members rather than loading the full vault graph.",
-            "Related clusters are shown as bridge nodes on the outer ring to keep local structure readable.",
-        ],
-    }
-
-
-def _build_object_graph_payload(
-    vault_dir: Path | str,
-    *,
-    object_id: str,
-    pack_name: str | None = None,
-    expand_level: int = 0,
-    edge_filter: str = "all",
-) -> dict[str, Any]:
-    requested_pack = pack_name or ""
-    neighbor_limit = DEFAULT_GRAPH_CANVAS_MEMBER_LIMIT + expand_level * DEFAULT_GRAPH_CANVAS_EXPAND_STEP
-    scope = get_graph_object_scope(vault_dir, object_id, pack_name=pack_name, neighbor_limit=neighbor_limit)
-    detail = get_object_detail(vault_dir, object_id, pack_name=pack_name)
-    center = scope["center"]
-    center_id = _graph_node_id("object", str(center["object_id"]))
-    neighbor_node_ids = {
-        str(item["object_id"]): _graph_node_id("object", str(item["object_id"]))
-        for item in scope["visible_neighbors"]
-    }
-    positions = {center_id: {"x": 0.0, "y": 0.0}}
-    positions.update(_ring_layout(list(neighbor_node_ids.values()), start_radius=320.0, ring_step=180.0, slots_per_ring=10))
-    relation_types = sorted({str(edge["relation_type"]) for edge in scope["visible_edges"]})
-    if edge_filter not in {"all", *relation_types}:
-        edge_filter = "all"
-    edges = []
-    for edge in scope["visible_edges"]:
-        relation_type = str(edge["relation_type"])
-        if edge_filter != "all" and edge_filter != relation_type:
-            continue
-        edges.append(
-            {
-                "id": f"{edge['source_object_id']}:{edge['target_object_id']}:{relation_type}",
-                "source": center_id,
-                "target": neighbor_node_ids[str(edge["target_object_id"])],
-                "edge_type": "relation",
-                "label": relation_type,
-                "strength": "medium",
-                "weight": 1.0,
-            }
-        )
-    nodes = [
-        _graph_node(
-            node_id=center_id,
-            label=str(center["title"]),
-            node_type="object_center",
-            x=0.0,
-            y=0.0,
-            size=48.0,
-            tone="center",
-            secondary_label=str(center["object_kind"]),
-            badges=[f"{len(detail['relations'])} relations", f"{len(detail['contradictions'])} contradictions"],
-            detail={
-                "title": str(center["title"]),
-                "subtitle": f"{center['object_kind']} · {len(detail['relations'])} outgoing relations",
-                "summary_lines": [str(detail["summary"]["summary_text"])] if detail.get("summary") else [],
-                "meta_rows": [
-                    f"Source slug: {center['source_slug']}",
-                    f"Contradictions: {len(detail['contradictions'])}",
-                    f"Evidence items: {len(detail['evidence'])}",
-                ],
-                "actions": [
-                    _detail_action("Open object", _scoped_path(f"/object?id={quote(str(center['object_id']), safe='')}", pack_name=requested_pack)),
-                    _detail_action("Open topic", _scoped_path(f"/topic?id={quote(str(center['object_id']), safe='')}", pack_name=requested_pack)),
-                ],
-            },
-        )
-    ]
-    for item in scope["visible_neighbors"]:
-        neighbor_id = str(item["object_id"])
-        nodes.append(
-            _graph_node(
-                node_id=neighbor_node_ids[neighbor_id],
-                label=str(item["title"]),
-                node_type="object_neighbor",
-                x=positions[neighbor_node_ids[neighbor_id]]["x"],
-                y=positions[neighbor_node_ids[neighbor_id]]["y"],
-                size=24.0,
-                tone="neutral",
-                secondary_label=str(item["object_kind"]),
-                badges=[str(item["object_kind"])],
-                detail={
-                    "title": str(item["title"]),
-                    "subtitle": f"{item['object_kind']} neighbor",
-                    "summary_lines": [],
-                    "meta_rows": [f"Source slug: {item['source_slug']}"],
-                    "actions": [
-                        _detail_action("Open object", _scoped_path(f"/object?id={quote(neighbor_id, safe='')}", pack_name=requested_pack)),
-                        _detail_action("Open object graph", _graph_path(pack_name=requested_pack, object_id=neighbor_id)),
-                    ],
-                },
-            )
-        )
-    edge_filter_items = [{"value": "all", "label": "All relations"}] + [
-        {"value": relation_type, "label": relation_type}
-        for relation_type in relation_types
-    ]
-    return {
-        "screen": "graph/canvas",
-        "requested_pack": requested_pack,
-        "scope": "object",
-        "title": f"Object Graph: {center['title']}",
-        "subtitle": f"One-hop neighborhood with {len(scope['visible_neighbors'])} visible neighbors.",
-        "nodes": nodes,
-        "edges": edges,
-        "default_selection_id": center_id,
-        "stats": {
-            "node_count": len(nodes),
-            "edge_count": len(edges),
-            "hidden_neighbor_count": scope["hidden_neighbor_count"],
-            "hidden_edge_count": scope["hidden_edge_count"],
-        },
-        "entry_links": [
-            _detail_action("Back to object", _scoped_path(f"/object?id={quote(str(center['object_id']), safe='')}", pack_name=requested_pack)),
-            _detail_action("Back to topic", _scoped_path(f"/topic?id={quote(str(center['object_id']), safe='')}", pack_name=requested_pack)),
-        ],
-        "controls": _graph_controls(
-            requested_pack=requested_pack,
-            object_id=str(center["object_id"]),
-            expand_level=expand_level,
-            can_expand=scope["hidden_neighbor_count"] > 0,
-            edge_filter=edge_filter,
-            edge_filter_items=edge_filter_items,
-        ),
-        "model_notes": [
-            "Object graph is limited to a one-hop neighborhood to keep interaction responsive.",
-            "Expand reveals more neighbors from the same pack-scoped truth projection.",
-        ],
-    }
-
-
-def build_graph_canvas_payload(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None = None,
-    cluster_id: str | None = None,
-    object_id: str | None = None,
-    expand: int = 0,
-    edge_filter: str = "all",
-) -> dict[str, Any]:
-    expand_level = _graph_expand_level(expand)
-    if cluster_id:
-        return _build_cluster_graph_payload(
-            vault_dir,
-            cluster_id=cluster_id,
-            pack_name=pack_name,
-            expand_level=expand_level,
-            edge_filter=edge_filter,
-        )
-    if object_id:
-        return _build_object_graph_payload(
-            vault_dir,
-            object_id=object_id,
-            pack_name=pack_name,
-            expand_level=expand_level,
-            edge_filter=edge_filter,
-        )
-    return _build_cluster_overview_graph_payload(
-        vault_dir,
-        pack_name=pack_name,
-        expand_level=expand_level,
-        edge_filter=edge_filter,
-    )
 
 
 def build_contradiction_browser_payload(
@@ -2808,6 +2578,28 @@ def build_contradiction_browser_payload(
             ],
         ),
     ]
+    operator_rail = [
+        _operator_action(
+            "Signals",
+            _scoped_path("/signals", pack_name=requested_pack),
+            "Open active signals for related maintenance entry points.",
+        ),
+        _operator_action(
+            "Action Queue",
+            _scoped_path("/actions", pack_name=requested_pack),
+            "Inspect queued or failed execution work.",
+        ),
+        _operator_action(
+            "Production Browser",
+            _scoped_path("/production", pack_name=requested_pack),
+            "Trace production gaps behind the visible contradictions.",
+        ),
+        _operator_action(
+            "Events",
+            _scoped_path("/events", pack_name=requested_pack),
+            "Compare contradiction scope against the timeline surface.",
+        ),
+    ]
     return {
         "screen": "truth/contradictions",
         "requested_pack": requested_pack,
@@ -2830,6 +2622,8 @@ def build_contradiction_browser_payload(
         "detection_contract": {
             "model": "page_summary_polarity",
             "confidence": "heuristic",
+            "polarity_semantics": "Positive and negative claim sets are compared within the same contradiction subject scope.",
+            "evidence_semantics": "Ranked evidence is assembled from claim_evidence rows attached to both polarity sides.",
             "status_buckets": {
                 "open": status_counts.get("open", 0),
                 "reviewed": sum(count for row_status, count in status_counts.items() if row_status != "open"),
@@ -2842,6 +2636,7 @@ def build_contradiction_browser_payload(
             CONTRADICTION_HEURISTIC_NOTE,
         ],
         "empty_state": "Zero results usually means the current heuristic did not detect a conflict, not that the vault is globally contradiction-free.",
+        "operator_rail": operator_rail,
         "status": status or "",
         "query": query or "",
         "compiled_sections": compiled_sections,
@@ -2915,6 +2710,11 @@ def _cluster_timeline_events(events: list[dict[str, Any]]) -> list[dict[str, Any
                 "event_labels": [],
                 "semantic_roles": [],
                 "timeline_anchor_labels": [],
+                "grouping_kind": "object_date_rollup",
+                "event_vs_note_explanation": (
+                    "This cluster groups timeline rows for the same object and date; "
+                    "it is a dossier rollup, not a canonical event entity."
+                ),
             },
         )
         cluster["row_count"] += 1
@@ -3017,28 +2817,67 @@ def build_truth_dashboard_payload(
             }
         )
     orientation = build_briefing_payload(vault_dir, pack_name=pack_name)
-    orientation_sections = list(orientation.get("compiled_sections") or [])
     entry_sections = [
-        _remap_compiled_section(
-            _compiled_section_by_id(orientation_sections, "what_changed"),
-            section_id="what_changed_recently",
-            label="What Changed Recently",
+        _compiled_section(
+            "what_changed_recently",
+            "What Changed Recently",
             summary=f"{orientation.get('changed_object_count', 0)} changed objects and {orientation.get('recent_signal_count', 0)} recent signals surfaced.",
-            limit=4,
+            items=[
+                *[
+                    {
+                        "kind": "changed_object",
+                        "label": item["title"],
+                        "path": item["path"],
+                        "detail": f"Changed object · {item['object_id']}",
+                    }
+                    for item in orientation.get("changed_objects", [])[:4]
+                ]
+            ],
         ),
-        _remap_compiled_section(
-            _compiled_section_by_id(orientation_sections, "next_actions"),
-            section_id="important_right_now",
-            label="Important Right Now",
+        _compiled_section(
+            "important_right_now",
+            "Important Right Now",
             summary=f"{len(orientation.get('priority_items', []))} priority items are currently surfaced.",
-            limit=4,
+            items=[
+                *[
+                    {
+                        "kind": str(item["kind"]),
+                        "label": str(item["title"]),
+                        "path": str(item["path"]),
+                        "detail": str(item["detail"]),
+                    }
+                    for item in orientation.get("priority_items", [])[:4]
+                ]
+            ],
         ),
-        _remap_compiled_section(
-            _compiled_section_by_id(orientation_sections, "needs_review"),
-            section_id="deserves_review",
-            label="Deserves Review",
-            summary=f"{orientation.get('unresolved_issue_count', 0)} review-oriented items are currently in scope.",
-            limit=4,
+        _compiled_section(
+            "deserves_review",
+            "Deserves Review",
+            summary=f"{contradictions['open_count'] if research_overview_supported else signals['count']} review-oriented items are currently in scope.",
+            items=(
+                [
+                    {
+                        "kind": "contradiction",
+                        "label": item["subject_key"],
+                        "path": _scoped_path(
+                            f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                        "detail": f"{len(item['object_ids'])} objects in scope",
+                    }
+                    for item in contradictions["items"][:4]
+                ]
+                if research_overview_supported
+                else [
+                    {
+                        "kind": str(item["signal_type"]),
+                        "label": str(item["title"]),
+                        "path": str(item["source_path"]),
+                        "detail": str(item["detail"]),
+                    }
+                    for item in signals["items"][:4]
+                ]
+            ),
         ),
         _compiled_section(
             "recommended_next_steps",
@@ -3075,6 +2914,121 @@ def build_truth_dashboard_payload(
                     if research_overview_supported
                     else []
                 ),
+            ],
+        ),
+    ]
+    workflow_groups = [
+        _workflow_group(
+            "orient",
+            "Orient",
+            "Start with the compiled entry products before diving into individual queues.",
+            [
+                {
+                    "label": "Orientation Brief",
+                    "path": _scoped_path("/briefing", pack_name=requested_pack),
+                    "detail": "Read the current entry product.",
+                },
+                {
+                    "label": "Workbench Home",
+                    "path": _scoped_path("/", pack_name=requested_pack),
+                    "detail": "Return to the current shell overview.",
+                },
+            ],
+        ),
+        _workflow_group(
+            "inspect",
+            "Inspect",
+            "Read the current knowledge state directly from compiled browsing surfaces.",
+            [
+                {
+                    "label": "Objects",
+                    "path": _scoped_path("/objects", pack_name=requested_pack),
+                    "detail": "Browse indexed evergreen objects.",
+                },
+                {
+                    "label": "Search",
+                    "path": _scoped_path("/search", pack_name=requested_pack),
+                    "detail": "Search notes and objects across the shell.",
+                },
+            ],
+        ),
+        _workflow_group(
+            "review",
+            "Review",
+            "Open the highest-signal maintenance surfaces for contradictions, summaries, and signals.",
+            [
+                {
+                    "label": "Signals",
+                    "path": _scoped_path("/signals", pack_name=requested_pack),
+                    "detail": "Review current active signals.",
+                },
+                {
+                    "label": "Contradictions" if research_overview_supported else "Actions",
+                    "path": _scoped_path(
+                        "/contradictions" if research_overview_supported else "/actions",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": (
+                        "Inspect open semantic tensions."
+                        if research_overview_supported
+                        else "Review queued execution actions."
+                    ),
+                },
+            ],
+        ),
+        _workflow_group(
+            "trace",
+            "Trace",
+            "Follow provenance and downstream production chains before editing or reviewing.",
+            [
+                {
+                    "label": "Production",
+                    "path": _scoped_path("/production", pack_name=requested_pack),
+                    "detail": "Inspect production weak points and chain state.",
+                },
+                {
+                    "label": "Deep Dives" if research_overview_supported else "Notes",
+                    "path": _scoped_path(
+                        "/deep-dives" if research_overview_supported else "/objects",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": (
+                        "Follow note -> deep dive -> object derivation."
+                        if research_overview_supported
+                        else "Use object pages as the primary trace surface."
+                    ),
+                },
+            ],
+        ),
+        _workflow_group(
+            "explore",
+            "Explore",
+            "Move through topic, graph, and timeline surfaces once the shell has oriented you.",
+            [
+                {
+                    "label": "Events" if research_overview_supported else "Objects",
+                    "path": _scoped_path(
+                        "/events" if research_overview_supported else "/objects",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": (
+                        "Explore timeline and dossier surfaces."
+                        if research_overview_supported
+                        else "Explore the shared-shell object browser."
+                    ),
+                },
+                {
+                    "label": "Clusters" if research_overview_supported else "Search",
+                    "path": _scoped_path(
+                        "/clusters" if research_overview_supported else "/search",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": (
+                        "Explore graph clusters and higher-order structure."
+                        if research_overview_supported
+                        else "Use search to move laterally through the vault."
+                    ),
+                },
             ],
         ),
     ]
@@ -3126,6 +3080,7 @@ def build_truth_dashboard_payload(
             "browser_path": _scoped_path("/signals", pack_name=requested_pack),
         },
         "orientation": orientation,
+        "workflow_groups": workflow_groups,
         "entry_sections": entry_sections,
         "recent_review_actions": list_review_actions(vault_dir, limit=8),
         "priorities": priorities[:8],
@@ -3328,6 +3283,9 @@ def build_production_browser_payload(
                 "source_notes": 0,
                 "deep_dives": 0,
             },
+            "operator_rail": [],
+            "compiled_sections": [],
+            "section_nav": [],
         }
     items = list_production_chains(
         vault_dir,
@@ -3338,6 +3296,111 @@ def build_production_browser_payload(
     source_items = [item for item in items if item["stage_label"] == "source_note"]
     deep_dive_items = [item for item in items if item["stage_label"] == "deep_dive"]
     weak_points = _build_production_weak_points(vault_dir, pack_name=pack_name, query=query)
+    compiled_sections = [
+        _compiled_section(
+            "current_state",
+            "Current State",
+            summary=(
+                f"{len(items)} production-chain entries are currently visible, spanning "
+                f"{len(source_items)} source notes and {len(deep_dive_items)} deep dives."
+            ),
+            items=[
+                {
+                    "kind": "source_notes",
+                    "label": "Source notes",
+                    "path": "",
+                    "detail": f"{len(source_items)} source-note chain entries in scope.",
+                },
+                {
+                    "kind": "deep_dives",
+                    "label": "Deep dives",
+                    "path": "",
+                    "detail": f"{len(deep_dive_items)} deep-dive chain entries in scope.",
+                },
+            ],
+        ),
+        _compiled_section(
+            "why_it_matters",
+            "Why It Matters",
+            summary=(
+                f"{len(weak_points)} chain weak points currently block full source-to-object-to-atlas legibility."
+            ),
+            items=[
+                *[
+                    {
+                        "kind": "weak_point",
+                        "label": item["title"],
+                        "path": _scoped_path(
+                            f"/note?path={quote(str(item['note_path']), safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                        "detail": f"Missing {', '.join(item['missing'])}",
+                    }
+                    for item in weak_points[:3]
+                ]
+            ],
+        ),
+        _compiled_section(
+            "chain_gaps",
+            "Chain Gaps",
+            summary="Weak points highlight where the current production chain stops short of a complete downstream path.",
+            items=[
+                *[
+                    {
+                        "kind": item["stage_label"],
+                        "label": item["title"],
+                        "path": _scoped_path(
+                            f"/note?path={quote(str(item['note_path']), safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                        "detail": ", ".join(item["missing"]),
+                    }
+                    for item in weak_points[:5]
+                ]
+            ],
+        ),
+        _compiled_section(
+            "where_to_go_next",
+            "Where To Go Next",
+            summary="Use the visible source and deep-dive entries to continue into note, object, and atlas-level traceability.",
+            items=[
+                *[
+                    {
+                        "kind": item["stage_label"],
+                        "label": item["title"],
+                        "path": _scoped_path(
+                            f"/note?path={quote(str(item['path']), safe='')}",
+                            pack_name=requested_pack,
+                        ),
+                        "detail": str(item["traceability"].get("chain_summary") or ""),
+                    }
+                    for item in items[:4]
+                ]
+            ],
+        ),
+    ]
+    operator_rail = [
+        _operator_action(
+            "Orientation Brief",
+            _scoped_path("/briefing", pack_name=requested_pack),
+            "Return to the current entry product.",
+        ),
+        _operator_action(
+            "Signals",
+            _scoped_path("/signals", pack_name=requested_pack),
+            "Review active signals related to chain maintenance.",
+        ),
+        _operator_action(
+            "Action Queue",
+            _scoped_path("/actions", pack_name=requested_pack),
+            "Run or inspect queued execution work.",
+        ),
+        _operator_action(
+            "Search",
+            _scoped_path("/search", pack_name=requested_pack),
+            "Search laterally from the current production scope.",
+        ),
+    ]
     return {
         "screen": "production/browser",
         "requested_pack": requested_pack,
@@ -3354,6 +3417,9 @@ def build_production_browser_payload(
             "source_notes": len(source_items),
             "deep_dives": len(deep_dive_items),
         },
+        "operator_rail": operator_rail,
+        "compiled_sections": compiled_sections,
+        "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
 
 
@@ -3436,6 +3502,7 @@ def build_note_page_payload(
     requested_pack = pack_name or ""
     provenance = get_note_provenance(vault_dir, note_path=note_path)
     production_chain = get_note_traceability(vault_dir, note_path=note_path, pack_name=pack_name)
+    inbound_capture = get_note_inbound_capture_summary(vault_dir, note_path=note_path)
     production_chain["source_notes"] = [
         {
             **item,
@@ -3476,10 +3543,144 @@ def build_note_page_payload(
         }
         for item in production_chain["atlas_pages"]
     ]
+    compiled_sections = [
+        _compiled_section(
+            "current_state",
+            "Current State",
+            summary=(
+                f"{production_chain['note']['title']} currently resolves as a "
+                f"{production_chain.get('stage_label', '').replace('_', ' ')} with "
+                f"{production_chain['counts']['deep_dives']} deep dives, "
+                f"{production_chain['counts']['objects']} objects, and "
+                f"{production_chain['counts']['atlas_pages']} atlas pages downstream."
+            ),
+            items=[
+                {
+                    "kind": "stage",
+                    "label": str(production_chain.get("stage_label") or "").replace("_", " "),
+                    "path": "",
+                    "detail": str(production_chain.get("chain_status") or ""),
+                }
+            ],
+        ),
+        _compiled_section(
+            "inbound_capture",
+            "Inbound Capture",
+            summary=str(inbound_capture.get("summary") or ""),
+            items=[
+                {
+                    "kind": str(item.get("kind") or ""),
+                    "label": str(item.get("label") or ""),
+                    "path": (
+                        _scoped_path(f"/note?path={quote(str(item['path']), safe='')}", pack_name=requested_pack)
+                        if item.get("path")
+                        else ""
+                    ),
+                    "detail": str(item.get("detail") or ""),
+                }
+                for item in inbound_capture.get("items", [])
+            ],
+        ),
+        _compiled_section(
+            "evidence_traceability",
+            "Evidence Traceability",
+            summary="The note traceability chain shows which deep dives, objects, and atlas pages this note currently anchors.",
+            items=[
+                *[
+                    {
+                        "kind": "deep_dive",
+                        "label": item["title"],
+                        "path": item["note_path"],
+                        "detail": "Downstream deep dive",
+                    }
+                    for item in production_chain["deep_dives"][:3]
+                ],
+                *[
+                    {
+                        "kind": "object",
+                        "label": item["title"],
+                        "path": item["object_path"],
+                        "detail": "Derived evergreen object",
+                    }
+                    for item in production_chain["objects"][:3]
+                ],
+            ],
+        ),
+        _compiled_section(
+            "production_chain",
+            "Production Chain",
+            summary=str(production_chain.get("chain_summary") or ""),
+            items=[
+                {
+                    "kind": "chain_status",
+                    "label": "Chain status",
+                    "path": "",
+                    "detail": str(production_chain.get("chain_status") or ""),
+                },
+                {
+                    "kind": "missing_stages",
+                    "label": "Missing stages",
+                    "path": "",
+                    "detail": ", ".join(str(item).replace("_", " ") for item in production_chain.get("missing_stages", [])) or "None",
+                },
+            ],
+        ),
+        _compiled_section(
+            "where_to_go_next",
+            "Where To Go Next",
+            summary="Continue into downstream deep dives, derived objects, or atlas reach from this note.",
+            items=[
+                *[
+                    {
+                        "kind": "deep_dive",
+                        "label": item["title"],
+                        "path": item["note_path"],
+                        "detail": "Open downstream deep dive.",
+                    }
+                    for item in production_chain["deep_dives"][:2]
+                ],
+                *[
+                    {
+                        "kind": "object",
+                        "label": item["title"],
+                        "path": item["object_path"],
+                        "detail": "Open derived object page.",
+                    }
+                    for item in production_chain["objects"][:2]
+                ],
+            ],
+        ),
+    ]
+    fallback_object_path = (
+        production_chain["objects"][0]["object_path"]
+        if production_chain["objects"]
+        else _scoped_path("/objects", pack_name=requested_pack)
+    )
+    fallback_object_label = "Open derived object" if production_chain["objects"] else "Objects"
     return {
         "screen": "note/page",
         "requested_pack": requested_pack,
         "note_path": note_path,
         "provenance": provenance,
+        "inbound_capture": inbound_capture,
         "production_chain": production_chain,
+        "operator_rail": [
+            _operator_action(
+                "Production Browser",
+                _scoped_path("/production", pack_name=requested_pack),
+                "Inspect broader production-chain weak points.",
+            ),
+            _operator_action(
+                "Signals",
+                _scoped_path("/signals", pack_name=requested_pack),
+                "Open active signals for this shell scope.",
+            ),
+            _operator_action(
+                fallback_object_label,
+                fallback_object_path,
+                "Jump into the most relevant derived object surface.",
+            ),
+        ],
+        "compiled_sections": compiled_sections,
+        "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
