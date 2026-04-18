@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+
+
+def _fresh_timestamp(*, seconds_ago: int = 0) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _seed_truth_store(temp_vault):
@@ -165,6 +170,8 @@ def test_build_object_page_payload_hides_research_affordances_when_research_shel
         "Production Chain",
         "Open Tensions",
         "Where To Go Next",
+        "Claims",
+        "Relations",
     ]
     assert payload["evolution"]["candidate_count"] == 0
     assert payload["evolution"]["accepted_count"] == 0
@@ -1101,6 +1108,41 @@ def test_build_truth_dashboard_payload(temp_vault):
     from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
 
     _seed_truth_store(temp_vault)
+    transactions_dir = temp_vault / "60-Logs" / "transactions"
+    transactions_dir.mkdir(parents=True, exist_ok=True)
+    (transactions_dir / "txn-1.json").write_text(
+        json.dumps(
+            {
+                "id": "txn-1",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "last_updated": _fresh_timestamp(seconds_ago=60),
+                "run_ledger": {
+                    "run_id": "txn-1",
+                    "run_state": "running",
+                    "workflow_profile": "full",
+                    "pack_name": "research-tech",
+                    "heartbeat_at": _fresh_timestamp(seconds_ago=30),
+                    "current_step_name": "absorb",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "running",
+                        "progress_mode": "counted",
+                        "work_units_total": 10,
+                        "work_units_done": 3,
+                        "work_units_failed": 0,
+                        "current_item": "Alpha.md",
+                        "progress_percent": 30.0,
+                        "progress_summary": "3/10 files processed",
+                    },
+                    "last_meaningful_event": {"event_type": "absorb_file_processed", "file": "Alpha.md"},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
     loose_source.parent.mkdir(parents=True, exist_ok=True)
     loose_source.write_text(
@@ -1133,6 +1175,8 @@ Thin note.
     payload = build_truth_dashboard_payload(temp_vault)
 
     assert payload["screen"] == "truth/dashboard"
+    assert payload["runtime"]["active_run"]["id"] == "txn-1"
+    assert payload["runtime"]["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 30.0
     assert payload["orientation"]["assembly_contract"]["recipe_name"] == "orientation_brief"
     assert [section["id"] for section in payload["entry_sections"]] == [
         "what_changed_recently",

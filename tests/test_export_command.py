@@ -142,6 +142,8 @@ def test_export_command_can_export_orientation_brief(temp_vault, tmp_path, capsy
     assert exported["screen"] == "briefing/intelligence"
     assert exported["assembly_contract"]["recipe_name"] == "orientation_brief"
     assert [section["id"] for section in exported["compiled_sections"]] == [
+        "signal_loop",
+        "inbound_capture",
         "what_changed",
         "what_matters",
         "needs_review",

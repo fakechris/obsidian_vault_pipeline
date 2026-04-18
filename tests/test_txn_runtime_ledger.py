@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+def test_transaction_manager_start_creates_run_ledger(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import TransactionManager
+
+    txn = TransactionManager(tmp_path)
+    txn_id = txn.start(
+        "enhanced-pipeline",
+        "Incremental pipeline",
+        pack_name="research-tech",
+        workflow_profile="full",
+        planned_steps=["pinboard", "clippings", "articles"],
+    )
+
+    payload = json.loads((tmp_path / f"{txn_id}.json").read_text(encoding="utf-8"))
+
+    assert payload["run_ledger"]["run_id"] == txn_id
+    assert payload["run_ledger"]["run_state"] == "running"
+    assert payload["run_ledger"]["pack_name"] == "research-tech"
+    assert payload["run_ledger"]["workflow_profile"] == "full"
+    assert payload["run_ledger"]["planned_steps"] == ["pinboard", "clippings", "articles"]
+    assert payload["run_ledger"]["current_step"]["step_name"] == "initialized"
+    assert payload["run_ledger"]["current_step"]["step_state"] == "pending"
+
+
+def test_transaction_manager_tracks_step_progress_and_percent(tmp_path):
+    from openclaw_pipeline.unified_pipeline_enhanced import TransactionManager
+
+    txn = TransactionManager(tmp_path)
+    txn_id = txn.start("enhanced-pipeline", "Incremental pipeline")
+
+    txn.step(
+        txn_id,
+        "absorb",
+        "in_progress",
+        progress_mode="counted",
+        work_units_total=10,
+        work_units_done=3,
+        work_units_failed=1,
+        current_item="Alpha_深度解读.md",
+        progress_summary="3/10 files processed",
+        last_meaningful_event={
+            "event_type": "absorb_file_processed",
+            "file": "Alpha_深度解读.md",
+        },
+    )
+
+    payload = json.loads((tmp_path / f"{txn_id}.json").read_text(encoding="utf-8"))
+    current = payload["run_ledger"]["current_step"]
+
+    assert payload["run_ledger"]["current_step_name"] == "absorb"
+    assert current["step_name"] == "absorb"
+    assert current["step_state"] == "running"
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 10
+    assert current["work_units_done"] == 3
+    assert current["work_units_failed"] == 1
+    assert current["current_item"] == "Alpha_深度解读.md"
+    assert current["progress_percent"] == 30.0
+    assert current["progress_summary"] == "3/10 files processed"
+    assert payload["run_ledger"]["last_meaningful_event"]["event_type"] == "absorb_file_processed"
+
+
+def test_classify_run_ledgers_separates_active_and_stale(tmp_path):
+    from openclaw_pipeline.txn import classify_run_ledgers
+
+    active = tmp_path / "txn-active.json"
+    active.write_text(
+        json.dumps(
+            {
+                "id": "txn-active",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "last_updated": "2026-04-18T12:05:00Z",
+                "run_ledger": {
+                    "run_id": "txn-active",
+                    "run_state": "running",
+                    "heartbeat_at": "2026-04-18T12:05:00Z",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "running",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    stale = tmp_path / "txn-stale.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "id": "txn-stale",
+                "status": "in_progress",
+                "checkpoint": "fix_links",
+                "last_updated": "2026-04-18T10:00:00Z",
+                "run_ledger": {
+                    "run_id": "txn-stale",
+                    "run_state": "running",
+                    "heartbeat_at": "2026-04-18T10:00:00Z",
+                    "current_step": {
+                        "step_name": "fix_links",
+                        "step_state": "running",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    classified = classify_run_ledgers(
+        tmp_path,
+        now_iso="2026-04-18T12:10:00Z",
+        stale_after_seconds=1800,
+    )
+
+    assert [item["id"] for item in classified["active"]] == ["txn-active"]
+    assert [item["id"] for item in classified["stale"]] == ["txn-stale"]

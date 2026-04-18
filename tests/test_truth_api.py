@@ -189,6 +189,79 @@ def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vau
     assert actions[0]["impact_summary"]["lifecycle_stage"] == "queued"
 
 
+def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
+    from openclaw_pipeline.truth_api import get_runtime_status
+
+    logs_dir = temp_vault / "60-Logs"
+    transactions_dir = logs_dir / "transactions"
+    transactions_dir.mkdir(parents=True, exist_ok=True)
+    (transactions_dir / "txn-1.json").write_text(
+        json.dumps(
+            {
+                "id": "txn-1",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "last_updated": "2026-04-09T00:15:00Z",
+                "run_ledger": {
+                    "run_id": "txn-1",
+                    "run_state": "running",
+                    "workflow_profile": "full",
+                    "pack_name": "research-tech",
+                    "heartbeat_at": "2026-04-09T00:15:00Z",
+                    "current_step_name": "absorb",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "running",
+                        "progress_mode": "counted",
+                        "work_units_total": 20,
+                        "work_units_done": 5,
+                        "work_units_failed": 1,
+                        "current_item": "Alpha.md",
+                        "progress_percent": 25.0,
+                        "progress_summary": "5/20 files processed",
+                    },
+                    "last_meaningful_event": {
+                        "event_type": "absorb_file_processed",
+                        "file": "Alpha.md",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (transactions_dir / "txn-old.json").write_text(
+        json.dumps(
+            {
+                "id": "txn-old",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "checkpoint": "fix_links",
+                "last_updated": "2026-04-08T00:15:00Z",
+                "run_ledger": {
+                    "run_id": "txn-old",
+                    "run_state": "running",
+                    "heartbeat_at": "2026-04-08T00:15:00Z",
+                    "current_step": {
+                        "step_name": "fix_links",
+                        "step_state": "running",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = get_runtime_status(temp_vault, now_iso="2026-04-09T00:20:00Z")
+
+    assert payload["active_run"]["id"] == "txn-1"
+    assert payload["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 25.0
+    assert payload["active_run"]["run_ledger"]["current_step"]["current_item"] == "Alpha.md"
+    assert payload["stale_count"] == 1
+
+
 def test_truth_api_builds_note_inbound_capture_summary_and_attaches_it_to_signals(temp_vault):
     from openclaw_pipeline.truth_api import get_note_inbound_capture_summary, list_signals
 

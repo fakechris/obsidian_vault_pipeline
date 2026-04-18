@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..runtime import VaultLayout, resolve_vault_dir
+from ..txn import classify_run_ledgers
 
 
 PROCESS_MARKERS = (
@@ -72,29 +73,6 @@ def detect_openclaw_process_lines(vault_dir: Path) -> list[str]:
     return lines
 
 
-def _load_in_progress_transactions(layout: VaultLayout) -> list[dict[str, Any]]:
-    txns: list[dict[str, Any]] = []
-    if not layout.transactions_dir.exists():
-        return txns
-    for txn_file in layout.transactions_dir.glob("*.json"):
-        try:
-            payload = json.loads(txn_file.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        if payload.get("status") != "in_progress":
-            continue
-        txns.append(
-            {
-                "id": payload.get("id"),
-                "type": payload.get("type"),
-                "checkpoint": payload.get("checkpoint"),
-                "last_updated": payload.get("last_updated"),
-            }
-        )
-    txns.sort(key=lambda item: item.get("last_updated") or "", reverse=True)
-    return txns
-
-
 def _count_state(layout: VaultLayout) -> dict[str, int]:
     candidates_dir = layout.evergreen_dir / "_Candidates"
     return {
@@ -111,6 +89,9 @@ def _count_state(layout: VaultLayout) -> dict[str, int]:
 def collect_progress_snapshot(vault_dir: Path, process_lines: list[str] | None = None) -> dict[str, Any]:
     layout = VaultLayout.from_vault(vault_dir)
     process_lines = detect_openclaw_process_lines(layout.vault_dir) if process_lines is None else process_lines
+    classified_runs = classify_run_ledgers(layout.transactions_dir)
+    active_runs = classified_runs["active"]
+    stale_runs = classified_runs["stale"]
 
     def _safe_mtime(path: Path) -> float:
         try:
@@ -130,7 +111,9 @@ def collect_progress_snapshot(vault_dir: Path, process_lines: list[str] | None =
         "counts": _count_state(layout),
         "active_processes": len(process_lines),
         "process_lines": process_lines,
-        "active_transactions": _load_in_progress_transactions(layout),
+        "active_transactions": active_runs,
+        "active_run": active_runs[0] if active_runs else None,
+        "stale_transactions": stale_runs,
         "latest_event": _read_last_json_line(layout.pipeline_log),
         "latest_report": str(reports[0]) if reports else None,
     }
@@ -173,8 +156,17 @@ def format_progress_snapshot(snapshot: dict[str, Any], previous: dict[str, Any] 
             "Active txn: "
             f"{txn.get('id')} type={txn.get('type')} checkpoint={txn.get('checkpoint')} updated={txn.get('last_updated')}"
         )
+        ledger = txn.get("run_ledger") or {}
+        current = ledger.get("current_step") or {}
+        progress_summary = current.get("progress_summary")
+        if progress_summary:
+            lines.append(f"Step progress: {progress_summary}")
+        current_item = current.get("current_item")
+        if current_item:
+            lines.append(f"Current item: {current_item}")
     else:
         lines.append("Active txn: none")
+    lines.append(f"Stale txns: {len(snapshot.get('stale_transactions', []))}")
     latest_event = snapshot.get("latest_event")
     if latest_event:
         event_bits = [

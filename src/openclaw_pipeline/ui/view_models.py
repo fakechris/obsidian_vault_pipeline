@@ -29,6 +29,7 @@ from ..truth_api import (
     get_note_traceability,
     get_object_provenance_map,
     get_review_context,
+    get_runtime_status,
     get_topic_neighborhood,
     list_evolution_candidates,
     list_evolution_links,
@@ -99,6 +100,128 @@ def _workflow_group(
         "summary": summary,
         "items": items,
     }
+
+
+def _build_dashboard_workflow_groups(
+    *,
+    requested_pack: str,
+    research_overview_supported: bool,
+) -> list[dict[str, Any]]:
+    return [
+        _workflow_group(
+            "orient",
+            "Orient",
+            "Start with the compiled entry products before diving into individual queues.",
+            [
+                {
+                    "label": "Orientation Brief",
+                    "path": _scoped_path("/briefing", pack_name=requested_pack),
+                    "detail": "Read the current entry product.",
+                },
+                {
+                    "label": "Workbench Home",
+                    "path": _scoped_path("/", pack_name=requested_pack),
+                    "detail": "Return to the current shell overview.",
+                },
+            ],
+        ),
+        _workflow_group(
+            "inspect",
+            "Inspect",
+            "Read the current knowledge state directly from compiled browsing surfaces.",
+            [
+                {
+                    "label": "Objects",
+                    "path": _scoped_path("/objects", pack_name=requested_pack),
+                    "detail": "Browse indexed evergreen objects.",
+                },
+                {
+                    "label": "Search",
+                    "path": _scoped_path("/search", pack_name=requested_pack),
+                    "detail": "Search notes and objects across the shell.",
+                },
+            ],
+        ),
+        _workflow_group(
+            "review",
+            "Review",
+            "Open the highest-signal maintenance surfaces for contradictions, summaries, and signals.",
+            [
+                {
+                    "label": "Signals",
+                    "path": _scoped_path("/signals", pack_name=requested_pack),
+                    "detail": "Review current active signals.",
+                },
+                {
+                    "label": "Contradictions" if research_overview_supported else "Actions",
+                    "path": _scoped_path(
+                        "/contradictions" if research_overview_supported else "/actions",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": (
+                        "Inspect open semantic tensions."
+                        if research_overview_supported
+                        else "Review queued execution actions."
+                    ),
+                },
+            ],
+        ),
+        _workflow_group(
+            "trace",
+            "Trace",
+            "Follow provenance and downstream production chains before editing or reviewing.",
+            [
+                {
+                    "label": "Production",
+                    "path": _scoped_path("/production", pack_name=requested_pack),
+                    "detail": "Inspect production weak points and chain state.",
+                },
+                {
+                    "label": "Deep Dives" if research_overview_supported else "Notes",
+                    "path": _scoped_path(
+                        "/deep-dives" if research_overview_supported else "/objects",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": (
+                        "Follow note -> deep dive -> object derivation."
+                        if research_overview_supported
+                        else "Use object pages as the primary trace surface."
+                    ),
+                },
+            ],
+        ),
+        _workflow_group(
+            "explore",
+            "Explore",
+            "Move through topic, graph, and timeline surfaces once the shell has oriented you.",
+            [
+                {
+                    "label": "Events" if research_overview_supported else "Objects",
+                    "path": _scoped_path(
+                        "/events" if research_overview_supported else "/objects",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": (
+                        "Explore timeline and dossier surfaces."
+                        if research_overview_supported
+                        else "Explore the shared-shell object browser."
+                    ),
+                },
+                {
+                    "label": "Clusters" if research_overview_supported else "Search",
+                    "path": _scoped_path(
+                        "/clusters" if research_overview_supported else "/search",
+                        pack_name=requested_pack,
+                    ),
+                    "detail": (
+                        "Explore graph clusters and higher-order structure."
+                        if research_overview_supported
+                        else "Use search to move laterally through the vault."
+                    ),
+                },
+            ],
+        ),
+    ]
 
 
 def _operator_action(label: str, path: str, detail: str) -> dict[str, str]:
@@ -1564,7 +1687,17 @@ def build_object_page_payload(
         },
         "operator_rail": operator_rail,
         "compiled_sections": compiled_sections,
-        "section_nav": [{"href": "#summary", "label": "Summary"}, *_section_nav_from_compiled_sections(compiled_sections)],
+        "section_nav": [
+            {"href": "#summary", "label": "Summary"},
+            *_section_nav_from_compiled_sections(compiled_sections),
+            {"href": "#claims", "label": "Claims"},
+            {"href": "#relations", "label": "Relations"},
+            *(
+                [{"href": "#contradictions", "label": "Contradictions"}]
+                if research_shell_enabled
+                else []
+            ),
+        ],
     }
 
 
@@ -2707,6 +2840,7 @@ def build_truth_dashboard_payload(
     pack_name: str | None = None,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
+    runtime = get_runtime_status(vault_dir)
     objects = build_objects_index_payload(vault_dir, limit=12, offset=0, pack_name=pack_name)
     signals = build_signal_browser_payload(vault_dir, pack_name=pack_name)
     production = build_production_browser_payload(vault_dir, pack_name=pack_name)
@@ -2886,121 +3020,10 @@ def build_truth_dashboard_payload(
             ],
         ),
     ]
-    workflow_groups = [
-        _workflow_group(
-            "orient",
-            "Orient",
-            "Start with the compiled entry products before diving into individual queues.",
-            [
-                {
-                    "label": "Orientation Brief",
-                    "path": _scoped_path("/briefing", pack_name=requested_pack),
-                    "detail": "Read the current entry product.",
-                },
-                {
-                    "label": "Workbench Home",
-                    "path": _scoped_path("/", pack_name=requested_pack),
-                    "detail": "Return to the current shell overview.",
-                },
-            ],
-        ),
-        _workflow_group(
-            "inspect",
-            "Inspect",
-            "Read the current knowledge state directly from compiled browsing surfaces.",
-            [
-                {
-                    "label": "Objects",
-                    "path": _scoped_path("/objects", pack_name=requested_pack),
-                    "detail": "Browse indexed evergreen objects.",
-                },
-                {
-                    "label": "Search",
-                    "path": _scoped_path("/search", pack_name=requested_pack),
-                    "detail": "Search notes and objects across the shell.",
-                },
-            ],
-        ),
-        _workflow_group(
-            "review",
-            "Review",
-            "Open the highest-signal maintenance surfaces for contradictions, summaries, and signals.",
-            [
-                {
-                    "label": "Signals",
-                    "path": _scoped_path("/signals", pack_name=requested_pack),
-                    "detail": "Review current active signals.",
-                },
-                {
-                    "label": "Contradictions" if research_overview_supported else "Actions",
-                    "path": _scoped_path(
-                        "/contradictions" if research_overview_supported else "/actions",
-                        pack_name=requested_pack,
-                    ),
-                    "detail": (
-                        "Inspect open semantic tensions."
-                        if research_overview_supported
-                        else "Review queued execution actions."
-                    ),
-                },
-            ],
-        ),
-        _workflow_group(
-            "trace",
-            "Trace",
-            "Follow provenance and downstream production chains before editing or reviewing.",
-            [
-                {
-                    "label": "Production",
-                    "path": _scoped_path("/production", pack_name=requested_pack),
-                    "detail": "Inspect production weak points and chain state.",
-                },
-                {
-                    "label": "Deep Dives" if research_overview_supported else "Notes",
-                    "path": _scoped_path(
-                        "/deep-dives" if research_overview_supported else "/objects",
-                        pack_name=requested_pack,
-                    ),
-                    "detail": (
-                        "Follow note -> deep dive -> object derivation."
-                        if research_overview_supported
-                        else "Use object pages as the primary trace surface."
-                    ),
-                },
-            ],
-        ),
-        _workflow_group(
-            "explore",
-            "Explore",
-            "Move through topic, graph, and timeline surfaces once the shell has oriented you.",
-            [
-                {
-                    "label": "Events" if research_overview_supported else "Objects",
-                    "path": _scoped_path(
-                        "/events" if research_overview_supported else "/objects",
-                        pack_name=requested_pack,
-                    ),
-                    "detail": (
-                        "Explore timeline and dossier surfaces."
-                        if research_overview_supported
-                        else "Explore the shared-shell object browser."
-                    ),
-                },
-                {
-                    "label": "Clusters" if research_overview_supported else "Search",
-                    "path": _scoped_path(
-                        "/clusters" if research_overview_supported else "/search",
-                        pack_name=requested_pack,
-                    ),
-                    "detail": (
-                        "Explore graph clusters and higher-order structure."
-                        if research_overview_supported
-                        else "Use search to move laterally through the vault."
-                    ),
-                },
-            ],
-        ),
-    ]
+    workflow_groups = _build_dashboard_workflow_groups(
+        requested_pack=requested_pack,
+        research_overview_supported=research_overview_supported,
+    )
     return {
         "screen": "truth/dashboard",
         "requested_pack": requested_pack,
@@ -3048,11 +3071,163 @@ def build_truth_dashboard_payload(
             "items": signals["items"][:8],
             "browser_path": _scoped_path("/signals", pack_name=requested_pack),
         },
+        "runtime": runtime,
         "orientation": orientation,
         "workflow_groups": workflow_groups,
         "entry_sections": entry_sections,
         "recent_review_actions": list_review_actions(vault_dir, limit=8),
         "priorities": priorities[:8],
+    }
+
+
+def build_runtime_home_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    runtime = get_runtime_status(vault_dir)
+    research_overview_supported = _supports_research_shell(pack_name)
+    objects = build_objects_index_payload(vault_dir, limit=8, offset=0, pack_name=pack_name)
+    active_run = runtime.get("active_run") if isinstance(runtime.get("active_run"), dict) else {}
+    run_ledger = active_run.get("run_ledger") if isinstance(active_run, dict) and isinstance(active_run.get("run_ledger"), dict) else {}
+    current_step = run_ledger.get("current_step") if isinstance(run_ledger.get("current_step"), dict) else {}
+    current_step_name = str(current_step.get("step_name") or run_ledger.get("current_step_name") or active_run.get("checkpoint") or "")
+    progress_summary = str(current_step.get("progress_summary") or "No active workflow is currently recorded in the canonical run ledger.")
+    current_item = str(current_step.get("current_item") or "").strip()
+    entry_sections = [
+        _compiled_section(
+            "current_workflow",
+            "Current Workflow",
+            summary=progress_summary,
+            items=[
+                *(
+                    [
+                        {
+                            "kind": "run",
+                            "label": str(active_run.get("id") or ""),
+                            "path": "",
+                            "detail": f"Step: {current_step_name or 'unknown'}",
+                        }
+                    ]
+                    if active_run
+                    else []
+                ),
+                *(
+                    [
+                        {
+                            "kind": "current_item",
+                            "label": "Current item",
+                            "path": "",
+                            "detail": current_item,
+                        }
+                    ]
+                    if current_item
+                    else []
+                ),
+            ],
+        ),
+        _compiled_section(
+            "where_to_start",
+            "Where To Start",
+            summary="Use the workflow map and the focused shell links below before opening heavier knowledge surfaces.",
+            items=[
+                {
+                    "kind": "orientation",
+                    "label": "Orientation Brief",
+                    "path": _scoped_path("/briefing", pack_name=requested_pack),
+                    "detail": "Open the compiled entry product for this shell.",
+                },
+                {
+                    "kind": "signals",
+                    "label": "Signals",
+                    "path": _scoped_path("/signals", pack_name=requested_pack),
+                    "detail": "Review active signals and queue impact.",
+                },
+                {
+                    "kind": "production",
+                    "label": "Production",
+                    "path": _scoped_path("/production", pack_name=requested_pack),
+                    "detail": "Inspect downstream weak points and chain state.",
+                },
+                {
+                    "kind": "events" if research_overview_supported else "objects",
+                    "label": "Events" if research_overview_supported else "Objects",
+                    "path": _scoped_path("/events" if research_overview_supported else "/objects", pack_name=requested_pack),
+                    "detail": (
+                        "Open the timeline surface."
+                        if research_overview_supported
+                        else "Browse indexed evergreen objects."
+                    ),
+                },
+            ],
+        ),
+    ]
+    return {
+        "screen": "truth/runtime-home",
+        "requested_pack": requested_pack,
+        "runtime": runtime,
+        "research_overview": {
+            "status": "supported" if research_overview_supported else "shared_shell_only",
+            "reason": (
+                "Research-specific overview surfaces are available because this pack resolves through research-tech."
+                if research_overview_supported
+                else "This pack currently gets the shared home shell only; research-specific overview panels stay hidden until the pack defines its own equivalents."
+            ),
+        },
+        "workflow_groups": _build_dashboard_workflow_groups(
+            requested_pack=requested_pack,
+            research_overview_supported=research_overview_supported,
+        ),
+        "entry_sections": entry_sections,
+        "objects": {
+            "count": objects["total_count"],
+            "items": objects["items"],
+        },
+        "orientation": {
+            "assembly_contract": _assembly_contract("orientation_brief", pack_name=pack_name),
+            "governance_contract": describe_governance_contract(pack_name=pack_name),
+        },
+        "signals": {
+            "count": 0,
+            "items": [],
+            "browser_path": _scoped_path("/signals", pack_name=requested_pack),
+            "surface_contract": describe_observation_surface_contract(pack_name=pack_name, surface_kind="signals"),
+        },
+        "production": {
+            "weak_points": [],
+            "weak_point_count": 0,
+            "browser_path": _scoped_path("/production", pack_name=requested_pack),
+            "surface_contract": describe_observation_surface_contract(
+                pack_name=pack_name,
+                surface_kind="production_chains",
+            ),
+        },
+        "contradictions": {
+            "count": 0,
+            "open_count": 0,
+            "items": [],
+            "browser_path": _scoped_path("/contradictions", pack_name=requested_pack),
+        },
+        "events": {
+            "count": 0,
+            "items": [],
+            "dates": [],
+            "browser_path": _scoped_path("/events", pack_name=requested_pack),
+        },
+        "stale_summaries": {
+            "count": 0,
+            "items": [],
+            "browser_path": _scoped_path("/summaries", pack_name=requested_pack),
+        },
+        "evolution": {
+            "candidate_count": 0,
+            "accepted_count": 0,
+            "items": [],
+        },
+        "recent_review_actions": [],
+        "priorities": [],
+        "mode": "runtime_first",
     }
 
 

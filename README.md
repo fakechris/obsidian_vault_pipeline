@@ -321,10 +321,14 @@ interpretation
 |---|---|
 | `ovp --check` | 检查运行环境 |
 | `ovp --full` | 完整日常流水线 |
+| `ovp --incremental` | 日常增量流水线（包含近期 Pinboard + Clippings + 后续步骤） |
 | `ovp --full --with-refine` | 完整流水线 + cleanup/breakdown |
 | `ovp --step absorb` | 单独跑吸收层 |
 | `ovp --step refine` | 单独跑批处理整形 |
 | `ovp --from-step absorb` | 从吸收层之后继续跑 |
+
+`ovp --incremental` 是推荐的日常入口。
+它和 `ovp --from-step clippings` 不同：前者会先跑 `pinboard -> pinboard_process`，后者会显式跳过 Pinboard。
 
 ### 内容处理
 

@@ -31,6 +31,7 @@ from .runtime import (
     resolve_vault_dir,
     signal_ledger_write_lock,
 )
+from .txn import classify_run_ledgers
 
 MAX_PAGE_SIZE = 500
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
@@ -86,6 +87,23 @@ _BRIEFING_EVOLUTION_PRIORITY = {
     "confirms": 70,
     "enriches": 60,
 }
+
+
+def get_runtime_status(
+    vault_dir: Path | str,
+    *,
+    now_iso: str | None = None,
+) -> dict[str, Any]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    classified = classify_run_ledgers(layout.transactions_dir, now_iso=now_iso)
+    return {
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "active_count": len(classified["active"]),
+        "stale_count": len(classified["stale"]),
+        "active_run": classified["active"][0] if classified["active"] else None,
+        "stale_runs": classified["stale"],
+    }
 
 
 def _db_path(vault_dir: Path | str) -> Path:

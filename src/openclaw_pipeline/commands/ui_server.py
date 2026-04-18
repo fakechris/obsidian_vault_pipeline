@@ -34,16 +34,17 @@ from ..ui.view_models import (
     build_object_page_payload,
     build_objects_index_payload,
     build_production_browser_payload,
+    build_runtime_home_payload,
     build_search_payload,
     build_signal_browser_payload,
     build_stale_summary_browser_payload,
-    build_truth_dashboard_payload,
     build_topic_overview_payload,
 )
 from ..truth_api import (
     dismiss_action_queue_item,
     enqueue_signal_action,
     ensure_signal_ledger_synced,
+    get_runtime_status,
     record_review_action,
     retry_action_queue_item,
     review_evolution_candidate,
@@ -312,6 +313,47 @@ def _render_governance_contract_card(payload: dict) -> str:
     return (
         f"<section class='card'><h2>Governance Contract</h2><p class='muted'>{detail}</p>"
         f"{description_html}{facts_html}</section>"
+    )
+
+
+def _render_runtime_card(runtime: dict[str, object] | None) -> str:
+    if not isinstance(runtime, dict):
+        return ""
+    active_run = runtime.get("active_run")
+    stale_count = int(runtime.get("stale_count") or 0)
+    if not isinstance(active_run, dict):
+        detail = "No active workflow is currently recorded in the canonical run ledger."
+        stale_html = (
+            f"<p class='muted'>{stale_count} stale run(s) remain in the ledger and need operator cleanup.</p>"
+            if stale_count
+            else ""
+        )
+        return f"<section class='card'><h2>Current Workflow</h2><p class='muted'>{detail}</p>{stale_html}</section>"
+
+    ledger = active_run.get("run_ledger") if isinstance(active_run.get("run_ledger"), dict) else {}
+    current = ledger.get("current_step") if isinstance(ledger.get("current_step"), dict) else {}
+    run_state = str(ledger.get("run_state") or active_run.get("status") or "running")
+    step_name = str(current.get("step_name") or ledger.get("current_step_name") or active_run.get("checkpoint") or "")
+    progress_summary = str(current.get("progress_summary") or "Progress is currently indeterminate.")
+    current_item = str(current.get("current_item") or "").strip()
+    heartbeat_at = str(ledger.get("heartbeat_at") or active_run.get("last_updated") or "")
+    facts = [
+        f"<li>Run: {escape(str(active_run.get('id') or ''))}</li>",
+        f"<li>State: {escape(run_state)}</li>",
+    ]
+    if step_name:
+        facts.append(f"<li>Step: {escape(step_name)}</li>")
+    if heartbeat_at:
+        facts.append(f"<li>Heartbeat: {escape(heartbeat_at)}</li>")
+    if stale_count:
+        facts.append(f"<li>Stale runs: {stale_count}</li>")
+    current_item_html = f"<p class='muted'>Current item: {escape(current_item)}</p>" if current_item else ""
+    return (
+        "<section class='card'><h2>Current Workflow</h2>"
+        f"<p class='muted'>{escape(progress_summary)}</p>"
+        f"{current_item_html}"
+        f"<ul class='list-tight'>{''.join(facts)}</ul>"
+        "</section>"
     )
 
 
@@ -1130,6 +1172,7 @@ def _render_workflow_groups(groups: list[dict[str, object]]) -> str:
 
 def _render_dashboard(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
+    runtime_card = _render_runtime_card(payload.get("runtime"))
     research_overview = payload.get("research_overview", {})
     research_overview_supported = research_overview.get("status") == "supported"
     orientation = payload.get("orientation", {})
@@ -1248,6 +1291,7 @@ def _render_dashboard(payload: dict) -> str:
             "<section class='section-stack'>",
             "<section class='card'><h2>Workflow Map</h2><p class='muted'>Start here if you do not yet know which route to open. Each group maps one common operator workflow onto the current shell.</p></section>",
             workflow_groups_html,
+            runtime_card,
             "<section class='card'><h2>Where To Start</h2><p class='muted'>Use the orientation brief and the compiled entry sections below to decide what to read, review, or do next.</p></section>",
             orientation_assembly_contract,
             orientation_governance_contract,
@@ -3002,7 +3046,7 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             try:
                 if path == "/":
                     pack_name = query.get("pack", [""])[0] or None
-                    payload = build_truth_dashboard_payload(resolved_vault, pack_name=pack_name)
+                    payload = build_runtime_home_payload(resolved_vault, pack_name=pack_name)
                     self._write_html(_render_dashboard(payload))
                     return
                 if path == "/api/objects":
@@ -3019,6 +3063,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                             pack_name=pack_name,
                         )
                     )
+                    return
+                if path == "/api/runtime":
+                    self._write_json(get_runtime_status(resolved_vault))
                     return
                 if path == "/objects":
                     limit = int(query.get("limit", ["100"])[0])

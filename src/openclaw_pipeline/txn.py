@@ -35,7 +35,10 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+
+
+RUN_STALE_AFTER_SECONDS = 30 * 60
 
 
 # =============================================================================
@@ -45,6 +48,323 @@ from typing import Literal
 def _get_timestamp() -> str:
     """Get current UTC timestamp in ISO format."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_step_state(status: str) -> str:
+    return {
+        "pending": "pending",
+        "processing": "running",
+        "in_progress": "running",
+        "completed": "completed",
+        "failed": "failed",
+        "blocked": "blocked",
+    }.get(status, status)
+
+
+def _derive_progress_percent(work_units_done: int | None, work_units_total: int | None) -> float | None:
+    if work_units_total is None or work_units_total <= 0 or work_units_done is None:
+        return None
+    return round((float(work_units_done) / float(work_units_total)) * 100.0, 1)
+
+
+def _derive_progress_summary(
+    *,
+    progress_mode: str,
+    work_units_done: int | None,
+    work_units_total: int | None,
+    work_units_failed: int | None,
+) -> str:
+    if progress_mode != "counted" or work_units_total is None:
+        return "Progress is currently indeterminate."
+    failed = work_units_failed or 0
+    if failed:
+        return f"{work_units_done or 0}/{work_units_total} work units completed, {failed} failed"
+    return f"{work_units_done or 0}/{work_units_total} work units completed"
+
+
+def build_transaction_payload(
+    txn_id: str,
+    workflow_type: str,
+    description: str,
+    *,
+    timestamp: str | None = None,
+    pack_name: str | None = None,
+    workflow_profile: str | None = None,
+    planned_steps: list[str] | None = None,
+) -> dict[str, Any]:
+    ts = timestamp or _get_timestamp()
+    return {
+        "id": txn_id,
+        "type": workflow_type,
+        "description": description,
+        "start_time": ts,
+        "status": "in_progress",
+        "steps": {},
+        "checkpoint": "initialized",
+        "last_updated": ts,
+        "run_ledger": {
+            "run_id": txn_id,
+            "run_state": "running",
+            "workflow_profile": workflow_profile or "",
+            "pack_name": pack_name or "",
+            "planned_steps": planned_steps or [],
+            "started_at": ts,
+            "updated_at": ts,
+            "heartbeat_at": ts,
+            "current_step_name": "initialized",
+            "current_step": {
+                "step_name": "initialized",
+                "step_state": "pending",
+                "step_started_at": ts,
+                "step_heartbeat_at": ts,
+                "progress_mode": "indeterminate",
+                "work_units_total": None,
+                "work_units_done": 0,
+                "work_units_failed": 0,
+                "current_item": None,
+                "progress_percent": None,
+                "progress_summary": "Waiting to start.",
+            },
+            "last_meaningful_event": None,
+            "stale": False,
+            "blocked_reason": None,
+            "error_summary": None,
+        },
+    }
+
+
+def ensure_run_ledger(payload: dict[str, Any]) -> dict[str, Any]:
+    if "run_ledger" in payload:
+        return payload
+    ts = payload.get("start_time") or payload.get("last_updated") or _get_timestamp()
+    payload["run_ledger"] = {
+        "run_id": payload.get("id", ""),
+        "run_state": "completed" if payload.get("status") == "completed" else ("failed" if payload.get("status") == "failed" else "running"),
+        "workflow_profile": "",
+        "pack_name": "",
+        "planned_steps": list(payload.get("steps", {}).keys()),
+        "started_at": ts,
+        "updated_at": payload.get("last_updated", ts),
+        "heartbeat_at": payload.get("last_updated", ts),
+        "current_step_name": payload.get("checkpoint", "initialized"),
+        "current_step": {
+            "step_name": payload.get("checkpoint", "initialized"),
+            "step_state": _normalize_step_state(payload.get("status", "pending")),
+            "step_started_at": ts,
+            "step_heartbeat_at": payload.get("last_updated", ts),
+            "progress_mode": "indeterminate",
+            "work_units_total": None,
+            "work_units_done": 0,
+            "work_units_failed": 0,
+            "current_item": None,
+            "progress_percent": None,
+            "progress_summary": "Progress is currently indeterminate.",
+        },
+        "last_meaningful_event": None,
+        "stale": False,
+        "blocked_reason": None,
+        "error_summary": payload.get("failure_reason"),
+    }
+    return payload
+
+
+def update_transaction_step(
+    payload: dict[str, Any],
+    step_name: str,
+    status: str,
+    *,
+    output: str = "",
+    timestamp: str | None = None,
+    progress_mode: str | None = None,
+    work_units_total: int | None = None,
+    work_units_done: int | None = None,
+    work_units_failed: int | None = None,
+    current_item: str | None = None,
+    progress_summary: str | None = None,
+    last_meaningful_event: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ensure_run_ledger(payload)
+    ts = timestamp or _get_timestamp()
+
+    payload["steps"][step_name] = {
+        "status": status,
+        "output": output,
+        "updated_at": ts,
+    }
+    payload["checkpoint"] = step_name
+    payload["last_updated"] = ts
+
+    run_ledger = payload["run_ledger"]
+    current = dict(run_ledger.get("current_step") or {})
+    previous_step = current.get("step_name")
+    if previous_step != step_name:
+        current["step_started_at"] = ts
+    current["step_name"] = step_name
+    current["step_state"] = _normalize_step_state(status)
+    current["step_heartbeat_at"] = ts
+    current["progress_mode"] = progress_mode or current.get("progress_mode") or "indeterminate"
+    current["work_units_total"] = work_units_total if work_units_total is not None else current.get("work_units_total")
+    current["work_units_done"] = work_units_done if work_units_done is not None else current.get("work_units_done", 0)
+    current["work_units_failed"] = work_units_failed if work_units_failed is not None else current.get("work_units_failed", 0)
+    current["current_item"] = current_item if current_item is not None else current.get("current_item")
+    current["progress_percent"] = _derive_progress_percent(current.get("work_units_done"), current.get("work_units_total"))
+    current["progress_summary"] = progress_summary or _derive_progress_summary(
+        progress_mode=current.get("progress_mode") or "indeterminate",
+        work_units_done=current.get("work_units_done"),
+        work_units_total=current.get("work_units_total"),
+        work_units_failed=current.get("work_units_failed"),
+    )
+
+    run_ledger["current_step_name"] = step_name
+    run_ledger["current_step"] = current
+    run_ledger["updated_at"] = ts
+    run_ledger["heartbeat_at"] = ts
+    run_ledger["run_state"] = "failed" if status == "failed" else ("completed" if status == "completed" and payload.get("status") == "completed" else "running")
+    run_ledger["stale"] = False
+    run_ledger["error_summary"] = output if status == "failed" and output else run_ledger.get("error_summary")
+    if last_meaningful_event is not None:
+        run_ledger["last_meaningful_event"] = last_meaningful_event
+    return payload
+
+
+def mark_transaction_completed(payload: dict[str, Any], *, timestamp: str | None = None) -> dict[str, Any]:
+    ensure_run_ledger(payload)
+    ts = timestamp or _get_timestamp()
+    payload["status"] = "completed"
+    payload["completed_at"] = ts
+    payload["last_updated"] = ts
+    payload["run_ledger"]["run_state"] = "completed"
+    payload["run_ledger"]["updated_at"] = ts
+    payload["run_ledger"]["heartbeat_at"] = ts
+    current = payload["run_ledger"].get("current_step") or {}
+    if current:
+        current["step_state"] = "completed"
+        current["step_heartbeat_at"] = ts
+        if current.get("progress_mode") == "counted" and current.get("work_units_total") is not None:
+            current["work_units_done"] = current.get("work_units_total")
+            current["progress_percent"] = 100.0
+            current["progress_summary"] = progress_summary = _derive_progress_summary(
+                progress_mode="counted",
+                work_units_done=current.get("work_units_done"),
+                work_units_total=current.get("work_units_total"),
+                work_units_failed=current.get("work_units_failed"),
+            )
+    return payload
+
+
+def mark_transaction_failed(payload: dict[str, Any], reason: str, *, timestamp: str | None = None) -> dict[str, Any]:
+    ensure_run_ledger(payload)
+    ts = timestamp or _get_timestamp()
+    payload["status"] = "failed"
+    payload["failure_reason"] = reason
+    payload["last_updated"] = ts
+    payload["run_ledger"]["run_state"] = "failed"
+    payload["run_ledger"]["error_summary"] = reason
+    payload["run_ledger"]["updated_at"] = ts
+    payload["run_ledger"]["heartbeat_at"] = ts
+    current = payload["run_ledger"].get("current_step") or {}
+    if current:
+        current["step_state"] = "failed"
+        current["step_heartbeat_at"] = ts
+    return payload
+
+
+def heartbeat_transaction(
+    payload: dict[str, Any],
+    *,
+    step_name: str | None = None,
+    timestamp: str | None = None,
+    current_item: str | None = None,
+    work_units_done: int | None = None,
+    work_units_total: int | None = None,
+    work_units_failed: int | None = None,
+    progress_mode: str | None = None,
+    progress_summary: str | None = None,
+    last_meaningful_event: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    ensure_run_ledger(payload)
+    ts = timestamp or _get_timestamp()
+    run_ledger = payload["run_ledger"]
+    current = dict(run_ledger.get("current_step") or {})
+    effective_step = step_name or current.get("step_name") or payload.get("checkpoint") or "initialized"
+    current["step_name"] = effective_step
+    current["step_state"] = current.get("step_state") or "running"
+    current["step_started_at"] = current.get("step_started_at") or ts
+    current["step_heartbeat_at"] = ts
+    current["progress_mode"] = progress_mode or current.get("progress_mode") or "indeterminate"
+    current["work_units_total"] = work_units_total if work_units_total is not None else current.get("work_units_total")
+    current["work_units_done"] = work_units_done if work_units_done is not None else current.get("work_units_done", 0)
+    current["work_units_failed"] = work_units_failed if work_units_failed is not None else current.get("work_units_failed", 0)
+    current["current_item"] = current_item if current_item is not None else current.get("current_item")
+    current["progress_percent"] = _derive_progress_percent(current.get("work_units_done"), current.get("work_units_total"))
+    current["progress_summary"] = progress_summary or current.get("progress_summary") or _derive_progress_summary(
+        progress_mode=current.get("progress_mode") or "indeterminate",
+        work_units_done=current.get("work_units_done"),
+        work_units_total=current.get("work_units_total"),
+        work_units_failed=current.get("work_units_failed"),
+    )
+    run_ledger["current_step_name"] = effective_step
+    run_ledger["current_step"] = current
+    run_ledger["updated_at"] = ts
+    run_ledger["heartbeat_at"] = ts
+    run_ledger["run_state"] = "running"
+    run_ledger["stale"] = False
+    payload["last_updated"] = ts
+    if last_meaningful_event is not None:
+        run_ledger["last_meaningful_event"] = last_meaningful_event
+    return payload
+
+
+def classify_run_ledgers(
+    transactions_dir: Path,
+    *,
+    now_iso: str | None = None,
+    stale_after_seconds: int = RUN_STALE_AFTER_SECONDS,
+) -> dict[str, list[dict[str, Any]]]:
+    now = _parse_timestamp(now_iso) if now_iso else datetime.now(timezone.utc)
+    active: list[dict[str, Any]] = []
+    stale: list[dict[str, Any]] = []
+
+    if not transactions_dir.exists():
+        return {"active": active, "stale": stale}
+
+    for txn_file in sorted(transactions_dir.glob("*.json")):
+        try:
+            payload = json.loads(txn_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if payload.get("status") != "in_progress":
+            continue
+        ensure_run_ledger(payload)
+        ledger = payload["run_ledger"]
+        heartbeat = _parse_timestamp(ledger.get("heartbeat_at")) or _parse_timestamp(payload.get("last_updated"))
+        is_stale = False
+        if heartbeat is not None:
+            is_stale = (now - heartbeat).total_seconds() > stale_after_seconds
+        ledger["stale"] = is_stale
+        (stale if is_stale else active).append(payload)
+
+    key_fn = lambda item: (
+        item.get("run_ledger", {}).get("heartbeat_at")
+        or item.get("last_updated")
+        or ""
+    )
+    active.sort(key=key_fn, reverse=True)
+    stale.sort(key=key_fn, reverse=True)
+    return {"active": active, "stale": stale}
 
 
 def _generate_txn_id() -> str:
