@@ -228,7 +228,7 @@ Exit condition:
 
 ### Milestone 4: Event And Contradiction Model Hardening
 
-Status: **In Progress**
+Status: **Complete**
 
 Goal:
 
@@ -248,7 +248,7 @@ Exit condition:
 
 ### Milestone 5: Knowledge Production Traceability
 
-Status: **In Progress**
+Status: **Complete**
 
 Goal:
 
@@ -279,7 +279,7 @@ Exit condition:
 
 ### Milestone 6: Product Shell And Operator UX
 
-Status: **Not Started**
+Status: **Complete**
 
 Goal:
 
@@ -504,18 +504,34 @@ The just-finished sequence was:
 1. `Phase 17`
 2. `Phase 18`
 3. `Phase 19`
+4. `Phase 20`
+5. `Phase 21`
+6. `Phase 22`
+7. `Phase 23`
 
 Completed references:
 
 - [[2026-04-16-phase17-research-graph-visualization-plan]]
 - [[2026-04-17-phase18-knowledge-compiler-contract-consolidation-plan]]
 - [[2026-04-17-phase19-orientation-and-compiled-knowledge-products]]
+- [[2026-04-17-phase20-semantic-trust-and-production-traceability]]
+- [[2026-04-17-phase21-product-shell-and-operator-ux]]
+- [[2026-04-17-phase22-active-signal-impact-accounting]]
+- [[2026-04-18-phase23-inbound-capture-audit-visibility]]
+
+Active next reference:
+
+- `Milestone 7: Active Signal Loop` (next execution slice should focus on brain-first lookup + backlink legibility)
 
 What those phases accomplished:
 
 - `Phase 17` made the research graph explorable as a real bounded product surface
 - `Phase 18` made the current runtime legible as explicit knowledge-compiler contracts
 - `Phase 19` turned those contracts into entry products: orientation brief, compiled-page sections, and a real workbench home
+- `Phase 20` turned event/contradiction surfaces and production-chain views into semantically trustworthy, traceable products
+- `Phase 21` turned the trustworthy workbench into a clearer operator shell with workflow IA, next-step rails, and denser page ordering
+- `Phase 22` turned passive signal surfaces into a first active loop by making signal/action/result impact legible from the product itself
+- `Phase 23` made inbound note capture legible by turning existing pipeline/refine audit into note, signal, and briefing products
 
 What this sequence closed:
 
@@ -523,19 +539,27 @@ What this sequence closed:
 - contract boundaries are no longer the missing piece
 - orientation on entry is no longer the obvious missing piece
 - the current product surface now has a clearer default entry path and stronger compiled pages
+- the signal loop no longer stops at passive visibility; it now shows whether execution was productive, stalled, failed, or still waiting
+- the signal loop now also shows what recent inbound note capture actually did before queue execution became relevant
+
+What the next phase should close:
+
+- the next phase should tighten brain-first lookup before object/link creation
+- newly created downstream objects should make backlink expectations more explicit
+- the operator should be able to see when capture created candidate vs canonical downstream knowledge without widening into opaque background automation
 
 Sequence rule:
 
 - do not reopen `Phase 17` graph-canvas internals unless a real product gap appears
 - do not reopen `Phase 18` contract plumbing unless a new contract family ambiguity appears
 - do not reopen `Phase 19` product-semantic work unless a new entry-surface/product-contract gap appears
+- treat `Phase 20` as the closeout for Milestones 4 and 5 instead of reopening the archived `Phase 10` / `Phase 11` slices independently
+- treat `Phase 21` as the closeout for Milestone 6
+- treat `Phase 22` as the first closeout slice for Milestone 7
+- treat `Phase 23` as the second closeout slice for Milestone 7
+- use the next Milestone 7 slice for brain-first lookup + backlink legibility instead of reopening shell UX or widening immediately into background intelligence
 
 This keeps the roadmap moving from substrate -> contracts -> entry products, instead of looping back into infrastructure.
-
-Closeout:
-
-- [[2026-04-16-phase17-research-graph-visualization-plan]]
-- [[2026-04-16-phase17-research-graph-visualization-closeout]]
 
 ## Non-Recommended Paths Right Now
 
@@ -578,9 +602,9 @@ As of this plan:
 - Milestone 1: complete
 - Milestone 2: complete
 - Milestone 3: complete
-- Milestone 4: in progress
-- Milestone 5: in progress
-- Milestone 6: not started
+- Milestone 4: complete
+- Milestone 5: complete
+- Milestone 6: complete
 - Milestone 7: in progress
 - Milestone 8+: not started
 

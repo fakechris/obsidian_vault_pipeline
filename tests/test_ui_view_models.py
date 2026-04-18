@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
@@ -97,10 +98,17 @@ def test_build_object_page_payload(temp_vault):
     assert payload["assembly_contract"]["source_contract_name"] == "object/page"
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["assembly_contract"]["source_provider_name"] == "object/page"
+    assert [item["label"] for item in payload["operator_rail"]] == [
+        "Topic overview",
+        "Event dossier",
+        "Contradiction review",
+        "Production Browser",
+    ]
     assert [section["id"] for section in payload["compiled_sections"]] == [
         "current_state",
         "why_it_matters",
         "evidence_traceability",
+        "production_chain",
         "open_tensions",
         "where_to_go_next",
     ]
@@ -154,6 +162,7 @@ def test_build_object_page_payload_hides_research_affordances_when_research_shel
         "Current State",
         "Why It Matters",
         "Evidence Traceability",
+        "Production Chain",
         "Open Tensions",
         "Where To Go Next",
     ]
@@ -235,10 +244,17 @@ def test_build_topic_overview_payload(temp_vault):
     assert payload["assembly_contract"]["source_contract_name"] == "overview/topic"
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["assembly_contract"]["source_provider_name"] == "overview/topic"
+    assert [item["label"] for item in payload["operator_rail"]] == [
+        "Center object",
+        "Event dossier",
+        "Contradictions",
+        "Production Browser",
+    ]
     assert [section["id"] for section in payload["compiled_sections"]] == [
         "current_state",
         "why_it_matters",
         "evidence_traceability",
+        "production_chain",
         "open_tensions",
         "where_to_go_next",
     ]
@@ -337,6 +353,11 @@ date: 2026-04-13
     assert payload["production_summary"]["top_deep_dives"] == []
     assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
     assert any(signal["code"] == "missing_deep_dives" for signal in payload["production_summary"]["signals"])
+    production_chain = next(
+        section for section in payload["compiled_sections"] if section["id"] == "production_chain"
+    )
+    assert production_chain["summary"]
+    assert any(item["kind"] == "gap_signal" for item in production_chain["items"])
 
 
 def test_build_event_dossier_payload(temp_vault):
@@ -352,6 +373,12 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["assembly_contract"]["source_contract_name"] == "event/dossier"
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["assembly_contract"]["source_provider_name"] == "event/dossier"
+    assert [item["label"] for item in payload["operator_rail"]] == [
+        "Production Browser",
+        "Contradictions",
+        "Signals",
+        "Clusters",
+    ]
     assert [section["id"] for section in payload["compiled_sections"]] == [
         "current_state",
         "why_it_matters",
@@ -372,8 +399,11 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["limit"] == 50
     assert payload["is_limited"] is True
     assert payload["timeline_contract"]["timeline_kind"] == "dated_note_projection"
+    assert payload["timeline_contract"]["grouping_kind"] == "object_date_rollup"
     assert payload["timeline_contract"]["row_type_counts"] == {"page_date": 3}
+    assert payload["timeline_contract"]["anchor_kind_counts"] == {"note": 3}
     assert payload["timeline_contract"]["semantic_roles"] == {"note_date_projection": 3}
+    assert "not a canonical event entity store" in payload["timeline_contract"]["event_vs_note_explanation"]
     assert "dated notes projected from indexed pages" in payload["model_notes"][0]
     assert payload["review_context"]["object_count"] == 3
     assert payload["review_context"]["open_contradiction_count"] == 1
@@ -679,80 +709,6 @@ date: 2026-04-13
     assert payload["top_mocs"][0]["slug"] == "atlas-index"
 
 
-def test_build_graph_canvas_payload_cluster_overview(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_graph_canvas_payload
-
-    _seed_truth_store(temp_vault)
-
-    payload = build_graph_canvas_payload(temp_vault, pack_name="default-knowledge")
-
-    assert payload["screen"] == "graph/canvas"
-    assert payload["scope"] == "clusters"
-    assert payload["requested_pack"] == "default-knowledge"
-    assert payload["nodes"]
-    assert payload["nodes"][0]["detail"]["actions"]
-    assert payload["controls"]["edge_filter_items"]
-    assert payload["entry_links"][0]["path"].startswith("/clusters")
-
-
-def test_build_graph_canvas_payload_cluster_scope(temp_vault):
-    from openclaw_pipeline.truth_api import list_graph_clusters
-    from openclaw_pipeline.ui.view_models import build_graph_canvas_payload
-
-    _seed_truth_store(temp_vault)
-    cluster = list_graph_clusters(temp_vault)[0]
-
-    payload = build_graph_canvas_payload(
-        temp_vault,
-        pack_name=cluster["pack"],
-        cluster_id=cluster["cluster_id"],
-    )
-
-    assert payload["scope"] == "cluster"
-    assert payload["default_selection_id"].startswith("cluster-root:")
-    assert any(node["node_type"] == "cluster_root" for node in payload["nodes"])
-    assert any(node["node_type"] == "object" for node in payload["nodes"])
-    assert payload["controls"]["edge_filter_items"]
-    assert payload["entry_links"][0]["path"].startswith("/cluster?id=")
-
-
-def test_build_graph_canvas_payload_object_scope(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_graph_canvas_payload
-
-    _seed_truth_store(temp_vault)
-
-    payload = build_graph_canvas_payload(
-        temp_vault,
-        pack_name="default-knowledge",
-        object_id="alpha",
-    )
-
-    assert payload["scope"] == "object"
-    assert payload["default_selection_id"] == "object:alpha"
-    assert payload["nodes"][0]["detail"]["actions"][0]["path"].startswith("/object?id=alpha")
-    assert payload["controls"]["edge_filter_items"][0]["value"] == "all"
-
-
-def test_build_object_page_payload_includes_graph_link(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
-
-    _seed_truth_store(temp_vault)
-
-    payload = build_object_page_payload(temp_vault, "alpha", pack_name="default-knowledge")
-
-    assert payload["links"]["graph_path"] == "/graph?object_id=alpha&pack=default-knowledge"
-
-
-def test_build_topic_overview_payload_includes_graph_link(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
-
-    _seed_truth_store(temp_vault)
-
-    payload = build_topic_overview_payload(temp_vault, "alpha", pack_name="default-knowledge")
-
-    assert payload["links"]["graph_path"] == "/graph?object_id=alpha&pack=default-knowledge"
-
-
 def test_build_cluster_detail_payload_filters_relevant_contradictions_before_slicing(
     temp_vault,
     monkeypatch,
@@ -998,6 +954,12 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["assembly_contract"]["source_contract_name"] == "truth/contradictions"
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["assembly_contract"]["source_provider_name"] == "truth/contradictions"
+    assert [item["label"] for item in payload["operator_rail"]] == [
+        "Signals",
+        "Action Queue",
+        "Production Browser",
+        "Events",
+    ]
     assert [section["id"] for section in payload["compiled_sections"]] == [
         "current_state",
         "why_it_matters",
@@ -1013,10 +975,15 @@ def test_build_contradiction_browser_payload(temp_vault):
     assert payload["items"][0]["detection_confidence"] == "heuristic"
     assert payload["items"][0]["status_bucket"] == "open"
     assert payload["items"][0]["scope_summary"]["object_count"] == 2
+    assert payload["items"][0]["polarity_summary"]["object_count"] == 2
+    assert payload["items"][0]["evidence_summary"]["ranked_evidence_count"] == len(payload["items"][0]["ranked_evidence"])
+    assert payload["items"][0]["tension_summary"] == "1 positive claims vs 1 negative claims across 2 objects."
     assert payload["items"][0]["status_explanation"] == "Active contradiction awaiting review."
     assert payload["items"][0]["ranked_evidence"][0]["rank"] == 1
     assert payload["detection_contract"]["model"] == "page_summary_polarity"
     assert payload["detection_contract"]["confidence"] == "heuristic"
+    assert payload["detection_contract"]["polarity_semantics"].startswith("Positive and negative claim sets")
+    assert payload["detection_contract"]["evidence_semantics"].startswith("Ranked evidence")
     assert payload["detection_contract"]["status_explanations"]["resolved_keep_positive"].startswith("Reviewed")
     assert "page_summary claim polarity" in payload["detection_notes"][0]
 
@@ -1173,6 +1140,14 @@ Thin note.
         "deserves_review",
         "recommended_next_steps",
     ]
+    assert [group["id"] for group in payload["workflow_groups"]] == [
+        "orient",
+        "inspect",
+        "review",
+        "trace",
+        "explore",
+    ]
+    assert payload["workflow_groups"][0]["items"][0]["path"] == "/briefing"
     assert payload["objects"]["count"] == 4
     assert payload["contradictions"]["count"] == 1
     assert payload["events"]["count"] == 4
@@ -1185,11 +1160,6 @@ Thin note.
     production_gap = next(item for item in payload["priorities"] if item["kind"] == "production_gap")
     assert production_gap["path"].startswith("/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md")
     assert payload["recent_review_actions"] == []
-    orientation_sections = {section["id"]: section for section in payload["orientation"]["compiled_sections"]}
-    entry_sections = {section["id"]: section for section in payload["entry_sections"]}
-    assert entry_sections["what_changed_recently"]["items"] == orientation_sections["what_changed"]["items"][:4]
-    assert entry_sections["important_right_now"]["items"] == orientation_sections["next_actions"]["items"][:4]
-    assert entry_sections["deserves_review"]["items"] == orientation_sections["needs_review"]["items"][:4]
 
 
 def test_build_truth_dashboard_payload_preserves_requested_pack(temp_vault):
@@ -1216,6 +1186,7 @@ Processed source note without downstream chain.
     assert payload["objects"]["items"][0]["object_path"] == "/object?id=alpha&pack=default-knowledge"
     assert payload["signals"]["browser_path"] == "/signals?pack=default-knowledge"
     assert payload["production"]["browser_path"] == "/production?pack=default-knowledge"
+    assert payload["workflow_groups"][0]["items"][0]["path"] == "/briefing?pack=default-knowledge"
     production_gap = next(item for item in payload["priorities"] if item["kind"] == "production_gap")
     assert production_gap["path"].endswith("&pack=default-knowledge")
     assert payload["signals"]["surface_contract"]["status"] == "inherited"
@@ -1337,6 +1308,21 @@ Processed source note without downstream chain.
 """,
         encoding="utf-8",
     )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-04-18T10:00:00Z",
+                "event_type": "source_archived_to_processed",
+                "source": "50-Inbox/02-Processing/Loose Source.md",
+                "archived": str(loose_source),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     rebuild_knowledge_index(temp_vault)
 
     payload = build_signal_browser_payload(temp_vault)
@@ -1347,9 +1333,19 @@ Processed source note without downstream chain.
     assert payload["governance_contract"]["provider_pack"] == "research-tech"
     assert payload["governance_contract"]["provider_name"] == "research_governance"
     assert payload["governance_contract"]["signal_rule_count"] >= 1
+    assert [item["label"] for item in payload["operator_rail"]] == [
+        "Action Queue",
+        "Production Browser",
+        "Contradictions",
+        "Orientation Brief",
+    ]
     assert "contradiction_open" in payload["governance_contract"]["signal_rule_names"]
     assert payload["type_counts"]["contradiction_open"] >= 1
+    assert "review_only" in payload["impact_counts"]
     assert any(item["signal_type"] == "production_gap" for item in payload["items"])
+    source_signal = next(item for item in payload["items"] if item["signal_type"] == "source_needs_deep_dive")
+    assert source_signal["capture_summary"]["status"] == "observed"
+    assert source_signal["capture_summary"]["captured_event_count"] == 1
 
 
 def test_build_signal_browser_payload_preserves_requested_pack(temp_vault):
@@ -1417,6 +1413,13 @@ def test_build_action_queue_payload_preserves_requested_pack(temp_vault, monkeyp
                 "action_kind": "deep_dive_workflow",
                 "title": "Run deep dive",
                 "safe_to_run": True,
+                "impact_summary": {
+                    "impact_status": "waiting",
+                    "lifecycle_stage": "queued",
+                    "impact_label": "Waiting on queue execution",
+                    "impact_detail": "A queueable action exists and is currently waiting to run.",
+                    "produced_artifact_count": 0,
+                },
             }
         ]
 
@@ -1439,6 +1442,7 @@ def test_build_action_queue_payload_preserves_requested_pack(temp_vault, monkeyp
     assert payload["governance_contract"]["status"] == "inherited"
     assert payload["governance_contract"]["provider_pack"] == "research-tech"
     assert payload["governance_contract"]["provider_name"] == "research_governance"
+    assert payload["impact_counts"] == {"waiting": 1}
 
 
 def test_build_briefing_payload(temp_vault):
@@ -1446,6 +1450,18 @@ def test_build_briefing_payload(temp_vault):
     from openclaw_pipeline.truth_api import record_review_action
 
     _seed_truth_store(temp_vault)
+    loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
+    loose_source.parent.mkdir(parents=True, exist_ok=True)
+    loose_source.write_text(
+        """---
+title: Loose Source
+source: https://example.com/loose
+---
+
+Processed source note without downstream chain.
+""",
+        encoding="utf-8",
+    )
     record_review_action(
         temp_vault,
         event_type="ui_summaries_rebuilt",
@@ -1455,6 +1471,21 @@ def test_build_briefing_payload(temp_vault):
             "objects_rebuilt": 1,
             "rebuilt_object_ids": ["alpha"],
         },
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-04-18T10:00:00Z",
+                "event_type": "source_archived_to_processed",
+                "source": "50-Inbox/02-Processing/Loose Source.md",
+                "archived": str(loose_source),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     rebuild_knowledge_index(temp_vault)
 
@@ -1476,7 +1507,11 @@ def test_build_briefing_payload(temp_vault):
     assert payload["active_topics"]
     assert payload["insights"]
     assert payload["priority_items"]
+    assert payload["loop_summary"]["review_only_count"] >= 0
+    assert payload["loop_summary"]["productive_count"] >= 0
     assert [section["id"] for section in payload["compiled_sections"]] == [
+        "signal_loop",
+        "inbound_capture",
         "what_changed",
         "what_matters",
         "needs_review",
@@ -1484,12 +1519,17 @@ def test_build_briefing_payload(temp_vault):
         "next_actions",
     ]
     assert [item["href"] for item in payload["section_nav"]] == [
+        "#signal-loop",
+        "#inbound-capture",
         "#what-changed",
         "#what-matters",
         "#needs-review",
         "#next-reads",
         "#next-actions",
     ]
+    inbound_section = next(section for section in payload["compiled_sections"] if section["id"] == "inbound_capture")
+    assert inbound_section["items"]
+    assert inbound_section["items"][0]["kind"] == "capture_signal"
     assert payload["queue_summary"]["queued_count"] >= 0
 
 
@@ -1741,6 +1781,8 @@ Shipped the local-first harness update.
     assert payload["cluster_sections"][0]["clusters"][0]["object_id"] == "alpha"
     assert payload["cluster_sections"][0]["clusters"][0]["row_count"] == 2
     assert payload["cluster_sections"][0]["clusters"][0]["row_types"] == ["heading_date", "page_date"]
+    assert payload["cluster_sections"][0]["clusters"][0]["grouping_kind"] == "object_date_rollup"
+    assert "same object and date" in payload["cluster_sections"][0]["clusters"][0]["event_vs_note_explanation"]
 
 
 def test_build_atlas_browser_payload(temp_vault):
@@ -2074,6 +2116,18 @@ Mentions [[alpha]].
     assert payload["screen"] == "production/browser"
     assert payload["counts"]["source_notes"] == 1
     assert payload["counts"]["deep_dives"] == 1
+    assert [item["label"] for item in payload["operator_rail"]] == [
+        "Orientation Brief",
+        "Signals",
+        "Action Queue",
+        "Search",
+    ]
+    assert [section["id"] for section in payload["compiled_sections"]] == [
+        "current_state",
+        "why_it_matters",
+        "chain_gaps",
+        "where_to_go_next",
+    ]
     assert any(item["stage_label"] == "source_note" for item in payload["items"])
     assert any(item["stage_label"] == "deep_dive" for item in payload["items"])
     assert payload["limit"] == 50
@@ -2459,9 +2513,27 @@ date: 2026-04-13
     (logs_dir / "pipeline.jsonl").write_text(
         "\n".join(
             [
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T09:00:00Z",
+                        "event_type": "source_archived_to_processed",
+                        "source": "50-Inbox/02-Processing/Harness.md",
+                        "archived": str(processed),
+                    },
+                    ensure_ascii=False,
+                ),
                 '{"event_type":"article_processed","file":"Harness.md","output":"'
                 + str(deep_dive)
                 + '"}',
+                json.dumps(
+                    {
+                        "timestamp": "2026-04-18T09:11:00Z",
+                        "event_type": "candidates_upserted",
+                        "file": "Harness.md",
+                        "candidates": ["agent-harness"],
+                    },
+                    ensure_ascii=False,
+                ),
                 '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Harness_深度解读.md","mutation":{"target_slug":"alpha"}}',
             ]
         )
@@ -2479,6 +2551,23 @@ date: 2026-04-13
     assert [item["title"] for item in payload["production_chain"]["deep_dives"]] == ["Harness Deep Dive"]
     assert [item["object_id"] for item in payload["production_chain"]["objects"]] == ["alpha"]
     assert [item["slug"] for item in payload["production_chain"]["atlas_pages"]] == ["atlas-index"]
+    assert payload["production_chain"]["chain_status"] == "complete"
+    assert payload["production_chain"]["missing_stages"] == []
+    assert payload["inbound_capture"]["status"] == "productive"
+    assert payload["inbound_capture"]["captured_event_count"] == 4
+    assert payload["inbound_capture"]["produced_artifact_count"] == 2
+    assert [item["label"] for item in payload["operator_rail"]] == [
+        "Production Browser",
+        "Signals",
+        "Open derived object",
+    ]
+    assert [section["id"] for section in payload["compiled_sections"]] == [
+        "current_state",
+        "inbound_capture",
+        "evidence_traceability",
+        "production_chain",
+        "where_to_go_next",
+    ]
 
 
 def test_build_search_payload_preserves_requested_pack(temp_vault):
@@ -2673,3 +2762,5 @@ date: 2026-04-13
     assert [item["slug"] for item in payload["production_chain"]["deep_dives"]] == ["harness-deep-dive"]
     assert [item["path"] for item in payload["production_chain"]["source_notes"]] == ["50-Inbox/03-Processed/2026-04/Harness.md"]
     assert [item["slug"] for item in payload["production_chain"]["atlas_pages"]] == ["atlas-index"]
+    assert payload["production_chain"]["chain_status"] == "complete"
+    assert payload["production_chain"]["missing_stages"] == []

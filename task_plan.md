@@ -83,3 +83,23 @@ Phase 4
   - `/` workbench home now exposes entry sections and routes into orientation
   - object/topic/event/contradiction pages now expose stable compiled sections
   - docs and verify checklists now treat orientation and compiled-page contracts as pack-level product semantics
+- `Phase 20` is complete:
+  - event / contradiction semantics are now explicit on the product surface
+  - production-chain traceability is now legible across note/object/topic/production views
+- `Phase 21` is complete:
+  - `/` now exposes workflow-group IA instead of only a flat card pile
+  - key shell surfaces now expose explicit `Next Actions`
+  - shell pages now lead with a compiled lead section before deeper detail blocks
+- `Phase 22` is complete:
+  - signals and queued actions now expose deterministic `impact_summary` contracts
+  - `/signals`, `/actions`, and `/briefing` now speak the same lifecycle language about loop productivity
+  - the first Milestone 7 slice is now about visible impact, not only passive signal presence
+- `Phase 23` is complete:
+  - note-level inbound capture is now a deterministic contract over existing pipeline/refine logs
+  - signal rows now expose `capture_summary` inherited from their backing notes
+  - note and briefing surfaces now expose `Inbound Capture` compiled sections
+  - `/signals` now renders inbound capture legibility directly, not only queue impact
+- Next active planning target after `Phase 23` remains inside `Milestone 7: Active Signal Loop`
+  - focus next on brain-first lookup before object/link creation plus backlink legibility
+  - do not reopen shell UX unless a new operator-navigation gap appears
+  - do not widen immediately into temporal truth, harness memory, or benchmark tracks

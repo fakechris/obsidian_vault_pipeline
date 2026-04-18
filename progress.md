@@ -1,6 +1,215 @@
 # Progress Log
 
+## Session: 2026-04-18
+
+### Phase 23: Inbound Capture Audit Visibility
+- **Status:** complete
+- Actions taken:
+  - Defined `Phase 23` as the second active execution slice for `Milestone 7`, scoped narrowly to inbound-capture legibility rather than hooks or background automation
+  - Added deterministic `get_note_inbound_capture_summary(...)` in `truth_api.py`, derived from existing `pipeline.jsonl` and `refine-mutations.jsonl`
+  - Kept the v1 event set intentionally narrow and explicit:
+    - `source_staged_for_processing`
+    - `source_archived_to_processed`
+    - `source_restored_to_raw`
+    - `article_processed`
+    - `article_abstained`
+    - `article_error`
+    - `candidates_upserted`
+    - `candidate_upsert_error`
+    - `evergreen_auto_promoted`
+    - `evergreen_created`
+    - `evergreen_error`
+    - `refine_mutation_applied`
+  - Attached `capture_summary` to signal rows based on their backing `note_paths`
+  - Upgraded note pages with a first-class `Inbound Capture` compiled section
+  - Upgraded `/briefing` with an `Inbound Capture` compiled section derived from recent signals carrying note-level capture audit
+  - Upgraded `/signals` to render item-level inbound capture summaries directly
+  - Closed out `Phase 23` docs and moved the roadmap to the next Milestone 7 slice:
+    - brain-first lookup + backlink legibility
+- Files created/modified:
+  - docs/plans/2026-04-18-phase23-inbound-capture-audit-visibility.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - docs/research-tech/RESEARCH_TECH_VERIFY.md
+  - src/openclaw_pipeline/truth_api.py
+  - src/openclaw_pipeline/ui/view_models.py
+  - src/openclaw_pipeline/commands/ui_server.py
+  - tests/test_truth_api.py
+  - tests/test_ui_view_models.py
+  - tests/test_ui_server.py
+  - progress.md
+  - task_plan.md
+
 ## Session: 2026-04-17
+
+### Phase 22: Active Signal Impact Accounting
+- **Status:** complete
+- Actions taken:
+  - Defined `Phase 22` as the first active execution slice for `Milestone 7`, scoped narrowly to signal impact accounting rather than inbound hooks or background intelligence
+  - Wrote a dedicated phase plan focused on:
+    - deterministic signal/action impact summaries
+    - signal/browser and action/browser lifecycle legibility
+    - briefing-level loop productivity visibility
+  - Added deterministic `impact_summary` contracts in `truth_api.py` for:
+    - signal rows
+    - action queue rows
+  - Introduced stable lifecycle/impact buckets:
+    - `review_only`
+    - `ready`
+    - `waiting`
+    - `running`
+    - `productive`
+    - `completed`
+    - `failed`
+    - `stalled`
+  - Kept the implementation grounded in existing runtime state only:
+    - signal ledger
+    - action queue state
+    - focused-action result payloads
+    - processor output metadata
+  - Upgraded `build_signal_browser_payload` and `build_action_queue_payload` with `impact_counts`
+  - Upgraded `build_briefing_payload` with:
+    - `loop_summary`
+    - leading `signal_loop` compiled section
+    - more useful `first_useful_sign` selection when a productive signal exists
+  - Updated the UI shell so `/signals`, `/actions`, and `/briefing` render the new impact/lifecycle language directly instead of only queue badges
+  - Closed out `Phase 22` docs and moved the roadmap to the next Milestone 7 slice:
+    - selected inbound capture + audit visibility
+- Files created/modified:
+  - docs/plans/2026-04-17-phase22-active-signal-impact-accounting.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - docs/research-tech/RESEARCH_TECH_VERIFY.md
+  - src/openclaw_pipeline/truth_api.py
+  - src/openclaw_pipeline/ui/view_models.py
+  - src/openclaw_pipeline/commands/ui_server.py
+  - tests/test_truth_api.py
+  - tests/test_ui_view_models.py
+  - tests/test_ui_server.py
+  - progress.md
+  - task_plan.md
+
+### Phase 21: Product Shell And Operator UX
+- **Status:** complete
+- Actions taken:
+  - Defined `Phase 21` as the active successor to `Phase 20`, scoped narrowly to shell IA and operator affordances rather than signal automation or new intelligence layers
+  - Added a dedicated implementation plan for `Phase 21` focused on:
+    - dashboard workflow IA
+    - cross-surface operator rails
+    - page-shell ordering and affordance density
+  - Updated the main milestone roadmap so `Phase 21` is now the active next reference for `Milestone 6`
+  - Started `Task 1` with red-first tests for dashboard workflow groups and root-shell rendering
+  - Added stable dashboard `workflow_groups` with five workflow buckets:
+    - orient
+    - inspect
+    - review
+    - trace
+    - explore
+  - Updated the root UI shell to render a visible `Workflow Map` block above `Where To Start`
+  - Kept all workflow links pack-scoped through the existing shared-shell path helpers
+  - Started `Task 2` with red-first payload and UI assertions for a shared `operator_rail` / `Next Actions` affordance across:
+    - note pages
+    - object pages
+    - topic pages
+    - event dossier
+    - contradictions browser
+    - signals browser
+    - production browser
+  - Added stable `operator_rail` payloads to the page builders that need cross-surface operator affordances
+  - Added a shared UI renderer for `Next Actions` so those rails now render as a consistent card instead of ad hoc link rows
+  - Fixed two real regressions caught by the wider suite while landing the rail:
+    - restored a missing `operator_rail` declaration in `build_object_page_payload`
+    - replaced an accidental object-scoped rail copy in `build_briefing_payload` with a briefing-scoped rail
+  - Re-ran the full `ui_view_models` and `ui_server` suites to green after the focused red/green cycle passed
+  - Completed `Task 3` by reordering shell pages so they now lead with:
+    - a lead compiled section
+    - then `Next Actions`
+    - then contract/status and deeper evidence/review blocks
+  - Closed out `Phase 21` docs:
+    - marked the phase plan complete
+    - marked `Milestone 6` complete
+    - updated verify guidance for workflow IA and operator rails
+    - pointed the roadmap at `Milestone 7: Active Signal Loop` as the next real gap
+- Files created/modified:
+  - docs/plans/2026-04-17-phase21-product-shell-and-operator-ux.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - docs/research-tech/RESEARCH_TECH_VERIFY.md
+  - progress.md
+  - task_plan.md
+  - src/openclaw_pipeline/ui/view_models.py
+  - src/openclaw_pipeline/commands/ui_server.py
+  - tests/test_ui_view_models.py
+  - tests/test_ui_server.py
+
+### Phase 20: Semantic Trust And Production Traceability
+- **Status:** complete
+- Actions taken:
+  - Started the first execution batch for `Phase 20`, focused on event semantics, contradiction semantics, and production-chain traceability contracts
+  - Hardened `Event Dossier` semantics with explicit:
+    - `grouping_kind`
+    - `anchor_kind_counts`
+    - `event_vs_note_explanation`
+  - Hardened contradiction rows with explicit:
+    - `polarity_summary`
+    - `evidence_summary`
+    - `tension_summary`
+  - Hardened contradiction browser contract with explicit:
+    - `polarity_semantics`
+    - `evidence_semantics`
+  - Upgraded note/object traceability payloads with:
+    - `stage_label`
+    - `stage_presence`
+    - `missing_stages`
+    - `chain_status`
+    - `chain_summary`
+  - Spent the new trust/traceability fields on the current UI surfaces:
+    - `/events`
+    - `/contradictions`
+    - `/note`
+    - `/object`
+    - `/production`
+  - Added and ran red-first tests covering the new contract fields and page rendering
+  - Completed a second execution batch for `Phase 20`, focused on spending those contracts on compiled trust sections across the production-chain surfaces
+  - Upgraded `/note` and `/production` payloads/pages so their compiled sections now make chain state explicit via:
+    - `current_state`
+    - `evidence_traceability`
+    - `production_chain`
+    - `chain_gaps`
+    - `where_to_go_next`
+  - Added explicit `Production Chain` compiled sections to:
+    - object pages
+    - topic pages
+  - Topic pages now spend `production_summary` on a stable compiled section instead of only a side-card summary, including:
+    - top deep-dive contribution
+    - Atlas/MOC reach
+    - gap signals
+  - Re-ran the trust/UI suite to green after locking the new note/object/topic/production expectations with focused tests first
+  - Closed out `Phase 20` in the phase plan and the main milestone roadmap after the new trust/traceability contracts and compiled sections satisfied the phase exit conditions
+- Files created/modified:
+  - docs/plans/2026-04-17-phase20-semantic-trust-and-production-traceability.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - docs/research-tech/RESEARCH_TECH_VERIFY.md
+  - src/openclaw_pipeline/truth_api.py
+  - src/openclaw_pipeline/ui/view_models.py
+  - src/openclaw_pipeline/commands/ui_server.py
+  - tests/test_truth_api.py
+  - tests/test_ui_view_models.py
+  - tests/test_ui_server.py
+  - progress.md
+
+### Phase 20: Semantic Trust And Production Traceability Planning
+- **Status:** planned
+- Actions taken:
+  - Reviewed the post-`Phase 19` roadmap state in the main milestone doc
+  - Re-read the archived `Phase 10` and `Phase 11` plans to avoid duplicating or reopening stale execution slices
+  - Defined a new `Phase 20` as the active successor plan for the remaining Milestone 4 + 5 work
+  - Scoped `Phase 20` around two product gaps only:
+    - semantic trust for events and contradictions
+    - production-chain legibility across notes, deep dives, objects, and Atlas/topic pages
+  - Explicitly deferred temporal truth, harness/session memory, graph workspaces, and benchmark-platform work
+- Files created/modified:
+  - docs/plans/2026-04-17-phase20-semantic-trust-and-production-traceability.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - task_plan.md
+  - progress.md
 
 ### Phase 19: Orientation And Compiled Knowledge Products
 - **Status:** complete

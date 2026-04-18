@@ -30,7 +30,6 @@ from ..ui.view_models import (
     build_derivation_browser_payload,
     build_evolution_browser_payload,
     build_event_dossier_payload,
-    build_graph_canvas_payload,
     build_note_page_payload,
     build_object_page_payload,
     build_objects_index_payload,
@@ -87,7 +86,6 @@ def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
             [
                 ("Evolution", "/evolution"),
                 ("Clusters", "/clusters"),
-                ("Graph", "/graph"),
                 ("Atlas", "/atlas"),
                 ("Deep Dives", "/deep-dives"),
                 ("Event Dossier", "/events"),
@@ -315,6 +313,38 @@ def _render_governance_contract_card(payload: dict) -> str:
         f"<section class='card'><h2>Governance Contract</h2><p class='muted'>{detail}</p>"
         f"{description_html}{facts_html}</section>"
     )
+
+
+def _render_operator_rail(payload: dict) -> str:
+    items = payload.get("operator_rail")
+    if not isinstance(items, list) or not items:
+        return ""
+    rendered_items: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        path = str(item.get("path") or "").strip()
+        detail = str(item.get("detail") or "").strip()
+        if not label:
+            continue
+        label_html = f'<a href="{escape(path)}">{escape(label)}</a>' if path else escape(label)
+        detail_html = f"<div class='muted'>{escape(detail)}</div>" if detail else ""
+        rendered_items.append(f"<li>{label_html}{detail_html}</li>")
+    if not rendered_items:
+        return ""
+    return (
+        "<section class='card'><h2>Next Actions</h2>"
+        f"<ul class='list-tight'>{''.join(rendered_items)}</ul>"
+        "</section>"
+    )
+
+
+def _split_lead_compiled_sections(sections: list[dict[str, object]] | None) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    normalized = [section for section in (sections or []) if isinstance(section, dict)]
+    if not normalized:
+        return [], []
+    return [normalized[0]], normalized[1:]
 
 
 def _render_compiled_sections(sections: list[dict[str, object]]) -> str:
@@ -733,10 +763,15 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
     source_note = None
     derived_notes: list[dict[str, str]] = []
     production_chain = None
+    compiled_sections: list[dict[str, object]] = []
+    section_nav_items: list[dict[str, str]] = []
     if payload:
         source_note = payload.get("provenance", {}).get("original_source_note")
         derived_notes = payload.get("provenance", {}).get("derived_deep_dives", [])
         production_chain = payload.get("production_chain")
+        compiled_sections = list(payload.get("compiled_sections") or [])
+        section_nav_items = list(payload.get("section_nav") or [])
+    lead_sections, remaining_sections = _split_lead_compiled_sections(compiled_sections)
     provenance_html = ""
     if source_note:
         provenance_html = (
@@ -764,11 +799,15 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
         )
     production_chain_html = ""
     if production_chain:
+        missing_stages = ", ".join(str(item).replace("_", " ") for item in production_chain.get("missing_stages", [])) or "None"
         production_chain_html = (
             "<section class='card'>"
             "<h2>Production Chain</h2>"
             "<dl class='meta-list'>"
             f"<div><dt>Current Note</dt><dd>{escape(production_chain['note']['title'])}<div class='muted'>{escape(production_chain['note']['path'])}</div></dd></div>"
+            f"<div><dt>Chain Status</dt><dd>{escape(str(production_chain.get('chain_status') or ''))}</dd></div>"
+            f"<div><dt>Missing Stages</dt><dd>{escape(missing_stages)}</dd></div>"
+            f"<div><dt>Chain Summary</dt><dd>{escape(str(production_chain.get('chain_summary') or ''))}</dd></div>"
             f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'], requested_pack=requested_pack)}</dd></div>"
             f"<div><dt>Deep Dives</dt><dd>{_render_named_note_links(production_chain['deep_dives'], requested_pack=requested_pack)}</dd></div>"
             f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'], requested_pack=requested_pack)}</dd></div>"
@@ -776,6 +815,11 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             "</dl>"
             "</section>"
         )
+    section_nav = "".join(
+        f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
+        for item in section_nav_items
+    )
+    operator_rail_card = _render_operator_rail(payload or {})
     return _layout(
         f"Markdown Note: {relative_path}",
         (
@@ -783,10 +827,14 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
             "<h1>Markdown Note</h1>"
             f"<p class='muted'>{escape(relative_path)}</p>"
             "</section>"
-            f"{frontmatter_html}"
-            f"{provenance_html}"
-            f"{production_chain_html}"
-            f"<section class='card'>{note_html}</section>"
+            + _render_compiled_sections(lead_sections)
+            + operator_rail_card
+            + (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "")
+            + f"{frontmatter_html}"
+            + f"{provenance_html}"
+            + f"{production_chain_html}"
+            + f"{_render_compiled_sections(remaining_sections)}"
+            + f"<section class='card'>{note_html}</section>"
         ),
         requested_pack=requested_pack,
     )
@@ -1051,6 +1099,35 @@ def _render_production_summary_card(
     )
 
 
+def _render_workflow_groups(groups: list[dict[str, object]]) -> str:
+    if not groups:
+        return ""
+    return "".join(
+        "<section class='card'>"
+        f"<h2>{escape(str(group.get('title') or ''))}</h2>"
+        f"<p class='muted'>{escape(str(group.get('summary') or ''))}</p>"
+        "<ul class='list-tight'>"
+        + "".join(
+            "<li>"
+            + (
+                f'<a href="{escape(str(item.get("path") or ""))}">{escape(str(item.get("label") or ""))}</a>'
+                if item.get("path")
+                else escape(str(item.get("label") or ""))
+            )
+            + (
+                f"<div class='muted'>{escape(str(item.get('detail') or ''))}</div>"
+                if item.get("detail")
+                else ""
+            )
+            + "</li>"
+            for item in (group.get("items") or [])
+        )
+        + "</ul>"
+        "</section>"
+        for group in groups
+    )
+
+
 def _render_dashboard(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     research_overview = payload.get("research_overview", {})
@@ -1061,6 +1138,7 @@ def _render_dashboard(payload: dict) -> str:
     orientation_assembly_contract = _render_assembly_contract_card(orientation) if isinstance(orientation, dict) else ""
     orientation_governance_contract = _render_governance_contract_card(orientation) if isinstance(orientation, dict) else ""
     entry_sections_html = _render_compiled_sections(payload.get("entry_sections", []))
+    workflow_groups_html = _render_workflow_groups(payload.get("workflow_groups", []))
     object_items = "".join(
         f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a></li>'
         for item in payload["objects"]["items"]
@@ -1168,6 +1246,8 @@ def _render_dashboard(payload: dict) -> str:
             "".join(stats_cards),
             "</section>",
             "<section class='section-stack'>",
+            "<section class='card'><h2>Workflow Map</h2><p class='muted'>Start here if you do not yet know which route to open. Each group maps one common operator workflow onto the current shell.</p></section>",
+            workflow_groups_html,
             "<section class='card'><h2>Where To Start</h2><p class='muted'>Use the orientation brief and the compiled entry sections below to decide what to read, review, or do next.</p></section>",
             orientation_assembly_contract,
             orientation_governance_contract,
@@ -1225,6 +1305,7 @@ def _render_object_page(payload: dict) -> str:
     research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
     next_path = _shell_href(f"/object?id={quote(str(payload['object']['object_id']), safe='')}", requested_pack)
     assembly_contract_card = _render_assembly_contract_card(payload)
+    operator_rail_card = _render_operator_rail(payload)
     evergreen_path = payload["provenance"]["evergreen_path"]
     evergreen_html = (
         f'<a href="{escape(_note_href(evergreen_path, requested_pack))}">{escape(evergreen_path)}</a>'
@@ -1266,6 +1347,7 @@ def _render_object_page(payload: dict) -> str:
         "evolution",
         {"candidate_items": [], "accepted_links": [], "accepted_count": 0, "candidate_count": 0, "link_types": []},
     )
+    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
     section_nav_items = [
         item for item in payload["section_nav"] if research_shell_enabled or item["href"] != "#contradictions"
     ]
@@ -1303,7 +1385,6 @@ def _render_object_page(payload: dict) -> str:
     )
     hero_links = [
         f"<a href='{escape(payload['links']['topic_path'])}'>Explore topic</a>",
-        f"<a href='{escape(payload['links']['graph_path'])}'>Open in graph</a>",
     ]
     if research_shell_enabled:
         hero_links.extend(
@@ -1359,6 +1440,9 @@ def _render_object_page(payload: dict) -> str:
             f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
             "</dl></section>",
             "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
+            f"<div><dt>Chain Status</dt><dd>{escape(str(payload['production_chain'].get('chain_status') or ''))}</dd></div>"
+            f"<div><dt>Missing Stages</dt><dd>{escape(', '.join(str(item).replace('_', ' ') for item in payload['production_chain'].get('missing_stages', [])) or 'None')}</dd></div>"
+            f"<div><dt>Chain Summary</dt><dd>{escape(str(payload['production_chain'].get('chain_summary') or ''))}</dd></div>"
             f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</dd></div>"
             f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'], requested_pack=requested_pack)}</dd></div>"
             f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
@@ -1382,13 +1466,15 @@ def _render_object_page(payload: dict) -> str:
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
             + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
+            + _render_compiled_sections(lead_sections)
+            + operator_rail_card
             + assembly_contract_card
             + f"<nav class='subnav'>{section_nav}</nav>"
             + f"<section class='grid stats'>{''.join(stats_cards)}</section>"
             "<section class='grid two-col'>"
             "<div class='section-stack'>"
             f"<section id='summary' class='card'><h2>Compiled Summary</h2><p>{escape(summary_text)}</p></section>"
-            f"{_render_compiled_sections(payload.get('compiled_sections', []))}"
+            f"{_render_compiled_sections(remaining_sections)}"
             f"<section id='claims' class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
             "</div>"
             "<div class='section-stack'>"
@@ -1405,6 +1491,7 @@ def _render_topic_page(payload: dict) -> str:
     research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
     next_path = _shell_href(f"/topic?id={quote(str(payload['center']['object_id']), safe='')}", requested_pack)
     assembly_contract_card = _render_assembly_contract_card(payload)
+    operator_rail_card = _render_operator_rail(payload)
     neighbors = "".join(
         f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a></li>'
         for item in payload["neighbors"]
@@ -1417,6 +1504,7 @@ def _render_topic_page(payload: dict) -> str:
         "evolution",
         {"candidate_items": [], "accepted_links": [], "accepted_count": 0, "candidate_count": 0, "link_types": []},
     )
+    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
     section_nav = "".join(
         f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
         for item in payload.get("section_nav", [])
@@ -1442,7 +1530,6 @@ def _render_topic_page(payload: dict) -> str:
     )
     hero_links = [
         f"<a href='{escape(payload['links']['center_object_path'])}'>Open center object</a>",
-        f"<a href='{escape(payload['links']['graph_path'])}'>Open in graph</a>",
     ]
     if research_shell_enabled:
         hero_links.extend(
@@ -1489,10 +1576,12 @@ def _render_topic_page(payload: dict) -> str:
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
             + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
+            + _render_compiled_sections(lead_sections)
+            + operator_rail_card
             + assembly_contract_card
             + (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "")
             + "<section class='grid two-col'>"
-            f"{_render_compiled_sections(payload.get('compiled_sections', []))}"
+            f"{_render_compiled_sections(remaining_sections)}"
             f"<section class='card'><h2>Center Summary</h2><p>{escape(payload['center_summary'])}</p></section>"
             f"<section class='card'><h2>Neighbors</h2><ul class='list-tight'>{neighbors}</ul></section>"
             f"{''.join(right_sections)}"
@@ -1506,6 +1595,8 @@ def _render_events_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
     assembly_contract_card = _render_assembly_contract_card(payload)
+    operator_rail_card = _render_operator_rail(payload)
+    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
     limit_note = (
         f" Showing the most recent {payload['limit']} timeline rows in this dossier window."
         if payload.get("is_limited")
@@ -1518,14 +1609,20 @@ def _render_events_page(payload: dict) -> str:
     timeline_contract = payload["timeline_contract"]
     timeline_contract_items = (
         f"<li>Timeline kind: {escape(timeline_contract['timeline_kind'])}</li>"
+        + f"<li>Grouping kind: {escape(str(timeline_contract.get('grouping_kind') or ''))}</li>"
         + "".join(
             f"<li>Row type {escape(str(row_type))}: {count}</li>"
             for row_type, count in timeline_contract["row_type_counts"].items()
         )
         + "".join(
+            f"<li>Anchor kind {escape(str(anchor_kind))}: {count}</li>"
+            for anchor_kind, count in timeline_contract.get("anchor_kind_counts", {}).items()
+        )
+        + "".join(
             f"<li>Semantic role {escape(str(role))}: {count}</li>"
             for role, count in timeline_contract["semantic_roles"].items()
         )
+        + f"<li>Semantics: {escape(str(timeline_contract.get('event_vs_note_explanation') or ''))}</li>"
     )
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     date_nav = "".join(
@@ -1612,9 +1709,11 @@ def _render_events_page(payload: dict) -> str:
                 f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
+                _render_compiled_sections(lead_sections),
+                operator_rail_card,
                 assembly_contract_card,
                 (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else ""),
-                _render_compiled_sections(payload.get("compiled_sections", [])),
+                _render_compiled_sections(remaining_sections),
                 f"<div class='link-row'>{type_breakdown}</div>",
                 f"{_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack)}",
                 f"{_render_review_context_card(payload['review_context'])}",
@@ -1752,6 +1851,8 @@ def _render_production_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
     surface_contract_card = _render_surface_contract_card(payload)
+    operator_rail_card = _render_operator_rail(payload)
+    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
     limit_note = (
         f" Showing the most recent {payload['limit']} production-chain entries in this browser window."
         if payload.get("is_limited")
@@ -1761,9 +1862,13 @@ def _render_production_browser_page(payload: dict) -> str:
         "<li>"
         f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
         + f" <span class='pill'>{escape(item['stage_label'].replace('_', ' '))}</span>"
+        + f" <span class='pill'>{escape(str(item['traceability'].get('chain_status') or ''))}</span>"
         + f" <span class='pill'>{item['traceability']['counts']['deep_dives']} deep dives</span>"
         + f" <span class='pill'>{item['traceability']['counts']['objects']} objects</span>"
         + f" <span class='pill'>{item['traceability']['counts']['atlas_pages']} atlas pages</span>"
+        + f"<div class='muted'>Chain status: {escape(str(item['traceability'].get('chain_status') or ''))}</div>"
+        + f"<div class='muted'>Missing stages: {escape(', '.join(str(value).replace('_', ' ') for value in item['traceability'].get('missing_stages', [])) or 'None')}</div>"
+        + f"<div class='muted'>Chain summary: {escape(str(item['traceability'].get('chain_summary') or ''))}</div>"
         + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'], requested_pack=requested_pack)}</div>"
         + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'], requested_pack=requested_pack)}</div>"
         + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'], requested_pack=requested_pack)}</div>"
@@ -1778,6 +1883,10 @@ def _render_production_browser_page(payload: dict) -> str:
         "</li>"
         for item in payload["weak_points"]
     ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
+    section_nav = "".join(
+        f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
+        for item in payload.get("section_nav", [])
+    )
     return _layout(
         "Production Browser",
         "".join(
@@ -1795,7 +1904,11 @@ def _render_production_browser_page(payload: dict) -> str:
                 f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
+                _render_compiled_sections(lead_sections),
+                operator_rail_card,
                 surface_contract_card,
+                f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "",
+                _render_compiled_sections(remaining_sections),
                 "<section class='card'><h2>Chain Model</h2><p class='muted'>This browser shows the current upstream/downstream chain from traceable notes into deep dives, evergreen objects, and Atlas placement.</p></section>",
                 f"<section class='card'><h2>Weak Points</h2><ul class='list-tight'>{weak_points}</ul></section>",
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
@@ -1808,7 +1921,6 @@ def _render_production_browser_page(payload: dict) -> str:
 def _render_clusters_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
-    graph_path = payload.get("graph_path", _shell_href("/graph", requested_pack))
     limit_note = (
         f" Showing the first {payload['limit']} graph clusters in this browser window."
         if payload.get("is_limited")
@@ -1866,11 +1978,6 @@ def _render_clusters_page(payload: dict) -> str:
             else ""
         )
         + (
-            f"<div class='muted'><a href='{escape(item['graph_path'])}'>Open this cluster in graph</a></div>"
-            if item.get("graph_path")
-            else ""
-        )
-        + (
             f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
             if item.get("top_summary_bullet")
             else ""
@@ -1893,7 +2000,6 @@ def _render_clusters_page(payload: dict) -> str:
                 f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter clusters or members' /> ",
                 "<button type='submit'>Search</button>",
                 "</form>",
-                f"<p><a href='{escape(graph_path)}'>Open cluster overview graph</a></p>",
                 f"<p class='muted'>{payload['count']} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
@@ -1909,7 +2015,6 @@ def _render_clusters_page(payload: dict) -> str:
 def _render_cluster_detail_page(payload: dict) -> str:
     cluster = payload["cluster"]
     requested_pack = payload.get("requested_pack", "")
-    graph_path = payload.get("graph_path", "")
     edge_kind_counts = "".join(
         f"<span class='pill'>{escape(edge_kind)}: {count}</span>"
         for edge_kind, count in payload["edge_kind_counts"].items()
@@ -2025,9 +2130,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
         "Graph Cluster",
         (
             "<h1>Graph Cluster</h1>"
-            f"<p><a href='{escape(payload['browser_path'])}'>Back to clusters</a>"
-            + (f" · <a href='{escape(graph_path)}'>Open in graph</a>" if graph_path else "")
-            + "</p>"
+            f"<p><a href='{escape(payload['browser_path'])}'>Back to clusters</a></p>"
             f"<section class='card'><h2>{escape(payload.get('display_title') or cluster['label'])}</h2>"
             f"<p class='muted'>Pack: {escape(cluster['pack'])} · Kind: {escape(cluster['cluster_kind'])} · Score: {cluster['score']:.1f}</p>"
             f"<p class='muted'>Canonical cluster id: {escape(cluster['cluster_id'])}</p>"
@@ -2055,328 +2158,6 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Members</h2><ul class='list-tight'>{members}</ul></section>"
             f"<section class='card'><h2>Internal Edges</h2><ul class='list-tight'>{edges}</ul></section>"
             f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>"
-        ),
-        requested_pack=requested_pack,
-    )
-
-
-def _render_graph_page(payload: dict) -> str:
-    requested_pack = payload.get("requested_pack", "")
-    controls = payload["controls"]
-    entry_links = "".join(
-        f"<a href='{escape(item['path'])}'>{escape(item['label'])}</a>"
-        for item in payload["entry_links"]
-    ) or "<span class='muted'>No entry links.</span>"
-    stats = payload["stats"]
-    stat_pills = "".join(
-        [
-            f"<span class='pill'>{stats['node_count']} nodes</span>",
-            f"<span class='pill'>{stats['edge_count']} edges</span>",
-        ]
-        + (
-            [f"<span class='pill'>{stats['hidden_member_count']} hidden members</span>"]
-            if stats.get("hidden_member_count")
-            else []
-        )
-        + (
-            [f"<span class='pill'>{stats['hidden_neighbor_count']} hidden neighbors</span>"]
-            if stats.get("hidden_neighbor_count")
-            else []
-        )
-        + (
-            [f"<span class='pill'>{stats['hidden_node_count']} additional clusters off-canvas</span>"]
-            if stats.get("hidden_node_count")
-            else []
-        )
-    )
-    filter_options = "".join(
-        f"<option value='{escape(item['value'])}'{' selected' if item['value'] == controls['edge_filter'] else ''}>{escape(item['label'])}</option>"
-        for item in controls["edge_filter_items"]
-    )
-    model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
-    payload_json = json.dumps(payload).replace("</", "<\\/")
-    return _layout(
-        f"Graph: {payload['title']}",
-        "".join(
-            [
-                """
-<style>
-.graph-shell { display: grid; gap: 1rem; }
-.graph-toolbar { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
-.graph-toolbar button, .graph-toolbar select, .graph-toolbar a {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 0.45rem 0.8rem;
-  text-decoration: none;
-  font: inherit;
-}
-.graph-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.8fr); gap: 1rem; align-items: start; }
-.graph-canvas-card { padding: 0; overflow: hidden; }
-.graph-canvas-header { padding: 1rem 1rem 0; }
-.graph-stage-wrap { position: relative; height: 72vh; min-height: 540px; background: linear-gradient(180deg, #fffdfa 0%, #f7f6f2 100%); border-top: 1px solid var(--border); }
-.graph-stage { width: 100%; height: 100%; display: block; cursor: grab; }
-.graph-stage.dragging { cursor: grabbing; }
-.graph-side { position: sticky; top: 1rem; }
-.graph-side .meta-list { margin: 0; }
-.graph-side .meta-list div { display: grid; grid-template-columns: 120px 1fr; gap: 0.5rem; padding: 0.25rem 0; }
-.graph-side .meta-list dt { color: var(--muted); }
-.graph-side .meta-list dd { margin: 0; }
-.graph-empty { color: var(--muted); }
-.graph-node-label { font-size: 13px; font-weight: 700; text-anchor: middle; pointer-events: none; fill: var(--text); }
-.graph-node-secondary { font-size: 11px; text-anchor: middle; pointer-events: none; fill: var(--muted); }
-.graph-edge-label { font-size: 11px; text-anchor: middle; pointer-events: none; fill: var(--muted); }
-</style>
-""",
-                f"<section class='hero'><h1>{escape(payload['title'])}</h1>",
-                f"<p class='muted'>{escape(payload['subtitle'])}"
-                + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
-                + "</p>",
-                f"<div class='link-row'>{entry_links}</div></section>",
-                f"<section class='card'><h2>Graph Scope</h2><div class='link-row'>{stat_pills}</div><ul class='list-tight'>{model_notes}</ul></section>",
-                "<section class='graph-shell'>",
-                "<section class='card graph-canvas-card'>",
-                "<div class='graph-canvas-header'>",
-                "<div class='graph-toolbar'>",
-                "<button type='button' id='graph-zoom-in'>Zoom in</button>",
-                "<button type='button' id='graph-zoom-out'>Zoom out</button>",
-                "<button type='button' id='graph-recenter'>Recenter</button>",
-                (
-                    f"<a href='{escape(controls['expand_path'])}' id='graph-expand'>Expand graph</a>"
-                    if controls.get("can_expand") and controls.get("expand_path")
-                    else "<span class='pill'>Fully expanded for current bound</span>"
-                ),
-                f"<label class='muted'>Edges <select id='graph-filter'>{filter_options}</select></label>",
-                "</div></div>",
-                "<div class='graph-layout'>",
-                "<div class='graph-stage-wrap'>",
-                "<svg id='graph-stage' class='graph-stage' viewBox='-900 -700 1800 1400' role='img' aria-label='Research graph canvas'>",
-                "<g id='graph-viewport'><g id='graph-edges'></g><g id='graph-nodes'></g></g>",
-                "</svg></div>",
-                "<aside class='card graph-side'>",
-                "<h2 id='graph-side-title'>Selection</h2>",
-                "<p id='graph-side-subtitle' class='muted'>Choose a node in the graph.</p>",
-                "<div id='graph-side-badges' class='link-row'></div>",
-                "<ul id='graph-side-summary' class='list-tight'></ul>",
-                "<dl id='graph-side-meta' class='meta-list'></dl>",
-                "<div id='graph-side-actions' class='link-row'></div>",
-                "</aside></div></section></section>",
-                f"<script id='graph-payload' type='application/json'>{payload_json}</script>",
-                """
-<script>
-(() => {
-  const payload = JSON.parse(document.getElementById('graph-payload').textContent);
-  const svg = document.getElementById('graph-stage');
-  const viewport = document.getElementById('graph-viewport');
-  const edgesLayer = document.getElementById('graph-edges');
-  const nodesLayer = document.getElementById('graph-nodes');
-  const state = { scale: 1, tx: 0, ty: 0, dragging: false, dragX: 0, dragY: 0, selectedId: payload.default_selection_id || "" };
-  const nodeMap = new Map(payload.nodes.map((node) => [node.id, node]));
-
-  const tonePalette = {
-    attention: { fill: '#f7c4bf', stroke: '#9f4f24' },
-    active: { fill: '#f4dfd2', stroke: '#9f4f24' },
-    reference: { fill: '#ece7e0', stroke: '#71675d' },
-    center: { fill: '#f6e8a4', stroke: '#8a6f00' },
-    neutral: { fill: '#ffffff', stroke: '#71675d' },
-    strong: { fill: '#dde9ff', stroke: '#315da8' },
-    medium: { fill: '#eef2ff', stroke: '#4b63a6' },
-    light: { fill: '#f6f7fb', stroke: '#7a8091' }
-  };
-
-  function applyTransform() {
-    viewport.setAttribute('transform', `translate(${state.tx} ${state.ty}) scale(${state.scale})`);
-  }
-
-  function clear(el) {
-    while (el.firstChild) el.removeChild(el.firstChild);
-  }
-
-  function makeSvg(tag, attrs = {}) {
-    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value));
-    return el;
-  }
-
-  function updateSidePanel(node) {
-    const title = document.getElementById('graph-side-title');
-    const subtitle = document.getElementById('graph-side-subtitle');
-    const badges = document.getElementById('graph-side-badges');
-    const summary = document.getElementById('graph-side-summary');
-    const meta = document.getElementById('graph-side-meta');
-    const actions = document.getElementById('graph-side-actions');
-    title.textContent = node?.detail?.title || 'Selection';
-    subtitle.textContent = node?.detail?.subtitle || 'Choose a node in the graph.';
-    badges.innerHTML = '';
-    summary.innerHTML = '';
-    meta.innerHTML = '';
-    actions.innerHTML = '';
-    (node?.badges || []).forEach((item) => {
-      const span = document.createElement('span');
-      span.className = 'pill';
-      span.textContent = item;
-      badges.appendChild(span);
-    });
-    const summaryLines = node?.detail?.summary_lines || [];
-    if (!summaryLines.length) {
-      const li = document.createElement('li');
-      li.className = 'graph-empty';
-      li.textContent = 'No additional summary for this node.';
-      summary.appendChild(li);
-    } else {
-      summaryLines.forEach((line) => {
-        const li = document.createElement('li');
-        li.textContent = line;
-        summary.appendChild(li);
-      });
-    }
-    (node?.detail?.meta_rows || []).forEach((line) => {
-      const wrap = document.createElement('div');
-      const dt = document.createElement('dt');
-      const dd = document.createElement('dd');
-      const parts = String(line).split(':');
-      dt.textContent = parts.length > 1 ? parts.shift() : 'Info';
-      dd.textContent = parts.length > 0 ? parts.join(':').trim() : String(line);
-      wrap.appendChild(dt);
-      wrap.appendChild(dd);
-      meta.appendChild(wrap);
-    });
-    (node?.detail?.actions || []).forEach((item) => {
-      const link = document.createElement('a');
-      link.href = item.path;
-      link.textContent = item.label;
-      actions.appendChild(link);
-    });
-  }
-
-  function selectNode(nodeId) {
-    state.selectedId = nodeId;
-    render();
-  }
-
-  function render() {
-    clear(edgesLayer);
-    clear(nodesLayer);
-    payload.edges.forEach((edge) => {
-      const source = nodeMap.get(edge.source);
-      const target = nodeMap.get(edge.target);
-      if (!source || !target) return;
-      const line = makeSvg('line', {
-        x1: source.x,
-        y1: source.y,
-        x2: target.x,
-        y2: target.y,
-        stroke: edge.edge_type === 'contradiction' ? '#c0504d' : edge.edge_type === 'bridge' ? '#315da8' : '#c7beb2',
-        'stroke-width': edge.edge_type === 'bridge' ? 3 : 2,
-        'stroke-dasharray': edge.edge_type === 'bridge' ? '8 6' : '',
-        opacity: state.scale < 0.55 ? 0.35 : 0.85
-      });
-      edgesLayer.appendChild(line);
-      if (state.scale >= 0.8) {
-        const label = makeSvg('text', {
-          x: (source.x + target.x) / 2,
-          y: (source.y + target.y) / 2 - 8,
-          class: 'graph-edge-label'
-        });
-        label.textContent = edge.label;
-        edgesLayer.appendChild(label);
-      }
-    });
-    payload.nodes.forEach((node) => {
-      const group = makeSvg('g', { transform: `translate(${node.x} ${node.y})`, tabindex: 0 });
-      const palette = tonePalette[node.tone] || tonePalette.neutral;
-      const selected = node.id === state.selectedId;
-      const shape = (node.node_type === 'cluster' || node.node_type === 'cluster_root' || node.node_type === 'related_cluster')
-        ? makeSvg('rect', {
-            x: -node.size,
-            y: -node.size * 0.55,
-            rx: 18,
-            ry: 18,
-            width: node.size * 2,
-            height: node.size * 1.1,
-            fill: palette.fill,
-            stroke: selected ? '#1f1a17' : palette.stroke,
-            'stroke-width': selected ? 4 : 2
-          })
-        : makeSvg('circle', {
-            cx: 0,
-            cy: 0,
-            r: node.size,
-            fill: palette.fill,
-            stroke: selected ? '#1f1a17' : palette.stroke,
-            'stroke-width': selected ? 4 : 2
-          });
-      group.appendChild(shape);
-      if (state.scale >= 0.45) {
-        const label = makeSvg('text', { x: 0, y: 4, class: 'graph-node-label' });
-        label.textContent = node.label;
-        group.appendChild(label);
-      }
-      if (state.scale >= 0.85 && node.secondary_label) {
-        const secondary = makeSvg('text', { x: 0, y: node.size + 20, class: 'graph-node-secondary' });
-        secondary.textContent = node.secondary_label;
-        group.appendChild(secondary);
-      }
-      group.addEventListener('click', () => selectNode(node.id));
-      group.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          selectNode(node.id);
-        }
-      });
-      nodesLayer.appendChild(group);
-    });
-    updateSidePanel(nodeMap.get(state.selectedId));
-    applyTransform();
-  }
-
-  function zoom(delta) {
-    state.scale = Math.max(0.35, Math.min(2.6, state.scale + delta));
-    render();
-  }
-
-  svg.addEventListener('wheel', (event) => {
-    event.preventDefault();
-    zoom(event.deltaY < 0 ? 0.12 : -0.12);
-  });
-  svg.addEventListener('mousedown', (event) => {
-    state.dragging = true;
-    state.dragX = event.clientX;
-    state.dragY = event.clientY;
-    svg.classList.add('dragging');
-  });
-  window.addEventListener('mousemove', (event) => {
-    if (!state.dragging) return;
-    state.tx += event.clientX - state.dragX;
-    state.ty += event.clientY - state.dragY;
-    state.dragX = event.clientX;
-    state.dragY = event.clientY;
-    applyTransform();
-  });
-  window.addEventListener('mouseup', () => {
-    state.dragging = false;
-    svg.classList.remove('dragging');
-  });
-  document.getElementById('graph-zoom-in').addEventListener('click', () => zoom(0.15));
-  document.getElementById('graph-zoom-out').addEventListener('click', () => zoom(-0.15));
-  document.getElementById('graph-recenter').addEventListener('click', () => {
-    state.scale = 1;
-    state.tx = 0;
-    state.ty = 0;
-    render();
-  });
-  document.getElementById('graph-filter').addEventListener('change', (event) => {
-    const next = new URL(window.location.href);
-    if (event.target.value === 'all') next.searchParams.delete('edge_filter');
-    else next.searchParams.set('edge_filter', event.target.value);
-    window.location.href = next.toString();
-  });
-  render();
-})();
-</script>
-""",
-            ]
         ),
         requested_pack=requested_pack,
     )
@@ -2437,6 +2218,7 @@ def _render_signals_page(payload: dict) -> str:
     next_path = "/signals" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     surface_contract_card = _render_surface_contract_card(payload)
     governance_contract_card = _render_governance_contract_card(payload)
+    operator_rail_card = _render_operator_rail(payload)
     options = ["", *sorted(payload["signal_type_explanations"].keys())]
     option_html = "".join(
         f"<option value='{escape(option)}' {'selected' if option == selected_type else ''}>"
@@ -2448,6 +2230,21 @@ def _render_signals_page(payload: dict) -> str:
         f'<span class="pill">{escape(item["signal_type"])}</span> '
         f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
         f"<div class='muted'>{escape(item['detail'])}</div>"
+        + (
+            f"<div class='muted'>Impact: {escape(str(item['impact_summary']['impact_label']))}</div>"
+            if item.get("impact_summary", {}).get("impact_label")
+            else ""
+        )
+        + (
+            f"<div class='muted'>{escape(str(item['impact_summary']['impact_detail']))}</div>"
+            if item.get("impact_summary", {}).get("impact_detail")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Inbound capture: {escape(str(item['capture_summary']['summary']))}</div>"
+            if item.get("capture_summary", {}).get("summary")
+            else ""
+        )
         + (
             "<div class='muted'>Recommended Action: "
             + f'<a href="{escape(item["recommended_action"]["path"])}">{escape(item["recommended_action"]["label"])}</a>'
@@ -2532,8 +2329,15 @@ def _render_signals_page(payload: dict) -> str:
                 "<button type='submit'>Filter</button>",
                 "</form>",
                 f"<p class='muted'>{payload['count']} active signals.",
+                (
+                    " "
+                    + f"{payload.get('impact_counts', {}).get('productive', 0)} productive, "
+                    + f"{payload.get('impact_counts', {}).get('waiting', 0)} waiting, "
+                    + f"{payload.get('impact_counts', {}).get('failed', 0) + payload.get('impact_counts', {}).get('stalled', 0)} failed/stalled."
+                ),
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
+                operator_rail_card,
                 surface_contract_card,
                 governance_contract_card,
                 f"<section class='card'><h2>Signal Types</h2><ul class='list-tight'>{explanations}</ul></section>",
@@ -2550,6 +2354,8 @@ def _render_briefing_page(payload: dict) -> str:
     surface_contract_card = _render_surface_contract_card(payload)
     assembly_contract_card = _render_assembly_contract_card(payload)
     governance_contract_card = _render_governance_contract_card(payload)
+    operator_rail_card = _render_operator_rail(payload)
+    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
     first_useful_sign = payload.get("first_useful_sign")
     first_useful_sign_html = (
         "<li>"
@@ -2662,23 +2468,32 @@ def _render_briefing_page(payload: dict) -> str:
         for item in payload.get("section_nav", [])
     )
     queue_summary = payload.get("queue_summary", {})
+    loop_summary = payload.get("loop_summary", {})
     failure_buckets = "".join(
         f"<li><span class='pill'>{escape(bucket)}</span> {count}</li>"
         for bucket, count in queue_summary.get("failure_buckets", {}).items()
     ) or "<li class='muted'>No failed actions.</li>"
     return _layout(
-        "Orientation Brief",
+        "Working Memory Snapshot",
         "".join(
             [
                 "<h1>Orientation Brief</h1>",
                 f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.",
+                (
+                    " "
+                    + f"Loop: {loop_summary.get('productive_count', 0)} productive, "
+                    + f"{loop_summary.get('waiting_count', 0)} waiting, "
+                    + f"{loop_summary.get('failed_count', 0) + loop_summary.get('stalled_count', 0)} blocked."
+                ),
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
+                _render_compiled_sections(lead_sections),
+                operator_rail_card,
                 surface_contract_card,
                 assembly_contract_card,
                 governance_contract_card,
                 f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "",
-                _render_compiled_sections(payload.get("compiled_sections", [])),
+                _render_compiled_sections(remaining_sections),
                 f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
                 f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>",
                 f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>",
@@ -2745,6 +2560,16 @@ def _render_actions_page(payload: dict) -> str:
         + (
             f"<div class='muted'>Failure bucket: {escape(str(item['failure_bucket']))}</div>"
             if item.get("failure_bucket")
+            else ""
+        )
+        + (
+            f"<div class='muted'>Impact: {escape(str(item['impact_summary']['impact_label']))}</div>"
+            if item.get("impact_summary", {}).get("impact_label")
+            else ""
+        )
+        + (
+            f"<div class='muted'>{escape(str(item['impact_summary']['impact_detail']))}</div>"
+            if item.get("impact_summary", {}).get("impact_detail")
             else ""
         )
         + (
@@ -2854,7 +2679,13 @@ def _render_actions_page(payload: dict) -> str:
                 f"<select name='status'>{option_html}</select>",
                 "<button type='submit'>Filter</button>",
                 "</form>",
-                f"<p class='muted'>{payload['count']} actions in the current execution surface. {payload.get('queued_safe_count', 0)} queued safe actions. {payload.get('failed_count', 0)} failed actions.</p>",
+                (
+                    f"<p class='muted'>{payload['count']} actions in the current execution surface. "
+                    f"{payload.get('impact_counts', {}).get('productive', 0)} productive, "
+                    f"{payload.get('impact_counts', {}).get('waiting', 0)} waiting, "
+                    f"{payload.get('impact_counts', {}).get('failed', 0) + payload.get('impact_counts', {}).get('stalled', 0)} failed/stalled. "
+                    f"{payload.get('queued_safe_count', 0)} queued safe actions. {payload.get('failed_count', 0)} failed actions.</p>"
+                ),
                 governance_contract_card,
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
@@ -2869,6 +2700,8 @@ def _render_contradictions_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     next_path = "/contradictions" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     assembly_contract_card = _render_assembly_contract_card(payload)
+    operator_rail_card = _render_operator_rail(payload)
+    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     scope_summary = payload["scope_summary"]
     scope_summary_items = (
@@ -2880,6 +2713,8 @@ def _render_contradictions_page(payload: dict) -> str:
     detection_contract_items = (
         f"<li>Model: {escape(detection_contract['model'])}</li>"
         + f"<li>Confidence: {escape(detection_contract['confidence'])}</li>"
+        + f"<li>Polarity semantics: {escape(str(detection_contract.get('polarity_semantics') or ''))}</li>"
+        + f"<li>Evidence semantics: {escape(str(detection_contract.get('evidence_semantics') or ''))}</li>"
         + "".join(
             f"<li>Status bucket {escape(str(bucket))}: {count}</li>"
             for bucket, count in detection_contract["status_buckets"].items()
@@ -2970,6 +2805,7 @@ def _render_contradictions_page(payload: dict) -> str:
             )
             + "</ul></details>"
         )
+        + f"<div class='muted'>Tension Summary: {escape(str(item.get('tension_summary') or ''))}</div>"
         + (
             "<details><summary>Review History</summary><ul class='list-tight'>"
             + "".join(
@@ -3043,9 +2879,11 @@ def _render_contradictions_page(payload: dict) -> str:
                 f"<p class='muted'>{payload['count']} records, {payload['open_count']} open.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
+                _render_compiled_sections(lead_sections),
+                operator_rail_card,
                 assembly_contract_card,
                 f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "",
-                _render_compiled_sections(payload.get("compiled_sections", [])),
+                _render_compiled_sections(remaining_sections),
                 f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
                 "<section class='card'>",
                 "<h2>Batch Resolve</h2>",
@@ -3365,43 +3203,6 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                         return
                     payload = build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     self._write_html(_render_clusters_page(payload))
-                    return
-                if path == "/api/graph":
-                    pack_name = query.get("pack", [""])[0] or None
-                    cluster_id = query.get("cluster_id", [""])[0] or None
-                    object_id = query.get("object_id", [""])[0] or None
-                    expand = query.get("expand", ["0"])[0] or "0"
-                    edge_filter = query.get("edge_filter", ["all"])[0] or "all"
-                    if self._guard_research_route(pack_name=pack_name, route_path="/graph", api=True):
-                        return
-                    self._write_json(
-                        build_graph_canvas_payload(
-                            resolved_vault,
-                            pack_name=pack_name,
-                            cluster_id=cluster_id,
-                            object_id=object_id,
-                            expand=expand,
-                            edge_filter=edge_filter,
-                        )
-                    )
-                    return
-                if path == "/graph":
-                    pack_name = query.get("pack", [""])[0] or None
-                    cluster_id = query.get("cluster_id", [""])[0] or None
-                    object_id = query.get("object_id", [""])[0] or None
-                    expand = query.get("expand", ["0"])[0] or "0"
-                    edge_filter = query.get("edge_filter", ["all"])[0] or "all"
-                    if self._guard_research_route(pack_name=pack_name, route_path="/graph", api=False):
-                        return
-                    payload = build_graph_canvas_payload(
-                        resolved_vault,
-                        pack_name=pack_name,
-                        cluster_id=cluster_id,
-                        object_id=object_id,
-                        expand=expand,
-                        edge_filter=edge_filter,
-                    )
-                    self._write_html(_render_graph_page(payload))
                     return
                 if path == "/api/cluster":
                     cluster_id = self._required(query, "id")
