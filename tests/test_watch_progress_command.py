@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openclaw_pipeline.runtime import VaultLayout
+
+
+def _fresh_timestamp(*, seconds_ago: int = 0) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def test_collect_progress_snapshot_reads_counts_transactions_and_latest_event(temp_vault):
@@ -32,7 +37,7 @@ def test_collect_progress_snapshot_reads_counts_transactions_and_latest_event(te
                 "type": "pipeline",
                 "status": "in_progress",
                 "checkpoint": "articles",
-                "last_updated": "2026-04-09T00:15:00Z",
+                "last_updated": _fresh_timestamp(seconds_ago=60),
             }
         ),
         encoding="utf-8",
@@ -69,6 +74,53 @@ def test_collect_progress_snapshot_reads_counts_transactions_and_latest_event(te
     assert snapshot["latest_event"]["event_type"] == "article_processed"
     assert snapshot["latest_report"] == str(report)
     assert snapshot["active_processes"] == 1
+
+
+def test_collect_progress_snapshot_surfaces_run_ledger_progress(temp_vault):
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.transactions_dir.mkdir(parents=True, exist_ok=True)
+    (layout.transactions_dir / "txn-1.json").write_text(
+        json.dumps(
+            {
+                "id": "txn-1",
+                "type": "pipeline",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "last_updated": _fresh_timestamp(seconds_ago=60),
+                "run_ledger": {
+                    "run_id": "txn-1",
+                    "run_state": "running",
+                    "workflow_profile": "full",
+                    "pack_name": "research-tech",
+                    "heartbeat_at": _fresh_timestamp(seconds_ago=30),
+                    "current_step_name": "absorb",
+                    "last_meaningful_event": {"event_type": "absorb_file_processed", "file": "Alpha.md"},
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "running",
+                        "progress_mode": "counted",
+                        "work_units_total": 10,
+                        "work_units_done": 3,
+                        "work_units_failed": 0,
+                        "current_item": "Alpha.md",
+                        "progress_percent": 30.0,
+                        "progress_summary": "3/10 files processed",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from openclaw_pipeline.commands.watch_progress import collect_progress_snapshot, format_progress_snapshot
+
+    snapshot = collect_progress_snapshot(temp_vault, process_lines=["python -m openclaw_pipeline.unified_pipeline_enhanced"])
+
+    assert snapshot["active_run"]["id"] == "txn-1"
+    assert snapshot["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 30.0
+    rendered = format_progress_snapshot(snapshot)
+    assert "Step progress: 3/10 files processed" in rendered
+    assert "Current item: Alpha.md" in rendered
 
 
 def test_collect_progress_snapshot_ignores_report_removed_during_sort(temp_vault, monkeypatch):

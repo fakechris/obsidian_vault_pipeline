@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from argparse import Namespace
 from datetime import datetime
+import json
+import os
 from pathlib import Path
 import sys
 
@@ -132,6 +134,28 @@ def test_build_execution_plan_full_respects_from_step():
     assert plan["steps"][0] == "quality"
     assert "pinboard" not in plan["steps"]
     assert plan["steps"][-2:] == ["refine", "knowledge_index"]
+
+
+def test_build_execution_plan_incremental_includes_pinboard_and_defaults_recent_days():
+    args = Namespace(
+        full=False,
+        incremental=True,
+        with_refine=False,
+        pinboard_new=False,
+        pinboard_history=None,
+        pinboard_days=None,
+        step=None,
+        from_step=None,
+        pack=None,
+        profile=None,
+    )
+
+    plan = build_execution_plan(args)
+
+    assert plan["steps"][:3] == ["pinboard", "pinboard_process", "clippings"]
+    assert plan["steps"][-1] == "knowledge_index"
+    assert plan["pinboard_days"] == 7
+    assert plan["description"] == "Incremental pipeline (research-tech/full)"
 
 
 def test_run_pipeline_dispatches_profile_stages_via_handler_registry(tmp_path, monkeypatch):
@@ -324,19 +348,20 @@ def test_step_absorb_invokes_absorb_command(tmp_path, monkeypatch):
 
     captured: dict[str, object] = {}
 
-    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
-        captured["cmd"] = cmd
-        captured["step_name"] = step_name
-        return {"success": True, "stdout": "", "stderr": ""}
+    def fake_run_absorb_workflow(vault_dir, *, recent=None, dry_run=False, **_):
+        captured["vault_dir"] = Path(vault_dir)
+        captured["recent"] = recent
+        captured["dry_run"] = dry_run
+        return {"summary": {"files_processed": 0}, "results": []}
 
-    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
 
     result = pipeline.step_absorb(dry_run=True)
 
     assert result["success"] is True
-    assert captured["step_name"] == "absorb"
-    assert "openclaw_pipeline.commands.absorb" in " ".join(captured["cmd"])
-    assert "--vault-dir" in captured["cmd"]
+    assert captured["vault_dir"] == vault
+    assert captured["recent"] == 7
+    assert captured["dry_run"] is True
 
 
 def test_step_quality_parses_qualified_files_from_qc_json(tmp_path, monkeypatch):
@@ -447,9 +472,45 @@ def test_step_quality_rejects_non_positive_batch_size(tmp_path):
     assert result["error"] == "invalid_batch_size (0 <= 0)"
 
 
-def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_path, monkeypatch):
+def test_step_pinboard_process_updates_txn_ledger_with_counted_progress(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
+
+    vault = tmp_path / "vault"
+    pinboard_dir = vault / "50-Inbox" / "02-Pinboard"
+    pinboard_dir.mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Phase 25 pinboard progress")
+
+    for name in ("one.md", "two.md"):
+        (pinboard_dir / name).write_text("---\ntitle: Demo\nsource: https://example.com\n---\n", encoding="utf-8")
+
+    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.detect_pinboard_processor", lambda content: "article")
+
+    class _Completed:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.subprocess.run", lambda *args, **kwargs: _Completed())
+
+    result = pipeline.step_pinboard_process(dry_run=False)
+
+    assert result["success"] is True
+    payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+    current = payload["run_ledger"]["current_step"]
+    assert current["step_name"] == "pinboard_process"
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 2
+    assert current["work_units_done"] == 2
+    assert current["progress_percent"] == 100.0
+    assert current["current_item"] == "two.md"
+    assert payload["run_ledger"]["last_meaningful_event"]["event_type"] == "pinboard_process_file_completed"
+
+
+def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_path, monkeypatch):
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -463,34 +524,47 @@ def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_pat
 
     captured: dict[str, object] = {}
 
-    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
-        captured["cmd"] = cmd
-        captured["step_name"] = step_name
-        captured["timeout"] = timeout
-        absorb_dir = Path(cmd[cmd.index("--dir") + 1])
-        staged_files = sorted(p.name for p in absorb_dir.glob("*.md"))
-        captured["staged_files"] = staged_files
-        return {
-            "success": True,
-            "stdout": json.dumps(
+    def fake_run_absorb_workflow(
+        vault_dir,
+        *,
+        directory=None,
+        dry_run=False,
+        auto_promote=False,
+        promote_threshold=0,
+        progress_callback=None,
+        **_,
+    ):
+        captured["vault_dir"] = Path(vault_dir)
+        captured["directory"] = Path(directory)
+        captured["dry_run"] = dry_run
+        captured["auto_promote"] = auto_promote
+        captured["promote_threshold"] = promote_threshold
+        captured["staged_files"] = sorted(p.name for p in Path(directory).glob("*.md"))
+        if progress_callback is not None:
+            progress_callback(
                 {
-                    "summary": {
-                        "files_processed": 1,
-                        "concepts_extracted": 1,
-                        "candidates_added": 1,
-                        "concepts_created": 1,
-                        "concepts_promoted": 1,
-                        "concepts_skipped": 0,
-                        "errors": 0,
-                    },
-                    "results": [],
-                },
-                ensure_ascii=False,
-            ),
-            "stderr": "",
+                    "event_type": "absorb_file_processed",
+                    "file": "example_深度解读.md",
+                    "files_total": 1,
+                    "files_done": 1,
+                    "files_failed": 0,
+                    "current_item": "example_深度解读.md",
+                }
+            )
+        return {
+            "summary": {
+                "files_processed": 1,
+                "concepts_extracted": 1,
+                "candidates_added": 1,
+                "concepts_created": 1,
+                "concepts_promoted": 1,
+                "concepts_skipped": 0,
+                "errors": 0,
+            },
+            "results": [],
         }
 
-    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
 
     result = pipeline.step_absorb(
         dry_run=False,
@@ -499,12 +573,10 @@ def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_pat
     )
 
     assert result["success"] is True
-    assert captured["step_name"] == "absorb"
-    assert "--dir" in captured["cmd"]
-    assert "--auto-promote" in captured["cmd"]
-    assert captured["cmd"][captured["cmd"].index("--promote-threshold") + 1] == "1"
+    assert captured["vault_dir"] == vault
+    assert captured["auto_promote"] is True
+    assert captured["promote_threshold"] == 1
     assert captured["staged_files"] == ["example_深度解读.md"]
-    assert captured["timeout"] == 600
 
 
 def test_step_absorb_skips_cleanly_when_no_qualified_files(tmp_path):
@@ -557,40 +629,30 @@ def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeyp
 
     captured: dict[str, object] = {}
 
-    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
-        captured["cmd"] = cmd
-        captured["timeout"] = timeout
-        absorb_dir = Path(cmd[cmd.index("--dir") + 1])
-        captured["staged_files"] = sorted(p.name for p in absorb_dir.glob("*.md"))
+    def fake_run_absorb_workflow(vault_dir, *, directory=None, **_):
+        captured["vault_dir"] = Path(vault_dir)
+        captured["directory"] = Path(directory)
+        captured["staged_files"] = sorted(p.name for p in Path(directory).glob("*.md"))
         return {
-            "success": True,
-            "stdout": json.dumps(
-                {
-                    "summary": {
-                        "files_processed": 1,
-                        "concepts_extracted": 1,
-                        "candidates_added": 1,
-                        "concepts_created": 1,
-                        "concepts_promoted": 1,
-                        "concepts_skipped": 0,
-                        "errors": 0,
-                    },
-                    "results": [],
-                },
-                ensure_ascii=False,
-            ),
-            "stderr": "",
+            "summary": {
+                "files_processed": 1,
+                "concepts_extracted": 1,
+                "candidates_added": 1,
+                "concepts_created": 1,
+                "concepts_promoted": 1,
+                "concepts_skipped": 0,
+                "errors": 0,
+            },
+            "results": [],
         }
 
-    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
 
     result = pipeline.step_absorb(dry_run=False, quality_score=-1.0, qualified_files=None)
 
     assert result["success"] is True
-    assert "--dir" in captured["cmd"]
-    assert "--auto-promote" in captured["cmd"]
+    assert captured["vault_dir"] == vault
     assert captured["staged_files"] == ["example_深度解读.md"]
-    assert captured["timeout"] == 600
 
 
 def test_load_latest_qualified_files_unions_batches(tmp_path):
@@ -623,7 +685,6 @@ def test_load_latest_qualified_files_unions_batches(tmp_path):
 
 def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
-    import json
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -639,7 +700,7 @@ def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, mo
         path.write_text(f"# {idx}\n", encoding="utf-8")
         files.append(path)
 
-    calls: list[tuple[list[str], int | None]] = []
+    calls: list[list[str]] = []
     payloads = [
         {
             "summary": {
@@ -667,19 +728,13 @@ def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, mo
         },
     ]
 
-    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
-        calls.append((cmd, timeout))
-        absorb_dir = Path(cmd[cmd.index("--dir") + 1])
-        staged_files = sorted(p.name for p in absorb_dir.glob("*.md"))
+    def fake_run_absorb_workflow(vault_dir, *, directory=None, **_):
+        absorb_dir = Path(directory)
+        calls.append(sorted(p.name for p in absorb_dir.glob("*.md")))
         payload = payloads[len(calls) - 1]
-        return {
-            "success": True,
-            "stdout": json.dumps(payload, ensure_ascii=False),
-            "stderr": "",
-            "staged_files": staged_files,
-        }
+        return payload
 
-    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
 
     result = pipeline.step_absorb(
         dry_run=False,
@@ -696,8 +751,8 @@ def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, mo
     assert result["summary"]["concepts_promoted"] == 3
     assert result["summary"]["concepts_skipped"] == 1
     assert len(calls) == 2
-    assert calls[0][1] == 600
-    assert calls[1][1] == 600
+    assert calls[0] == ["absorb_0_深度解读.md", "absorb_1_深度解读.md"]
+    assert calls[1] == ["absorb_2_深度解读.md"]
 
 
 def test_absorb_timeout_scales_with_batch_size(tmp_path):
@@ -714,7 +769,7 @@ def test_absorb_timeout_scales_with_batch_size(tmp_path):
     assert timeout > 300
 
 
-def test_step_absorb_parses_json_payload_after_log_prefix(tmp_path, monkeypatch):
+def test_step_absorb_updates_txn_ledger_with_counted_progress(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
 
@@ -723,41 +778,94 @@ def test_step_absorb_parses_json_payload_after_log_prefix(tmp_path, monkeypatch)
     logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Phase 25 absorb progress")
 
     topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
     topic_dir.mkdir(parents=True, exist_ok=True)
-    deep_dive = topic_dir / "prefixed_深度解读.md"
-    deep_dive.write_text("# prefixed\n", encoding="utf-8")
+    deep_dives = []
+    for name in ("alpha_深度解读.md", "beta_深度解读.md"):
+        deep_dive = topic_dir / name
+        deep_dive.write_text("# item\n", encoding="utf-8")
+        deep_dives.append(deep_dive)
 
-    payload = {
-        "summary": {
-            "files_processed": 1,
-            "concepts_extracted": 2,
-            "candidates_added": 1,
-            "concepts_created": 1,
-            "concepts_promoted": 1,
-            "concepts_skipped": 0,
-            "errors": 0,
-        },
-        "results": [],
-    }
+    def fake_run_absorb_workflow(vault_dir, *, directory=None, progress_callback=None, **_):
+        staged = sorted(p.name for p in Path(directory).glob("*.md"))
+        if progress_callback is not None:
+            for idx, name in enumerate(staged, start=1):
+                progress_callback(
+                    {
+                        "event_type": "absorb_file_processed",
+                        "file": name,
+                        "files_total": len(staged),
+                        "files_done": idx,
+                        "files_failed": 0,
+                        "current_item": name,
+                    }
+                )
+        return {
+            "summary": {
+                "files_processed": len(staged),
+                "concepts_extracted": 2,
+                "candidates_added": 1,
+                "concepts_created": 1,
+                "concepts_promoted": 1,
+                "concepts_skipped": 0,
+                "errors": 0,
+            },
+            "results": [],
+        }
 
-    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
-        stdout = "processing batch...\nextra note\n" + json.dumps(payload, ensure_ascii=False)
-        return {"success": True, "stdout": stdout, "stderr": ""}
-
-    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
 
     result = pipeline.step_absorb(
         dry_run=False,
         quality_score=4.0,
-        qualified_files=[str(deep_dive)],
-        batch_size=1,
+        qualified_files=[str(path) for path in deep_dives],
+        batch_size=2,
     )
 
     assert result["success"] is True
-    assert result["summary"]["files_processed"] == 1
-    assert result["summary"]["concepts_promoted"] == 1
+    payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+    current = payload["run_ledger"]["current_step"]
+    assert current["step_name"] == "absorb"
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 2
+    assert current["work_units_done"] == 2
+    assert current["progress_percent"] == 100.0
+    assert current["current_item"] == "beta_深度解读.md"
+    assert payload["run_ledger"]["last_meaningful_event"]["event_type"] == "absorb_file_processed"
+
+
+def test_run_absorb_workflow_direct_reports_file_level_errors(tmp_path, monkeypatch):
+    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_module
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    def fake_run_absorb_workflow(*_args, **_kwargs):
+        return {
+            "summary": {
+                "files_processed": 1,
+                "errors": 1,
+            },
+            "results": [
+                {
+                    "file": "broken_深度解读.md",
+                    "error": "extract failed",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(pipeline_module, "run_absorb_workflow", fake_run_absorb_workflow)
+
+    result = pipeline._run_absorb_workflow_direct(dry_run=False, recent=7, total_files=1)
+
+    assert result["success"] is False
+    assert result["error"] == "1 absorb file(s) failed"
 
 
 def test_step_absorb_rejects_non_positive_batch_size(tmp_path):
@@ -790,6 +898,52 @@ def test_run_command_timeout_is_failure(tmp_path):
     assert result["timeout"] is True
 
 
+def test_step_pinboard_process_heartbeats_current_item_before_processor_runs(tmp_path, monkeypatch):
+    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_module
+    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "50-Inbox" / "02-Pinboard").mkdir(parents=True)
+    (vault / "50-Inbox" / "02-Pinboard-Archive").mkdir(parents=True)
+    (vault / "60-Logs").mkdir(parents=True)
+    pinboard_file = vault / "50-Inbox" / "02-Pinboard" / "sample.md"
+    pinboard_file.write_text(
+        """---
+title: Sample
+type: pinboard-article
+source: https://example.com/sample
+---
+
+# Sample
+""",
+        encoding="utf-8",
+    )
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Pinboard processor heartbeat")
+    current_items_seen: list[str | None] = []
+
+    def direct_subprocess_run_is_not_allowed(*_args, **_kwargs):
+        raise AssertionError("pinboard processors must run through run_command")
+
+    def fake_run_command(_cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        assert step_name == "pinboard_process"
+        assert timeout == 600
+        payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+        current_items_seen.append(payload["run_ledger"]["current_step"].get("current_item"))
+        return {"success": True, "stdout": "ok", "stderr": ""}
+
+    monkeypatch.setattr(pipeline_module.subprocess, "run", direct_subprocess_run_is_not_allowed)
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_pinboard_process(dry_run=False)
+
+    assert result["success"] is True
+    assert current_items_seen == ["sample.md"]
+    assert not pinboard_file.exists()
+
+
 def test_step_pinboard_decomposes_cross_day_history_into_daily_requests(tmp_path, monkeypatch):
     from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
@@ -819,6 +973,25 @@ def test_step_pinboard_decomposes_cross_day_history_into_daily_requests(tmp_path
     assert captured_cmds[0][-5:] == ["--start-date", "2026-04-01", "--end-date", "2026-04-01", "--dry-run=false"]
     assert captured_cmds[1][-5:] == ["--start-date", "2026-04-02", "--end-date", "2026-04-02", "--dry-run=false"]
     assert captured_cmds[2][-5:] == ["--start-date", "2026-04-03", "--end-date", "2026-04-03", "--dry-run=false"]
+
+
+def test_collect_absorb_targets_recent_filters_by_file_mtime(tmp_path):
+    from openclaw_pipeline.auto_evergreen_extractor import _collect_absorb_targets
+
+    vault = tmp_path / "vault"
+    layout = VaultLayout.from_vault(vault)
+    month_dir = layout.vault_dir / "20-Areas" / "AI-Research" / "Topics" / datetime.now().strftime("%Y-%m")
+    month_dir.mkdir(parents=True, exist_ok=True)
+    recent_file = month_dir / "recent_深度解读.md"
+    old_file = month_dir / "old_深度解读.md"
+    recent_file.write_text("# recent\n", encoding="utf-8")
+    old_file.write_text("# old\n", encoding="utf-8")
+    old_ts = datetime.now().timestamp() - (30 * 24 * 60 * 60)
+    os.utime(old_file, (old_ts, old_ts))
+
+    targets = _collect_absorb_targets(layout, recent=7)
+
+    assert targets == [recent_file]
 
 
 def test_before_counts_include_monthly_processed_files(tmp_path):

@@ -4,11 +4,16 @@ import json
 import sqlite3
 import subprocess
 import threading
+from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection
 from pathlib import Path
 from urllib.parse import urlencode
 
 from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+
+
+def _fresh_timestamp(*, seconds_ago: int = 0) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _seed_truth_store(temp_vault):
@@ -65,6 +70,41 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     from openclaw_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
+    transactions_dir = temp_vault / "60-Logs" / "transactions"
+    transactions_dir.mkdir(parents=True, exist_ok=True)
+    (transactions_dir / "txn-1.json").write_text(
+        json.dumps(
+            {
+                "id": "txn-1",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "last_updated": _fresh_timestamp(seconds_ago=60),
+                "run_ledger": {
+                    "run_id": "txn-1",
+                    "run_state": "running",
+                    "workflow_profile": "full",
+                    "pack_name": "research-tech",
+                    "heartbeat_at": _fresh_timestamp(seconds_ago=30),
+                    "current_step_name": "absorb",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "running",
+                        "progress_mode": "counted",
+                        "work_units_total": 10,
+                        "work_units_done": 3,
+                        "work_units_failed": 0,
+                        "current_item": "Alpha.md",
+                        "progress_percent": 30.0,
+                        "progress_summary": "3/10 files processed",
+                    },
+                    "last_meaningful_event": {"event_type": "absorb_file_processed", "file": "Alpha.md"},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     server = create_server(temp_vault, host="127.0.0.1", port=0)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -85,9 +125,103 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert "Orient" in body
     assert "Inspect" in body
     assert "Review" in body
+    assert "Current Workflow" in body
+    assert "3/10 files processed" in body
+    assert "Alpha.md" in body
     assert "Where To Start" in body
     assert "Orientation Brief" in body
     assert "/api/objects" in body
+
+
+def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
+    from openclaw_pipeline.commands.ui_server import create_server
+
+    transactions_dir = temp_vault / "60-Logs" / "transactions"
+    transactions_dir.mkdir(parents=True, exist_ok=True)
+    (transactions_dir / "txn-1.json").write_text(
+        json.dumps(
+            {
+                "id": "txn-1",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "last_updated": _fresh_timestamp(seconds_ago=60),
+                "run_ledger": {
+                    "run_id": "txn-1",
+                    "run_state": "running",
+                    "workflow_profile": "full",
+                    "pack_name": "research-tech",
+                    "heartbeat_at": _fresh_timestamp(seconds_ago=30),
+                    "current_step_name": "absorb",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "running",
+                        "progress_mode": "counted",
+                        "work_units_total": 20,
+                        "work_units_done": 5,
+                        "work_units_failed": 0,
+                        "current_item": "Beta.md",
+                        "progress_percent": 25.0,
+                        "progress_summary": "5/20 files processed",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/runtime")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["active_run"]["id"] == "txn-1"
+    assert payload["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 25.0
+
+
+def test_ui_server_runtime_endpoint_returns_structured_error(temp_vault, monkeypatch):
+    import openclaw_pipeline.commands.ui_server as ui_server
+
+    def fail_runtime_status(_vault_dir):
+        raise OSError("ledger read failed")
+
+    monkeypatch.setattr(ui_server, "get_runtime_status", fail_runtime_status)
+    server = ui_server.create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/runtime")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 503
+    assert payload["active_run"] is None
+    assert payload["stale_count"] == 0
+    assert payload["error"] == "runtime_status_unavailable"
+
+
+def test_render_runtime_card_tolerates_malformed_stale_count():
+    from openclaw_pipeline.commands.ui_server import _render_runtime_card
+
+    html = _render_runtime_card({"active_run": None, "stale_count": "not-a-number"})
+
+    assert "No active workflow is currently recorded" in html
 
 
 def test_ui_server_root_accepts_pack_scope(temp_vault):

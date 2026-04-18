@@ -23,9 +23,9 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     from .runtime import VaultLayout, resolve_vault_dir
@@ -537,6 +537,55 @@ def build_extraction_summary(
     }
 
 
+def _collect_absorb_targets(
+    layout: VaultLayout,
+    *,
+    file_path: Path | None = None,
+    directory: Path | None = None,
+    recent: int | None = None,
+) -> list[Path]:
+    if file_path:
+        return [file_path]
+    if directory:
+        if not directory.exists():
+            return []
+        return sorted(directory.glob("*_深度解读.md"))
+    if recent:
+        areas_root = layout.vault_dir / "20-Areas"
+        area_dirs = (
+            sorted(path for path in areas_root.iterdir() if path.is_dir() and (path / "Topics").exists())
+            if areas_root.exists()
+            else []
+        )
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=recent)
+        month_names = {
+            (now - timedelta(days=days_ago)).strftime("%Y-%m")
+            for days_ago in range(recent)
+        }
+        ordered: list[Path] = []
+        seen: set[str] = set()
+        for area_dir in area_dirs:
+            for month_name in sorted(month_names):
+                month_dir = area_dir / "Topics" / month_name
+                if not month_dir.exists():
+                    continue
+                for candidate in sorted(month_dir.glob("*_深度解读.md")):
+                    try:
+                        modified_at = datetime.fromtimestamp(candidate.stat().st_mtime, tz=timezone.utc)
+                    except OSError:
+                        continue
+                    if modified_at < cutoff:
+                        continue
+                    key = str(candidate.resolve())
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    ordered.append(candidate)
+        return ordered
+    raise ValueError("one of file_path, directory, or recent must be provided")
+
+
 def run_absorb_workflow(
     vault_dir: Path,
     *,
@@ -549,6 +598,7 @@ def run_absorb_workflow(
     api_key: str | None = None,
     api_base: str | None = None,
     verbose: bool = False,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     layout = VaultLayout.from_vault(vault_dir)
     load_env_file(layout.vault_dir)
@@ -559,47 +609,82 @@ def run_absorb_workflow(
     if verbose:
         print("✓ LLM Client initialized")
 
-    if directory:
-        if verbose:
-            print(f"\nProcessing directory: {directory}")
+    if directory and progress_callback is None and hasattr(extractor, "process_directory"):
         results = extractor.process_directory(
             directory,
             dry_run=dry_run,
             auto_promote=auto_promote,
             promote_threshold=promote_threshold,
         )
-    elif file_path:
+        payload = build_extraction_summary(
+            results,
+            dry_run=dry_run,
+            auto_promote=auto_promote,
+            promote_threshold=promote_threshold,
+            source_scope={
+                "file": str(file_path) if file_path else None,
+                "dir": str(directory) if directory else None,
+                "recent": recent,
+            },
+        )
+        logger.log(
+            "evergreen_extraction_complete",
+            {
+                **payload["summary"],
+                "auto_promote": auto_promote,
+                "dry_run": dry_run,
+                **payload["source_scope"],
+            },
+        )
+        return payload
+
+    targets = _collect_absorb_targets(
+        layout,
+        file_path=file_path,
+        directory=directory,
+        recent=recent,
+    )
+
+    if verbose and directory:
+        print(f"\nProcessing directory: {directory}")
+    elif verbose and file_path:
+        print(f"\nProcessing file: {file_path}")
+    elif verbose and recent:
+        print(f"\nProcessing recent deep dives: {recent} day window")
+
+    results: list[dict[str, Any]] = []
+    files_failed = 0
+    for index, target in enumerate(targets, start=1):
         if verbose:
-            print(f"\nProcessing file: {file_path}")
-        results = [
-            extractor.process_file(
-                file_path,
-                dry_run=dry_run,
-                auto_promote=auto_promote,
-                promote_threshold=promote_threshold,
+            print(f"  Processing: {target.name}")
+        result = extractor.process_file(
+            target,
+            dry_run=dry_run,
+            auto_promote=auto_promote,
+            promote_threshold=promote_threshold,
+        )
+        results.append(result)
+        if result.get("error"):
+            files_failed += 1
+        if verbose:
+            print(
+                f"    Extracted: {result['concepts_extracted']}, "
+                f"Candidates: {result['candidates_added']}, "
+                f"Promoted: {result.get('concepts_promoted', 0)}, "
+                f"Skipped: {result['concepts_skipped']}"
             )
-        ]
-    elif recent:
-        areas = ["AI-Research", "Tools", "Investing", "Programming"]
-        results = []
-        for area in areas:
-            for days_ago in range(recent):
-                date_dir = layout.vault_dir / "20-Areas" / area / "Topics" / (
-                    datetime.now() - __import__("datetime").timedelta(days=days_ago)
-                ).strftime("%Y-%m")
-                if date_dir.exists():
-                    if verbose:
-                        print(f"\nProcessing {area} - {date_dir.name}...")
-                    results.extend(
-                        extractor.process_directory(
-                            date_dir,
-                            dry_run=dry_run,
-                            auto_promote=auto_promote,
-                            promote_threshold=promote_threshold,
-                        )
-                    )
-    else:
-        raise ValueError("one of file_path, directory, or recent must be provided")
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "event_type": "absorb_file_processed",
+                    "file": target.name,
+                    "current_item": target.name,
+                    "files_total": len(targets),
+                    "files_done": index,
+                    "files_failed": files_failed,
+                    "result": result,
+                }
+            )
 
     payload = build_extraction_summary(
         results,

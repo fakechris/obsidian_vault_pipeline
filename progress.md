@@ -2,6 +2,71 @@
 
 ## Session: 2026-04-18
 
+### Phase 25: Observable Runtime And Run Ledger
+- **Status:** complete
+- Actions taken:
+  - Added a canonical `run_ledger` contract in `txn.py`
+  - Added active/stale run classification with heartbeat semantics
+  - Upgraded `TransactionManager` start/step/heartbeat/complete/fail paths to preserve the ledger
+  - Unified watcher/API/UI runtime readers over the same ledger:
+    - `watch_progress`
+    - `truth_api.get_runtime_status(...)`
+    - dashboard payload
+    - `/api/runtime`
+    - root-shell `Current Workflow`
+  - Made `absorb` observable with real counted file progress by switching the qualified-file path to direct workflow execution plus per-file callbacks
+  - Made `pinboard_process` observable with counted file progress and file-level evidence events
+  - Fixed `run_command(...)` timeout polling so short timeouts fail honestly instead of being swallowed by a 5-second sleep
+  - Added the explicit daily entrypoint `ovp --incremental` so normal incremental runs include:
+    - `pinboard`
+    - `pinboard_process`
+    - `clippings`
+    - `articles`
+    - `quality`
+    - `fix_links`
+    - `absorb`
+    - `registry_sync`
+    - `moc`
+    - `knowledge_index`
+  - Updated README, recipe docs, verify checklist, and roadmap docs so operator guidance matches the new runtime contract
+  - Added a runtime-first home shell for `/` so live operator visibility no longer depends on rebuilding every heavy dashboard surface during an active run
+  - Switched the local editable install to the `phase25-observable-runtime-run-ledger` worktree
+  - Stopped the legacy black-box local run that had lost transaction truth but was still burning CPU
+  - Repaired historical stuck transactions with `ovp-repair --transactions --write`
+  - Ran a real local `ovp --incremental` validation on `{LOCAL_VAULT_PATH}`
+  - Verified that `watch_progress`, `/api/runtime`, and `/` all reported the same active run and counted progress during the live run
+- Files created/modified:
+  - docs/plans/2026-04-18-phase25-observable-runtime-and-run-ledger.md
+  - docs/plans/2026-04-18-phase24-brain-first-lookup-and-backlink-legibility.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - docs/research-tech/RESEARCH_TECH_VERIFY.md
+  - docs/recipes/research-tech/pinboard.md
+  - docs/recipes/research-tech/clippings.md
+  - README.md
+  - src/openclaw_pipeline/txn.py
+  - src/openclaw_pipeline/unified_pipeline_enhanced.py
+  - src/openclaw_pipeline/auto_evergreen_extractor.py
+  - src/openclaw_pipeline/commands/watch_progress.py
+  - src/openclaw_pipeline/truth_api.py
+  - src/openclaw_pipeline/ui/view_models.py
+  - src/openclaw_pipeline/commands/ui_server.py
+  - tests/test_txn_runtime_ledger.py
+  - tests/test_runtime_paths.py
+  - tests/test_watch_progress_command.py
+  - tests/test_truth_api.py
+  - tests/test_ui_view_models.py
+  - tests/test_ui_server.py
+  - tests/test_export_command.py
+  - tests/test_promote_candidates.py
+  - tests/test_ui_smoke.py
+- Verification:
+  - `PYTHONPATH=src pytest -q`
+  - `620 passed in 58.93s`
+  - real runtime validation confirmed:
+    - `run_id = pipeline-20260418-081131-ca15f0f3`
+    - `current_step = pinboard_process`
+    - counted progress visible in all operator surfaces
+
 ### Phase 23: Inbound Capture Audit Visibility
 - **Status:** complete
 - Actions taken:

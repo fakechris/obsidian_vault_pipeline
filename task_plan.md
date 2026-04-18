@@ -1,5 +1,16 @@
 # Task Plan: External Project Discovery for OVP
 
+## Runtime Note
+
+- `Phase 25` is complete in the codebase and validated against a real local incremental run:
+  - canonical run ledger
+  - honest counted progress
+  - watcher/API/UI reader unification
+  - explicit daily `ovp --incremental` entrypoint
+- `Phase 24` is the next active planned slice:
+  - brain-first lookup before object/link creation
+  - backlink legibility
+
 ## Goal
 Build a running comparative map of external memory, context, runtime, and governance systems; classify what each project is actually doing; and extract only the durable ideas that matter for Obsidian Vault Pipeline.
 

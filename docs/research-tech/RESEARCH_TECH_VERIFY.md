@@ -8,9 +8,15 @@ Use this checklist when validating the primary `research-tech` pack.
 ovp-packs --json
 ovp-doctor --pack research-tech --json
 ovp-truth objects --vault-dir /path/to/vault
-ovp-ui --vault-dir /path/to/vault --port 8787
+python3 -m openclaw_pipeline.commands.watch_progress --vault-dir /path/to/vault --once
 ovp --help
 ovp-autopilot --help
+```
+
+Start the UI server in a separate terminal before browser or `/api/runtime` checks:
+
+```bash
+ovp-ui --vault-dir /path/to/vault --port 8787
 ```
 
 Expected:
@@ -20,6 +26,7 @@ Expected:
 - default workflow pack is `research-tech`
 - `ovp-truth` can read object rows directly from `knowledge.db`
 - `ovp-ui` starts a local DB-backed browser surface
+- `watch_progress --once` reports one canonical runtime view instead of forcing operator inference from `ps` + JSONL
 
 ## Test Checks
 
@@ -34,6 +41,52 @@ Expected:
 - pack-level e2e stays green
 - orchestrated runtime e2e stays green
 - full suite stays green under Python 3.13
+
+## Incremental Runtime Checks
+
+Run the real daily entrypoint:
+
+```bash
+ovp --incremental --pack research-tech --vault-dir /path/to/vault
+```
+
+While it is running, inspect the same run through all three operator readers:
+
+```bash
+# Terminal A, keep running:
+ovp-ui --vault-dir /path/to/vault --port 8787
+
+# Terminal B:
+python3 -m openclaw_pipeline.commands.watch_progress --vault-dir /path/to/vault --once
+curl -s http://127.0.0.1:8787/api/runtime | jq
+open http://127.0.0.1:8787/
+```
+
+`curl /api/runtime` and the root page require `ovp-ui` to be running in Terminal A.
+
+Expected:
+
+- `ovp --incremental` includes:
+  - `pinboard`
+  - `pinboard_process`
+  - `clippings`
+  - `articles`
+  - `quality`
+  - `fix_links`
+  - `absorb`
+  - `registry_sync`
+  - `moc`
+  - `knowledge_index`
+- `watch_progress`, `/api/runtime`, and `/` agree on the same active run id
+- `watch_progress`, `/api/runtime`, and `/` agree on the same:
+  - current step
+  - current item
+  - progress summary
+- counted stages expose a real denominator rather than a phase-count guess
+- stale runs are reported separately from the active run
+- `/` shows a `Current Workflow` card with the same progress summary as `/api/runtime`
+- `pinboard_process` shows counted file progress
+- `absorb` shows counted deep-dive progress with a live current item
 
 ## Vault Checks
 

@@ -2,12 +2,12 @@
 
 ## Goal
 
-Run the `research-tech` pack from fresh Pinboard source items through the full workflow.
+Run the `research-tech` pack from fresh Pinboard source items through the daily incremental workflow.
 
 ## Command
 
 ```bash
-ovp --full --pack research-tech --batch-size 25
+ovp --incremental --pack research-tech --batch-size 25
 ```
 
 ## Verify

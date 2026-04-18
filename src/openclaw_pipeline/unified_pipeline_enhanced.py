@@ -37,6 +37,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -46,11 +47,27 @@ try:
     from .runtime import VaultLayout, resolve_vault_dir
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
+    from .auto_evergreen_extractor import run_absorb_workflow
+    from .txn import (
+        build_transaction_payload,
+        heartbeat_transaction,
+        mark_transaction_completed,
+        mark_transaction_failed,
+        update_transaction_step,
+    )
 except ImportError:  # pragma: no cover - script mode fallback
     from handler_registry import execute_profile_stage_handler
     from runtime import VaultLayout, resolve_vault_dir
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
+    from auto_evergreen_extractor import run_absorb_workflow
+    from txn import (
+        build_transaction_payload,
+        heartbeat_transaction,
+        mark_transaction_completed,
+        mark_transaction_failed,
+        update_transaction_step,
+    )
 
 # ========== 环境初始化 ==========
 # 加载 .env 文件（从 Vault 根目录或 auto_vault 目录）
@@ -131,6 +148,13 @@ def _extract_json_suffix(text: str) -> dict[str, Any] | None:
         if idx + end == len(raw) and isinstance(payload, dict):
             return payload
     return None
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _load_env(vault_dir: Path | None = None) -> bool:
@@ -392,6 +416,7 @@ def pipeline_steps(
 def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
     """Build the requested execution plan from CLI args."""
     include_refine = bool(getattr(args, "with_refine", False))
+    incremental = bool(getattr(args, "incremental", False))
     pack_name = getattr(args, "pack", None)
     profile_name = getattr(args, "profile", None)
     pack, profile = resolve_workflow_profile(
@@ -430,6 +455,21 @@ def build_execution_plan(args: argparse.Namespace) -> dict[str, Any]:
             f"Full pipeline from {normalized_from_step} ({pack.name}/{profile.name})"
             if normalized_from_step
             else f"Full pipeline ({pack.name}/{profile.name})"
+        )
+        return plan_dict(
+            requested_steps,
+            description,
+            args.pinboard_days or 7,
+            None,
+            None,
+        )
+
+    if incremental:
+        requested_steps = slice_from_step(selected_steps)
+        description = (
+            f"Incremental pipeline from {normalized_from_step} ({pack.name}/{profile.name})"
+            if normalized_from_step
+            else f"Incremental pipeline ({pack.name}/{profile.name})"
         )
         return plan_dict(
             requested_steps,
@@ -507,75 +547,96 @@ class TransactionManager:
     def __init__(self, txn_dir: Path):
         self.txn_dir = txn_dir
 
-    def start(self, workflow_type: str, description: str) -> str:
-        txn_id = f"pipeline-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()[:8]}"
-        txn_file = self.txn_dir / f"{txn_id}.json"
+    def _txn_file(self, txn_id: str) -> Path:
+        return self.txn_dir / f"{txn_id}.json"
 
-        txn_data = {
-            "id": txn_id,
-            "type": workflow_type,
-            "description": description,
-            "start_time": datetime.now().isoformat(),
-            "status": "in_progress",
-            "steps": {},
-            "checkpoint": "initialized",
-            "last_updated": datetime.now().isoformat()
-        }
+    def _read(self, txn_id: str) -> dict[str, Any] | None:
+        txn_file = self._txn_file(txn_id)
+        if not txn_file.exists():
+            return None
+        with open(txn_file, "r", encoding="utf-8") as f:
+            return json.load(f)
 
+    def _write(self, txn_id: str, txn_data: dict[str, Any]) -> None:
+        txn_file = self._txn_file(txn_id)
         txn_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(txn_file, "w", encoding="utf-8") as f:
-            json.dump(txn_data, f, indent=2, ensure_ascii=False)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=txn_file.parent,
+            prefix=f".{txn_file.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp_file = Path(f.name)
+            try:
+                json.dump(txn_data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            except Exception:
+                try:
+                    tmp_file.unlink()
+                except OSError:
+                    pass
+                raise
+        try:
+            os.replace(tmp_file, txn_file)
+        finally:
+            if tmp_file.exists():
+                try:
+                    tmp_file.unlink()
+                except OSError:
+                    pass
 
+    def start(
+        self,
+        workflow_type: str,
+        description: str,
+        *,
+        pack_name: str | None = None,
+        workflow_profile: str | None = None,
+        planned_steps: list[str] | None = None,
+    ) -> str:
+        txn_id = f"pipeline-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()[:8]}"
+        txn_data = build_transaction_payload(
+            txn_id,
+            workflow_type,
+            description,
+            pack_name=pack_name,
+            workflow_profile=workflow_profile,
+            planned_steps=planned_steps,
+        )
+        self._write(txn_id, txn_data)
         return txn_id
 
-    def step(self, txn_id: str, step_name: str, status: str, output: str = ""):
-        txn_file = self.txn_dir / f"{txn_id}.json"
-        if not txn_file.exists():
+    def step(self, txn_id: str, step_name: str, status: str, output: str = "", **progress_kwargs: Any):
+        txn_data = self._read(txn_id)
+        if txn_data is None:
             return
+        update_transaction_step(txn_data, step_name, status, output=output, **progress_kwargs)
+        self._write(txn_id, txn_data)
 
-        with open(txn_file, "r", encoding="utf-8") as f:
-            txn_data = json.load(f)
-
-        txn_data["steps"][step_name] = {
-            "status": status,
-            "output": output,
-            "updated_at": datetime.now().isoformat()
-        }
-        txn_data["checkpoint"] = step_name
-        txn_data["last_updated"] = datetime.now().isoformat()
-
-        with open(txn_file, "w", encoding="utf-8") as f:
-            json.dump(txn_data, f, indent=2, ensure_ascii=False)
+    def heartbeat(self, txn_id: str, *, step_name: str | None = None, **kwargs: Any):
+        txn_data = self._read(txn_id)
+        if txn_data is None:
+            return
+        heartbeat_transaction(txn_data, step_name=step_name, **kwargs)
+        self._write(txn_id, txn_data)
 
     def complete(self, txn_id: str):
-        txn_file = self.txn_dir / f"{txn_id}.json"
-        if not txn_file.exists():
+        txn_data = self._read(txn_id)
+        if txn_data is None:
             return
-
-        with open(txn_file, "r", encoding="utf-8") as f:
-            txn_data = json.load(f)
-
-        txn_data["status"] = "completed"
-        txn_data["completed_at"] = datetime.now().isoformat()
-        txn_data["last_updated"] = datetime.now().isoformat()
-
-        with open(txn_file, "w", encoding="utf-8") as f:
-            json.dump(txn_data, f, indent=2, ensure_ascii=False)
+        mark_transaction_completed(txn_data)
+        self._write(txn_id, txn_data)
 
     def fail(self, txn_id: str, reason: str):
-        txn_file = self.txn_dir / f"{txn_id}.json"
-        if not txn_file.exists():
+        txn_data = self._read(txn_id)
+        if txn_data is None:
             return
-
-        with open(txn_file, "r", encoding="utf-8") as f:
-            txn_data = json.load(f)
-
-        txn_data["status"] = "failed"
-        txn_data["failure_reason"] = reason
-        txn_data["last_updated"] = datetime.now().isoformat()
-
-        with open(txn_file, "w", encoding="utf-8") as f:
-            json.dump(txn_data, f, indent=2, ensure_ascii=False)
+        mark_transaction_failed(txn_data, reason)
+        self._write(txn_id, txn_data)
 
 
 class EnhancedPipeline:
@@ -807,36 +868,60 @@ class EnhancedPipeline:
         self.logger.log("command_started", {"step": step_name, "cmd": " ".join(cmd), "timeout": timeout})
 
         try:
-            result = subprocess.run(
-                cmd,
-                cwd=self.vault_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=self._subprocess_env(),
-            )
+            with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8") as stdout_file, tempfile.NamedTemporaryFile(
+                mode="w+",
+                encoding="utf-8",
+            ) as stderr_file:
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=self.vault_dir,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    text=True,
+                    env=self._subprocess_env(),
+                )
+                started = time.monotonic()
+                timeout_seconds = float(timeout)
+                poll_interval = min(1.0, max(0.1, timeout_seconds / 10.0))
+                while True:
+                    returncode = process.poll()
+                    if returncode is not None:
+                        break
+                    elapsed = time.monotonic() - started
+                    if elapsed > timeout_seconds:
+                        process.kill()
+                        process.wait()
+                        self.logger.log("command_timeout", {"step": step_name, "timeout": timeout})
+                        return {"success": False, "timeout": True, "error": f"Timeout after {timeout}s"}
+                    if self.txn_id:
+                        self.txn.heartbeat(self.txn_id, step_name=step_name)
+                    time.sleep(poll_interval)
 
-            success = result.returncode == 0
+                stdout_file.flush()
+                stderr_file.flush()
+                stdout_file.seek(0)
+                stderr_file.seek(0)
+                stdout = stdout_file.read()
+                stderr = stderr_file.read()
+
+            success = returncode == 0
 
             self.logger.log("command_completed", {
                 "step": step_name,
                 "success": success,
-                "returncode": result.returncode,
+                "returncode": returncode,
                 "timeout": timeout,
-                "stdout": result.stdout[-1000:] if result.stdout else "",
-                "stderr": result.stderr[-500:] if result.stderr else ""
+                "stdout": stdout[-1000:] if stdout else "",
+                "stderr": stderr[-500:] if stderr else ""
             })
 
             return {
                 "success": success,
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr
+                "returncode": returncode,
+                "stdout": stdout,
+                "stderr": stderr
             }
 
-        except subprocess.TimeoutExpired:
-            self.logger.log("command_timeout", {"step": step_name, "timeout": timeout})
-            return {"success": False, "timeout": True, "error": f"Timeout after {timeout}s"}
         except Exception as e:
             self.logger.log("command_error", {"step": step_name, "error": str(e)})
             return {"success": False, "error": str(e)}
@@ -849,6 +934,7 @@ class EnhancedPipeline:
         if project_src not in segments:
             segments.insert(0, project_src)
         env["PYTHONPATH"] = os.pathsep.join(segments)
+        env.setdefault("PYTHONUNBUFFERED", "1")
         return env
 
     def step_pinboard(
@@ -992,19 +1078,82 @@ class EnhancedPipeline:
         print(f"  找到 {len(files)} 个 Pinboard 文件")
 
         results = {"processed": 0, "skipped": 0, "failed": 0}
+        total_files = len(files)
 
-        for f in files:
+        if self.txn_id:
+            self.txn.heartbeat(
+                self.txn_id,
+                step_name="pinboard_process",
+                progress_mode="counted",
+                work_units_total=total_files,
+                work_units_done=0,
+                work_units_failed=0,
+                progress_summary=f"0/{total_files} files processed",
+            )
+
+        for index, f in enumerate(files, start=1):
             try:
+                self.logger.log(
+                    "pinboard_process_file_started",
+                    {"file": f.name, "index": index, "total": total_files},
+                )
+                if self.txn_id:
+                    self.txn.heartbeat(
+                        self.txn_id,
+                        step_name="pinboard_process",
+                        progress_mode="counted",
+                        work_units_total=total_files,
+                        work_units_done=index - 1,
+                        work_units_failed=results["failed"],
+                        current_item=f.name,
+                        progress_summary=f"{index - 1}/{total_files} files processed",
+                        last_meaningful_event={
+                            "event_type": "pinboard_process_file_started",
+                            "file": f.name,
+                        },
+                    )
                 content = f.read_text(encoding="utf-8")
                 url_type = detect_pinboard_processor(content)
                 if not url_type:
                     print(f"  ⚠️  无法识别类型: {f.name}")
                     results["skipped"] += 1
+                    self.logger.log("pinboard_process_file_skipped", {"file": f.name, "reason": "unknown_type"})
+                    if self.txn_id:
+                        self.txn.heartbeat(
+                            self.txn_id,
+                            step_name="pinboard_process",
+                            progress_mode="counted",
+                            work_units_total=total_files,
+                            work_units_done=index,
+                            work_units_failed=results["failed"],
+                            current_item=f.name,
+                            progress_summary=f"{index}/{total_files} files processed",
+                            last_meaningful_event={
+                                "event_type": "pinboard_process_file_skipped",
+                                "file": f.name,
+                            },
+                        )
                     continue
 
                 if url_type == "social":
                     print(f"  ⏭️  跳过 social: {f.name}")
                     results["skipped"] += 1
+                    self.logger.log("pinboard_process_file_skipped", {"file": f.name, "reason": "social"})
+                    if self.txn_id:
+                        self.txn.heartbeat(
+                            self.txn_id,
+                            step_name="pinboard_process",
+                            progress_mode="counted",
+                            work_units_total=total_files,
+                            work_units_done=index,
+                            work_units_failed=results["failed"],
+                            current_item=f.name,
+                            progress_summary=f"{index}/{total_files} files processed",
+                            last_meaningful_event={
+                                "event_type": "pinboard_process_file_skipped",
+                                "file": f.name,
+                            },
+                        )
                     continue
 
                 # 构建命令
@@ -1029,24 +1178,49 @@ class EnhancedPipeline:
                 else:
                     print(f"  ⏭️  跳过未知类型 {url_type}: {f.name}")
                     results["skipped"] += 1
+                    self.logger.log("pinboard_process_file_skipped", {"file": f.name, "reason": f"unsupported:{url_type}"})
+                    if self.txn_id:
+                        self.txn.heartbeat(
+                            self.txn_id,
+                            step_name="pinboard_process",
+                            progress_mode="counted",
+                            work_units_total=total_files,
+                            work_units_done=index,
+                            work_units_failed=results["failed"],
+                            current_item=f.name,
+                            progress_summary=f"{index}/{total_files} files processed",
+                            last_meaningful_event={
+                                "event_type": "pinboard_process_file_skipped",
+                                "file": f.name,
+                            },
+                        )
                     continue
 
                 if dry_run:
                     print(f"  🔍 [DRY RUN] 路由 {url_type}: {f.name}")
                     results["processed"] += 1
+                    self.logger.log("pinboard_process_file_completed", {"file": f.name, "processor": url_type, "dry_run": True})
+                    if self.txn_id:
+                        self.txn.heartbeat(
+                            self.txn_id,
+                            step_name="pinboard_process",
+                            progress_mode="counted",
+                            work_units_total=total_files,
+                            work_units_done=index,
+                            work_units_failed=results["failed"],
+                            current_item=f.name,
+                            progress_summary=f"{index}/{total_files} files processed",
+                            last_meaningful_event={
+                                "event_type": "pinboard_process_file_completed",
+                                "file": f.name,
+                            },
+                        )
                     continue
 
                 # 执行处理器
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd=str(self.vault_dir),
-                    timeout=600,
-                    env=self._subprocess_env(),
-                )
+                result = self.run_command(cmd, "pinboard_process", timeout=600)
 
-                if result.returncode == 0:
+                if result.get("success"):
                     print(f"  ✅ {url_type}: {f.name}")
                     results["processed"] += 1
 
@@ -1055,14 +1229,63 @@ class EnhancedPipeline:
                     month_dir.mkdir(parents=True, exist_ok=True)
                     archive_file = month_dir / f.name
                     f.rename(archive_file)
+                    self.logger.log("pinboard_process_file_completed", {"file": f.name, "processor": url_type, "archived_to": str(archive_file)})
+                    if self.txn_id:
+                        self.txn.heartbeat(
+                            self.txn_id,
+                            step_name="pinboard_process",
+                            progress_mode="counted",
+                            work_units_total=total_files,
+                            work_units_done=index,
+                            work_units_failed=results["failed"],
+                            current_item=f.name,
+                            progress_summary=f"{index}/{total_files} files processed",
+                            last_meaningful_event={
+                                "event_type": "pinboard_process_file_completed",
+                                "file": f.name,
+                            },
+                        )
                 else:
                     print(f"  ❌ {url_type} 处理失败: {f.name}")
-                    print(f"     {result.stderr[:100]}")
+                    stderr = str(result.get("stderr") or result.get("error") or "")
+                    print(f"     {stderr[:100]}")
                     results["failed"] += 1
+                    self.logger.log("pinboard_process_file_failed", {"file": f.name, "processor": url_type, "error": stderr[:500]})
+                    if self.txn_id:
+                        self.txn.heartbeat(
+                            self.txn_id,
+                            step_name="pinboard_process",
+                            progress_mode="counted",
+                            work_units_total=total_files,
+                            work_units_done=index,
+                            work_units_failed=results["failed"],
+                            current_item=f.name,
+                            progress_summary=f"{index}/{total_files} files processed",
+                            last_meaningful_event={
+                                "event_type": "pinboard_process_file_failed",
+                                "file": f.name,
+                            },
+                        )
 
             except Exception as e:
                 print(f"  ❌ 处理异常 {f.name}: {e}")
                 results["failed"] += 1
+                self.logger.log("pinboard_process_file_failed", {"file": f.name, "error": str(e)})
+                if self.txn_id:
+                    self.txn.heartbeat(
+                        self.txn_id,
+                        step_name="pinboard_process",
+                        progress_mode="counted",
+                        work_units_total=total_files,
+                        work_units_done=index,
+                        work_units_failed=results["failed"],
+                        current_item=f.name,
+                        progress_summary=f"{index}/{total_files} files processed",
+                        last_meaningful_event={
+                            "event_type": "pinboard_process_file_failed",
+                            "file": f.name,
+                        },
+                    )
 
         print(f"\n  汇总: 处理 {results['processed']}, 跳过 {results['skipped']}, 失败 {results['failed']}")
         return {"success": results["failed"] == 0, **results}
@@ -1284,6 +1507,124 @@ class EnhancedPipeline:
                     merged.append(resolved)
         return merged
 
+    def _build_absorb_progress_callback(
+        self,
+        *,
+        total_files: int | None,
+        completed_before: int = 0,
+        failed_before: int = 0,
+    ):
+        def _callback(event: dict[str, Any]) -> None:
+            effective_total = total_files or int(event.get("files_total") or 0) or None
+            batch_done = int(event.get("files_done") or 0)
+            batch_failed = int(event.get("files_failed") or 0)
+            current_item = str(event.get("current_item") or event.get("file") or "").strip() or None
+            work_units_done = completed_before + batch_done
+            work_units_failed = failed_before + batch_failed
+            progress_summary = (
+                f"{work_units_done}/{effective_total} files processed"
+                if effective_total is not None
+                else "Progress is currently indeterminate."
+            )
+            if self.txn_id:
+                self.txn.heartbeat(
+                    self.txn_id,
+                    step_name="absorb",
+                    progress_mode="counted" if effective_total is not None else "indeterminate",
+                    work_units_total=effective_total,
+                    work_units_done=work_units_done,
+                    work_units_failed=work_units_failed,
+                    current_item=current_item,
+                    progress_summary=progress_summary,
+                    last_meaningful_event={
+                        "event_type": str(event.get("event_type") or "absorb_file_processed"),
+                        "file": current_item or "",
+                    },
+                )
+
+        return _callback
+
+    def _run_absorb_workflow_direct(
+        self,
+        *,
+        dry_run: bool,
+        total_files: int | None = None,
+        completed_before: int = 0,
+        failed_before: int = 0,
+        directory: Path | None = None,
+        recent: int | None = None,
+    ) -> dict[str, Any]:
+        self.logger.log(
+            "command_started",
+            {
+                "step": "absorb",
+                "mode": "direct_workflow",
+                "directory": str(directory) if directory else "",
+                "recent": recent,
+                "total_files": total_files,
+            },
+        )
+        if self.txn_id and total_files is not None:
+            self.txn.heartbeat(
+                self.txn_id,
+                step_name="absorb",
+                progress_mode="counted",
+                work_units_total=total_files,
+                work_units_done=completed_before,
+                work_units_failed=failed_before,
+                progress_summary=f"{completed_before}/{total_files} files processed",
+            )
+        try:
+            payload = run_absorb_workflow(
+                self.vault_dir,
+                directory=directory,
+                recent=recent,
+                dry_run=dry_run,
+                auto_promote=True,
+                promote_threshold=1,
+                progress_callback=self._build_absorb_progress_callback(
+                    total_files=total_files,
+                    completed_before=completed_before,
+                    failed_before=failed_before,
+                ),
+            )
+        except Exception as exc:
+            self.logger.log("command_error", {"step": "absorb", "error": str(exc)})
+            return {"success": False, "error": str(exc)}
+
+        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        error_count = _safe_int(summary.get("errors"))
+        error_count += _safe_int(summary.get("failed"))
+        error_count += _safe_int(summary.get("files_failed"))
+        if error_count == 0:
+            error_count = sum(1 for item in results if isinstance(item, dict) and item.get("error"))
+        success = error_count == 0
+        stdout = json.dumps(payload, ensure_ascii=False)
+        stderr = "" if success else f"{error_count} absorb file(s) failed"
+        self.logger.log(
+            "command_completed",
+            {
+                "step": "absorb",
+                "success": success,
+                "mode": "direct_workflow",
+                "directory": str(directory) if directory else "",
+                "recent": recent,
+                "total_files": total_files,
+                "stdout": stdout[-1000:],
+                "stderr": stderr,
+            },
+        )
+        result = {
+            "success": success,
+            "stdout": stdout,
+            "stderr": stderr,
+            **payload,
+        }
+        if not success:
+            result["error"] = stderr
+        return result
+
     def step_absorb(
         self,
         recent_days: int = 7,
@@ -1346,7 +1687,8 @@ class EnhancedPipeline:
         print("="*60)
 
         if normalized_files is not None:
-            effective_batch_size = batch_size or len(normalized_files)
+            total_files = len(normalized_files)
+            effective_batch_size = batch_size or total_files
             aggregated_summary = {
                 "files_processed": 0,
                 "concepts_extracted": 0,
@@ -1383,21 +1725,12 @@ class EnhancedPipeline:
                         except OSError:
                             target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
-                    cmd = [
-                        sys.executable, "-m", "openclaw_pipeline.commands.absorb",
-                        "--vault-dir", str(self.vault_dir),
-                        "--dir", str(staging_path),
-                        "--auto-promote",
-                        "--promote-threshold", "1",
-                        "--json",
-                    ]
-                    if dry_run:
-                        cmd.append("--dry-run")
-
-                    result = self.run_command(
-                        cmd,
-                        "absorb",
-                        timeout=self._calculate_timeout("absorb", batch_size=len(batch_files)),
+                    result = self._run_absorb_workflow_direct(
+                        directory=staging_path,
+                        dry_run=dry_run,
+                        total_files=total_files,
+                        completed_before=aggregated_summary["files_processed"],
+                        failed_before=aggregated_summary["errors"],
                     )
                     if not result["success"]:
                         print(f"✗ Absorb stage failed: {result.get('error', 'Unknown error')}")
@@ -1406,21 +1739,10 @@ class EnhancedPipeline:
                         result["results"] = aggregated_results
                         return result
 
-                    payload = _extract_json_suffix(result.get("stdout", ""))
-                    if payload is None:
-                        print("✗ Absorb stage failed: missing absorb JSON payload")
-                        return {
-                            "success": False,
-                            "error": "missing_absorb_payload",
-                            "qualified_files": normalized_files,
-                            "summary": aggregated_summary,
-                            "results": aggregated_results,
-                        }
-
-                    summary = payload.get("summary", {})
+                    summary = result.get("summary", {})
                     for key in aggregated_summary:
                         aggregated_summary[key] += int(summary.get(key, 0) or 0)
-                    aggregated_results.extend(payload.get("results", []))
+                    aggregated_results.extend(result.get("results", []))
 
             result = {
                 "success": True,
@@ -1437,16 +1759,7 @@ class EnhancedPipeline:
                 "stderr": "",
             }
         else:
-            cmd = [
-                sys.executable, "-m", "openclaw_pipeline.commands.absorb",
-                "--vault-dir", str(self.vault_dir),
-                "--recent", str(recent_days),
-                "--json",
-            ]
-            if dry_run:
-                cmd.append("--dry-run")
-
-            result = self.run_command(cmd, "absorb")
+            result = self._run_absorb_workflow_direct(dry_run=dry_run, recent=recent_days)
 
         if result["success"]:
             print("✓ Absorb stage completed")
@@ -1729,6 +2042,8 @@ def main():
     # 运行模式
     parser.add_argument("--full", action="store_true",
                        help="完整Pipeline（Pinboard+Clippings+Articles+Quality+Absorb+MOC+knowledge.db）")
+    parser.add_argument("--incremental", action="store_true",
+                       help="日常增量流水线（默认包含最近7天 Pinboard + Clippings + 后续步骤）")
     parser.add_argument("--step", choices=PIPELINE_STEP_CHOICES,
                        help="运行指定步骤")
     parser.add_argument("--from-step", choices=PIPELINE_STEP_CHOICES,
@@ -1815,7 +2130,13 @@ def main():
     description = execution_plan["description"]
 
     # 创建事务
-    pipeline.txn_id = txn.start("enhanced-pipeline", description)
+    pipeline.txn_id = txn.start(
+        "enhanced-pipeline",
+        description,
+        pack_name=execution_plan["pack"],
+        workflow_profile=execution_plan["profile"],
+        planned_steps=steps,
+    )
     logger.log("pipeline_started", {
         "txn_id": pipeline.txn_id,
         "mode": "full" if args.full else "custom",
