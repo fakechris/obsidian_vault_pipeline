@@ -21,6 +21,17 @@ TARGET_TO_RECIPE = {
 }
 
 
+def _build_compiled_briefing_export(vault_dir: Path, *, pack_name: str) -> object:
+    from ..ui.view_models import build_briefing_payload
+
+    return build_briefing_payload(vault_dir, pack_name=pack_name)
+
+
+OBSERVATION_SURFACE_EXPORT_BUILDERS = {
+    "briefing": _build_compiled_briefing_export,
+}
+
+
 def _resolve_export_recipe(pack, target: str) -> tuple[object, object]:
     recipe_name = TARGET_TO_RECIPE[target]
     recipe = resolve_assembly_recipe_spec(pack_name=pack, recipe_name=recipe_name)
@@ -47,6 +58,18 @@ def _resolve_export_view(pack, recipe_provider_pack, recipe) -> tuple[object, ob
 
 def _write_json_export(output_path: Path, payload: object) -> None:
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _build_observation_surface_export(*, vault_dir: Path, pack_name: str, recipe) -> tuple[object | None, object]:
+    surface_kind = str(getattr(recipe, "source_contract_name", ""))
+    compiled_builder = OBSERVATION_SURFACE_EXPORT_BUILDERS.get(surface_kind)
+    if compiled_builder is not None:
+        return None, compiled_builder(vault_dir, pack_name=pack_name)
+    return execute_observation_surface_builder(
+        surface_kind=surface_kind,
+        vault_dir=vault_dir,
+        pack_name=pack_name,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -108,20 +131,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if getattr(recipe, "source_contract_kind", "") == "observation_surface":
         try:
-            spec, payload = execute_observation_surface_builder(
-                surface_kind=str(getattr(recipe, "source_contract_name", "")),
+            spec, payload = _build_observation_surface_export(
                 vault_dir=vault_dir,
                 pack_name=pack.name,
+                recipe=recipe,
             )
         except Exception as exc:
             parser.error(
                 f"failed to build export target '{args.target}' for observation surface "
                 f"'{getattr(recipe, 'source_contract_name', None)}': {exc}"
             )
-        if getattr(recipe, "name", "") == "orientation_brief":
-            from ..ui.view_models import build_briefing_payload
-
-            payload = build_briefing_payload(vault_dir, pack_name=pack.name)
         _write_json_export(output_path, payload)
         print(
             json.dumps(

@@ -1185,6 +1185,11 @@ Thin note.
     production_gap = next(item for item in payload["priorities"] if item["kind"] == "production_gap")
     assert production_gap["path"].startswith("/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md")
     assert payload["recent_review_actions"] == []
+    orientation_sections = {section["id"]: section for section in payload["orientation"]["compiled_sections"]}
+    entry_sections = {section["id"]: section for section in payload["entry_sections"]}
+    assert entry_sections["what_changed_recently"]["items"] == orientation_sections["what_changed"]["items"][:4]
+    assert entry_sections["important_right_now"]["items"] == orientation_sections["next_actions"]["items"][:4]
+    assert entry_sections["deserves_review"]["items"] == orientation_sections["needs_review"]["items"][:4]
 
 
 def test_build_truth_dashboard_payload_preserves_requested_pack(temp_vault):

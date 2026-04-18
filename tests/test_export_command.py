@@ -150,6 +150,38 @@ def test_export_command_can_export_orientation_brief(temp_vault, tmp_path, capsy
     ]
 
 
+def test_export_command_orientation_brief_uses_compiled_export_builder(
+    temp_vault, tmp_path, monkeypatch, capsys
+):
+    from openclaw_pipeline.commands import export_artifact
+
+    _seed_truth_store(temp_vault)
+    output_path = tmp_path / "orientation-brief.json"
+
+    monkeypatch.setattr(
+        export_artifact,
+        "execute_observation_surface_builder",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("raw observation builder should not run")),
+    )
+
+    exit_code = export_artifact.main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--target",
+            "orientation-brief",
+            "--output-path",
+            str(output_path),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    exported = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["source_name"] == "briefing"
+    assert exported["assembly_contract"]["recipe_name"] == "orientation_brief"
+
+
 def test_export_command_can_use_inherited_assembly_recipe_for_compatibility_pack(
     temp_vault, tmp_path, capsys
 ):

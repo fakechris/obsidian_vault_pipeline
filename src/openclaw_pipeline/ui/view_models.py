@@ -99,6 +99,27 @@ def _section_nav_from_compiled_sections(sections: list[dict[str, Any]]) -> list[
     ]
 
 
+def _compiled_section_by_id(
+    sections: list[dict[str, Any]],
+    section_id: str,
+) -> dict[str, Any]:
+    return next((section for section in sections if str(section.get("id") or "") == section_id), {})
+
+
+def _remap_compiled_section(
+    section: dict[str, Any],
+    *,
+    section_id: str,
+    label: str,
+    summary: str,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    items = list(section.get("items") or [])
+    if limit is not None:
+        items = items[:limit]
+    return _compiled_section(section_id, label, summary=summary, items=items)
+
+
 def _db_path(vault_dir: Path | str) -> Path:
     resolved = resolve_vault_dir(vault_dir)
     return VaultLayout.from_vault(resolved).knowledge_db
@@ -2996,67 +3017,28 @@ def build_truth_dashboard_payload(
             }
         )
     orientation = build_briefing_payload(vault_dir, pack_name=pack_name)
+    orientation_sections = list(orientation.get("compiled_sections") or [])
     entry_sections = [
-        _compiled_section(
-            "what_changed_recently",
-            "What Changed Recently",
+        _remap_compiled_section(
+            _compiled_section_by_id(orientation_sections, "what_changed"),
+            section_id="what_changed_recently",
+            label="What Changed Recently",
             summary=f"{orientation.get('changed_object_count', 0)} changed objects and {orientation.get('recent_signal_count', 0)} recent signals surfaced.",
-            items=[
-                *[
-                    {
-                        "kind": "changed_object",
-                        "label": item["title"],
-                        "path": item["path"],
-                        "detail": f"Changed object · {item['object_id']}",
-                    }
-                    for item in orientation.get("changed_objects", [])[:4]
-                ]
-            ],
+            limit=4,
         ),
-        _compiled_section(
-            "important_right_now",
-            "Important Right Now",
+        _remap_compiled_section(
+            _compiled_section_by_id(orientation_sections, "next_actions"),
+            section_id="important_right_now",
+            label="Important Right Now",
             summary=f"{len(orientation.get('priority_items', []))} priority items are currently surfaced.",
-            items=[
-                *[
-                    {
-                        "kind": str(item["kind"]),
-                        "label": str(item["title"]),
-                        "path": str(item["path"]),
-                        "detail": str(item["detail"]),
-                    }
-                    for item in orientation.get("priority_items", [])[:4]
-                ]
-            ],
+            limit=4,
         ),
-        _compiled_section(
-            "deserves_review",
-            "Deserves Review",
-            summary=f"{contradictions['open_count'] if research_overview_supported else signals['count']} review-oriented items are currently in scope.",
-            items=(
-                [
-                    {
-                        "kind": "contradiction",
-                        "label": item["subject_key"],
-                        "path": _scoped_path(
-                            f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
-                            pack_name=requested_pack,
-                        ),
-                        "detail": f"{len(item['object_ids'])} objects in scope",
-                    }
-                    for item in contradictions["items"][:4]
-                ]
-                if research_overview_supported
-                else [
-                    {
-                        "kind": str(item["signal_type"]),
-                        "label": str(item["title"]),
-                        "path": str(item["source_path"]),
-                        "detail": str(item["detail"]),
-                    }
-                    for item in signals["items"][:4]
-                ]
-            ),
+        _remap_compiled_section(
+            _compiled_section_by_id(orientation_sections, "needs_review"),
+            section_id="deserves_review",
+            label="Deserves Review",
+            summary=f"{orientation.get('unresolved_issue_count', 0)} review-oriented items are currently in scope.",
+            limit=4,
         ),
         _compiled_section(
             "recommended_next_steps",
