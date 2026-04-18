@@ -76,3 +76,10 @@ Phase 4
   - registry-backed effective assembly/governance enumeration in `ovp-doctor`
   - explicit `/api/briefing`, `/api/signals`, and `/api/actions` endpoint assertions for contract provenance
   - closeout docs marking `Phase 18` complete / ready to close
+- `Phase 19` implementation is now complete:
+  - `orientation_brief` exists as a first-class assembly recipe
+  - `ovp-export --target orientation-brief` exports a compiled JSON entry product
+  - `/briefing` is now the orientation page
+  - `/` workbench home now exposes entry sections and routes into orientation
+  - object/topic/event/contradiction pages now expose stable compiled sections
+  - docs and verify checklists now treat orientation and compiled-page contracts as pack-level product semantics
