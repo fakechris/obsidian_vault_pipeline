@@ -2058,6 +2058,31 @@ def test_truth_api_auto_queue_signal_types_follow_governance_contract():
     }
 
 
+def test_truth_api_auto_queue_signal_types_respect_explicit_opt_out(monkeypatch):
+    from openclaw_pipeline import truth_api
+    from openclaw_pipeline.packs.base import GovernanceSpec, SignalRuleSpec
+
+    monkeypatch.setattr(
+        truth_api,
+        "list_effective_governance_specs",
+        lambda *, pack_name: [
+            GovernanceSpec(
+                name="opt_out_governance",
+                pack="opt-out-pack",
+                signal_rules=[
+                    SignalRuleSpec(
+                        signal_type="source_needs_deep_dive",
+                        description="Explicitly not auto-queued.",
+                        auto_queue=False,
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert truth_api._auto_queue_signal_types_for_pack("opt-out-pack") == set()
+
+
 def test_truth_api_backfills_active_auto_queue_signals_without_duplicates(temp_vault):
     from openclaw_pipeline.truth_api import list_action_queue, list_signals, sync_signal_ledger
 

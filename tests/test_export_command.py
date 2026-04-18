@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 
 def _seed_truth_store(temp_vault):
@@ -212,6 +213,27 @@ def test_export_command_requires_object_id_for_object_page(temp_vault, tmp_path)
         assert exc.code == 2
     else:
         raise AssertionError("expected object-page export to require --object-id")
+
+
+def test_export_command_resolve_view_errors_when_source_provider_missing(monkeypatch):
+    from openclaw_pipeline.commands import export_artifact
+    from openclaw_pipeline.packs.loader import load_pack
+
+    pack = load_pack("research-tech")
+    recipe_provider_pack, recipe = export_artifact._resolve_export_recipe(pack, "topic-overview")
+
+    monkeypatch.setattr(
+        export_artifact,
+        "resolve_assembly_source_contract",
+        lambda *, pack_name, recipe: {
+            "source_provider_pack": "",
+            "source_provider_name": "",
+            "source_status": "missing",
+        },
+    )
+
+    with pytest.raises(ValueError, match="has no resolved wiki-view provider"):
+        export_artifact._resolve_export_view(pack, recipe_provider_pack, recipe)
 
 
 def test_export_command_handles_missing_contradictions_table(temp_vault, tmp_path, capsys):

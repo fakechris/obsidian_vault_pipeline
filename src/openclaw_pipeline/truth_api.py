@@ -1636,18 +1636,19 @@ def _is_safe_action_kind(action_kind: str, *, pack_name: str | None = None) -> b
 
 
 def _auto_queue_signal_types_for_pack(pack_name: str | None = None) -> set[str]:
-    signal_types: set[str] = set()
-    for governance_spec in list_effective_governance_specs(
+    governance_specs = list_effective_governance_specs(
         pack_name=pack_name or DEFAULT_WORKFLOW_PACK_NAME,
-    ):
+    )
+    if not governance_specs:
+        return set(_LEGACY_AUTO_QUEUE_SIGNAL_TYPES)
+    signal_types: set[str] = set()
+    for governance_spec in governance_specs:
         for signal_rule in governance_spec.signal_rules:
             if bool(getattr(signal_rule, "auto_queue", False)):
                 signal_type = str(getattr(signal_rule, "signal_type", "") or "").strip()
                 if signal_type:
                     signal_types.add(signal_type)
-    if signal_types:
-        return signal_types
-    return set(_LEGACY_AUTO_QUEUE_SIGNAL_TYPES)
+    return signal_types
 
 
 def _resolver_rule_metadata_for_action_kind(

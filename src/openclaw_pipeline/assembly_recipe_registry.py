@@ -9,13 +9,12 @@ def resolve_assembly_recipe_spec(
     pack_name: str | BaseDomainPack | None,
     recipe_name: str,
 ) -> AssemblyRecipeSpec:
-    compatible_packs = iter_compatible_packs(pack_name)
-    resolved = compatible_packs[0]
-    for pack in compatible_packs:
-        for spec in pack.assembly_recipes():
+    pack = coerce_pack(pack_name)
+    for pack_candidate in iter_compatible_packs(pack):
+        for spec in pack_candidate.assembly_recipes():
             if spec.name == recipe_name:
                 return spec
-    raise ValueError(f"Unknown assembly recipe '{recipe_name}' for pack '{resolved.name}'")
+    raise ValueError(f"Unknown assembly recipe '{recipe_name}' for pack '{pack.name}'")
 
 
 def list_effective_assembly_recipes(
