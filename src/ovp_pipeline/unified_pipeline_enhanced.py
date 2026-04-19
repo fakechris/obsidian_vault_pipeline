@@ -1485,6 +1485,27 @@ class EnhancedPipeline:
             "--vault-dir", str(self.vault_dir),
         ]
 
+        target_files = len(collect_quality_files(self.layout, all_areas=True))
+        if self.txn_id:
+            self.txn.heartbeat(
+                self.txn_id,
+                step_name="fix_links",
+                progress_mode="counted" if target_files else "indeterminate",
+                work_units_total=target_files or None,
+                work_units_done=0,
+                work_units_failed=0,
+                current_item="migrate broken wikilinks",
+                progress_summary=(
+                    f"Scanning and migrating wikilinks across {target_files} files"
+                    if target_files
+                    else "Scanning and migrating broken wikilinks"
+                ),
+                last_meaningful_event={
+                    "event_type": "fix_links_started",
+                    "target_files": target_files,
+                },
+            )
+
         result = self.run_command(cmd, "fix_links", timeout=self._calculate_timeout("fix_links"))
 
         if result["success"]:
@@ -1881,6 +1902,32 @@ class EnhancedPipeline:
             "--pack", self.workflow_pack_name,
             "--json",
         ]
+
+        evergreen_files = [
+            path
+            for path in self.layout.evergreen_dir.rglob("*.md")
+            if "_Candidates" not in path.parts
+        ]
+        total_files = len(evergreen_files)
+        if self.txn_id:
+            self.txn.heartbeat(
+                self.txn_id,
+                step_name="knowledge_index",
+                progress_mode="counted" if total_files else "indeterminate",
+                work_units_total=total_files or None,
+                work_units_done=0,
+                work_units_failed=0,
+                current_item="rebuild knowledge index",
+                progress_summary=(
+                    f"Rebuilding knowledge index from {total_files} Evergreen files"
+                    if total_files
+                    else "Rebuilding knowledge index"
+                ),
+                last_meaningful_event={
+                    "event_type": "knowledge_index_started",
+                    "target_files": total_files,
+                },
+            )
 
         result = self.run_command(cmd, "knowledge_index", timeout=self._calculate_timeout("knowledge_index"))
 

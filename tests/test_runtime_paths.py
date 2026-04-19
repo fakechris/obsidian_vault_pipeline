@@ -1161,6 +1161,7 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
     logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Fix links progress")
 
     captured: dict[str, object] = {}
 
@@ -1168,6 +1169,8 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
         captured["timeout"] = timeout
         captured["step_name"] = step_name
         captured["cmd"] = cmd
+        payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+        captured["current_step"] = payload["run_ledger"]["current_step"]
         return {"success": True, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(pipeline, "run_command", fake_run_command)
@@ -1178,6 +1181,11 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
     assert captured["step_name"] == "fix_links"
     assert "ovp_pipeline.commands.migrate_broken_links" in " ".join(captured["cmd"])
     assert captured["timeout"] > 300
+    current = captured["current_step"]
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 8
+    assert current["work_units_done"] == 0
+    assert current["current_item"] == "migrate broken wikilinks"
 
 
 def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
@@ -1197,6 +1205,7 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
     logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Knowledge index progress")
 
     captured: dict[str, object] = {}
 
@@ -1204,6 +1213,8 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
         captured["cmd"] = cmd
         captured["step_name"] = step_name
         captured["timeout"] = timeout
+        payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+        captured["current_step"] = payload["run_ledger"]["current_step"]
         return {"success": True, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(pipeline, "run_command", fake_run_command)
@@ -1214,6 +1225,11 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
     assert captured["step_name"] == "knowledge_index"
     assert "ovp_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
     assert captured["timeout"] > 120
+    current = captured["current_step"]
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 400
+    assert current["work_units_done"] == 0
+    assert current["current_item"] == "rebuild knowledge index"
 
 
 def test_step_refine_runs_cleanup_then_breakdown(tmp_path, monkeypatch):
