@@ -48,6 +48,7 @@ try:
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
+    from .stage_artifacts import StageArtifactStore, build_stage_fingerprint, hash_file_set, hash_json_payload
     from .txn import (
         build_transaction_payload,
         heartbeat_transaction,
@@ -61,6 +62,7 @@ except ImportError:  # pragma: no cover - script mode fallback
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
+    from stage_artifacts import StageArtifactStore, build_stage_fingerprint, hash_file_set, hash_json_payload
     from txn import (
         build_transaction_payload,
         heartbeat_transaction,
@@ -395,6 +397,7 @@ STEP_ALIASES = {"evergreen": "absorb"}
 PIPELINE_STEP_CHOICES = [*BASE_PIPELINE_STEPS, *OPTIONAL_PIPELINE_STEPS, *STEP_ALIASES.keys()]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_SRC = PROJECT_ROOT / "src"
+QUALITY_STAGE_ALGORITHM_VERSION = "quality:v1"
 
 
 def normalize_step_name(step: str | None) -> str | None:
@@ -652,6 +655,61 @@ class EnhancedPipeline:
         self.txn_id = None
         self.workflow_pack_name = DEFAULT_WORKFLOW_PACK_NAME
         self.workflow_profile_name = "full"
+
+    def _quality_stage_inputs(self) -> tuple[list[Path], str, str, str]:
+        files = collect_quality_files(self.layout, all_areas=True)
+        input_digest = hash_file_set(self.vault_dir, files)
+        algorithm_digest = hash_json_payload(
+            {
+                "stage": "quality",
+                "algorithm_version": QUALITY_STAGE_ALGORITHM_VERSION,
+            }
+        )
+        fingerprint = build_stage_fingerprint(
+            stage="quality",
+            input_digest=input_digest,
+            algorithm_digest=algorithm_digest,
+            pack_name=self.workflow_pack_name,
+            workflow_profile=self.workflow_profile_name,
+        )
+        return files, input_digest, algorithm_digest, fingerprint
+
+    def _stage_artifact_store(self) -> StageArtifactStore:
+        return StageArtifactStore(self.layout.stage_artifacts_dir)
+
+    def _load_quality_stage_artifact(self) -> dict[str, Any] | None:
+        _, _, _, fingerprint = self._quality_stage_inputs()
+        return self._stage_artifact_store().load("quality", fingerprint)
+
+    def _write_quality_stage_artifact(self, result: dict[str, Any], files: list[Path], input_digest: str, algorithm_digest: str, fingerprint: str) -> None:
+        if result.get("success") is not True:
+            return
+        normalized_files = [str(Path(path).resolve()) for path in result.get("quality_qualified_files", [])]
+        manifest = self._stage_artifact_store().write_completed(
+            stage="quality",
+            fingerprint=fingerprint,
+            input_digest=input_digest,
+            algorithm_digest=algorithm_digest,
+            run_id=self.txn_id,
+            pack_name=self.workflow_pack_name,
+            workflow_profile=self.workflow_profile_name,
+            inputs={
+                "files": [path.resolve().relative_to(self.vault_dir).as_posix() for path in files],
+                "file_count": len(files),
+            },
+            outputs={
+                "qualified_files": normalized_files,
+                "results_json": result.get("quality_results_json"),
+            },
+            metrics={
+                "quality_checked": result.get("quality_checked", 0),
+                "quality_qualified": result.get("quality_qualified", 0),
+                "quality_failed": result.get("quality_failed", 0),
+                "quality_score": result.get("quality_score", 0.0),
+            },
+        )
+        result["quality_stage_fingerprint"] = manifest["fingerprint"]
+        result["quality_stage_artifact"] = str(self._stage_artifact_store().path_for("quality", fingerprint))
 
     def _get_before_counts(self) -> dict:
         """获取执行前的文件计数（用于基于产出的检测）"""
@@ -1405,7 +1463,7 @@ class EnhancedPipeline:
                 "quality_score": 0.0,
             }
 
-        target_files = collect_quality_files(self.layout, all_areas=True)
+        target_files, input_digest, algorithm_digest, fingerprint = self._quality_stage_inputs()
         total_files = len(target_files)
         effective_batch_size = batch_size or total_files
 
@@ -1519,6 +1577,14 @@ class EnhancedPipeline:
             )
 
         print("✓ Quality check completed")
+        if not dry_run:
+            self._write_quality_stage_artifact(
+                aggregated,
+                target_files,
+                input_digest,
+                algorithm_digest,
+                fingerprint,
+            )
         return aggregated
 
     def step_fix_links(self, dry_run: bool = False) -> dict:
@@ -1584,33 +1650,6 @@ class EnhancedPipeline:
             print(f"✗ Registry sync failed: {result.get('error', 'Unknown error')}")
 
         return result
-
-    def _load_latest_qualified_files(self) -> list[str]:
-        results_dir = self.layout.quality_reports_dir
-        if not results_dir.exists():
-            return []
-
-        candidates = sorted(
-            results_dir.glob("quality-results-*.json"),
-            key=lambda path: path.stat().st_mtime,
-        )
-        merged: list[str] = []
-        seen: set[str] = set()
-        for results_file in candidates:
-            try:
-                payload = json.loads(results_file.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            qualified_files = payload.get("qualified_files")
-            if isinstance(qualified_files, list):
-                for path in qualified_files:
-                    resolved_path = Path(path).resolve()
-                    resolved = str(resolved_path)
-                    if not resolved_path.exists() or resolved in seen:
-                        continue
-                    seen.add(resolved)
-                    merged.append(resolved)
-        return merged
 
     def _build_absorb_progress_callback(
         self,
@@ -1737,6 +1776,7 @@ class EnhancedPipeline:
         quality_score: float = -1.0,
         qualified_files: list[str] | None = None,
         batch_size: int | None = None,
+        require_quality_artifact: bool = False,
     ) -> dict:
         """执行 Absorb 步骤
 
@@ -1746,9 +1786,11 @@ class EnhancedPipeline:
             quality_score: 质量分数。只有在 normalized_files is None 时，>= 0 且 < 3.0 才阻断执行；
                 < 0 表示未执行质量检查（不阻断）。
             qualified_files: 通过质检的深度解读文件列表。提供时会先解析成 normalized_files，
-                并过滤为当前仍存在的文件；若为 None，则回退到 _load_latest_qualified_files()。
+                并过滤为当前仍存在的文件。
                 只要 normalized_files 非空，就按文件级白名单执行 absorb，不再使用 quality_score
                 做整批阻断。
+            require_quality_artifact: 在 pipeline 中要求从 quality stage artifact checkout 输入；
+                找不到 artifact 时停线，避免扫历史 quality reports。
         """
         if batch_size is not None and batch_size <= 0:
             return {
@@ -1757,10 +1799,30 @@ class EnhancedPipeline:
             }
 
         normalized_files = None
+        input_artifact: dict[str, Any] | None = None
         if qualified_files is None:
-            fallback_files = self._load_latest_qualified_files()
-            if fallback_files:
-                normalized_files = fallback_files
+            if require_quality_artifact:
+                input_artifact = self._load_quality_stage_artifact()
+                if not input_artifact:
+                    return {
+                        "success": False,
+                        "blocked": True,
+                        "reason": "missing_quality_stage_artifact",
+                        "error": "Absorb requires a matching quality stage artifact; refusing to scan historical quality reports.",
+                    }
+                artifact_files = input_artifact.get("outputs", {}).get("qualified_files")
+                if not isinstance(artifact_files, list):
+                    return {
+                        "success": False,
+                        "blocked": True,
+                        "reason": "invalid_quality_stage_artifact",
+                        "error": "Quality stage artifact is missing outputs.qualified_files.",
+                    }
+                normalized_files = [
+                    str(Path(path).resolve())
+                    for path in artifact_files
+                    if Path(path).exists()
+                ]
         else:
             normalized_files = [
                 str(Path(path).resolve())
@@ -1863,6 +1925,12 @@ class EnhancedPipeline:
                 ),
                 "stderr": "",
             }
+            if input_artifact is not None:
+                result["input_artifact"] = {
+                    "stage": input_artifact.get("stage"),
+                    "fingerprint": input_artifact.get("fingerprint"),
+                    "run_id": input_artifact.get("run_id"),
+                }
         else:
             result = self._run_absorb_workflow_direct(dry_run=dry_run, recent=recent_days)
 

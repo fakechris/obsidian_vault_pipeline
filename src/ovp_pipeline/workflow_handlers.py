@@ -75,6 +75,7 @@ def run_pipeline_absorb(
         quality_score=quality_score,
         qualified_files=qualified_files,
         batch_size=batch_size,
+        require_quality_artifact=True,
     )
 
 

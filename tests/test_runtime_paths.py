@@ -397,6 +397,102 @@ def test_step_quality_parses_qualified_files_from_qc_json(tmp_path, monkeypatch)
     assert result["quality_qualified_files"] == [str(qualified_file)]
 
 
+def test_step_quality_writes_reusable_stage_artifact(tmp_path, monkeypatch):
+    from ovp_pipeline.stage_artifacts import StageArtifactStore
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Quality artifact")
+
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "artifact_深度解读.md"
+    qualified_file.parent.mkdir(parents=True, exist_ok=True)
+    qualified_file.write_text("# artifact\n", encoding="utf-8")
+
+    stdout = (
+        "__QC_JSON__: "
+        '{"checked": 1, "qualified": 1, "failed": 0, '
+        f'"qualified_files": ["{qualified_file}"], '
+        '"results_json": "quality-results-demo.json"}'
+    )
+
+    monkeypatch.setattr(
+        pipeline,
+        "run_command",
+        lambda *_args, **_kwargs: {"success": True, "stdout": stdout, "stderr": ""},
+    )
+
+    result = pipeline.step_quality(dry_run=False)
+
+    store = StageArtifactStore(vault / "60-Logs" / "stage-artifacts")
+    manifest = store.load("quality", result["quality_stage_fingerprint"])
+    assert manifest is not None
+    assert manifest["run_id"] == pipeline.txn_id
+    assert manifest["outputs"]["qualified_files"] == [str(qualified_file.resolve())]
+
+
+def test_step_absorb_checkouts_matching_quality_stage_artifact(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    quality_pipeline = EnhancedPipeline(vault, logger, txn)
+    quality_pipeline.txn_id = txn.start("enhanced-pipeline", "Quality artifact source")
+
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "checkout_深度解读.md"
+    qualified_file.parent.mkdir(parents=True, exist_ok=True)
+    qualified_file.write_text("# checkout\n", encoding="utf-8")
+
+    stdout = (
+        "__QC_JSON__: "
+        '{"checked": 1, "qualified": 1, "failed": 0, '
+        f'"qualified_files": ["{qualified_file}"]'
+        "}"
+    )
+    monkeypatch.setattr(
+        quality_pipeline,
+        "run_command",
+        lambda *_args, **_kwargs: {"success": True, "stdout": stdout, "stderr": ""},
+    )
+    quality_pipeline.step_quality(dry_run=False)
+
+    absorb_pipeline = EnhancedPipeline(vault, logger, txn)
+    captured: dict[str, object] = {}
+
+    def fake_run_absorb_workflow(vault_dir, *, directory=None, **_):
+        captured["staged_files"] = sorted(p.name for p in Path(directory).glob("*.md"))
+        return {
+            "summary": {
+                "files_processed": 1,
+                "concepts_extracted": 1,
+                "candidates_added": 0,
+                "concepts_created": 0,
+                "concepts_promoted": 0,
+                "concepts_skipped": 1,
+                "errors": 0,
+            },
+            "results": [],
+        }
+
+    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
+
+    result = absorb_pipeline.step_absorb(
+        dry_run=False,
+        quality_score=-1.0,
+        qualified_files=None,
+        require_quality_artifact=True,
+    )
+
+    assert result["success"] is True
+    assert result["input_artifact"]["stage"] == "quality"
+    assert captured["staged_files"] == ["checkout_深度解读.md"]
+
+
 def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
@@ -653,7 +749,7 @@ def test_step_absorb_skips_cleanly_when_no_qualified_files(tmp_path):
     assert result["produced"] == 0
 
 
-def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeypatch):
+def test_step_absorb_requires_quality_artifact_without_using_quality_report_history(tmp_path, monkeypatch):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
 
@@ -681,35 +777,24 @@ def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeyp
         encoding="utf-8",
     )
 
-    captured: dict[str, object] = {}
-
     def fake_run_absorb_workflow(vault_dir, *, directory=None, **_):
-        captured["vault_dir"] = Path(vault_dir)
-        captured["directory"] = Path(directory)
-        captured["staged_files"] = sorted(p.name for p in Path(directory).glob("*.md"))
-        return {
-            "summary": {
-                "files_processed": 1,
-                "concepts_extracted": 1,
-                "candidates_added": 1,
-                "concepts_created": 1,
-                "concepts_promoted": 1,
-                "concepts_skipped": 0,
-                "errors": 0,
-            },
-            "results": [],
-        }
+        raise AssertionError("absorb must not scan historical quality reports without a stage artifact")
 
     monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
 
-    result = pipeline.step_absorb(dry_run=False, quality_score=-1.0, qualified_files=None)
+    result = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=-1.0,
+        qualified_files=None,
+        require_quality_artifact=True,
+    )
 
-    assert result["success"] is True
-    assert captured["vault_dir"] == vault
-    assert captured["staged_files"] == ["example_深度解读.md"]
+    assert result["success"] is False
+    assert result["blocked"] is True
+    assert result["reason"] == "missing_quality_stage_artifact"
 
 
-def test_load_latest_qualified_files_unions_batches(tmp_path):
+def test_load_quality_stage_artifact_returns_none_without_matching_manifest(tmp_path):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
@@ -734,7 +819,7 @@ def test_load_latest_qualified_files_unions_batches(tmp_path):
         encoding="utf-8",
     )
 
-    assert pipeline._load_latest_qualified_files() == [str(file_a.resolve()), str(file_b.resolve())]
+    assert pipeline._load_quality_stage_artifact() is None
 
 
 def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, monkeypatch):
@@ -935,6 +1020,25 @@ def test_step_absorb_rejects_non_positive_batch_size(tmp_path):
 
     assert result["success"] is False
     assert result["error"] == "invalid_batch_size (-1 <= 0)"
+
+
+def test_run_pipeline_absorb_requires_artifact_when_quality_result_missing():
+    from ovp_pipeline.workflow_handlers import run_pipeline_absorb
+
+    captured: dict[str, object] = {}
+
+    class FakePipeline:
+        def step_absorb(self, recent_days, dry_run, **kwargs):
+            captured["recent_days"] = recent_days
+            captured["dry_run"] = dry_run
+            captured.update(kwargs)
+            return {"success": False, "reason": "missing_quality_stage_artifact"}
+
+    result = run_pipeline_absorb(pipeline=FakePipeline(), results={})
+
+    assert result["success"] is False
+    assert captured["qualified_files"] is None
+    assert captured["require_quality_artifact"] is True
 
 
 def test_run_command_timeout_is_failure(tmp_path):
