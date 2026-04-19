@@ -641,6 +641,27 @@ def test_step_quality_writes_reusable_stage_artifact(tmp_path, monkeypatch):
     assert manifest["outputs"]["qualified_files"] == [str(qualified_file.resolve())]
 
 
+def test_step_quality_writes_empty_reusable_stage_artifact(tmp_path):
+    from ovp_pipeline.stage_artifacts import StageArtifactStore
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Empty quality artifact")
+
+    result = pipeline.step_quality(dry_run=False)
+
+    store = StageArtifactStore(vault / "60-Logs" / "stage-artifacts")
+    manifest = store.load("quality", result["quality_stage_fingerprint"])
+    assert result["success"] is True
+    assert result["quality_qualified_files"] == []
+    assert manifest is not None
+    assert manifest["outputs"]["qualified_files"] == []
+
+
 def test_step_absorb_checkouts_matching_quality_stage_artifact(tmp_path, monkeypatch):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
@@ -698,6 +719,35 @@ def test_step_absorb_checkouts_matching_quality_stage_artifact(tmp_path, monkeyp
     assert result["success"] is True
     assert result["input_artifact"]["stage"] == "quality"
     assert captured["staged_files"] == ["checkout_深度解读.md"]
+
+
+def test_step_absorb_skips_empty_quality_stage_artifact(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    pipeline.step_quality(dry_run=False)
+
+    def fake_run_absorb_workflow(*_args, **_kwargs):
+        raise AssertionError("empty quality artifact should skip absorb")
+
+    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
+
+    result = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=-1.0,
+        qualified_files=None,
+        require_quality_artifact=True,
+    )
+
+    assert result["success"] is True
+    assert result["skipped"] is True
+    assert result["reason"] == "no_qualified_files"
+    assert result["input_artifact"]["stage"] == "quality"
 
 
 def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
@@ -1024,6 +1074,33 @@ def test_load_quality_stage_artifact_returns_none_without_matching_manifest(tmp_
     (reports_dir / "quality-results-20260409-000002.json").write_text(
         __import__("json").dumps({"qualified_files": [str(file_a), str(file_b)]}, ensure_ascii=False),
         encoding="utf-8",
+    )
+
+    assert pipeline._load_quality_stage_artifact() is None
+
+
+def test_load_quality_stage_artifact_rejects_output_paths_outside_vault(tmp_path):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    external_file = tmp_path / "outside.md"
+    external_file.write_text("# outside\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    target_files, input_digest, algorithm_digest, fingerprint = pipeline._quality_stage_inputs()
+
+    pipeline._stage_artifact_store().write_completed(
+        stage="quality",
+        fingerprint=fingerprint,
+        input_digest=input_digest,
+        algorithm_digest=algorithm_digest,
+        run_id="previous-run",
+        pack_name=pipeline.workflow_pack_name,
+        workflow_profile=pipeline.workflow_profile_name,
+        inputs={"files": [str(path) for path in target_files], "file_count": len(target_files)},
+        outputs={"qualified_files": [str(external_file)]},
     )
 
     assert pipeline._load_quality_stage_artifact() is None

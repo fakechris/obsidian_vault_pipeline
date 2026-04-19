@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -423,6 +424,47 @@ Body
 
     assert results["completed"] == 1
     assert seen == ["2026-04-07_stuck.md"]
+
+
+def test_process_inbox_batch_progress_uses_selected_batch_total(temp_vault, monkeypatch):
+    raw_dir = temp_vault / "50-Inbox" / "01-Raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    for idx in range(3):
+        (raw_dir / f"2026-04-07_article_{idx}.md").write_text(
+            f"""---
+title: "Article {idx}"
+source: https://example.com/{idx}
+author: unknown
+date: 2026-04-07
+type: article
+tags: [sdk]
+---
+
+Body
+""",
+            encoding="utf-8",
+        )
+
+    logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+    txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    txn_id = txn.start("article-processing", "Batch progress")
+
+    monkeypatch.setattr(
+        processor,
+        "process_single_file",
+        lambda file_path, dry_run=False: {"status": "completed", "tokens_used": 0},
+    )
+
+    results = processor.process_inbox(dry_run=True, batch_size=1, txn_id=txn_id)
+
+    payload = json.loads((temp_vault / "60-Logs" / "transactions" / f"{txn_id}.json").read_text(encoding="utf-8"))
+    current = payload["run_ledger"]["current_step"]
+    assert results["total"] == 3
+    assert results["completed"] == 1
+    assert current["work_units_total"] == 1
+    assert current["work_units_done"] == 1
+    assert current["progress_summary"] == "1/1 articles processed"
 
 
 def test_linter_resolve_link_handles_dot_relative_target_without_crashing(temp_vault):

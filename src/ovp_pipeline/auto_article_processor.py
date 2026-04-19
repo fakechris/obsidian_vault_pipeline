@@ -177,7 +177,9 @@ class TransactionManager:
     def _write(self, txn_id: str, txn_data: dict[str, Any]) -> None:
         txn_file = self.txn_dir / f"{txn_id}.json"
         txn_file.parent.mkdir(parents=True, exist_ok=True)
-        txn_file.write_text(json.dumps(txn_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        temp_file = txn_file.with_suffix(txn_file.suffix + ".tmp")
+        temp_file.write_text(json.dumps(txn_data, indent=2, ensure_ascii=False), encoding="utf-8")
+        temp_file.replace(txn_file)
 
     def start(
         self,
@@ -1031,6 +1033,7 @@ class AutoArticleProcessor:
 
         if batch_size:
             files = files[:batch_size]
+        work_units_total = len(files)
 
         if txn_id:
             self.txn.step(
@@ -1039,10 +1042,10 @@ class AutoArticleProcessor:
                 "in_progress",
                 "Processing articles",
                 progress_mode="counted",
-                work_units_total=results["total"],
+                work_units_total=work_units_total,
                 work_units_done=0,
                 work_units_failed=0,
-                progress_summary=f"0/{results['total']} articles processed",
+                progress_summary=f"0/{work_units_total} articles processed",
             )
 
         for index, file_path in enumerate(files, start=1):
@@ -1055,11 +1058,11 @@ class AutoArticleProcessor:
                     txn_id,
                     step_name="process",
                     progress_mode="counted",
-                    work_units_total=results["total"],
+                    work_units_total=work_units_total,
                     work_units_done=index - 1,
                     work_units_failed=results["failed"],
                     current_item=working_path.name,
-                    progress_summary=f"{index - 1}/{results['total']} articles processed",
+                    progress_summary=f"{index - 1}/{work_units_total} articles processed",
                 )
 
             result = self.process_single_file(working_path, dry_run)
@@ -1084,11 +1087,11 @@ class AutoArticleProcessor:
                     txn_id,
                     step_name="process",
                     progress_mode="counted",
-                    work_units_total=results["total"],
+                    work_units_total=work_units_total,
                     work_units_done=index,
                     work_units_failed=results["failed"],
                     current_item=working_path.name,
-                    progress_summary=f"{index}/{results['total']} articles processed",
+                    progress_summary=f"{index}/{work_units_total} articles processed",
                 )
 
         return results

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -18,9 +19,11 @@ PIPELINE_PROCESS_MARKERS = (
     "ovp_pipeline.auto_paper_processor",
     "pinboard-processor.py",
     "/bin/ovp ",
+    "/bin/ovp-",
 )
 DAEMON_PROCESS_MARKERS = (
     "ovp_pipeline.autopilot.daemon",
+    "/bin/ovp-autopilot ",
 )
 OBSERVER_PROCESS_MARKERS = (
     "/bin/ovp-ui ",
@@ -84,13 +87,17 @@ def _args_summary(command: str) -> str:
     if not parts:
         return ""
     try:
-        ovp_index = next(index for index, part in enumerate(parts) if Path(part).name == "ovp")
+        ovp_index = next(
+            _index
+            for _index, part in enumerate(parts)
+            if Path(part).name == "ovp" or Path(part).name.startswith("ovp-")
+        )
+        args = parts[ovp_index + 1 :]
     except StopIteration:
-        return " ".join(parts[1:]) if len(parts) > 1 else ""
-    args = parts[ovp_index + 1 :]
+        args = parts[1:] if len(parts) > 1 else []
     filtered: list[str] = []
     skip_next = False
-    for index, part in enumerate(args):
+    for _index, part in enumerate(args):
         if skip_next:
             skip_next = False
             continue
@@ -107,14 +114,18 @@ def _args_summary(command: str) -> str:
 
 def detect_runtime_processes(vault_dir: Path | str, *, include_observers: bool = False) -> list[dict[str, Any]]:
     resolved_vault = Path(vault_dir).resolve()
+    ps_executable = shutil.which("ps")
+    if ps_executable is None:
+        return []
     try:
         result = subprocess.run(
-            ["ps", "-eo", "pid=,etime=,stat=,command="],
+            [ps_executable, "-eo", "pid=,etime=,stat=,command="],
             capture_output=True,
             text=True,
             check=True,
+            timeout=5,
         )
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return []
 
     vault_token = str(resolved_vault)

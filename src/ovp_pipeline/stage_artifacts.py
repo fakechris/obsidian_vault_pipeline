@@ -123,8 +123,12 @@ class StageArtifactStore:
             return None
         if payload.get("status") != "completed":
             return None
-        if validate_outputs_under is not None and not self._declared_outputs_exist(payload, Path(validate_outputs_under)):
-            return None
+        if validate_outputs_under is not None:
+            try:
+                if not self._declared_outputs_exist(payload, Path(validate_outputs_under)):
+                    return None
+            except OSError:
+                return None
         return payload
 
     def write_completed(

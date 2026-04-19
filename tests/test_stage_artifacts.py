@@ -42,7 +42,7 @@ def test_stage_artifact_store_writes_and_loads_manifest_by_fingerprint(tmp_path)
     assert loaded is not None
     assert loaded["fingerprint"] == "quality-demo"
     assert loaded["outputs"]["qualified_files"] == ["a.md"]
-    assert json.loads((tmp_path / "stage-artifacts" / "quality" / "quality-demo.json").read_text())["run_id"] == "run-1"
+    assert json.loads((tmp_path / "stage-artifacts" / "quality" / "quality-demo.json").read_text(encoding="utf-8"))["run_id"] == "run-1"
 
 
 def test_stage_artifact_store_rejects_manifest_with_missing_declared_outputs(tmp_path):
@@ -62,5 +62,31 @@ def test_stage_artifact_store_rejects_manifest_with_missing_declared_outputs(tmp
         inputs={"files": []},
         outputs={"paths": ["60-Logs/knowledge.db"]},
     )
+
+    assert store.load("knowledge_index", "knowledge-demo", validate_outputs_under=vault) is None
+
+
+def test_stage_artifact_store_treats_output_validation_io_errors_as_cache_miss(tmp_path, monkeypatch):
+    from ovp_pipeline.stage_artifacts import StageArtifactStore
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = StageArtifactStore(vault / "60-Logs" / "stage-artifacts")
+    store.write_completed(
+        stage="knowledge_index",
+        fingerprint="knowledge-demo",
+        input_digest="input-demo",
+        algorithm_digest="algorithm-demo",
+        run_id="run-1",
+        pack_name="research-tech",
+        workflow_profile="full",
+        inputs={"files": []},
+        outputs={"paths": ["60-Logs/knowledge.db"]},
+    )
+
+    def raise_oserror(_payload, _base_dir):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(store, "_declared_outputs_exist", raise_oserror)
 
     assert store.load("knowledge_index", "knowledge-demo", validate_outputs_under=vault) is None

@@ -71,6 +71,7 @@ def _step_summaries(steps: object) -> list[dict[str, Any]]:
                 "skipped": bool(step.get("skipped")),
                 "blocked_reason": str(step.get("blocked_reason") or ""),
                 "stage_fingerprint": str(step.get("stage_fingerprint") or ""),
+                "stage_artifact": str(step.get("stage_artifact") or ""),
             }
         )
     return summaries
@@ -102,6 +103,7 @@ def summarize_run(payload: dict[str, Any], *, now_iso: str | None = None) -> dic
     ledger = payload.get("run_ledger") if isinstance(payload.get("run_ledger"), dict) else {}
     current = ledger.get("current_step") if isinstance(ledger.get("current_step"), dict) else {}
     status = str(payload.get("status") or ledger.get("run_state") or "")
+    is_active = status in {"", "in_progress", "pending", "running"}
     started_at = (
         _parse_timestamp(ledger.get("started_at"))
         or _parse_timestamp(payload.get("start_time"))
@@ -110,8 +112,8 @@ def summarize_run(payload: dict[str, Any], *, now_iso: str | None = None) -> dic
     finished_at = (
         _parse_timestamp(payload.get("completed_at"))
         or _parse_timestamp(payload.get("failed_at"))
-        or (None if status == "in_progress" else _parse_timestamp(ledger.get("updated_at")))
-        or (None if status == "in_progress" else _parse_timestamp(payload.get("last_updated")))
+        or (None if is_active else _parse_timestamp(ledger.get("updated_at")))
+        or (None if is_active else _parse_timestamp(payload.get("last_updated")))
     )
     now = _parse_timestamp(now_iso) or datetime.now(timezone.utc)
     duration_end = finished_at or now
@@ -169,8 +171,20 @@ def summarize_run(payload: dict[str, Any], *, now_iso: str | None = None) -> dic
 def list_run_history(transactions_dir: Path, *, now_iso: str | None = None, limit: int = 10) -> dict[str, Any]:
     if not transactions_dir.exists():
         return {"total_count": 0, "items": []}
+    limit_count = max(limit, 0)
+    txn_files = list(transactions_dir.glob("*.json"))
+    total_count = len(txn_files)
+    if limit_count == 0:
+        return {"total_count": total_count, "items": []}
+
+    def file_sort_key(path: Path) -> tuple[int, str]:
+        try:
+            return (path.stat().st_mtime_ns, path.name)
+        except OSError:
+            return (0, path.name)
+
     items: list[dict[str, Any]] = []
-    for txn_file in transactions_dir.glob("*.json"):
+    for txn_file in sorted(txn_files, key=file_sort_key, reverse=True)[:limit_count]:
         try:
             payload = json.loads(txn_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -185,4 +199,4 @@ def list_run_history(transactions_dir: Path, *, now_iso: str | None = None, limi
         return (str(item.get("started_at") or ""), str(item.get("updated_at") or ""))
 
     items.sort(key=sort_key, reverse=True)
-    return {"total_count": len(items), "items": items[: max(limit, 0)]}
+    return {"total_count": total_count, "items": items}

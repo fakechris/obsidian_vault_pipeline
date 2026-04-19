@@ -934,12 +934,38 @@ class EnhancedPipeline:
 
     def _load_quality_stage_artifact(self) -> dict[str, Any] | None:
         _, _, _, fingerprint = self._quality_stage_inputs()
-        return self._stage_artifact_store().load("quality", fingerprint)
+        artifact = self._stage_artifact_store().load(
+            "quality",
+            fingerprint,
+            validate_outputs_under=self.vault_dir,
+        )
+        if artifact is None:
+            return None
+        artifact_files = artifact.get("outputs", {}).get("qualified_files")
+        if isinstance(artifact_files, list):
+            for raw_path in artifact_files:
+                if not isinstance(raw_path, str) or self._resolve_existing_vault_file(raw_path) is None:
+                    return None
+        return artifact
+
+    def _resolve_existing_vault_file(self, raw_path: str | Path) -> str | None:
+        path = Path(raw_path).resolve()
+        try:
+            path.relative_to(self.vault_dir.resolve())
+        except ValueError:
+            return None
+        if not path.exists():
+            return None
+        return str(path)
 
     def _write_quality_stage_artifact(self, result: dict[str, Any], files: list[Path], input_digest: str, algorithm_digest: str, fingerprint: str) -> None:
         if result.get("success") is not True:
             return
-        normalized_files = [str(Path(path).resolve()) for path in result.get("quality_qualified_files", [])]
+        normalized_files = [
+            normalized
+            for raw_path in result.get("quality_qualified_files", [])
+            if isinstance(raw_path, (str, Path)) and (normalized := self._resolve_existing_vault_file(raw_path)) is not None
+        ]
         manifest = self._stage_artifact_store().write_completed(
             stage="quality",
             fingerprint=fingerprint,
@@ -1724,7 +1750,7 @@ class EnhancedPipeline:
 
         if total_files == 0:
             print("  没有待质检的深度解读文件")
-            return {
+            result = {
                 "success": True,
                 "quality_checked": 0,
                 "quality_qualified": 0,
@@ -1733,6 +1759,15 @@ class EnhancedPipeline:
                 "quality_results_json": None,
                 "quality_score": 0.0,
             }
+            if not dry_run:
+                self._write_quality_stage_artifact(
+                    result,
+                    target_files,
+                    input_digest,
+                    algorithm_digest,
+                    fingerprint,
+                )
+            return result
 
         aggregated = {
             "success": True,
@@ -2074,25 +2109,33 @@ class EnhancedPipeline:
                         "error": "Quality stage artifact is missing outputs.qualified_files.",
                     }
                 normalized_files = [
-                    str(Path(path).resolve())
+                    normalized
                     for path in artifact_files
-                    if Path(path).exists()
+                    if isinstance(path, str) and (normalized := self._resolve_existing_vault_file(path)) is not None
                 ]
         else:
             normalized_files = [
-                str(Path(path).resolve())
+                normalized
                 for path in qualified_files
-                if Path(path).exists()
+                if isinstance(path, str) and (normalized := self._resolve_existing_vault_file(path)) is not None
             ]
-            if not normalized_files:
-                print("\n⚠️  No qualified deep-dive files to absorb; skipping absorb stage")
-                return {
-                    "success": True,
-                    "skipped": True,
-                    "reason": "no_qualified_files",
-                    "output": "No qualified files to absorb",
-                    "produced": 0,
+
+        if normalized_files is not None and not normalized_files:
+            print("\n⚠️  No qualified deep-dive files to absorb; skipping absorb stage")
+            result = {
+                "success": True,
+                "skipped": True,
+                "reason": "no_qualified_files",
+                "output": "No qualified files to absorb",
+                "produced": 0,
+            }
+            if input_artifact is not None:
+                result["input_artifact"] = {
+                    "stage": input_artifact.get("stage"),
+                    "fingerprint": input_artifact.get("fingerprint"),
+                    "run_id": input_artifact.get("run_id"),
                 }
+            return result
 
         # Quality gate: 仅在没有文件级质检结果时才阻断
         if normalized_files is None and 0 <= quality_score < 3.0:
