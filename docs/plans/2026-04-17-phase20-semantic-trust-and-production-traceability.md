@@ -161,9 +161,9 @@ Those all remain valid later. They are not the next highest-leverage move.
 ### Task 1: Harden Event Payload Semantics
 
 **Files:**
-- Modify: `src/openclaw_pipeline/truth_api.py`
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/truth_api.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_truth_api.py`
 - Test: `tests/test_ui_view_models.py`
 - Test: `tests/test_ui_server.py`
@@ -177,9 +177,9 @@ Those all remain valid later. They are not the next highest-leverage move.
 ### Task 2: Harden Contradiction Payload Semantics
 
 **Files:**
-- Modify: `src/openclaw_pipeline/truth_api.py`
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/truth_api.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_truth_api.py`
 - Test: `tests/test_ui_view_models.py`
 - Test: `tests/test_ui_server.py`
@@ -193,9 +193,9 @@ Those all remain valid later. They are not the next highest-leverage move.
 ### Task 3: Upgrade Production Traceability Contracts
 
 **Files:**
-- Modify: `src/openclaw_pipeline/truth_api.py`
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/truth_api.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Reference: existing note/object/topic/production builders
 - Test: `tests/test_truth_api.py`
 - Test: `tests/test_ui_view_models.py`
@@ -210,8 +210,8 @@ Those all remain valid later. They are not the next highest-leverage move.
 ### Task 4: Spend The Contracts On Product Surfaces
 
 **Files:**
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_ui_view_models.py`
 - Test: `tests/test_ui_server.py`
 

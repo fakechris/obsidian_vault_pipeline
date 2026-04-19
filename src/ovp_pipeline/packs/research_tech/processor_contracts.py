@@ -13,7 +13,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("pinboard_account",),
             outputs=("raw_note",),
             quality_hooks=(),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_pinboard",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_pinboard",
             description="Fetch pinboard bookmarks into raw inbox notes.",
         ),
         ProcessorContractSpec(
@@ -24,7 +24,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("raw_note",),
             outputs=("processed_source_note",),
             quality_hooks=(),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_pinboard_process",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_pinboard_process",
             description="Normalize fetched pinboard bookmarks into processed source notes.",
         ),
         ProcessorContractSpec(
@@ -35,7 +35,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("local_clipping",),
             outputs=("raw_note",),
             quality_hooks=(),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_clippings",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_clippings",
             description="Convert local clippings into raw inbox notes.",
         ),
         ProcessorContractSpec(
@@ -46,7 +46,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("source_note",),
             outputs=("deep_dive",),
             quality_hooks=("quality",),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_articles",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_articles",
             description="Interpret one or more processed source notes into deep dives.",
         ),
         ProcessorContractSpec(
@@ -57,7 +57,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("deep_dive",),
             outputs=("quality_report",),
             quality_hooks=(),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_quality",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_quality",
             description="Evaluate deep dive quality and emit review signals.",
         ),
         ProcessorContractSpec(
@@ -68,7 +68,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("vault_links",),
             outputs=("vault_links",),
             quality_hooks=(),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_fix_links",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_fix_links",
             description="Repair broken wiki links before downstream projection.",
         ),
         ProcessorContractSpec(
@@ -79,7 +79,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("deep_dive",),
             outputs=("evergreen_object", "relation", "compiled_summary"),
             quality_hooks=("quality",),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_absorb",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_absorb",
             description="Project qualified deep dives into evergreen truth artifacts.",
         ),
         ProcessorContractSpec(
@@ -90,7 +90,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("vault_state",),
             outputs=("registry_state",),
             quality_hooks=(),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_registry_sync",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_registry_sync",
             description="Sync the concept registry with current filesystem state.",
         ),
         ProcessorContractSpec(
@@ -101,7 +101,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("evergreen_object", "relation"),
             outputs=("atlas_page",),
             quality_hooks=(),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_moc",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_moc",
             description="Refresh atlas/MOC navigation from projected knowledge objects.",
         ),
         ProcessorContractSpec(
@@ -112,7 +112,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("deep_dive", "evergreen_object"),
             outputs=("deep_dive", "evergreen_object"),
             quality_hooks=("quality",),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_refine",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_refine",
             description="Run cleanup and refinement passes over interpreted notes.",
         ),
         ProcessorContractSpec(
@@ -123,7 +123,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("vault_state",),
             outputs=("truth_projection", "graph_projection"),
             quality_hooks=(),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_pipeline_knowledge_index",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_knowledge_index",
             description="Rebuild the derived truth and graph projections.",
         ),
         ProcessorContractSpec(
@@ -134,7 +134,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("autopilot_task", "source_note"),
             outputs=("deep_dive",),
             quality_hooks=("quality",),
-            entrypoint="openclaw_pipeline.workflow_handlers:run_autopilot_interpretation",
+            entrypoint="ovp_pipeline.workflow_handlers:run_autopilot_interpretation",
             description="Interpret one autopilot task into a deep dive.",
         ),
         ProcessorContractSpec(
@@ -145,7 +145,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("source_note",),
             outputs=("deep_dive",),
             quality_hooks=("quality",),
-            entrypoint="openclaw_pipeline.packs.research_tech.focused_actions:run_deep_dive_workflow_action",
+            entrypoint="ovp_pipeline.packs.research_tech.focused_actions:run_deep_dive_workflow_action",
             description="Focused single-note deep dive generation action.",
         ),
         ProcessorContractSpec(
@@ -156,7 +156,7 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             inputs=("deep_dive",),
             outputs=("evergreen_object", "relation", "compiled_summary"),
             quality_hooks=("quality",),
-            entrypoint="openclaw_pipeline.packs.research_tech.focused_actions:run_object_extraction_workflow_action",
+            entrypoint="ovp_pipeline.packs.research_tech.focused_actions:run_object_extraction_workflow_action",
             description="Focused single-note evergreen extraction action.",
         ),
     ]

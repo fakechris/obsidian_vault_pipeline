@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_resolve_processor_contract_by_stage_for_primary_pack():
-    from openclaw_pipeline.processor_contract_registry import resolve_processor_contract
+    from ovp_pipeline.processor_contract_registry import resolve_processor_contract
 
     spec = resolve_processor_contract(pack_name="research-tech", stage="articles")
 
@@ -12,7 +12,7 @@ def test_resolve_processor_contract_by_stage_for_primary_pack():
 
 
 def test_resolve_processor_contract_by_action_for_compatibility_pack():
-    from openclaw_pipeline.processor_contract_registry import resolve_processor_contract
+    from ovp_pipeline.processor_contract_registry import resolve_processor_contract
 
     spec = resolve_processor_contract(
         pack_name="default-knowledge",
@@ -24,7 +24,7 @@ def test_resolve_processor_contract_by_action_for_compatibility_pack():
 
 
 def test_list_effective_processor_contracts_falls_back_to_compatibility_base():
-    from openclaw_pipeline.processor_contract_registry import list_effective_processor_contracts
+    from ovp_pipeline.processor_contract_registry import list_effective_processor_contracts
 
     specs = list_effective_processor_contracts(pack_name="default-knowledge")
 
@@ -33,7 +33,7 @@ def test_list_effective_processor_contracts_falls_back_to_compatibility_base():
 
 
 def test_research_tech_processor_contracts_cover_all_declared_handler_keys():
-    from openclaw_pipeline.packs.loader import load_pack
+    from ovp_pipeline.packs.loader import load_pack
 
     pack = load_pack("research-tech")
     handler_keys = {

@@ -9,7 +9,7 @@ from http.client import HTTPConnection
 from pathlib import Path
 from urllib.parse import urlencode
 
-from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 
 
 def _fresh_timestamp(*, seconds_ago: int = 0) -> str:
@@ -67,7 +67,7 @@ Alpha does not support local-first execution.
     )
     rebuild_knowledge_index(temp_vault)
 def test_ui_server_root_serves_html_shell(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     transactions_dir = temp_vault / "60-Logs" / "transactions"
@@ -120,7 +120,7 @@ def test_ui_server_root_serves_html_shell(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert "OpenClaw Truth UI" in body
+    assert "OVP Truth UI" in body
     assert "Workflow Map" in body
     assert "Orient" in body
     assert "Inspect" in body
@@ -134,7 +134,7 @@ def test_ui_server_root_serves_html_shell(temp_vault):
 
 
 def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     transactions_dir = temp_vault / "60-Logs" / "transactions"
     transactions_dir.mkdir(parents=True, exist_ok=True)
@@ -190,7 +190,7 @@ def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
 
 
 def test_ui_server_runtime_endpoint_returns_structured_error(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
+    import ovp_pipeline.commands.ui_server as ui_server
 
     def fail_runtime_status(_vault_dir):
         raise OSError("ledger read failed")
@@ -217,7 +217,7 @@ def test_ui_server_runtime_endpoint_returns_structured_error(temp_vault, monkeyp
 
 
 def test_render_runtime_card_tolerates_malformed_stale_count():
-    from openclaw_pipeline.commands.ui_server import _render_runtime_card
+    from ovp_pipeline.commands.ui_server import _render_runtime_card
 
     html = _render_runtime_card({"active_run": None, "stale_count": "not-a-number"})
 
@@ -225,7 +225,7 @@ def test_render_runtime_card_tolerates_malformed_stale_count():
 
 
 def test_ui_server_root_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -251,7 +251,7 @@ def test_ui_server_root_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_objects_endpoint_returns_json(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -273,7 +273,7 @@ def test_ui_server_objects_endpoint_returns_json(temp_vault):
 
 
 def test_ui_server_search_endpoint_returns_objects_and_notes(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
@@ -314,7 +314,7 @@ Mentions [[alpha]].
 
 
 def test_ui_server_search_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
@@ -355,7 +355,7 @@ Mentions [[alpha]].
 
 
 def test_ui_server_search_page_preserves_pack_scope_in_shell_nav(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -380,7 +380,7 @@ def test_ui_server_search_page_preserves_pack_scope_in_shell_nav(temp_vault):
 
 
 def test_ui_server_object_endpoint_returns_detail_payload(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -403,7 +403,7 @@ def test_ui_server_object_endpoint_returns_detail_payload(temp_vault):
 
 
 def test_ui_server_object_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -426,7 +426,7 @@ def test_ui_server_object_endpoint_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -460,7 +460,7 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
 
 
 def test_ui_server_note_page_preserves_pack_scope_in_shell_nav(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -585,7 +585,7 @@ date: 2026-04-13
 
 
 def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -608,7 +608,7 @@ def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
 
 
 def test_ui_server_contradictions_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -630,7 +630,7 @@ def test_ui_server_contradictions_endpoint_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_contradictions_page_renders_assembly_contract(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -657,7 +657,7 @@ def test_ui_server_contradictions_page_renders_assembly_contract(temp_vault):
 
 
 def test_ui_server_signals_endpoint_returns_payload(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -693,7 +693,7 @@ Processed source note without downstream chain.
 
 
 def test_ui_server_signals_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -718,7 +718,7 @@ def test_ui_server_signals_endpoint_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -743,8 +743,8 @@ def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
 
 
 def test_ui_server_signals_page_renders_missing_surface_contract_error(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -789,8 +789,8 @@ def test_ui_server_signals_page_renders_missing_surface_contract_error(temp_vaul
 
 
 def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -838,8 +838,8 @@ def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vau
 
 
 def test_ui_server_research_api_route_rejects_non_research_pack(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -868,8 +868,8 @@ def test_ui_server_research_api_route_rejects_non_research_pack(temp_vault, monk
 
 
 def test_ui_server_research_html_route_rejects_non_research_pack(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -898,7 +898,7 @@ def test_ui_server_research_html_route_rejects_non_research_pack(temp_vault, mon
 
 
 def test_ui_server_summaries_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(
@@ -935,7 +935,7 @@ Thin note.
 
 
 def test_ui_server_events_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -957,7 +957,7 @@ def test_ui_server_events_endpoint_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -988,7 +988,7 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
 
 
 def test_ui_server_atlas_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1010,7 +1010,7 @@ def test_ui_server_atlas_endpoint_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_deep_dives_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1032,7 +1032,7 @@ def test_ui_server_deep_dives_endpoint_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_evolution_endpoint_returns_payload(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1055,8 +1055,8 @@ def test_ui_server_evolution_endpoint_returns_payload(temp_vault):
 
 
 def test_ui_server_evolution_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     captured: dict[str, str | None] = {}
 
@@ -1110,7 +1110,7 @@ def test_ui_server_evolution_endpoint_accepts_pack_scope(temp_vault, monkeypatch
 
 
 def test_ui_server_evolution_page_preserves_pack_scope_in_shell_nav(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1133,7 +1133,7 @@ def test_ui_server_evolution_page_preserves_pack_scope_in_shell_nav(temp_vault):
 
 
 def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1162,7 +1162,7 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
 
 
 def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1185,8 +1185,8 @@ def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
 
 
 def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.truth_api import list_graph_clusters
 
     _seed_truth_store(temp_vault)
     cluster = list_graph_clusters(temp_vault)[0]
@@ -1218,8 +1218,8 @@ def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
 
 
 def test_ui_server_cluster_detail_endpoint_includes_related_clusters(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.truth_api import list_graph_clusters
 
     _seed_truth_store(temp_vault)
     gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
@@ -1317,8 +1317,8 @@ date: 2026-04-13
 
 
 def test_ui_server_cluster_detail_page_shows_canonical_cluster_id(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.truth_api import list_graph_clusters
 
     _seed_truth_store(temp_vault)
     cluster = list_graph_clusters(temp_vault)[0]
@@ -1341,7 +1341,7 @@ def test_ui_server_cluster_detail_page_shows_canonical_cluster_id(temp_vault):
 
 
 def test_ui_server_clusters_endpoint_includes_related_cluster_summary(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
@@ -1438,8 +1438,8 @@ date: 2026-04-13
 
 
 def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import list_evolution_candidates
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.truth_api import list_evolution_candidates
 
     _seed_truth_store(temp_vault)
     candidate = next(item for item in list_evolution_candidates(temp_vault) if item["link_type"] == "challenges")
@@ -1475,8 +1475,8 @@ def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):
 
 
 def test_ui_server_briefing_endpoint_returns_payload(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import record_review_action
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.truth_api import record_review_action
 
     _seed_truth_store(temp_vault)
     record_review_action(
@@ -1520,7 +1520,7 @@ def test_ui_server_briefing_endpoint_returns_payload(temp_vault):
 
 
 def test_ui_server_briefing_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1547,7 +1547,7 @@ def test_ui_server_briefing_endpoint_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -1609,8 +1609,8 @@ Processed source note without downstream chain.
 
 
 def test_ui_server_briefing_page_renders_governance_resolver_metadata(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -1696,8 +1696,8 @@ def test_ui_server_briefing_page_renders_governance_resolver_metadata(temp_vault
 
 
 def test_ui_server_can_enqueue_signal_action_via_api(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import list_signals
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.truth_api import list_signals
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -1742,7 +1742,7 @@ Processed source note without downstream chain.
 
 
 def test_ui_server_production_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1764,7 +1764,7 @@ def test_ui_server_production_endpoint_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_production_page_preserves_pack_scope_in_note_links(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -1806,7 +1806,7 @@ Processed source note without downstream chain.
 
 
 def test_ui_server_contradictions_page_renders_detection_semantics(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1830,8 +1830,8 @@ def test_ui_server_contradictions_page_renders_detection_semantics(temp_vault):
 
 
 def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -1921,8 +1921,8 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
 
 
 def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2030,8 +2030,8 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
 
 
 def test_ui_server_actions_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     captured: dict[str, str | None] = {}
 
@@ -2110,8 +2110,8 @@ def test_ui_server_actions_endpoint_accepts_pack_scope(temp_vault, monkeypatch):
 
 
 def test_ui_server_briefing_endpoint_preserves_contract_metadata(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2232,8 +2232,8 @@ def test_ui_server_briefing_endpoint_preserves_contract_metadata(temp_vault, mon
 
 
 def test_ui_server_signals_endpoint_preserves_contract_metadata(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2316,8 +2316,8 @@ def test_ui_server_signals_endpoint_preserves_contract_metadata(temp_vault, monk
 
 
 def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2365,8 +2365,8 @@ def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, mo
 
 
 def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2408,8 +2408,8 @@ def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
 
 
 def test_ui_server_can_run_action_batch_via_api(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2450,8 +2450,8 @@ def test_ui_server_can_run_action_batch_via_api(temp_vault, monkeypatch):
 
 
 def test_ui_server_can_run_safe_action_batch_via_api(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2489,8 +2489,8 @@ def test_ui_server_can_run_safe_action_batch_via_api(temp_vault, monkeypatch):
 
 
 def test_ui_server_can_retry_action_via_api(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2527,8 +2527,8 @@ def test_ui_server_can_retry_action_via_api(temp_vault, monkeypatch):
 
 
 def test_ui_server_can_dismiss_action_via_api(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2565,9 +2565,9 @@ def test_ui_server_can_dismiss_action_via_api(temp_vault, monkeypatch):
 
 
 def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.runtime import VaultLayout
-    from openclaw_pipeline.truth_api import list_contradictions
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import list_contradictions
 
     _seed_truth_store(temp_vault)
     layout = VaultLayout.from_vault(temp_vault)
@@ -2615,8 +2615,8 @@ def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
 
 
 def test_ui_server_can_bulk_resolve_contradictions_via_api(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.runtime import VaultLayout
 
     _seed_truth_store(temp_vault)
     delta = temp_vault / "10-Knowledge" / "Evergreen" / "Delta.md"
@@ -2680,8 +2680,8 @@ Delta does not support local-first execution.
 
 
 def test_ui_server_can_rebuild_stale_summary_via_api(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(
@@ -2738,7 +2738,7 @@ Thin note.
 
 
 def test_ui_server_can_bulk_rebuild_summaries_via_api(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     for object_id, title in (("thin-note", "Thin Note"), ("fragile-note", "Fragile Note")):
         note = temp_vault / "10-Knowledge" / "Evergreen" / f"{title}.md"
@@ -2784,8 +2784,8 @@ Thin note.
 
 
 def test_ui_server_research_mutation_rejects_non_research_pack(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.commands.ui_server import create_server
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     monkeypatch.setattr(
         ui_server,
@@ -2826,7 +2826,7 @@ def test_ui_server_research_mutation_rejects_non_research_pack(temp_vault, monke
 
 
 def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -2855,7 +2855,7 @@ def test_ui_server_topic_and_events_endpoints_return_payloads(temp_vault):
 
 
 def test_ui_server_topic_endpoint_accepts_pack_scope(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -2878,7 +2878,7 @@ def test_ui_server_topic_endpoint_accepts_pack_scope(temp_vault):
 
 
 def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -2905,8 +2905,8 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
 
 
 def test_render_object_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    import openclaw_pipeline.ui.view_models as view_models
+    import ovp_pipeline.commands.ui_server as ui_server
+    import ovp_pipeline.ui.view_models as view_models
 
     _seed_truth_store(temp_vault)
     monkeypatch.setattr(view_models, "_supports_research_shell", lambda pack_name=None: False, raising=False)
@@ -2923,8 +2923,8 @@ def test_render_object_page_hides_research_affordances_when_pack_lacks_research_
 
 
 def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.ui.view_models import build_topic_overview_payload
 
     _seed_truth_store(temp_vault)
     payload = build_topic_overview_payload(temp_vault, "alpha")
@@ -2942,8 +2942,8 @@ def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_s
 
 
 def test_render_topic_page_includes_production_chain_section(temp_vault):
-    import openclaw_pipeline.commands.ui_server as ui_server
-    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.ui.view_models import build_topic_overview_payload
 
     _seed_truth_store(temp_vault)
     payload = build_topic_overview_payload(temp_vault, "alpha")
@@ -2955,7 +2955,7 @@ def test_render_topic_page_includes_production_chain_section(temp_vault):
 
 
 def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, monkeypatch):
-    from openclaw_pipeline.commands.ui_server import main
+    from ovp_pipeline.commands.ui_server import main
 
     calls = {}
 
@@ -2972,17 +2972,17 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
         calls["port"] = port
         return FakeServer()
 
-    monkeypatch.setattr("openclaw_pipeline.commands.ui_server.create_server", fake_create_server)
+    monkeypatch.setattr("ovp_pipeline.commands.ui_server.create_server", fake_create_server)
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server.build_objects_index_payload",
+        "ovp_pipeline.commands.ui_server.build_objects_index_payload",
         lambda vault_dir, *, limit, offset: {"items": []},
     )
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server.ensure_signal_ledger_synced",
+        "ovp_pipeline.commands.ui_server.ensure_signal_ledger_synced",
         lambda vault_dir: {"signal_count": 0, "type_counts": {}},
     )
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server._start_ui_prewarm",
+        "ovp_pipeline.commands.ui_server._start_ui_prewarm",
         lambda vault_dir: calls.setdefault("prewarm_vault_dir", str(vault_dir)),
     )
 
@@ -3001,7 +3001,7 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
 
 
 def test_ui_server_main_can_spawn_detached_action_worker_when_enabled(temp_vault, capsys, monkeypatch):
-    from openclaw_pipeline.commands.ui_server import main
+    from ovp_pipeline.commands.ui_server import main
 
     calls = {}
 
@@ -3018,21 +3018,21 @@ def test_ui_server_main_can_spawn_detached_action_worker_when_enabled(temp_vault
         calls["port"] = port
         return FakeServer()
 
-    monkeypatch.setattr("openclaw_pipeline.commands.ui_server.create_server", fake_create_server)
+    monkeypatch.setattr("ovp_pipeline.commands.ui_server.create_server", fake_create_server)
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server.build_objects_index_payload",
+        "ovp_pipeline.commands.ui_server.build_objects_index_payload",
         lambda vault_dir, *, limit, offset: {"items": []},
     )
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server.ensure_signal_ledger_synced",
+        "ovp_pipeline.commands.ui_server.ensure_signal_ledger_synced",
         lambda vault_dir: {"signal_count": 0, "type_counts": {}},
     )
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server._start_ui_prewarm",
+        "ovp_pipeline.commands.ui_server._start_ui_prewarm",
         lambda vault_dir: None,
     )
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server.subprocess.Popen",
+        "ovp_pipeline.commands.ui_server.subprocess.Popen",
         lambda cmd, **kwargs: calls.setdefault("worker_process", {"cmd": cmd, "kwargs": kwargs}),
     )
 
@@ -3051,13 +3051,13 @@ def test_ui_server_main_can_spawn_detached_action_worker_when_enabled(temp_vault
 
     assert exit_code == 0
     assert payload == {"host": "127.0.0.1", "port": 9999, "vault_dir": str(temp_vault)}
-    assert calls["worker_process"]["cmd"][1:4] == ["-m", "openclaw_pipeline.commands.run_actions", "--vault-dir"]
+    assert calls["worker_process"]["cmd"][1:4] == ["-m", "ovp_pipeline.commands.run_actions", "--vault-dir"]
     assert "--loop" in calls["worker_process"]["cmd"]
     assert calls["worker_process"]["kwargs"]["start_new_session"] is True
 
 
 def test_ui_server_main_exits_nonzero_when_preflight_fails(temp_vault, capsys, monkeypatch):
-    from openclaw_pipeline.commands.ui_server import main
+    from ovp_pipeline.commands.ui_server import main
 
     class FakeServer:
         def serve_forever(self):
@@ -3067,14 +3067,14 @@ def test_ui_server_main_exits_nonzero_when_preflight_fails(temp_vault, capsys, m
             return None
 
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.ui_server.create_server",
+        "ovp_pipeline.commands.ui_server.create_server",
         lambda vault_dir, *, host, port: FakeServer(),
     )
 
     def boom(vault_dir, *, limit, offset):
         raise ValueError("broken knowledge db")
 
-    monkeypatch.setattr("openclaw_pipeline.commands.ui_server.build_objects_index_payload", boom)
+    monkeypatch.setattr("ovp_pipeline.commands.ui_server.build_objects_index_payload", boom)
 
     exit_code = main(["--vault-dir", str(temp_vault)])
     captured = capsys.readouterr()
@@ -3085,7 +3085,7 @@ def test_ui_server_main_exits_nonzero_when_preflight_fails(temp_vault, capsys, m
 
 
 def test_ui_server_module_compiles_on_python311():
-    module_path = Path("src/openclaw_pipeline/commands/ui_server.py")
+    module_path = Path("src/ovp_pipeline/commands/ui_server.py")
     result = subprocess.run(
         ["python3.11", "-m", "py_compile", str(module_path)],
         capture_output=True,

@@ -30,7 +30,7 @@ The smallest defensible Phase 4 slice is:
 
 ### In Scope
 
-- new `src/openclaw_pipeline/packs/research_tech/` package
+- new `src/ovp_pipeline/packs/research_tech/` package
 - pack entrypoint registration
 - loader tests for `research-tech`
 - compatibility behavior for `default-knowledge`

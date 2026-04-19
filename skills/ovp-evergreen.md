@@ -1,4 +1,4 @@
-# OpenClaw Evergreen Skill
+# OVP Evergreen Skill
 
 Create and maintain evergreen (atomic, permanent) notes in the vault.
 

@@ -4,14 +4,14 @@ import pytest
 
 
 def test_base_domain_pack_rejects_invalid_role():
-    from openclaw_pipeline.packs.base import BaseDomainPack
+    from ovp_pipeline.packs.base import BaseDomainPack
 
     with pytest.raises(ValueError, match="Invalid pack role"):
         BaseDomainPack(name="broken", version="0.1.0", api_version=1, role="weird")
 
 
 def test_base_domain_pack_rejects_incompatible_compatibility_base():
-    from openclaw_pipeline.packs.base import BaseDomainPack
+    from ovp_pipeline.packs.base import BaseDomainPack
 
     with pytest.raises(ValueError, match="compatibility_base"):
         BaseDomainPack(
@@ -24,7 +24,7 @@ def test_base_domain_pack_rejects_incompatible_compatibility_base():
 
 
 def test_base_domain_pack_rejects_stage_handler_from_other_pack():
-    from openclaw_pipeline.packs.base import BaseDomainPack, StageHandlerSpec
+    from ovp_pipeline.packs.base import BaseDomainPack, StageHandlerSpec
 
     with pytest.raises(ValueError, match="declares stage handler"):
         BaseDomainPack(
@@ -45,7 +45,7 @@ def test_base_domain_pack_rejects_stage_handler_from_other_pack():
 
 
 def test_base_domain_pack_rejects_processor_contract_from_other_pack():
-    from openclaw_pipeline.packs.base import BaseDomainPack, ProcessorContractSpec
+    from ovp_pipeline.packs.base import BaseDomainPack, ProcessorContractSpec
 
     with pytest.raises(ValueError, match="declares processor contract"):
         BaseDomainPack(
@@ -67,8 +67,8 @@ def test_base_domain_pack_rejects_processor_contract_from_other_pack():
 
 
 def test_base_domain_pack_rejects_extraction_profile_from_other_pack():
-    from openclaw_pipeline.extraction.specs import ExtractionFieldSpec, ExtractionProfileSpec
-    from openclaw_pipeline.packs.base import BaseDomainPack
+    from ovp_pipeline.extraction.specs import ExtractionFieldSpec, ExtractionProfileSpec
+    from ovp_pipeline.packs.base import BaseDomainPack
 
     with pytest.raises(ValueError, match="declares extraction profile"):
         BaseDomainPack(
@@ -88,8 +88,8 @@ def test_base_domain_pack_rejects_extraction_profile_from_other_pack():
 
 
 def test_base_domain_pack_rejects_operation_profile_from_other_pack():
-    from openclaw_pipeline.operations.specs import OperationProfileSpec
-    from openclaw_pipeline.packs.base import BaseDomainPack
+    from ovp_pipeline.operations.specs import OperationProfileSpec
+    from ovp_pipeline.packs.base import BaseDomainPack
 
     with pytest.raises(ValueError, match="declares operation profile"):
         BaseDomainPack(
@@ -107,8 +107,8 @@ def test_base_domain_pack_rejects_operation_profile_from_other_pack():
 
 
 def test_base_domain_pack_rejects_wiki_view_from_other_pack():
-    from openclaw_pipeline.packs.base import BaseDomainPack
-    from openclaw_pipeline.wiki_views.specs import WikiViewSpec
+    from ovp_pipeline.packs.base import BaseDomainPack
+    from ovp_pipeline.wiki_views.specs import WikiViewSpec
 
     with pytest.raises(ValueError, match="declares wiki view"):
         BaseDomainPack(
@@ -127,8 +127,8 @@ def test_base_domain_pack_rejects_wiki_view_from_other_pack():
 
 
 def test_load_default_pack_returns_pack_contract():
-    from openclaw_pipeline.packs.base import BaseDomainPack
-    from openclaw_pipeline.packs.loader import load_default_pack
+    from ovp_pipeline.packs.base import BaseDomainPack
+    from ovp_pipeline.packs.loader import load_default_pack
 
     pack = load_default_pack()
 
@@ -142,7 +142,7 @@ def test_load_default_pack_returns_pack_contract():
 
 
 def test_load_pack_by_name_returns_default_knowledge():
-    from openclaw_pipeline.packs.loader import load_pack
+    from ovp_pipeline.packs.loader import load_pack
 
     pack = load_pack("default-knowledge")
 
@@ -150,7 +150,7 @@ def test_load_pack_by_name_returns_default_knowledge():
 
 
 def test_load_pack_by_name_returns_research_tech():
-    from openclaw_pipeline.packs.loader import load_pack
+    from ovp_pipeline.packs.loader import load_pack
 
     pack = load_pack("research-tech")
 
@@ -158,7 +158,7 @@ def test_load_pack_by_name_returns_research_tech():
 
 
 def test_load_primary_pack_returns_research_tech():
-    from openclaw_pipeline.packs.loader import load_primary_pack
+    from ovp_pipeline.packs.loader import load_primary_pack
 
     pack = load_primary_pack()
 
@@ -168,7 +168,7 @@ def test_load_primary_pack_returns_research_tech():
 
 
 def test_list_builtin_packs_reports_roles():
-    from openclaw_pipeline.packs.loader import list_builtin_packs
+    from ovp_pipeline.packs.loader import list_builtin_packs
 
     packs = {pack.name: pack for pack in list_builtin_packs()}
 
@@ -178,22 +178,22 @@ def test_list_builtin_packs_reports_roles():
 
 
 def test_load_pack_rejects_unknown_pack():
-    from openclaw_pipeline.packs.loader import load_pack
+    from ovp_pipeline.packs.loader import load_pack
 
     with pytest.raises(ValueError):
         load_pack("unknown-pack")
 
 
 def test_load_builtin_pack_rejects_unknown_pack_with_clear_error():
-    from openclaw_pipeline.packs.loader import load_builtin_pack
+    from ovp_pipeline.packs.loader import load_builtin_pack
 
     with pytest.raises(ValueError, match="Unknown builtin pack"):
         load_builtin_pack("unknown-pack")
 
 
 def test_resolve_workflow_profile_rejects_profile_without_execution_contract(monkeypatch):
-    from openclaw_pipeline.packs.base import BaseDomainPack, WorkflowProfile
-    import openclaw_pipeline.packs.loader as loader
+    from ovp_pipeline.packs.base import BaseDomainPack, WorkflowProfile
+    import ovp_pipeline.packs.loader as loader
 
     broken_pack = BaseDomainPack(
         name="broken-pack",

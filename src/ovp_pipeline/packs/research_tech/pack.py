@@ -33,7 +33,7 @@ def get_pack() -> BaseDomainPack:
         _truth_projection=TruthProjectionSpec(
             name="research-tech-default",
             pack="research-tech",
-            entrypoint="openclaw_pipeline.packs.research_tech.truth_projection:build_truth_projection",
+            entrypoint="ovp_pipeline.packs.research_tech.truth_projection:build_truth_projection",
             description="Default research-tech truth projection",
         ),
         _observation_surfaces=build_observation_surfaces(),

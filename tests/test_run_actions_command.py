@@ -4,10 +4,10 @@ import json
 
 
 def test_run_actions_main_runs_once_and_prints_payload(temp_vault, capsys, monkeypatch):
-    from openclaw_pipeline.commands.run_actions import main
+    from ovp_pipeline.commands.run_actions import main
 
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.run_actions.run_next_action_queue_item",
+        "ovp_pipeline.commands.run_actions.run_next_action_queue_item",
         lambda vault_dir, *, safe_only=False: {
             "ran": True,
             "safe_only": safe_only,
@@ -24,7 +24,7 @@ def test_run_actions_main_runs_once_and_prints_payload(temp_vault, capsys, monke
 
 
 def test_run_actions_main_can_loop_for_multiple_iterations(temp_vault, capsys, monkeypatch):
-    from openclaw_pipeline.commands.run_actions import main
+    from ovp_pipeline.commands.run_actions import main
 
     calls = {"count": 0}
 
@@ -33,7 +33,7 @@ def test_run_actions_main_can_loop_for_multiple_iterations(temp_vault, capsys, m
         return {"ran": False, "safe_only": safe_only, "action": None, "iteration": calls["count"]}
 
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.run_actions.run_next_action_queue_item",
+        "ovp_pipeline.commands.run_actions.run_next_action_queue_item",
         fake_run_next,
     )
 

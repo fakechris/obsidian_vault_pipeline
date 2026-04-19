@@ -9,11 +9,11 @@ Handles the candidate lifecycle:
 - reject: Removes from registry
 
 Usage:
-    python -m openclaw_pipeline.promote_candidates --list
-    python -m openclaw_pipeline.promote_candidates --review
-    python -m openclaw_pipeline.promote_candidates --promote <slug>
-    python -m openclaw_pipeline.promote_candidates --merge <slug> --target <target_slug>
-    python -m openclaw_pipeline.promote_candidates --reject <slug>
+    python -m ovp_pipeline.promote_candidates --list
+    python -m ovp_pipeline.promote_candidates --review
+    python -m ovp_pipeline.promote_candidates --promote <slug>
+    python -m ovp_pipeline.promote_candidates --merge <slug> --target <target_slug>
+    python -m ovp_pipeline.promote_candidates --reject <slug>
 """
 
 from __future__ import annotations

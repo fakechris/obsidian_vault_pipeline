@@ -4,8 +4,8 @@ import json
 
 
 def test_discover_related_defaults_to_knowledge_engine(temp_vault):
-    from openclaw_pipeline.discovery import discover_related
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.discovery import discover_related
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(
@@ -40,7 +40,7 @@ The harness coordinates architecture, execution, and tools.
 
 
 def test_discover_related_qmd_engine_is_explicit_and_typed(temp_vault, monkeypatch):
-    from openclaw_pipeline import discovery
+    from ovp_pipeline import discovery
 
     def fake_qmd(vault_dir, query, limit):  # noqa: ARG001
         return [
@@ -75,7 +75,7 @@ def test_discover_with_knowledge_deduplicates_by_slug_and_skips_semantic_when_le
     temp_vault,
     monkeypatch,
 ):
-    from openclaw_pipeline import discovery
+    from ovp_pipeline import discovery
 
     monkeypatch.setattr(
         discovery,
@@ -90,10 +90,10 @@ def test_discover_with_knowledge_deduplicates_by_slug_and_skips_semantic_when_le
         raise AssertionError("semantic search should not run when lexical already satisfies the limit")
 
     monkeypatch.setattr(
-        "openclaw_pipeline.knowledge_index.get_knowledge_page",
+        "ovp_pipeline.knowledge_index.get_knowledge_page",
         lambda vault_dir, slug: {"title": slug.replace("-", " ").title(), "path": f"{slug}.md", "body": slug},
     )
-    monkeypatch.setattr("openclaw_pipeline.knowledge_index.query_knowledge_index", fail_semantic)
+    monkeypatch.setattr("ovp_pipeline.knowledge_index.query_knowledge_index", fail_semantic)
 
     results = discovery._discover_with_knowledge(temp_vault, "agent runtime", limit=2)
 

@@ -1283,7 +1283,7 @@ def _render_dashboard(payload: dict) -> str:
     dashboard_body = "".join(
         [
             "<section class='hero'>",
-            "<h1>OpenClaw Truth UI</h1>",
+            "<h1>OVP Truth UI</h1>",
             "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
             f"<div class='link-row'><a href='{escape(_shell_href('/briefing', requested_pack))}'>Orientation Brief</a></div>",
@@ -1311,7 +1311,7 @@ def _render_dashboard(payload: dict) -> str:
         ]
     )
     return _layout(
-        "OpenClaw Truth UI",
+        "OVP Truth UI",
         dashboard_body,
         requested_pack=requested_pack,
     )
@@ -2685,7 +2685,7 @@ def _render_actions_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Action Queue</h1>",
-                "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m openclaw_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>",
+                "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m ovp_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>",
                 "<form method='post' action='/actions/run-next' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -3653,7 +3653,7 @@ def _spawn_action_worker_process(vault_dir: Path | str, *, interval_seconds: flo
         [
             sys.executable,
             "-m",
-            "openclaw_pipeline.commands.run_actions",
+            "ovp_pipeline.commands.run_actions",
             "--vault-dir",
             str(resolve_vault_dir(vault_dir)),
             "--loop",

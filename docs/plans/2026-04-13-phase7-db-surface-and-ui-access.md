@@ -92,8 +92,8 @@ Phase 7 is complete when:
 
 **Files:**
 - Create: `tests/test_truth_api.py`
-- Reference: `src/openclaw_pipeline/truth_store.py`
-- Reference: `src/openclaw_pipeline/knowledge_index.py`
+- Reference: `src/ovp_pipeline/truth_store.py`
+- Reference: `src/ovp_pipeline/knowledge_index.py`
 
 **Step 1: Write the failing tests**
 
@@ -119,7 +119,7 @@ Expected:
 
 Create a new module:
 
-- `src/openclaw_pipeline/truth_api.py`
+- `src/ovp_pipeline/truth_api.py`
 
 Add pure read helpers, e.g.:
 
@@ -142,14 +142,14 @@ Expected:
 **Step 5: Commit**
 
 ```bash
-git add tests/test_truth_api.py src/openclaw_pipeline/truth_api.py
+git add tests/test_truth_api.py src/ovp_pipeline/truth_api.py
 git commit -m "feat: add truth api read surface"
 ```
 
 ## Task 2: Add CLI access to DB truth surface
 
 **Files:**
-- Create: `src/openclaw_pipeline/commands/truth_api.py`
+- Create: `src/ovp_pipeline/commands/truth_api.py`
 - Modify: `pyproject.toml`
 - Test: `tests/test_truth_api_command.py`
 
@@ -196,14 +196,14 @@ PYTHONPATH=src python3.13 -m pytest -q tests/test_truth_api_command.py
 **Step 5: Commit**
 
 ```bash
-git add tests/test_truth_api_command.py src/openclaw_pipeline/commands/truth_api.py pyproject.toml
+git add tests/test_truth_api_command.py src/ovp_pipeline/commands/truth_api.py pyproject.toml
 git commit -m "feat: add truth api cli"
 ```
 
 ## Task 3: Build UI view-model payloads
 
 **Files:**
-- Create: `src/openclaw_pipeline/ui/view_models.py`
+- Create: `src/ovp_pipeline/ui/view_models.py`
 - Test: `tests/test_ui_view_models.py`
 
 **Step 1: Write the failing test**
@@ -246,14 +246,14 @@ PYTHONPATH=src python3.13 -m pytest -q tests/test_ui_view_models.py
 **Step 5: Commit**
 
 ```bash
-git add tests/test_ui_view_models.py src/openclaw_pipeline/ui/view_models.py
+git add tests/test_ui_view_models.py src/ovp_pipeline/ui/view_models.py
 git commit -m "feat: add db-backed ui view models"
 ```
 
 ## Task 4: Add minimal local UI server
 
 **Files:**
-- Create: `src/openclaw_pipeline/commands/ui_server.py`
+- Create: `src/ovp_pipeline/commands/ui_server.py`
 - Create: `tests/test_ui_server.py`
 
 **Step 1: Write the failing test**
@@ -298,7 +298,7 @@ PYTHONPATH=src python3.13 -m pytest -q tests/test_ui_server.py
 **Step 5: Commit**
 
 ```bash
-git add tests/test_ui_server.py src/openclaw_pipeline/commands/ui_server.py
+git add tests/test_ui_server.py src/ovp_pipeline/commands/ui_server.py
 git commit -m "feat: add local db ui server"
 ```
 

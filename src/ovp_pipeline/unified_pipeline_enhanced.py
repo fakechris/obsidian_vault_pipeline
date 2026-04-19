@@ -1159,19 +1159,19 @@ class EnhancedPipeline:
                 # 构建命令
                 if url_type == "github":
                     cmd = [
-                        sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
+                        sys.executable, "-m", "ovp_pipeline.auto_github_processor",
                         "--process-single", str(f),
                         "--vault-dir", str(self.vault_dir),
                     ]
                 elif url_type == "paper":
                     cmd = [
-                        sys.executable, "-m", "openclaw_pipeline.auto_paper_processor",
+                        sys.executable, "-m", "ovp_pipeline.auto_paper_processor",
                         "--process-single", str(f),
                         "--vault-dir", str(self.vault_dir),
                     ]
                 elif url_type in ("article", "website"):
                     cmd = [
-                        sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+                        sys.executable, "-m", "ovp_pipeline.auto_article_processor",
                         "--process-single", str(f),
                         "--vault-dir", str(self.vault_dir),
                     ]
@@ -1297,7 +1297,7 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.clippings_processor",
+            sys.executable, "-m", "ovp_pipeline.clippings_processor",
             "--vault-dir", str(self.vault_dir)
         ]
         if dry_run:
@@ -1321,7 +1321,7 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+            sys.executable, "-m", "ovp_pipeline.auto_article_processor",
             "--vault-dir", str(self.vault_dir),
             "--process-inbox"
         ]
@@ -1386,7 +1386,7 @@ class EnhancedPipeline:
         for start_index in range(0, total_files, effective_batch_size):
             current_batch = min(effective_batch_size, total_files - start_index)
             cmd = [
-                sys.executable, "-m", "openclaw_pipeline.batch_quality_checker",
+                sys.executable, "-m", "ovp_pipeline.batch_quality_checker",
                 "--all",
                 "--vault-dir", str(self.vault_dir),
                 "--start-index", str(start_index),
@@ -1445,7 +1445,7 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.migrate_broken_links",
+            sys.executable, "-m", "ovp_pipeline.commands.migrate_broken_links",
             "--write" if not dry_run else "--dry-run",
             "--vault-dir", str(self.vault_dir),
         ]
@@ -1466,7 +1466,7 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.rebuild_registry",
+            sys.executable, "-m", "ovp_pipeline.commands.rebuild_registry",
             "--write" if not dry_run else "--dry-run",
             "--vault-dir", str(self.vault_dir),
         ]
@@ -1779,7 +1779,7 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.auto_moc_updater",
+            sys.executable, "-m", "ovp_pipeline.auto_moc_updater",
             "--vault-dir", str(self.vault_dir),
             "--scan"
         ]
@@ -1802,13 +1802,13 @@ class EnhancedPipeline:
         print("="*60)
 
         cleanup_cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.cleanup",
+            sys.executable, "-m", "ovp_pipeline.commands.cleanup",
             "--vault-dir", str(self.vault_dir),
             "--all",
             "--json",
         ]
         breakdown_cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.breakdown",
+            sys.executable, "-m", "ovp_pipeline.commands.breakdown",
             "--vault-dir", str(self.vault_dir),
             "--all",
             "--json",
@@ -1841,7 +1841,7 @@ class EnhancedPipeline:
         print("="*60)
 
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.knowledge_index",
+            sys.executable, "-m", "ovp_pipeline.commands.knowledge_index",
             "--vault-dir", str(self.vault_dir),
             "--pack", self.workflow_pack_name,
             "--json",

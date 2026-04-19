@@ -26,7 +26,7 @@ def test_migrate_pack_provenance_dry_run_reports_log_only_changes(temp_vault, sa
         encoding="utf-8",
     )
 
-    from openclaw_pipeline.migrate_pack_provenance import migrate_pack_provenance
+    from ovp_pipeline.migrate_pack_provenance import migrate_pack_provenance
 
     result = migrate_pack_provenance(temp_vault, from_pack="default-knowledge", write=False)
 
@@ -67,7 +67,7 @@ def test_migrate_pack_provenance_write_updates_logs_without_touching_notes(temp_
     evergreen_path = temp_vault / "10-Knowledge" / "Evergreen" / "DCF-Valuation.md"
     original_evergreen = evergreen_path.read_text(encoding="utf-8")
 
-    from openclaw_pipeline.migrate_pack_provenance import migrate_pack_provenance
+    from ovp_pipeline.migrate_pack_provenance import migrate_pack_provenance
 
     result = migrate_pack_provenance(temp_vault, from_pack="default-knowledge", write=True)
 
@@ -87,7 +87,7 @@ def test_migrate_pack_provenance_command_emits_json(temp_vault, capsys):
         encoding="utf-8",
     )
 
-    from openclaw_pipeline.commands.migrate_pack_provenance import main
+    from ovp_pipeline.commands.migrate_pack_provenance import main
 
     exit_code = main(["--vault-dir", str(temp_vault), "--json"])
     payload = json.loads(capsys.readouterr().out)
@@ -106,7 +106,7 @@ def test_migrate_pack_provenance_replaces_only_token_bound_occurrences(temp_vaul
         encoding="utf-8",
     )
 
-    from openclaw_pipeline.migrate_pack_provenance import migrate_pack_provenance
+    from ovp_pipeline.migrate_pack_provenance import migrate_pack_provenance
 
     result = migrate_pack_provenance(temp_vault, from_pack="default-knowledge", write=True)
     content = sample.read_text(encoding="utf-8")
@@ -132,7 +132,7 @@ def test_migrate_pack_provenance_skips_unreadable_files(temp_vault, monkeypatch)
 
     monkeypatch.setattr(Path, "read_text", patched_read_text)
 
-    from openclaw_pipeline.migrate_pack_provenance import migrate_pack_provenance
+    from ovp_pipeline.migrate_pack_provenance import migrate_pack_provenance
 
     result = migrate_pack_provenance(temp_vault, from_pack="default-knowledge", write=True)
 

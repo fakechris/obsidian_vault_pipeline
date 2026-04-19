@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from openclaw_pipeline.truth_store import _detect_contradictions
+from ovp_pipeline.truth_store import _detect_contradictions
 
 
 def test_detect_contradictions_ignores_not_only_phrases():

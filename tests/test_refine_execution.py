@@ -11,7 +11,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def test_cleanup_write_restructures_diary_sections(temp_vault, capsys):
-    from openclaw_pipeline.commands.cleanup import main
+    from ovp_pipeline.commands.cleanup import main
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "messy-note.md"
     evergreen.write_text(
@@ -67,7 +67,7 @@ Another event happened.
 
 
 def test_breakdown_write_creates_child_notes_and_updates_parent(temp_vault, capsys):
-    from openclaw_pipeline.commands.breakdown import main
+    from ovp_pipeline.commands.breakdown import main
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "agent-harness.md"
     evergreen.write_text(

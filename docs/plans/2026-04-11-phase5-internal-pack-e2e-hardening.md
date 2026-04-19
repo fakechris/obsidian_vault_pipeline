@@ -119,7 +119,7 @@ PYTHONPATH=src python3.13 -m pytest -q --ignore=tests/test_autopilot_contracts.p
 Compile:
 
 ```bash
-python3.13 -m compileall src/openclaw_pipeline
+python3.13 -m compileall src/ovp_pipeline
 ```
 
 Autopilot environment recovery:

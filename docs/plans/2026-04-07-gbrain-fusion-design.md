@@ -2,7 +2,7 @@
 
 ## Goal
 
-Adopt the strongest parts of the GBrain design without breaking the current OpenClaw pipeline's source-of-truth guarantees.
+Adopt the strongest parts of the GBrain design without breaking the current OVP pipeline's source-of-truth guarantees.
 
 This design answers five concrete questions:
 
@@ -85,7 +85,7 @@ Not as:
 
 Borrow GBrain's `raw_data` idea almost directly.
 
-Current pain in OpenClaw:
+Current pain in OVP:
 
 - sidecars and logs are split across filesystem patterns
 - enrichment and ingest metadata are hard to query uniformly
@@ -512,7 +512,7 @@ Adopt GBrain as a **data-model influence**, not as a full product transplant.
 
 The right merge is:
 
-- OpenClaw keeps the workflow and canonical file model
+- OVP keeps the workflow and canonical file model
 - GBrain contributes the local DB indexing model
 - MCP becomes the access surface for the derived knowledge layer
 

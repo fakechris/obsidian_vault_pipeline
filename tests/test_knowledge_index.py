@@ -8,8 +8,8 @@ import pytest
 
 
 def test_rebuild_knowledge_index_creates_database_and_core_tables(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Linked.md"
@@ -62,8 +62,8 @@ date: 2026-04-07
 
 
 def test_rebuild_knowledge_index_uses_canonical_note_id_and_resolved_links(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Wrong-File-Name.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Also-Wrong.md"
@@ -115,8 +115,8 @@ aliases: [Linked Note]
 
 
 def test_rebuild_knowledge_index_indexes_atlas_and_deep_dive_pages_for_bridge_queries(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     evergreen.write_text(
@@ -191,8 +191,8 @@ date: 2026-04-07
 
 
 def test_rebuild_knowledge_index_dedupes_duplicate_slugs_across_surfaces(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     evergreen.write_text(
@@ -234,8 +234,8 @@ date: 2026-04-07
 
 
 def test_rebuild_knowledge_index_scopes_truth_rows_and_graph_seeds_to_selected_pack(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -287,8 +287,8 @@ date: 2026-04-15
 
 
 def test_rebuild_knowledge_index_preserves_other_materialized_pack_projections(temp_vault):
-    from openclaw_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -350,8 +350,8 @@ date: 2026-04-15
 
 
 def test_rebuild_knowledge_index_makes_contradiction_ids_distinct_per_pack(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     negative = temp_vault / "10-Knowledge" / "Evergreen" / "Negative.md"
@@ -399,7 +399,7 @@ Agent harness does not support local-first execution.
 
 
 def test_knowledge_index_help_includes_expected_arguments(capsys):
-    from openclaw_pipeline.commands.knowledge_index import main
+    from ovp_pipeline.commands.knowledge_index import main
 
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
@@ -411,7 +411,7 @@ def test_knowledge_index_help_includes_expected_arguments(capsys):
 
 
 def test_knowledge_index_cli_rebuild_returns_json_summary(temp_vault, capsys):
-    from openclaw_pipeline.commands.knowledge_index import main
+    from ovp_pipeline.commands.knowledge_index import main
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Linked.md"
@@ -456,7 +456,7 @@ date: 2026-04-07
 
 
 def test_knowledge_index_cli_rebuild_passes_pack_override(temp_vault, capsys, monkeypatch):
-    from openclaw_pipeline.commands.knowledge_index import main
+    from ovp_pipeline.commands.knowledge_index import main
 
     captured: dict[str, object] = {}
 
@@ -473,7 +473,7 @@ def test_knowledge_index_cli_rebuild_passes_pack_override(temp_vault, capsys, mo
         }
 
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.knowledge_index.rebuild_knowledge_index",
+        "ovp_pipeline.commands.knowledge_index.rebuild_knowledge_index",
         fake_rebuild,
     )
 
@@ -486,9 +486,9 @@ def test_knowledge_index_cli_rebuild_passes_pack_override(temp_vault, capsys, mo
 
 
 def test_rebuild_knowledge_index_dispatches_truth_projection_via_registry(temp_vault, monkeypatch):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
-    from openclaw_pipeline.truth_store import TruthStoreProjection
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_store import TruthStoreProjection
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     source.write_text(
@@ -529,7 +529,7 @@ date: 2026-04-07
         )
 
     monkeypatch.setattr(
-        "openclaw_pipeline.knowledge_index.execute_truth_projection_builder",
+        "ovp_pipeline.knowledge_index.execute_truth_projection_builder",
         fake_execute_truth_projection_builder,
     )
 
@@ -544,8 +544,8 @@ date: 2026-04-07
 
 
 def test_rebuild_knowledge_index_mirrors_structured_sidecars_timeline_and_audit(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     evergreen.write_text(
@@ -650,8 +650,8 @@ Something happened.
 
 
 def test_rebuild_knowledge_index_creates_section_chunk_embeddings(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     evergreen.write_text(
@@ -690,7 +690,7 @@ Usage patterns cover prompts, workflows, and operator loops.
 
 
 def test_query_knowledge_index_returns_best_matching_chunk(temp_vault):
-    from openclaw_pipeline.knowledge_index import query_knowledge_index, rebuild_knowledge_index
+    from ovp_pipeline.knowledge_index import query_knowledge_index, rebuild_knowledge_index
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     evergreen.write_text(
@@ -722,7 +722,7 @@ Usage patterns cover prompts, workflows, and operator loops.
 
 
 def test_knowledge_index_cli_query_returns_ranked_json_results(temp_vault, capsys):
-    from openclaw_pipeline.commands.knowledge_index import main
+    from ovp_pipeline.commands.knowledge_index import main
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     evergreen.write_text(
@@ -768,7 +768,7 @@ Usage patterns cover prompts, workflows, and operator loops.
 
 
 def test_search_knowledge_index_returns_ranked_pages(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index, search_knowledge_index
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index, search_knowledge_index
 
     first = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     second = temp_vault / "10-Knowledge" / "Evergreen" / "Prompt-Patterns.md"
@@ -810,7 +810,7 @@ Prompt patterns improve instruction design and tool use.
 
 
 def test_get_knowledge_page_returns_canonical_page_payload(temp_vault):
-    from openclaw_pipeline.knowledge_index import get_knowledge_page, rebuild_knowledge_index
+    from ovp_pipeline.knowledge_index import get_knowledge_page, rebuild_knowledge_index
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(
@@ -840,7 +840,7 @@ Body text.
 
 
 def test_knowledge_index_stats_returns_core_counts(temp_vault):
-    from openclaw_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
+    from ovp_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(
@@ -871,7 +871,7 @@ Body text.
 
 
 def test_knowledge_db_supports_pack_schema_requires_timeline_events(tmp_path):
-    from openclaw_pipeline.knowledge_index import _knowledge_db_supports_pack_schema
+    from ovp_pipeline.knowledge_index import _knowledge_db_supports_pack_schema
 
     db_path = tmp_path / "knowledge.db"
     with sqlite3.connect(db_path) as conn:
@@ -898,8 +898,8 @@ def test_knowledge_db_supports_pack_schema_requires_timeline_events(tmp_path):
 
 
 def test_recent_audit_events_returns_newest_rows_first(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index, recent_audit_events
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index, recent_audit_events
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(
@@ -938,8 +938,8 @@ date: 2026-04-07
 
 
 def test_knowledge_index_cli_read_modes_return_json(temp_vault, capsys):
-    from openclaw_pipeline.commands.knowledge_index import main
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.knowledge_index import main
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(
@@ -989,7 +989,7 @@ Agent harness architecture manages tools and execution layers.
 
 
 def test_knowledge_tools_json_exposes_expected_read_tools():
-    from openclaw_pipeline.knowledge_index import knowledge_tools_json
+    from ovp_pipeline.knowledge_index import knowledge_tools_json
 
     tools = knowledge_tools_json()
     tool_names = {tool["name"] for tool in tools}
@@ -1006,7 +1006,7 @@ def test_knowledge_tools_json_exposes_expected_read_tools():
 
 
 def test_dispatch_knowledge_tool_routes_to_read_helpers(temp_vault):
-    from openclaw_pipeline.knowledge_index import dispatch_knowledge_tool
+    from ovp_pipeline.knowledge_index import dispatch_knowledge_tool
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(
@@ -1041,7 +1041,7 @@ Agent harness architecture manages tools and execution layers.
 
 
 def test_serve_knowledge_index_processes_jsonl_requests(temp_vault):
-    from openclaw_pipeline.knowledge_index import serve_knowledge_index
+    from ovp_pipeline.knowledge_index import serve_knowledge_index
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(
@@ -1071,7 +1071,7 @@ Agent harness architecture manages tools and execution layers.
 
 
 def test_knowledge_index_cli_tools_json_lists_tools(capsys):
-    from openclaw_pipeline.commands.knowledge_index import main
+    from ovp_pipeline.commands.knowledge_index import main
 
     result = main(["--tools-json"])
     captured = capsys.readouterr()
@@ -1083,8 +1083,8 @@ def test_knowledge_index_cli_tools_json_lists_tools(capsys):
 
 
 def test_rebuild_knowledge_index_preserves_existing_db_on_failure(temp_vault, monkeypatch):
-    from openclaw_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     evergreen.write_text(
@@ -1109,7 +1109,7 @@ Stable body.
     def fail_embed(_: str, dimensions: int = 128) -> bytes:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("openclaw_pipeline.knowledge_index._embed_text", fail_embed)
+    monkeypatch.setattr("ovp_pipeline.knowledge_index._embed_text", fail_embed)
 
     with pytest.raises(RuntimeError, match="boom"):
         rebuild_knowledge_index(temp_vault)
@@ -1121,8 +1121,8 @@ Stable body.
 
 
 def test_rebuild_knowledge_index_cleans_stale_temp_sqlite_sidecars(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     evergreen.write_text(
@@ -1158,8 +1158,8 @@ Stable body.
 
 
 def test_rebuild_knowledge_index_does_not_reenter_knowledge_discovery(temp_vault, monkeypatch):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -1199,7 +1199,7 @@ aliases: [Target Note]
     def fail_related(*args, **kwargs):
         raise AssertionError("knowledge discovery should not run during rebuild")
 
-    monkeypatch.setattr("openclaw_pipeline.concept_registry.discover_related", fail_related)
+    monkeypatch.setattr("ovp_pipeline.concept_registry.discover_related", fail_related)
 
     result = rebuild_knowledge_index(temp_vault)
 
@@ -1210,7 +1210,7 @@ aliases: [Target Note]
 def test_rebuild_knowledge_index_acquires_single_writer_lock(temp_vault, monkeypatch):
     from contextlib import contextmanager
 
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     evergreen.write_text(
@@ -1234,7 +1234,7 @@ date: 2026-04-10
         yield
         calls.append("exit")
 
-    monkeypatch.setattr("openclaw_pipeline.knowledge_index.knowledge_db_write_lock", fake_lock)
+    monkeypatch.setattr("ovp_pipeline.knowledge_index.knowledge_db_write_lock", fake_lock)
 
     result = rebuild_knowledge_index(temp_vault)
 

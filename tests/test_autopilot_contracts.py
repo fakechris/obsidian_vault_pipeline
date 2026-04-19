@@ -4,10 +4,10 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from openclaw_pipeline.autopilot.queue import Task, TaskQueue
-from openclaw_pipeline.autopilot.daemon import AutoPilotDaemon
-from openclaw_pipeline.commands.repair import repair_autopilot
-from openclaw_pipeline.autopilot.watcher import MultiSourceWatcher, WATCHDOG_AVAILABLE
+from ovp_pipeline.autopilot.queue import Task, TaskQueue
+from ovp_pipeline.autopilot.daemon import AutoPilotDaemon
+from ovp_pipeline.commands.repair import repair_autopilot
+from ovp_pipeline.autopilot.watcher import MultiSourceWatcher, WATCHDOG_AVAILABLE
 
 
 def test_task_queue_deduplicates_active_file_tasks(tmp_path):
@@ -56,7 +56,7 @@ def test_autopilot_success_path_runs_absorb_and_knowledge_index_after_moc(tmp_pa
     order: list[str] = []
 
     monkeypatch.setattr(
-        "openclaw_pipeline.autopilot.daemon.subprocess.run",
+        "ovp_pipeline.autopilot.daemon.subprocess.run",
         lambda *args, **kwargs: type("Completed", (), {"returncode": 0, "stderr": "", "stdout": ""})(),
     )
     monkeypatch.setattr(daemon, "_check_quality", lambda task: (4.0, {}))
@@ -114,7 +114,7 @@ def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monk
     order: list[str] = []
 
     monkeypatch.setattr(
-        "openclaw_pipeline.autopilot.daemon.subprocess.run",
+        "ovp_pipeline.autopilot.daemon.subprocess.run",
         lambda *args, **kwargs: type("Completed", (), {"returncode": 0, "stderr": "", "stdout": ""})(),
     )
     monkeypatch.setattr(daemon, "_check_quality", lambda task: (4.0, {}))
@@ -132,7 +132,7 @@ def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monk
 
 
 def test_autopilot_uses_handler_registry_for_follow_up_stages(tmp_path, monkeypatch):
-    import openclaw_pipeline.autopilot.daemon as daemon_source
+    import ovp_pipeline.autopilot.daemon as daemon_source
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -177,7 +177,7 @@ def test_autopilot_uses_handler_registry_for_follow_up_stages(tmp_path, monkeypa
 
 
 def test_autopilot_knowledge_index_refresh_passes_pack(tmp_path, monkeypatch):
-    import openclaw_pipeline.autopilot.daemon as daemon_source
+    import ovp_pipeline.autopilot.daemon as daemon_source
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)

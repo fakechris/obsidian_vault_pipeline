@@ -23,15 +23,15 @@ Registry Cleanup Script
 3. P2: 处理 merge (合并重复概念)
 
 Usage:
-    python -m openclaw_pipeline.registry_cleanup <vault_dir> --dry-run
-    python -m openclaw_pipeline.registry_cleanup <vault_dir> --execute
-    python -m openclaw_pipeline.registry_cleanup <vault_dir> --status  # 只显示状态
+    python -m ovp_pipeline.registry_cleanup <vault_dir> --dry-run
+    python -m ovp_pipeline.registry_cleanup <vault_dir> --execute
+    python -m ovp_pipeline.registry_cleanup <vault_dir> --status  # 只显示状态
 """
 
 import argparse
 from pathlib import Path
 
-from openclaw_pipeline.concept_registry import (
+from ovp_pipeline.concept_registry import (
     ConceptRegistry, is_sentence_like_title,
     KIND_PROPOSITION, STATUS_DEPRECATED
 )

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Define the final layer model for the OpenClaw knowledge pipeline before further implementation.
+Define the final layer model for the OVP knowledge pipeline before further implementation.
 
 This design answers four questions:
 

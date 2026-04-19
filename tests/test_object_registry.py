@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from openclaw_pipeline.concept_registry import ConceptEntry, ConceptRegistry, STATUS_ACTIVE
+from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry, STATUS_ACTIVE
 
 
 def test_object_record_contains_core_pack_fields():
-    from openclaw_pipeline.object_registry import ObjectRecord
+    from ovp_pipeline.object_registry import ObjectRecord
 
     record = ObjectRecord(
         id="agent-harness",
@@ -22,7 +22,7 @@ def test_object_record_contains_core_pack_fields():
 
 
 def test_concept_registry_projects_entries_into_object_registry(temp_vault):
-    from openclaw_pipeline.object_registry import ObjectRegistry
+    from ovp_pipeline.object_registry import ObjectRegistry
 
     registry = ConceptRegistry(temp_vault)
     registry.add_entry(
@@ -68,7 +68,7 @@ def test_concept_registry_exposes_object_records_without_changing_legacy_behavio
 
 
 def test_object_registry_can_project_entries_into_research_tech_pack(temp_vault):
-    from openclaw_pipeline.object_registry import ObjectRegistry
+    from ovp_pipeline.object_registry import ObjectRegistry
 
     registry = ConceptRegistry(temp_vault)
     registry.add_entry(

@@ -6,7 +6,7 @@ import pytest
 
 
 def test_build_views_help_mentions_primary_pack(capsys):
-    from openclaw_pipeline.commands.build_views import main
+    from ovp_pipeline.commands.build_views import main
 
     try:
         main(["--help"])
@@ -19,7 +19,7 @@ def test_build_views_help_mentions_primary_pack(capsys):
 
 
 def test_build_views_command_requires_object_id_for_object_page(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
+    from ovp_pipeline.commands.build_views import main
 
     try:
         main(
@@ -39,7 +39,7 @@ def test_build_views_command_requires_object_id_for_object_page(temp_vault):
 
 
 def test_build_views_command_requires_cluster_id_for_cluster_crystal(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
+    from ovp_pipeline.commands.build_views import main
 
     with pytest.raises(SystemExit) as exc_info:
         main(
@@ -57,8 +57,8 @@ def test_build_views_command_requires_cluster_id_for_cluster_crystal(temp_vault)
 
 
 def test_build_views_command_writes_compiled_markdown(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.parent.mkdir(parents=True, exist_ok=True)
@@ -97,8 +97,8 @@ date: 2026-04-10
 
 
 def test_build_views_command_respects_input_source_kinds(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.runtime import VaultLayout
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Evergreen-Only.md"
     evergreen.parent.mkdir(parents=True, exist_ok=True)
@@ -147,10 +147,10 @@ def test_build_views_command_can_render_extraction_overview(temp_vault):
     import json
     from pathlib import Path
 
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.derived.paths import extraction_run_path
-    from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.derived.paths import extraction_run_path
+    from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     artifact = extraction_run_path(
@@ -198,10 +198,10 @@ def test_build_views_command_can_render_extraction_overview_for_research_tech(te
     import json
     from pathlib import Path
 
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.derived.paths import extraction_run_path
-    from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.derived.paths import extraction_run_path
+    from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     artifact = extraction_run_path(
@@ -245,10 +245,10 @@ def test_build_views_command_can_render_extraction_overview_for_research_tech(te
 
 
 def test_build_views_command_can_materialize_object_page_from_truth_store(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions
-    from openclaw_pipeline.runtime import VaultLayout
-    from openclaw_pipeline.truth_api import record_review_action
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import record_review_action
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -350,9 +350,9 @@ Source note does not support the runtime architecture.
 
 
 def test_build_views_command_escapes_like_wildcards_in_object_id_lookup(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
     import sqlite3
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Baseline.md"
@@ -425,9 +425,9 @@ Baseline note.
 
 
 def test_build_views_command_can_materialize_topic_view_from_truth_store(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -489,9 +489,9 @@ Target note captures downstream effects.
 
 
 def test_build_views_command_can_materialize_event_dossier_from_truth_store(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Launch.md"
     source.write_text(
@@ -537,9 +537,9 @@ The system launched publicly for operators.
 
 
 def test_build_views_command_can_materialize_cluster_overview(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -644,10 +644,10 @@ date: 2026-04-10
 
 
 def test_build_views_command_can_materialize_cluster_crystal(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
-    from openclaw_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import list_graph_clusters
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -722,10 +722,10 @@ Target note captures downstream effects.
 
 
 def test_build_views_command_materializes_cluster_crystal_to_safe_path(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
-    from openclaw_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import list_graph_clusters
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -785,10 +785,10 @@ date: 2026-04-10
 
 
 def test_build_views_command_cluster_crystal_includes_related_clusters(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
-    from openclaw_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import list_graph_clusters
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     beta = temp_vault / "10-Knowledge" / "Evergreen" / "Beta.md"
@@ -921,10 +921,10 @@ date: 2026-04-10
 
 
 def test_build_views_command_can_materialize_contradictions_overview(temp_vault):
-    from openclaw_pipeline.commands.build_views import main
-    from openclaw_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions
-    from openclaw_pipeline.runtime import VaultLayout
-    from openclaw_pipeline.truth_api import record_review_action
+    from ovp_pipeline.commands.build_views import main
+    from ovp_pipeline.knowledge_index import list_contradictions, rebuild_knowledge_index, resolve_contradictions
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import record_review_action
 
     one = temp_vault / "10-Knowledge" / "Evergreen" / "One.md"
     two = temp_vault / "10-Knowledge" / "Evergreen" / "Two.md"

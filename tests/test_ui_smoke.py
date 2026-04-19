@@ -5,8 +5,8 @@ import threading
 from http.client import HTTPConnection
 from urllib.parse import quote, urlencode
 
-from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-from openclaw_pipeline.runtime import VaultLayout
+from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+from ovp_pipeline.runtime import VaultLayout
 
 
 def _seed_truth_store(temp_vault):
@@ -95,7 +95,7 @@ def _post(port: int, path: str, fields: dict[str, str]) -> tuple[int, str, dict[
 
 
 def test_ui_smoke_pages_render_truth_views(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -253,7 +253,7 @@ date: 2026-04-13
 
 
 def test_ui_note_page_renders_markdown_note(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -344,7 +344,7 @@ raw block
 
 
 def test_ui_note_page_formats_fenced_yaml_frontmatter(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     note = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Fenced Source_深度解读.md"
     note.parent.mkdir(parents=True, exist_ok=True)
@@ -390,7 +390,7 @@ Body paragraph.
 
 
 def test_ui_note_page_normalizes_related_knowledge_links(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     prompt = temp_vault / "10-Knowledge" / "Evergreen" / "Prompt Engineering.md"
     prompt.parent.mkdir(parents=True, exist_ok=True)
@@ -441,7 +441,7 @@ date: 2026-04-13
 
 
 def test_ui_note_page_smart_renders_reference_tables_and_keywords(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     note = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Repo Links_深度解读.md"
     note.parent.mkdir(parents=True, exist_ok=True)
@@ -492,7 +492,7 @@ github: "https://github.com/example/repo"
 
 
 def test_ui_note_page_shows_original_source_note_for_deep_dive(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -562,7 +562,7 @@ type: "ai"
 
 
 def test_ui_note_page_shows_derived_deep_dive_for_processed_source(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -622,7 +622,7 @@ type: "ai"
 
 
 def test_ui_note_page_shows_production_chain(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -720,7 +720,7 @@ date: 2026-04-13
 
 
 def test_ui_object_page_shows_production_chain(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -807,7 +807,7 @@ date: 2026-04-13
 
 
 def test_ui_note_page_rewrites_local_images_to_asset_route(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     asset = temp_vault / "50-Inbox" / "01-Raw" / "attachments" / "2026-04" / "sample.png"
     asset.parent.mkdir(parents=True, exist_ok=True)
@@ -853,7 +853,7 @@ def test_ui_note_page_rewrites_local_images_to_asset_route(temp_vault):
 
 
 def test_ui_deep_dive_browser_uses_promoted_objects_not_incidental_mentions(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     prompt = temp_vault / "10-Knowledge" / "Evergreen" / "Prompt Engineering.md"
     prompt.parent.mkdir(parents=True, exist_ok=True)
@@ -905,7 +905,7 @@ date: 2026-04-13
 
 
 def test_ui_search_page_combines_objects_and_notes(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
@@ -946,7 +946,7 @@ Mentions [[alpha]].
 
 
 def test_ui_root_dashboard_renders_db_summary(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -1004,8 +1004,8 @@ Thin note.
 
 
 def test_ui_signals_page_renders_active_signal_ledger(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import record_review_action
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.truth_api import record_review_action
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -1051,7 +1051,7 @@ Processed source note without downstream chain.
 
 
 def test_ui_signals_page_renders_extraction_trigger_signals(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -1101,8 +1101,8 @@ date: 2026-04-13
 
 
 def test_ui_briefing_page_renders_briefing_snapshot(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import record_review_action
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.truth_api import record_review_action
 
     _seed_truth_store(temp_vault)
     record_review_action(
@@ -1136,8 +1136,8 @@ def test_ui_briefing_page_renders_briefing_snapshot(temp_vault):
 
 
 def test_ui_actions_page_renders_queued_signal_actions(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.truth_api import enqueue_signal_action, list_signals
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.truth_api import enqueue_signal_action, list_signals
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -1178,7 +1178,7 @@ Processed source note without downstream chain.
 
 
 def test_ui_contradictions_and_summaries_support_batch_actions(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     thin = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
@@ -1218,7 +1218,7 @@ Thin note.
 
 
 def test_ui_objects_page_filters_by_query(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1238,7 +1238,7 @@ def test_ui_objects_page_filters_by_query(temp_vault):
 
 
 def test_ui_contradictions_page_filters_by_status(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     _resolve_all_contradictions(temp_vault)
@@ -1260,7 +1260,7 @@ def test_ui_contradictions_page_filters_by_status(temp_vault):
 
 
 def test_ui_contradictions_empty_state_explains_heuristic_limit(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(
@@ -1294,7 +1294,7 @@ Alpha supports local-first execution.
 
 
 def test_ui_contradictions_page_filters_by_query(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1313,8 +1313,8 @@ def test_ui_contradictions_page_filters_by_query(temp_vault):
 
 
 def test_ui_contradictions_page_can_resolve_item(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.runtime import VaultLayout
 
     _seed_truth_store(temp_vault)
     layout = VaultLayout.from_vault(temp_vault)
@@ -1354,8 +1354,8 @@ def test_ui_contradictions_page_can_resolve_item(temp_vault):
 
 
 def test_ui_summaries_page_can_rebuild_item(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(
@@ -1413,7 +1413,7 @@ Thin note.
 
 
 def test_ui_events_page_filters_by_query(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1433,8 +1433,8 @@ def test_ui_events_page_filters_by_query(temp_vault):
 
 
 def test_ui_events_page_handles_missing_evergreen_path(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.runtime import VaultLayout
 
     _seed_truth_store(temp_vault)
     db_path = VaultLayout.from_vault(temp_vault).knowledge_db
@@ -1459,7 +1459,7 @@ def test_ui_events_page_handles_missing_evergreen_path(temp_vault):
 
 
 def test_ui_smoke_atlas_and_deep_dive_pages_render_bridge_views(temp_vault):
-    from openclaw_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.commands.ui_server import create_server
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(

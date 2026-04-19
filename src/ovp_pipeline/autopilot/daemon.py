@@ -222,19 +222,19 @@ class AutoPilotDaemon:
 
             if url_type == "github":
                 cmd = [
-                    sys.executable, "-m", "openclaw_pipeline.auto_github_processor",
+                    sys.executable, "-m", "ovp_pipeline.auto_github_processor",
                     "--process-single", task.file_path,
                     "--vault-dir", str(self.vault_dir),
                 ]
             elif url_type == "paper":
                 cmd = [
-                    sys.executable, "-m", "openclaw_pipeline.auto_paper_processor",
+                    sys.executable, "-m", "ovp_pipeline.auto_paper_processor",
                     "--process-single", task.file_path,
                     "--vault-dir", str(self.vault_dir),
                 ]
             elif url_type in ("article", "website"):
                 cmd = [
-                    sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+                    sys.executable, "-m", "ovp_pipeline.auto_article_processor",
                     "--process-single", task.file_path,
                     "--vault-dir", str(self.vault_dir),
                 ]
@@ -243,7 +243,7 @@ class AutoPilotDaemon:
                 return {"skipped": True, "reason": "unsupported_pinboard_type"}
         else:
             cmd = [
-                sys.executable, "-m", "openclaw_pipeline.auto_article_processor",
+                sys.executable, "-m", "ovp_pipeline.auto_article_processor",
                 "--process-single", task.file_path,
                 "--vault-dir", str(self.vault_dir),
             ]
@@ -442,7 +442,7 @@ class AutoPilotDaemon:
     def _run_absorb(self):
         """运行 absorb 吸收层。"""
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.absorb",
+            sys.executable, "-m", "ovp_pipeline.commands.absorb",
             "--recent", "1",
             "--vault-dir", str(self.vault_dir),
             "--json",
@@ -456,7 +456,7 @@ class AutoPilotDaemon:
     def _run_moc_update(self):
         """运行 MOC 更新"""
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.auto_moc_updater",
+            sys.executable, "-m", "ovp_pipeline.auto_moc_updater",
             "--scan",
             "--vault-dir", str(self.vault_dir),
         ]
@@ -465,14 +465,14 @@ class AutoPilotDaemon:
     def _run_refine(self):
         """运行 cleanup + breakdown 批处理。"""
         cleanup_cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.cleanup",
+            sys.executable, "-m", "ovp_pipeline.commands.cleanup",
             "--vault-dir", str(self.vault_dir),
             "--all",
             "--write",
             "--json",
         ]
         breakdown_cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.breakdown",
+            sys.executable, "-m", "ovp_pipeline.commands.breakdown",
             "--vault-dir", str(self.vault_dir),
             "--all",
             "--write",
@@ -484,7 +484,7 @@ class AutoPilotDaemon:
     def _run_knowledge_index_refresh(self):
         """刷新派生 knowledge.db。"""
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.commands.knowledge_index",
+            sys.executable, "-m", "ovp_pipeline.commands.knowledge_index",
             "--vault-dir", str(self.vault_dir),
             "--pack", self.pack.name,
             "--json",
@@ -549,7 +549,7 @@ class AutoPilotDaemon:
         """运行 Pinboard 抓取"""
         self.log("📡 抓取 Pinboard 书签...")
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.unified_pipeline_enhanced",
+            sys.executable, "-m", "ovp_pipeline.unified_pipeline_enhanced",
             "--step", "pinboard"
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.vault_dir))
@@ -562,7 +562,7 @@ class AutoPilotDaemon:
         """运行 Clippings 处理"""
         self.log("📚 处理 Clippings...")
         cmd = [
-            sys.executable, "-m", "openclaw_pipeline.unified_pipeline_enhanced",
+            sys.executable, "-m", "ovp_pipeline.unified_pipeline_enhanced",
             "--step", "clippings"
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.vault_dir))

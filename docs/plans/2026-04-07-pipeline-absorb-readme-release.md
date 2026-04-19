@@ -17,7 +17,7 @@
 **Step 1: Write failing tests**
 
 - Add a full-pipeline planning test that expects `--with-refine` to place `refine` before `knowledge_index`.
-- Add a step-command test that expects the absorb step to call `openclaw_pipeline.commands.absorb`.
+- Add a step-command test that expects the absorb step to call `ovp_pipeline.commands.absorb`.
 - Add an autopilot contract test that expects the success path to use `absorb`, and to include `refine` only when explicitly enabled.
 
 **Step 2: Run focused tests to verify failure**
@@ -29,11 +29,11 @@ Expected: failures showing missing `with_refine` support and legacy `auto_evergr
 ### Task 2: Rewire the unified pipeline
 
 **Files:**
-- Modify: `src/openclaw_pipeline/unified_pipeline_enhanced.py`
+- Modify: `src/ovp_pipeline/unified_pipeline_enhanced.py`
 
 **Step 1: Implement minimal orchestration changes**
 
-- Replace the legacy evergreen subprocess with `openclaw_pipeline.commands.absorb`.
+- Replace the legacy evergreen subprocess with `ovp_pipeline.commands.absorb`.
 - Add a `refine` step implementation that runs cleanup and breakdown in write mode.
 - Add `--with-refine` CLI support and ensure `knowledge_index` stays last so the derived DB reflects final canonical state.
 - Preserve compatibility for users still passing `evergreen` as a step alias.
@@ -47,7 +47,7 @@ Expected: pipeline-related tests pass or only autopilot tests still fail.
 ### Task 3: Rewire autopilot
 
 **Files:**
-- Modify: `src/openclaw_pipeline/autopilot/daemon.py`
+- Modify: `src/ovp_pipeline/autopilot/daemon.py`
 
 **Step 1: Implement minimal autopilot changes**
 
@@ -97,7 +97,7 @@ Expected: help output reflects the rewritten command surface.
 **Step 1: Run full verification**
 
 Run:
-- `python3 -m compileall src/openclaw_pipeline`
+- `python3 -m compileall src/ovp_pipeline`
 - `pytest -q`
 
 Expected: all pass.

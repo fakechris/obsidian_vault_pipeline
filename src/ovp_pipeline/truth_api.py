@@ -87,6 +87,22 @@ _BRIEFING_EVOLUTION_PRIORITY = {
     "confirms": 70,
     "enriches": 60,
 }
+_NOTE_CAPTURE_EVENT_TYPES = frozenset(
+    {
+        "source_staged_for_processing",
+        "source_archived_to_processed",
+        "source_restored_to_raw",
+        "article_processed",
+        "article_abstained",
+        "article_error",
+        "candidate_upsert_error",
+        "evergreen_error",
+        "candidates_upserted",
+        "evergreen_auto_promoted",
+        "evergreen_created",
+        "refine_mutation_applied",
+    }
+)
 
 
 def get_runtime_status(
@@ -2732,6 +2748,17 @@ def _note_capture_targets(vault_dir: Path | str, note_path: str) -> dict[str, An
     }
 
 
+def _canonicalized_payload_targets(payload: dict[str, Any]) -> set[str]:
+    targets = payload.get("targets", [])
+    if not isinstance(targets, list):
+        return set()
+    return {
+        canonicalize_note_id(str(item))
+        for item in targets
+        if isinstance(item, str) and item.strip()
+    }
+
+
 def _match_note_capture_event(
     vault_dir: Path | str,
     *,
@@ -2743,40 +2770,56 @@ def _match_note_capture_event(
     note_name = str(targets["note_name"])
     note_slug = str(targets["note_slug"])
     event_type = str(payload.get("event_type") or "").strip()
-    timestamp = str(payload.get("timestamp") or "")
-    relative_source = _vault_relative_path(vault_dir, str(payload.get("source") or ""))
-    relative_staged = _vault_relative_path(vault_dir, str(payload.get("staged") or ""))
-    relative_archived = _vault_relative_path(vault_dir, str(payload.get("archived") or ""))
-    relative_restored = _vault_relative_path(vault_dir, str(payload.get("restored") or ""))
-    relative_output = _vault_relative_path(vault_dir, str(payload.get("output") or ""))
-    relative_path_field = _vault_relative_path(vault_dir, str(payload.get("path") or ""))
-    file_name = Path(str(payload.get("file") or "")).name
-    source_name = Path(str(payload.get("source") or "")).name
-    staged_name = Path(relative_staged).name
-    archived_name = Path(relative_archived).name
-    restored_name = Path(relative_restored).name
+    if event_type not in _NOTE_CAPTURE_EVENT_TYPES:
+        return None
 
-    if event_type == "source_staged_for_processing" and (
-        relative_source == note_path or relative_staged == note_path or note_name in {source_name, staged_name}
-    ):
+    timestamp = str(payload.get("timestamp") or "")
+
+    if event_type == "source_staged_for_processing":
+        relative_source = _vault_relative_path(vault_dir, str(payload.get("source") or ""))
+        relative_staged = _vault_relative_path(vault_dir, str(payload.get("staged") or ""))
+        source_name = Path(str(payload.get("source") or "")).name
+        staged_name = Path(relative_staged).name
+        if not (
+            relative_source == note_path
+            or relative_staged == note_path
+            or note_name in {source_name, staged_name}
+        ):
+            return None
         return _note_capture_item(
             kind="source_staged",
             label="Source staged",
             timestamp=timestamp,
             detail="Source note was staged for processing.",
         )
-    if event_type == "source_archived_to_processed" and (
-        relative_source == note_path or relative_archived == note_path or note_name in {source_name, archived_name}
-    ):
+    if event_type == "source_archived_to_processed":
+        relative_source = _vault_relative_path(vault_dir, str(payload.get("source") or ""))
+        relative_archived = _vault_relative_path(vault_dir, str(payload.get("archived") or ""))
+        source_name = Path(str(payload.get("source") or "")).name
+        archived_name = Path(relative_archived).name
+        if not (
+            relative_source == note_path
+            or relative_archived == note_path
+            or note_name in {source_name, archived_name}
+        ):
+            return None
         return _note_capture_item(
             kind="processed_source",
             label="Source processed",
             timestamp=timestamp,
             detail="Source note was archived into the processed intake.",
         )
-    if event_type == "source_restored_to_raw" and (
-        relative_source == note_path or relative_restored == note_path or note_name in {source_name, restored_name}
-    ):
+    if event_type == "source_restored_to_raw":
+        relative_source = _vault_relative_path(vault_dir, str(payload.get("source") or ""))
+        relative_restored = _vault_relative_path(vault_dir, str(payload.get("restored") or ""))
+        source_name = Path(str(payload.get("source") or "")).name
+        restored_name = Path(relative_restored).name
+        if not (
+            relative_source == note_path
+            or relative_restored == note_path
+            or note_name in {source_name, restored_name}
+        ):
+            return None
         return _note_capture_item(
             kind="source_restored",
             label="Source restored",
@@ -2784,7 +2827,11 @@ def _match_note_capture_event(
             detail="Source note was restored to raw intake before downstream output landed.",
             skipped_count=1,
         )
-    if event_type == "article_processed" and (relative_output == note_path or file_name == note_name):
+    if event_type == "article_processed":
+        relative_output = _vault_relative_path(vault_dir, str(payload.get("output") or ""))
+        file_name = Path(str(payload.get("file") or "")).name
+        if relative_output != note_path and file_name != note_name:
+            return None
         if relative_output:
             derived_note_names.add(Path(relative_output).name)
         return _note_capture_item(
@@ -2799,7 +2846,10 @@ def _match_note_capture_event(
             path=relative_output,
             produced_artifact_count=1,
         )
-    if event_type == "article_abstained" and file_name == note_name:
+    if event_type == "article_abstained":
+        file_name = Path(str(payload.get("file") or "")).name
+        if file_name != note_name:
+            return None
         return _note_capture_item(
             kind="capture_abstained",
             label="Capture abstained",
@@ -2807,9 +2857,10 @@ def _match_note_capture_event(
             detail=f"Interpretation abstained: {str(payload.get('reason') or 'unspecified')}.",
             skipped_count=1,
         )
-    if event_type in {"article_error", "candidate_upsert_error", "evergreen_error"} and (
-        file_name == note_name or Path(str(payload.get("file") or "")).name == note_name
-    ):
+    if event_type in {"article_error", "candidate_upsert_error", "evergreen_error"}:
+        file_name = Path(str(payload.get("file") or "")).name
+        if file_name != note_name:
+            return None
         return _note_capture_item(
             kind="capture_error",
             label="Capture error",
@@ -2817,7 +2868,10 @@ def _match_note_capture_event(
             detail=str(payload.get("error") or "Capture error."),
             error_count=1,
         )
-    if event_type == "candidates_upserted" and file_name == note_name:
+    if event_type == "candidates_upserted":
+        file_name = Path(str(payload.get("file") or "")).name
+        if file_name != note_name:
+            return None
         candidates = [str(item) for item in payload.get("candidates", []) if str(item).strip()]
         return _note_capture_item(
             kind="candidate_upserted",
@@ -2830,12 +2884,19 @@ def _match_note_capture_event(
             ),
             candidate_count=len(candidates),
         )
-    if event_type in {"evergreen_auto_promoted", "evergreen_created"} and (
-        relative_path_field == note_path
-        or canonicalize_note_id(str(payload.get("concept") or payload.get("mutation", {}).get("target_slug") or "")) == note_slug
-        or source_name == note_name
-        or source_name in derived_note_names
-    ):
+    if event_type in {"evergreen_auto_promoted", "evergreen_created"}:
+        relative_path_field = _vault_relative_path(vault_dir, str(payload.get("path") or ""))
+        source_name = Path(str(payload.get("source") or "")).name
+        target_slug = canonicalize_note_id(
+            str(payload.get("concept") or payload.get("mutation", {}).get("target_slug") or "")
+        )
+        if not (
+            relative_path_field == note_path
+            or target_slug == note_slug
+            or source_name == note_name
+            or source_name in derived_note_names
+        ):
+            return None
         object_id = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
         label = "Evergreen promoted" if event_type == "evergreen_auto_promoted" else "Evergreen created"
         detail = (
@@ -2856,12 +2917,7 @@ def _match_note_capture_event(
             produced_artifact_count=1,
         )
     if event_type == "refine_mutation_applied":
-        targets_list = [
-            canonicalize_note_id(str(item))
-            for item in payload.get("targets", [])
-            if isinstance(item, str) and item.strip()
-        ]
-        if note_slug in targets_list:
+        if note_slug in _canonicalized_payload_targets(payload):
             return _note_capture_item(
                 kind="refine_mutation",
                 label="Refine mutation",

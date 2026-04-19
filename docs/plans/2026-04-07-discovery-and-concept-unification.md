@@ -114,8 +114,8 @@ Examples:
 ### Task 1: Introduce a unified discovery contract
 
 **Files:**
-- Create: `src/openclaw_pipeline/discovery.py`
-- Modify: `src/openclaw_pipeline/knowledge_index.py`
+- Create: `src/ovp_pipeline/discovery.py`
+- Modify: `src/ovp_pipeline/knowledge_index.py`
 - Test: `tests/test_discovery.py`
 
 **Step 1: Write the failing test**
@@ -155,7 +155,7 @@ Expected: PASS
 ### Task 2: Make `ovp-query` knowledge.db-first
 
 **Files:**
-- Modify: `src/openclaw_pipeline/query_tool.py`
+- Modify: `src/ovp_pipeline/query_tool.py`
 - Test: `tests/test_query_tool.py`
 
 **Step 1: Write the failing test**
@@ -188,8 +188,8 @@ Expected: PASS
 ### Task 3: Unify concept discovery hooks
 
 **Files:**
-- Modify: `src/openclaw_pipeline/concept_registry.py`
-- Modify: `src/openclaw_pipeline/concept_resolver.py`
+- Modify: `src/ovp_pipeline/concept_registry.py`
+- Modify: `src/ovp_pipeline/concept_resolver.py`
 - Test: `tests/test_concept_discovery.py`
 
 **Step 1: Write the failing test**
@@ -221,10 +221,10 @@ Expected: PASS
 ### Task 4: Add LLM evidence schema
 
 **Files:**
-- Create: `src/openclaw_pipeline/evidence.py`
-- Modify: `src/openclaw_pipeline/commands/absorb.py`
-- Modify: `src/openclaw_pipeline/refine.py`
-- Modify: `src/openclaw_pipeline/query_tool.py`
+- Create: `src/ovp_pipeline/evidence.py`
+- Modify: `src/ovp_pipeline/commands/absorb.py`
+- Modify: `src/ovp_pipeline/refine.py`
+- Modify: `src/ovp_pipeline/query_tool.py`
 - Test: `tests/test_evidence_schema.py`
 
 **Step 1: Write the failing test**
@@ -299,7 +299,7 @@ Expected: docs align with the new contract.
 
 Run:
 
-- `python3 -m compileall src/openclaw_pipeline`
+- `python3 -m compileall src/ovp_pipeline`
 - `pytest -q`
 
 Expected: all pass.
@@ -307,7 +307,7 @@ Expected: all pass.
 **Step 2: Commit**
 
 ```bash
-git add src/openclaw_pipeline/discovery.py src/openclaw_pipeline/evidence.py src/openclaw_pipeline/query_tool.py src/openclaw_pipeline/concept_registry.py src/openclaw_pipeline/concept_resolver.py tests/test_discovery.py tests/test_query_tool.py tests/test_concept_discovery.py tests/test_evidence_schema.py README.md README_EN.md CLAUDE.md skills/daily-ingestion.md
+git add src/ovp_pipeline/discovery.py src/ovp_pipeline/evidence.py src/ovp_pipeline/query_tool.py src/ovp_pipeline/concept_registry.py src/ovp_pipeline/concept_resolver.py tests/test_discovery.py tests/test_query_tool.py tests/test_concept_discovery.py tests/test_evidence_schema.py README.md README_EN.md CLAUDE.md skills/daily-ingestion.md
 git commit -m "feat: unify discovery and concept retrieval contracts"
 ```
 

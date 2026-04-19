@@ -3,11 +3,11 @@
 ## Requirements
 - Explain what `agenticnotetaking/arscontexta` does in detail
 - Evaluate why it matters conceptually and architecturally
-- Judge what is relevant to the current OpenClaw project
+- Judge what is relevant to the current OVP project
 - Surface several article/research directions based on the comparison
 
 ## Research Findings
-- Local project is centered on `src/openclaw_pipeline`, with commands for `absorb`, `build_views`, `truth_api`, `knowledge_index`, `run_operations`, and registry maintenance.
+- Local project is centered on `src/ovp_pipeline`, with commands for `absorb`, `build_views`, `truth_api`, `knowledge_index`, `run_operations`, and registry maintenance.
 - Repository structure mixes a vault-like content tree (`10-Knowledge`, `20-Areas`, `50-Inbox`, `80-Views`) with a Python pipeline that materializes knowledge artifacts and views.
 - Existing docs already frame the system around packs, extraction profiles, truth projections, observation surfaces, and materialized views, which means the current project emphasis is knowledge processing and presentation rather than a lightweight interactive note editor.
 - There are existing article/recipe surfaces under `docs/recipes/research-tech/*.md`, suggesting article-worthy workflow narratives already exist around ingesting clippings, GitHub repos, PDFs, and web articles.
@@ -23,11 +23,11 @@
 - The hook implementations are concrete, not fictional: `session-orient.sh` injects workspace state and maintenance signals, while `write-validate.sh` enforces note schema presence on write events.
 - The three-space architecture is a strong design rule rather than simple folder preference: `self/` is agent identity/orientation, `notes/` is durable knowledge, and `ops/` is temporal coordination. The repo explicitly models failure modes caused by mixing those spaces.
 - A notable product choice is "full automation by default, opt down later." The generated system installs a large command surface immediately and expects the user to restart Claude Code to activate skills and hooks.
-- Local implementation confirms OpenClaw already embodies several "hard system" ideas that arscontexta mostly expresses via generated conventions:
+- Local implementation confirms OVP already embodies several "hard system" ideas that arscontexta mostly expresses via generated conventions:
   - `truth_store.py` defines an explicit canonical/derived projection schema with objects, claims, evidence, relations, contradictions, graph edges, and graph clusters.
   - `autopilot/queue.py` implements a persistent SQLite task queue with claim/complete/fail lifecycle, deduped active identities, and retry semantics.
   - `commands/ui_server.py` exposes a read-oriented shell over objects, signals, actions, contradictions, evolution, clusters, atlas, and briefing views.
-- This reinforces a core comparison: arscontexta is stronger at front-door onboarding and agent-operating conventions; OpenClaw is stronger at domain truth modeling, derived-state boundaries, and operator surfaces.
+- This reinforces a core comparison: arscontexta is stronger at front-door onboarding and agent-operating conventions; OVP is stronger at domain truth modeling, derived-state boundaries, and operator surfaces.
 - Created a durable discovery document at `docs/plans/2026-04-17-external-project-discovery-log.md` to hold this round's conclusions and future external-project comparisons.
 - Round 2 added the "横纵分析法 / HV Analysis" article as a research-methodology comparison. The key conclusion is that it is valuable as an orientation-report pattern and question scaffold, but not as a canonical knowledge/runtime model.
 - Repository inspection of `KKKKhazix/khazix-skills` confirmed that the method has been operationalized into both a reusable prompt and a heavier `hv-analysis` skill with mandatory web research, optional parallel-subagent collection, arXiv guidance, writing-style constraints, and Markdown-to-PDF conversion.
@@ -81,7 +81,7 @@
 - MemSearch’s strongest ideas are:
   - markdown files as canonical state with Milvus as a rebuildable shadow index
   - progressive disclosure (`search -> expand -> transcript`) as a disciplined recall UX
-  - pragmatic cross-platform packaging across Claude Code, OpenClaw, OpenCode, and Codex CLI
+  - pragmatic cross-platform packaging across Claude Code, OVP, OpenCode, and Codex CLI
   - a lightweight consolidation loop via `compact` that writes summaries back into the markdown memory store
 - The most relevant lesson from MemSearch for OVP is not to become “search over markdown,” but to preserve the source-of-truth / derived-index boundary and think seriously about progressive disclosure and agent-facing access layers.
 - Round 11 added the Garry Tan “Resolvers” article/thread as a governance-pattern artifact rather than a repo-first project. The key conclusion is that resolver is a missing first-class primitive: a routing/governance layer for skills, context, and filing decisions.
@@ -219,12 +219,12 @@
 | GitHub skill alias not loadable via superpowers CLI | Continued with direct repo inspection and GitHub/web tools |
 
 ## Resources
-- Local project root: `/Users/chris/Documents/openclaw-template`
+- Local project root: `/Users/chris/Documents/obsidian-vault-pipeline`
 - Target repo: `https://github.com/agenticnotetaking/arscontexta`
 - Local docs to inspect next: `README.md`, `README_EN.md`, `docs/pack-api/README.md`, `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
 - External docs to inspect next: `reference/kernel.yaml`, `skills/setup/SKILL.md`, `hooks/hooks.json`, selected setup/generator assets from `arscontexta`
-- Local comparison targets to inspect next: `src/openclaw_pipeline/truth_store.py`, `src/openclaw_pipeline/autopilot/queue.py`, `src/openclaw_pipeline/commands/ui_server.py`
-- Inspected local implementation: `src/openclaw_pipeline/truth_store.py`, `src/openclaw_pipeline/autopilot/queue.py`, `src/openclaw_pipeline/commands/ui_server.py`
+- Local comparison targets to inspect next: `src/ovp_pipeline/truth_store.py`, `src/ovp_pipeline/autopilot/queue.py`, `src/ovp_pipeline/commands/ui_server.py`
+- Inspected local implementation: `src/ovp_pipeline/truth_store.py`, `src/ovp_pipeline/autopilot/queue.py`, `src/ovp_pipeline/commands/ui_server.py`
 
 ## Visual/Browser Findings
 - Pending

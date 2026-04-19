@@ -1,4 +1,4 @@
-# OpenClaw Vault Workflow Skill
+# OVP Vault Workflow Skill
 
 Complete workflow for maintaining the vault's PARA structure.
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_default_pack_exposes_first_wave_wiki_views():
-    from openclaw_pipeline.packs.loader import load_default_pack
+    from ovp_pipeline.packs.loader import load_default_pack
 
     pack = load_default_pack()
     views = {view.name: view for view in pack.wiki_views()}

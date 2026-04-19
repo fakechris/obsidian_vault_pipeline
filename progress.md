@@ -43,13 +43,13 @@
   - docs/recipes/research-tech/pinboard.md
   - docs/recipes/research-tech/clippings.md
   - README.md
-  - src/openclaw_pipeline/txn.py
-  - src/openclaw_pipeline/unified_pipeline_enhanced.py
-  - src/openclaw_pipeline/auto_evergreen_extractor.py
-  - src/openclaw_pipeline/commands/watch_progress.py
-  - src/openclaw_pipeline/truth_api.py
-  - src/openclaw_pipeline/ui/view_models.py
-  - src/openclaw_pipeline/commands/ui_server.py
+  - src/ovp_pipeline/txn.py
+  - src/ovp_pipeline/unified_pipeline_enhanced.py
+  - src/ovp_pipeline/auto_evergreen_extractor.py
+  - src/ovp_pipeline/commands/watch_progress.py
+  - src/ovp_pipeline/truth_api.py
+  - src/ovp_pipeline/ui/view_models.py
+  - src/ovp_pipeline/commands/ui_server.py
   - tests/test_txn_runtime_ledger.py
   - tests/test_runtime_paths.py
   - tests/test_watch_progress_command.py
@@ -95,9 +95,9 @@
   - docs/plans/2026-04-18-phase23-inbound-capture-audit-visibility.md
   - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
   - docs/research-tech/RESEARCH_TECH_VERIFY.md
-  - src/openclaw_pipeline/truth_api.py
-  - src/openclaw_pipeline/ui/view_models.py
-  - src/openclaw_pipeline/commands/ui_server.py
+  - src/ovp_pipeline/truth_api.py
+  - src/ovp_pipeline/ui/view_models.py
+  - src/ovp_pipeline/commands/ui_server.py
   - tests/test_truth_api.py
   - tests/test_ui_view_models.py
   - tests/test_ui_server.py
@@ -143,9 +143,9 @@
   - docs/plans/2026-04-17-phase22-active-signal-impact-accounting.md
   - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
   - docs/research-tech/RESEARCH_TECH_VERIFY.md
-  - src/openclaw_pipeline/truth_api.py
-  - src/openclaw_pipeline/ui/view_models.py
-  - src/openclaw_pipeline/commands/ui_server.py
+  - src/ovp_pipeline/truth_api.py
+  - src/ovp_pipeline/ui/view_models.py
+  - src/ovp_pipeline/commands/ui_server.py
   - tests/test_truth_api.py
   - tests/test_ui_view_models.py
   - tests/test_ui_server.py
@@ -199,8 +199,8 @@
   - docs/research-tech/RESEARCH_TECH_VERIFY.md
   - progress.md
   - task_plan.md
-  - src/openclaw_pipeline/ui/view_models.py
-  - src/openclaw_pipeline/commands/ui_server.py
+  - src/ovp_pipeline/ui/view_models.py
+  - src/ovp_pipeline/commands/ui_server.py
   - tests/test_ui_view_models.py
   - tests/test_ui_server.py
 
@@ -252,9 +252,9 @@
   - docs/plans/2026-04-17-phase20-semantic-trust-and-production-traceability.md
   - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
   - docs/research-tech/RESEARCH_TECH_VERIFY.md
-  - src/openclaw_pipeline/truth_api.py
-  - src/openclaw_pipeline/ui/view_models.py
-  - src/openclaw_pipeline/commands/ui_server.py
+  - src/ovp_pipeline/truth_api.py
+  - src/ovp_pipeline/ui/view_models.py
+  - src/ovp_pipeline/commands/ui_server.py
   - tests/test_truth_api.py
   - tests/test_ui_view_models.py
   - tests/test_ui_server.py
@@ -294,10 +294,10 @@
   - docs/research-tech/RESEARCH_TECH_VERIFY.md
   - progress.md
   - task_plan.md
-  - src/openclaw_pipeline/packs/research_tech/assembly_recipes.py
-  - src/openclaw_pipeline/commands/export_artifact.py
-  - src/openclaw_pipeline/ui/view_models.py
-  - src/openclaw_pipeline/commands/ui_server.py
+  - src/ovp_pipeline/packs/research_tech/assembly_recipes.py
+  - src/ovp_pipeline/commands/export_artifact.py
+  - src/ovp_pipeline/ui/view_models.py
+  - src/ovp_pipeline/commands/ui_server.py
   - tests/test_export_command.py
   - tests/test_ui_view_models.py
   - tests/test_ui_server.py
@@ -328,7 +328,7 @@
 ### Phase 3: Comparative Analysis
 - **Status:** in_progress
 - Actions taken:
-  - Compared arscontexta's derived operating system model against OpenClaw's existing pack-based orchestration and truth projection architecture
+  - Compared arscontexta's derived operating system model against OVP's existing pack-based orchestration and truth projection architecture
 - Files created/modified:
   - findings.md
 
@@ -360,7 +360,7 @@
   - Researched `rohitg00/agentmemory` and added Round 18, classifying it as an open-harness-compatible, self-hosted memory engine rather than a context substrate
   - Verified in code that agentmemory centers on KV-scoped memory state, hook-driven capture, BM25/vector/graph retrieval with token-budgeted injection, and a thick consolidation pipeline rather than file-canonical knowledge artifacts
   - Researched `EverMind-AI/EverOS` and added Round 19, focusing on the EverMemOS/EverCore method stack rather than the whole monorepo label
-  - Verified in docs and code that EverMemOS is a construction-first, retrieval-heavy, DB/search-native memory operating system with typed memory extraction, multi-strategy retrieval, benchmark infrastructure, and a context-engine style OpenClaw integration
+  - Verified in docs and code that EverMemOS is a construction-first, retrieval-heavy, DB/search-native memory operating system with typed memory extraction, multi-strategy retrieval, benchmark infrastructure, and a context-engine style OVP integration
   - Added an actionable cross-round synthesis section translating the survey into recommended OVP direction, anti-goals, architecture layers, and near-term milestones
   - Wrote a dedicated architecture mapping doc clarifying how the proposed four-layer model stacks with the existing six-layer OVP pipeline and the current `Core Platform / Domain Pack / Workflow Profile` model
   - Inspected the current runtime interface layer in code: pack base types, workflow profile resolution, execution-contract resolution, handler registry, processor registry, observation surfaces, truth projection registry, and pack compatibility inheritance
@@ -484,19 +484,19 @@
   - docs/plans/2026-04-17-phase18-knowledge-compiler-contract-consolidation-plan.md
   - docs/pack-api/README.md
   - docs/research-tech/RESEARCH_TECH_SKILLPACK.md
-  - src/openclaw_pipeline/packs/base.py
-  - src/openclaw_pipeline/packs/research_tech/assembly_recipes.py
-  - src/openclaw_pipeline/packs/research_tech/artifacts.py
-  - src/openclaw_pipeline/packs/research_tech/governance.py
-  - src/openclaw_pipeline/packs/research_tech/pack.py
-  - src/openclaw_pipeline/commands/export_artifact.py
-  - src/openclaw_pipeline/assembly_recipe_registry.py
-  - src/openclaw_pipeline/artifact_registry.py
-  - src/openclaw_pipeline/governance_registry.py
-  - src/openclaw_pipeline/ui/view_models.py
-  - src/openclaw_pipeline/commands/ui_server.py
-  - src/openclaw_pipeline/commands/doctor.py
-  - src/openclaw_pipeline/truth_api.py
+  - src/ovp_pipeline/packs/base.py
+  - src/ovp_pipeline/packs/research_tech/assembly_recipes.py
+  - src/ovp_pipeline/packs/research_tech/artifacts.py
+  - src/ovp_pipeline/packs/research_tech/governance.py
+  - src/ovp_pipeline/packs/research_tech/pack.py
+  - src/ovp_pipeline/commands/export_artifact.py
+  - src/ovp_pipeline/assembly_recipe_registry.py
+  - src/ovp_pipeline/artifact_registry.py
+  - src/ovp_pipeline/governance_registry.py
+  - src/ovp_pipeline/ui/view_models.py
+  - src/ovp_pipeline/commands/ui_server.py
+  - src/ovp_pipeline/commands/doctor.py
+  - src/ovp_pipeline/truth_api.py
   - tests/test_export_command.py
   - tests/test_ui_view_models.py
   - tests/test_ui_server.py

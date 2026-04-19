@@ -4,9 +4,9 @@ import json
 
 
 def test_default_pack_discovery_preserves_knowledge_behavior_with_context(temp_vault):
-    from openclaw_pipeline.concept_registry import ConceptEntry, ConceptRegistry
-    from openclaw_pipeline.discovery import discover_related
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+    from ovp_pipeline.discovery import discover_related
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(
@@ -50,10 +50,10 @@ The harness coordinates architecture, execution, and tools.
 
 
 def test_pack_discovery_hooks_can_filter_discoverable_object_kinds(temp_vault):
-    from openclaw_pipeline.concept_registry import ConceptEntry, ConceptRegistry
-    from openclaw_pipeline.discovery import discover_related
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.packs.base import BaseDomainPack
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+    from ovp_pipeline.discovery import discover_related
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.packs.base import BaseDomainPack
 
     concept_note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     concept_note.write_text(
@@ -126,10 +126,10 @@ Entity and orchestration reference.
 
 
 def test_pack_evidence_payload_carries_pack_and_object_kind_context(temp_vault):
-    from openclaw_pipeline.concept_registry import ConceptEntry, ConceptRegistry
-    from openclaw_pipeline.evidence import build_evidence_payload
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+    from ovp_pipeline.evidence import build_evidence_payload
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(

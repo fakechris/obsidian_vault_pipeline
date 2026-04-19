@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_lint_issue_can_be_mapped_to_operation_proposal():
-    from openclaw_pipeline.lint_checker import LintIssue, issue_to_operation_proposal
+    from ovp_pipeline.lint_checker import LintIssue, issue_to_operation_proposal
 
     proposal = issue_to_operation_proposal(
         LintIssue(

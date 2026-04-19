@@ -133,7 +133,7 @@ Explicit deferrals:
 ### Task 2: Implement Signal Impact Accounting In `truth_api.py`
 
 **Files:**
-- Modify: `src/openclaw_pipeline/truth_api.py`
+- Modify: `src/ovp_pipeline/truth_api.py`
 - Test: `tests/test_truth_api.py`
 
 **Deliverable:**
@@ -145,7 +145,7 @@ Explicit deferrals:
 ### Task 3: Spend The Contract In View Models
 
 **Files:**
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
 - Test: `tests/test_ui_view_models.py`
 
 **Deliverable:**
@@ -157,7 +157,7 @@ Explicit deferrals:
 ### Task 4: Render The Impact Loop In The Shell
 
 **Files:**
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_ui_server.py`
 
 **Deliverable:**

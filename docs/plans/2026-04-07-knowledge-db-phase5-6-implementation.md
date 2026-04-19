@@ -32,8 +32,8 @@ Expected:
 ### Task 2: Implement Phase 5 wiring
 
 **Files:**
-- Modify: `src/openclaw_pipeline/unified_pipeline_enhanced.py`
-- Modify: `src/openclaw_pipeline/autopilot/daemon.py`
+- Modify: `src/ovp_pipeline/unified_pipeline_enhanced.py`
+- Modify: `src/ovp_pipeline/autopilot/daemon.py`
 
 **Step 1: Add `knowledge_index` pipeline step**
 
@@ -60,8 +60,8 @@ Expected:
 ### Task 3: Add stdio read surface and tool discovery
 
 **Files:**
-- Modify: `src/openclaw_pipeline/knowledge_index.py`
-- Modify: `src/openclaw_pipeline/commands/knowledge_index.py`
+- Modify: `src/ovp_pipeline/knowledge_index.py`
+- Modify: `src/ovp_pipeline/commands/knowledge_index.py`
 - Modify: `tests/test_knowledge_index.py`
 
 **Step 1: Write failing tests**
@@ -102,7 +102,7 @@ Expected:
 **Step 1: Run compile**
 
 Run:
-- `python3 -m compileall src/openclaw_pipeline`
+- `python3 -m compileall src/ovp_pipeline`
 
 **Step 2: Run tests**
 

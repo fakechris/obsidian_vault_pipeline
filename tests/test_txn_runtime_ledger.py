@@ -7,7 +7,7 @@ import pytest
 
 
 def test_transaction_manager_start_creates_run_ledger(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import TransactionManager
 
     txn = TransactionManager(tmp_path)
     txn_id = txn.start(
@@ -30,8 +30,8 @@ def test_transaction_manager_start_creates_run_ledger(tmp_path):
 
 
 def test_transaction_manager_write_preserves_previous_ledger_on_dump_failure(tmp_path, monkeypatch):
-    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_module
-    from openclaw_pipeline.unified_pipeline_enhanced import TransactionManager
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_module
+    from ovp_pipeline.unified_pipeline_enhanced import TransactionManager
 
     txn = TransactionManager(tmp_path)
     txn_file = tmp_path / "txn-1.json"
@@ -51,7 +51,7 @@ def test_transaction_manager_write_preserves_previous_ledger_on_dump_failure(tmp
 
 
 def test_transaction_manager_tracks_step_progress_and_percent(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import TransactionManager
 
     txn = TransactionManager(tmp_path)
     txn_id = txn.start("enhanced-pipeline", "Incremental pipeline")
@@ -89,7 +89,7 @@ def test_transaction_manager_tracks_step_progress_and_percent(tmp_path):
 
 
 def test_transaction_step_transition_resets_previous_progress_fields():
-    from openclaw_pipeline.txn import build_transaction_payload, heartbeat_transaction, update_transaction_step
+    from ovp_pipeline.txn import build_transaction_payload, heartbeat_transaction, update_transaction_step
 
     payload = build_transaction_payload("txn-1", "enhanced-pipeline", "demo")
     update_transaction_step(
@@ -129,7 +129,7 @@ def test_transaction_step_transition_resets_previous_progress_fields():
 
 
 def test_classify_run_ledgers_separates_active_and_stale(tmp_path):
-    from openclaw_pipeline.txn import classify_run_ledgers
+    from ovp_pipeline.txn import classify_run_ledgers
 
     active = tmp_path / "txn-active.json"
     active.write_text(
@@ -187,7 +187,7 @@ def test_classify_run_ledgers_separates_active_and_stale(tmp_path):
 
 
 def test_classify_run_ledgers_falls_back_when_now_iso_is_malformed(tmp_path):
-    from openclaw_pipeline.txn import classify_run_ledgers
+    from ovp_pipeline.txn import classify_run_ledgers
 
     txn_file = tmp_path / "txn-active.json"
     txn_file.write_text(

@@ -4,7 +4,7 @@
 
 ```bash
 # 1. 进入模板目录
-cd /Users/chris/Documents/openclaw-template
+cd /Users/chris/Documents/obsidian-vault-pipeline
 
 # 2. 添加远程仓库（替换为你的仓库URL）
 git remote add origin https://github.com/yourusername/para-zettelkasten-template.git
@@ -25,7 +25,7 @@ brew install gh  # macOS
 git gh auth login
 
 # 创建仓库并推送
-cd /Users/chris/Documents/openclaw-template
+cd /Users/chris/Documents/obsidian-vault-pipeline
 gh repo create para-zettelkasten-template --public --source=. --push
 ```
 
@@ -39,7 +39,7 @@ gh repo create para-zettelkasten-template --public --source=. --push
 6. 复制推送命令:
 
 ```bash
-cd /Users/chris/Documents/openclaw-template
+cd /Users/chris/Documents/obsidian-vault-pipeline
 git remote add origin https://github.com/yourusername/para-zettelkasten-template.git
 git branch -M main
 git push -u origin main

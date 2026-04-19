@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def _make_pipeline(tmp_path: Path):
-    from openclaw_pipeline.unified_pipeline_enhanced import EnhancedPipeline, PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import EnhancedPipeline, PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
@@ -26,7 +26,7 @@ def _bind_success_step(pipeline, step_name: str, calls: list[str], **payload):
 
 
 def test_research_tech_full_profile_runtime_e2e(tmp_path):
-    from openclaw_pipeline.packs.loader import load_pack
+    from ovp_pipeline.packs.loader import load_pack
 
     _vault, pipeline = _make_pipeline(tmp_path)
     calls: list[str] = []
@@ -77,7 +77,7 @@ def test_research_tech_full_profile_runtime_e2e(tmp_path):
 
 
 def test_default_knowledge_compatibility_runtime_from_step_e2e(tmp_path):
-    from openclaw_pipeline.packs.loader import load_pack
+    from ovp_pipeline.packs.loader import load_pack
 
     _vault, pipeline = _make_pipeline(tmp_path)
     calls: list[str] = []

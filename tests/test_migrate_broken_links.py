@@ -4,14 +4,14 @@ Tests for migrate_broken_links module.
 
 import pytest
 from pathlib import Path
-from openclaw_pipeline.migrate_broken_links import (
+from ovp_pipeline.migrate_broken_links import (
     BrokenLinkScanner,
     BrokenLinkResolver,
     WikilinkExtractor,
     BrokenLinkOccurrence,
     UniqueBrokenMention,
 )
-from openclaw_pipeline.concept_registry import ConceptRegistry, ConceptEntry
+from ovp_pipeline.concept_registry import ConceptRegistry, ConceptEntry
 
 
 class TestWikilinkExtractor:

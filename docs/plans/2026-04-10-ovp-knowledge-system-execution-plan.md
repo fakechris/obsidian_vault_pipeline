@@ -2,7 +2,7 @@
 
 ## Goal
 
-把 `OVP_KNOWLEDGE_DIR` 指向的外部架构分析文档，收敛成当前 `openclaw-template` 可执行的大项目实施稿。
+把 `OVP_KNOWLEDGE_DIR` 指向的外部架构分析文档，收敛成当前 `obsidian-vault-pipeline` 可执行的大项目实施稿。
 
 建议做法：
 
@@ -25,26 +25,26 @@
 当前 repo 已经具备的骨架：
 
 - pack/plugin 基础设施：
-  - `src/openclaw_pipeline/packs/base.py`
-  - `src/openclaw_pipeline/packs/default_knowledge/pack.py`
+  - `src/ovp_pipeline/packs/base.py`
+  - `src/ovp_pipeline/packs/default_knowledge/pack.py`
 - extraction 基础类型与运行时：
-  - `src/openclaw_pipeline/extraction/specs.py`
-  - `src/openclaw_pipeline/extraction/results.py`
-  - `src/openclaw_pipeline/extraction/runtime.py`
-  - `src/openclaw_pipeline/extraction/artifacts.py`
+  - `src/ovp_pipeline/extraction/specs.py`
+  - `src/ovp_pipeline/extraction/results.py`
+  - `src/ovp_pipeline/extraction/runtime.py`
+  - `src/ovp_pipeline/extraction/artifacts.py`
 - object projection 的最小兼容层：
-  - `src/openclaw_pipeline/object_registry.py`
+  - `src/ovp_pipeline/object_registry.py`
 - existing derived/query surface：
-  - `src/openclaw_pipeline/knowledge_index.py`
-  - `src/openclaw_pipeline/discovery.py`
-  - `src/openclaw_pipeline/evidence.py`
+  - `src/ovp_pipeline/knowledge_index.py`
+  - `src/ovp_pipeline/discovery.py`
+  - `src/ovp_pipeline/evidence.py`
 - pack-aware operation / wiki view 早期版本：
-  - `src/openclaw_pipeline/packs/default_knowledge/operation_profiles.py`
-  - `src/openclaw_pipeline/packs/default_knowledge/wiki_views.py`
+  - `src/ovp_pipeline/packs/default_knowledge/operation_profiles.py`
+  - `src/ovp_pipeline/packs/default_knowledge/wiki_views.py`
 
 当前明确还不够的部分：
 
-- `src/openclaw_pipeline/commands/extract_profiles.py`
+- `src/ovp_pipeline/commands/extract_profiles.py`
   - 仍然是 `NoopExtractor`，没有真正的 extractor runtime 接口落地。
 - 缺少 `truth_store.py`
   - `knowledge.db` 仍然是 index-first，不是 truth-first。
@@ -89,20 +89,20 @@
 
 主要改动：
 
-- `src/openclaw_pipeline/commands/extract_profiles.py`
+- `src/ovp_pipeline/commands/extract_profiles.py`
   - 替换 `NoopExtractor`
   - 接入真实 extractor interface
 - 新增：
-  - `src/openclaw_pipeline/extraction/llm_extractor.py`
-  - `src/openclaw_pipeline/extraction/prompt_builder.py`
-  - `src/openclaw_pipeline/extraction/validator.py`
+  - `src/ovp_pipeline/extraction/llm_extractor.py`
+  - `src/ovp_pipeline/extraction/prompt_builder.py`
+  - `src/ovp_pipeline/extraction/validator.py`
 - 扩展：
-  - `src/openclaw_pipeline/extraction/runtime.py`
-  - `src/openclaw_pipeline/extraction/results.py`
-  - `src/openclaw_pipeline/extraction/artifacts.py`
+  - `src/ovp_pipeline/extraction/runtime.py`
+  - `src/ovp_pipeline/extraction/results.py`
+  - `src/ovp_pipeline/extraction/artifacts.py`
 - 新增命令：
-  - `src/openclaw_pipeline/commands/extract_preview.py`
-  - `src/openclaw_pipeline/commands/extraction_dashboard.py`
+  - `src/ovp_pipeline/commands/extract_preview.py`
+  - `src/ovp_pipeline/commands/extraction_dashboard.py`
 
 ### 2. Truth Layer
 
@@ -113,7 +113,7 @@
 
 新增核心模块：
 
-- `src/openclaw_pipeline/truth_store.py`
+- `src/ovp_pipeline/truth_store.py`
 
 第一版 truth tables：
 
@@ -139,14 +139,14 @@
 
 新增模块：
 
-- `src/openclaw_pipeline/materializers/object_page.py`
-- `src/openclaw_pipeline/materializers/topic_view.py`
-- `src/openclaw_pipeline/materializers/event_dossier.py`
+- `src/ovp_pipeline/materializers/object_page.py`
+- `src/ovp_pipeline/materializers/topic_view.py`
+- `src/ovp_pipeline/materializers/event_dossier.py`
 
 并扩展：
 
-- `src/openclaw_pipeline/packs/default_knowledge/wiki_views.py`
-- `src/openclaw_pipeline/commands/build_views.py`
+- `src/ovp_pipeline/packs/default_knowledge/wiki_views.py`
+- `src/ovp_pipeline/commands/build_views.py`
 
 ### 4. Review Runtime
 
@@ -156,10 +156,10 @@
 
 新增模块：
 
-- `src/openclaw_pipeline/review_queue/items.py`
-- `src/openclaw_pipeline/review_queue/runtime.py`
-- `src/openclaw_pipeline/review_queue/materializers.py`
-- `src/openclaw_pipeline/commands/review_queue.py`
+- `src/ovp_pipeline/review_queue/items.py`
+- `src/ovp_pipeline/review_queue/runtime.py`
+- `src/ovp_pipeline/review_queue/materializers.py`
+- `src/ovp_pipeline/commands/review_queue.py`
 
 第一波 queue types：
 
@@ -290,23 +290,23 @@
 
 第一批最值得动的文件：
 
-- `src/openclaw_pipeline/commands/extract_profiles.py`
-- `src/openclaw_pipeline/extraction/runtime.py`
-- `src/openclaw_pipeline/extraction/results.py`
-- `src/openclaw_pipeline/evidence.py`
-- `src/openclaw_pipeline/knowledge_index.py`
-- `src/openclaw_pipeline/object_registry.py`
-- `src/openclaw_pipeline/packs/default_knowledge/extraction_profiles.py`
-- `src/openclaw_pipeline/packs/default_knowledge/wiki_views.py`
+- `src/ovp_pipeline/commands/extract_profiles.py`
+- `src/ovp_pipeline/extraction/runtime.py`
+- `src/ovp_pipeline/extraction/results.py`
+- `src/ovp_pipeline/evidence.py`
+- `src/ovp_pipeline/knowledge_index.py`
+- `src/ovp_pipeline/object_registry.py`
+- `src/ovp_pipeline/packs/default_knowledge/extraction_profiles.py`
+- `src/ovp_pipeline/packs/default_knowledge/wiki_views.py`
 
 第一批新增文件：
 
-- `src/openclaw_pipeline/extraction/llm_extractor.py`
-- `src/openclaw_pipeline/extraction/prompt_builder.py`
-- `src/openclaw_pipeline/extraction/validator.py`
-- `src/openclaw_pipeline/commands/extract_preview.py`
-- `src/openclaw_pipeline/commands/extraction_dashboard.py`
-- `src/openclaw_pipeline/truth_store.py`
+- `src/ovp_pipeline/extraction/llm_extractor.py`
+- `src/ovp_pipeline/extraction/prompt_builder.py`
+- `src/ovp_pipeline/extraction/validator.py`
+- `src/ovp_pipeline/commands/extract_preview.py`
+- `src/ovp_pipeline/commands/extraction_dashboard.py`
+- `src/ovp_pipeline/truth_store.py`
 
 ## Risks
 

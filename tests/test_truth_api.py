@@ -7,7 +7,7 @@ import sqlite3
 
 import pytest
 
-from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 
 
 def _seed_truth_vault(temp_vault):
@@ -65,7 +65,7 @@ Agent harness does not support local-first execution for operators.
 
 
 def test_truth_api_lists_objects(temp_vault):
-    from openclaw_pipeline.truth_api import list_objects
+    from ovp_pipeline.truth_api import list_objects
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -81,8 +81,8 @@ def test_truth_api_lists_objects(temp_vault):
 
 
 def test_truth_api_rebuilds_legacy_knowledge_db_before_object_queries(temp_vault):
-    from openclaw_pipeline.runtime import VaultLayout
-    from openclaw_pipeline.truth_api import list_objects
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import list_objects
 
     vault = _seed_truth_vault(temp_vault)
     db_path = VaultLayout.from_vault(vault).knowledge_db
@@ -130,7 +130,7 @@ def test_truth_api_rebuilds_legacy_knowledge_db_before_object_queries(temp_vault
 
 
 def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vault):
-    from openclaw_pipeline.truth_api import list_action_queue, list_signals
+    from ovp_pipeline.truth_api import list_action_queue, list_signals
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -190,7 +190,7 @@ def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vau
 
 
 def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
-    from openclaw_pipeline.truth_api import get_runtime_status
+    from ovp_pipeline.truth_api import get_runtime_status
 
     logs_dir = temp_vault / "60-Logs"
     transactions_dir = logs_dir / "transactions"
@@ -264,7 +264,7 @@ def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
 
 
 def test_truth_api_builds_note_inbound_capture_summary_and_attaches_it_to_signals(temp_vault):
-    from openclaw_pipeline.truth_api import get_note_inbound_capture_summary, list_signals
+    from ovp_pipeline.truth_api import get_note_inbound_capture_summary, list_signals
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -399,7 +399,7 @@ Processed source note without downstream chain.
 
 
 def test_truth_api_marks_non_executable_recommended_actions_as_review_only():
-    from openclaw_pipeline.truth_api import _build_signal_impact_summary
+    from ovp_pipeline.truth_api import _build_signal_impact_summary
 
     review_only = _build_signal_impact_summary(
         {
@@ -432,7 +432,7 @@ def test_truth_api_aggregates_note_capture_summaries_with_single_log_scan_per_fi
     temp_vault,
     monkeypatch,
 ):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     note_alpha = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Alpha_深度解读.md"
     note_beta = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Beta_深度解读.md"
@@ -511,7 +511,7 @@ def test_truth_api_avoids_datetime_utc_import_for_python_310_compatibility():
     source = (
         Path(__file__).resolve().parents[1]
         / "src"
-        / "openclaw_pipeline"
+        / "ovp_pipeline"
         / "truth_api.py"
     ).read_text(encoding="utf-8")
 
@@ -521,7 +521,7 @@ def test_truth_api_avoids_datetime_utc_import_for_python_310_compatibility():
 
 
 def test_truth_store_schema_requires_explicit_pack():
-    from openclaw_pipeline.truth_store import TRUTH_STORE_SCHEMA
+    from ovp_pipeline.truth_store import TRUTH_STORE_SCHEMA
 
     conn = sqlite3.connect(":memory:")
     try:
@@ -539,7 +539,7 @@ def test_truth_store_schema_requires_explicit_pack():
 
 
 def test_truth_api_reads_review_actions_from_jsonl_without_knowledge_db(temp_vault):
-    from openclaw_pipeline.truth_api import list_evolution_review_actions, list_review_actions
+    from ovp_pipeline.truth_api import list_evolution_review_actions, list_review_actions
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -587,7 +587,7 @@ def test_truth_api_reads_review_actions_from_jsonl_without_knowledge_db(temp_vau
 
 
 def test_note_date_text_returns_empty_string_when_frontmatter_date_missing(temp_vault):
-    from openclaw_pipeline.truth_api import _note_date_text
+    from ovp_pipeline.truth_api import _note_date_text
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "NoDate.md"
     note.write_text(
@@ -606,7 +606,7 @@ type: evergreen
 
 
 def test_truth_api_returns_object_detail_with_claims_relations_and_summary(temp_vault):
-    from openclaw_pipeline.truth_api import get_object_detail
+    from ovp_pipeline.truth_api import get_object_detail
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -621,7 +621,7 @@ def test_truth_api_returns_object_detail_with_claims_relations_and_summary(temp_
 
 
 def test_truth_api_filters_truth_rows_by_pack_name(temp_vault):
-    from openclaw_pipeline.truth_api import get_object_detail, list_objects
+    from ovp_pipeline.truth_api import get_object_detail, list_objects
 
     vault = _seed_truth_vault(temp_vault)
     db_path = vault / "60-Logs" / "knowledge.db"
@@ -691,7 +691,7 @@ def test_truth_api_filters_truth_rows_by_pack_name(temp_vault):
 
 
 def test_truth_api_lists_research_graph_clusters(temp_vault):
-    from openclaw_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.truth_api import list_graph_clusters
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -705,9 +705,9 @@ def test_truth_api_lists_research_graph_clusters(temp_vault):
 
 
 def test_truth_api_does_not_fallback_when_requested_pack_is_materialized(temp_vault, monkeypatch):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.truth_api import get_object_detail, list_graph_clusters, list_objects
-    from openclaw_pipeline.truth_store import TruthStoreProjection
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.truth_api import get_object_detail, list_graph_clusters, list_objects
+    from ovp_pipeline.truth_store import TruthStoreProjection
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -742,7 +742,7 @@ def test_truth_api_does_not_fallback_when_requested_pack_is_materialized(temp_va
         )
 
     monkeypatch.setattr(
-        "openclaw_pipeline.knowledge_index.execute_truth_projection_builder",
+        "ovp_pipeline.knowledge_index.execute_truth_projection_builder",
         fake_execute_truth_projection_builder,
     )
 
@@ -770,7 +770,7 @@ def test_truth_api_does_not_fallback_when_requested_pack_is_materialized(temp_va
 
 
 def test_truth_api_lists_contradictions(temp_vault):
-    from openclaw_pipeline.truth_api import list_contradictions
+    from ovp_pipeline.truth_api import list_contradictions
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -798,7 +798,7 @@ def test_truth_api_lists_contradictions(temp_vault):
 
 
 def test_truth_api_filters_contradictions_by_query(temp_vault):
-    from openclaw_pipeline.truth_api import list_contradictions
+    from ovp_pipeline.truth_api import list_contradictions
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -809,7 +809,7 @@ def test_truth_api_filters_contradictions_by_query(temp_vault):
 
 
 def test_truth_api_filters_contradictions_by_resolved_status_after_overrides(temp_vault):
-    from openclaw_pipeline.truth_api import list_contradictions, record_review_action
+    from ovp_pipeline.truth_api import list_contradictions, record_review_action
 
     vault = _seed_truth_vault(temp_vault)
     positive = vault / "10-Knowledge" / "Evergreen" / "Zeta Positive.md"
@@ -865,7 +865,7 @@ Zeta platform does not support high-trust execution for operators.
 
 
 def test_truth_api_lists_evolution_candidates_from_open_contradictions(temp_vault):
-    from openclaw_pipeline.truth_api import list_evolution_candidates
+    from ovp_pipeline.truth_api import list_evolution_candidates
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -881,7 +881,7 @@ def test_truth_api_lists_evolution_candidates_from_open_contradictions(temp_vaul
 
 
 def test_truth_api_lists_replaces_and_enriches_candidates(temp_vault):
-    from openclaw_pipeline.truth_api import list_evolution_candidates
+    from ovp_pipeline.truth_api import list_evolution_candidates
 
     vault = _seed_truth_vault(temp_vault)
     legacy = vault / "10-Knowledge" / "Evergreen" / "Legacy.md"
@@ -971,7 +971,7 @@ Source note builds on [[source-note]] with more deployment detail.
 
 
 def test_truth_api_expresses_all_four_evolution_link_types(temp_vault):
-    from openclaw_pipeline.truth_api import list_evolution_candidates
+    from ovp_pipeline.truth_api import list_evolution_candidates
 
     vault = _seed_truth_vault(temp_vault)
     legacy = vault / "10-Knowledge" / "Evergreen" / "Legacy.md"
@@ -1076,7 +1076,7 @@ Source note confirms the local-first rollout guidance from independent testing.
 
 
 def test_truth_api_scopes_evolution_candidate_traceability_to_requested_objects(temp_vault, monkeypatch):
-    from openclaw_pipeline import truth_api
+    from ovp_pipeline import truth_api
 
     vault = _seed_truth_vault(temp_vault)
     observed_object_ids: list[str] = []
@@ -1096,7 +1096,7 @@ def test_truth_api_scopes_evolution_candidate_traceability_to_requested_objects(
 
 
 def test_truth_api_ignores_missing_objects_in_evolution_object_pool(temp_vault):
-    from openclaw_pipeline.truth_api import list_evolution_candidates
+    from ovp_pipeline.truth_api import list_evolution_candidates
 
     vault = _seed_truth_vault(temp_vault)
     deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Ghost Dive_深度解读.md"
@@ -1135,7 +1135,7 @@ date: 2026-04-14
 
 
 def test_truth_api_reviews_evolution_candidate_and_lists_links(temp_vault):
-    from openclaw_pipeline.truth_api import list_evolution_candidates, list_evolution_links, review_evolution_candidate
+    from ovp_pipeline.truth_api import list_evolution_candidates, list_evolution_links, review_evolution_candidate
 
     vault = _seed_truth_vault(temp_vault)
     candidate = next(item for item in list_evolution_candidates(vault) if item["link_type"] == "challenges")
@@ -1156,7 +1156,7 @@ def test_truth_api_reviews_evolution_candidate_and_lists_links(temp_vault):
 
 
 def test_truth_api_reviews_evolution_candidate_beyond_page_limit(temp_vault, monkeypatch):
-    from openclaw_pipeline import truth_api
+    from ovp_pipeline import truth_api
 
     vault = _seed_truth_vault(temp_vault)
     legacy = vault / "10-Knowledge" / "Evergreen" / "Legacy.md"
@@ -1227,7 +1227,7 @@ This note supersedes [[legacy-note]] and confirms the migration path.
 
 
 def test_truth_api_builds_topic_neighborhood(temp_vault):
-    from openclaw_pipeline.truth_api import get_topic_neighborhood
+    from ovp_pipeline.truth_api import get_topic_neighborhood
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -1246,7 +1246,7 @@ def test_truth_api_builds_topic_neighborhood(temp_vault):
 
 
 def test_truth_api_rejects_negative_pagination_inputs(temp_vault):
-    from openclaw_pipeline.truth_api import list_contradictions, list_objects
+    from ovp_pipeline.truth_api import list_contradictions, list_objects
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -1267,7 +1267,7 @@ def test_truth_api_rejects_negative_pagination_inputs(temp_vault):
 
 
 def test_truth_api_filters_objects_by_query(temp_vault):
-    from openclaw_pipeline.truth_api import list_objects
+    from ovp_pipeline.truth_api import list_objects
 
     vault = _seed_truth_vault(temp_vault)
 
@@ -1277,7 +1277,7 @@ def test_truth_api_filters_objects_by_query(temp_vault):
 
 
 def test_truth_api_escapes_like_wildcards_in_object_queries(temp_vault):
-    from openclaw_pipeline.truth_api import list_objects
+    from ovp_pipeline.truth_api import list_objects
 
     percent = temp_vault / "10-Knowledge" / "Evergreen" / "Percent.md"
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
@@ -1317,7 +1317,7 @@ Regular note.
 
 
 def test_truth_api_matches_contradictions_by_exact_object_id_prefix(temp_vault):
-    from openclaw_pipeline.truth_api import get_object_detail
+    from ovp_pipeline.truth_api import get_object_detail
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha_one = temp_vault / "10-Knowledge" / "Evergreen" / "AlphaOne.md"
@@ -1373,7 +1373,7 @@ Alpha one does not support local-first execution.
 
 
 def test_truth_api_searches_objects_and_notes(temp_vault):
-    from openclaw_pipeline.truth_api import search_vault_surface
+    from ovp_pipeline.truth_api import search_vault_surface
 
     vault = _seed_truth_vault(temp_vault)
     deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
@@ -1406,7 +1406,7 @@ Mentions [[source-note]].
 
 
 def test_truth_api_resolves_deep_dive_source_note_from_frontmatter_and_logs(temp_vault):
-    from openclaw_pipeline.truth_api import get_note_provenance
+    from ovp_pipeline.truth_api import get_note_provenance
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -1475,7 +1475,7 @@ type: "ai"
 
 
 def test_truth_api_resolves_processed_note_to_derived_deep_dives(temp_vault):
-    from openclaw_pipeline.truth_api import get_note_provenance
+    from ovp_pipeline.truth_api import get_note_provenance
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -1534,7 +1534,7 @@ type: "ai"
 
 
 def test_truth_api_returns_object_provenance_and_moc_membership(temp_vault):
-    from openclaw_pipeline.truth_api import get_object_detail
+    from ovp_pipeline.truth_api import get_object_detail
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -1598,7 +1598,7 @@ date: 2026-04-13
 
 
 def test_truth_api_uses_page_links_for_provenance_resolution(temp_vault):
-    from openclaw_pipeline.truth_api import get_object_detail
+    from ovp_pipeline.truth_api import get_object_detail
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Alias Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -1657,7 +1657,7 @@ date: 2026-04-13
 
 
 def test_truth_api_returns_note_traceability_for_processed_source(temp_vault):
-    from openclaw_pipeline.truth_api import get_note_traceability
+    from ovp_pipeline.truth_api import get_note_traceability
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -1769,7 +1769,7 @@ date: 2026-04-13
 
 
 def test_truth_api_returns_object_traceability(temp_vault):
-    from openclaw_pipeline.truth_api import get_object_traceability
+    from ovp_pipeline.truth_api import get_object_traceability
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -1865,7 +1865,7 @@ date: 2026-04-13
 
 
 def test_truth_api_object_traceability_excludes_incidental_deep_dive_mentions(temp_vault):
-    from openclaw_pipeline.truth_api import get_object_traceability
+    from ovp_pipeline.truth_api import get_object_traceability
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -1949,7 +1949,7 @@ date: 2026-04-13
 
 
 def test_truth_api_returns_note_traceability_for_evergreen_note(temp_vault):
-    from openclaw_pipeline.truth_api import get_note_traceability
+    from ovp_pipeline.truth_api import get_note_traceability
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -2040,7 +2040,7 @@ date: 2026-04-13
 
 
 def test_truth_api_note_traceability_forwards_pack_to_object_traceability(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     evergreen.parent.mkdir(parents=True, exist_ok=True)
@@ -2081,7 +2081,7 @@ date: 2026-04-13
 
 
 def test_truth_api_limits_atlas_memberships_by_page_not_join_rows(temp_vault):
-    from openclaw_pipeline.truth_api import list_atlas_memberships
+    from ovp_pipeline.truth_api import list_atlas_memberships
 
     for note_id, title in (("alpha", "Alpha"), ("beta", "Beta"), ("gamma", "Gamma")):
         note = temp_vault / "10-Knowledge" / "Evergreen" / f"{title}.md"
@@ -2126,7 +2126,7 @@ date: 2026-04-13
 
 
 def test_truth_api_limits_deep_dive_derivations_by_page_not_join_rows(temp_vault):
-    from openclaw_pipeline.truth_api import list_deep_dive_derivations
+    from ovp_pipeline.truth_api import list_deep_dive_derivations
 
     for note_id, title in (("alpha", "Alpha"), ("beta", "Beta"), ("gamma", "Gamma")):
         note = temp_vault / "10-Knowledge" / "Evergreen" / f"{title}.md"
@@ -2209,7 +2209,7 @@ date: 2026-04-13
 
 
 def test_surface_page_query_clauses_parameterizes_note_type():
-    from openclaw_pipeline.truth_api import _surface_page_query_clauses
+    from ovp_pipeline.truth_api import _surface_page_query_clauses
 
     where_sql, params = _surface_page_query_clauses(
         note_type="moc",
@@ -2221,7 +2221,7 @@ def test_surface_page_query_clauses_parameterizes_note_type():
 
 
 def test_truth_api_syncs_and_lists_active_signals(temp_vault):
-    from openclaw_pipeline.truth_api import list_signals, sync_signal_ledger
+    from ovp_pipeline.truth_api import list_signals, sync_signal_ledger
 
     vault = _seed_truth_vault(temp_vault)
     thin = vault / "10-Knowledge" / "Evergreen" / "Thin.md"
@@ -2277,7 +2277,7 @@ Processed source note with no downstream chain.
 
 
 def test_truth_api_filters_signal_ledger_by_type_and_query(temp_vault):
-    from openclaw_pipeline.truth_api import list_signals, sync_signal_ledger
+    from ovp_pipeline.truth_api import list_signals, sync_signal_ledger
 
     vault = _seed_truth_vault(temp_vault)
     loose_source = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -2306,7 +2306,7 @@ Processed source note with no downstream chain.
 
 
 def test_truth_api_reuses_signal_ledger_when_dependencies_unchanged(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     truth_api.sync_signal_ledger(vault)
@@ -2329,7 +2329,7 @@ def test_truth_api_reuses_signal_ledger_when_dependencies_unchanged(temp_vault, 
 
 
 def test_truth_api_includes_extraction_trigger_signals(temp_vault):
-    from openclaw_pipeline.truth_api import list_signals, sync_signal_ledger
+    from ovp_pipeline.truth_api import list_signals, sync_signal_ledger
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -2397,7 +2397,7 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
 
 
 def test_truth_api_auto_queue_signal_types_follow_governance_contract():
-    from openclaw_pipeline import truth_api
+    from ovp_pipeline import truth_api
 
     assert truth_api._auto_queue_signal_types_for_pack("research-tech") == {
         "source_needs_deep_dive",
@@ -2410,8 +2410,8 @@ def test_truth_api_auto_queue_signal_types_follow_governance_contract():
 
 
 def test_truth_api_auto_queue_signal_types_respect_explicit_opt_out(monkeypatch):
-    from openclaw_pipeline import truth_api
-    from openclaw_pipeline.packs.base import GovernanceSpec, SignalRuleSpec
+    from ovp_pipeline import truth_api
+    from ovp_pipeline.packs.base import GovernanceSpec, SignalRuleSpec
 
     monkeypatch.setattr(
         truth_api,
@@ -2435,7 +2435,7 @@ def test_truth_api_auto_queue_signal_types_respect_explicit_opt_out(monkeypatch)
 
 
 def test_truth_api_backfills_active_auto_queue_signals_without_duplicates(temp_vault):
-    from openclaw_pipeline.truth_api import list_action_queue, list_signals, sync_signal_ledger
+    from ovp_pipeline.truth_api import list_action_queue, list_signals, sync_signal_ledger
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -2491,7 +2491,7 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
 
 
 def test_truth_api_action_queue_items_include_execution_contract_metadata(temp_vault):
-    from openclaw_pipeline.truth_api import list_action_queue, sync_signal_ledger
+    from ovp_pipeline.truth_api import list_action_queue, sync_signal_ledger
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -2521,7 +2521,7 @@ Processed source note without downstream chain.
 
 
 def test_truth_api_list_action_queue_backfills_execution_contract_metadata_for_legacy_rows(temp_vault):
-    from openclaw_pipeline.truth_api import list_action_queue
+    from ovp_pipeline.truth_api import list_action_queue
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -2558,7 +2558,7 @@ def test_truth_api_list_action_queue_backfills_execution_contract_metadata_for_l
 
 
 def test_truth_api_run_next_action_queue_item_executes_deep_dive_workflow(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -2609,7 +2609,7 @@ Processed source note without any derived deep dive.
 
 
 def test_truth_api_run_next_action_queue_item_marks_obsolete_when_signal_is_gone(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -2639,7 +2639,7 @@ Processed source note without any derived deep dive.
 
 
 def test_truth_api_can_retry_failed_action_queue_item(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -2679,7 +2679,7 @@ Processed source note without any derived deep dive.
 
 
 def test_truth_api_can_dismiss_queued_action_queue_item(temp_vault):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -2709,7 +2709,7 @@ Processed source note without any derived deep dive.
 
 def test_truth_api_cannot_dismiss_running_action_queue_item(temp_vault):
     import pytest
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -2740,7 +2740,7 @@ def test_truth_api_cannot_dismiss_running_action_queue_item(temp_vault):
 
 
 def test_truth_api_run_action_queue_processes_multiple_queued_items(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -2796,7 +2796,7 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
 
 
 def test_truth_api_failed_action_tracks_retry_count_and_failure_bucket(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -2834,7 +2834,7 @@ Processed source note without any derived deep dive.
 
 
 def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -2902,7 +2902,7 @@ def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkey
 
 
 def test_truth_api_builds_briefing_snapshot(temp_vault):
-    from openclaw_pipeline.truth_api import get_briefing_snapshot, record_review_action, sync_signal_ledger
+    from ovp_pipeline.truth_api import get_briefing_snapshot, record_review_action, sync_signal_ledger
 
     vault = _seed_truth_vault(temp_vault)
     thin = vault / "10-Knowledge" / "Evergreen" / "Thin.md"
@@ -2948,7 +2948,7 @@ Thin.
 
 
 def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     monkeypatch.setattr(truth_api, "_list_signals_from_ledger", lambda *args, **kwargs: [])
@@ -2971,7 +2971,7 @@ def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, mo
         ],
     )
 
-    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
+    from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
 
     payload = research_surfaces.build_briefing_snapshot(vault, limit=8)
 
@@ -2980,7 +2980,7 @@ def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, mo
 
 
 def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     monkeypatch.setattr(
@@ -3021,7 +3021,7 @@ def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault,
     )
     monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24, pack_name=None: [])
 
-    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
+    from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
 
     payload = research_surfaces.build_briefing_snapshot(vault, limit=8)
 
@@ -3029,7 +3029,7 @@ def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault,
 
 
 def test_truth_api_enqueues_signal_actions_idempotently(temp_vault):
-    from openclaw_pipeline.truth_api import enqueue_signal_action, list_action_queue, list_signals, sync_signal_ledger
+    from ovp_pipeline.truth_api import enqueue_signal_action, list_action_queue, list_signals, sync_signal_ledger
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -3066,7 +3066,7 @@ Processed source note without any derived deep dive.
 
 
 def test_truth_api_enqueue_signal_action_uses_action_queue_lock(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
     rebuild_knowledge_index(vault)
@@ -3091,7 +3091,7 @@ def test_truth_api_enqueue_signal_action_uses_action_queue_lock(temp_vault, monk
 
 
 def test_truth_api_includes_review_action_signals(temp_vault):
-    from openclaw_pipeline.truth_api import list_signals, record_review_action, sync_signal_ledger
+    from ovp_pipeline.truth_api import list_signals, record_review_action, sync_signal_ledger
 
     vault = _seed_truth_vault(temp_vault)
     record_review_action(
@@ -3128,7 +3128,7 @@ def test_truth_api_includes_review_action_signals(temp_vault):
 
 
 def test_truth_api_sync_signal_ledger_writes_jsonl_without_db_lock(temp_vault, monkeypatch):
-    from openclaw_pipeline import truth_api
+    from ovp_pipeline import truth_api
 
     vault = _seed_truth_vault(temp_vault)
     calls: list[str] = []
@@ -3150,7 +3150,7 @@ def test_truth_api_sync_signal_ledger_writes_jsonl_without_db_lock(temp_vault, m
 
 
 def test_truth_api_sync_signal_ledger_uses_signal_ledger_lock(temp_vault, monkeypatch):
-    from openclaw_pipeline import truth_api
+    from ovp_pipeline import truth_api
 
     vault = _seed_truth_vault(temp_vault)
     calls: list[str] = []
@@ -3174,7 +3174,7 @@ def test_truth_api_sync_signal_ledger_uses_signal_ledger_lock(temp_vault, monkey
 
 
 def test_truth_api_run_next_action_queue_item_uses_action_queue_lock(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -3227,12 +3227,12 @@ def test_truth_api_run_next_action_queue_item_uses_action_queue_lock(temp_vault,
 
 
 def test_truth_api_refresh_truth_after_action_uses_pack_override(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api_source
+    import ovp_pipeline.truth_api as truth_api_source
 
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
-        "openclaw_pipeline.knowledge_index.rebuild_knowledge_index",
+        "ovp_pipeline.knowledge_index.rebuild_knowledge_index",
         lambda vault_dir, *, pack_name=None: captured.update(
             {"vault_dir": vault_dir, "pack_name": pack_name}
         ),
@@ -3256,12 +3256,12 @@ def test_truth_api_refresh_truth_after_action_uses_pack_override(temp_vault, mon
 
 
 def test_truth_api_refresh_truth_after_action_respects_independent_flags(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api_source
+    import ovp_pipeline.truth_api as truth_api_source
 
     calls: list[str] = []
 
     monkeypatch.setattr(
-        "openclaw_pipeline.knowledge_index.rebuild_knowledge_index",
+        "ovp_pipeline.knowledge_index.rebuild_knowledge_index",
         lambda vault_dir, *, pack_name=None: calls.append(f"rebuild:{pack_name}"),
     )
     monkeypatch.setattr(
@@ -3281,7 +3281,7 @@ def test_truth_api_refresh_truth_after_action_respects_independent_flags(temp_va
 
 
 def test_truth_api_list_action_queue_can_filter_by_pack(temp_vault):
-    import openclaw_pipeline.truth_api as truth_api
+    import ovp_pipeline.truth_api as truth_api
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -3324,7 +3324,7 @@ def test_truth_api_list_action_queue_can_filter_by_pack(temp_vault):
 
 
 def test_action_id_includes_pack_to_avoid_cross_pack_collisions():
-    from openclaw_pipeline.truth_api import _action_id
+    from ovp_pipeline.truth_api import _action_id
 
     payload = {"recommended_action": {"kind": "deep_dive_workflow"}}
 
@@ -3347,7 +3347,7 @@ def test_action_id_includes_pack_to_avoid_cross_pack_collisions():
 
 
 def test_truth_api_list_signals_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api_source
+    import ovp_pipeline.truth_api as truth_api_source
 
     calls: list[tuple[str, str | None]] = []
 
@@ -3387,7 +3387,7 @@ def test_truth_api_list_signals_dispatches_via_observation_surface_registry(temp
 
 
 def test_truth_api_no_longer_exposes_research_pack_surface_shims():
-    import openclaw_pipeline.truth_api as truth_api_source
+    import ovp_pipeline.truth_api as truth_api_source
 
     assert not hasattr(truth_api_source, "_research_tech_build_signal_entries")
     assert not hasattr(truth_api_source, "_research_tech_build_briefing_snapshot")
@@ -3395,7 +3395,7 @@ def test_truth_api_no_longer_exposes_research_pack_surface_shims():
 
 
 def test_research_tech_build_signal_entries_uses_pack_aware_core_surfaces(temp_vault, monkeypatch):
-    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
+    from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
 
     contradiction_calls: list[str | None] = []
     stale_summary_calls: list[str | None] = []
@@ -3429,7 +3429,7 @@ def test_research_tech_build_signal_entries_uses_pack_aware_core_surfaces(temp_v
 
 
 def test_research_tech_observation_surface_build_signals_delegates_to_surface_module(temp_vault, monkeypatch):
-    from openclaw_pipeline.packs.research_tech import observation_surfaces, surfaces
+    from ovp_pipeline.packs.research_tech import observation_surfaces, surfaces
 
     calls: list[tuple[Path, str | None]] = []
 
@@ -3449,7 +3449,7 @@ def test_research_tech_observation_surface_build_signals_delegates_to_surface_mo
 
 
 def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api_source
+    import ovp_pipeline.truth_api as truth_api_source
 
     def fake_execute(*, surface_kind, vault_dir, pack_name=None, **kwargs):
         if surface_kind == "signals":
@@ -3471,7 +3471,7 @@ def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_regi
 
 
 def test_research_tech_observation_surface_build_briefing_delegates_to_surface_module(temp_vault, monkeypatch):
-    from openclaw_pipeline.packs.research_tech import observation_surfaces, surfaces
+    from ovp_pipeline.packs.research_tech import observation_surfaces, surfaces
 
     calls: list[tuple[Path, str | None, int]] = []
 
@@ -3493,7 +3493,7 @@ def test_research_tech_observation_surface_build_briefing_delegates_to_surface_m
 
 
 def test_truth_api_list_production_chains_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api_source
+    import ovp_pipeline.truth_api as truth_api_source
 
     calls: list[tuple[str, str | None, str | None]] = []
 
@@ -3522,7 +3522,7 @@ def test_research_tech_observation_surface_build_production_chains_delegates_to_
     temp_vault,
     monkeypatch,
 ):
-    from openclaw_pipeline.packs.research_tech import observation_surfaces, surfaces
+    from ovp_pipeline.packs.research_tech import observation_surfaces, surfaces
 
     calls: list[tuple[Path, str | None, str | None, int]] = []
 
@@ -3545,7 +3545,7 @@ def test_research_tech_observation_surface_build_production_chains_delegates_to_
 
 
 def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, monkeypatch):
-    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
+    from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
 
     calls = {"chains": 0}
 
@@ -3610,8 +3610,8 @@ def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, m
 
 
 def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch):
-    import openclaw_pipeline.truth_api as truth_api
-    from openclaw_pipeline.packs.research_tech import surfaces as research_surfaces
+    import ovp_pipeline.truth_api as truth_api
+    from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
 
     calls: list[tuple[str, ...]] = []
     action_queue_calls: list[str | None] = []
@@ -3684,7 +3684,7 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
 
 
 def test_truth_api_record_review_action_writes_jsonl_without_db_lock(temp_vault, monkeypatch):
-    from openclaw_pipeline import truth_api
+    from ovp_pipeline import truth_api
 
     vault = _seed_truth_vault(temp_vault)
     calls: list[str] = []

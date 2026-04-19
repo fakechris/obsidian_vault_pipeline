@@ -38,9 +38,9 @@ git commit -m "test: cover absorb and refine command contracts"
 ### Task 2: Add absorb/refine command modules
 
 **Files:**
-- Create: `src/openclaw_pipeline/commands/absorb.py`
-- Create: `src/openclaw_pipeline/commands/cleanup.py`
-- Create: `src/openclaw_pipeline/commands/breakdown.py`
+- Create: `src/ovp_pipeline/commands/absorb.py`
+- Create: `src/ovp_pipeline/commands/cleanup.py`
+- Create: `src/ovp_pipeline/commands/breakdown.py`
 - Modify: `pyproject.toml`
 
 **Step 1: Implement minimal CLI surfaces**
@@ -71,16 +71,16 @@ Run:
 **Step 4: Commit**
 
 ```bash
-git add pyproject.toml src/openclaw_pipeline/commands/absorb.py src/openclaw_pipeline/commands/cleanup.py src/openclaw_pipeline/commands/breakdown.py tests/test_absorb_refine_commands.py
+git add pyproject.toml src/ovp_pipeline/commands/absorb.py src/ovp_pipeline/commands/cleanup.py src/ovp_pipeline/commands/breakdown.py tests/test_absorb_refine_commands.py
 git commit -m "feat: add absorb and refine command surfaces"
 ```
 
 ### Task 3: Add deterministic proposal analyzers for cleanup/breakdown
 
 **Files:**
-- Create: `src/openclaw_pipeline/refine.py`
-- Modify: `src/openclaw_pipeline/commands/cleanup.py`
-- Modify: `src/openclaw_pipeline/commands/breakdown.py`
+- Create: `src/ovp_pipeline/refine.py`
+- Modify: `src/ovp_pipeline/commands/cleanup.py`
+- Modify: `src/ovp_pipeline/commands/breakdown.py`
 - Test: `tests/test_refine_proposals.py`
 
 **Step 1: Write failing tests**
@@ -108,15 +108,15 @@ Run:
 **Step 4: Commit**
 
 ```bash
-git add src/openclaw_pipeline/refine.py src/openclaw_pipeline/commands/cleanup.py src/openclaw_pipeline/commands/breakdown.py tests/test_refine_proposals.py
+git add src/ovp_pipeline/refine.py src/ovp_pipeline/commands/cleanup.py src/ovp_pipeline/commands/breakdown.py tests/test_refine_proposals.py
 git commit -m "feat: add structured cleanup and breakdown proposals"
 ```
 
 ### Task 4: Integrate absorb command with existing lifecycle contracts
 
 **Files:**
-- Modify: `src/openclaw_pipeline/commands/absorb.py`
-- Modify: `src/openclaw_pipeline/auto_evergreen_extractor.py`
+- Modify: `src/ovp_pipeline/commands/absorb.py`
+- Modify: `src/ovp_pipeline/auto_evergreen_extractor.py`
 - Test: `tests/test_absorb_refine_commands.py`
 
 **Step 1: Ensure absorb output is structured**
@@ -131,7 +131,7 @@ Run:
 **Step 3: Commit**
 
 ```bash
-git add src/openclaw_pipeline/commands/absorb.py src/openclaw_pipeline/auto_evergreen_extractor.py tests/test_absorb_refine_commands.py
+git add src/ovp_pipeline/commands/absorb.py src/ovp_pipeline/auto_evergreen_extractor.py tests/test_absorb_refine_commands.py
 git commit -m "refactor: expose structured absorb summaries"
 ```
 
@@ -143,7 +143,7 @@ git commit -m "refactor: expose structured absorb summaries"
 **Step 1: Run compile**
 
 Run:
-- `python3 -m compileall src/openclaw_pipeline`
+- `python3 -m compileall src/ovp_pipeline`
 
 **Step 2: Run tests**
 

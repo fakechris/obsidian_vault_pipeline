@@ -8,7 +8,7 @@
 
 **Architecture:** `Phase 17` is a research-graph product layer. It spends existing graph and UI capabilities on a better exploration surface. `Phase 18` should not compete with that product work and should not reopen `Phase 16` runtime ownership hardening. Instead it should consolidate what the system already is: keep the existing `Core / Pack / Profile` model and existing execution-contract stack, then add three pack-side contract families so canonical knowledge, access products, and governance rules stop living as implicit conventions spread across handlers, exports, views, signals, and docs.
 
-**Tech Stack:** Existing pack runtime in `src/openclaw_pipeline/packs/base.py`, pack loader/registries, `research-tech` pack declarations, `ovp-doctor`, `ovp-export`, `ovp-ui`, `truth_api.py`, `operations/runtime.py`, pack docs in `docs/pack-api/` and `docs/research-tech/`.
+**Tech Stack:** Existing pack runtime in `src/ovp_pipeline/packs/base.py`, pack loader/registries, `research-tech` pack declarations, `ovp-doctor`, `ovp-export`, `ovp-ui`, `truth_api.py`, `operations/runtime.py`, pack docs in `docs/pack-api/` and `docs/research-tech/`.
 
 ## Why This Is The Right Next Phase
 
@@ -179,10 +179,10 @@ The goal is to extend the existing pack declaration style consistently.
 ### Task 1: Add `ArtifactSpec` To Core Pack Base
 
 **Files:**
-- Modify: `src/openclaw_pipeline/packs/base.py`
-- Modify: `src/openclaw_pipeline/commands/doctor.py`
-- Reference: `src/openclaw_pipeline/extraction/specs.py`
-- Reference: `src/openclaw_pipeline/wiki_views/specs.py`
+- Modify: `src/ovp_pipeline/packs/base.py`
+- Modify: `src/ovp_pipeline/commands/doctor.py`
+- Reference: `src/ovp_pipeline/extraction/specs.py`
+- Reference: `src/ovp_pipeline/wiki_views/specs.py`
 
 Deliverable:
 
@@ -193,9 +193,9 @@ Deliverable:
 ### Task 2: Declare Research-Tech Artifact Families
 
 **Files:**
-- Create: `src/openclaw_pipeline/packs/research_tech/artifacts.py`
-- Modify: `src/openclaw_pipeline/packs/research_tech/pack.py`
-- Reference: `src/openclaw_pipeline/truth_store.py`
+- Create: `src/ovp_pipeline/packs/research_tech/artifacts.py`
+- Modify: `src/ovp_pipeline/packs/research_tech/pack.py`
+- Reference: `src/ovp_pipeline/truth_store.py`
 
 Deliverable:
 
@@ -209,10 +209,10 @@ Deliverable:
 ### Task 3: Add `AssemblyRecipeSpec` To Core Pack Base
 
 **Files:**
-- Modify: `src/openclaw_pipeline/packs/base.py`
-- Modify: `src/openclaw_pipeline/commands/doctor.py`
-- Reference: `src/openclaw_pipeline/wiki_views/specs.py`
-- Reference: `src/openclaw_pipeline/observation_surface_registry.py`
+- Modify: `src/ovp_pipeline/packs/base.py`
+- Modify: `src/ovp_pipeline/commands/doctor.py`
+- Reference: `src/ovp_pipeline/wiki_views/specs.py`
+- Reference: `src/ovp_pipeline/observation_surface_registry.py`
 
 Deliverable:
 
@@ -222,11 +222,11 @@ Deliverable:
 ### Task 4: Declare Research-Tech Assembly Recipes
 
 **Files:**
-- Create: `src/openclaw_pipeline/packs/research_tech/assembly_recipes.py`
-- Modify: `src/openclaw_pipeline/packs/research_tech/pack.py`
-- Reference: `src/openclaw_pipeline/packs/research_tech/observation_surfaces.py`
-- Reference: `src/openclaw_pipeline/packs/research_tech/shared.py`
-- Reference: `src/openclaw_pipeline/commands/export_artifact.py`
+- Create: `src/ovp_pipeline/packs/research_tech/assembly_recipes.py`
+- Modify: `src/ovp_pipeline/packs/research_tech/pack.py`
+- Reference: `src/ovp_pipeline/packs/research_tech/observation_surfaces.py`
+- Reference: `src/ovp_pipeline/packs/research_tech/shared.py`
+- Reference: `src/ovp_pipeline/commands/export_artifact.py`
 
 Deliverable:
 
@@ -240,10 +240,10 @@ Deliverable:
 ### Task 5: Add `GovernanceSpec` To Core Pack Base
 
 **Files:**
-- Modify: `src/openclaw_pipeline/packs/base.py`
-- Modify: `src/openclaw_pipeline/commands/doctor.py`
-- Reference: `src/openclaw_pipeline/operations/specs.py`
-- Reference: `src/openclaw_pipeline/truth_api.py`
+- Modify: `src/ovp_pipeline/packs/base.py`
+- Modify: `src/ovp_pipeline/commands/doctor.py`
+- Reference: `src/ovp_pipeline/operations/specs.py`
+- Reference: `src/ovp_pipeline/truth_api.py`
 
 Deliverable:
 
@@ -254,10 +254,10 @@ Deliverable:
 ### Task 6: Declare Research-Tech Governance Contract
 
 **Files:**
-- Create: `src/openclaw_pipeline/packs/research_tech/governance.py`
-- Modify: `src/openclaw_pipeline/packs/research_tech/pack.py`
-- Reference: `src/openclaw_pipeline/operations/runtime.py`
-- Reference: `src/openclaw_pipeline/packs/research_tech/surfaces.py`
+- Create: `src/ovp_pipeline/packs/research_tech/governance.py`
+- Modify: `src/ovp_pipeline/packs/research_tech/pack.py`
+- Reference: `src/ovp_pipeline/operations/runtime.py`
+- Reference: `src/ovp_pipeline/packs/research_tech/surfaces.py`
 
 Deliverable:
 

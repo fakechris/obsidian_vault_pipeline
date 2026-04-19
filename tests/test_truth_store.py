@@ -4,8 +4,8 @@ import sqlite3
 
 
 def test_rebuild_knowledge_index_populates_truth_store_tables(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -80,8 +80,8 @@ Target note captures downstream effects.
 
 
 def test_rebuild_knowledge_index_persists_detected_contradictions(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     one = temp_vault / "10-Knowledge" / "Evergreen" / "One.md"
     two = temp_vault / "10-Knowledge" / "Evergreen" / "Two.md"
@@ -137,7 +137,7 @@ Agent harness does not support local-first execution for operators.
 
 
 def test_knowledge_index_stats_include_truth_store_counts(temp_vault):
-    from openclaw_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
+    from ovp_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "One.md"
     note.write_text(

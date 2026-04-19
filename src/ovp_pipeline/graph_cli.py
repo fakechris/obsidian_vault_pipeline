@@ -15,7 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from openclaw_pipeline.runtime import iter_markdown_files, resolve_vault_dir
+from ovp_pipeline.runtime import iter_markdown_files, resolve_vault_dir
 
 # 默认vault_dir: 假设从vault根目录运行
 # 通过 --vault-dir 或环境变量覆盖
@@ -24,7 +24,7 @@ VAULT_DIR = resolve_vault_dir()
 
 def cmd_build(args):
     """全量构建图谱"""
-    from openclaw_pipeline.graph import GraphBuilder
+    from ovp_pipeline.graph import GraphBuilder
 
     vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
     builder = GraphBuilder(vault_dir)
@@ -62,7 +62,7 @@ def cmd_build(args):
 
 def cmd_daily(args):
     """生成每日增量图谱"""
-    from openclaw_pipeline.graph import DailyDelta, GraphBuilder
+    from ovp_pipeline.graph import DailyDelta, GraphBuilder
 
     vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
     delta_computer = DailyDelta(vault_dir)
@@ -132,7 +132,7 @@ def cmd_daily(args):
 
     # 可视化
     if args.viz:
-        from openclaw_pipeline.graph.visualize import GraphVisualizer
+        from ovp_pipeline.graph.visualize import GraphVisualizer
 
         viz = GraphVisualizer(delta)
 
@@ -154,7 +154,7 @@ def cmd_daily(args):
 
 def cmd_validate(args):
     """验证frontmatter"""
-    from openclaw_pipeline.graph.validators import validate_frontmatter_file
+    from ovp_pipeline.graph.validators import validate_frontmatter_file
 
     vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
 
@@ -182,7 +182,7 @@ def cmd_validate(args):
 
 def cmd_upgrade(args):
     """升级现有文件frontmatter"""
-    from openclaw_pipeline.graph import FrontmatterParser
+    from ovp_pipeline.graph import FrontmatterParser
 
     vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
     parser = FrontmatterParser(vault_dir)
@@ -201,7 +201,7 @@ def cmd_upgrade(args):
 
 def cmd_stats(args):
     """显示图谱统计"""
-    from openclaw_pipeline.graph import GraphBuilder
+    from ovp_pipeline.graph import GraphBuilder
 
     vault_dir = resolve_vault_dir(args.vault_dir or VAULT_DIR)
     builder = GraphBuilder(vault_dir)

@@ -107,16 +107,16 @@ The runtime architecture coordinates [[harness-positive]] and [[runtime-target]]
 
 
 def test_research_tech_pack_e2e_runtime(temp_vault):
-    from openclaw_pipeline.commands.build_views import main as build_views_main
-    from openclaw_pipeline.commands.extract_preview import main as extract_preview_main
-    from openclaw_pipeline.commands.extract_profiles import main as extract_main
-    from openclaw_pipeline.commands.extraction_dashboard import main as dashboard_main
-    from openclaw_pipeline.commands.rebuild_summaries import main as rebuild_summaries_main
-    from openclaw_pipeline.commands.resolve_contradictions import main as resolve_contradictions_main
-    from openclaw_pipeline.commands.run_operations import main as run_operations_main
-    from openclaw_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index, search_truth_store
-    from openclaw_pipeline.query_tool import VaultQuerier
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main as build_views_main
+    from ovp_pipeline.commands.extract_preview import main as extract_preview_main
+    from ovp_pipeline.commands.extract_profiles import main as extract_main
+    from ovp_pipeline.commands.extraction_dashboard import main as dashboard_main
+    from ovp_pipeline.commands.rebuild_summaries import main as rebuild_summaries_main
+    from ovp_pipeline.commands.resolve_contradictions import main as resolve_contradictions_main
+    from ovp_pipeline.commands.run_operations import main as run_operations_main
+    from ovp_pipeline.knowledge_index import knowledge_index_stats, rebuild_knowledge_index, search_truth_store
+    from ovp_pipeline.query_tool import VaultQuerier
+    from ovp_pipeline.runtime import VaultLayout
 
     _seed_truth_notes(temp_vault)
     source = _seed_raw_source(temp_vault)
@@ -329,13 +329,13 @@ def test_research_tech_pack_e2e_runtime(temp_vault):
 
 
 def test_default_knowledge_pack_e2e_compatibility(temp_vault):
-    from openclaw_pipeline.commands.build_views import main as build_views_main
-    from openclaw_pipeline.commands.extract_preview import main as extract_preview_main
-    from openclaw_pipeline.commands.extract_profiles import main as extract_main
-    from openclaw_pipeline.commands.extraction_dashboard import main as dashboard_main
-    from openclaw_pipeline.commands.run_operations import main as run_operations_main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.build_views import main as build_views_main
+    from ovp_pipeline.commands.extract_preview import main as extract_preview_main
+    from ovp_pipeline.commands.extract_profiles import main as extract_main
+    from ovp_pipeline.commands.extraction_dashboard import main as dashboard_main
+    from ovp_pipeline.commands.run_operations import main as run_operations_main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     _seed_truth_notes(temp_vault)
     source = _seed_raw_source(temp_vault, name="compat-graph.md")

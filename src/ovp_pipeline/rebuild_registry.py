@@ -5,8 +5,8 @@ Rebuild Registry - Initialize registry from existing Evergreen files.
 Scans 10-Knowledge/Evergreen/*.md and builds concept-registry.jsonl.
 
 Usage:
-    python -m openclaw_pipeline.rebuild_registry --vault-dir . --write
-    python -m openclaw_pipeline.rebuild_registry --vault-dir . --dry-run
+    python -m ovp_pipeline.rebuild_registry --vault-dir . --write
+    python -m ovp_pipeline.rebuild_registry --vault-dir . --dry-run
 """
 
 from __future__ import annotations

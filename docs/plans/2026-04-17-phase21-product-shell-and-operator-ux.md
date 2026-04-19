@@ -102,8 +102,8 @@ Do not:
 ### Task 1: Add Dashboard Workflow Groups
 
 **Files:**
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_ui_view_models.py`
 - Test: `tests/test_ui_server.py`
 
@@ -116,8 +116,8 @@ Do not:
 ### Task 2: Add Consistent Operator Action Rails
 
 **Files:**
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_ui_view_models.py`
 - Test: `tests/test_ui_server.py`
 
@@ -129,7 +129,7 @@ Do not:
 ### Task 3: Reorder And Tighten Page Shells
 
 **Files:**
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_ui_server.py`
 
 **Deliverable:**
