@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_extraction_span_preserves_grounding_metadata():
-    from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionSpan
+    from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionSpan
 
     span = ExtractionSpan(
         source_path="50-Inbox/01-Raw/example.md",

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 
 def test_compatibility_pack_falls_back_to_base_truth_projection_builder(monkeypatch):
-    from openclaw_pipeline.packs.base import BaseDomainPack, TruthProjectionSpec
-    import openclaw_pipeline.truth_projection_registry as registry_source
+    from ovp_pipeline.packs.base import BaseDomainPack, TruthProjectionSpec
+    import ovp_pipeline.truth_projection_registry as registry_source
 
     compatibility_pack = BaseDomainPack(
         name="compat-pack",
@@ -37,7 +37,7 @@ def test_compatibility_pack_falls_back_to_base_truth_projection_builder(monkeypa
 
 
 def test_execute_truth_projection_builder_namespaces_rows_to_requested_pack(temp_vault):
-    from openclaw_pipeline.truth_projection_registry import execute_truth_projection_builder
+    from ovp_pipeline.truth_projection_registry import execute_truth_projection_builder
 
     page_rows = [
         (

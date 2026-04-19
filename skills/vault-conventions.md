@@ -1,6 +1,6 @@
 # Vault Conventions Skill
 
-OpenClaw Vault 的写作与组织规范。所有 Bot 和人工编辑必须遵循。
+OVP Vault 的写作与组织规范。所有 Bot 和人工编辑必须遵循。
 
 ## 触发条件
 

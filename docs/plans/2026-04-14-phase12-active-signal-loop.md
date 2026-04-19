@@ -47,9 +47,9 @@ The first three are state signals. The next two are change signals derived from 
 
 ## Files
 
-- Modify: `src/openclaw_pipeline/truth_api.py`
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/truth_api.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Modify: `docs/plans/2026-04-14-local-knowledge-workbench-milestone.md`
 - Test: `tests/test_truth_api.py`
 - Test: `tests/test_ui_view_models.py`
@@ -133,7 +133,7 @@ PYTHONPATH=src python3.13 -m pytest -q tests/test_truth_api.py -k signal
 PYTHONPATH=src python3.13 -m pytest -q tests/test_ui_view_models.py -k 'signal or dashboard'
 PYTHONPATH=src python3.13 -m pytest -q tests/test_ui_server.py -k signals tests/test_ui_smoke.py -k 'signals or dashboard'
 PYTHONPATH=src python3.13 -m pytest -q
-python3.13 -m compileall src/openclaw_pipeline
+python3.13 -m compileall src/ovp_pipeline
 ```
 
 ## Exit Condition

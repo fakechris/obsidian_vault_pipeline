@@ -3,7 +3,7 @@ include LICENSE
 include requirements.txt
 include .env.example
 recursive-include 90-Templates *.md
-recursive-include src/openclaw_pipeline *.py
+recursive-include src/ovp_pipeline *.py
 graft .claude
 prune .git
 prune __pycache__

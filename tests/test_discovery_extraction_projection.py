@@ -5,10 +5,10 @@ from pathlib import Path
 
 
 def test_discover_related_can_include_projected_extraction_rows(temp_vault):
-    from openclaw_pipeline.derived.paths import extraction_run_path
-    from openclaw_pipeline.discovery import discover_related
-    from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult, ExtractionSpan
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.derived.paths import extraction_run_path
+    from ovp_pipeline.discovery import discover_related
+    from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult, ExtractionSpan
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     source_path = Path("50-Inbox/01-Raw/example.md")

@@ -8,20 +8,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from openclaw_pipeline import auto_github_processor as github_module
-from openclaw_pipeline import auto_paper_processor as paper_module
-from openclaw_pipeline.auto_article_processor import (
+from ovp_pipeline import auto_github_processor as github_module
+from ovp_pipeline import auto_paper_processor as paper_module
+from ovp_pipeline.auto_article_processor import (
     AutoArticleProcessor,
     LiteLLMClient as ArticleLiteLLMClient,
     PipelineLogger as ArticleLogger,
     TransactionManager as ArticleTxn,
 )
-from openclaw_pipeline.auto_github_processor import LiteLLMClient as GithubLiteLLMClient
-from openclaw_pipeline.auto_github_processor import parse_github_url
-from openclaw_pipeline.auto_paper_processor import LiteLLMClient as PaperLiteLLMClient, process_single_paper
-from openclaw_pipeline.lint_checker import KnowledgeLinter
-from openclaw_pipeline.markdown_generation import sanitize_generated_markdown
-from openclaw_pipeline.unified_pipeline_enhanced import (
+from ovp_pipeline.auto_github_processor import LiteLLMClient as GithubLiteLLMClient
+from ovp_pipeline.auto_github_processor import parse_github_url
+from ovp_pipeline.auto_paper_processor import LiteLLMClient as PaperLiteLLMClient, process_single_paper
+from ovp_pipeline.lint_checker import KnowledgeLinter
+from ovp_pipeline.markdown_generation import sanitize_generated_markdown
+from ovp_pipeline.unified_pipeline_enhanced import (
     EnhancedPipeline,
     PipelineLogger,
     TransactionManager,
@@ -55,12 +55,12 @@ tags: [paper]
         captured.append(cmd)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
+    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
 
     result = pipeline.step_pinboard_process(dry_run=False)
 
     assert result["processed"] == 1
-    assert "openclaw_pipeline.auto_paper_processor" in " ".join(captured[0])
+    assert "ovp_pipeline.auto_paper_processor" in " ".join(captured[0])
     assert captured[0]
 
 
@@ -97,7 +97,7 @@ example/repo
         captured.append(timeout)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
+    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
 
     result = pipeline.step_pinboard_process(dry_run=False)
 
@@ -132,7 +132,7 @@ example/repo
         captured_envs.append(env)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr("openclaw_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
+    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.subprocess.run", fake_run)
 
     result = pipeline.step_pinboard_process(dry_run=False)
 
@@ -215,7 +215,7 @@ OSGym: Scalable OS Infra for Computer Use Agents
     )
 
     monkeypatch.setattr(
-        "openclaw_pipeline.image_downloader.ImageDownloader.process_file",
+        "ovp_pipeline.image_downloader.ImageDownloader.process_file",
         lambda self, file_path, backup=True: [],
     )
 
@@ -252,7 +252,7 @@ Example SDK
     )
 
     monkeypatch.setattr(
-        "openclaw_pipeline.image_downloader.ImageDownloader.process_file",
+        "ovp_pipeline.image_downloader.ImageDownloader.process_file",
         lambda self, file_path, backup=True: [],
     )
 
@@ -273,7 +273,7 @@ Example SDK
             return FakeResponse(docs_text)
         raise AssertionError(f"unexpected url {url}")
 
-    monkeypatch.setattr("openclaw_pipeline.auto_article_processor.requests.get", fake_get)
+    monkeypatch.setattr("ovp_pipeline.auto_article_processor.requests.get", fake_get)
 
     result = processor.process_single_file(raw_file, dry_run=False)
 
@@ -316,7 +316,7 @@ Example SDK body
     )
 
     monkeypatch.setattr(
-        "openclaw_pipeline.image_downloader.ImageDownloader.process_file",
+        "ovp_pipeline.image_downloader.ImageDownloader.process_file",
         lambda self, file_path, backup=True: [],
     )
 
@@ -362,7 +362,7 @@ Broken body
     )
 
     monkeypatch.setattr(
-        "openclaw_pipeline.image_downloader.ImageDownloader.process_file",
+        "ovp_pipeline.image_downloader.ImageDownloader.process_file",
         lambda self, file_path, backup=True: [],
     )
 
@@ -414,7 +414,7 @@ Body
         lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
     )
     monkeypatch.setattr(
-        "openclaw_pipeline.image_downloader.ImageDownloader.process_file",
+        "ovp_pipeline.image_downloader.ImageDownloader.process_file",
         lambda self, file_path, backup=True: [],
     )
 
@@ -615,7 +615,7 @@ def test_litellm_clients_retry_transient_failures(monkeypatch, client_class, pat
         return FakeResponse()
 
     if patch_mode == "article":
-        monkeypatch.setattr("openclaw_pipeline.auto_article_processor.litellm.completion", fake_completion)
+        monkeypatch.setattr("ovp_pipeline.auto_article_processor.litellm.completion", fake_completion)
     else:
         monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
     monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
@@ -658,7 +658,7 @@ def test_litellm_clients_pass_explicit_completion_timeout(monkeypatch, client_cl
         return FakeResponse()
 
     if patch_mode == "article":
-        monkeypatch.setattr("openclaw_pipeline.auto_article_processor.litellm.completion", fake_completion)
+        monkeypatch.setattr("ovp_pipeline.auto_article_processor.litellm.completion", fake_completion)
     else:
         monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
 
@@ -678,7 +678,7 @@ def test_process_single_paper_downloads_remote_pdf_before_analysis(tmp_path, mon
             self.headers = {"Content-Type": "application/pdf"}
 
     monkeypatch.setattr(
-        "openclaw_pipeline.auto_paper_processor.requests.get",
+        "ovp_pipeline.auto_paper_processor.requests.get",
         lambda url, timeout=30: FakeResponse(b"%PDF-1.4 fake"),
     )
 
@@ -688,7 +688,7 @@ def test_process_single_paper_downloads_remote_pdf_before_analysis(tmp_path, mon
         extracted_paths.append(pdf_path)
         return "Remote paper body " * 200
 
-    monkeypatch.setattr("openclaw_pipeline.auto_paper_processor.extract_pdf_text", fake_extract_pdf_text)
+    monkeypatch.setattr("ovp_pipeline.auto_paper_processor.extract_pdf_text", fake_extract_pdf_text)
 
     class StubLLM:
         def generate(self, system_prompt: str, user_prompt: str, max_tokens: int = 8000):

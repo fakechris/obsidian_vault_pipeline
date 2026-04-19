@@ -6,7 +6,7 @@ import pytest
 
 
 def test_vault_querier_search_defaults_to_knowledge_engine(temp_vault, monkeypatch):
-    from openclaw_pipeline import query_tool
+    from ovp_pipeline import query_tool
 
     queried = {}
 
@@ -40,7 +40,7 @@ def test_vault_querier_search_defaults_to_knowledge_engine(temp_vault, monkeypat
 
 
 def test_vault_querier_search_passes_pack_to_discovery(temp_vault, monkeypatch):
-    from openclaw_pipeline import query_tool
+    from ovp_pipeline import query_tool
 
     queried = {}
 
@@ -67,7 +67,7 @@ def test_vault_querier_search_passes_pack_to_discovery(temp_vault, monkeypatch):
 
 
 def test_query_cli_explicit_qmd_engine_is_passed(temp_vault, monkeypatch, capsys):
-    from openclaw_pipeline import query_tool
+    from ovp_pipeline import query_tool
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     source.write_text(
@@ -113,7 +113,7 @@ date: 2026-04-07
 
 
 def test_query_cli_explicit_qmd_engine_fails_clearly_when_unavailable(temp_vault, monkeypatch, capsys):
-    from openclaw_pipeline import query_tool
+    from ovp_pipeline import query_tool
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     source.write_text(
@@ -143,7 +143,7 @@ date: 2026-04-07
 
 
 def test_query_cli_passes_pack_into_query_and_evidence(temp_vault, monkeypatch, capsys):
-    from openclaw_pipeline import query_tool
+    from ovp_pipeline import query_tool
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Workflow-Graph.md"
     source.write_text(

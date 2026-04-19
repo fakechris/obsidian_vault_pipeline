@@ -44,8 +44,8 @@ git commit -m "test: cover derived knowledge index contract"
 ### Task 2: Add the SQLite knowledge index core
 
 **Files:**
-- Create: `src/openclaw_pipeline/knowledge_index.py`
-- Modify: `src/openclaw_pipeline/runtime.py`
+- Create: `src/ovp_pipeline/knowledge_index.py`
+- Modify: `src/ovp_pipeline/runtime.py`
 
 **Step 1: Implement the database builder**
 
@@ -71,14 +71,14 @@ Expected:
 **Step 3: Commit**
 
 ```bash
-git add src/openclaw_pipeline/knowledge_index.py src/openclaw_pipeline/runtime.py tests/test_knowledge_index.py tests/test_runtime_paths.py
+git add src/ovp_pipeline/knowledge_index.py src/ovp_pipeline/runtime.py tests/test_knowledge_index.py tests/test_runtime_paths.py
 git commit -m "feat: add derived knowledge index builder"
 ```
 
 ### Task 3: Add a thin CLI for rebuilding and inspecting the index
 
 **Files:**
-- Create: `src/openclaw_pipeline/commands/knowledge_index.py`
+- Create: `src/ovp_pipeline/commands/knowledge_index.py`
 - Modify: `pyproject.toml`
 - Modify: `tests/test_knowledge_index.py`
 
@@ -107,7 +107,7 @@ Expected:
 **Step 4: Commit**
 
 ```bash
-git add pyproject.toml src/openclaw_pipeline/commands/knowledge_index.py tests/test_knowledge_index.py
+git add pyproject.toml src/ovp_pipeline/commands/knowledge_index.py tests/test_knowledge_index.py
 git commit -m "feat: add knowledge index rebuild command"
 ```
 
@@ -119,7 +119,7 @@ git commit -m "feat: add knowledge index rebuild command"
 **Step 1: Run compile**
 
 Run:
-- `python3 -m compileall src/openclaw_pipeline`
+- `python3 -m compileall src/ovp_pipeline`
 
 **Step 2: Run tests**
 

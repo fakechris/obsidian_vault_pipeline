@@ -37,7 +37,7 @@ install_package "$OVP_PACKAGE_SPEC"
 
 installer_args=(
   -m
-  openclaw_pipeline.installer
+  ovp_pipeline.installer
   --distribution
   "$OVP_DISTRIBUTION_NAME"
   --python-executable

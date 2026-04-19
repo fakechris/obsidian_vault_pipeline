@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_default_pack_registers_first_wave_extraction_profiles():
-    from openclaw_pipeline.packs.loader import load_default_pack
+    from ovp_pipeline.packs.loader import load_default_pack
 
     pack = load_default_pack()
     profiles = {profile.name: profile for profile in pack.extraction_profiles()}

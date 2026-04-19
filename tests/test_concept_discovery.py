@@ -2,8 +2,8 @@ from __future__ import annotations
 
 
 def test_resolve_mention_uses_shared_discovery_related_context(temp_vault, monkeypatch):
-    from openclaw_pipeline import concept_registry as registry_module
-    from openclaw_pipeline.concept_registry import ConceptRegistry, ResolutionAction
+    from ovp_pipeline import concept_registry as registry_module
+    from ovp_pipeline.concept_registry import ConceptRegistry, ResolutionAction
 
     def fake_discover(vault_dir, query, engine="knowledge", limit=5):  # noqa: ARG001
         return [
@@ -30,7 +30,7 @@ def test_resolve_mention_uses_shared_discovery_related_context(temp_vault, monke
 
 
 def test_fix_surface_conflicts_uses_similarity_as_review_signal_only(temp_vault, monkeypatch):
-    from openclaw_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
 
     registry = ConceptRegistry(temp_vault)
     registry.add_entry(

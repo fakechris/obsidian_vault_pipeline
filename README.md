@@ -71,7 +71,7 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 - 内置标准 pack：`research-tech`
 - 默认兼容 pack：`default-knowledge`
 - 运行时可通过 `--pack` 和 `--profile` 选择 workflow
-- 第三方 pack 可以通过 `openclaw_pipeline.packs` entry point 或 `OPENCLAW_PACK_MANIFESTS` manifest 列表接入
+- 第三方 pack 可以通过 `ovp.packs` entry point 或 `OVP_PACK_MANIFESTS` manifest 列表接入
 
 示例：
 
@@ -190,8 +190,8 @@ ovp --pack default-knowledge --profile full
 
 支持两种发现方式：
 
-1. Python entry point 组：`openclaw_pipeline.packs`
-2. 显式 manifest 列表：`OPENCLAW_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
+1. Python entry point 组：`ovp.packs`
+2. 显式 manifest 列表：`OVP_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
 
 最小接入链路是：
 
@@ -275,7 +275,7 @@ pinboard
 
 关键点：
 
-- `absorb` 现在走的是 `openclaw_pipeline.commands.absorb`
+- `absorb` 现在走的是 `ovp_pipeline.commands.absorb`
 - `refine` 是 `cleanup + breakdown` 的批处理包装
 - `knowledge_index` 永远放最后，保证 `knowledge.db` 反映最终 canonical 状态
 - `--step evergreen` / `--from-step evergreen` 仍然接受，内部会映射到 `absorb`
@@ -443,7 +443,7 @@ ovp --full
 
 ```bash
 python3 -m pip install --user obsidian-vault-pipeline
-python3 -m openclaw_pipeline.installer
+python3 -m ovp_pipeline.installer
 ```
 
 如果你的 Python 环境启用了 PEP 668，优先使用：

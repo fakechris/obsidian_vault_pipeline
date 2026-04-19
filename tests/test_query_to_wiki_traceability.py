@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_create_evergreen_writes_source_traceability_to_frontmatter(tmp_path):
-    from openclaw_pipeline.query_to_wiki import create_evergreen
+    from ovp_pipeline.query_to_wiki import create_evergreen
 
     vault = tmp_path / "vault"
     (vault / "10-Knowledge" / "Evergreen").mkdir(parents=True, exist_ok=True)

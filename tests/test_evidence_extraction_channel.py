@@ -5,10 +5,10 @@ from pathlib import Path
 
 
 def test_build_evidence_payload_can_include_extraction_evidence(temp_vault):
-    from openclaw_pipeline.derived.paths import extraction_run_path
-    from openclaw_pipeline.evidence import build_evidence_payload
-    from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult, ExtractionSpan
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.derived.paths import extraction_run_path
+    from ovp_pipeline.evidence import build_evidence_payload
+    from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult, ExtractionSpan
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     source_path = Path("50-Inbox/01-Raw/example.md")
@@ -54,10 +54,10 @@ def test_build_evidence_payload_can_include_extraction_evidence(temp_vault):
 
 
 def test_build_evidence_payload_limits_extraction_evidence(temp_vault):
-    from openclaw_pipeline.derived.paths import extraction_run_path
-    from openclaw_pipeline.evidence import build_evidence_payload
-    from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.derived.paths import extraction_run_path
+    from ovp_pipeline.evidence import build_evidence_payload
+    from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     for index in range(2):

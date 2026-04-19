@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from openclaw_pipeline.auto_moc_updater import MOCUpdater, PipelineLogger
+from ovp_pipeline.auto_moc_updater import MOCUpdater, PipelineLogger
 
 
 def test_update_area_moc_creates_missing_topics_moc(temp_vault):

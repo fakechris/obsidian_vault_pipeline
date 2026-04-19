@@ -21,7 +21,7 @@ Phase 4
 - **Status:** complete
 
 ### Phase 3: Comparative Analysis
-- [x] Compare arscontexta assumptions against OpenClaw's current direction
+- [x] Compare arscontexta assumptions against OVP's current direction
 - [x] Separate strong ideas from superficial similarities
 - [x] Record decisions and rationale
 - **Status:** complete
@@ -41,7 +41,7 @@ Phase 4
 ## Key Questions
 1. What problem is arscontexta actually solving beyond "better note taking"?
 2. Which parts of its system are durable ideas versus implementation-specific choices?
-3. What is genuinely useful for OpenClaw now, and what is likely premature?
+3. What is genuinely useful for OVP now, and what is likely premature?
 4. Which external patterns should OVP explicitly reject rather than absorb?
 
 ## Decisions Made
@@ -83,3 +83,30 @@ Phase 4
   - `/` workbench home now exposes entry sections and routes into orientation
   - object/topic/event/contradiction pages now expose stable compiled sections
   - docs and verify checklists now treat orientation and compiled-page contracts as pack-level product semantics
+- `Phase 20` is complete:
+  - event / contradiction semantics are now explicit on the product surface
+  - production-chain traceability is now legible across note/object/topic/production views
+- `Phase 21` is complete:
+  - `/` now exposes workflow-group IA instead of only a flat card pile
+  - key shell surfaces now expose explicit `Next Actions`
+  - shell pages now lead with a compiled lead section before deeper detail blocks
+- `Phase 22` is complete:
+  - signals and queued actions now expose deterministic `impact_summary` contracts
+  - `/signals`, `/actions`, and `/briefing` now speak the same lifecycle language about loop productivity
+  - the first Milestone 7 slice is now about visible impact, not only passive signal presence
+- `Phase 23` is complete:
+  - note-level inbound capture is now a deterministic contract over existing pipeline/refine logs
+  - signal rows now expose `capture_summary` inherited from their backing notes
+  - note and briefing surfaces now expose `Inbound Capture` compiled sections
+  - `/signals` now renders inbound capture legibility directly, not only queue impact
+- `Phase 24` remains the semantic follow-up slice inside `Milestone 7`
+  - focus on brain-first lookup before object/link creation plus backlink legibility
+  - keep the phase narrow: lookup provenance, reuse-vs-create semantics, backlink visibility
+  - do not reopen shell UX unless a new operator-navigation gap appears
+  - do not widen immediately into temporal truth, harness memory, or benchmark tracks
+- `Phase 25` is now planned **ahead of** `Phase 24`
+  - focus on runtime observability and a canonical run ledger
+  - enforce `single source of truth` for active workflow state
+  - make watcher/UI/API all read the same current-state contract
+  - require real work-unit progress semantics before claiming percent complete
+  - treat `Phase 24` as semantically next, but operationally gated on `Phase 25`

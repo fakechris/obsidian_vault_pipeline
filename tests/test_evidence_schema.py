@@ -4,10 +4,10 @@ import json
 
 
 def test_build_evidence_payload_separates_identity_retrieval_graph_and_audit(temp_vault):
-    from openclaw_pipeline.concept_registry import ConceptEntry, ConceptRegistry
-    from openclaw_pipeline.evidence import build_evidence_payload
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+    from ovp_pipeline.evidence import build_evidence_payload
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -99,7 +99,7 @@ date: 2026-04-07
 
 
 def test_query_tool_attaches_structured_evidence_to_saved_answer(temp_vault, monkeypatch):
-    from openclaw_pipeline import query_tool
+    from ovp_pipeline import query_tool
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     source.write_text(
@@ -159,7 +159,7 @@ date: 2026-04-07
 
 
 def test_cleanup_proposal_includes_structured_evidence(temp_vault, capsys):
-    from openclaw_pipeline.commands.cleanup import main
+    from ovp_pipeline.commands.cleanup import main
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
     note.write_text(

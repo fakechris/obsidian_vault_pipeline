@@ -1,5 +1,5 @@
 """
-Pytest fixtures for openclaw_pipeline tests.
+Pytest fixtures for ovp_pipeline tests.
 """
 
 import pytest

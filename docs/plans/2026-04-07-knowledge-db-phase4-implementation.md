@@ -37,7 +37,7 @@ Expected:
 ### Task 2: Implement read-only helpers
 
 **Files:**
-- Modify: `src/openclaw_pipeline/knowledge_index.py`
+- Modify: `src/ovp_pipeline/knowledge_index.py`
 
 **Step 1: Implement helper functions**
 
@@ -66,7 +66,7 @@ Expected:
 ### Task 3: Extend CLI read modes and verify
 
 **Files:**
-- Modify: `src/openclaw_pipeline/commands/knowledge_index.py`
+- Modify: `src/ovp_pipeline/commands/knowledge_index.py`
 - Modify: `tests/test_knowledge_index.py`
 
 **Step 1: Add CLI flags**
@@ -91,5 +91,5 @@ Expected:
 **Step 4: Run full verification**
 
 Run:
-- `python3 -m compileall src/openclaw_pipeline`
+- `python3 -m compileall src/ovp_pipeline`
 - `pytest -q`

@@ -5,7 +5,7 @@ import json
 
 class FakeCommandExtractor:
     def extract(self, chunk_text, *, chunk_index, source_path, profile):  # noqa: ANN001
-        from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionSpan
+        from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionSpan
 
         return [
             ExtractionRecord(
@@ -24,8 +24,8 @@ class FakeCommandExtractor:
 
 
 def test_extract_profiles_command_writes_derived_json(temp_vault, monkeypatch):
-    from openclaw_pipeline.commands import extract_profiles
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands import extract_profiles
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "50-Inbox" / "01-Raw" / "example.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -58,8 +58,8 @@ def test_extract_profiles_command_writes_derived_json(temp_vault, monkeypatch):
 
 
 def test_extract_profiles_command_uses_default_profile_extractor(temp_vault):
-    from openclaw_pipeline.commands import extract_profiles
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands import extract_profiles
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "50-Inbox" / "01-Raw" / "workflow.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -95,8 +95,8 @@ def test_extract_profiles_command_uses_default_profile_extractor(temp_vault):
 
 
 def test_extract_profiles_command_supports_research_tech_pack(temp_vault, monkeypatch):
-    from openclaw_pipeline.commands import extract_profiles
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands import extract_profiles
+    from ovp_pipeline.runtime import VaultLayout
 
     source = temp_vault / "50-Inbox" / "01-Raw" / "research.md"
     source.parent.mkdir(parents=True, exist_ok=True)

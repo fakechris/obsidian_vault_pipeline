@@ -32,7 +32,7 @@ Expected:
 ### Task 2: Implement deterministic embeddings and query helper
 
 **Files:**
-- Modify: `src/openclaw_pipeline/knowledge_index.py`
+- Modify: `src/ovp_pipeline/knowledge_index.py`
 
 **Step 1: Extend the schema**
 
@@ -78,7 +78,7 @@ Expected:
 ### Task 3: Wire CLI query mode and run full verification
 
 **Files:**
-- Modify: `src/openclaw_pipeline/commands/knowledge_index.py`
+- Modify: `src/ovp_pipeline/commands/knowledge_index.py`
 - Modify: `tests/test_knowledge_index.py`
 
 **Step 1: Extend CLI**
@@ -102,5 +102,5 @@ Expected:
 **Step 3: Run full verification**
 
 Run:
-- `python3 -m compileall src/openclaw_pipeline`
+- `python3 -m compileall src/ovp_pipeline`
 - `pytest -q`

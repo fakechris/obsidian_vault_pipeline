@@ -132,9 +132,9 @@ They are not the highest-leverage next move.
 ### Task 1: Add Orientation Recipe To Research-Tech
 
 **Files:**
-- Modify: `src/openclaw_pipeline/packs/research_tech/assembly_recipes.py`
-- Modify: `src/openclaw_pipeline/packs/research_tech/pack.py`
-- Modify: `src/openclaw_pipeline/commands/export_artifact.py`
+- Modify: `src/ovp_pipeline/packs/research_tech/assembly_recipes.py`
+- Modify: `src/ovp_pipeline/packs/research_tech/pack.py`
+- Modify: `src/ovp_pipeline/commands/export_artifact.py`
 - Test: `tests/test_export_command.py`
 
 Deliverable:
@@ -149,8 +149,8 @@ Status:
 ### Task 2: Strengthen Briefing Payload Into Orientation Product
 
 **Files:**
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_ui_view_models.py`
 - Test: `tests/test_ui_server.py`
 
@@ -170,8 +170,8 @@ Status:
 ### Task 3: Add Compiled Page Section Contracts
 
 **Files:**
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Reference: existing page builders and contract cards
 - Test: `tests/test_ui_view_models.py`
 - Test: `tests/test_ui_server.py`
@@ -193,8 +193,8 @@ Status:
 ### Task 4: Add Workbench Home Entry Surface
 
 **Files:**
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
 - Test: `tests/test_ui_server.py`
 
 Deliverable:

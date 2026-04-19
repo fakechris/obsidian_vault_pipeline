@@ -5,8 +5,8 @@ import sqlite3
 
 
 def test_rebuild_compiled_summaries_updates_summary_for_object(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_compiled_summaries, rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_compiled_summaries, rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(
@@ -48,9 +48,9 @@ Thin note.
 
 
 def test_rebuild_summaries_command_can_apply_stale_summary_queue(temp_vault, capsys):
-    from openclaw_pipeline.commands.rebuild_summaries import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.rebuild_summaries import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(
@@ -95,9 +95,9 @@ Thin note.
 
 
 def test_rebuild_summaries_command_skips_malformed_queue_artifacts(temp_vault, capsys):
-    from openclaw_pipeline.commands.rebuild_summaries import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.rebuild_summaries import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openclaw_pipeline.graph.frontmatter import FrontmatterParser
-from openclaw_pipeline.graph.link_parser import LinkParser
+from ovp_pipeline.graph.frontmatter import FrontmatterParser
+from ovp_pipeline.graph.link_parser import LinkParser
 
 
 def test_frontmatter_parser_scans_relative_vault_path(tmp_path, monkeypatch):

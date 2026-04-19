@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_research_tech_pack_exposes_current_technical_profiles():
-    from openclaw_pipeline.packs.loader import load_pack
+    from ovp_pipeline.packs.loader import load_pack
 
     pack = load_pack("research-tech")
     extraction_profiles = {profile.name: profile for profile in pack.extraction_profiles()}
@@ -13,7 +13,7 @@ def test_research_tech_pack_exposes_current_technical_profiles():
 
 
 def test_default_knowledge_pack_remains_compatibility_surface():
-    from openclaw_pipeline.packs.loader import load_pack
+    from ovp_pipeline.packs.loader import load_pack
 
     pack = load_pack("default-knowledge")
     extraction_profiles = {profile.name: profile for profile in pack.extraction_profiles()}

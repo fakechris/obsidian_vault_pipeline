@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from openclaw_pipeline.graph.daily_delta import DailyDelta
+from ovp_pipeline.graph.daily_delta import DailyDelta
 
 
 def test_daily_delta_expands_incoming_and_outgoing_neighbors(temp_vault):

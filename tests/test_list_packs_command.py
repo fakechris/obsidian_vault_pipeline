@@ -5,7 +5,7 @@ import os
 
 
 def test_list_packs_command_outputs_builtin_roles(capsys):
-    from openclaw_pipeline.commands.list_packs import main
+    from ovp_pipeline.commands.list_packs import main
 
     exit_code = main(["--json"])
     payload = json.loads(capsys.readouterr().out)
@@ -18,7 +18,7 @@ def test_list_packs_command_outputs_builtin_roles(capsys):
 
 
 def test_list_packs_command_help_mentions_domain_packs(capsys):
-    from openclaw_pipeline.commands.list_packs import main
+    from ovp_pipeline.commands.list_packs import main
 
     try:
         main(["--help"])
@@ -30,7 +30,7 @@ def test_list_packs_command_help_mentions_domain_packs(capsys):
 
 
 def test_list_packs_command_reads_manifest_paths_from_os_pathsep(tmp_path, monkeypatch, capsys):
-    from openclaw_pipeline.commands.list_packs import main
+    from ovp_pipeline.commands.list_packs import main
 
     first = tmp_path / "external-pack.yaml"
     first.write_text(
@@ -54,7 +54,7 @@ entrypoints:
 """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("OPENCLAW_PACK_MANIFESTS", f"{first}{os.pathsep}{second}")
+    monkeypatch.setenv("OVP_PACK_MANIFESTS", f"{first}{os.pathsep}{second}")
 
     exit_code = main(["--json"])
     payload = json.loads(capsys.readouterr().out)

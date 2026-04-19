@@ -7,16 +7,16 @@ import sys
 
 import pytest
 
-from openclaw_pipeline.auto_github_processor import build_default_output_dir as github_output_dir
-from openclaw_pipeline.auto_paper_processor import build_default_output_dir as paper_output_dir
-from openclaw_pipeline.runtime import (
+from ovp_pipeline.auto_github_processor import build_default_output_dir as github_output_dir
+from ovp_pipeline.auto_paper_processor import build_default_output_dir as paper_output_dir
+from ovp_pipeline.runtime import (
     VaultLayout,
     iter_markdown_files,
     markdown_title,
     read_markdown_frontmatter,
     resolve_vault_dir,
 )
-from openclaw_pipeline.unified_pipeline_enhanced import (
+from ovp_pipeline.unified_pipeline_enhanced import (
     EnhancedPipeline,
     build_execution_plan,
     detect_pinboard_processor,
@@ -135,8 +135,8 @@ def test_build_execution_plan_full_respects_from_step():
 
 
 def test_run_pipeline_dispatches_profile_stages_via_handler_registry(tmp_path, monkeypatch):
-    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_source
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -176,8 +176,8 @@ def test_run_pipeline_dispatches_profile_stages_via_handler_registry(tmp_path, m
 
 
 def test_run_pipeline_restores_pack_and_profile_after_override(tmp_path, monkeypatch):
-    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_source
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -212,9 +212,9 @@ def test_run_pipeline_restores_pack_and_profile_after_override(tmp_path, monkeyp
 
 
 def test_run_pipeline_uses_profile_stages_when_steps_omitted(tmp_path, monkeypatch):
-    import openclaw_pipeline.unified_pipeline_enhanced as pipeline_source
-    from openclaw_pipeline.packs.base import BaseDomainPack, WorkflowProfile
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.packs.base import BaseDomainPack, WorkflowProfile
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -286,7 +286,7 @@ tags: [knowledge]
 
 
 def test_step_knowledge_index_invokes_rebuild_command(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -307,14 +307,14 @@ def test_step_knowledge_index_invokes_rebuild_command(tmp_path, monkeypatch):
 
     assert result["success"] is True
     assert captured["step_name"] == "knowledge_index"
-    assert "openclaw_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
+    assert "ovp_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
     assert "--vault-dir" in captured["cmd"]
     assert "--pack" in captured["cmd"]
     assert captured["cmd"][captured["cmd"].index("--pack") + 1] == pipeline.workflow_pack_name
 
 
 def test_step_absorb_invokes_absorb_command(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -335,12 +335,12 @@ def test_step_absorb_invokes_absorb_command(tmp_path, monkeypatch):
 
     assert result["success"] is True
     assert captured["step_name"] == "absorb"
-    assert "openclaw_pipeline.commands.absorb" in " ".join(captured["cmd"])
+    assert "ovp_pipeline.commands.absorb" in " ".join(captured["cmd"])
     assert "--vault-dir" in captured["cmd"]
 
 
 def test_step_quality_parses_qualified_files_from_qc_json(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -373,7 +373,7 @@ def test_step_quality_parses_qualified_files_from_qc_json(tmp_path, monkeypatch)
 
 
 def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -433,7 +433,7 @@ def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
 
 
 def test_step_quality_rejects_non_positive_batch_size(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -448,7 +448,7 @@ def test_step_quality_rejects_non_positive_batch_size(tmp_path):
 
 
 def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
 
     vault = tmp_path / "vault"
@@ -508,7 +508,7 @@ def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_pat
 
 
 def test_step_absorb_skips_cleanly_when_no_qualified_files(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -528,7 +528,7 @@ def test_step_absorb_skips_cleanly_when_no_qualified_files(tmp_path):
 
 
 def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
 
     vault = tmp_path / "vault"
@@ -594,7 +594,7 @@ def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeyp
 
 
 def test_load_latest_qualified_files_unions_batches(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     reports_dir = vault / "60-Logs" / "quality-reports"
@@ -622,7 +622,7 @@ def test_load_latest_qualified_files_unions_batches(tmp_path):
 
 
 def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
 
     vault = tmp_path / "vault"
@@ -701,7 +701,7 @@ def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, mo
 
 
 def test_absorb_timeout_scales_with_batch_size(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
@@ -715,7 +715,7 @@ def test_absorb_timeout_scales_with_batch_size(tmp_path):
 
 
 def test_step_absorb_parses_json_payload_after_log_prefix(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
 
     vault = tmp_path / "vault"
@@ -761,7 +761,7 @@ def test_step_absorb_parses_json_payload_after_log_prefix(tmp_path, monkeypatch)
 
 
 def test_step_absorb_rejects_non_positive_batch_size(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
@@ -776,7 +776,7 @@ def test_step_absorb_rejects_non_positive_batch_size(tmp_path):
 
 
 def test_run_command_timeout_is_failure(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -791,7 +791,7 @@ def test_run_command_timeout_is_failure(tmp_path):
 
 
 def test_step_pinboard_decomposes_cross_day_history_into_daily_requests(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -822,7 +822,7 @@ def test_step_pinboard_decomposes_cross_day_history_into_daily_requests(tmp_path
 
 
 def test_before_counts_include_monthly_processed_files(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     processed_file = vault / "50-Inbox" / "03-Processed" / "2026-04" / "example.md"
@@ -840,7 +840,7 @@ def test_before_counts_include_monthly_processed_files(tmp_path):
 
 
 def test_articles_timeout_scales_with_raw_and_processing_queue(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     raw_dir = vault / "50-Inbox" / "01-Raw"
@@ -864,7 +864,7 @@ def test_articles_timeout_scales_with_raw_and_processing_queue(tmp_path):
 
 
 def test_quality_timeout_scales_with_batch_size(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
@@ -878,7 +878,7 @@ def test_quality_timeout_scales_with_batch_size(tmp_path):
 
 
 def test_fix_links_timeout_scales_with_deep_dive_count(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
@@ -898,7 +898,7 @@ def test_fix_links_timeout_scales_with_deep_dive_count(tmp_path):
 
 
 def test_knowledge_index_timeout_scales_with_evergreen_count(tmp_path):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     evergreen_dir = vault / "10-Knowledge" / "Evergreen"
@@ -921,7 +921,7 @@ def test_knowledge_index_timeout_scales_with_evergreen_count(tmp_path):
 
 
 def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
@@ -949,12 +949,12 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
 
     assert result["success"] is True
     assert captured["step_name"] == "fix_links"
-    assert "openclaw_pipeline.commands.migrate_broken_links" in " ".join(captured["cmd"])
+    assert "ovp_pipeline.commands.migrate_broken_links" in " ".join(captured["cmd"])
     assert captured["timeout"] > 300
 
 
 def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     evergreen_dir = vault / "10-Knowledge" / "Evergreen"
@@ -985,12 +985,12 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
 
     assert result["success"] is True
     assert captured["step_name"] == "knowledge_index"
-    assert "openclaw_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
+    assert "ovp_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
     assert captured["timeout"] > 120
 
 
 def test_step_refine_runs_cleanup_then_breakdown(tmp_path, monkeypatch):
-    from openclaw_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
@@ -1010,8 +1010,8 @@ def test_step_refine_runs_cleanup_then_breakdown(tmp_path, monkeypatch):
 
     assert result["success"] is True
     assert [step_name for step_name, _ in commands] == ["refine_cleanup", "refine_breakdown"]
-    assert "openclaw_pipeline.commands.cleanup" in " ".join(commands[0][1])
-    assert "openclaw_pipeline.commands.breakdown" in " ".join(commands[1][1])
+    assert "ovp_pipeline.commands.cleanup" in " ".join(commands[0][1])
+    assert "ovp_pipeline.commands.breakdown" in " ".join(commands[1][1])
 
 
 def test_iter_markdown_files_does_not_drop_parent_relative_paths(tmp_path, monkeypatch):

@@ -4,12 +4,12 @@ Tests for concept_resolver module.
 
 import pytest
 from pathlib import Path
-from openclaw_pipeline.concept_registry import (
+from ovp_pipeline.concept_registry import (
     ConceptRegistry,
     ConceptEntry,
     STATUS_ACTIVE,
 )
-from openclaw_pipeline.concept_resolver import (
+from ovp_pipeline.concept_resolver import (
     MentionExtractor,
     LinkRenderer,
     LinkResolutionSidecar,
