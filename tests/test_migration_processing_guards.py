@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from ovp_pipeline import auto_github_processor as github_module
+from ovp_pipeline import auto_article_processor as article_module
 from ovp_pipeline import auto_paper_processor as paper_module
 from ovp_pipeline.auto_article_processor import (
     AutoArticleProcessor,
@@ -425,6 +427,48 @@ Body
     assert seen == ["2026-04-07_stuck.md"]
 
 
+def test_process_inbox_batch_progress_uses_selected_batch_total(temp_vault, monkeypatch):
+    raw_dir = temp_vault / "50-Inbox" / "01-Raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    for idx in range(3):
+        (raw_dir / f"2026-04-07_article_{idx}.md").write_text(
+            f"""---
+title: "Article {idx}"
+source: https://example.com/{idx}
+author: unknown
+date: 2026-04-07
+type: article
+tags: [sdk]
+---
+
+Body
+""",
+            encoding="utf-8",
+        )
+
+    logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+    txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    txn_id = txn.start("article-processing", "Batch progress")
+
+    monkeypatch.setattr(
+        processor,
+        "process_single_file",
+        lambda file_path, dry_run=False: {"status": "completed", "tokens_used": 0},
+    )
+
+    results = processor.process_inbox(dry_run=True, batch_size=1, txn_id=txn_id)
+
+    payload = json.loads((temp_vault / "60-Logs" / "transactions" / f"{txn_id}.json").read_text(encoding="utf-8"))
+    current = payload["run_ledger"]["current_step"]
+    assert results["queued_total"] == 3
+    assert results["total"] == 1
+    assert results["completed"] == 1
+    assert current["work_units_total"] == 1
+    assert current["work_units_done"] == 1
+    assert current["progress_summary"] == "1/1 articles processed"
+
+
 def test_linter_resolve_link_handles_dot_relative_target_without_crashing(temp_vault):
     note = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04-07_Test.md"
     note.parent.mkdir(parents=True, exist_ok=True)
@@ -573,6 +617,27 @@ tags: [paper]
 
     assert paper_module.main() == 0
     assert captured["model"] is None
+
+
+def test_article_cli_summary_handles_results_without_queued_total(temp_vault, monkeypatch, capsys):
+    def stub_init_llm(self, *, api_key=None, api_base=None):
+        self.llm = SimpleNamespace(model="stub-model")
+
+    monkeypatch.setattr(article_module.AutoArticleProcessor, "init_llm", stub_init_llm)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "auto_article_processor.py",
+            "--single",
+            "https://example.com/article",
+            "--vault-dir",
+            str(temp_vault),
+        ],
+    )
+
+    assert article_module.main() == 0
+    assert "Queued:" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(("client_class", "patch_mode"), [

@@ -130,6 +130,10 @@ class VaultLayout:
         return self.logs_dir / "quality-reports"
 
     @property
+    def stage_artifacts_dir(self) -> Path:
+        return self.logs_dir / "stage-artifacts"
+
+    @property
     def raw_dir(self) -> Path:
         return self.vault_dir / "50-Inbox" / "01-Raw"
 

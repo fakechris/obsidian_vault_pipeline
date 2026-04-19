@@ -97,16 +97,22 @@ def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
     return items
 
 
-def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
+def _layout(title: str, body: str, *, requested_pack: str = "", auto_refresh_seconds: int | None = None) -> str:
     nav_items = "".join(
         f'<a href="{escape(_shell_href(path, requested_pack))}">{escape(label)}</a>'
         for label, path in _shell_nav_items(requested_pack)
+    )
+    refresh_meta = (
+        f'    <meta http-equiv="refresh" content="{int(auto_refresh_seconds)}" />\n'
+        if auto_refresh_seconds and auto_refresh_seconds > 0
+        else ""
     )
     return f"""<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+{refresh_meta}    <meta name="ovp-runtime-refresh" content="{int(auto_refresh_seconds or 0)}" />
     <title>{escape(title)}</title>
     <style>
       :root {{
@@ -215,9 +221,10 @@ def _render_surface_contract_card(payload: dict) -> str:
             f"This shared shell surface has no provider for {escape(surface_kind)} "
             f"in the current pack scope."
         )
+    title = f"{surface_kind.replace('_', ' ').title()} Surface Contract" if surface_kind else "Surface Contract"
     error_text = str(payload.get("surface_error") or "").strip()
     extra = f"<p class='muted'>{escape(error_text)}</p>" if error_text else ""
-    return f"<section class='card'><h2>Surface Contract</h2><p class='muted'>{detail}</p>{extra}</section>"
+    return f"<section class='card'><h2>{escape(title)}</h2><p class='muted'>{detail}</p>{extra}</section>"
 
 
 def _render_assembly_contract_card(payload: dict) -> str:
@@ -335,17 +342,84 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
 
     ledger = active_run.get("run_ledger") if isinstance(active_run.get("run_ledger"), dict) else {}
     current = ledger.get("current_step") if isinstance(ledger.get("current_step"), dict) else {}
+    runtime_progress = active_run.get("runtime_progress") if isinstance(active_run.get("runtime_progress"), dict) else {}
+    stage_progress = runtime_progress.get("stage") if isinstance(runtime_progress.get("stage"), dict) else {}
+    work_progress = runtime_progress.get("work") if isinstance(runtime_progress.get("work"), dict) else {}
+    performance = runtime_progress.get("performance") if isinstance(runtime_progress.get("performance"), dict) else {}
     run_state = str(ledger.get("run_state") or active_run.get("status") or "running")
     step_name = str(current.get("step_name") or ledger.get("current_step_name") or active_run.get("checkpoint") or "")
-    progress_summary = str(current.get("progress_summary") or "Progress is currently indeterminate.")
-    current_item = str(current.get("current_item") or "").strip()
+    steps = active_run.get("steps") if isinstance(active_run.get("steps"), dict) else {}
+    current_step_record = steps.get(step_name) if isinstance(steps.get(step_name), dict) else {}
+    progress_summary = str(
+        work_progress.get("summary") or current.get("progress_summary") or "Progress is currently indeterminate."
+    )
+    current_item = str(work_progress.get("current_item") or current.get("current_item") or "").strip()
     heartbeat_at = str(ledger.get("heartbeat_at") or active_run.get("last_updated") or "")
     facts = [
         f"<li>Run: {escape(str(active_run.get('id') or ''))}</li>",
         f"<li>State: {escape(run_state)}</li>",
     ]
-    if step_name:
+    runtime_processes = runtime.get("runtime_processes") if isinstance(runtime.get("runtime_processes"), dict) else {}
+    process_items = runtime_processes.get("items") if isinstance(runtime_processes.get("items"), list) else []
+    if process_items:
+        for process in process_items[:2]:
+            if not isinstance(process, dict):
+                continue
+            process_kind = str(process.get("process_kind") or "unknown").replace("_", "-")
+            elapsed = str(process.get("elapsed_summary") or process.get("elapsed_raw") or "unknown")
+            args_summary = str(process.get("args_summary") or "").strip()
+            process_detail = (
+                f"PID {escape(str(process.get('pid') or ''))} · {escape(process_kind)} · "
+                f"running {escape(elapsed)}"
+            )
+            if args_summary:
+                process_detail += f" · {escape(args_summary)}"
+            facts.append(f"<li>Process: {process_detail}</li>")
+    else:
+        facts.append("<li>Process: no matching pipeline worker detected</li>")
+    stage_summary = str(stage_progress.get("summary") or "").strip()
+    if stage_summary:
+        facts.append(f"<li>Stage: {escape(stage_summary)}</li>")
+    elif step_name:
         facts.append(f"<li>Step: {escape(step_name)}</li>")
+    if current_step_record.get("cache_hit") or current.get("cache_hit"):
+        facts.append("<li>Cache: hit</li>")
+    if current_step_record.get("skipped") or current.get("skipped"):
+        facts.append("<li>Skipped: yes</li>")
+    blocked_reason = str(
+        current_step_record.get("blocked_reason")
+        or current.get("blocked_reason")
+        or ledger.get("blocked_reason")
+        or ""
+    ).strip()
+    if blocked_reason:
+        facts.append(f"<li>Blocked reason: {escape(blocked_reason)}</li>")
+    stage_fingerprint = str(current_step_record.get("stage_fingerprint") or current.get("stage_fingerprint") or "").strip()
+    if stage_fingerprint:
+        facts.append(f"<li>Fingerprint: {escape(stage_fingerprint)}</li>")
+    work_done = work_progress.get("done")
+    work_total = work_progress.get("total")
+    work_percent = work_progress.get("percent")
+    if work_done is not None and work_total is not None:
+        if work_percent is not None:
+            facts.append(
+                f"<li>Files: {escape(str(work_done))}/{escape(str(work_total))} "
+                f"({escape(str(work_percent))}%)</li>"
+            )
+        else:
+            facts.append(f"<li>Files: {escape(str(work_done))}/{escape(str(work_total))}</li>")
+    failed = work_progress.get("failed")
+    if failed:
+        facts.append(f"<li>Failed files: {escape(str(failed))}</li>")
+    rate_summary = str(performance.get("rate_summary") or "").strip()
+    if rate_summary:
+        facts.append(f"<li>Speed: {escape(rate_summary)}</li>")
+    eta_summary = str(performance.get("eta_summary") or "").strip()
+    if eta_summary:
+        facts.append(f"<li>ETA: {escape(eta_summary)}</li>")
+    elapsed_summary = str(performance.get("elapsed_summary") or "").strip()
+    if elapsed_summary:
+        facts.append(f"<li>Stage elapsed: {escape(elapsed_summary)}</li>")
     if heartbeat_at:
         facts.append(f"<li>Heartbeat: {escape(heartbeat_at)}</li>")
     if stale_count:
@@ -356,6 +430,67 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
         f"<p class='muted'>{escape(progress_summary)}</p>"
         f"{current_item_html}"
         f"<ul class='list-tight'>{''.join(facts)}</ul>"
+        "</section>"
+    )
+
+
+def _render_run_history_card(runtime: dict[str, object] | None) -> str:
+    if not isinstance(runtime, dict):
+        return ""
+    history = runtime.get("run_history") if isinstance(runtime.get("run_history"), dict) else {}
+    items = history.get("items") if isinstance(history.get("items"), list) else []
+    if not items:
+        return (
+            "<section class='card'><h2>Recent Runs</h2>"
+            "<p class='muted'>No persisted run history found in the transaction ledger.</p></section>"
+        )
+    rendered_items: list[str] = []
+    for item in items[:6]:
+        if not isinstance(item, dict):
+            continue
+        run_id = str(item.get("run_id") or "")
+        status = str(item.get("status") or "")
+        duration = str(item.get("duration_summary") or "duration unknown")
+        scope = str(item.get("scope_summary") or "scope unknown")
+        work = str(item.get("content_summary") or "No counted work recorded.")
+        started_at = str(item.get("started_at") or "")
+        finished_at = str(item.get("finished_at") or "running")
+        step_summaries = item.get("step_summaries") if isinstance(item.get("step_summaries"), list) else []
+        step_items: list[str] = []
+        for step in step_summaries[:8]:
+            if not isinstance(step, dict):
+                continue
+            labels = [str(step.get("status") or "").strip()]
+            if step.get("cache_hit"):
+                labels.append("cache hit")
+            if step.get("skipped"):
+                labels.append("skipped")
+            blocked_reason = str(step.get("blocked_reason") or "").strip()
+            if blocked_reason:
+                labels.append(f"blocked: {blocked_reason}")
+            labels_html = " · ".join(escape(label) for label in labels if label)
+            step_items.append(
+                f"<li>{escape(str(step.get('step_name') or ''))}"
+                + (f" <span class='muted'>{labels_html}</span>" if labels_html else "")
+                + "</li>"
+            )
+        steps_html = f"<ul class='list-tight'>{''.join(step_items)}</ul>" if step_items else ""
+        rendered_items.append(
+            "<li>"
+            f"<strong>{escape(run_id)}</strong> "
+            f"<span class='pill'>{escape(status)}</span>"
+            f"<div class='muted'>Duration: {escape(duration)} · {escape(started_at)} → {escape(finished_at)}</div>"
+            f"<div class='muted'>Scope: {escape(scope)}</div>"
+            f"<div class='muted'>Work: {escape(work)}</div>"
+            f"{steps_html}"
+            "</li>"
+        )
+    total_count = history.get("total_count")
+    total_suffix = f"<p class='muted'>Showing {len(rendered_items)} of {escape(str(total_count))} persisted run(s).</p>" if total_count else ""
+    return (
+        "<section class='card'><h2>Recent Runs</h2>"
+        f"{total_suffix}"
+        f"<ul class='list-tight'>{''.join(rendered_items)}</ul>"
         "</section>"
     )
 
@@ -1176,6 +1311,7 @@ def _render_workflow_groups(groups: list[dict[str, object]]) -> str:
 def _render_dashboard(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     runtime_card = _render_runtime_card(payload.get("runtime"))
+    run_history_card = _render_run_history_card(payload.get("runtime"))
     research_overview = payload.get("research_overview", {})
     research_overview_supported = research_overview.get("status") == "supported"
     orientation = payload.get("orientation", {})
@@ -1230,18 +1366,18 @@ def _render_dashboard(payload: dict) -> str:
     stats_cards = [
         "<div class='card'><h2>Objects Indexed</h2>"
         f"<p>{payload['objects']['count']}</p></div>",
-        "<div class='card'><h2>Signals</h2>"
+        "<div class='card'><h2>Signal Count</h2>"
         f"<p>{payload['signals']['count']}</p></div>",
-        "<div class='card'><h2>Production Weak Points</h2>"
+        "<div class='card'><h2>Weak Point Count</h2>"
         f"<p>{payload['production']['weak_point_count']}</p></div>",
     ]
     if research_overview_supported:
         stats_cards[1:1] = [
             "<div class='card'><h2>Contradictions Open</h2>"
             f"<p>{payload['contradictions']['open_count']}</p></div>",
-            "<div class='card'><h2>Recent Events</h2>"
+            "<div class='card'><h2>Event Count</h2>"
             f"<p>{payload['events']['count']}</p></div>",
-            "<div class='card'><h2>Stale Summaries</h2>"
+            "<div class='card'><h2>Stale Summary Count</h2>"
             f"<p>{payload['stale_summaries']['count']}</p></div>",
             "<div class='card'><h2>Evolution Candidates</h2>"
             f"<p>{payload['evolution']['candidate_count']}</p></div>",
@@ -1286,16 +1422,16 @@ def _render_dashboard(payload: dict) -> str:
             "<h1>OVP Truth UI</h1>",
             "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
-            f"<div class='link-row'><a href='{escape(_shell_href('/briefing', requested_pack))}'>Orientation Brief</a></div>",
             "</section>",
+            runtime_card,
+            run_history_card,
             "<section class='grid stats'>",
             "".join(stats_cards),
             "</section>",
             "<section class='section-stack'>",
             "<section class='card'><h2>Workflow Map</h2><p class='muted'>Start here if you do not yet know which route to open. Each group maps one common operator workflow onto the current shell.</p></section>",
             workflow_groups_html,
-            runtime_card,
-            "<section class='card'><h2>Where To Start</h2><p class='muted'>Use the orientation brief and the compiled entry sections below to decide what to read, review, or do next.</p></section>",
+            "<section class='card'><h2>Where To Start</h2><p class='muted'>Use the workflow map above to choose a route, then inspect the attention queues and knowledge surfaces below.</p></section>",
             orientation_assembly_contract,
             orientation_governance_contract,
             entry_sections_html,
@@ -1314,6 +1450,7 @@ def _render_dashboard(payload: dict) -> str:
         "OVP Truth UI",
         dashboard_body,
         requested_pack=requested_pack,
+        auto_refresh_seconds=10,
     )
 
 

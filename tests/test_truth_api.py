@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
 
 import pytest
 
@@ -189,6 +191,23 @@ def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vau
     assert actions[0]["impact_summary"]["lifecycle_stage"] == "queued"
 
 
+def test_truth_api_marks_old_running_action_as_stale():
+    from ovp_pipeline.truth_api import _build_action_impact_summary
+
+    summary = _build_action_impact_summary(
+        {
+            "action_id": "action::stale",
+            "action_kind": "object_extraction_workflow",
+            "status": "running",
+            "started_at": "2000-01-01T00:00:00Z",
+        }
+    )
+
+    assert summary["impact_status"] == "stale"
+    assert summary["lifecycle_stage"] == "stale_running"
+    assert "stale" in summary["impact_label"].lower()
+
+
 def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
     from ovp_pipeline.truth_api import get_runtime_status
 
@@ -208,11 +227,15 @@ def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
                     "run_state": "running",
                     "workflow_profile": "full",
                     "pack_name": "research-tech",
+                    "planned_steps": ["pinboard", "absorb", "knowledge_index"],
+                    "started_at": "2026-04-09T00:00:00Z",
                     "heartbeat_at": "2026-04-09T00:15:00Z",
                     "current_step_name": "absorb",
                     "current_step": {
                         "step_name": "absorb",
                         "step_state": "running",
+                        "step_started_at": "2026-04-09T00:10:00Z",
+                        "step_heartbeat_at": "2026-04-09T00:15:00Z",
                         "progress_mode": "counted",
                         "work_units_total": 20,
                         "work_units_done": 5,
@@ -260,7 +283,330 @@ def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
     assert payload["active_run"]["id"] == "txn-1"
     assert payload["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 25.0
     assert payload["active_run"]["run_ledger"]["current_step"]["current_item"] == "Alpha.md"
+    runtime_progress = payload["active_run"]["runtime_progress"]
+    assert runtime_progress["stage"]["current_index"] == 2
+    assert runtime_progress["stage"]["total"] == 3
+    assert runtime_progress["stage"]["summary"] == "Stage 2/3: absorb"
+    assert runtime_progress["work"]["done"] == 5
+    assert runtime_progress["work"]["total"] == 20
+    assert runtime_progress["work"]["failed"] == 1
+    assert runtime_progress["work"]["percent"] == 25.0
+    assert runtime_progress["work"]["summary"] == "5/20 files processed"
+    assert runtime_progress["performance"]["elapsed_seconds"] == 600
+    assert runtime_progress["performance"]["items_per_second"] == pytest.approx(0.008333, rel=1e-3)
+    assert runtime_progress["performance"]["items_per_minute"] == pytest.approx(0.5, rel=1e-3)
+    assert runtime_progress["performance"]["eta_seconds"] == 1800
+    assert runtime_progress["performance"]["eta_at"] == "2026-04-09T00:50:00Z"
+    assert runtime_progress["performance"]["rate_summary"] == "0.0083 files/s (0.50 files/min)"
+    assert runtime_progress["performance"]["eta_summary"] == "~30m remaining, ETA 2026-04-09T00:50:00Z"
     assert payload["stale_count"] == 1
+
+
+def test_truth_api_runtime_progress_accepts_naive_ledger_timestamps(temp_vault):
+    from ovp_pipeline.truth_api import get_runtime_status
+
+    transactions_dir = temp_vault / "60-Logs" / "transactions"
+    transactions_dir.mkdir(parents=True, exist_ok=True)
+    (transactions_dir / "txn-1.json").write_text(
+        json.dumps(
+            {
+                "id": "txn-1",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "last_updated": "2026-04-09T00:15:00",
+                "run_ledger": {
+                    "run_id": "txn-1",
+                    "run_state": "running",
+                    "started_at": "2026-04-09T00:00:00",
+                    "heartbeat_at": "2026-04-09T00:15:00",
+                    "current_step_name": "absorb",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "running",
+                        "step_started_at": "2026-04-09T00:10:00",
+                        "progress_mode": "counted",
+                        "work_units_total": 20,
+                        "work_units_done": 5,
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = get_runtime_status(temp_vault, now_iso="2026-04-09T00:20:00Z")
+
+    assert payload["active_run"]["runtime_progress"]["performance"]["elapsed_seconds"] == 600
+
+
+def test_truth_api_get_runtime_status_surfaces_pipeline_process_identity(temp_vault, monkeypatch):
+    from ovp_pipeline import runtime_processes
+    from ovp_pipeline.truth_api import get_runtime_status
+
+    logs_dir = temp_vault / "60-Logs"
+    transactions_dir = logs_dir / "transactions"
+    transactions_dir.mkdir(parents=True, exist_ok=True)
+    (transactions_dir / "txn-1.json").write_text(
+        json.dumps(
+            {
+                "id": "txn-1",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "last_updated": "2026-04-09T00:15:00Z",
+                "run_ledger": {
+                    "run_id": "txn-1",
+                    "run_state": "running",
+                    "heartbeat_at": "2026-04-09T00:15:00Z",
+                    "current_step_name": "absorb",
+                    "current_step": {"step_name": "absorb", "step_state": "running"},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class Result:
+        stdout = (
+            f"80018 01:02:03 Ss /env/bin/python /env/bin/ovp --from-step absorb --pack research-tech --vault-dir {temp_vault}\n"
+            f"31189 00:04:00 Ss /env/bin/python /env/bin/ovp-ui --vault-dir {temp_vault} --port 8766\n"
+        )
+
+    monkeypatch.setattr(
+        runtime_processes.subprocess,
+        "run",
+        lambda *_args, **_kwargs: Result(),
+    )
+
+    payload = get_runtime_status(temp_vault, now_iso="2026-04-09T00:20:00Z")
+
+    processes = payload["runtime_processes"]
+    assert processes["active_count"] == 1
+    assert processes["items"][0]["pid"] == 80018
+    assert processes["items"][0]["process_kind"] == "one_shot"
+    assert processes["items"][0]["elapsed_seconds"] == 3723
+    assert processes["items"][0]["elapsed_summary"] == "1h 2m"
+    assert processes["items"][0]["args_summary"] == "--from-step absorb --pack research-tech"
+
+
+def test_runtime_processes_detects_ovp_variant_and_strips_vault_dir(temp_vault, monkeypatch):
+    from ovp_pipeline import runtime_processes
+
+    class Result:
+        stdout = f"80018 00:04:00 Ss /env/bin/python /env/bin/ovp-article --vault-dir {temp_vault} --batch-size 5\n"
+
+    monkeypatch.setattr(runtime_processes.shutil, "which", lambda name: "/bin/ps" if name == "ps" else None)
+    monkeypatch.setattr(runtime_processes.subprocess, "run", lambda *_args, **_kwargs: Result())
+
+    processes = runtime_processes.detect_runtime_processes(temp_vault)
+
+    assert len(processes) == 1
+    assert processes[0]["process_kind"] == "one_shot"
+    assert processes[0]["args_summary"] == "--batch-size 5"
+
+
+def test_runtime_processes_treats_ps_timeout_as_no_processes(temp_vault, monkeypatch):
+    from ovp_pipeline import runtime_processes
+
+    def raise_timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd=["ps"], timeout=5)
+
+    monkeypatch.setattr(runtime_processes.shutil, "which", lambda name: "/bin/ps" if name == "ps" else None)
+    monkeypatch.setattr(runtime_processes.subprocess, "run", raise_timeout)
+
+    assert runtime_processes.detect_runtime_processes(temp_vault) == []
+
+
+def test_truth_api_get_runtime_status_includes_run_history(temp_vault):
+    from ovp_pipeline.truth_api import get_runtime_status
+
+    transactions_dir = temp_vault / "60-Logs" / "transactions"
+    transactions_dir.mkdir(parents=True, exist_ok=True)
+    (transactions_dir / "pipeline-complete.json").write_text(
+        json.dumps(
+            {
+                "id": "pipeline-complete",
+                "type": "enhanced-pipeline",
+                "status": "completed",
+                "checkpoint": "knowledge_index",
+                "start_time": "2026-04-09T00:00:00Z",
+                "completed_at": "2026-04-09T00:10:00Z",
+                "last_updated": "2026-04-09T00:10:00Z",
+                "steps": {
+                    "pinboard": {
+                        "status": "completed",
+                        "output": "Produced 2 items",
+                        "updated_at": "2026-04-09T00:02:00Z",
+                    },
+                    "articles": {
+                        "status": "completed",
+                        "output": "Produced 3 items",
+                        "updated_at": "2026-04-09T00:05:00Z",
+                    },
+                    "knowledge_index": {
+                        "status": "completed",
+                        "output": "Produced 1 items",
+                        "updated_at": "2026-04-09T00:10:00Z",
+                        "stage_artifact": "60-Logs/stage-artifacts/knowledge_index/demo.json",
+                    },
+                },
+                "run_ledger": {
+                    "run_id": "pipeline-complete",
+                    "run_state": "completed",
+                    "workflow_profile": "full",
+                    "pack_name": "research-tech",
+                    "planned_steps": ["pinboard", "articles", "knowledge_index"],
+                    "started_at": "2026-04-09T00:00:00Z",
+                    "updated_at": "2026-04-09T00:10:00Z",
+                    "current_step_name": "knowledge_index",
+                    "current_step": {
+                        "step_name": "knowledge_index",
+                        "step_state": "completed",
+                        "progress_mode": "counted",
+                        "work_units_total": 20,
+                        "work_units_done": 20,
+                        "work_units_failed": 0,
+                        "progress_percent": 100.0,
+                        "progress_summary": "20/20 files processed",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (transactions_dir / "pipeline-active.json").write_text(
+        json.dumps(
+            {
+                "id": "pipeline-active",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "start_time": "2026-04-09T00:20:00Z",
+                "last_updated": "2026-04-09T00:30:00Z",
+                "steps": {
+                    "fix_links": {
+                        "status": "completed",
+                        "output": "Produced 0 items",
+                        "updated_at": "2026-04-09T00:21:00Z",
+                    },
+                    "absorb": {
+                        "status": "in_progress",
+                        "output": "",
+                        "updated_at": "2026-04-09T00:30:00Z",
+                    },
+                },
+                "run_ledger": {
+                    "run_id": "pipeline-active",
+                    "run_state": "running",
+                    "workflow_profile": "full",
+                    "pack_name": "research-tech",
+                    "planned_steps": ["fix_links", "absorb", "moc"],
+                    "started_at": "2026-04-09T00:20:00Z",
+                    "heartbeat_at": "2026-04-09T00:30:00Z",
+                    "current_step_name": "absorb",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "running",
+                        "progress_mode": "counted",
+                        "work_units_total": 443,
+                        "work_units_done": 137,
+                        "work_units_failed": 0,
+                        "progress_percent": 30.9,
+                        "progress_summary": "137/443 files processed",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = get_runtime_status(temp_vault, now_iso="2026-04-09T00:40:00Z")
+
+    history = payload["run_history"]
+    assert history["total_count"] == 2
+    assert [item["run_id"] for item in history["items"]] == ["pipeline-active", "pipeline-complete"]
+    active = history["items"][0]
+    assert active["duration_seconds"] == 1200
+    assert active["duration_summary"] == "20m"
+    assert active["scope_summary"] == "fix_links → absorb → moc"
+    assert active["content_summary"] == "137/443 files processed"
+    completed = history["items"][1]
+    assert completed["duration_seconds"] == 600
+    assert completed["duration_summary"] == "10m"
+    assert completed["produced_total"] == 6
+    assert completed["completed_steps"] == 3
+    assert completed["total_steps"] == 3
+    assert completed["content_summary"] == "Produced 6 items; 20/20 files processed"
+    assert completed["step_summaries"][2]["stage_artifact"] == "60-Logs/stage-artifacts/knowledge_index/demo.json"
+
+
+def test_run_history_keeps_running_run_open_when_payload_status_is_missing():
+    from ovp_pipeline.run_history import summarize_run
+
+    summary = summarize_run(
+        {
+            "id": "pipeline-active",
+            "type": "enhanced-pipeline",
+            "last_updated": "2026-04-09T00:05:00Z",
+            "run_ledger": {
+                "run_id": "pipeline-active",
+                "run_state": "running",
+                "started_at": "2026-04-09T00:00:00Z",
+                "updated_at": "2026-04-09T00:05:00Z",
+            },
+        },
+        now_iso="2026-04-09T00:10:00Z",
+    )
+
+    assert summary["finished_at"] == ""
+    assert summary["duration_seconds"] == 600
+
+
+def test_run_history_applies_limit_before_parsing_old_transaction_files(tmp_path, monkeypatch):
+    from ovp_pipeline.run_history import list_run_history
+
+    transactions_dir = tmp_path / "transactions"
+    transactions_dir.mkdir()
+    for idx in range(20):
+        txn_file = transactions_dir / f"pipeline-20260409-{idx:02d}.json"
+        txn_file.write_text(
+            json.dumps(
+                {
+                    "id": f"pipeline-{idx:02d}",
+                    "type": "enhanced-pipeline",
+                    "status": "completed",
+                    "start_time": f"2026-04-09T00:{idx:02d}:00Z",
+                    "completed_at": f"2026-04-09T00:{idx:02d}:30Z",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        os.utime(txn_file, (idx, idx))
+
+    reads = 0
+    original_read_text = Path.read_text
+
+    def counted_read_text(self, *args, **kwargs):
+        nonlocal reads
+        reads += 1
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+
+    history = list_run_history(transactions_dir, now_iso="2026-04-09T01:00:00Z", limit=3)
+
+    assert reads == 3
+    assert history["total_count"] == 20
+    assert [item["run_id"] for item in history["items"]] == [
+        "pipeline-19",
+        "pipeline-18",
+        "pipeline-17",
+    ]
 
 
 def test_truth_api_builds_note_inbound_capture_summary_and_attaches_it_to_signals(temp_vault):

@@ -85,11 +85,15 @@ def test_ui_server_root_serves_html_shell(temp_vault):
                     "run_state": "running",
                     "workflow_profile": "full",
                     "pack_name": "research-tech",
+                    "planned_steps": ["pinboard", "absorb", "knowledge_index"],
+                    "started_at": _fresh_timestamp(seconds_ago=360),
                     "heartbeat_at": _fresh_timestamp(seconds_ago=30),
                     "current_step_name": "absorb",
                     "current_step": {
                         "step_name": "absorb",
                         "step_state": "running",
+                        "step_started_at": _fresh_timestamp(seconds_ago=300),
+                        "step_heartbeat_at": _fresh_timestamp(seconds_ago=30),
                         "progress_mode": "counted",
                         "work_units_total": 10,
                         "work_units_done": 3,
@@ -126,11 +130,175 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert "Inspect" in body
     assert "Review" in body
     assert "Current Workflow" in body
+    assert body.count("<h2>Current Workflow</h2>") == 1
+    assert "Recent Runs" in body
+    assert "Stage 2/3: absorb" in body
     assert "3/10 files processed" in body
+    assert "30.0%" in body
+    assert "files/s" in body
+    assert "files/min" in body
+    assert "ETA" in body
     assert "Alpha.md" in body
+    assert 'http-equiv="refresh"' in body
+    assert 'content="10"' in body
     assert "Where To Start" in body
+    assert body.count("<h2>Where To Start</h2>") == 1
+    assert "Signals Surface Contract" in body
+    assert "Production Chains Surface Contract" in body
+    assert "<h2>Surface Contract</h2>" not in body
     assert "Orientation Brief" in body
     assert "/api/objects" in body
+
+
+def test_render_runtime_card_shows_pipeline_process_identity():
+    from ovp_pipeline.commands.ui_server import _render_runtime_card
+
+    html = _render_runtime_card(
+        {
+            "active_run": {
+                "id": "txn-1",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "run_ledger": {
+                    "run_state": "running",
+                    "heartbeat_at": "2026-04-09T00:20:00Z",
+                    "current_step": {"step_name": "absorb", "progress_summary": "3/10 files processed"},
+                },
+            },
+            "stale_count": 0,
+            "runtime_processes": {
+                "active_count": 1,
+                "items": [
+                    {
+                        "pid": 80018,
+                        "process_kind": "one_shot",
+                        "elapsed_summary": "1h 2m",
+                        "args_summary": "--from-step absorb --pack research-tech",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert "PID 80018" in html
+    assert "one-shot" in html
+    assert "1h 2m" in html
+    assert "--from-step absorb --pack research-tech" in html
+
+
+def test_render_runtime_card_shows_cache_skip_and_blocked_reason():
+    from ovp_pipeline.commands.ui_server import _render_runtime_card
+
+    html = _render_runtime_card(
+        {
+            "active_run": {
+                "id": "txn-1",
+                "status": "failed",
+                "checkpoint": "absorb",
+                "steps": {
+                    "absorb": {
+                        "status": "blocked",
+                        "output": "Absorb blocked",
+                        "skipped": True,
+                        "cache_hit": True,
+                        "blocked_reason": "missing_quality_stage_artifact",
+                        "stage_fingerprint": "abcdef123456",
+                    }
+                },
+                "run_ledger": {
+                    "run_state": "failed",
+                    "heartbeat_at": "2026-04-09T00:20:00Z",
+                    "blocked_reason": "missing_quality_stage_artifact",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "blocked",
+                        "progress_summary": "Absorb blocked",
+                    },
+                },
+            },
+            "stale_count": 0,
+        }
+    )
+
+    assert "Cache: hit" in html
+    assert "Skipped: yes" in html
+    assert "Blocked reason: missing_quality_stage_artifact" in html
+    assert "Fingerprint: abcdef123456" in html
+
+
+def test_render_run_history_card_shows_duration_scope_and_work():
+    from ovp_pipeline.commands.ui_server import _render_run_history_card
+
+    html = _render_run_history_card(
+        {
+            "run_history": {
+                "total_count": 1,
+                "items": [
+                    {
+                        "run_id": "pipeline-complete",
+                        "status": "completed",
+                        "duration_summary": "10m",
+                        "scope_summary": "pinboard → articles → knowledge_index",
+                        "content_summary": "Produced 6 items; 20/20 files processed",
+                        "started_at": "2026-04-09T00:00:00Z",
+                        "finished_at": "2026-04-09T00:10:00Z",
+                    }
+                ],
+            }
+        }
+    )
+
+    assert "<h2>Recent Runs</h2>" in html
+    assert "pipeline-complete" in html
+    assert "completed" in html
+    assert "10m" in html
+    assert "pinboard → articles → knowledge_index" in html
+    assert "Produced 6 items; 20/20 files processed" in html
+
+
+def test_render_run_history_card_shows_cache_skip_and_blocked_step_summaries():
+    from ovp_pipeline.commands.ui_server import _render_run_history_card
+
+    html = _render_run_history_card(
+        {
+            "run_history": {
+                "total_count": 1,
+                "items": [
+                    {
+                        "run_id": "pipeline-with-cache",
+                        "status": "failed",
+                        "duration_summary": "2m",
+                        "scope_summary": "articles → fix_links → absorb",
+                        "content_summary": "Cache hits: 1; skipped: 1; blocked: missing_quality_stage_artifact",
+                        "started_at": "2026-04-09T00:00:00Z",
+                        "finished_at": "2026-04-09T00:02:00Z",
+                        "step_summaries": [
+                            {
+                                "step_name": "fix_links",
+                                "status": "completed",
+                                "cache_hit": True,
+                                "skipped": True,
+                                "blocked_reason": "",
+                            },
+                            {
+                                "step_name": "absorb",
+                                "status": "blocked",
+                                "cache_hit": False,
+                                "skipped": False,
+                                "blocked_reason": "missing_quality_stage_artifact",
+                            },
+                        ],
+                    }
+                ],
+            }
+        }
+    )
+
+    assert "fix_links" in html
+    assert "cache hit" in html
+    assert "skipped" in html
+    assert "absorb" in html
+    assert "blocked: missing_quality_stage_artifact" in html
 
 
 def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
@@ -151,11 +319,15 @@ def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
                     "run_state": "running",
                     "workflow_profile": "full",
                     "pack_name": "research-tech",
+                    "planned_steps": ["pinboard", "absorb", "knowledge_index"],
+                    "started_at": _fresh_timestamp(seconds_ago=660),
                     "heartbeat_at": _fresh_timestamp(seconds_ago=30),
                     "current_step_name": "absorb",
                     "current_step": {
                         "step_name": "absorb",
                         "step_state": "running",
+                        "step_started_at": _fresh_timestamp(seconds_ago=600),
+                        "step_heartbeat_at": _fresh_timestamp(seconds_ago=30),
                         "progress_mode": "counted",
                         "work_units_total": 20,
                         "work_units_done": 5,
@@ -187,6 +359,10 @@ def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
     assert response.status == 200
     assert payload["active_run"]["id"] == "txn-1"
     assert payload["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 25.0
+    assert payload["run_history"]["items"][0]["run_id"] == "txn-1"
+    assert payload["active_run"]["runtime_progress"]["stage"]["summary"] == "Stage 2/3: absorb"
+    assert payload["active_run"]["runtime_progress"]["work"]["summary"] == "5/20 files processed"
+    assert payload["active_run"]["runtime_progress"]["performance"]["items_per_minute"] > 0
 
 
 def test_ui_server_runtime_endpoint_returns_structured_error(temp_vault, monkeypatch):

@@ -296,6 +296,213 @@ def test_run_pipeline_uses_profile_stages_when_steps_omitted(tmp_path, monkeypat
     assert calls == expected_steps
 
 
+def test_run_pipeline_checkouts_cacheable_stage_artifact_without_dispatching_handler(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    (topic_dir / "cached_深度解读.md").write_text("# cached\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Cache checkout", planned_steps=["fix_links"])
+
+    context = pipeline._build_stage_artifact_context("fix_links")
+    pipeline._stage_artifact_store().write_completed(
+        stage="fix_links",
+        fingerprint=context["fingerprint"],
+        input_digest=context["input_digest"],
+        algorithm_digest=context["algorithm_digest"],
+        run_id="previous-run",
+        pack_name=pipeline.workflow_pack_name,
+        workflow_profile=pipeline.workflow_profile_name,
+        inputs=context["inputs"],
+        outputs=context["outputs"],
+    )
+
+    def fail_if_dispatched(*_args, **_kwargs):
+        raise AssertionError("cacheable stage handler should not be dispatched on cache hit")
+
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fail_if_dispatched, raising=False)
+
+    results = pipeline.run_pipeline(steps=["fix_links"], dry_run=False)
+
+    result = results["fix_links"]
+    assert result["success"] is True
+    assert result["cache_hit"] is True
+    assert result["skipped"] is True
+    assert result["stage_fingerprint"] == context["fingerprint"]
+    payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+    step = payload["steps"]["fix_links"]
+    assert step["status"] == "completed"
+    assert "Cache hit" in step["output"]
+
+
+def test_run_pipeline_does_not_skip_record_only_source_stage(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "50-Inbox" / "02-Pinboard").mkdir(parents=True, exist_ok=True)
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+
+    context = pipeline._build_stage_artifact_context("pinboard")
+    pipeline._stage_artifact_store().write_completed(
+        stage="pinboard",
+        fingerprint=context["fingerprint"],
+        input_digest=context["input_digest"],
+        algorithm_digest=context["algorithm_digest"],
+        run_id="previous-run",
+        pack_name=pipeline.workflow_pack_name,
+        workflow_profile=pipeline.workflow_profile_name,
+        inputs=context["inputs"],
+        outputs=context["outputs"],
+    )
+
+    calls: list[str] = []
+
+    def fake_execute_profile_stage_handler(_pipeline_runtime, stage, **_kwargs):
+        calls.append(stage)
+        return {"success": True}
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {"pinboard": 0})
+    monkeypatch.setattr(pipeline, "_count_output_files", lambda step, before_counts, cmd_result: {"produced": 0})
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fake_execute_profile_stage_handler, raising=False)
+
+    results = pipeline.run_pipeline(steps=["pinboard"], dry_run=False)
+
+    assert calls == ["pinboard"]
+    assert results["pinboard"]["success"] is True
+    assert "cache_hit" not in results["pinboard"]
+
+
+def test_run_pipeline_ignores_cache_artifact_when_declared_output_is_missing(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    evergreen_dir = vault / "10-Knowledge" / "Evergreen"
+    evergreen_dir.mkdir(parents=True, exist_ok=True)
+    (evergreen_dir / "state.md").write_text("# state\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+
+    context = pipeline._build_stage_artifact_context("knowledge_index")
+    pipeline._stage_artifact_store().write_completed(
+        stage="knowledge_index",
+        fingerprint=context["fingerprint"],
+        input_digest=context["input_digest"],
+        algorithm_digest=context["algorithm_digest"],
+        run_id="previous-run",
+        pack_name=pipeline.workflow_pack_name,
+        workflow_profile=pipeline.workflow_profile_name,
+        inputs=context["inputs"],
+        outputs={"paths": ["60-Logs/knowledge.db"]},
+    )
+
+    calls: list[str] = []
+
+    def fake_execute_profile_stage_handler(_pipeline_runtime, stage, **_kwargs):
+        calls.append(stage)
+        return {"success": True}
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {"knowledge_db_mtime": 0.0})
+    monkeypatch.setattr(
+        pipeline,
+        "_count_output_files",
+        lambda step, before_counts, cmd_result: {"produced": 0, "db_path": str(vault / "60-Logs" / "knowledge.db")},
+    )
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fake_execute_profile_stage_handler, raising=False)
+
+    results = pipeline.run_pipeline(steps=["knowledge_index"], dry_run=False)
+
+    assert calls == ["knowledge_index"]
+    assert results["knowledge_index"]["success"] is True
+    assert "cache_hit" not in results["knowledge_index"]
+
+
+def test_run_pipeline_writes_stage_artifact_after_cacheable_stage_success(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    (topic_dir / "write_artifact_深度解读.md").write_text("# write artifact\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Artifact write", planned_steps=["fix_links"])
+
+    def fake_execute_profile_stage_handler(_pipeline_runtime, stage, **_kwargs):
+        return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(pipeline, "_count_output_files", lambda step, before_counts, cmd_result: {"produced": 0})
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fake_execute_profile_stage_handler, raising=False)
+
+    results = pipeline.run_pipeline(steps=["fix_links"], dry_run=False)
+
+    context = pipeline._build_stage_artifact_context("fix_links")
+    manifest = pipeline._stage_artifact_store().load("fix_links", context["fingerprint"])
+    assert results["fix_links"]["success"] is True
+    assert manifest is not None
+    assert manifest["run_id"] == pipeline.txn_id
+    assert manifest["inputs"]["file_count"] == 1
+
+
+def test_run_pipeline_writes_record_only_article_artifact_without_skipping(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    raw_dir = vault / "50-Inbox" / "01-Raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "article.md").write_text("# article\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Article artifact", planned_steps=["articles"])
+
+    calls: list[str] = []
+
+    def fake_execute_profile_stage_handler(_pipeline_runtime, stage, **_kwargs):
+        calls.append(stage)
+        return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(pipeline, "_count_output_files", lambda step, before_counts, cmd_result: {"produced": 1})
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fake_execute_profile_stage_handler, raising=False)
+
+    first_results = pipeline.run_pipeline(steps=["articles"], dry_run=False)
+    context = pipeline._build_stage_artifact_context("articles")
+    manifest = pipeline._stage_artifact_store().load("articles", context["fingerprint"])
+
+    assert first_results["articles"]["success"] is True
+    assert manifest is not None
+    assert manifest["inputs"]["file_count"] == 1
+
+    second_results = pipeline.run_pipeline(steps=["articles"], dry_run=False)
+
+    assert calls == ["articles", "articles"]
+    assert "cache_hit" not in second_results["articles"]
+
+
 def test_detect_pinboard_processor_routes_gist_to_article_stack():
     content = """---
 title: "GBrain.md"
@@ -397,6 +604,152 @@ def test_step_quality_parses_qualified_files_from_qc_json(tmp_path, monkeypatch)
     assert result["quality_qualified_files"] == [str(qualified_file)]
 
 
+def test_step_quality_writes_reusable_stage_artifact(tmp_path, monkeypatch):
+    from ovp_pipeline.stage_artifacts import StageArtifactStore
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Quality artifact")
+
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "artifact_深度解读.md"
+    qualified_file.parent.mkdir(parents=True, exist_ok=True)
+    qualified_file.write_text("# artifact\n", encoding="utf-8")
+
+    stdout = (
+        "__QC_JSON__: "
+        '{"checked": 1, "qualified": 1, "failed": 0, '
+        f'"qualified_files": ["{qualified_file}"], '
+        '"results_json": "quality-results-demo.json"}'
+    )
+
+    monkeypatch.setattr(
+        pipeline,
+        "run_command",
+        lambda *_args, **_kwargs: {"success": True, "stdout": stdout, "stderr": ""},
+    )
+
+    result = pipeline.step_quality(dry_run=False)
+
+    store = StageArtifactStore(vault / "60-Logs" / "stage-artifacts")
+    manifest = store.load("quality", result["quality_stage_fingerprint"])
+    assert manifest is not None
+    assert manifest["run_id"] == pipeline.txn_id
+    assert manifest["outputs"]["qualified_files"] == [str(qualified_file.resolve())]
+
+
+def test_step_quality_writes_empty_reusable_stage_artifact(tmp_path):
+    from ovp_pipeline.stage_artifacts import StageArtifactStore
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Empty quality artifact")
+
+    result = pipeline.step_quality(dry_run=False)
+
+    store = StageArtifactStore(vault / "60-Logs" / "stage-artifacts")
+    manifest = store.load("quality", result["quality_stage_fingerprint"])
+    assert result["success"] is True
+    assert result["quality_qualified_files"] == []
+    assert manifest is not None
+    assert manifest["outputs"]["qualified_files"] == []
+
+
+def test_step_absorb_checkouts_matching_quality_stage_artifact(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    quality_pipeline = EnhancedPipeline(vault, logger, txn)
+    quality_pipeline.txn_id = txn.start("enhanced-pipeline", "Quality artifact source")
+
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "checkout_深度解读.md"
+    qualified_file.parent.mkdir(parents=True, exist_ok=True)
+    qualified_file.write_text("# checkout\n", encoding="utf-8")
+
+    stdout = (
+        "__QC_JSON__: "
+        '{"checked": 1, "qualified": 1, "failed": 0, '
+        f'"qualified_files": ["{qualified_file}"]'
+        "}"
+    )
+    monkeypatch.setattr(
+        quality_pipeline,
+        "run_command",
+        lambda *_args, **_kwargs: {"success": True, "stdout": stdout, "stderr": ""},
+    )
+    quality_pipeline.step_quality(dry_run=False)
+
+    absorb_pipeline = EnhancedPipeline(vault, logger, txn)
+    captured: dict[str, object] = {}
+
+    def fake_run_absorb_workflow(vault_dir, *, directory=None, **_):
+        captured["staged_files"] = sorted(p.name for p in Path(directory).glob("*.md"))
+        return {
+            "summary": {
+                "files_processed": 1,
+                "concepts_extracted": 1,
+                "candidates_added": 0,
+                "concepts_created": 0,
+                "concepts_promoted": 0,
+                "concepts_skipped": 1,
+                "errors": 0,
+            },
+            "results": [],
+        }
+
+    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
+
+    result = absorb_pipeline.step_absorb(
+        dry_run=False,
+        quality_score=-1.0,
+        qualified_files=None,
+        require_quality_artifact=True,
+    )
+
+    assert result["success"] is True
+    assert result["input_artifact"]["stage"] == "quality"
+    assert captured["staged_files"] == ["checkout_深度解读.md"]
+
+
+def test_step_absorb_skips_empty_quality_stage_artifact(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    pipeline.step_quality(dry_run=False)
+
+    def fake_run_absorb_workflow(*_args, **_kwargs):
+        raise AssertionError("empty quality artifact should skip absorb")
+
+    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
+
+    result = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=-1.0,
+        qualified_files=None,
+        require_quality_artifact=True,
+    )
+
+    assert result["success"] is True
+    assert result["skipped"] is True
+    assert result["reason"] == "no_qualified_files"
+    assert result["input_artifact"]["stage"] == "quality"
+
+
 def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
@@ -457,6 +810,60 @@ def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
     assert calls[1][1] == 600
 
 
+def test_step_quality_updates_parent_run_progress_before_each_batch(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for idx in range(3):
+        path = topic_dir / f"progress_{idx}_深度解读.md"
+        path.write_text(f"# {idx}\n", encoding="utf-8")
+        files.append(path)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Quality progress")
+
+    snapshots: list[dict] = []
+    payloads = [
+        {"checked": 2, "qualified": 1, "failed": 1, "qualified_files": [str(files[0])]},
+        {"checked": 1, "qualified": 1, "failed": 0, "qualified_files": [str(files[2])]},
+    ]
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        payload = json.loads(
+            (vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8")
+        )
+        snapshots.append(payload["run_ledger"]["current_step"])
+        batch_payload = payloads[len(snapshots) - 1]
+        return {
+            "success": True,
+            "stdout": "__QC_JSON__: " + json.dumps(batch_payload, ensure_ascii=False),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_quality(batch_size=2, dry_run=False)
+
+    assert result["success"] is True
+    assert len(snapshots) == 2
+    assert snapshots[0]["progress_mode"] == "counted"
+    assert snapshots[0]["work_units_total"] == 3
+    assert snapshots[0]["work_units_done"] == 0
+    assert snapshots[0]["current_item"] == "quality batch 1/2"
+    assert snapshots[0]["progress_percent"] == 0.0
+    assert snapshots[1]["progress_mode"] == "counted"
+    assert snapshots[1]["work_units_total"] == 3
+    assert snapshots[1]["work_units_done"] == 2
+    assert snapshots[1]["current_item"] == "quality batch 2/2"
+    assert snapshots[1]["progress_percent"] == 66.7
+
+
 def test_step_quality_rejects_non_positive_batch_size(tmp_path):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
@@ -489,11 +896,11 @@ def test_step_pinboard_process_updates_txn_ledger_with_counted_progress(tmp_path
 
     monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.detect_pinboard_processor", lambda content: "article")
 
-    class _Completed:
-        returncode = 0
-        stderr = ""
-
-    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.subprocess.run", lambda *args, **kwargs: _Completed())
+    monkeypatch.setattr(
+        pipeline,
+        "run_command",
+        lambda *args, **kwargs: {"success": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
 
     result = pipeline.step_pinboard_process(dry_run=False)
 
@@ -599,7 +1006,7 @@ def test_step_absorb_skips_cleanly_when_no_qualified_files(tmp_path):
     assert result["produced"] == 0
 
 
-def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeypatch):
+def test_step_absorb_requires_quality_artifact_without_using_quality_report_history(tmp_path, monkeypatch):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
     import json
 
@@ -627,35 +1034,24 @@ def test_step_absorb_falls_back_to_latest_quality_results_file(tmp_path, monkeyp
         encoding="utf-8",
     )
 
-    captured: dict[str, object] = {}
-
     def fake_run_absorb_workflow(vault_dir, *, directory=None, **_):
-        captured["vault_dir"] = Path(vault_dir)
-        captured["directory"] = Path(directory)
-        captured["staged_files"] = sorted(p.name for p in Path(directory).glob("*.md"))
-        return {
-            "summary": {
-                "files_processed": 1,
-                "concepts_extracted": 1,
-                "candidates_added": 1,
-                "concepts_created": 1,
-                "concepts_promoted": 1,
-                "concepts_skipped": 0,
-                "errors": 0,
-            },
-            "results": [],
-        }
+        raise AssertionError("absorb must not scan historical quality reports without a stage artifact")
 
     monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
 
-    result = pipeline.step_absorb(dry_run=False, quality_score=-1.0, qualified_files=None)
+    result = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=-1.0,
+        qualified_files=None,
+        require_quality_artifact=True,
+    )
 
-    assert result["success"] is True
-    assert captured["vault_dir"] == vault
-    assert captured["staged_files"] == ["example_深度解读.md"]
+    assert result["success"] is False
+    assert result["blocked"] is True
+    assert result["reason"] == "missing_quality_stage_artifact"
 
 
-def test_load_latest_qualified_files_unions_batches(tmp_path):
+def test_load_quality_stage_artifact_returns_none_without_matching_manifest(tmp_path):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
@@ -680,7 +1076,34 @@ def test_load_latest_qualified_files_unions_batches(tmp_path):
         encoding="utf-8",
     )
 
-    assert pipeline._load_latest_qualified_files() == [str(file_a.resolve()), str(file_b.resolve())]
+    assert pipeline._load_quality_stage_artifact() is None
+
+
+def test_load_quality_stage_artifact_rejects_output_paths_outside_vault(tmp_path):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    external_file = tmp_path / "outside.md"
+    external_file.write_text("# outside\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    target_files, input_digest, algorithm_digest, fingerprint = pipeline._quality_stage_inputs()
+
+    pipeline._stage_artifact_store().write_completed(
+        stage="quality",
+        fingerprint=fingerprint,
+        input_digest=input_digest,
+        algorithm_digest=algorithm_digest,
+        run_id="previous-run",
+        pack_name=pipeline.workflow_pack_name,
+        workflow_profile=pipeline.workflow_profile_name,
+        inputs={"files": [str(path) for path in target_files], "file_count": len(target_files)},
+        outputs={"qualified_files": [str(external_file)]},
+    )
+
+    assert pipeline._load_quality_stage_artifact() is None
 
 
 def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, monkeypatch):
@@ -881,6 +1304,60 @@ def test_step_absorb_rejects_non_positive_batch_size(tmp_path):
 
     assert result["success"] is False
     assert result["error"] == "invalid_batch_size (-1 <= 0)"
+
+
+def test_run_pipeline_absorb_requires_artifact_when_quality_result_missing():
+    from ovp_pipeline.workflow_handlers import run_pipeline_absorb
+
+    captured: dict[str, object] = {}
+
+    class FakePipeline:
+        def step_absorb(self, recent_days, dry_run, **kwargs):
+            captured["recent_days"] = recent_days
+            captured["dry_run"] = dry_run
+            captured.update(kwargs)
+            return {"success": False, "reason": "missing_quality_stage_artifact"}
+
+    result = run_pipeline_absorb(pipeline=FakePipeline(), results={})
+
+    assert result["success"] is False
+    assert captured["qualified_files"] is None
+    assert captured["require_quality_artifact"] is True
+
+
+def test_run_pipeline_records_blocked_stage_as_blocked_transaction_reason(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Blocked transaction", planned_steps=["absorb"])
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(pipeline, "_count_output_files", lambda *_args, **_kwargs: {"produced": 0})
+    monkeypatch.setattr(
+        pipeline_source,
+        "execute_profile_stage_handler",
+        lambda *_args, **_kwargs: {
+            "success": False,
+            "blocked": True,
+            "reason": "missing_quality_stage_artifact",
+            "error": "Absorb requires a matching quality stage artifact.",
+        },
+        raising=False,
+    )
+
+    result = pipeline.run_pipeline(steps=["absorb"], dry_run=False)
+
+    payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+    assert result["absorb"]["blocked"] is True
+    assert payload["steps"]["absorb"]["status"] == "blocked"
+    assert payload["steps"]["absorb"]["blocked_reason"] == "missing_quality_stage_artifact"
+    assert payload["failure_reason"] == "Blocked at step: absorb (missing_quality_stage_artifact)"
+    assert payload["run_ledger"]["error_summary"] == "Blocked at step: absorb (missing_quality_stage_artifact)"
 
 
 def test_run_command_timeout_is_failure(tmp_path):
@@ -1107,6 +1584,7 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
     logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Fix links progress")
 
     captured: dict[str, object] = {}
 
@@ -1114,6 +1592,8 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
         captured["timeout"] = timeout
         captured["step_name"] = step_name
         captured["cmd"] = cmd
+        payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+        captured["current_step"] = payload["run_ledger"]["current_step"]
         return {"success": True, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(pipeline, "run_command", fake_run_command)
@@ -1123,7 +1603,13 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
     assert result["success"] is True
     assert captured["step_name"] == "fix_links"
     assert "ovp_pipeline.commands.migrate_broken_links" in " ".join(captured["cmd"])
+    assert "--exact-only" in captured["cmd"]
     assert captured["timeout"] > 300
+    current = captured["current_step"]
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 8
+    assert current["work_units_done"] == 0
+    assert current["current_item"] == "migrate broken wikilinks"
 
 
 def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
@@ -1143,6 +1629,7 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
     logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Knowledge index progress")
 
     captured: dict[str, object] = {}
 
@@ -1150,6 +1637,8 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
         captured["cmd"] = cmd
         captured["step_name"] = step_name
         captured["timeout"] = timeout
+        payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+        captured["current_step"] = payload["run_ledger"]["current_step"]
         return {"success": True, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(pipeline, "run_command", fake_run_command)
@@ -1160,6 +1649,63 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
     assert captured["step_name"] == "knowledge_index"
     assert "ovp_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
     assert captured["timeout"] > 120
+    current = captured["current_step"]
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 400
+    assert current["work_units_done"] == 0
+    assert current["current_item"] == "rebuild knowledge index"
+
+
+def test_run_command_streams_resolve_progress_to_run_ledger(tmp_path, monkeypatch):
+    from ovp_pipeline import unified_pipeline_enhanced as pipeline_module
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Stream subprocess progress")
+
+    class FakeProcess:
+        def __init__(self, cmd, cwd, stdout, stderr, text, env):
+            self.returncode = 0
+            self.stdout = stdout
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            if self.polls == 1:
+                self.stdout.write(
+                    "Loaded 4730 registry entries\n"
+                    "Scanning for broken links...\n"
+                    "Found 5625 unique broken mentions\n"
+                    "Resolving...\n"
+                    "  Resolved 50/5625...\n"
+                )
+                self.stdout.flush()
+                return None
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(pipeline_module.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(pipeline_module.time, "sleep", lambda _seconds: None)
+
+    result = pipeline.run_command(["fake-progress-command"], "fix_links", timeout=30)
+
+    payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+    current = payload["run_ledger"]["current_step"]
+    assert result["success"] is True
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 5625
+    assert current["work_units_done"] == 50
+    assert current["current_item"] == "Resolved 50/5625"
+    assert payload["run_ledger"]["last_meaningful_event"]["event_type"] == "command_progress"
 
 
 def test_step_refine_runs_cleanup_then_breakdown(tmp_path, monkeypatch):

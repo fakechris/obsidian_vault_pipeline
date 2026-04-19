@@ -29,6 +29,38 @@ def test_transaction_manager_start_creates_run_ledger(tmp_path):
     assert payload["run_ledger"]["current_step"]["step_state"] == "pending"
 
 
+def test_article_transaction_manager_uses_shared_run_ledger(tmp_path):
+    from ovp_pipeline.auto_article_processor import TransactionManager
+
+    txn = TransactionManager(tmp_path)
+    txn_id = txn.start("article-processing", "Process articles")
+    txn.step(
+        txn_id,
+        "process",
+        "in_progress",
+        "Processing articles",
+        progress_mode="counted",
+        work_units_total=4,
+        work_units_done=2,
+        current_item="Example.md",
+        progress_summary="2/4 articles processed",
+    )
+
+    payload = json.loads((tmp_path / f"{txn_id}.json").read_text(encoding="utf-8"))
+
+    assert payload["start_time"].endswith("Z")
+    assert payload["last_updated"].endswith("Z")
+    assert payload["run_ledger"]["run_id"] == txn_id
+    assert payload["run_ledger"]["current_step_name"] == "process"
+    current = payload["run_ledger"]["current_step"]
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 4
+    assert current["work_units_done"] == 2
+    assert current["current_item"] == "Example.md"
+    assert current["progress_percent"] == 50.0
+    assert current["progress_summary"] == "2/4 articles processed"
+
+
 def test_transaction_manager_write_preserves_previous_ledger_on_dump_failure(tmp_path, monkeypatch):
     import ovp_pipeline.unified_pipeline_enhanced as pipeline_module
     from ovp_pipeline.unified_pipeline_enhanced import TransactionManager
@@ -126,6 +158,43 @@ def test_transaction_step_transition_resets_previous_progress_fields():
     assert current["work_units_failed"] == 0
     assert current["current_item"] is None
     assert current["progress_percent"] is None
+
+
+def test_transaction_step_records_cache_skip_and_blocked_metadata():
+    from ovp_pipeline.txn import build_transaction_payload, update_transaction_step
+
+    payload = build_transaction_payload("txn-1", "enhanced-pipeline", "demo")
+
+    update_transaction_step(
+        payload,
+        "fix_links",
+        "completed",
+        output="Cache hit: fix_links abc123",
+        cache_hit=True,
+        skipped=True,
+        stage_fingerprint="abc123",
+        stage_artifact="60-Logs/stage-artifacts/fix_links/abc123.json",
+    )
+    update_transaction_step(
+        payload,
+        "absorb",
+        "blocked",
+        output="Absorb requires a matching quality stage artifact",
+        blocked_reason="missing_quality_stage_artifact",
+    )
+
+    cached_step = payload["steps"]["fix_links"]
+    blocked_step = payload["steps"]["absorb"]
+    current = payload["run_ledger"]["current_step"]
+
+    assert cached_step["cache_hit"] is True
+    assert cached_step["skipped"] is True
+    assert cached_step["stage_fingerprint"] == "abc123"
+    assert "fix_links/abc123.json" in cached_step["stage_artifact"]
+    assert blocked_step["blocked_reason"] == "missing_quality_stage_artifact"
+    assert current["step_state"] == "blocked"
+    assert current["blocked_reason"] == "missing_quality_stage_artifact"
+    assert payload["run_ledger"]["blocked_reason"] == "missing_quality_stage_artifact"
 
 
 def test_classify_run_ledgers_separates_active_and_stale(tmp_path):

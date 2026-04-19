@@ -48,6 +48,7 @@ try:
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
+    from .stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from .txn import (
         build_transaction_payload,
         heartbeat_transaction,
@@ -61,6 +62,7 @@ except ImportError:  # pragma: no cover - script mode fallback
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
+    from stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from txn import (
         build_transaction_payload,
         heartbeat_transaction,
@@ -395,6 +397,36 @@ STEP_ALIASES = {"evergreen": "absorb"}
 PIPELINE_STEP_CHOICES = [*BASE_PIPELINE_STEPS, *OPTIONAL_PIPELINE_STEPS, *STEP_ALIASES.keys()]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_SRC = PROJECT_ROOT / "src"
+QUALITY_STAGE_ALGORITHM_VERSION = "quality:v1"
+STAGE_CACHE_CHECKOUT = "checkout"
+STAGE_CACHE_RECORD_ONLY = "record_only"
+STAGE_CACHE_DISABLED = "disabled"
+STAGE_CACHE_POLICIES = {
+    "pinboard": STAGE_CACHE_RECORD_ONLY,
+    "pinboard_process": STAGE_CACHE_RECORD_ONLY,
+    "clippings": STAGE_CACHE_RECORD_ONLY,
+    "articles": STAGE_CACHE_RECORD_ONLY,
+    "quality": STAGE_CACHE_CHECKOUT,
+    "fix_links": STAGE_CACHE_CHECKOUT,
+    "absorb": STAGE_CACHE_CHECKOUT,
+    "registry_sync": STAGE_CACHE_CHECKOUT,
+    "moc": STAGE_CACHE_CHECKOUT,
+    "knowledge_index": STAGE_CACHE_CHECKOUT,
+    "refine": STAGE_CACHE_RECORD_ONLY,
+}
+STAGE_ALGORITHM_VERSIONS = {
+    "quality": QUALITY_STAGE_ALGORITHM_VERSION,
+    "fix_links": "fix_links:exact-only:v1",
+    "absorb": "absorb:qualified-files:v1",
+    "registry_sync": "registry_sync:rebuild-registry:v1",
+    "moc": "moc:auto-moc-scan:v1",
+    "knowledge_index": "knowledge_index:truth-projection:v1",
+    "pinboard": "pinboard:fetch:v1",
+    "pinboard_process": "pinboard_process:route-and-process:v1",
+    "clippings": "clippings:process-inbox:v1",
+    "articles": "articles:auto-article-processor:v1",
+    "refine": "refine:cleanup-breakdown:v1",
+}
 
 
 def normalize_step_name(step: str | None) -> str | None:
@@ -653,6 +685,314 @@ class EnhancedPipeline:
         self.workflow_pack_name = DEFAULT_WORKFLOW_PACK_NAME
         self.workflow_profile_name = "full"
 
+    def _quality_stage_inputs(self) -> tuple[list[Path], str, str, str]:
+        files = collect_quality_files(self.layout, all_areas=True)
+        input_digest = hash_file_set(self.vault_dir, files)
+        algorithm_digest = hash_json_payload(
+            {
+                "stage": "quality",
+                "algorithm_version": QUALITY_STAGE_ALGORITHM_VERSION,
+            }
+        )
+        fingerprint = build_stage_fingerprint(
+            stage="quality",
+            input_digest=input_digest,
+            algorithm_digest=algorithm_digest,
+            pack_name=self.workflow_pack_name,
+            workflow_profile=self.workflow_profile_name,
+        )
+        return files, input_digest, algorithm_digest, fingerprint
+
+    def _stage_artifact_store(self) -> StageArtifactStore:
+        return StageArtifactStore(self.layout.stage_artifacts_dir)
+
+    def _relative_artifact_path(self, path: Path) -> str:
+        resolved = path.resolve()
+        try:
+            return resolved.relative_to(self.vault_dir).as_posix()
+        except ValueError:
+            return str(resolved)
+
+    def _existing_files(self, files: list[Path]) -> list[Path]:
+        return sorted((path.resolve() for path in files if path.exists()), key=lambda item: self._relative_artifact_path(item))
+
+    def _markdown_files_under(self, directory: Path) -> list[Path]:
+        if not directory.exists():
+            return []
+        return self._existing_files(list(directory.rglob("*.md")))
+
+    def _concept_registry_file(self) -> Path:
+        return self.layout.atlas_dir / "concept-registry.jsonl"
+
+    def _evergreen_source_files(self) -> list[Path]:
+        return self._existing_files(
+            [
+                path
+                for path in self.layout.evergreen_dir.rglob("*.md")
+                if "_Candidates" not in path.parts
+            ]
+        )
+
+    def _moc_output_files(self) -> list[Path]:
+        candidates: list[Path] = []
+        if self.layout.atlas_dir.exists():
+            candidates.extend(self.layout.atlas_dir.glob("*.md"))
+        candidates.extend(self.vault_dir.glob("20-Areas/**/MOC*.md"))
+        candidates.extend(self.vault_dir.glob("20-Areas/**/Topics/*MOC.md"))
+        return self._existing_files(candidates)
+
+    def _knowledge_index_source_files(self) -> list[Path]:
+        files: list[Path] = []
+        files.extend(self._markdown_files_under(self.layout.evergreen_dir))
+        files.extend(self._markdown_files_under(self.layout.atlas_dir))
+        files.extend(self._markdown_files_under(self.vault_dir / "20-Areas"))
+        registry = self._concept_registry_file()
+        if registry.exists():
+            files.append(registry)
+        return self._existing_files([path for path in files if "_Candidates" not in path.parts])
+
+    def _stage_input_files(self, stage: str) -> list[Path]:
+        if stage in {"quality", "fix_links"}:
+            return self._existing_files(collect_quality_files(self.layout, all_areas=True))
+        if stage == "pinboard":
+            return self._markdown_files_under(self.layout.pinboard_dir)
+        if stage == "pinboard_process":
+            return self._markdown_files_under(self.layout.pinboard_dir)
+        if stage == "clippings":
+            files = []
+            files.extend(self._markdown_files_under(self.layout.raw_dir))
+            files.extend(self._markdown_files_under(self.layout.clippings_dir))
+            return self._existing_files(files)
+        if stage == "articles":
+            files = []
+            files.extend(self._markdown_files_under(self.layout.processing_dir))
+            files.extend(self._markdown_files_under(self.layout.raw_dir))
+            return self._existing_files(files)
+        if stage == "registry_sync":
+            return self._evergreen_source_files()
+        if stage == "moc":
+            files = self._evergreen_source_files()
+            registry = self._concept_registry_file()
+            if registry.exists():
+                files.append(registry)
+            return self._existing_files(files)
+        if stage == "knowledge_index":
+            return self._knowledge_index_source_files()
+        if stage == "refine":
+            return self._evergreen_source_files()
+        return []
+
+    def _stage_output_files(self, stage: str) -> list[Path]:
+        if stage == "registry_sync":
+            return self._existing_files([self._concept_registry_file()])
+        if stage == "moc":
+            return self._moc_output_files()
+        if stage == "knowledge_index":
+            return self._existing_files([self.layout.knowledge_db])
+        if stage == "absorb":
+            return self._evergreen_source_files()
+        return []
+
+    def _stage_algorithm_digest(self, stage: str) -> str:
+        return hash_json_payload(
+            {
+                "stage": stage,
+                "algorithm_version": STAGE_ALGORITHM_VERSIONS.get(stage, f"{stage}:v1"),
+            }
+        )
+
+    def _build_stage_artifact_context(
+        self,
+        stage: str,
+        *,
+        results: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        algorithm_digest = self._stage_algorithm_digest(stage)
+        if stage == "absorb":
+            quality_result = (results or {}).get("quality", {})
+            quality_fingerprint = quality_result.get("quality_stage_fingerprint")
+            qualified_files = quality_result.get("quality_qualified_files")
+            if not quality_fingerprint:
+                artifact = self._load_quality_stage_artifact()
+                if artifact:
+                    quality_fingerprint = artifact.get("fingerprint")
+                    qualified_files = artifact.get("outputs", {}).get("qualified_files")
+            input_payload = {
+                "quality_stage_fingerprint": quality_fingerprint or "",
+                "qualified_files": sorted(str(Path(path).resolve()) for path in (qualified_files or []) if Path(path).exists()),
+            }
+            input_digest = hash_json_payload(input_payload)
+            inputs = {
+                **input_payload,
+                "qualified_file_count": len(input_payload["qualified_files"]),
+            }
+        else:
+            files = self._stage_input_files(stage)
+            input_digest = hash_file_set(self.vault_dir, files)
+            inputs = {
+                "files": [self._relative_artifact_path(path) for path in files],
+                "file_count": len(files),
+            }
+        fingerprint = build_stage_fingerprint(
+            stage=stage,
+            input_digest=input_digest,
+            algorithm_digest=algorithm_digest,
+            pack_name=self.workflow_pack_name,
+            workflow_profile=self.workflow_profile_name,
+        )
+        output_files = self._stage_output_files(stage)
+        outputs = {
+            "paths": [self._relative_artifact_path(path) for path in output_files],
+            "files": build_file_records(self.vault_dir, output_files),
+        }
+        return {
+            "stage": stage,
+            "input_digest": input_digest,
+            "algorithm_digest": algorithm_digest,
+            "fingerprint": fingerprint,
+            "inputs": inputs,
+            "outputs": outputs,
+        }
+
+    def _checkout_stage_artifact(self, stage: str, *, results: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        if STAGE_CACHE_POLICIES.get(stage, STAGE_CACHE_DISABLED) != STAGE_CACHE_CHECKOUT:
+            return None
+        context = self._build_stage_artifact_context(stage, results=results)
+        manifest = self._stage_artifact_store().load(
+            stage,
+            context["fingerprint"],
+            validate_outputs_under=self.vault_dir,
+        )
+        if not manifest:
+            return None
+        artifact_path = self._stage_artifact_store().path_for(stage, context["fingerprint"])
+        result: dict[str, Any] = {
+            "success": True,
+            "skipped": True,
+            "cache_hit": True,
+            "stage_fingerprint": context["fingerprint"],
+            "stage_artifact": str(artifact_path),
+            "input_digest": context["input_digest"],
+            "algorithm_digest": context["algorithm_digest"],
+            "produced": 0,
+            "output": f"Cache hit: {stage} {context['fingerprint'][:12]}",
+        }
+        if stage == "quality":
+            outputs = manifest.get("outputs", {})
+            metrics = manifest.get("metrics", {})
+            result.update(
+                {
+                    "quality_checked": metrics.get("quality_checked", 0),
+                    "quality_qualified": metrics.get("quality_qualified", 0),
+                    "quality_failed": metrics.get("quality_failed", 0),
+                    "quality_score": metrics.get("quality_score", 0.0),
+                    "quality_qualified_files": outputs.get("qualified_files", []),
+                    "quality_results_json": outputs.get("results_json"),
+                    "quality_stage_fingerprint": context["fingerprint"],
+                    "quality_stage_artifact": str(artifact_path),
+                }
+            )
+        return result
+
+    def _stage_artifact_metrics(self, result: dict[str, Any]) -> dict[str, Any]:
+        keys = {
+            "produced",
+            "processed",
+            "skipped",
+            "failed",
+            "updated",
+            "migrated",
+            "remaining",
+            "total_evergreen",
+            "total_interpretations",
+            "new_bookmarks",
+        }
+        return {key: result[key] for key in keys if key in result}
+
+    def _write_stage_artifact(self, stage: str, result: dict[str, Any], *, results: dict[str, Any] | None = None) -> None:
+        if result.get("success") is not True:
+            return
+        if STAGE_CACHE_POLICIES.get(stage, STAGE_CACHE_DISABLED) not in {STAGE_CACHE_CHECKOUT, STAGE_CACHE_RECORD_ONLY}:
+            return
+        if stage == "quality":
+            return
+        context = self._build_stage_artifact_context(stage, results=results)
+        manifest = self._stage_artifact_store().write_completed(
+            stage=stage,
+            fingerprint=context["fingerprint"],
+            input_digest=context["input_digest"],
+            algorithm_digest=context["algorithm_digest"],
+            run_id=self.txn_id,
+            pack_name=self.workflow_pack_name,
+            workflow_profile=self.workflow_profile_name,
+            inputs=context["inputs"],
+            outputs=context["outputs"],
+            metrics=self._stage_artifact_metrics(result),
+        )
+        result["stage_fingerprint"] = manifest["fingerprint"]
+        result["stage_artifact"] = str(self._stage_artifact_store().path_for(stage, manifest["fingerprint"]))
+
+    def _load_quality_stage_artifact(self) -> dict[str, Any] | None:
+        _, _, _, fingerprint = self._quality_stage_inputs()
+        artifact = self._stage_artifact_store().load(
+            "quality",
+            fingerprint,
+            validate_outputs_under=self.vault_dir,
+        )
+        if artifact is None:
+            return None
+        artifact_files = artifact.get("outputs", {}).get("qualified_files")
+        if isinstance(artifact_files, list):
+            for raw_path in artifact_files:
+                if not isinstance(raw_path, str) or self._resolve_existing_vault_file(raw_path) is None:
+                    return None
+        return artifact
+
+    def _resolve_existing_vault_file(self, raw_path: str | Path) -> str | None:
+        path = Path(raw_path).resolve()
+        try:
+            path.relative_to(self.vault_dir.resolve())
+        except ValueError:
+            return None
+        if not path.exists():
+            return None
+        return str(path)
+
+    def _write_quality_stage_artifact(self, result: dict[str, Any], files: list[Path], input_digest: str, algorithm_digest: str, fingerprint: str) -> None:
+        if result.get("success") is not True:
+            return
+        normalized_files = [
+            normalized
+            for raw_path in result.get("quality_qualified_files", [])
+            if isinstance(raw_path, (str, Path)) and (normalized := self._resolve_existing_vault_file(raw_path)) is not None
+        ]
+        base_vault = self.vault_dir.resolve()
+        manifest = self._stage_artifact_store().write_completed(
+            stage="quality",
+            fingerprint=fingerprint,
+            input_digest=input_digest,
+            algorithm_digest=algorithm_digest,
+            run_id=self.txn_id,
+            pack_name=self.workflow_pack_name,
+            workflow_profile=self.workflow_profile_name,
+            inputs={
+                "files": [path.resolve().relative_to(base_vault).as_posix() for path in files],
+                "file_count": len(files),
+            },
+            outputs={
+                "qualified_files": normalized_files,
+                "results_json": result.get("quality_results_json"),
+            },
+            metrics={
+                "quality_checked": result.get("quality_checked", 0),
+                "quality_qualified": result.get("quality_qualified", 0),
+                "quality_failed": result.get("quality_failed", 0),
+                "quality_score": result.get("quality_score", 0.0),
+            },
+        )
+        result["quality_stage_fingerprint"] = manifest["fingerprint"]
+        result["quality_stage_artifact"] = str(self._stage_artifact_store().path_for("quality", fingerprint))
+
     def _get_before_counts(self) -> dict:
         """获取执行前的文件计数（用于基于产出的检测）"""
         counts = {}
@@ -894,7 +1234,8 @@ class EnhancedPipeline:
                         self.logger.log("command_timeout", {"step": step_name, "timeout": timeout})
                         return {"success": False, "timeout": True, "error": f"Timeout after {timeout}s"}
                     if self.txn_id:
-                        self.txn.heartbeat(self.txn_id, step_name=step_name)
+                        progress = self._parse_command_progress(self._read_command_output_snapshot(stdout_file.name))
+                        self.txn.heartbeat(self.txn_id, step_name=step_name, **progress)
                     time.sleep(poll_interval)
 
                 stdout_file.flush()
@@ -925,6 +1266,53 @@ class EnhancedPipeline:
         except Exception as e:
             self.logger.log("command_error", {"step": step_name, "error": str(e)})
             return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def _read_command_output_snapshot(path: str) -> str:
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _parse_command_progress(stdout: str) -> dict[str, Any]:
+        resolved_matches = list(re.finditer(r"Resolved\s+(\d+)/(\d+)", stdout))
+        if resolved_matches:
+            match = resolved_matches[-1]
+            done = int(match.group(1))
+            total = int(match.group(2))
+            return {
+                "progress_mode": "counted",
+                "work_units_total": total,
+                "work_units_done": done,
+                "current_item": f"Resolved {done}/{total}",
+                "progress_summary": f"Resolved {done} of {total} items.",
+                "last_meaningful_event": {
+                    "event_type": "command_progress",
+                    "work_units_done": done,
+                    "work_units_total": total,
+                    "line": match.group(0),
+                },
+            }
+
+        found_match = re.search(r"Found\s+(\d+)\s+unique broken mentions", stdout)
+        if found_match:
+            total = int(found_match.group(1))
+            return {
+                "progress_mode": "counted",
+                "work_units_total": total,
+                "work_units_done": 0,
+                "current_item": "resolve broken wikilinks",
+                "progress_summary": f"Found {total} broken wikilink mentions to resolve.",
+                "last_meaningful_event": {
+                    "event_type": "command_progress",
+                    "work_units_done": 0,
+                    "work_units_total": total,
+                    "line": found_match.group(0),
+                },
+            }
+
+        return {}
 
     def _subprocess_env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -1357,13 +1745,13 @@ class EnhancedPipeline:
                 "quality_score": 0.0,
             }
 
-        target_files = collect_quality_files(self.layout, all_areas=True)
+        target_files, input_digest, algorithm_digest, fingerprint = self._quality_stage_inputs()
         total_files = len(target_files)
         effective_batch_size = batch_size or total_files
 
         if total_files == 0:
             print("  没有待质检的深度解读文件")
-            return {
+            result = {
                 "success": True,
                 "quality_checked": 0,
                 "quality_qualified": 0,
@@ -1372,6 +1760,15 @@ class EnhancedPipeline:
                 "quality_results_json": None,
                 "quality_score": 0.0,
             }
+            if not dry_run:
+                self._write_quality_stage_artifact(
+                    result,
+                    target_files,
+                    input_digest,
+                    algorithm_digest,
+                    fingerprint,
+                )
+            return result
 
         aggregated = {
             "success": True,
@@ -1383,7 +1780,8 @@ class EnhancedPipeline:
             "quality_score": 0.0,
         }
 
-        for start_index in range(0, total_files, effective_batch_size):
+        total_batches = (total_files + effective_batch_size - 1) // effective_batch_size
+        for batch_index, start_index in enumerate(range(0, total_files, effective_batch_size), start=1):
             current_batch = min(effective_batch_size, total_files - start_index)
             cmd = [
                 sys.executable, "-m", "ovp_pipeline.batch_quality_checker",
@@ -1394,6 +1792,23 @@ class EnhancedPipeline:
             ]
             if dry_run:
                 cmd.append("--dry-run")
+
+            if self.txn_id:
+                self.txn.heartbeat(
+                    self.txn_id,
+                    step_name="quality",
+                    progress_mode="counted",
+                    work_units_total=total_files,
+                    work_units_done=aggregated["quality_checked"],
+                    work_units_failed=aggregated["quality_failed"],
+                    current_item=f"quality batch {batch_index}/{total_batches}",
+                    progress_summary=f"{aggregated['quality_checked']}/{total_files} files checked",
+                    last_meaningful_event={
+                        "event_type": "quality_batch_started",
+                        "start_index": start_index,
+                        "batch_size": current_batch,
+                    },
+                )
 
             result = self.run_command(
                 cmd,
@@ -1429,6 +1844,23 @@ class EnhancedPipeline:
             aggregated["quality_failed"] += batch_payload.get("failed", 0)
             aggregated["quality_qualified_files"].extend(batch_payload.get("qualified_files", []))
             aggregated["quality_results_json"] = batch_payload.get("results_json")
+            if self.txn_id:
+                self.txn.heartbeat(
+                    self.txn_id,
+                    step_name="quality",
+                    progress_mode="counted",
+                    work_units_total=total_files,
+                    work_units_done=aggregated["quality_checked"],
+                    work_units_failed=aggregated["quality_failed"],
+                    current_item=f"quality batch {batch_index}/{total_batches}",
+                    progress_summary=f"{aggregated['quality_checked']}/{total_files} files checked",
+                    last_meaningful_event={
+                        "event_type": "quality_batch_completed",
+                        "checked": batch_payload.get("checked", 0),
+                        "qualified": batch_payload.get("qualified", 0),
+                        "failed": batch_payload.get("failed", 0),
+                    },
+                )
 
         if aggregated["quality_checked"] > 0:
             aggregated["quality_score"] = (
@@ -1436,6 +1868,14 @@ class EnhancedPipeline:
             )
 
         print("✓ Quality check completed")
+        if not dry_run:
+            self._write_quality_stage_artifact(
+                aggregated,
+                target_files,
+                input_digest,
+                algorithm_digest,
+                fingerprint,
+            )
         return aggregated
 
     def step_fix_links(self, dry_run: bool = False) -> dict:
@@ -1447,8 +1887,30 @@ class EnhancedPipeline:
         cmd = [
             sys.executable, "-m", "ovp_pipeline.commands.migrate_broken_links",
             "--write" if not dry_run else "--dry-run",
+            "--exact-only",
             "--vault-dir", str(self.vault_dir),
         ]
+
+        target_files = len(collect_quality_files(self.layout, all_areas=True))
+        if self.txn_id:
+            self.txn.heartbeat(
+                self.txn_id,
+                step_name="fix_links",
+                progress_mode="counted" if target_files else "indeterminate",
+                work_units_total=target_files or None,
+                work_units_done=0,
+                work_units_failed=0,
+                current_item="migrate broken wikilinks",
+                progress_summary=(
+                    f"Scanning and migrating wikilinks across {target_files} files"
+                    if target_files
+                    else "Scanning and migrating broken wikilinks"
+                ),
+                last_meaningful_event={
+                    "event_type": "fix_links_started",
+                    "target_files": target_files,
+                },
+            )
 
         result = self.run_command(cmd, "fix_links", timeout=self._calculate_timeout("fix_links"))
 
@@ -1479,33 +1941,6 @@ class EnhancedPipeline:
             print(f"✗ Registry sync failed: {result.get('error', 'Unknown error')}")
 
         return result
-
-    def _load_latest_qualified_files(self) -> list[str]:
-        results_dir = self.layout.quality_reports_dir
-        if not results_dir.exists():
-            return []
-
-        candidates = sorted(
-            results_dir.glob("quality-results-*.json"),
-            key=lambda path: path.stat().st_mtime,
-        )
-        merged: list[str] = []
-        seen: set[str] = set()
-        for results_file in candidates:
-            try:
-                payload = json.loads(results_file.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            qualified_files = payload.get("qualified_files")
-            if isinstance(qualified_files, list):
-                for path in qualified_files:
-                    resolved_path = Path(path).resolve()
-                    resolved = str(resolved_path)
-                    if not resolved_path.exists() or resolved in seen:
-                        continue
-                    seen.add(resolved)
-                    merged.append(resolved)
-        return merged
 
     def _build_absorb_progress_callback(
         self,
@@ -1632,6 +2067,7 @@ class EnhancedPipeline:
         quality_score: float = -1.0,
         qualified_files: list[str] | None = None,
         batch_size: int | None = None,
+        require_quality_artifact: bool = False,
     ) -> dict:
         """执行 Absorb 步骤
 
@@ -1641,9 +2077,11 @@ class EnhancedPipeline:
             quality_score: 质量分数。只有在 normalized_files is None 时，>= 0 且 < 3.0 才阻断执行；
                 < 0 表示未执行质量检查（不阻断）。
             qualified_files: 通过质检的深度解读文件列表。提供时会先解析成 normalized_files，
-                并过滤为当前仍存在的文件；若为 None，则回退到 _load_latest_qualified_files()。
+                并过滤为当前仍存在的文件。
                 只要 normalized_files 非空，就按文件级白名单执行 absorb，不再使用 quality_score
                 做整批阻断。
+            require_quality_artifact: 在 pipeline 中要求从 quality stage artifact checkout 输入；
+                找不到 artifact 时停线，避免扫历史 quality reports。
         """
         if batch_size is not None and batch_size <= 0:
             return {
@@ -1652,25 +2090,53 @@ class EnhancedPipeline:
             }
 
         normalized_files = None
+        input_artifact: dict[str, Any] | None = None
         if qualified_files is None:
-            fallback_files = self._load_latest_qualified_files()
-            if fallback_files:
-                normalized_files = fallback_files
+            if require_quality_artifact:
+                input_artifact = self._load_quality_stage_artifact()
+                if not input_artifact:
+                    return {
+                        "success": False,
+                        "blocked": True,
+                        "reason": "missing_quality_stage_artifact",
+                        "error": "Absorb requires a matching quality stage artifact; refusing to scan historical quality reports.",
+                    }
+                artifact_files = input_artifact.get("outputs", {}).get("qualified_files")
+                if not isinstance(artifact_files, list):
+                    return {
+                        "success": False,
+                        "blocked": True,
+                        "reason": "invalid_quality_stage_artifact",
+                        "error": "Quality stage artifact is missing outputs.qualified_files.",
+                    }
+                normalized_files = [
+                    normalized
+                    for path in artifact_files
+                    if isinstance(path, str) and (normalized := self._resolve_existing_vault_file(path)) is not None
+                ]
         else:
             normalized_files = [
-                str(Path(path).resolve())
+                normalized
                 for path in qualified_files
-                if Path(path).exists()
+                if isinstance(path, str) and (normalized := self._resolve_existing_vault_file(path)) is not None
             ]
-            if not normalized_files:
-                print("\n⚠️  No qualified deep-dive files to absorb; skipping absorb stage")
-                return {
-                    "success": True,
-                    "skipped": True,
-                    "reason": "no_qualified_files",
-                    "output": "No qualified files to absorb",
-                    "produced": 0,
+
+        if normalized_files is not None and not normalized_files:
+            print("\n⚠️  No qualified deep-dive files to absorb; skipping absorb stage")
+            result = {
+                "success": True,
+                "skipped": True,
+                "reason": "no_qualified_files",
+                "output": "No qualified files to absorb",
+                "produced": 0,
+            }
+            if input_artifact is not None:
+                result["input_artifact"] = {
+                    "stage": input_artifact.get("stage"),
+                    "fingerprint": input_artifact.get("fingerprint"),
+                    "run_id": input_artifact.get("run_id"),
                 }
+            return result
 
         # Quality gate: 仅在没有文件级质检结果时才阻断
         if normalized_files is None and 0 <= quality_score < 3.0:
@@ -1758,6 +2224,12 @@ class EnhancedPipeline:
                 ),
                 "stderr": "",
             }
+            if input_artifact is not None:
+                result["input_artifact"] = {
+                    "stage": input_artifact.get("stage"),
+                    "fingerprint": input_artifact.get("fingerprint"),
+                    "run_id": input_artifact.get("run_id"),
+                }
         else:
             result = self._run_absorb_workflow_direct(dry_run=dry_run, recent=recent_days)
 
@@ -1847,6 +2319,32 @@ class EnhancedPipeline:
             "--json",
         ]
 
+        evergreen_files = [
+            path
+            for path in self.layout.evergreen_dir.rglob("*.md")
+            if "_Candidates" not in path.parts
+        ]
+        total_files = len(evergreen_files)
+        if self.txn_id:
+            self.txn.heartbeat(
+                self.txn_id,
+                step_name="knowledge_index",
+                progress_mode="counted" if total_files else "indeterminate",
+                work_units_total=total_files or None,
+                work_units_done=0,
+                work_units_failed=0,
+                current_item="rebuild knowledge index",
+                progress_summary=(
+                    f"Rebuilding knowledge index from {total_files} Evergreen files"
+                    if total_files
+                    else "Rebuilding knowledge index"
+                ),
+                last_meaningful_event={
+                    "event_type": "knowledge_index_started",
+                    "target_files": total_files,
+                },
+            )
+
         result = self.run_command(cmd, "knowledge_index", timeout=self._calculate_timeout("knowledge_index"))
 
         if result["success"]:
@@ -1902,6 +2400,23 @@ class EnhancedPipeline:
             for step in steps_to_run:
                 self.txn.step(self.txn_id, step, "in_progress")
 
+                if not dry_run:
+                    cache_result = self._checkout_stage_artifact(step, results=results)
+                    if cache_result:
+                        results[step] = cache_result
+                        self.step_results[step] = cache_result
+                        self.txn.step(
+                            self.txn_id,
+                            step,
+                            "completed",
+                            cache_result.get("output", ""),
+                            cache_hit=cache_result.get("cache_hit"),
+                            skipped=cache_result.get("skipped"),
+                            stage_fingerprint=cache_result.get("stage_fingerprint"),
+                            stage_artifact=cache_result.get("stage_artifact"),
+                        )
+                        continue
+
                 try:
                     cmd_result = execute_profile_stage_handler(
                         self,
@@ -1939,21 +2454,44 @@ class EnhancedPipeline:
                         elif step == "pinboard_process":
                             before_counts["pinboard_archived"] += produced
                         elif step == "articles":
-                            before_counts["interpretations"] += produced
+                            before_counts["interpretations"] = before_counts.get("interpretations", 0) + produced
                         elif step == "absorb":
                             before_counts["evergreen"] += produced
                         elif step == "refine":
                             before_counts["refine_log_mtime"] = (self.layout.logs_dir / "refine-mutations.jsonl").stat().st_mtime if (self.layout.logs_dir / "refine-mutations.jsonl").exists() else before_counts.get("refine_log_mtime", 0.0)
 
+                    self._write_stage_artifact(step, cmd_result, results={**results, step: cmd_result})
+
                 results[step] = cmd_result
                 self.step_results[step] = cmd_result
 
                 if cmd_result["success"]:
-                    self.txn.step(self.txn_id, step, "completed", cmd_result.get("output", ""))
+                    self.txn.step(
+                        self.txn_id,
+                        step,
+                        "completed",
+                        cmd_result.get("output", ""),
+                        cache_hit=cmd_result.get("cache_hit"),
+                        skipped=cmd_result.get("skipped"),
+                        stage_fingerprint=cmd_result.get("stage_fingerprint"),
+                        stage_artifact=cmd_result.get("stage_artifact"),
+                    )
                 else:
-                    self.txn.step(self.txn_id, step, "failed", cmd_result.get("error", ""))
+                    blocked_reason = str(cmd_result.get("reason") or cmd_result.get("error") or "").strip()
+                    step_status = "blocked" if cmd_result.get("blocked") else "failed"
+                    self.txn.step(
+                        self.txn_id,
+                        step,
+                        step_status,
+                        cmd_result.get("error", ""),
+                        skipped=cmd_result.get("skipped"),
+                        blocked_reason=blocked_reason if cmd_result.get("blocked") else None,
+                    )
                     print(f"\nPipeline stopped at step: {step}")
-                    self.txn.fail(self.txn_id, f"Failed at step: {step}")
+                    if cmd_result.get("blocked"):
+                        self.txn.fail(self.txn_id, f"Blocked at step: {step} ({blocked_reason})")
+                    else:
+                        self.txn.fail(self.txn_id, f"Failed at step: {step}")
                     break
 
             return results

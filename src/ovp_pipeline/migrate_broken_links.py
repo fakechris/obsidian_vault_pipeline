@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .concept_registry import ConceptRegistry, ConceptEntry, STATUS_ACTIVE
+from .concept_registry import ConceptRegistry, ConceptEntry, STATUS_ACTIVE, normalize_surface
 from .runtime import resolve_vault_dir
 
 
@@ -222,11 +222,18 @@ class BrokenLinkResolver:
     Path-based wikilinks are left untouched (keep_as_path).
     """
 
-    def __init__(self, registry: ConceptRegistry, scanner: "BrokenLinkScanner | None" = None,
-                 llm_client: Any = None):
+    def __init__(
+        self,
+        registry: ConceptRegistry,
+        scanner: "BrokenLinkScanner | None" = None,
+        llm_client: Any = None,
+        *,
+        exact_only: bool = False,
+    ):
         self.registry = registry
         self.scanner = scanner
         self.llm = llm_client
+        self.exact_only = exact_only
 
     def resolve_unique_mention(self, mention: UniqueBrokenMention) -> ResolutionResult:
         """Resolve a unique broken mention to a decision."""
@@ -297,17 +304,20 @@ class BrokenLinkResolver:
         - Registry 搜索匹配 (score >= 0.5) → link_existing
         - 找不到 → create_candidate
         """
-        # Step 1: Registry exact/alias match
-        entry = self.registry.find_by_surface(surface)
-        if entry and entry.status == STATUS_ACTIVE:
+        # Step 1: Registry exact surface match (slug/title/alias/redirect).
+        exact_slug = self._find_exact_active_slug(surface)
+        if exact_slug:
             return ResolutionResult(
                 surface=surface,
                 action="link_existing",
-                slug=entry.slug,
+                slug=exact_slug,
                 display=surface,
                 confidence=0.95,
                 occurrences=mention.occurrences,
             )
+
+        if self.exact_only:
+            return self._create_candidate_result(surface, mention)
 
         # Step 2: Registry search match
         search_results = self.registry.search(surface, topk=10)
@@ -324,6 +334,24 @@ class BrokenLinkResolver:
                 )
 
         # Step 3: No match -> create_candidate
+        return self._create_candidate_result(surface, mention)
+
+    def _find_exact_active_slug(self, surface: str) -> str | None:
+        surface_index = getattr(self.registry, "_surface_index", {})
+        records = surface_index.get(normalize_surface(surface), [])
+        active_slugs: list[str] = []
+        seen: set[str] = set()
+        for record in records:
+            entry = record.entry
+            if entry.status != STATUS_ACTIVE or entry.slug in seen:
+                continue
+            active_slugs.append(entry.slug)
+            seen.add(entry.slug)
+        if len(active_slugs) == 1:
+            return active_slugs[0]
+        return None
+
+    def _create_candidate_result(self, surface: str, mention: UniqueBrokenMention) -> ResolutionResult:
         return ResolutionResult(
             surface=surface,
             action="create_candidate",
@@ -555,6 +583,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Dry run (default for resolve)")
     parser.add_argument("--json", action="store_true", help="Output JSON report")
     parser.add_argument("--no-registry", action="store_true", help="Disable registry-based resolution")
+    parser.add_argument(
+        "--exact-only",
+        action="store_true",
+        help="Resolve only exact registry surfaces; skip expensive fuzzy search",
+    )
     parser.add_argument("--min-confidence", type=float, default=MIN_AUTO_FIX_CONFIDENCE,
                         help=f"Min confidence for auto-fix (default: {MIN_AUTO_FIX_CONFIDENCE})")
     args = parser.parse_args(argv)
@@ -596,7 +629,11 @@ def main(argv: list[str] | None = None) -> int:
 
         # Resolve
         print("Resolving...")
-        resolver = BrokenLinkResolver(registry, scanner=scanner if not args.no_registry else None)
+        resolver = BrokenLinkResolver(
+            registry,
+            scanner=scanner if not args.no_registry else None,
+            exact_only=args.exact_only,
+        )
         results = []
         for i, mention in enumerate(mentions):
             if (i + 1) % 50 == 0:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from collections import Counter
 import hashlib
 import json
@@ -31,6 +31,8 @@ from .runtime import (
     resolve_vault_dir,
     signal_ledger_write_lock,
 )
+from .runtime_processes import detect_runtime_processes
+from .run_history import list_run_history
 from .txn import classify_run_ledgers
 
 MAX_PAGE_SIZE = 500
@@ -38,6 +40,7 @@ _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?",
 _REVIEW_AUDIT_LOG_NAME = "review-actions"
 _SIGNAL_LOG_NAME = "signals"
 _ACTION_LOG_NAME = "actions"
+_ACTION_RUNNING_STALE_AFTER_SECONDS = 3600
 _SOURCE_NOTE_INDEX_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dict[str, list[dict[str, str]]]] = {}
 _PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
@@ -113,12 +116,165 @@ def get_runtime_status(
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
     classified = classify_run_ledgers(layout.transactions_dir, now_iso=now_iso)
+    generated_at = now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    active_run = dict(classified["active"][0]) if classified["active"] else None
+    if active_run is not None:
+        active_run["runtime_progress"] = _build_runtime_progress(active_run, now_iso=generated_at)
+    runtime_process_items = detect_runtime_processes(resolved_vault)
+    run_history = list_run_history(layout.transactions_dir, now_iso=generated_at, limit=10)
     return {
-        "generated_at": now_iso or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": generated_at,
         "active_count": len(classified["active"]),
         "stale_count": len(classified["stale"]),
-        "active_run": classified["active"][0] if classified["active"] else None,
+        "active_run": active_run,
         "stale_runs": classified["stale"],
+        "runtime_processes": {
+            "active_count": len(runtime_process_items),
+            "items": runtime_process_items,
+        },
+        "run_history": run_history,
+    }
+
+
+def _format_utc_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _coerce_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_duration(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, remaining_seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m" if remaining_seconds == 0 else f"{minutes}m {remaining_seconds}s"
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h" if remaining_minutes == 0 else f"{hours}h {remaining_minutes}m"
+    days, remaining_hours = divmod(hours, 24)
+    return f"{days}d" if remaining_hours == 0 else f"{days}d {remaining_hours}h"
+
+
+def _runtime_planned_steps(active_run: dict[str, Any], ledger: dict[str, Any], current_step_name: str) -> list[str]:
+    raw_planned = ledger.get("planned_steps")
+    planned = [str(item) for item in raw_planned if item] if isinstance(raw_planned, list) else []
+    if planned:
+        return planned
+    raw_steps = active_run.get("steps")
+    if isinstance(raw_steps, dict):
+        planned = [str(item) for item in raw_steps.keys() if item]
+    if current_step_name and current_step_name not in planned:
+        planned.append(current_step_name)
+    return planned
+
+
+def _build_runtime_progress(active_run: dict[str, Any], *, now_iso: str) -> dict[str, Any]:
+    ledger = active_run.get("run_ledger") if isinstance(active_run.get("run_ledger"), dict) else {}
+    current = ledger.get("current_step") if isinstance(ledger.get("current_step"), dict) else {}
+    current_step_name = str(
+        current.get("step_name") or ledger.get("current_step_name") or active_run.get("checkpoint") or ""
+    )
+    planned_steps = _runtime_planned_steps(active_run, ledger, current_step_name)
+    current_index: int | None = None
+    if current_step_name and current_step_name in planned_steps:
+        current_index = planned_steps.index(current_step_name) + 1
+    stage_total = len(planned_steps) or None
+    if current_index is not None and stage_total is not None:
+        stage_summary = f"Stage {current_index}/{stage_total}: {current_step_name}"
+    elif current_step_name:
+        stage_summary = f"Stage unknown: {current_step_name}"
+    else:
+        stage_summary = "Stage unknown"
+
+    done = _coerce_int(current.get("work_units_done"))
+    total = _coerce_int(current.get("work_units_total"))
+    failed = _coerce_int(current.get("work_units_failed")) or 0
+    percent = _coerce_float(current.get("progress_percent"))
+    if percent is None and done is not None and total and total > 0:
+        percent = round((done / total) * 100.0, 1)
+    if percent is not None:
+        percent = round(percent, 1)
+    progress_summary = str(current.get("progress_summary") or "").strip()
+    if not progress_summary:
+        if total is not None and done is not None:
+            progress_summary = f"{done}/{total} work units completed"
+        else:
+            progress_summary = "Progress is currently indeterminate."
+
+    now = _parse_iso_datetime(now_iso) or datetime.now(timezone.utc)
+    started_at = (
+        _parse_iso_datetime(current.get("step_started_at"))
+        or _parse_iso_datetime(ledger.get("started_at"))
+        or _parse_iso_datetime(active_run.get("start_time"))
+    )
+    elapsed_seconds: int | None = None
+    items_per_second: float | None = None
+    items_per_minute: float | None = None
+    eta_seconds: int | None = None
+    eta_at: str | None = None
+    rate_summary = "Speed unavailable until counted progress starts."
+    eta_summary = "ETA unavailable until counted progress starts."
+    if started_at is not None:
+        elapsed_seconds = max(0, int((now - started_at).total_seconds()))
+    if done is not None and total is not None and total > 0 and done > 0 and elapsed_seconds and elapsed_seconds > 0:
+        raw_items_per_second = done / elapsed_seconds
+        items_per_second = round(raw_items_per_second, 6)
+        items_per_minute = round(raw_items_per_second * 60.0, 2)
+        rate_summary = f"{raw_items_per_second:.4f} files/s ({items_per_minute:.2f} files/min)"
+        remaining = max(total - done, 0)
+        if remaining:
+            eta_seconds = int(round(remaining / raw_items_per_second))
+            eta_at = _format_utc_timestamp(now + timedelta(seconds=eta_seconds))
+            eta_summary = f"~{_format_duration(eta_seconds)} remaining, ETA {eta_at}"
+        else:
+            eta_seconds = 0
+            eta_at = _format_utc_timestamp(now)
+            eta_summary = f"Current stage complete as of {eta_at}"
+
+    return {
+        "stage": {
+            "current_index": current_index,
+            "total": stage_total,
+            "current_name": current_step_name,
+            "planned_steps": planned_steps,
+            "remaining_steps": planned_steps[current_index:] if current_index is not None else [],
+            "summary": stage_summary,
+        },
+        "work": {
+            "mode": str(current.get("progress_mode") or "indeterminate"),
+            "done": done,
+            "total": total,
+            "failed": failed,
+            "percent": percent,
+            "current_item": current.get("current_item"),
+            "summary": progress_summary,
+        },
+        "performance": {
+            "elapsed_seconds": elapsed_seconds,
+            "elapsed_summary": _format_duration(elapsed_seconds) if elapsed_seconds is not None else "",
+            "items_per_second": items_per_second,
+            "items_per_minute": items_per_minute,
+            "rate_summary": rate_summary,
+            "eta_seconds": eta_seconds,
+            "eta_at": eta_at,
+            "eta_summary": eta_summary,
+        },
     }
 
 
@@ -667,12 +823,13 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
     text = str(value).strip()
     if not text:
         return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _candidate_evolution_id(
@@ -1863,6 +2020,15 @@ def _result_artifact_summary(action: dict[str, Any]) -> tuple[int, list[str]]:
     return note_output_count + object_output_count, artifact_types
 
 
+def _running_action_age_seconds(action: dict[str, Any]) -> float | None:
+    started_at = _parse_iso_datetime(action.get("started_at") or action.get("created_at"))
+    if started_at is None:
+        return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - started_at.astimezone(timezone.utc)).total_seconds()
+
+
 def _build_action_impact_summary(action: dict[str, Any]) -> dict[str, Any]:
     action_status = str(action.get("status") or "")
     action_kind = str(action.get("action_kind") or "")
@@ -1886,6 +2052,19 @@ def _build_action_impact_summary(action: dict[str, Any]) -> dict[str, Any]:
             "impact_detail": "A queueable action exists and is currently waiting to run.",
         }
     if action_status == "running":
+        age_seconds = _running_action_age_seconds(action)
+        if age_seconds is not None and age_seconds > _ACTION_RUNNING_STALE_AFTER_SECONDS:
+            age_minutes = int(age_seconds // 60)
+            return {
+                **base,
+                "impact_status": "stale",
+                "lifecycle_stage": "stale_running",
+                "impact_label": "Stale running action",
+                "impact_detail": (
+                    f"The queued action has been marked running for {age_minutes} minutes "
+                    "without a finished_at timestamp."
+                ),
+            }
         return {
             **base,
             "impact_status": "running",

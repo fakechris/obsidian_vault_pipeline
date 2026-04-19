@@ -47,13 +47,21 @@ def test_research_tech_full_profile_runtime_e2e(tmp_path):
     )
     _bind_success_step(pipeline, "fix_links", calls)
 
-    def fake_absorb(recent_days=7, dry_run=False, quality_score=-1.0, qualified_files=None, batch_size=None):
+    def fake_absorb(
+        recent_days=7,
+        dry_run=False,
+        quality_score=-1.0,
+        qualified_files=None,
+        batch_size=None,
+        require_quality_artifact=False,
+    ):
         calls.append("absorb")
         captured_absorb["recent_days"] = recent_days
         captured_absorb["dry_run"] = dry_run
         captured_absorb["quality_score"] = quality_score
         captured_absorb["qualified_files"] = list(qualified_files or [])
         captured_absorb["batch_size"] = batch_size
+        captured_absorb["require_quality_artifact"] = require_quality_artifact
         return {"success": True, "produced": 2}
 
     pipeline.step_absorb = fake_absorb
@@ -73,6 +81,7 @@ def test_research_tech_full_profile_runtime_e2e(tmp_path):
         "quality_score": 4.25,
         "qualified_files": ["/tmp/qualified-a.md", "/tmp/qualified-b.md"],
         "batch_size": 25,
+        "require_quality_artifact": True,
     }
 
 
@@ -94,10 +103,18 @@ def test_default_knowledge_compatibility_runtime_from_step_e2e(tmp_path):
     )
     _bind_success_step(pipeline, "fix_links", calls)
 
-    def fake_absorb(recent_days=7, dry_run=False, quality_score=-1.0, qualified_files=None, batch_size=None):
+    def fake_absorb(
+        recent_days=7,
+        dry_run=False,
+        quality_score=-1.0,
+        qualified_files=None,
+        batch_size=None,
+        require_quality_artifact=False,
+    ):
         calls.append("absorb")
         captured_absorb["quality_score"] = quality_score
         captured_absorb["qualified_files"] = list(qualified_files or [])
+        captured_absorb["require_quality_artifact"] = require_quality_artifact
         return {"success": True, "produced": 1}
 
     pipeline.step_absorb = fake_absorb
@@ -113,3 +130,4 @@ def test_default_knowledge_compatibility_runtime_from_step_e2e(tmp_path):
     assert calls == sliced_steps
     assert captured_absorb["quality_score"] == 3.5
     assert captured_absorb["qualified_files"] == ["/tmp/compat-qualified.md"]
+    assert captured_absorb["require_quality_artifact"] is True
