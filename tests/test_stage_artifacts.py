@@ -43,3 +43,24 @@ def test_stage_artifact_store_writes_and_loads_manifest_by_fingerprint(tmp_path)
     assert loaded["fingerprint"] == "quality-demo"
     assert loaded["outputs"]["qualified_files"] == ["a.md"]
     assert json.loads((tmp_path / "stage-artifacts" / "quality" / "quality-demo.json").read_text())["run_id"] == "run-1"
+
+
+def test_stage_artifact_store_rejects_manifest_with_missing_declared_outputs(tmp_path):
+    from ovp_pipeline.stage_artifacts import StageArtifactStore
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = StageArtifactStore(vault / "60-Logs" / "stage-artifacts")
+    store.write_completed(
+        stage="knowledge_index",
+        fingerprint="knowledge-demo",
+        input_digest="input-demo",
+        algorithm_digest="algorithm-demo",
+        run_id="run-1",
+        pack_name="research-tech",
+        workflow_profile="full",
+        inputs={"files": []},
+        outputs={"paths": ["60-Logs/knowledge.db"]},
+    )
+
+    assert store.load("knowledge_index", "knowledge-demo", validate_outputs_under=vault) is None

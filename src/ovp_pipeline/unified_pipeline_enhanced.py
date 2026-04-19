@@ -48,7 +48,7 @@ try:
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
-    from .stage_artifacts import StageArtifactStore, build_stage_fingerprint, hash_file_set, hash_json_payload
+    from .stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from .txn import (
         build_transaction_payload,
         heartbeat_transaction,
@@ -62,7 +62,7 @@ except ImportError:  # pragma: no cover - script mode fallback
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
-    from stage_artifacts import StageArtifactStore, build_stage_fingerprint, hash_file_set, hash_json_payload
+    from stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from txn import (
         build_transaction_payload,
         heartbeat_transaction,
@@ -398,6 +398,35 @@ PIPELINE_STEP_CHOICES = [*BASE_PIPELINE_STEPS, *OPTIONAL_PIPELINE_STEPS, *STEP_A
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_SRC = PROJECT_ROOT / "src"
 QUALITY_STAGE_ALGORITHM_VERSION = "quality:v1"
+STAGE_CACHE_CHECKOUT = "checkout"
+STAGE_CACHE_RECORD_ONLY = "record_only"
+STAGE_CACHE_DISABLED = "disabled"
+STAGE_CACHE_POLICIES = {
+    "pinboard": STAGE_CACHE_RECORD_ONLY,
+    "pinboard_process": STAGE_CACHE_RECORD_ONLY,
+    "clippings": STAGE_CACHE_RECORD_ONLY,
+    "articles": STAGE_CACHE_RECORD_ONLY,
+    "quality": STAGE_CACHE_CHECKOUT,
+    "fix_links": STAGE_CACHE_CHECKOUT,
+    "absorb": STAGE_CACHE_CHECKOUT,
+    "registry_sync": STAGE_CACHE_CHECKOUT,
+    "moc": STAGE_CACHE_CHECKOUT,
+    "knowledge_index": STAGE_CACHE_CHECKOUT,
+    "refine": STAGE_CACHE_RECORD_ONLY,
+}
+STAGE_ALGORITHM_VERSIONS = {
+    "quality": QUALITY_STAGE_ALGORITHM_VERSION,
+    "fix_links": "fix_links:exact-only:v1",
+    "absorb": "absorb:qualified-files:v1",
+    "registry_sync": "registry_sync:rebuild-registry:v1",
+    "moc": "moc:auto-moc-scan:v1",
+    "knowledge_index": "knowledge_index:truth-projection:v1",
+    "pinboard": "pinboard:fetch:v1",
+    "pinboard_process": "pinboard_process:route-and-process:v1",
+    "clippings": "clippings:process-inbox:v1",
+    "articles": "articles:auto-article-processor:v1",
+    "refine": "refine:cleanup-breakdown:v1",
+}
 
 
 def normalize_step_name(step: str | None) -> str | None:
@@ -676,6 +705,232 @@ class EnhancedPipeline:
 
     def _stage_artifact_store(self) -> StageArtifactStore:
         return StageArtifactStore(self.layout.stage_artifacts_dir)
+
+    def _relative_artifact_path(self, path: Path) -> str:
+        resolved = path.resolve()
+        try:
+            return resolved.relative_to(self.vault_dir).as_posix()
+        except ValueError:
+            return str(resolved)
+
+    def _existing_files(self, files: list[Path]) -> list[Path]:
+        return sorted((path.resolve() for path in files if path.exists()), key=lambda item: self._relative_artifact_path(item))
+
+    def _markdown_files_under(self, directory: Path) -> list[Path]:
+        if not directory.exists():
+            return []
+        return self._existing_files(list(directory.rglob("*.md")))
+
+    def _concept_registry_file(self) -> Path:
+        return self.layout.atlas_dir / "concept-registry.jsonl"
+
+    def _evergreen_source_files(self) -> list[Path]:
+        return self._existing_files(
+            [
+                path
+                for path in self.layout.evergreen_dir.rglob("*.md")
+                if "_Candidates" not in path.parts
+            ]
+        )
+
+    def _moc_output_files(self) -> list[Path]:
+        candidates: list[Path] = []
+        if self.layout.atlas_dir.exists():
+            candidates.extend(self.layout.atlas_dir.glob("*.md"))
+        candidates.extend(self.vault_dir.glob("20-Areas/**/MOC*.md"))
+        candidates.extend(self.vault_dir.glob("20-Areas/**/Topics/*MOC.md"))
+        return self._existing_files(candidates)
+
+    def _knowledge_index_source_files(self) -> list[Path]:
+        files: list[Path] = []
+        files.extend(self._markdown_files_under(self.layout.evergreen_dir))
+        files.extend(self._markdown_files_under(self.layout.atlas_dir))
+        files.extend(self._markdown_files_under(self.vault_dir / "20-Areas"))
+        registry = self._concept_registry_file()
+        if registry.exists():
+            files.append(registry)
+        return self._existing_files([path for path in files if "_Candidates" not in path.parts])
+
+    def _stage_input_files(self, stage: str) -> list[Path]:
+        if stage in {"quality", "fix_links"}:
+            return self._existing_files(collect_quality_files(self.layout, all_areas=True))
+        if stage == "pinboard":
+            return self._markdown_files_under(self.layout.pinboard_dir)
+        if stage == "pinboard_process":
+            return self._markdown_files_under(self.layout.pinboard_dir)
+        if stage == "clippings":
+            files = []
+            files.extend(self._markdown_files_under(self.layout.raw_dir))
+            files.extend(self._markdown_files_under(self.layout.clippings_dir))
+            return self._existing_files(files)
+        if stage == "articles":
+            files = []
+            files.extend(self._markdown_files_under(self.layout.processing_dir))
+            files.extend(self._markdown_files_under(self.layout.raw_dir))
+            return self._existing_files(files)
+        if stage == "registry_sync":
+            return self._evergreen_source_files()
+        if stage == "moc":
+            files = self._evergreen_source_files()
+            registry = self._concept_registry_file()
+            if registry.exists():
+                files.append(registry)
+            return self._existing_files(files)
+        if stage == "knowledge_index":
+            return self._knowledge_index_source_files()
+        if stage == "refine":
+            return self._evergreen_source_files()
+        return []
+
+    def _stage_output_files(self, stage: str) -> list[Path]:
+        if stage == "registry_sync":
+            return self._existing_files([self._concept_registry_file()])
+        if stage == "moc":
+            return self._moc_output_files()
+        if stage == "knowledge_index":
+            return self._existing_files([self.layout.knowledge_db])
+        if stage == "absorb":
+            return self._evergreen_source_files()
+        return []
+
+    def _stage_algorithm_digest(self, stage: str) -> str:
+        return hash_json_payload(
+            {
+                "stage": stage,
+                "algorithm_version": STAGE_ALGORITHM_VERSIONS.get(stage, f"{stage}:v1"),
+            }
+        )
+
+    def _build_stage_artifact_context(
+        self,
+        stage: str,
+        *,
+        results: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        algorithm_digest = self._stage_algorithm_digest(stage)
+        if stage == "absorb":
+            quality_result = (results or {}).get("quality", {})
+            quality_fingerprint = quality_result.get("quality_stage_fingerprint")
+            qualified_files = quality_result.get("quality_qualified_files")
+            if not quality_fingerprint:
+                artifact = self._load_quality_stage_artifact()
+                if artifact:
+                    quality_fingerprint = artifact.get("fingerprint")
+                    qualified_files = artifact.get("outputs", {}).get("qualified_files")
+            input_payload = {
+                "quality_stage_fingerprint": quality_fingerprint or "",
+                "qualified_files": sorted(str(Path(path).resolve()) for path in (qualified_files or []) if Path(path).exists()),
+            }
+            input_digest = hash_json_payload(input_payload)
+            inputs = {
+                **input_payload,
+                "qualified_file_count": len(input_payload["qualified_files"]),
+            }
+        else:
+            files = self._stage_input_files(stage)
+            input_digest = hash_file_set(self.vault_dir, files)
+            inputs = {
+                "files": [self._relative_artifact_path(path) for path in files],
+                "file_count": len(files),
+            }
+        fingerprint = build_stage_fingerprint(
+            stage=stage,
+            input_digest=input_digest,
+            algorithm_digest=algorithm_digest,
+            pack_name=self.workflow_pack_name,
+            workflow_profile=self.workflow_profile_name,
+        )
+        output_files = self._stage_output_files(stage)
+        outputs = {
+            "paths": [self._relative_artifact_path(path) for path in output_files],
+            "files": build_file_records(self.vault_dir, output_files),
+        }
+        return {
+            "stage": stage,
+            "input_digest": input_digest,
+            "algorithm_digest": algorithm_digest,
+            "fingerprint": fingerprint,
+            "inputs": inputs,
+            "outputs": outputs,
+        }
+
+    def _checkout_stage_artifact(self, stage: str, *, results: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        if STAGE_CACHE_POLICIES.get(stage, STAGE_CACHE_DISABLED) != STAGE_CACHE_CHECKOUT:
+            return None
+        context = self._build_stage_artifact_context(stage, results=results)
+        manifest = self._stage_artifact_store().load(
+            stage,
+            context["fingerprint"],
+            validate_outputs_under=self.vault_dir,
+        )
+        if not manifest:
+            return None
+        artifact_path = self._stage_artifact_store().path_for(stage, context["fingerprint"])
+        result: dict[str, Any] = {
+            "success": True,
+            "skipped": True,
+            "cache_hit": True,
+            "stage_fingerprint": context["fingerprint"],
+            "stage_artifact": str(artifact_path),
+            "input_digest": context["input_digest"],
+            "algorithm_digest": context["algorithm_digest"],
+            "produced": 0,
+            "output": f"Cache hit: {stage} {context['fingerprint'][:12]}",
+        }
+        if stage == "quality":
+            outputs = manifest.get("outputs", {})
+            metrics = manifest.get("metrics", {})
+            result.update(
+                {
+                    "quality_checked": metrics.get("quality_checked", 0),
+                    "quality_qualified": metrics.get("quality_qualified", 0),
+                    "quality_failed": metrics.get("quality_failed", 0),
+                    "quality_score": metrics.get("quality_score", 0.0),
+                    "quality_qualified_files": outputs.get("qualified_files", []),
+                    "quality_results_json": outputs.get("results_json"),
+                    "quality_stage_fingerprint": context["fingerprint"],
+                    "quality_stage_artifact": str(artifact_path),
+                }
+            )
+        return result
+
+    def _stage_artifact_metrics(self, result: dict[str, Any]) -> dict[str, Any]:
+        keys = {
+            "produced",
+            "processed",
+            "skipped",
+            "failed",
+            "updated",
+            "migrated",
+            "remaining",
+            "total_evergreen",
+            "total_interpretations",
+            "new_bookmarks",
+        }
+        return {key: result[key] for key in keys if key in result}
+
+    def _write_stage_artifact(self, stage: str, result: dict[str, Any], *, results: dict[str, Any] | None = None) -> None:
+        if result.get("success") is not True:
+            return
+        if STAGE_CACHE_POLICIES.get(stage, STAGE_CACHE_DISABLED) != STAGE_CACHE_CHECKOUT:
+            return
+        if stage == "quality":
+            return
+        context = self._build_stage_artifact_context(stage, results=results)
+        manifest = self._stage_artifact_store().write_completed(
+            stage=stage,
+            fingerprint=context["fingerprint"],
+            input_digest=context["input_digest"],
+            algorithm_digest=context["algorithm_digest"],
+            run_id=self.txn_id,
+            pack_name=self.workflow_pack_name,
+            workflow_profile=self.workflow_profile_name,
+            inputs=context["inputs"],
+            outputs=context["outputs"],
+            metrics=self._stage_artifact_metrics(result),
+        )
+        result["stage_fingerprint"] = manifest["fingerprint"]
+        result["stage_artifact"] = str(self._stage_artifact_store().path_for(stage, manifest["fingerprint"]))
 
     def _load_quality_stage_artifact(self) -> dict[str, Any] | None:
         _, _, _, fingerprint = self._quality_stage_inputs()
@@ -2101,6 +2356,14 @@ class EnhancedPipeline:
             for step in steps_to_run:
                 self.txn.step(self.txn_id, step, "in_progress")
 
+                if not dry_run:
+                    cache_result = self._checkout_stage_artifact(step, results=results)
+                    if cache_result:
+                        results[step] = cache_result
+                        self.step_results[step] = cache_result
+                        self.txn.step(self.txn_id, step, "completed", cache_result.get("output", ""))
+                        continue
+
                 try:
                     cmd_result = execute_profile_stage_handler(
                         self,
@@ -2143,6 +2406,8 @@ class EnhancedPipeline:
                             before_counts["evergreen"] += produced
                         elif step == "refine":
                             before_counts["refine_log_mtime"] = (self.layout.logs_dir / "refine-mutations.jsonl").stat().st_mtime if (self.layout.logs_dir / "refine-mutations.jsonl").exists() else before_counts.get("refine_log_mtime", 0.0)
+
+                    self._write_stage_artifact(step, cmd_result, results={**results, step: cmd_result})
 
                 results[step] = cmd_result
                 self.step_results[step] = cmd_result

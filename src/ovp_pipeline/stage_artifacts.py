@@ -28,7 +28,7 @@ def _relative_path(root: Path, path: Path) -> str:
         return os.fspath(resolved_path)
 
 
-def hash_file_set(root: Path, files: list[Path] | tuple[Path, ...]) -> str:
+def build_file_records(root: Path, files: list[Path] | tuple[Path, ...]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in sorted((Path(item) for item in files), key=lambda item: _relative_path(root, item)):
         stat = path.stat()
@@ -40,6 +40,11 @@ def hash_file_set(root: Path, files: list[Path] | tuple[Path, ...]) -> str:
                 "size": stat.st_size,
             }
         )
+    return records
+
+
+def hash_file_set(root: Path, files: list[Path] | tuple[Path, ...]) -> str:
+    records = build_file_records(root, files)
     return hash_json_payload(records)
 
 
@@ -69,7 +74,44 @@ class StageArtifactStore:
     def path_for(self, stage: str, fingerprint: str) -> Path:
         return self.root_dir / stage / f"{fingerprint}.json"
 
-    def load(self, stage: str, fingerprint: str) -> dict[str, Any] | None:
+    def _declared_outputs_exist(self, payload: dict[str, Any], base_dir: Path) -> bool:
+        outputs = payload.get("outputs") or {}
+        paths = outputs.get("paths", [])
+        if paths is None:
+            paths = []
+        if not isinstance(paths, list):
+            return False
+        for raw_path in paths:
+            if not isinstance(raw_path, str):
+                return False
+            path = Path(raw_path)
+            if not path.is_absolute():
+                path = base_dir / path
+            if not path.exists():
+                return False
+
+        file_records = outputs.get("files", [])
+        if file_records is None:
+            file_records = []
+        if not isinstance(file_records, list):
+            return False
+        for record in file_records:
+            if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+                return False
+            path = Path(record["path"])
+            if not path.is_absolute():
+                path = base_dir / path
+            if not path.exists():
+                return False
+            expected_size = record.get("size")
+            if expected_size is not None and path.stat().st_size != expected_size:
+                return False
+            expected_sha = record.get("sha256")
+            if expected_sha is not None and hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha:
+                return False
+        return True
+
+    def load(self, stage: str, fingerprint: str, *, validate_outputs_under: Path | None = None) -> dict[str, Any] | None:
         path = self.path_for(stage, fingerprint)
         if not path.exists():
             return None
@@ -80,6 +122,8 @@ class StageArtifactStore:
         if payload.get("stage") != stage or payload.get("fingerprint") != fingerprint:
             return None
         if payload.get("status") != "completed":
+            return None
+        if validate_outputs_under is not None and not self._declared_outputs_exist(payload, Path(validate_outputs_under)):
             return None
         return payload
 

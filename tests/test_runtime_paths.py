@@ -296,6 +296,174 @@ def test_run_pipeline_uses_profile_stages_when_steps_omitted(tmp_path, monkeypat
     assert calls == expected_steps
 
 
+def test_run_pipeline_checkouts_cacheable_stage_artifact_without_dispatching_handler(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    (topic_dir / "cached_深度解读.md").write_text("# cached\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Cache checkout", planned_steps=["fix_links"])
+
+    context = pipeline._build_stage_artifact_context("fix_links")
+    pipeline._stage_artifact_store().write_completed(
+        stage="fix_links",
+        fingerprint=context["fingerprint"],
+        input_digest=context["input_digest"],
+        algorithm_digest=context["algorithm_digest"],
+        run_id="previous-run",
+        pack_name=pipeline.workflow_pack_name,
+        workflow_profile=pipeline.workflow_profile_name,
+        inputs=context["inputs"],
+        outputs=context["outputs"],
+    )
+
+    def fail_if_dispatched(*_args, **_kwargs):
+        raise AssertionError("cacheable stage handler should not be dispatched on cache hit")
+
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fail_if_dispatched, raising=False)
+
+    results = pipeline.run_pipeline(steps=["fix_links"], dry_run=False)
+
+    result = results["fix_links"]
+    assert result["success"] is True
+    assert result["cache_hit"] is True
+    assert result["skipped"] is True
+    assert result["stage_fingerprint"] == context["fingerprint"]
+    payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+    step = payload["steps"]["fix_links"]
+    assert step["status"] == "completed"
+    assert "Cache hit" in step["output"]
+
+
+def test_run_pipeline_does_not_skip_record_only_source_stage(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "50-Inbox" / "02-Pinboard").mkdir(parents=True, exist_ok=True)
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+
+    context = pipeline._build_stage_artifact_context("pinboard")
+    pipeline._stage_artifact_store().write_completed(
+        stage="pinboard",
+        fingerprint=context["fingerprint"],
+        input_digest=context["input_digest"],
+        algorithm_digest=context["algorithm_digest"],
+        run_id="previous-run",
+        pack_name=pipeline.workflow_pack_name,
+        workflow_profile=pipeline.workflow_profile_name,
+        inputs=context["inputs"],
+        outputs=context["outputs"],
+    )
+
+    calls: list[str] = []
+
+    def fake_execute_profile_stage_handler(_pipeline_runtime, stage, **_kwargs):
+        calls.append(stage)
+        return {"success": True}
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {"pinboard": 0})
+    monkeypatch.setattr(pipeline, "_count_output_files", lambda step, before_counts, cmd_result: {"produced": 0})
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fake_execute_profile_stage_handler, raising=False)
+
+    results = pipeline.run_pipeline(steps=["pinboard"], dry_run=False)
+
+    assert calls == ["pinboard"]
+    assert results["pinboard"]["success"] is True
+    assert "cache_hit" not in results["pinboard"]
+
+
+def test_run_pipeline_ignores_cache_artifact_when_declared_output_is_missing(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    evergreen_dir = vault / "10-Knowledge" / "Evergreen"
+    evergreen_dir.mkdir(parents=True, exist_ok=True)
+    (evergreen_dir / "state.md").write_text("# state\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+
+    context = pipeline._build_stage_artifact_context("knowledge_index")
+    pipeline._stage_artifact_store().write_completed(
+        stage="knowledge_index",
+        fingerprint=context["fingerprint"],
+        input_digest=context["input_digest"],
+        algorithm_digest=context["algorithm_digest"],
+        run_id="previous-run",
+        pack_name=pipeline.workflow_pack_name,
+        workflow_profile=pipeline.workflow_profile_name,
+        inputs=context["inputs"],
+        outputs={"paths": ["60-Logs/knowledge.db"]},
+    )
+
+    calls: list[str] = []
+
+    def fake_execute_profile_stage_handler(_pipeline_runtime, stage, **_kwargs):
+        calls.append(stage)
+        return {"success": True}
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {"knowledge_db_mtime": 0.0})
+    monkeypatch.setattr(
+        pipeline,
+        "_count_output_files",
+        lambda step, before_counts, cmd_result: {"produced": 0, "db_path": str(vault / "60-Logs" / "knowledge.db")},
+    )
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fake_execute_profile_stage_handler, raising=False)
+
+    results = pipeline.run_pipeline(steps=["knowledge_index"], dry_run=False)
+
+    assert calls == ["knowledge_index"]
+    assert results["knowledge_index"]["success"] is True
+    assert "cache_hit" not in results["knowledge_index"]
+
+
+def test_run_pipeline_writes_stage_artifact_after_cacheable_stage_success(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    (topic_dir / "write_artifact_深度解读.md").write_text("# write artifact\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Artifact write", planned_steps=["fix_links"])
+
+    def fake_execute_profile_stage_handler(_pipeline_runtime, stage, **_kwargs):
+        return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(pipeline, "_count_output_files", lambda step, before_counts, cmd_result: {"produced": 0})
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fake_execute_profile_stage_handler, raising=False)
+
+    results = pipeline.run_pipeline(steps=["fix_links"], dry_run=False)
+
+    context = pipeline._build_stage_artifact_context("fix_links")
+    manifest = pipeline._stage_artifact_store().load("fix_links", context["fingerprint"])
+    assert results["fix_links"]["success"] is True
+    assert manifest is not None
+    assert manifest["run_id"] == pipeline.txn_id
+    assert manifest["inputs"]["file_count"] == 1
+
+
 def test_detect_pinboard_processor_routes_gist_to_article_stack():
     content = """---
 title: "GBrain.md"
