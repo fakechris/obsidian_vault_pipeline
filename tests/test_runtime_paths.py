@@ -1325,6 +1325,41 @@ def test_run_pipeline_absorb_requires_artifact_when_quality_result_missing():
     assert captured["require_quality_artifact"] is True
 
 
+def test_run_pipeline_records_blocked_stage_as_blocked_transaction_reason(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Blocked transaction", planned_steps=["absorb"])
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(pipeline, "_count_output_files", lambda *_args, **_kwargs: {"produced": 0})
+    monkeypatch.setattr(
+        pipeline_source,
+        "execute_profile_stage_handler",
+        lambda *_args, **_kwargs: {
+            "success": False,
+            "blocked": True,
+            "reason": "missing_quality_stage_artifact",
+            "error": "Absorb requires a matching quality stage artifact.",
+        },
+        raising=False,
+    )
+
+    result = pipeline.run_pipeline(steps=["absorb"], dry_run=False)
+
+    payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+    assert result["absorb"]["blocked"] is True
+    assert payload["steps"]["absorb"]["status"] == "blocked"
+    assert payload["steps"]["absorb"]["blocked_reason"] == "missing_quality_stage_artifact"
+    assert payload["failure_reason"] == "Blocked at step: absorb (missing_quality_stage_artifact)"
+    assert payload["run_ledger"]["error_summary"] == "Blocked at step: absorb (missing_quality_stage_artifact)"
+
+
 def test_run_command_timeout_is_failure(tmp_path):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 

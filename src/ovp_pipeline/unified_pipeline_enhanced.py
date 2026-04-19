@@ -966,6 +966,7 @@ class EnhancedPipeline:
             for raw_path in result.get("quality_qualified_files", [])
             if isinstance(raw_path, (str, Path)) and (normalized := self._resolve_existing_vault_file(raw_path)) is not None
         ]
+        base_vault = self.vault_dir.resolve()
         manifest = self._stage_artifact_store().write_completed(
             stage="quality",
             fingerprint=fingerprint,
@@ -975,7 +976,7 @@ class EnhancedPipeline:
             pack_name=self.workflow_pack_name,
             workflow_profile=self.workflow_profile_name,
             inputs={
-                "files": [path.resolve().relative_to(self.vault_dir).as_posix() for path in files],
+                "files": [path.resolve().relative_to(base_vault).as_posix() for path in files],
                 "file_count": len(files),
             },
             outputs={
@@ -2487,7 +2488,10 @@ class EnhancedPipeline:
                         blocked_reason=blocked_reason if cmd_result.get("blocked") else None,
                     )
                     print(f"\nPipeline stopped at step: {step}")
-                    self.txn.fail(self.txn_id, f"Failed at step: {step}")
+                    if cmd_result.get("blocked"):
+                        self.txn.fail(self.txn_id, f"Blocked at step: {step} ({blocked_reason})")
+                    else:
+                        self.txn.fail(self.txn_id, f"Failed at step: {step}")
                     break
 
             return results
