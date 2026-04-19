@@ -1383,7 +1383,8 @@ class EnhancedPipeline:
             "quality_score": 0.0,
         }
 
-        for start_index in range(0, total_files, effective_batch_size):
+        total_batches = (total_files + effective_batch_size - 1) // effective_batch_size
+        for batch_index, start_index in enumerate(range(0, total_files, effective_batch_size), start=1):
             current_batch = min(effective_batch_size, total_files - start_index)
             cmd = [
                 sys.executable, "-m", "ovp_pipeline.batch_quality_checker",
@@ -1394,6 +1395,23 @@ class EnhancedPipeline:
             ]
             if dry_run:
                 cmd.append("--dry-run")
+
+            if self.txn_id:
+                self.txn.heartbeat(
+                    self.txn_id,
+                    step_name="quality",
+                    progress_mode="counted",
+                    work_units_total=total_files,
+                    work_units_done=aggregated["quality_checked"],
+                    work_units_failed=aggregated["quality_failed"],
+                    current_item=f"quality batch {batch_index}/{total_batches}",
+                    progress_summary=f"{aggregated['quality_checked']}/{total_files} files checked",
+                    last_meaningful_event={
+                        "event_type": "quality_batch_started",
+                        "start_index": start_index,
+                        "batch_size": current_batch,
+                    },
+                )
 
             result = self.run_command(
                 cmd,
@@ -1429,6 +1447,23 @@ class EnhancedPipeline:
             aggregated["quality_failed"] += batch_payload.get("failed", 0)
             aggregated["quality_qualified_files"].extend(batch_payload.get("qualified_files", []))
             aggregated["quality_results_json"] = batch_payload.get("results_json")
+            if self.txn_id:
+                self.txn.heartbeat(
+                    self.txn_id,
+                    step_name="quality",
+                    progress_mode="counted",
+                    work_units_total=total_files,
+                    work_units_done=aggregated["quality_checked"],
+                    work_units_failed=aggregated["quality_failed"],
+                    current_item=f"quality batch {batch_index}/{total_batches}",
+                    progress_summary=f"{aggregated['quality_checked']}/{total_files} files checked",
+                    last_meaningful_event={
+                        "event_type": "quality_batch_completed",
+                        "checked": batch_payload.get("checked", 0),
+                        "qualified": batch_payload.get("qualified", 0),
+                        "failed": batch_payload.get("failed", 0),
+                    },
+                )
 
         if aggregated["quality_checked"] > 0:
             aggregated["quality_score"] = (

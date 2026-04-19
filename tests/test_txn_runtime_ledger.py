@@ -29,6 +29,38 @@ def test_transaction_manager_start_creates_run_ledger(tmp_path):
     assert payload["run_ledger"]["current_step"]["step_state"] == "pending"
 
 
+def test_article_transaction_manager_uses_shared_run_ledger(tmp_path):
+    from ovp_pipeline.auto_article_processor import TransactionManager
+
+    txn = TransactionManager(tmp_path)
+    txn_id = txn.start("article-processing", "Process articles")
+    txn.step(
+        txn_id,
+        "process",
+        "in_progress",
+        "Processing articles",
+        progress_mode="counted",
+        work_units_total=4,
+        work_units_done=2,
+        current_item="Example.md",
+        progress_summary="2/4 articles processed",
+    )
+
+    payload = json.loads((tmp_path / f"{txn_id}.json").read_text(encoding="utf-8"))
+
+    assert payload["start_time"].endswith("Z")
+    assert payload["last_updated"].endswith("Z")
+    assert payload["run_ledger"]["run_id"] == txn_id
+    assert payload["run_ledger"]["current_step_name"] == "process"
+    current = payload["run_ledger"]["current_step"]
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 4
+    assert current["work_units_done"] == 2
+    assert current["current_item"] == "Example.md"
+    assert current["progress_percent"] == 50.0
+    assert current["progress_summary"] == "2/4 articles processed"
+
+
 def test_transaction_manager_write_preserves_previous_ledger_on_dump_failure(tmp_path, monkeypatch):
     import ovp_pipeline.unified_pipeline_enhanced as pipeline_module
     from ovp_pipeline.unified_pipeline_enhanced import TransactionManager

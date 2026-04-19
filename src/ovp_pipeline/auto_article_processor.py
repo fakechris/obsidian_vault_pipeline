@@ -24,7 +24,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -65,6 +65,23 @@ try:
     from .markdown_generation import sanitize_generated_markdown
 except ImportError:  # pragma: no cover - script mode fallback
     from markdown_generation import sanitize_generated_markdown
+
+try:
+    from .txn import (
+        build_transaction_payload,
+        heartbeat_transaction,
+        mark_transaction_completed,
+        mark_transaction_failed,
+        update_transaction_step,
+    )
+except ImportError:  # pragma: no cover - script mode fallback
+    from txn import (  # type: ignore
+        build_transaction_payload,
+        heartbeat_transaction,
+        mark_transaction_completed,
+        mark_transaction_failed,
+        update_transaction_step,
+    )
 
 # 自动加载 .env 文件（尝试多个位置）
 def _load_env_files():
@@ -122,6 +139,10 @@ LINK_RESOLUTION_DIR = DEFAULT_LAYOUT.link_resolution_dir
 RESOLVER_VERSION = "v2"
 
 
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class PipelineLogger:
     """统一过程日志记录器"""
 
@@ -131,7 +152,7 @@ class PipelineLogger:
 
     def log(self, event_type: str, data: dict[str, Any]):
         entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": _utc_timestamp(),
             "session_id": self.session_id,
             "event_type": event_type,
             **data
@@ -147,60 +168,66 @@ class TransactionManager:
     def __init__(self, txn_dir: Path):
         self.txn_dir = txn_dir
 
-    def start(self, workflow_type: str, description: str) -> str:
-        txn_id = f"txn-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()[:8]}"
+    def _read(self, txn_id: str) -> dict[str, Any] | None:
         txn_file = self.txn_dir / f"{txn_id}.json"
+        if not txn_file.exists():
+            return None
+        return json.loads(txn_file.read_text(encoding="utf-8"))
 
-        txn_data = {
-            "id": txn_id,
-            "type": workflow_type,
-            "description": description,
-            "start_time": datetime.now().isoformat(),
-            "status": "in_progress",
-            "steps": {},
-            "checkpoint": "initialized",
-            "last_updated": datetime.now().isoformat()
-        }
-
+    def _write(self, txn_id: str, txn_data: dict[str, Any]) -> None:
+        txn_file = self.txn_dir / f"{txn_id}.json"
         txn_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(txn_file, "w", encoding="utf-8") as f:
-            json.dump(txn_data, f, indent=2, ensure_ascii=False)
+        txn_file.write_text(json.dumps(txn_data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def start(
+        self,
+        workflow_type: str,
+        description: str,
+        *,
+        pack_name: str | None = None,
+        workflow_profile: str | None = None,
+        planned_steps: list[str] | None = None,
+    ) -> str:
+        txn_id = f"txn-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()[:8]}"
+        txn_data = build_transaction_payload(
+            txn_id,
+            workflow_type,
+            description,
+            pack_name=pack_name,
+            workflow_profile=workflow_profile,
+            planned_steps=planned_steps,
+        )
+        self._write(txn_id, txn_data)
 
         return txn_id
 
-    def step(self, txn_id: str, step_name: str, status: str, output: str = ""):
-        txn_file = self.txn_dir / f"{txn_id}.json"
-        if not txn_file.exists():
+    def step(self, txn_id: str, step_name: str, status: str, output: str = "", **progress_kwargs: Any):
+        txn_data = self._read(txn_id)
+        if txn_data is None:
             return
+        update_transaction_step(txn_data, step_name, status, output=output, **progress_kwargs)
+        self._write(txn_id, txn_data)
 
-        with open(txn_file, "r", encoding="utf-8") as f:
-            txn_data = json.load(f)
-
-        txn_data["steps"][step_name] = {
-            "status": status,
-            "output": output,
-            "updated_at": datetime.now().isoformat()
-        }
-        txn_data["checkpoint"] = step_name
-        txn_data["last_updated"] = datetime.now().isoformat()
-
-        with open(txn_file, "w", encoding="utf-8") as f:
-            json.dump(txn_data, f, indent=2, ensure_ascii=False)
+    def heartbeat(self, txn_id: str, *, step_name: str | None = None, **progress_kwargs: Any):
+        txn_data = self._read(txn_id)
+        if txn_data is None:
+            return
+        heartbeat_transaction(txn_data, step_name=step_name, **progress_kwargs)
+        self._write(txn_id, txn_data)
 
     def complete(self, txn_id: str):
-        txn_file = self.txn_dir / f"{txn_id}.json"
-        if not txn_file.exists():
+        txn_data = self._read(txn_id)
+        if txn_data is None:
             return
+        mark_transaction_completed(txn_data)
+        self._write(txn_id, txn_data)
 
-        with open(txn_file, "r", encoding="utf-8") as f:
-            txn_data = json.load(f)
-
-        txn_data["status"] = "completed"
-        txn_data["completed_at"] = datetime.now().isoformat()
-        txn_data["last_updated"] = datetime.now().isoformat()
-
-        with open(txn_file, "w", encoding="utf-8") as f:
-            json.dump(txn_data, f, indent=2, ensure_ascii=False)
+    def fail(self, txn_id: str, reason: str):
+        txn_data = self._read(txn_id)
+        if txn_data is None:
+            return
+        mark_transaction_failed(txn_data, reason)
+        self._write(txn_id, txn_data)
 
 
 class LiteLLMClient:
@@ -981,7 +1008,7 @@ class AutoArticleProcessor:
 
         return result
 
-    def process_inbox(self, dry_run: bool = False, batch_size: int | None = None) -> dict:
+    def process_inbox(self, dry_run: bool = False, batch_size: int | None = None, txn_id: str | None = None) -> dict:
         """处理整个inbox"""
         results = {
             "total": 0,
@@ -1005,10 +1032,35 @@ class AutoArticleProcessor:
         if batch_size:
             files = files[:batch_size]
 
-        for file_path in files:
+        if txn_id:
+            self.txn.step(
+                txn_id,
+                "process",
+                "in_progress",
+                "Processing articles",
+                progress_mode="counted",
+                work_units_total=results["total"],
+                work_units_done=0,
+                work_units_failed=0,
+                progress_summary=f"0/{results['total']} articles processed",
+            )
+
+        for index, file_path in enumerate(files, start=1):
             working_path = file_path
             if not dry_run and file_path.parent != self.processing_dir:
                 working_path = self._stage_source_for_processing(file_path)
+
+            if txn_id:
+                self.txn.heartbeat(
+                    txn_id,
+                    step_name="process",
+                    progress_mode="counted",
+                    work_units_total=results["total"],
+                    work_units_done=index - 1,
+                    work_units_failed=results["failed"],
+                    current_item=working_path.name,
+                    progress_summary=f"{index - 1}/{results['total']} articles processed",
+                )
 
             result = self.process_single_file(working_path, dry_run)
             results["files"].append(result)
@@ -1026,6 +1078,18 @@ class AutoArticleProcessor:
                 results["skipped"] += 1
                 if not dry_run and working_path.exists():
                     self._restore_source_to_raw(working_path)
+
+            if txn_id:
+                self.txn.heartbeat(
+                    txn_id,
+                    step_name="process",
+                    progress_mode="counted",
+                    work_units_total=results["total"],
+                    work_units_done=index,
+                    work_units_failed=results["failed"],
+                    current_item=working_path.name,
+                    progress_summary=f"{index}/{results['total']} articles processed",
+                )
 
         return results
 
@@ -1068,7 +1132,7 @@ def main():
     txn.step(txn_id, "process", "in_progress", "Processing articles")
 
     if args.process_inbox:
-        results = processor.process_inbox(dry_run=args.dry_run, batch_size=args.batch_size)
+        results = processor.process_inbox(dry_run=args.dry_run, batch_size=args.batch_size, txn_id=txn_id)
     elif args.process_single:
         result = processor.process_single_file(args.process_single, dry_run=args.dry_run)
         results = {

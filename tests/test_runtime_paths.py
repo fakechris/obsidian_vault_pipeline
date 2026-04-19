@@ -457,6 +457,60 @@ def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
     assert calls[1][1] == 600
 
 
+def test_step_quality_updates_parent_run_progress_before_each_batch(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for idx in range(3):
+        path = topic_dir / f"progress_{idx}_深度解读.md"
+        path.write_text(f"# {idx}\n", encoding="utf-8")
+        files.append(path)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Quality progress")
+
+    snapshots: list[dict] = []
+    payloads = [
+        {"checked": 2, "qualified": 1, "failed": 1, "qualified_files": [str(files[0])]},
+        {"checked": 1, "qualified": 1, "failed": 0, "qualified_files": [str(files[2])]},
+    ]
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        payload = json.loads(
+            (vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8")
+        )
+        snapshots.append(payload["run_ledger"]["current_step"])
+        batch_payload = payloads[len(snapshots) - 1]
+        return {
+            "success": True,
+            "stdout": "__QC_JSON__: " + json.dumps(batch_payload, ensure_ascii=False),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_quality(batch_size=2, dry_run=False)
+
+    assert result["success"] is True
+    assert len(snapshots) == 2
+    assert snapshots[0]["progress_mode"] == "counted"
+    assert snapshots[0]["work_units_total"] == 3
+    assert snapshots[0]["work_units_done"] == 0
+    assert snapshots[0]["current_item"] == "quality batch 1/2"
+    assert snapshots[0]["progress_percent"] == 0.0
+    assert snapshots[1]["progress_mode"] == "counted"
+    assert snapshots[1]["work_units_total"] == 3
+    assert snapshots[1]["work_units_done"] == 2
+    assert snapshots[1]["current_item"] == "quality batch 2/2"
+    assert snapshots[1]["progress_percent"] == 66.7
+
+
 def test_step_quality_rejects_non_positive_batch_size(tmp_path):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
