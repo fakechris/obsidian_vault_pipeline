@@ -31,6 +31,7 @@ from .runtime import (
     resolve_vault_dir,
     signal_ledger_write_lock,
 )
+from .runtime_processes import detect_runtime_processes
 from .txn import classify_run_ledgers
 
 MAX_PAGE_SIZE = 500
@@ -118,12 +119,17 @@ def get_runtime_status(
     active_run = dict(classified["active"][0]) if classified["active"] else None
     if active_run is not None:
         active_run["runtime_progress"] = _build_runtime_progress(active_run, now_iso=generated_at)
+    runtime_process_items = detect_runtime_processes(resolved_vault)
     return {
         "generated_at": generated_at,
         "active_count": len(classified["active"]),
         "stale_count": len(classified["stale"]),
         "active_run": active_run,
         "stale_runs": classified["stale"],
+        "runtime_processes": {
+            "active_count": len(runtime_process_items),
+            "items": runtime_process_items,
+        },
     }
 
 

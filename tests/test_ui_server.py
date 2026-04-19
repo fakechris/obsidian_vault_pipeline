@@ -130,6 +130,7 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert "Inspect" in body
     assert "Review" in body
     assert "Current Workflow" in body
+    assert body.count("<h2>Current Workflow</h2>") == 1
     assert "Stage 2/3: absorb" in body
     assert "3/10 files processed" in body
     assert "30.0%" in body
@@ -140,8 +141,48 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert 'http-equiv="refresh"' in body
     assert 'content="10"' in body
     assert "Where To Start" in body
+    assert body.count("<h2>Where To Start</h2>") == 1
+    assert "Signals Surface Contract" in body
+    assert "Production Chains Surface Contract" in body
+    assert "<h2>Surface Contract</h2>" not in body
     assert "Orientation Brief" in body
     assert "/api/objects" in body
+
+
+def test_render_runtime_card_shows_pipeline_process_identity():
+    from ovp_pipeline.commands.ui_server import _render_runtime_card
+
+    html = _render_runtime_card(
+        {
+            "active_run": {
+                "id": "txn-1",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "run_ledger": {
+                    "run_state": "running",
+                    "heartbeat_at": "2026-04-09T00:20:00Z",
+                    "current_step": {"step_name": "absorb", "progress_summary": "3/10 files processed"},
+                },
+            },
+            "stale_count": 0,
+            "runtime_processes": {
+                "active_count": 1,
+                "items": [
+                    {
+                        "pid": 80018,
+                        "process_kind": "one_shot",
+                        "elapsed_summary": "1h 2m",
+                        "args_summary": "--from-step absorb --pack research-tech",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert "PID 80018" in html
+    assert "one-shot" in html
+    assert "1h 2m" in html
+    assert "--from-step absorb --pack research-tech" in html
 
 
 def test_ui_server_runtime_endpoint_returns_payload(temp_vault):

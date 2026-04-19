@@ -237,7 +237,8 @@ def test_build_runtime_home_payload_uses_active_step_fallback_without_progress_s
 
     payload = view_models.build_runtime_home_payload(temp_vault)
 
-    assert payload["entry_sections"][0]["summary"] == "Active run at step pinboard_process."
+    assert payload["entry_sections"] == []
+    assert payload["runtime"]["active_run"]["checkpoint"] == "pinboard_process"
 
 
 def test_build_object_page_payload_includes_provenance(temp_vault):

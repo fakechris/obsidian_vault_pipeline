@@ -300,6 +300,57 @@ def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
     assert payload["stale_count"] == 1
 
 
+def test_truth_api_get_runtime_status_surfaces_pipeline_process_identity(temp_vault, monkeypatch):
+    from ovp_pipeline import runtime_processes
+    from ovp_pipeline.truth_api import get_runtime_status
+
+    logs_dir = temp_vault / "60-Logs"
+    transactions_dir = logs_dir / "transactions"
+    transactions_dir.mkdir(parents=True, exist_ok=True)
+    (transactions_dir / "txn-1.json").write_text(
+        json.dumps(
+            {
+                "id": "txn-1",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "last_updated": "2026-04-09T00:15:00Z",
+                "run_ledger": {
+                    "run_id": "txn-1",
+                    "run_state": "running",
+                    "heartbeat_at": "2026-04-09T00:15:00Z",
+                    "current_step_name": "absorb",
+                    "current_step": {"step_name": "absorb", "step_state": "running"},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class Result:
+        stdout = (
+            f"80018 01:02:03 Ss /env/bin/python /env/bin/ovp --from-step absorb --pack research-tech --vault-dir {temp_vault}\n"
+            f"31189 00:04:00 Ss /env/bin/python /env/bin/ovp-ui --vault-dir {temp_vault} --port 8766\n"
+        )
+
+    monkeypatch.setattr(
+        runtime_processes.subprocess,
+        "run",
+        lambda *_args, **_kwargs: Result(),
+    )
+
+    payload = get_runtime_status(temp_vault, now_iso="2026-04-09T00:20:00Z")
+
+    processes = payload["runtime_processes"]
+    assert processes["active_count"] == 1
+    assert processes["items"][0]["pid"] == 80018
+    assert processes["items"][0]["process_kind"] == "one_shot"
+    assert processes["items"][0]["elapsed_seconds"] == 3723
+    assert processes["items"][0]["elapsed_summary"] == "1h 2m"
+    assert processes["items"][0]["args_summary"] == "--from-step absorb --pack research-tech"
+
+
 def test_truth_api_builds_note_inbound_capture_summary_and_attaches_it_to_signals(temp_vault):
     from ovp_pipeline.truth_api import get_note_inbound_capture_summary, list_signals
 

@@ -221,9 +221,10 @@ def _render_surface_contract_card(payload: dict) -> str:
             f"This shared shell surface has no provider for {escape(surface_kind)} "
             f"in the current pack scope."
         )
+    title = f"{surface_kind.replace('_', ' ').title()} Surface Contract" if surface_kind else "Surface Contract"
     error_text = str(payload.get("surface_error") or "").strip()
     extra = f"<p class='muted'>{escape(error_text)}</p>" if error_text else ""
-    return f"<section class='card'><h2>Surface Contract</h2><p class='muted'>{detail}</p>{extra}</section>"
+    return f"<section class='card'><h2>{escape(title)}</h2><p class='muted'>{detail}</p>{extra}</section>"
 
 
 def _render_assembly_contract_card(payload: dict) -> str:
@@ -356,6 +357,24 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
         f"<li>Run: {escape(str(active_run.get('id') or ''))}</li>",
         f"<li>State: {escape(run_state)}</li>",
     ]
+    runtime_processes = runtime.get("runtime_processes") if isinstance(runtime.get("runtime_processes"), dict) else {}
+    process_items = runtime_processes.get("items") if isinstance(runtime_processes.get("items"), list) else []
+    if process_items:
+        for process in process_items[:2]:
+            if not isinstance(process, dict):
+                continue
+            process_kind = str(process.get("process_kind") or "unknown").replace("_", "-")
+            elapsed = str(process.get("elapsed_summary") or process.get("elapsed_raw") or "unknown")
+            args_summary = str(process.get("args_summary") or "").strip()
+            process_detail = (
+                f"PID {escape(str(process.get('pid') or ''))} · {escape(process_kind)} · "
+                f"running {escape(elapsed)}"
+            )
+            if args_summary:
+                process_detail += f" · {escape(args_summary)}"
+            facts.append(f"<li>Process: {process_detail}</li>")
+    else:
+        facts.append("<li>Process: no matching pipeline worker detected</li>")
     stage_summary = str(stage_progress.get("summary") or "").strip()
     if stage_summary:
         facts.append(f"<li>Stage: {escape(stage_summary)}</li>")
@@ -1268,18 +1287,18 @@ def _render_dashboard(payload: dict) -> str:
     stats_cards = [
         "<div class='card'><h2>Objects Indexed</h2>"
         f"<p>{payload['objects']['count']}</p></div>",
-        "<div class='card'><h2>Signals</h2>"
+        "<div class='card'><h2>Signal Count</h2>"
         f"<p>{payload['signals']['count']}</p></div>",
-        "<div class='card'><h2>Production Weak Points</h2>"
+        "<div class='card'><h2>Weak Point Count</h2>"
         f"<p>{payload['production']['weak_point_count']}</p></div>",
     ]
     if research_overview_supported:
         stats_cards[1:1] = [
             "<div class='card'><h2>Contradictions Open</h2>"
             f"<p>{payload['contradictions']['open_count']}</p></div>",
-            "<div class='card'><h2>Recent Events</h2>"
+            "<div class='card'><h2>Event Count</h2>"
             f"<p>{payload['events']['count']}</p></div>",
-            "<div class='card'><h2>Stale Summaries</h2>"
+            "<div class='card'><h2>Stale Summary Count</h2>"
             f"<p>{payload['stale_summaries']['count']}</p></div>",
             "<div class='card'><h2>Evolution Candidates</h2>"
             f"<p>{payload['evolution']['candidate_count']}</p></div>",
@@ -1324,16 +1343,15 @@ def _render_dashboard(payload: dict) -> str:
             "<h1>OVP Truth UI</h1>",
             "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
-            f"<div class='link-row'><a href='{escape(_shell_href('/briefing', requested_pack))}'>Orientation Brief</a></div>",
             "</section>",
+            runtime_card,
             "<section class='grid stats'>",
             "".join(stats_cards),
             "</section>",
             "<section class='section-stack'>",
             "<section class='card'><h2>Workflow Map</h2><p class='muted'>Start here if you do not yet know which route to open. Each group maps one common operator workflow onto the current shell.</p></section>",
             workflow_groups_html,
-            runtime_card,
-            "<section class='card'><h2>Where To Start</h2><p class='muted'>Use the orientation brief and the compiled entry sections below to decide what to read, review, or do next.</p></section>",
+            "<section class='card'><h2>Where To Start</h2><p class='muted'>Use the workflow map above to choose a route, then inspect the attention queues and knowledge surfaces below.</p></section>",
             orientation_assembly_contract,
             orientation_governance_contract,
             entry_sections_html,

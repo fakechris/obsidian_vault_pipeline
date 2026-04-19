@@ -2,30 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..runtime import VaultLayout, resolve_vault_dir
+from ..runtime_processes import detect_runtime_process_lines
 from ..txn import classify_run_ledgers
-
-
-PROCESS_MARKERS = (
-    "ovp_pipeline.unified_pipeline_enhanced",
-    "ovp_pipeline.auto_article_processor",
-    "ovp_pipeline.batch_quality_checker",
-    "ovp_pipeline.commands.absorb",
-    "ovp_pipeline.auto_moc_updater",
-    "ovp_pipeline.commands.knowledge_index",
-    "ovp_pipeline.clippings_processor",
-    "ovp_pipeline.auto_github_processor",
-    "ovp_pipeline.auto_paper_processor",
-    "ovp_pipeline.autopilot.daemon",
-    "/bin/ovp ",
-    "pinboard-processor.py",
-)
 
 
 def _read_last_json_line(path: Path) -> dict[str, Any] | None:
@@ -53,25 +37,7 @@ def _read_last_json_line(path: Path) -> dict[str, Any] | None:
 
 
 def detect_ovp_process_lines(vault_dir: Path) -> list[str]:
-    try:
-        result = subprocess.run(
-            ["ps", "aux"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return []
-
-    vault_token = str(vault_dir)
-    lines: list[str] = []
-    for raw_line in result.stdout.splitlines():
-        if vault_token not in raw_line:
-            continue
-        if not any(marker in raw_line for marker in PROCESS_MARKERS):
-            continue
-        lines.append(raw_line.strip())
-    return lines
+    return detect_runtime_process_lines(vault_dir)
 
 
 def _count_state(layout: VaultLayout) -> dict[str, int]:
