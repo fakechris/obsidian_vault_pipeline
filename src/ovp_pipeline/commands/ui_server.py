@@ -97,16 +97,22 @@ def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
     return items
 
 
-def _layout(title: str, body: str, *, requested_pack: str = "") -> str:
+def _layout(title: str, body: str, *, requested_pack: str = "", auto_refresh_seconds: int | None = None) -> str:
     nav_items = "".join(
         f'<a href="{escape(_shell_href(path, requested_pack))}">{escape(label)}</a>'
         for label, path in _shell_nav_items(requested_pack)
+    )
+    refresh_meta = (
+        f'    <meta http-equiv="refresh" content="{int(auto_refresh_seconds)}" />\n'
+        if auto_refresh_seconds and auto_refresh_seconds > 0
+        else ""
     )
     return f"""<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+{refresh_meta}    <meta name="ovp-runtime-refresh" content="{int(auto_refresh_seconds or 0)}" />
     <title>{escape(title)}</title>
     <style>
       :root {{
@@ -1314,6 +1320,7 @@ def _render_dashboard(payload: dict) -> str:
         "OVP Truth UI",
         dashboard_body,
         requested_pack=requested_pack,
+        auto_refresh_seconds=10,
     )
 
 

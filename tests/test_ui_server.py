@@ -128,6 +128,8 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert "Current Workflow" in body
     assert "3/10 files processed" in body
     assert "Alpha.md" in body
+    assert 'http-equiv="refresh"' in body
+    assert 'content="10"' in body
     assert "Where To Start" in body
     assert "Orientation Brief" in body
     assert "/api/objects" in body
