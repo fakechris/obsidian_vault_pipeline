@@ -464,6 +464,45 @@ def test_run_pipeline_writes_stage_artifact_after_cacheable_stage_success(tmp_pa
     assert manifest["inputs"]["file_count"] == 1
 
 
+def test_run_pipeline_writes_record_only_article_artifact_without_skipping(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    raw_dir = vault / "50-Inbox" / "01-Raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "article.md").write_text("# article\n", encoding="utf-8")
+    (vault / "60-Logs").mkdir(parents=True)
+
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = pipeline_source.EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Article artifact", planned_steps=["articles"])
+
+    calls: list[str] = []
+
+    def fake_execute_profile_stage_handler(_pipeline_runtime, stage, **_kwargs):
+        calls.append(stage)
+        return {"success": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(pipeline, "_count_output_files", lambda step, before_counts, cmd_result: {"produced": 1})
+    monkeypatch.setattr(pipeline_source, "execute_profile_stage_handler", fake_execute_profile_stage_handler, raising=False)
+
+    first_results = pipeline.run_pipeline(steps=["articles"], dry_run=False)
+    context = pipeline._build_stage_artifact_context("articles")
+    manifest = pipeline._stage_artifact_store().load("articles", context["fingerprint"])
+
+    assert first_results["articles"]["success"] is True
+    assert manifest is not None
+    assert manifest["inputs"]["file_count"] == 1
+
+    second_results = pipeline.run_pipeline(steps=["articles"], dry_run=False)
+
+    assert calls == ["articles", "articles"]
+    assert "cache_hit" not in second_results["articles"]
+
+
 def test_detect_pinboard_processor_routes_gist_to_article_stack():
     content = """---
 title: "GBrain.md"

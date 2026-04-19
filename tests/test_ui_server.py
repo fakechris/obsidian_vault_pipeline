@@ -186,6 +186,46 @@ def test_render_runtime_card_shows_pipeline_process_identity():
     assert "--from-step absorb --pack research-tech" in html
 
 
+def test_render_runtime_card_shows_cache_skip_and_blocked_reason():
+    from ovp_pipeline.commands.ui_server import _render_runtime_card
+
+    html = _render_runtime_card(
+        {
+            "active_run": {
+                "id": "txn-1",
+                "status": "failed",
+                "checkpoint": "absorb",
+                "steps": {
+                    "absorb": {
+                        "status": "blocked",
+                        "output": "Absorb blocked",
+                        "skipped": True,
+                        "cache_hit": True,
+                        "blocked_reason": "missing_quality_stage_artifact",
+                        "stage_fingerprint": "abcdef123456",
+                    }
+                },
+                "run_ledger": {
+                    "run_state": "failed",
+                    "heartbeat_at": "2026-04-09T00:20:00Z",
+                    "blocked_reason": "missing_quality_stage_artifact",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "blocked",
+                        "progress_summary": "Absorb blocked",
+                    },
+                },
+            },
+            "stale_count": 0,
+        }
+    )
+
+    assert "Cache: hit" in html
+    assert "Skipped: yes" in html
+    assert "Blocked reason: missing_quality_stage_artifact" in html
+    assert "Fingerprint: abcdef123456" in html
+
+
 def test_render_run_history_card_shows_duration_scope_and_work():
     from ovp_pipeline.commands.ui_server import _render_run_history_card
 
@@ -214,6 +254,51 @@ def test_render_run_history_card_shows_duration_scope_and_work():
     assert "10m" in html
     assert "pinboard → articles → knowledge_index" in html
     assert "Produced 6 items; 20/20 files processed" in html
+
+
+def test_render_run_history_card_shows_cache_skip_and_blocked_step_summaries():
+    from ovp_pipeline.commands.ui_server import _render_run_history_card
+
+    html = _render_run_history_card(
+        {
+            "run_history": {
+                "total_count": 1,
+                "items": [
+                    {
+                        "run_id": "pipeline-with-cache",
+                        "status": "failed",
+                        "duration_summary": "2m",
+                        "scope_summary": "articles → fix_links → absorb",
+                        "content_summary": "Cache hits: 1; skipped: 1; blocked: missing_quality_stage_artifact",
+                        "started_at": "2026-04-09T00:00:00Z",
+                        "finished_at": "2026-04-09T00:02:00Z",
+                        "step_summaries": [
+                            {
+                                "step_name": "fix_links",
+                                "status": "completed",
+                                "cache_hit": True,
+                                "skipped": True,
+                                "blocked_reason": "",
+                            },
+                            {
+                                "step_name": "absorb",
+                                "status": "blocked",
+                                "cache_hit": False,
+                                "skipped": False,
+                                "blocked_reason": "missing_quality_stage_artifact",
+                            },
+                        ],
+                    }
+                ],
+            }
+        }
+    )
+
+    assert "fix_links" in html
+    assert "cache hit" in html
+    assert "skipped" in html
+    assert "absorb" in html
+    assert "blocked: missing_quality_stage_artifact" in html
 
 
 def test_ui_server_runtime_endpoint_returns_payload(temp_vault):

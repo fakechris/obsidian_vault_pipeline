@@ -195,15 +195,31 @@ def update_transaction_step(
     current_item: str | None = None,
     progress_summary: str | None = None,
     last_meaningful_event: dict[str, Any] | None = None,
+    cache_hit: bool | None = None,
+    skipped: bool | None = None,
+    blocked_reason: str | None = None,
+    stage_fingerprint: str | None = None,
+    stage_artifact: str | None = None,
 ) -> dict[str, Any]:
     ensure_run_ledger(payload)
     ts = timestamp or _get_timestamp()
 
-    payload["steps"][step_name] = {
+    step_payload: dict[str, Any] = {
         "status": status,
         "output": output,
         "updated_at": ts,
     }
+    if cache_hit is not None:
+        step_payload["cache_hit"] = bool(cache_hit)
+    if skipped is not None:
+        step_payload["skipped"] = bool(skipped)
+    if blocked_reason:
+        step_payload["blocked_reason"] = blocked_reason
+    if stage_fingerprint:
+        step_payload["stage_fingerprint"] = stage_fingerprint
+    if stage_artifact:
+        step_payload["stage_artifact"] = stage_artifact
+    payload["steps"][step_name] = step_payload
     payload["checkpoint"] = step_name
     payload["last_updated"] = ts
 
@@ -227,6 +243,16 @@ def update_transaction_step(
         work_units_total=current.get("work_units_total"),
         work_units_failed=current.get("work_units_failed"),
     )
+    if cache_hit is not None:
+        current["cache_hit"] = bool(cache_hit)
+    if skipped is not None:
+        current["skipped"] = bool(skipped)
+    if blocked_reason:
+        current["blocked_reason"] = blocked_reason
+    if stage_fingerprint:
+        current["stage_fingerprint"] = stage_fingerprint
+    if stage_artifact:
+        current["stage_artifact"] = stage_artifact
 
     run_ledger["current_step_name"] = step_name
     run_ledger["current_step"] = current
@@ -235,6 +261,8 @@ def update_transaction_step(
     run_ledger["run_state"] = "failed" if status == "failed" else ("completed" if status == "completed" and payload.get("status") == "completed" else "running")
     run_ledger["stale"] = False
     run_ledger["error_summary"] = output if status == "failed" and output else run_ledger.get("error_summary")
+    if blocked_reason:
+        run_ledger["blocked_reason"] = blocked_reason
     if last_meaningful_event is not None:
         run_ledger["last_meaningful_event"] = last_meaningful_event
     return payload
@@ -277,7 +305,7 @@ def mark_transaction_failed(payload: dict[str, Any], reason: str, *, timestamp: 
     payload["run_ledger"]["heartbeat_at"] = ts
     current = payload["run_ledger"].get("current_step") or {}
     if current:
-        current["step_state"] = "failed"
+        current["step_state"] = "blocked" if current.get("blocked_reason") else "failed"
         current["step_heartbeat_at"] = ts
     return payload
 

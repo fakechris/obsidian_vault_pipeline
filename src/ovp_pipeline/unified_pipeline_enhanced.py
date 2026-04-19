@@ -912,7 +912,7 @@ class EnhancedPipeline:
     def _write_stage_artifact(self, stage: str, result: dict[str, Any], *, results: dict[str, Any] | None = None) -> None:
         if result.get("success") is not True:
             return
-        if STAGE_CACHE_POLICIES.get(stage, STAGE_CACHE_DISABLED) != STAGE_CACHE_CHECKOUT:
+        if STAGE_CACHE_POLICIES.get(stage, STAGE_CACHE_DISABLED) not in {STAGE_CACHE_CHECKOUT, STAGE_CACHE_RECORD_ONLY}:
             return
         if stage == "quality":
             return
@@ -2361,7 +2361,16 @@ class EnhancedPipeline:
                     if cache_result:
                         results[step] = cache_result
                         self.step_results[step] = cache_result
-                        self.txn.step(self.txn_id, step, "completed", cache_result.get("output", ""))
+                        self.txn.step(
+                            self.txn_id,
+                            step,
+                            "completed",
+                            cache_result.get("output", ""),
+                            cache_hit=cache_result.get("cache_hit"),
+                            skipped=cache_result.get("skipped"),
+                            stage_fingerprint=cache_result.get("stage_fingerprint"),
+                            stage_artifact=cache_result.get("stage_artifact"),
+                        )
                         continue
 
                 try:
@@ -2401,7 +2410,7 @@ class EnhancedPipeline:
                         elif step == "pinboard_process":
                             before_counts["pinboard_archived"] += produced
                         elif step == "articles":
-                            before_counts["interpretations"] += produced
+                            before_counts["interpretations"] = before_counts.get("interpretations", 0) + produced
                         elif step == "absorb":
                             before_counts["evergreen"] += produced
                         elif step == "refine":
@@ -2413,9 +2422,27 @@ class EnhancedPipeline:
                 self.step_results[step] = cmd_result
 
                 if cmd_result["success"]:
-                    self.txn.step(self.txn_id, step, "completed", cmd_result.get("output", ""))
+                    self.txn.step(
+                        self.txn_id,
+                        step,
+                        "completed",
+                        cmd_result.get("output", ""),
+                        cache_hit=cmd_result.get("cache_hit"),
+                        skipped=cmd_result.get("skipped"),
+                        stage_fingerprint=cmd_result.get("stage_fingerprint"),
+                        stage_artifact=cmd_result.get("stage_artifact"),
+                    )
                 else:
-                    self.txn.step(self.txn_id, step, "failed", cmd_result.get("error", ""))
+                    blocked_reason = str(cmd_result.get("reason") or cmd_result.get("error") or "").strip()
+                    step_status = "blocked" if cmd_result.get("blocked") else "failed"
+                    self.txn.step(
+                        self.txn_id,
+                        step,
+                        step_status,
+                        cmd_result.get("error", ""),
+                        skipped=cmd_result.get("skipped"),
+                        blocked_reason=blocked_reason if cmd_result.get("blocked") else None,
+                    )
                     print(f"\nPipeline stopped at step: {step}")
                     self.txn.fail(self.txn_id, f"Failed at step: {step}")
                     break

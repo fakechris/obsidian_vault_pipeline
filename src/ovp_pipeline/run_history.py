@@ -67,15 +67,32 @@ def _step_summaries(steps: object) -> list[dict[str, Any]]:
                 "output": output,
                 "updated_at": str(step.get("updated_at") or ""),
                 "produced_count": _produced_count(output),
+                "cache_hit": bool(step.get("cache_hit")),
+                "skipped": bool(step.get("skipped")),
+                "blocked_reason": str(step.get("blocked_reason") or ""),
+                "stage_fingerprint": str(step.get("stage_fingerprint") or ""),
             }
         )
     return summaries
 
 
-def _content_summary(*, produced_total: int, progress_summary: str) -> str:
+def _content_summary(
+    *,
+    produced_total: int,
+    progress_summary: str,
+    cache_hit_count: int = 0,
+    skipped_count: int = 0,
+    blocked_reasons: list[str] | None = None,
+) -> str:
     parts: list[str] = []
     if produced_total:
         parts.append(f"Produced {produced_total} items")
+    if cache_hit_count:
+        parts.append(f"Cache hits: {cache_hit_count}")
+    if skipped_count:
+        parts.append(f"skipped: {skipped_count}")
+    for reason in blocked_reasons or []:
+        parts.append(f"blocked: {reason}")
     if progress_summary:
         parts.append(progress_summary)
     return "; ".join(parts) if parts else "No counted work recorded."
@@ -108,6 +125,9 @@ def summarize_run(payload: dict[str, Any], *, now_iso: str | None = None) -> dic
         planned_steps = [str(item) for item in payload["steps"].keys()]
     step_summaries = _step_summaries(payload.get("steps"))
     produced_total = sum(item["produced_count"] or 0 for item in step_summaries)
+    cache_hit_count = sum(1 for item in step_summaries if item["cache_hit"])
+    skipped_count = sum(1 for item in step_summaries if item["skipped"])
+    blocked_reasons = [item["blocked_reason"] for item in step_summaries if item["blocked_reason"]]
     completed_steps = sum(1 for item in step_summaries if item["status"] == "completed")
     failed_step = next((item["step_name"] for item in step_summaries if item["status"] == "failed"), "")
     progress_summary = str(current.get("progress_summary") or "").strip()
@@ -135,7 +155,13 @@ def summarize_run(payload: dict[str, Any], *, now_iso: str | None = None) -> dic
         "work_units_total": _coerce_int(current.get("work_units_total")),
         "work_units_failed": _coerce_int(current.get("work_units_failed")) or 0,
         "progress_summary": progress_summary,
-        "content_summary": _content_summary(produced_total=produced_total, progress_summary=progress_summary),
+        "content_summary": _content_summary(
+            produced_total=produced_total,
+            progress_summary=progress_summary,
+            cache_hit_count=cache_hit_count,
+            skipped_count=skipped_count,
+            blocked_reasons=blocked_reasons,
+        ),
         "step_summaries": step_summaries,
     }
 

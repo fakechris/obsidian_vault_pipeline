@@ -160,6 +160,43 @@ def test_transaction_step_transition_resets_previous_progress_fields():
     assert current["progress_percent"] is None
 
 
+def test_transaction_step_records_cache_skip_and_blocked_metadata():
+    from ovp_pipeline.txn import build_transaction_payload, update_transaction_step
+
+    payload = build_transaction_payload("txn-1", "enhanced-pipeline", "demo")
+
+    update_transaction_step(
+        payload,
+        "fix_links",
+        "completed",
+        output="Cache hit: fix_links abc123",
+        cache_hit=True,
+        skipped=True,
+        stage_fingerprint="abc123",
+        stage_artifact="60-Logs/stage-artifacts/fix_links/abc123.json",
+    )
+    update_transaction_step(
+        payload,
+        "absorb",
+        "blocked",
+        output="Absorb requires a matching quality stage artifact",
+        blocked_reason="missing_quality_stage_artifact",
+    )
+
+    cached_step = payload["steps"]["fix_links"]
+    blocked_step = payload["steps"]["absorb"]
+    current = payload["run_ledger"]["current_step"]
+
+    assert cached_step["cache_hit"] is True
+    assert cached_step["skipped"] is True
+    assert cached_step["stage_fingerprint"] == "abc123"
+    assert "fix_links/abc123.json" in cached_step["stage_artifact"]
+    assert blocked_step["blocked_reason"] == "missing_quality_stage_artifact"
+    assert current["step_state"] == "blocked"
+    assert current["blocked_reason"] == "missing_quality_stage_artifact"
+    assert payload["run_ledger"]["blocked_reason"] == "missing_quality_stage_artifact"
+
+
 def test_classify_run_ledgers_separates_active_and_stale(tmp_path):
     from ovp_pipeline.txn import classify_run_ledgers
 

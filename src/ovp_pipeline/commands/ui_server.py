@@ -348,6 +348,8 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
     performance = runtime_progress.get("performance") if isinstance(runtime_progress.get("performance"), dict) else {}
     run_state = str(ledger.get("run_state") or active_run.get("status") or "running")
     step_name = str(current.get("step_name") or ledger.get("current_step_name") or active_run.get("checkpoint") or "")
+    steps = active_run.get("steps") if isinstance(active_run.get("steps"), dict) else {}
+    current_step_record = steps.get(step_name) if isinstance(steps.get(step_name), dict) else {}
     progress_summary = str(
         work_progress.get("summary") or current.get("progress_summary") or "Progress is currently indeterminate."
     )
@@ -380,6 +382,21 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
         facts.append(f"<li>Stage: {escape(stage_summary)}</li>")
     elif step_name:
         facts.append(f"<li>Step: {escape(step_name)}</li>")
+    if current_step_record.get("cache_hit") or current.get("cache_hit"):
+        facts.append("<li>Cache: hit</li>")
+    if current_step_record.get("skipped") or current.get("skipped"):
+        facts.append("<li>Skipped: yes</li>")
+    blocked_reason = str(
+        current_step_record.get("blocked_reason")
+        or current.get("blocked_reason")
+        or ledger.get("blocked_reason")
+        or ""
+    ).strip()
+    if blocked_reason:
+        facts.append(f"<li>Blocked reason: {escape(blocked_reason)}</li>")
+    stage_fingerprint = str(current_step_record.get("stage_fingerprint") or current.get("stage_fingerprint") or "").strip()
+    if stage_fingerprint:
+        facts.append(f"<li>Fingerprint: {escape(stage_fingerprint)}</li>")
     work_done = work_progress.get("done")
     work_total = work_progress.get("total")
     work_percent = work_progress.get("percent")
@@ -438,6 +455,26 @@ def _render_run_history_card(runtime: dict[str, object] | None) -> str:
         work = str(item.get("content_summary") or "No counted work recorded.")
         started_at = str(item.get("started_at") or "")
         finished_at = str(item.get("finished_at") or "running")
+        step_summaries = item.get("step_summaries") if isinstance(item.get("step_summaries"), list) else []
+        step_items: list[str] = []
+        for step in step_summaries[:8]:
+            if not isinstance(step, dict):
+                continue
+            labels = [str(step.get("status") or "").strip()]
+            if step.get("cache_hit"):
+                labels.append("cache hit")
+            if step.get("skipped"):
+                labels.append("skipped")
+            blocked_reason = str(step.get("blocked_reason") or "").strip()
+            if blocked_reason:
+                labels.append(f"blocked: {blocked_reason}")
+            labels_html = " · ".join(escape(label) for label in labels if label)
+            step_items.append(
+                f"<li>{escape(str(step.get('step_name') or ''))}"
+                + (f" <span class='muted'>{labels_html}</span>" if labels_html else "")
+                + "</li>"
+            )
+        steps_html = f"<ul class='list-tight'>{''.join(step_items)}</ul>" if step_items else ""
         rendered_items.append(
             "<li>"
             f"<strong>{escape(run_id)}</strong> "
@@ -445,6 +482,7 @@ def _render_run_history_card(runtime: dict[str, object] | None) -> str:
             f"<div class='muted'>Duration: {escape(duration)} · {escape(started_at)} → {escape(finished_at)}</div>"
             f"<div class='muted'>Scope: {escape(scope)}</div>"
             f"<div class='muted'>Work: {escape(work)}</div>"
+            f"{steps_html}"
             "</li>"
         )
     total_count = history.get("total_count")
