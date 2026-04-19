@@ -38,6 +38,7 @@ _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?",
 _REVIEW_AUDIT_LOG_NAME = "review-actions"
 _SIGNAL_LOG_NAME = "signals"
 _ACTION_LOG_NAME = "actions"
+_ACTION_RUNNING_STALE_AFTER_SECONDS = 3600
 _SOURCE_NOTE_INDEX_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dict[str, list[dict[str, str]]]] = {}
 _PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
@@ -1863,6 +1864,15 @@ def _result_artifact_summary(action: dict[str, Any]) -> tuple[int, list[str]]:
     return note_output_count + object_output_count, artifact_types
 
 
+def _running_action_age_seconds(action: dict[str, Any]) -> float | None:
+    started_at = _parse_iso_datetime(action.get("started_at") or action.get("created_at"))
+    if started_at is None:
+        return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - started_at.astimezone(timezone.utc)).total_seconds()
+
+
 def _build_action_impact_summary(action: dict[str, Any]) -> dict[str, Any]:
     action_status = str(action.get("status") or "")
     action_kind = str(action.get("action_kind") or "")
@@ -1886,6 +1896,19 @@ def _build_action_impact_summary(action: dict[str, Any]) -> dict[str, Any]:
             "impact_detail": "A queueable action exists and is currently waiting to run.",
         }
     if action_status == "running":
+        age_seconds = _running_action_age_seconds(action)
+        if age_seconds is not None and age_seconds > _ACTION_RUNNING_STALE_AFTER_SECONDS:
+            age_minutes = int(age_seconds // 60)
+            return {
+                **base,
+                "impact_status": "stale",
+                "lifecycle_stage": "stale_running",
+                "impact_label": "Stale running action",
+                "impact_detail": (
+                    f"The queued action has been marked running for {age_minutes} minutes "
+                    "without a finished_at timestamp."
+                ),
+            }
         return {
             **base,
             "impact_status": "running",

@@ -189,6 +189,23 @@ def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vau
     assert actions[0]["impact_summary"]["lifecycle_stage"] == "queued"
 
 
+def test_truth_api_marks_old_running_action_as_stale():
+    from ovp_pipeline.truth_api import _build_action_impact_summary
+
+    summary = _build_action_impact_summary(
+        {
+            "action_id": "action::stale",
+            "action_kind": "object_extraction_workflow",
+            "status": "running",
+            "started_at": "2000-01-01T00:00:00Z",
+        }
+    )
+
+    assert summary["impact_status"] == "stale"
+    assert summary["lifecycle_stage"] == "stale_running"
+    assert "stale" in summary["impact_label"].lower()
+
+
 def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
     from ovp_pipeline.truth_api import get_runtime_status
 
