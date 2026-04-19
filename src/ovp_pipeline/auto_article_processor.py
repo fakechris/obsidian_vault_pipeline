@@ -606,7 +606,7 @@ class AutoArticleProcessor:
         if requests is None:
             return "", None
 
-        headers = {"User-Agent": "openclaw-pipeline/1.0"}
+        headers = {"User-Agent": "ovp-pipeline/1.0"}
         try:
             response = requests.get(url, timeout=15, headers=headers, allow_redirects=True)
         except requests.RequestException:

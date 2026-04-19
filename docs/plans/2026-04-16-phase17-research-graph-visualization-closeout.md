@@ -58,7 +58,7 @@ That keeps the experience legible and responsive on real vault data.
 
 - targeted graph API / payload / UI / doctor tests
 - full `pytest` suite
-- `python3.13 -m compileall src/openclaw_pipeline`
+- `python3.13 -m compileall src/ovp_pipeline`
 
 ## Follow-Up
 

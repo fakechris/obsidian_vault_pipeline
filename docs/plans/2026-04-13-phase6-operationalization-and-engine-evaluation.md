@@ -124,9 +124,9 @@ Write failing tests for:
 ### Task 2: Implement `ovp-doctor`
 
 **Files:**
-- Create: `src/openclaw_pipeline/commands/doctor.py`
-- Modify: `src/openclaw_pipeline/packs/loader.py`
-- Modify: `src/openclaw_pipeline/runtime.py` if shared helpers are needed
+- Create: `src/ovp_pipeline/commands/doctor.py`
+- Modify: `src/ovp_pipeline/packs/loader.py`
+- Modify: `src/ovp_pipeline/runtime.py` if shared helpers are needed
 
 Implement the minimal command to satisfy the tests and print deterministic JSON/text output.
 
@@ -146,8 +146,8 @@ Write failing tests for:
 ### Task 4: Implement `ovp-export`
 
 **Files:**
-- Create: `src/openclaw_pipeline/commands/export_artifact.py`
-- Modify: `src/openclaw_pipeline/wiki_views/runtime.py` only if a small helper improves reuse
+- Create: `src/ovp_pipeline/commands/export_artifact.py`
+- Modify: `src/ovp_pipeline/wiki_views/runtime.py` only if a small helper improves reuse
 
 Use existing view builders/materializers. The export command should be a thin operational wrapper, not a second rendering pipeline.
 
@@ -173,7 +173,7 @@ Run:
 ```bash
 PYTHONPATH=src python3.13 -m pytest -q tests/test_doctor_command.py tests/test_export_command.py
 PYTHONPATH=src python3.13 -m pytest -q
-python3.13 -m compileall src/openclaw_pipeline
+python3.13 -m compileall src/ovp_pipeline
 ```
 
 ## 4. Milestone Outcome

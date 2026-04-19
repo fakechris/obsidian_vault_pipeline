@@ -11,7 +11,7 @@ Usage:
     new_content = downloader.process_markdown(content, base_path)
 
     # CLI 使用
-    python -m openclaw_pipeline.image_downloader --file article.md
+    python -m ovp_pipeline.image_downloader --file article.md
 """
 
 import os

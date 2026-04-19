@@ -13,16 +13,16 @@ from ..txn import classify_run_ledgers
 
 
 PROCESS_MARKERS = (
-    "openclaw_pipeline.unified_pipeline_enhanced",
-    "openclaw_pipeline.auto_article_processor",
-    "openclaw_pipeline.batch_quality_checker",
-    "openclaw_pipeline.commands.absorb",
-    "openclaw_pipeline.auto_moc_updater",
-    "openclaw_pipeline.commands.knowledge_index",
-    "openclaw_pipeline.clippings_processor",
-    "openclaw_pipeline.auto_github_processor",
-    "openclaw_pipeline.auto_paper_processor",
-    "openclaw_pipeline.autopilot.daemon",
+    "ovp_pipeline.unified_pipeline_enhanced",
+    "ovp_pipeline.auto_article_processor",
+    "ovp_pipeline.batch_quality_checker",
+    "ovp_pipeline.commands.absorb",
+    "ovp_pipeline.auto_moc_updater",
+    "ovp_pipeline.commands.knowledge_index",
+    "ovp_pipeline.clippings_processor",
+    "ovp_pipeline.auto_github_processor",
+    "ovp_pipeline.auto_paper_processor",
+    "ovp_pipeline.autopilot.daemon",
     "pinboard-processor.py",
 )
 
@@ -51,7 +51,7 @@ def _read_last_json_line(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def detect_openclaw_process_lines(vault_dir: Path) -> list[str]:
+def detect_ovp_process_lines(vault_dir: Path) -> list[str]:
     try:
         result = subprocess.run(
             ["ps", "aux"],
@@ -88,7 +88,7 @@ def _count_state(layout: VaultLayout) -> dict[str, int]:
 
 def collect_progress_snapshot(vault_dir: Path, process_lines: list[str] | None = None) -> dict[str, Any]:
     layout = VaultLayout.from_vault(vault_dir)
-    process_lines = detect_openclaw_process_lines(layout.vault_dir) if process_lines is None else process_lines
+    process_lines = detect_ovp_process_lines(layout.vault_dir) if process_lines is None else process_lines
     classified_runs = classify_run_ledgers(layout.transactions_dir)
     active_runs = classified_runs["active"]
     stale_runs = classified_runs["stale"]

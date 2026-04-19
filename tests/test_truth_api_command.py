@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import pytest
 
-from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 
 
 def _seed_truth_store(temp_vault):
@@ -59,7 +59,7 @@ Alpha does not support local-first execution.
 
 
 def test_truth_api_command_lists_objects(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 
@@ -71,7 +71,7 @@ def test_truth_api_command_lists_objects(temp_vault, capsys):
 
 
 def test_truth_api_command_filters_objects_by_query(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 
@@ -83,7 +83,7 @@ def test_truth_api_command_filters_objects_by_query(temp_vault, capsys):
 
 
 def test_truth_api_command_returns_object_detail(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 
@@ -96,7 +96,7 @@ def test_truth_api_command_returns_object_detail(temp_vault, capsys):
 
 
 def test_truth_api_command_lists_contradictions(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 
@@ -109,7 +109,7 @@ def test_truth_api_command_lists_contradictions(temp_vault, capsys):
 
 
 def test_truth_api_command_lists_graph_clusters(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 
@@ -123,7 +123,7 @@ def test_truth_api_command_lists_graph_clusters(temp_vault, capsys):
 
 
 def test_truth_api_command_lists_graph_clusters_for_requested_pack(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 
@@ -136,8 +136,8 @@ def test_truth_api_command_lists_graph_clusters_for_requested_pack(temp_vault, c
 
 
 def test_truth_api_command_returns_graph_cluster_detail(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
-    from openclaw_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.commands.truth_api import main
+    from ovp_pipeline.truth_api import list_graph_clusters
 
     _seed_truth_store(temp_vault)
     cluster = list_graph_clusters(temp_vault)[0]
@@ -164,7 +164,7 @@ def test_truth_api_command_returns_graph_cluster_detail(temp_vault, capsys):
 
 
 def test_truth_api_command_filters_contradictions_by_query(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 
@@ -177,7 +177,7 @@ def test_truth_api_command_filters_contradictions_by_query(temp_vault, capsys):
 
 
 def test_truth_api_command_returns_neighborhood(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 
@@ -190,7 +190,7 @@ def test_truth_api_command_returns_neighborhood(temp_vault, capsys):
 
 
 def test_truth_api_command_reports_unknown_object_as_cli_error(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 
@@ -203,7 +203,7 @@ def test_truth_api_command_reports_unknown_object_as_cli_error(temp_vault, capsy
 
 
 def test_truth_api_command_rejects_unsupported_depth(temp_vault, capsys):
-    from openclaw_pipeline.commands.truth_api import main
+    from ovp_pipeline.commands.truth_api import main
 
     _seed_truth_store(temp_vault)
 

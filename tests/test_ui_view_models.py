@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 
 
 def _fresh_timestamp(*, seconds_ago: int = 0) -> str:
@@ -64,7 +64,7 @@ Alpha does not support local-first execution.
 
 
 def _resolve_all_contradictions(temp_vault):
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.runtime import VaultLayout
 
     db_path = VaultLayout.from_vault(temp_vault).knowledge_db
     with sqlite3.connect(db_path) as conn:
@@ -80,7 +80,7 @@ def _resolve_all_contradictions(temp_vault):
 
 
 def test_build_object_page_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
+    from ovp_pipeline.ui.view_models import build_object_page_payload
 
     _seed_truth_store(temp_vault)
 
@@ -126,7 +126,7 @@ def test_build_object_page_payload(temp_vault):
 
 
 def test_build_object_page_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
+    from ovp_pipeline.ui.view_models import build_object_page_payload
 
     _seed_truth_store(temp_vault)
 
@@ -144,7 +144,7 @@ def test_build_object_page_payload_preserves_requested_pack(temp_vault):
 
 
 def test_build_object_page_payload_hides_research_affordances_when_research_shell_disabled(temp_vault, monkeypatch):
-    import openclaw_pipeline.ui.view_models as view_models
+    import ovp_pipeline.ui.view_models as view_models
 
     _seed_truth_store(temp_vault)
     monkeypatch.setattr(view_models, "_supports_research_shell", lambda pack_name=None: False, raising=False)
@@ -178,7 +178,7 @@ def test_build_object_page_payload_hides_research_affordances_when_research_shel
 
 
 def test_build_runtime_home_payload_keeps_runtime_when_objects_index_fails(temp_vault, monkeypatch):
-    import openclaw_pipeline.ui.view_models as view_models
+    import ovp_pipeline.ui.view_models as view_models
 
     monkeypatch.setattr(
         view_models,
@@ -206,7 +206,7 @@ def test_build_runtime_home_payload_keeps_runtime_when_objects_index_fails(temp_
 
 
 def test_build_runtime_home_payload_uses_active_step_fallback_without_progress_summary(temp_vault, monkeypatch):
-    import openclaw_pipeline.ui.view_models as view_models
+    import ovp_pipeline.ui.view_models as view_models
 
     monkeypatch.setattr(
         view_models,
@@ -241,7 +241,7 @@ def test_build_runtime_home_payload_uses_active_step_fallback_without_progress_s
 
 
 def test_build_object_page_payload_includes_provenance(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
+    from ovp_pipeline.ui.view_models import build_object_page_payload
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -299,7 +299,7 @@ Alpha supports local-first execution.
 
 
 def test_build_topic_overview_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+    from ovp_pipeline.ui.view_models import build_topic_overview_payload
 
     _seed_truth_store(temp_vault)
 
@@ -340,7 +340,7 @@ def test_build_topic_overview_payload(temp_vault):
 
 
 def test_build_topic_overview_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+    from ovp_pipeline.ui.view_models import build_topic_overview_payload
 
     _seed_truth_store(temp_vault)
 
@@ -357,7 +357,7 @@ def test_build_topic_overview_payload_preserves_requested_pack(temp_vault):
 
 
 def test_build_topic_overview_payload_hides_research_affordances_when_research_shell_disabled(temp_vault, monkeypatch):
-    import openclaw_pipeline.ui.view_models as view_models
+    import ovp_pipeline.ui.view_models as view_models
 
     _seed_truth_store(temp_vault)
     monkeypatch.setattr(view_models, "_supports_research_shell", lambda pack_name=None: False, raising=False)
@@ -379,7 +379,7 @@ def test_build_topic_overview_payload_hides_research_affordances_when_research_s
 
 
 def test_build_topic_overview_payload_includes_production_summary(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+    from ovp_pipeline.ui.view_models import build_topic_overview_payload
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -431,7 +431,7 @@ date: 2026-04-13
 
 
 def test_build_event_dossier_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+    from ovp_pipeline.ui.view_models import build_event_dossier_payload
 
     _seed_truth_store(temp_vault)
 
@@ -484,7 +484,7 @@ def test_build_event_dossier_payload(temp_vault):
 
 
 def test_build_event_dossier_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+    from ovp_pipeline.ui.view_models import build_event_dossier_payload
 
     _seed_truth_store(temp_vault)
 
@@ -498,8 +498,8 @@ def test_build_event_dossier_payload_preserves_requested_pack(temp_vault):
 
 
 def test_build_cluster_browser_payload(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.ui.view_models import build_cluster_browser_payload
 
     _seed_truth_store(temp_vault)
     gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
@@ -551,8 +551,8 @@ Delta extends Gamma.
 
 
 def test_build_cluster_browser_payload_respects_requested_pack(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.ui.view_models import build_cluster_browser_payload
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
     target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
@@ -592,7 +592,7 @@ date: 2026-04-10
 
 
 def test_build_atlas_browser_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_atlas_browser_payload
+    from ovp_pipeline.ui.view_models import build_atlas_browser_payload
 
     _seed_truth_store(temp_vault)
 
@@ -602,7 +602,7 @@ def test_build_atlas_browser_payload_preserves_requested_pack(temp_vault):
 
 
 def test_build_derivation_browser_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_derivation_browser_payload
+    from ovp_pipeline.ui.view_models import build_derivation_browser_payload
 
     _seed_truth_store(temp_vault)
 
@@ -612,8 +612,8 @@ def test_build_derivation_browser_payload_preserves_requested_pack(temp_vault):
 
 
 def test_build_cluster_browser_payload_includes_related_cluster_summary(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.ui.view_models import build_cluster_browser_payload
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.ui.view_models import build_cluster_browser_payload
 
     _seed_truth_store(temp_vault)
     gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
@@ -699,7 +699,7 @@ date: 2026-04-13
 
 
 def test_build_cluster_browser_payload_does_not_call_full_detail_builder(temp_vault, monkeypatch):
-    from openclaw_pipeline.ui import view_models
+    from ovp_pipeline.ui import view_models
 
     _seed_truth_store(temp_vault)
 
@@ -714,8 +714,8 @@ def test_build_cluster_browser_payload_does_not_call_full_detail_builder(temp_va
 
 
 def test_build_cluster_detail_payload(temp_vault):
-    from openclaw_pipeline.truth_api import list_graph_clusters
-    from openclaw_pipeline.ui.view_models import build_cluster_detail_payload
+    from ovp_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.ui.view_models import build_cluster_detail_payload
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -783,8 +783,8 @@ def test_build_cluster_detail_payload_filters_relevant_contradictions_before_sli
     temp_vault,
     monkeypatch,
 ):
-    from openclaw_pipeline.truth_api import list_graph_clusters
-    from openclaw_pipeline.ui import view_models
+    from ovp_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.ui import view_models
 
     _seed_truth_store(temp_vault)
     cluster = list_graph_clusters(temp_vault)[0]
@@ -823,9 +823,9 @@ def test_build_cluster_detail_payload_filters_relevant_contradictions_before_sli
 
 
 def test_build_cluster_detail_payload_includes_related_clusters(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.truth_api import list_graph_clusters
-    from openclaw_pipeline.ui.view_models import build_cluster_detail_payload
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.truth_api import list_graph_clusters
+    from ovp_pipeline.ui.view_models import build_cluster_detail_payload
 
     _seed_truth_store(temp_vault)
     gamma = temp_vault / "10-Knowledge" / "Evergreen" / "Gamma.md"
@@ -920,7 +920,7 @@ date: 2026-04-13
 
 
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+    from ovp_pipeline.ui.view_models import build_event_dossier_payload
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -965,7 +965,7 @@ date: 2026-04-13
 
 
 def test_build_event_dossier_payload_includes_production_summary(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+    from ovp_pipeline.ui.view_models import build_event_dossier_payload
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -1012,7 +1012,7 @@ date: 2026-04-13
 
 
 def test_build_contradiction_browser_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+    from ovp_pipeline.ui.view_models import build_contradiction_browser_payload
 
     _seed_truth_store(temp_vault)
 
@@ -1059,7 +1059,7 @@ def test_build_contradiction_browser_payload(temp_vault):
 
 
 def test_build_contradiction_browser_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+    from ovp_pipeline.ui.view_models import build_contradiction_browser_payload
 
     _seed_truth_store(temp_vault)
 
@@ -1073,7 +1073,7 @@ def test_build_contradiction_browser_payload_preserves_requested_pack(temp_vault
 
 
 def test_build_contradiction_browser_payload_empty_state_explains_zero(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+    from ovp_pipeline.ui.view_models import build_contradiction_browser_payload
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(
@@ -1099,7 +1099,7 @@ Alpha supports local-first execution.
 
 
 def test_build_contradiction_browser_payload_filters_by_status(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+    from ovp_pipeline.ui.view_models import build_contradiction_browser_payload
 
     _seed_truth_store(temp_vault)
     _resolve_all_contradictions(temp_vault)
@@ -1112,7 +1112,7 @@ def test_build_contradiction_browser_payload_filters_by_status(temp_vault):
 
 
 def test_build_contradiction_browser_payload_filters_by_query(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+    from ovp_pipeline.ui.view_models import build_contradiction_browser_payload
 
     _seed_truth_store(temp_vault)
 
@@ -1123,7 +1123,7 @@ def test_build_contradiction_browser_payload_filters_by_query(temp_vault):
 
 
 def test_build_contradiction_browser_payload_includes_provenance(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_contradiction_browser_payload
+    from ovp_pipeline.ui.view_models import build_contradiction_browser_payload
 
     source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -1168,7 +1168,7 @@ date: 2026-04-13
 
 
 def test_build_truth_dashboard_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
+    from ovp_pipeline.ui.view_models import build_truth_dashboard_payload
 
     _seed_truth_store(temp_vault)
     transactions_dir = temp_vault / "60-Logs" / "transactions"
@@ -1270,7 +1270,7 @@ Thin note.
 
 
 def test_build_truth_dashboard_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
+    from ovp_pipeline.ui.view_models import build_truth_dashboard_payload
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -1301,7 +1301,7 @@ Processed source note without downstream chain.
 
 
 def test_build_truth_dashboard_payload_handles_missing_shell_surfaces(temp_vault, monkeypatch):
-    from openclaw_pipeline.ui import view_models
+    from ovp_pipeline.ui import view_models
 
     _seed_truth_store(temp_vault)
 
@@ -1372,7 +1372,7 @@ def test_build_truth_dashboard_payload_handles_missing_shell_surfaces(temp_vault
 
 
 def test_build_truth_dashboard_payload_uses_total_object_count(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_truth_dashboard_payload
+    from ovp_pipeline.ui.view_models import build_truth_dashboard_payload
 
     _seed_truth_store(temp_vault)
     for index in range(20):
@@ -1400,7 +1400,7 @@ Filler note.
 
 
 def test_build_signal_browser_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_signal_browser_payload
+    from ovp_pipeline.ui.view_models import build_signal_browser_payload
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -1456,7 +1456,7 @@ Processed source note without downstream chain.
 
 
 def test_build_signal_browser_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_signal_browser_payload
+    from ovp_pipeline.ui.view_models import build_signal_browser_payload
 
     _seed_truth_store(temp_vault)
 
@@ -1474,7 +1474,7 @@ def test_build_signal_browser_payload_preserves_requested_pack(temp_vault):
 
 
 def test_build_signal_browser_payload_handles_missing_surface_contract(temp_vault, monkeypatch):
-    from openclaw_pipeline.ui import view_models
+    from ovp_pipeline.ui import view_models
 
     monkeypatch.setattr(
         view_models,
@@ -1504,7 +1504,7 @@ def test_build_signal_browser_payload_handles_missing_surface_contract(temp_vaul
 
 
 def test_build_action_queue_payload_preserves_requested_pack(temp_vault, monkeypatch):
-    from openclaw_pipeline.ui import view_models
+    from ovp_pipeline.ui import view_models
 
     captured: dict[str, str | None] = {}
 
@@ -1553,8 +1553,8 @@ def test_build_action_queue_payload_preserves_requested_pack(temp_vault, monkeyp
 
 
 def test_build_briefing_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_briefing_payload
-    from openclaw_pipeline.truth_api import record_review_action
+    from ovp_pipeline.ui.view_models import build_briefing_payload
+    from ovp_pipeline.truth_api import record_review_action
 
     _seed_truth_store(temp_vault)
     loose_source = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
@@ -1641,7 +1641,7 @@ Processed source note without downstream chain.
 
 
 def test_build_briefing_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_briefing_payload
+    from ovp_pipeline.ui.view_models import build_briefing_payload
 
     _seed_truth_store(temp_vault)
 
@@ -1664,7 +1664,7 @@ def test_build_briefing_payload_preserves_requested_pack(temp_vault):
 
 
 def test_build_briefing_payload_handles_missing_surface_contract(temp_vault, monkeypatch):
-    from openclaw_pipeline.ui import view_models
+    from ovp_pipeline.ui import view_models
 
     monkeypatch.setattr(
         view_models,
@@ -1696,7 +1696,7 @@ def test_build_briefing_payload_handles_missing_surface_contract(temp_vault, mon
 
 
 def test_build_evolution_browser_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_evolution_browser_payload
+    from ovp_pipeline.ui.view_models import build_evolution_browser_payload
 
     _seed_truth_store(temp_vault)
 
@@ -1709,7 +1709,7 @@ def test_build_evolution_browser_payload(temp_vault):
 
 
 def test_build_evolution_browser_payload_preserves_requested_pack(temp_vault, monkeypatch):
-    from openclaw_pipeline.ui import view_models
+    from ovp_pipeline.ui import view_models
 
     captured: dict[str, str | None] = {}
 
@@ -1769,8 +1769,8 @@ def test_build_evolution_browser_payload_preserves_requested_pack(temp_vault, mo
 
 
 def test_build_evolution_browser_payload_filters_reviewed_links_by_link_type(temp_vault):
-    from openclaw_pipeline.truth_api import list_evolution_candidates, review_evolution_candidate
-    from openclaw_pipeline.ui.view_models import build_evolution_browser_payload
+    from ovp_pipeline.truth_api import list_evolution_candidates, review_evolution_candidate
+    from ovp_pipeline.ui.view_models import build_evolution_browser_payload
 
     _seed_truth_store(temp_vault)
     legacy = temp_vault / "10-Knowledge" / "Evergreen" / "Legacy.md"
@@ -1825,7 +1825,7 @@ This note supersedes [[legacy-note]] and confirms the migration path.
 
 
 def test_build_object_page_payload_includes_evolution_section(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
+    from ovp_pipeline.ui.view_models import build_object_page_payload
 
     _seed_truth_store(temp_vault)
 
@@ -1836,7 +1836,7 @@ def test_build_object_page_payload_includes_evolution_section(temp_vault):
 
 
 def test_build_topic_overview_payload_includes_evolution_section(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_topic_overview_payload
+    from ovp_pipeline.ui.view_models import build_topic_overview_payload
 
     _seed_truth_store(temp_vault)
 
@@ -1847,7 +1847,7 @@ def test_build_topic_overview_payload_includes_evolution_section(temp_vault):
 
 
 def test_build_event_dossier_payload_filters_by_query(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+    from ovp_pipeline.ui.view_models import build_event_dossier_payload
 
     _seed_truth_store(temp_vault)
 
@@ -1858,7 +1858,7 @@ def test_build_event_dossier_payload_filters_by_query(temp_vault):
 
 
 def test_build_event_dossier_payload_groups_rows_into_event_clusters(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+    from ovp_pipeline.ui.view_models import build_event_dossier_payload
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(
@@ -1893,7 +1893,7 @@ Shipped the local-first harness update.
 
 
 def test_build_atlas_browser_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_atlas_browser_payload
+    from ovp_pipeline.ui.view_models import build_atlas_browser_payload
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(
@@ -1940,7 +1940,7 @@ date: 2026-04-13
 
 
 def test_build_derivation_browser_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_derivation_browser_payload
+    from ovp_pipeline.ui.view_models import build_derivation_browser_payload
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(
@@ -1995,7 +1995,7 @@ Mentions [[alpha]].
 
 
 def test_build_derivation_browser_payload_includes_chain_context(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_derivation_browser_payload
+    from ovp_pipeline.ui.view_models import build_derivation_browser_payload
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -2069,7 +2069,7 @@ Mentions [[alpha]].
 
 
 def test_build_atlas_browser_payload_includes_chain_context(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_atlas_browser_payload
+    from ovp_pipeline.ui.view_models import build_atlas_browser_payload
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -2143,7 +2143,7 @@ date: 2026-04-13
 
 
 def test_build_production_browser_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_production_browser_payload
+    from ovp_pipeline.ui.view_models import build_production_browser_payload
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -2242,7 +2242,7 @@ Mentions [[alpha]].
 
 
 def test_build_production_browser_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_production_browser_payload
+    from ovp_pipeline.ui.view_models import build_production_browser_payload
 
     _seed_truth_store(temp_vault)
 
@@ -2257,7 +2257,7 @@ def test_build_production_browser_payload_preserves_requested_pack(temp_vault):
 
 
 def test_build_production_browser_payload_handles_missing_surface_contract(temp_vault, monkeypatch):
-    from openclaw_pipeline.ui import view_models
+    from ovp_pipeline.ui import view_models
 
     monkeypatch.setattr(
         view_models,
@@ -2293,7 +2293,7 @@ def test_build_production_browser_payload_handles_missing_surface_contract(temp_
 
 
 def test_build_production_browser_payload_surfaces_weak_points(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_production_browser_payload
+    from ovp_pipeline.ui.view_models import build_production_browser_payload
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Loose Source.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -2317,8 +2317,8 @@ Processed source note without downstream chain.
 
 
 def test_build_derivation_browser_payload_filters_stale_object_ids(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_derivation_browser_payload
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_derivation_browser_payload
+    from ovp_pipeline.runtime import VaultLayout
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(
@@ -2371,7 +2371,7 @@ Mentions [[alpha]].
 
 
 def test_build_stale_summary_browser_payload(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_stale_summary_browser_payload
+    from ovp_pipeline.ui.view_models import build_stale_summary_browser_payload
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(
@@ -2401,7 +2401,7 @@ Thin note.
 
 
 def test_build_stale_summary_browser_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_stale_summary_browser_payload
+    from ovp_pipeline.ui.view_models import build_stale_summary_browser_payload
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(
@@ -2426,8 +2426,8 @@ Thin note.
 
 
 def test_build_object_page_payload_includes_review_history(temp_vault):
-    from openclaw_pipeline.truth_api import record_review_action
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
+    from ovp_pipeline.truth_api import record_review_action
+    from ovp_pipeline.ui.view_models import build_object_page_payload
 
     _seed_truth_store(temp_vault)
     record_review_action(
@@ -2450,7 +2450,7 @@ def test_build_object_page_payload_includes_review_history(temp_vault):
 
 
 def test_build_object_page_payload_exposes_quick_maintenance_state(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
+    from ovp_pipeline.ui.view_models import build_object_page_payload
 
     _seed_truth_store(temp_vault)
 
@@ -2461,7 +2461,7 @@ def test_build_object_page_payload_exposes_quick_maintenance_state(temp_vault):
 
 
 def test_build_stale_summary_browser_payload_includes_review_context(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_stale_summary_browser_payload
+    from ovp_pipeline.ui.view_models import build_stale_summary_browser_payload
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(
@@ -2487,7 +2487,7 @@ Thin note.
 
 
 def test_build_event_dossier_payload_applies_limit_before_materializing(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+    from ovp_pipeline.ui.view_models import build_event_dossier_payload
 
     _seed_truth_store(temp_vault)
 
@@ -2498,7 +2498,7 @@ def test_build_event_dossier_payload_applies_limit_before_materializing(temp_vau
 
 
 def test_build_event_dossier_payload_orders_latest_first(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_event_dossier_payload
+    from ovp_pipeline.ui.view_models import build_event_dossier_payload
 
     older = temp_vault / "10-Knowledge" / "Evergreen" / "Older.md"
     newer = temp_vault / "10-Knowledge" / "Evergreen" / "Newer.md"
@@ -2539,8 +2539,8 @@ Newer event.
 
 
 def test_build_object_page_payload_handles_missing_summary(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_object_page_payload
+    from ovp_pipeline.runtime import VaultLayout
 
     _seed_truth_store(temp_vault)
     db_path = VaultLayout.from_vault(temp_vault).knowledge_db
@@ -2555,7 +2555,7 @@ def test_build_object_page_payload_handles_missing_summary(temp_vault):
 
 
 def test_build_note_page_payload_includes_production_chain(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_note_page_payload
+    from ovp_pipeline.ui.view_models import build_note_page_payload
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -2678,7 +2678,7 @@ date: 2026-04-13
 
 
 def test_build_search_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_search_payload
+    from ovp_pipeline.ui.view_models import build_search_payload
 
     _seed_truth_store(temp_vault)
     deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
@@ -2707,7 +2707,7 @@ Mentions [[alpha]].
 
 
 def test_build_note_page_payload_preserves_requested_pack(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_note_page_payload
+    from ovp_pipeline.ui.view_models import build_note_page_payload
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -2796,7 +2796,7 @@ date: 2026-04-13
 
 
 def test_build_object_page_payload_includes_production_chain(temp_vault):
-    from openclaw_pipeline.ui.view_models import build_object_page_payload
+    from ovp_pipeline.ui.view_models import build_object_page_payload
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)

@@ -26,10 +26,10 @@
 ### Task 1: Lock the system model
 
 **Files:**
-- Modify: `src/openclaw_pipeline/unified_pipeline_enhanced.py`
-- Modify: `src/openclaw_pipeline/auto_article_processor.py`
-- Modify: `src/openclaw_pipeline/auto_github_processor.py`
-- Modify: `src/openclaw_pipeline/auto_paper_processor.py`
+- Modify: `src/ovp_pipeline/unified_pipeline_enhanced.py`
+- Modify: `src/ovp_pipeline/auto_article_processor.py`
+- Modify: `src/ovp_pipeline/auto_github_processor.py`
+- Modify: `src/ovp_pipeline/auto_paper_processor.py`
 - Test: `tests/test_runtime_contracts.py`
 
 **Step 1: Write failing tests for vault path consistency**
@@ -62,7 +62,7 @@ Commit message:
 ### Task 2: Repair the stage contract chain
 
 **Files:**
-- Modify: `src/openclaw_pipeline/unified_pipeline_enhanced.py`
+- Modify: `src/ovp_pipeline/unified_pipeline_enhanced.py`
 - Test: `tests/test_pipeline_contracts.py`
 
 **Step 1: Write failing tests for main pipeline step order**
@@ -96,9 +96,9 @@ Commit message:
 ### Task 3: Make graph scanning work on real vault paths
 
 **Files:**
-- Modify: `src/openclaw_pipeline/graph/frontmatter.py`
-- Modify: `src/openclaw_pipeline/graph/link_parser.py`
-- Modify: `src/openclaw_pipeline/graph/daily_delta.py`
+- Modify: `src/ovp_pipeline/graph/frontmatter.py`
+- Modify: `src/ovp_pipeline/graph/link_parser.py`
+- Modify: `src/ovp_pipeline/graph/daily_delta.py`
 - Test: `tests/test_graph_paths.py`
 
 **Step 1: Write failing tests for relative vault paths**
@@ -124,10 +124,10 @@ Commit message:
 ### Task 4: Unify graph identity with registry identity
 
 **Files:**
-- Modify: `src/openclaw_pipeline/graph/frontmatter.py`
-- Modify: `src/openclaw_pipeline/graph/link_parser.py`
-- Modify: `src/openclaw_pipeline/graph/graph_builder.py`
-- Modify: `src/openclaw_pipeline/concept_registry.py`
+- Modify: `src/ovp_pipeline/graph/frontmatter.py`
+- Modify: `src/ovp_pipeline/graph/link_parser.py`
+- Modify: `src/ovp_pipeline/graph/graph_builder.py`
+- Modify: `src/ovp_pipeline/concept_registry.py`
 - Test: `tests/test_graph_identity.py`
 
 **Step 1: Write failing tests for note identity**
@@ -163,10 +163,10 @@ Commit message:
 ### Task 5: Close the concept lifecycle
 
 **Files:**
-- Modify: `src/openclaw_pipeline/promote_candidates.py`
-- Modify: `src/openclaw_pipeline/concept_registry.py`
-- Modify: `src/openclaw_pipeline/auto_evergreen_extractor.py`
-- Modify: `src/openclaw_pipeline/auto_article_processor.py`
+- Modify: `src/ovp_pipeline/promote_candidates.py`
+- Modify: `src/ovp_pipeline/concept_registry.py`
+- Modify: `src/ovp_pipeline/auto_evergreen_extractor.py`
+- Modify: `src/ovp_pipeline/auto_article_processor.py`
 - Test: `tests/test_candidate_lifecycle.py`
 
 **Step 1: Write failing lifecycle tests**
@@ -197,12 +197,12 @@ Commit message:
 ### Task 6: Collapse registry/repair/migrate duplication
 
 **Files:**
-- Modify: `src/openclaw_pipeline/rebuild_registry.py`
-- Modify: `src/openclaw_pipeline/commands/rebuild_registry.py`
-- Modify: `src/openclaw_pipeline/migrate_broken_links.py`
-- Modify: `src/openclaw_pipeline/commands/migrate_broken_links.py`
-- Modify: `src/openclaw_pipeline/repair.py`
-- Modify: `src/openclaw_pipeline/commands/repair.py`
+- Modify: `src/ovp_pipeline/rebuild_registry.py`
+- Modify: `src/ovp_pipeline/commands/rebuild_registry.py`
+- Modify: `src/ovp_pipeline/migrate_broken_links.py`
+- Modify: `src/ovp_pipeline/commands/migrate_broken_links.py`
+- Modify: `src/ovp_pipeline/repair.py`
+- Modify: `src/ovp_pipeline/commands/repair.py`
 - Test: `tests/test_registry_repair_commands.py`
 
 **Step 1: Write failing command contract tests**
@@ -229,9 +229,9 @@ Commit message:
 ### Task 7: Make AutoPilot converge instead of drift
 
 **Files:**
-- Modify: `src/openclaw_pipeline/autopilot/queue.py`
-- Modify: `src/openclaw_pipeline/autopilot/watcher.py`
-- Modify: `src/openclaw_pipeline/autopilot/daemon.py`
+- Modify: `src/ovp_pipeline/autopilot/queue.py`
+- Modify: `src/ovp_pipeline/autopilot/watcher.py`
+- Modify: `src/ovp_pipeline/autopilot/daemon.py`
 - Test: `tests/test_autopilot_queue.py`
 - Test: `tests/test_autopilot_daemon.py`
 

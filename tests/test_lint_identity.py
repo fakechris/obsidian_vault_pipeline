@@ -1,4 +1,4 @@
-from openclaw_pipeline.lint_checker import KnowledgeLinter
+from ovp_pipeline.lint_checker import KnowledgeLinter
 
 
 def test_lint_resolves_links_via_note_id_not_only_filename(temp_vault):

@@ -274,7 +274,7 @@ git commit -m "docs: define phase14 orchestration integration"
 ### Task 2: Introduce action queue ledger
 
 **Files:**
-- Modify: `src/openclaw_pipeline/truth_api.py`
+- Modify: `src/ovp_pipeline/truth_api.py`
 - Test: `tests/test_truth_api.py`
 
 **Step 1: Write failing tests**
@@ -295,8 +295,8 @@ Run focused tests, then full tests.
 ### Task 3: Add a worker/dispatcher
 
 **Files:**
-- Modify: `src/openclaw_pipeline/commands/*.py`
-- Modify: `src/openclaw_pipeline/truth_api.py`
+- Modify: `src/ovp_pipeline/commands/*.py`
+- Modify: `src/ovp_pipeline/truth_api.py`
 - Test: `tests/test_ui_server.py`, `tests/test_truth_api.py`
 
 **Step 1: Add worker contract**
@@ -318,9 +318,9 @@ Do not duplicate pipeline logic in the worker.
 ### Task 4: Wire the first two actionable workflow bridges
 
 **Files:**
-- Modify: `src/openclaw_pipeline/unified_pipeline_enhanced.py`
-- Modify: `src/openclaw_pipeline/truth_api.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/unified_pipeline_enhanced.py`
+- Modify: `src/ovp_pipeline/truth_api.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_runtime_paths.py`, `tests/test_truth_api.py`, `tests/test_ui_smoke.py`
 
 **Step 1: Add focused workflow entrypoints**
@@ -341,8 +341,8 @@ Auto-queue:
 ### Task 5: Surface queue state in UI
 
 **Files:**
-- Modify: `src/openclaw_pipeline/ui/view_models.py`
-- Modify: `src/openclaw_pipeline/commands/ui_server.py`
+- Modify: `src/ovp_pipeline/ui/view_models.py`
+- Modify: `src/ovp_pipeline/commands/ui_server.py`
 - Test: `tests/test_ui_smoke.py`
 
 Show:

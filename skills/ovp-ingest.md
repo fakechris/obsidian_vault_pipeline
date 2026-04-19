@@ -1,4 +1,4 @@
-# OpenClaw Ingest Skill
+# OVP Ingest Skill
 
 Ingest external content into the vault's Inbox system.
 

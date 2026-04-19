@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 def _write_run(layout, *, source_name: str, profile_name: str, values: dict[str, object]) -> Path:
-    from openclaw_pipeline.derived.paths import extraction_run_path
-    from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult, ExtractionSpan
+    from ovp_pipeline.derived.paths import extraction_run_path
+    from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionRunResult, ExtractionSpan
 
     source_path = Path(f"50-Inbox/01-Raw/{source_name}")
     artifact_path = extraction_run_path(
@@ -45,8 +45,8 @@ def _write_run(layout, *, source_name: str, profile_name: str, values: dict[str,
 
 
 def test_extract_preview_command_returns_latest_artifact(temp_vault, capsys):
-    from openclaw_pipeline.commands import extract_preview
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands import extract_preview
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     _write_run(
@@ -75,7 +75,7 @@ def test_extract_preview_command_returns_latest_artifact(temp_vault, capsys):
 
 
 def test_extract_preview_help_mentions_primary_pack(capsys):
-    from openclaw_pipeline.commands import extract_preview
+    from ovp_pipeline.commands import extract_preview
 
     try:
         extract_preview.main(["--help"])
@@ -88,8 +88,8 @@ def test_extract_preview_help_mentions_primary_pack(capsys):
 
 
 def test_extract_preview_command_normalizes_source_filter(temp_vault, capsys):
-    from openclaw_pipeline.commands import extract_preview
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands import extract_preview
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     _write_run(
@@ -118,7 +118,7 @@ def test_extract_preview_command_normalizes_source_filter(temp_vault, capsys):
 
 
 def test_extract_preview_command_rejects_negative_limit(temp_vault):
-    from openclaw_pipeline.commands import extract_preview
+    from ovp_pipeline.commands import extract_preview
 
     try:
         extract_preview.main(
@@ -140,8 +140,8 @@ def test_extract_preview_command_rejects_negative_limit(temp_vault):
 
 
 def test_extraction_dashboard_command_summarizes_profiles(temp_vault, capsys):
-    from openclaw_pipeline.commands import extraction_dashboard
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands import extraction_dashboard
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     _write_run(
@@ -154,7 +154,7 @@ def test_extraction_dashboard_command_summarizes_profiles(temp_vault, capsys):
         layout,
         source_name="doc-two.md",
         profile_name="media/commentary_sentiment",
-        values={"subject": "OpenClaw", "stance": "positive"},
+        values={"subject": "OVP", "stance": "positive"},
     )
 
     exit_code = extraction_dashboard.main(
@@ -175,7 +175,7 @@ def test_extraction_dashboard_command_summarizes_profiles(temp_vault, capsys):
 
 
 def test_extraction_dashboard_help_mentions_primary_pack(capsys):
-    from openclaw_pipeline.commands import extraction_dashboard
+    from ovp_pipeline.commands import extraction_dashboard
 
     try:
         extraction_dashboard.main(["--help"])
@@ -188,8 +188,8 @@ def test_extraction_dashboard_help_mentions_primary_pack(capsys):
 
 
 def test_extract_preview_command_supports_research_tech_pack(temp_vault, capsys):
-    from openclaw_pipeline.commands import extract_preview
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands import extract_preview
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     artifact_path = _write_run(
@@ -223,8 +223,8 @@ def test_extract_preview_command_supports_research_tech_pack(temp_vault, capsys)
 
 
 def test_extraction_dashboard_command_supports_research_tech_pack(temp_vault, capsys):
-    from openclaw_pipeline.commands import extraction_dashboard
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands import extraction_dashboard
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     artifact_path = _write_run(

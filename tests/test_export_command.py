@@ -5,7 +5,7 @@ import pytest
 
 
 def _seed_truth_store(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     beta = temp_vault / "10-Knowledge" / "Evergreen" / "Beta.md"
@@ -59,7 +59,7 @@ Alpha is not reliable.
 
 
 def test_export_command_can_export_object_page(temp_vault, tmp_path, capsys):
-    from openclaw_pipeline.commands.export_artifact import main
+    from ovp_pipeline.commands.export_artifact import main
 
     _seed_truth_store(temp_vault)
     output_path = tmp_path / "alpha-object.md"
@@ -85,7 +85,7 @@ def test_export_command_can_export_object_page(temp_vault, tmp_path, capsys):
 
 
 def test_export_command_can_export_topic_overview(temp_vault, tmp_path, capsys):
-    from openclaw_pipeline.commands.export_artifact import main
+    from ovp_pipeline.commands.export_artifact import main
 
     _seed_truth_store(temp_vault)
     output_path = tmp_path / "topic.md"
@@ -113,7 +113,7 @@ def test_export_command_can_export_topic_overview(temp_vault, tmp_path, capsys):
 
 
 def test_export_command_can_export_orientation_brief(temp_vault, tmp_path, capsys):
-    from openclaw_pipeline.commands.export_artifact import main
+    from ovp_pipeline.commands.export_artifact import main
 
     _seed_truth_store(temp_vault)
     output_path = tmp_path / "orientation-brief.json"
@@ -155,7 +155,7 @@ def test_export_command_can_export_orientation_brief(temp_vault, tmp_path, capsy
 def test_export_command_orientation_brief_uses_compiled_export_builder(
     temp_vault, tmp_path, monkeypatch, capsys
 ):
-    from openclaw_pipeline.commands import export_artifact
+    from ovp_pipeline.commands import export_artifact
 
     _seed_truth_store(temp_vault)
     output_path = tmp_path / "orientation-brief.json"
@@ -187,7 +187,7 @@ def test_export_command_orientation_brief_uses_compiled_export_builder(
 def test_export_command_can_use_inherited_assembly_recipe_for_compatibility_pack(
     temp_vault, tmp_path, capsys
 ):
-    from openclaw_pipeline.commands.export_artifact import main
+    from ovp_pipeline.commands.export_artifact import main
 
     _seed_truth_store(temp_vault)
     output_path = tmp_path / "compat-topic.md"
@@ -217,7 +217,7 @@ def test_export_command_can_use_inherited_assembly_recipe_for_compatibility_pack
 
 
 def test_export_command_can_export_event_dossier(temp_vault, tmp_path, capsys):
-    from openclaw_pipeline.commands.export_artifact import main
+    from ovp_pipeline.commands.export_artifact import main
 
     _seed_truth_store(temp_vault)
     output_path = tmp_path / "events.md"
@@ -241,7 +241,7 @@ def test_export_command_can_export_event_dossier(temp_vault, tmp_path, capsys):
 
 
 def test_export_command_can_export_contradictions(temp_vault, tmp_path, capsys):
-    from openclaw_pipeline.commands.export_artifact import main
+    from ovp_pipeline.commands.export_artifact import main
 
     _seed_truth_store(temp_vault)
     output_path = tmp_path / "contradictions.md"
@@ -265,7 +265,7 @@ def test_export_command_can_export_contradictions(temp_vault, tmp_path, capsys):
 
 
 def test_export_command_requires_object_id_for_object_page(temp_vault, tmp_path):
-    from openclaw_pipeline.commands.export_artifact import main
+    from ovp_pipeline.commands.export_artifact import main
 
     _seed_truth_store(temp_vault)
     output_path = tmp_path / "missing-object-id.md"
@@ -288,8 +288,8 @@ def test_export_command_requires_object_id_for_object_page(temp_vault, tmp_path)
 
 
 def test_export_command_resolve_view_errors_when_source_provider_missing(monkeypatch):
-    from openclaw_pipeline.commands import export_artifact
-    from openclaw_pipeline.packs.loader import load_pack
+    from ovp_pipeline.commands import export_artifact
+    from ovp_pipeline.packs.loader import load_pack
 
     pack = load_pack("research-tech")
     recipe_provider_pack, recipe = export_artifact._resolve_export_recipe(pack, "topic-overview")
@@ -311,8 +311,8 @@ def test_export_command_resolve_view_errors_when_source_provider_missing(monkeyp
 def test_export_command_handles_missing_contradictions_table(temp_vault, tmp_path, capsys):
     import sqlite3
 
-    from openclaw_pipeline.commands.export_artifact import main
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.export_artifact import main
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     layout.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -342,7 +342,7 @@ def test_export_command_handles_missing_contradictions_table(temp_vault, tmp_pat
 
 
 def test_export_command_surfaces_build_errors_as_cli_errors(temp_vault, tmp_path, monkeypatch):
-    from openclaw_pipeline.commands import export_artifact
+    from ovp_pipeline.commands import export_artifact
 
     _seed_truth_store(temp_vault)
     output_path = tmp_path / "topic.md"

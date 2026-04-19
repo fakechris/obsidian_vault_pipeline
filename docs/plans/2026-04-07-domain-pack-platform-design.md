@@ -19,7 +19,7 @@ Media, medical, and other specialized domains should become **separate plugin-pa
 The correct platform shape is:
 
 ```text
-openclaw-core
+ovp-core
   + default-knowledge pack
   + workflow profiles
   + plugin loader
@@ -184,11 +184,11 @@ Media and medical should be separate engineering projects.
 Recommended repo pattern:
 
 ```text
-openclaw-core                    # current repo evolved into platform
-openclaw-pack-default-knowledge  # may live in-tree first, then optionally split
-openclaw-pack-media-editorial
-openclaw-pack-medical-evidence
-openclaw-pack-engineering-research
+ovp-core                    # current repo evolved into platform
+ovp-pack-default-knowledge  # may live in-tree first, then optionally split
+ovp-pack-media-editorial
+ovp-pack-medical-evidence
+ovp-pack-engineering-research
 ```
 
 ### Why separate repos are preferable for specialized packs
@@ -202,7 +202,7 @@ openclaw-pack-engineering-research
 The installation model should be plugin-based:
 
 ```bash
-ovp-plugin install openclaw-pack-media-editorial
+ovp-plugin install ovp-pack-media-editorial
 ovp --pack media-editorial --profile daily-desk
 ```
 
@@ -406,7 +406,7 @@ templates:
 prompts:
   - prompts/topic-card-generator.md
 entrypoints:
-  pack: openclaw_pack_media.plugin:get_pack
+  pack: ovp_pack_media.plugin:get_pack
 ```
 
 And the runtime-facing Python object should supply:

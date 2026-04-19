@@ -5,18 +5,18 @@ Tests for promote_candidates module.
 import pytest
 from pathlib import Path
 from types import SimpleNamespace
-from openclaw_pipeline.concept_registry import (
+from ovp_pipeline.concept_registry import (
     ConceptRegistry,
     ConceptEntry,
     STATUS_ACTIVE,
     STATUS_CANDIDATE,
 )
-from openclaw_pipeline.auto_evergreen_extractor import (
+from ovp_pipeline.auto_evergreen_extractor import (
     AutoEvergreenExtractor,
     PipelineLogger as EvergreenLogger,
     main as evergreen_main,
 )
-from openclaw_pipeline.promote_candidates import (
+from ovp_pipeline.promote_candidates import (
     merge_candidate,
     promote_candidate,
     reject_candidate,
@@ -324,7 +324,7 @@ class TestCandidatePromotion:
                 captured["promote_threshold"] = promote_threshold
                 return []
 
-        monkeypatch.setattr("openclaw_pipeline.auto_evergreen_extractor.AutoEvergreenExtractor", FakeExtractor)
+        monkeypatch.setattr("ovp_pipeline.auto_evergreen_extractor.AutoEvergreenExtractor", FakeExtractor)
         monkeypatch.setattr(
             "sys.argv",
             [

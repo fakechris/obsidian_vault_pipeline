@@ -2,9 +2,9 @@ from __future__ import annotations
 
 
 def test_compatibility_pack_falls_back_to_base_observation_surface_builder(monkeypatch):
-    from openclaw_pipeline.observation_surface_registry import resolve_observation_surface_builder
-    from openclaw_pipeline.packs.base import BaseDomainPack, ObservationSurfaceSpec
-    import openclaw_pipeline.observation_surface_registry as registry_source
+    from ovp_pipeline.observation_surface_registry import resolve_observation_surface_builder
+    from ovp_pipeline.packs.base import BaseDomainPack, ObservationSurfaceSpec
+    import ovp_pipeline.observation_surface_registry as registry_source
 
     compatibility_pack = BaseDomainPack(
         name="compat-pack",

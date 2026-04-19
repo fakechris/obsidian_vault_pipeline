@@ -73,7 +73,7 @@ The core runtime is now being formalized as a pack-aware platform.
 - Built-in standard pack: `research-tech`
 - Default compatibility pack: `default-knowledge`
 - Runtime selection is exposed through `--pack` and `--profile`
-- Third-party packs can be discovered through the `openclaw_pipeline.packs` entry point group or the `OPENCLAW_PACK_MANIFESTS` manifest list
+- Third-party packs can be discovered through the `ovp.packs` entry point group or the `OVP_PACK_MANIFESTS` manifest list
 
 Examples:
 
@@ -192,8 +192,8 @@ The plugin / pack surface is no longer only a design memo. There is now a minima
 
 Two discovery modes are supported:
 
-1. Python entry point group: `openclaw_pipeline.packs`
-2. Explicit manifest list: `OPENCLAW_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
+1. Python entry point group: `ovp.packs`
+2. Explicit manifest list: `OVP_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
 
 The minimum third-party loading chain is:
 
@@ -277,7 +277,7 @@ pinboard
 
 Important details:
 
-- `absorb` now shells to `openclaw_pipeline.commands.absorb`
+- `absorb` now shells to `ovp_pipeline.commands.absorb`
 - `refine` is a batch wrapper over `cleanup + breakdown`
 - `knowledge_index` always runs last so `knowledge.db` reflects final canonical state
 - `--step evergreen` and `--from-step evergreen` are still accepted and map to `absorb`
@@ -445,7 +445,7 @@ If you prefer the explicit PyPI two-step flow:
 
 ```bash
 python3 -m pip install --user obsidian-vault-pipeline
-python3 -m openclaw_pipeline.installer
+python3 -m ovp_pipeline.installer
 ```
 
 If your Python installation enforces PEP 668, prefer:

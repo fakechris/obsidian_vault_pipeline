@@ -62,8 +62,8 @@ Current runtime entry surfaces:
   - `ovp-ui`
   - `ovp-ops`
 - builtin and external packs are discovered through:
-  - entry point group `openclaw_pipeline.packs`
-  - explicit manifests via `OPENCLAW_PACK_MANIFESTS`
+  - entry point group `ovp_pipeline.packs`
+  - explicit manifests via `OVP_PACK_MANIFESTS`
 
 This means the first packaging boundary is already explicit:
 

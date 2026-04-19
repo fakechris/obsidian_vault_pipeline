@@ -4,7 +4,7 @@ import pytest
 
 
 def test_default_pack_exposes_new_derived_extension_points():
-    from openclaw_pipeline.packs.loader import load_default_pack
+    from ovp_pipeline.packs.loader import load_default_pack
 
     pack = load_default_pack()
 
@@ -14,7 +14,7 @@ def test_default_pack_exposes_new_derived_extension_points():
 
 
 def test_base_pack_lookup_methods_raise_for_unknown_extension_names():
-    from openclaw_pipeline.packs.loader import load_default_pack
+    from ovp_pipeline.packs.loader import load_default_pack
 
     pack = load_default_pack()
 

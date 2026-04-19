@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from openclaw_pipeline.runtime import VaultLayout
+from ovp_pipeline.runtime import VaultLayout
 
 
 def _fresh_timestamp(*, seconds_ago: int = 0) -> str:
@@ -57,9 +57,9 @@ def test_collect_progress_snapshot_reads_counts_transactions_and_latest_event(te
     report = layout.pipeline_reports_dir / "pipeline-report-20260409-001500.md"
     report.write_text("# report", encoding="utf-8")
 
-    from openclaw_pipeline.commands.watch_progress import collect_progress_snapshot
+    from ovp_pipeline.commands.watch_progress import collect_progress_snapshot
 
-    snapshot = collect_progress_snapshot(temp_vault, process_lines=["python -m openclaw_pipeline.unified_pipeline_enhanced --vault-dir /tmp/vault --full"])
+    snapshot = collect_progress_snapshot(temp_vault, process_lines=["python -m ovp_pipeline.unified_pipeline_enhanced --vault-dir /tmp/vault --full"])
 
     assert snapshot["counts"] == {
         "raw": 1,
@@ -112,9 +112,9 @@ def test_collect_progress_snapshot_surfaces_run_ledger_progress(temp_vault):
         encoding="utf-8",
     )
 
-    from openclaw_pipeline.commands.watch_progress import collect_progress_snapshot, format_progress_snapshot
+    from ovp_pipeline.commands.watch_progress import collect_progress_snapshot, format_progress_snapshot
 
-    snapshot = collect_progress_snapshot(temp_vault, process_lines=["python -m openclaw_pipeline.unified_pipeline_enhanced"])
+    snapshot = collect_progress_snapshot(temp_vault, process_lines=["python -m ovp_pipeline.unified_pipeline_enhanced"])
 
     assert snapshot["active_run"]["id"] == "txn-1"
     assert snapshot["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 30.0
@@ -129,7 +129,7 @@ def test_collect_progress_snapshot_ignores_report_removed_during_sort(temp_vault
     report = layout.pipeline_reports_dir / "pipeline-report-20260409-001500.md"
     report.write_text("# report", encoding="utf-8")
 
-    from openclaw_pipeline.commands import watch_progress
+    from ovp_pipeline.commands import watch_progress
 
     original_stat = Path.stat
     calls = {"count": 0}
@@ -150,7 +150,7 @@ def test_collect_progress_snapshot_ignores_report_removed_during_sort(temp_vault
 
 
 def test_format_progress_snapshot_shows_deltas(temp_vault):
-    from openclaw_pipeline.commands.watch_progress import format_progress_snapshot
+    from ovp_pipeline.commands.watch_progress import format_progress_snapshot
 
     previous = {
         "counts": {
@@ -206,12 +206,12 @@ def test_watch_progress_main_once_outputs_snapshot(temp_vault, monkeypatch, caps
     layout.raw_dir.mkdir(parents=True, exist_ok=True)
     (layout.raw_dir / "a.md").write_text("# raw", encoding="utf-8")
 
-    from openclaw_pipeline.commands import watch_progress
+    from ovp_pipeline.commands import watch_progress
 
     monkeypatch.setattr(
         watch_progress,
-        "detect_openclaw_process_lines",
-        lambda vault_dir: ["python -m openclaw_pipeline.unified_pipeline_enhanced --vault-dir /tmp/vault --full"],
+        "detect_ovp_process_lines",
+        lambda vault_dir: ["python -m ovp_pipeline.unified_pipeline_enhanced --vault-dir /tmp/vault --full"],
     )
 
     exit_code = watch_progress.main(["--vault-dir", str(temp_vault), "--once"])

@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     ]
     entrypoint_names = {item["name"] for item in entrypoint}
 
-    manifest_env = os.environ.get("OPENCLAW_PACK_MANIFESTS", "")
+    manifest_env = os.environ.get("OVP_PACK_MANIFESTS", "")
     manifest_paths = [Path(item) for item in manifest_env.split(os.pathsep) if item]
     manifests = []
     if manifest_paths:

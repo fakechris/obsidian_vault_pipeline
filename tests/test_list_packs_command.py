@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 
 def test_list_packs_command_outputs_builtin_roles(capsys):
-    from openclaw_pipeline.commands.list_packs import main
+    from ovp_pipeline.commands.list_packs import main
 
     exit_code = main(["--json"])
     payload = json.loads(capsys.readouterr().out)
@@ -19,7 +19,7 @@ def test_list_packs_command_outputs_builtin_roles(capsys):
 
 
 def test_list_packs_command_help_mentions_domain_packs(capsys):
-    from openclaw_pipeline.commands.list_packs import main
+    from ovp_pipeline.commands.list_packs import main
 
     try:
         main(["--help"])
@@ -31,7 +31,7 @@ def test_list_packs_command_help_mentions_domain_packs(capsys):
 
 
 def test_list_packs_command_lists_entrypoint_packs(monkeypatch, capsys):
-    from openclaw_pipeline.commands import list_packs
+    from ovp_pipeline.commands import list_packs
 
     class FakePack:
         name = "media"
@@ -56,7 +56,7 @@ def test_list_packs_command_lists_entrypoint_packs(monkeypatch, capsys):
 
 
 def test_list_packs_command_reads_manifest_paths_from_os_pathsep(tmp_path, monkeypatch, capsys):
-    from openclaw_pipeline.commands.list_packs import main
+    from ovp_pipeline.commands.list_packs import main
 
     first = tmp_path / "external-pack.yaml"
     first.write_text(
@@ -81,10 +81,10 @@ entrypoints:
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "openclaw_pipeline.commands.list_packs.discover_entrypoint_packs",
+        "ovp_pipeline.commands.list_packs.discover_entrypoint_packs",
         lambda: {},
     )
-    monkeypatch.setenv("OPENCLAW_PACK_MANIFESTS", f"{first}{os.pathsep}{second}")
+    monkeypatch.setenv("OVP_PACK_MANIFESTS", f"{first}{os.pathsep}{second}")
 
     exit_code = main(["--json"])
     payload = json.loads(capsys.readouterr().out)

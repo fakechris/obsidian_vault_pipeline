@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from openclaw_pipeline.extraction.llm_extractor import DefaultProfileExtractor, _split_sections
-from openclaw_pipeline.extraction.prompt_builder import build_extraction_prompt
-from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionSpan
-from openclaw_pipeline.extraction.validator import validate_record
-from openclaw_pipeline.packs.loader import load_pack
+from ovp_pipeline.extraction.llm_extractor import DefaultProfileExtractor, _split_sections
+from ovp_pipeline.extraction.prompt_builder import build_extraction_prompt
+from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionSpan
+from ovp_pipeline.extraction.validator import validate_record
+from ovp_pipeline.packs.loader import load_pack
 
 
 def test_workflow_graph_spans_preserve_duplicate_step_offsets():

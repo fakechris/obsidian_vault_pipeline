@@ -109,7 +109,7 @@ If media work has already started:
 If media needs to inspect the current runtime contract, use:
 
 ```bash
-PYTHONPATH=src python3.13 -m openclaw_pipeline.commands.doctor --pack <pack-name> --json
+PYTHONPATH=src python3.13 -m ovp_pipeline.commands.doctor --pack <pack-name> --json
 ```
 
 This now exposes:

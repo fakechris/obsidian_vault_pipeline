@@ -5,8 +5,8 @@ import sqlite3
 
 
 def _build_contradiction(temp_vault):
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     one = temp_vault / "10-Knowledge" / "Evergreen" / "One.md"
     two = temp_vault / "10-Knowledge" / "Evergreen" / "Two.md"
@@ -48,8 +48,8 @@ Agent harness does not support local-first execution for operators.
 
 
 def test_resolve_contradictions_command_updates_truth_store_status(temp_vault, capsys):
-    from openclaw_pipeline.commands.resolve_contradictions import main
-    from openclaw_pipeline.truth_api import list_contradictions, list_review_actions
+    from ovp_pipeline.commands.resolve_contradictions import main
+    from ovp_pipeline.truth_api import list_contradictions, list_review_actions
 
     contradiction_id, _one, _two = _build_contradiction(temp_vault)
 
@@ -81,10 +81,10 @@ def test_resolve_contradictions_command_updates_truth_store_status(temp_vault, c
 
 
 def test_resolve_contradictions_command_can_apply_review_queue(temp_vault, capsys):
-    from openclaw_pipeline.commands.resolve_contradictions import main
-    from openclaw_pipeline.operations.runtime import run_operation_profile
-    from openclaw_pipeline.packs.loader import load_pack
-    from openclaw_pipeline.truth_api import list_contradictions
+    from ovp_pipeline.commands.resolve_contradictions import main
+    from ovp_pipeline.operations.runtime import run_operation_profile
+    from ovp_pipeline.packs.loader import load_pack
+    from ovp_pipeline.truth_api import list_contradictions
 
     contradiction_id, _one, _two = _build_contradiction(temp_vault)
     pack = load_pack("default-knowledge")
@@ -119,9 +119,9 @@ def test_resolve_contradictions_command_can_apply_review_queue(temp_vault, capsy
 
 
 def test_resolve_contradictions_command_can_rebuild_affected_summaries(temp_vault, capsys):
-    from openclaw_pipeline.commands.resolve_contradictions import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.resolve_contradictions import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     contradiction_id, _one, _two = _build_contradiction(temp_vault)
     layout = VaultLayout.from_vault(temp_vault)
@@ -172,8 +172,8 @@ def test_resolve_contradictions_command_can_rebuild_affected_summaries(temp_vaul
 
 
 def test_resolve_contradictions_command_only_clears_resolved_queue_files(temp_vault, capsys):
-    from openclaw_pipeline.commands.resolve_contradictions import main
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.resolve_contradictions import main
+    from ovp_pipeline.runtime import VaultLayout
 
     contradiction_id, _one, _two = _build_contradiction(temp_vault)
     layout = VaultLayout.from_vault(temp_vault)
@@ -208,8 +208,8 @@ def test_resolve_contradictions_command_only_clears_resolved_queue_files(temp_va
 
 
 def test_resolve_contradictions_command_skips_malformed_queue_artifacts(temp_vault, capsys):
-    from openclaw_pipeline.commands.resolve_contradictions import main
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.resolve_contradictions import main
+    from ovp_pipeline.runtime import VaultLayout
 
     contradiction_id, _one, _two = _build_contradiction(temp_vault)
     layout = VaultLayout.from_vault(temp_vault)

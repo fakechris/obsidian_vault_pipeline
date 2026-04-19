@@ -4,8 +4,8 @@ Tests for rebuild_registry module.
 
 import pytest
 from pathlib import Path
-from openclaw_pipeline.rebuild_registry import rebuild_registry
-from openclaw_pipeline.concept_registry import ConceptRegistry
+from ovp_pipeline.rebuild_registry import rebuild_registry
+from ovp_pipeline.concept_registry import ConceptRegistry
 
 
 class TestRebuildRegistry:

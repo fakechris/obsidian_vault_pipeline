@@ -1,5 +1,5 @@
-from openclaw_pipeline.auto_evergreen_extractor import build_extraction_summary
-from openclaw_pipeline.refine import analyze_breakdown, analyze_cleanup
+from ovp_pipeline.auto_evergreen_extractor import build_extraction_summary
+from ovp_pipeline.refine import analyze_breakdown, analyze_cleanup
 
 
 def test_analyze_cleanup_flags_diary_driven_sections(temp_vault):

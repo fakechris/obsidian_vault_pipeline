@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_resolve_stage_execution_contract_for_primary_pack():
-    from openclaw_pipeline.execution_contract_registry import resolve_stage_execution_contract
+    from ovp_pipeline.execution_contract_registry import resolve_stage_execution_contract
 
     contract = resolve_stage_execution_contract(
         pack_name="research-tech",
@@ -18,7 +18,7 @@ def test_resolve_stage_execution_contract_for_primary_pack():
 
 
 def test_resolve_focused_action_execution_contract_for_compatibility_pack():
-    from openclaw_pipeline.execution_contract_registry import (
+    from ovp_pipeline.execution_contract_registry import (
         resolve_focused_action_execution_contract,
     )
 
@@ -35,7 +35,7 @@ def test_resolve_focused_action_execution_contract_for_compatibility_pack():
 
 
 def test_list_effective_execution_contracts_falls_back_to_compatibility_base():
-    from openclaw_pipeline.execution_contract_registry import list_effective_execution_contracts
+    from ovp_pipeline.execution_contract_registry import list_effective_execution_contracts
 
     contracts = list_effective_execution_contracts(pack_name="default-knowledge")
 
@@ -49,8 +49,8 @@ def test_list_effective_execution_contracts_falls_back_to_compatibility_base():
 
 
 def test_compute_declared_contract_integrity_reports_missing_and_orphan_keys():
-    from openclaw_pipeline.execution_contract_registry import compute_declared_contract_integrity
-    from openclaw_pipeline.packs.base import BaseDomainPack, ProcessorContractSpec, StageHandlerSpec
+    from ovp_pipeline.execution_contract_registry import compute_declared_contract_integrity
+    from ovp_pipeline.packs.base import BaseDomainPack, ProcessorContractSpec, StageHandlerSpec
 
     pack = BaseDomainPack(
         name="diagnostic-pack",

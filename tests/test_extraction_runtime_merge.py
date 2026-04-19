@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from openclaw_pipeline.extraction.specs import (
+from ovp_pipeline.extraction.specs import (
     ExtractionFieldSpec,
     ExtractionProfileSpec,
     GroundingPolicy,
@@ -11,7 +11,7 @@ from openclaw_pipeline.extraction.specs import (
 
 class FakeExtractor:
     def extract(self, chunk_text, *, chunk_index, source_path, profile):  # noqa: ANN001
-        from openclaw_pipeline.extraction.results import ExtractionRecord, ExtractionSpan
+        from ovp_pipeline.extraction.results import ExtractionRecord, ExtractionSpan
 
         quote = "first quote" if chunk_index == 0 else "second quote"
         summary = "first summary" if chunk_index == 0 else "refined summary"
@@ -32,7 +32,7 @@ class FakeExtractor:
 
 
 def test_runtime_merges_records_by_identifier_fields(tmp_path):
-    from openclaw_pipeline.extraction.runtime import ExtractionRuntime
+    from ovp_pipeline.extraction.runtime import ExtractionRuntime
 
     profile = ExtractionProfileSpec(
         name="tech/doc_structure",

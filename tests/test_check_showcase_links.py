@@ -4,7 +4,7 @@ Tests for check_showcase_links module.
 
 import pytest
 from pathlib import Path
-from openclaw_pipeline.check_showcase_links import (
+from ovp_pipeline.check_showcase_links import (
     RegistryLinkChecker,
     LinkCheckResult,
 )
@@ -13,7 +13,7 @@ from openclaw_pipeline.check_showcase_links import (
 class TestRegistryLinkChecker:
     def test_check_active_slug_ok(self, temp_vault, sample_evergreen_files):
         """Test that active slug returns ok."""
-        from openclaw_pipeline.concept_registry import ConceptRegistry, ConceptEntry
+        from ovp_pipeline.concept_registry import ConceptRegistry, ConceptEntry
 
         registry = ConceptRegistry(temp_vault)
         registry.add_entry(ConceptEntry(
@@ -33,7 +33,7 @@ class TestRegistryLinkChecker:
 
     def test_check_alias_warning(self, temp_vault, sample_evergreen_files):
         """Test that alias returns alias_warning."""
-        from openclaw_pipeline.concept_registry import ConceptRegistry, ConceptEntry
+        from ovp_pipeline.concept_registry import ConceptRegistry, ConceptEntry
 
         registry = ConceptRegistry(temp_vault)
         registry.add_entry(ConceptEntry(
@@ -54,7 +54,7 @@ class TestRegistryLinkChecker:
 
     def test_check_broken_link(self, temp_vault, sample_evergreen_files):
         """Test that nonexistent link returns broken."""
-        from openclaw_pipeline.concept_registry import ConceptRegistry
+        from ovp_pipeline.concept_registry import ConceptRegistry
 
         registry = ConceptRegistry(temp_vault)
         registry.save()
@@ -66,7 +66,7 @@ class TestRegistryLinkChecker:
 
     def test_check_file_exists_ok(self, temp_vault):
         """Test that link to existing file returns ok."""
-        from openclaw_pipeline.concept_registry import ConceptRegistry
+        from ovp_pipeline.concept_registry import ConceptRegistry
 
         # Create a file
         (temp_vault / "10-Knowledge" / "Evergreen" / "Test.md").touch()

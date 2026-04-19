@@ -4,8 +4,8 @@ from argparse import Namespace
 
 
 def test_no_pack_selection_matches_primary_full_profile():
-    from openclaw_pipeline.packs.loader import load_primary_pack
-    from openclaw_pipeline.unified_pipeline_enhanced import build_execution_plan
+    from ovp_pipeline.packs.loader import load_primary_pack
+    from ovp_pipeline.unified_pipeline_enhanced import build_execution_plan
 
     args = Namespace(
         full=True,
@@ -29,8 +29,8 @@ def test_no_pack_selection_matches_primary_full_profile():
 
 
 def test_explicit_default_pack_profile_matches_default_full_profile():
-    from openclaw_pipeline.packs.loader import load_default_pack
-    from openclaw_pipeline.unified_pipeline_enhanced import build_execution_plan
+    from ovp_pipeline.packs.loader import load_default_pack
+    from ovp_pipeline.unified_pipeline_enhanced import build_execution_plan
 
     args = Namespace(
         full=True,
@@ -53,8 +53,8 @@ def test_explicit_default_pack_profile_matches_default_full_profile():
 
 
 def test_step_aliases_remain_compatible_with_default_pack():
-    from openclaw_pipeline.packs.loader import load_default_pack
-    from openclaw_pipeline.unified_pipeline_enhanced import STEP_ALIASES
+    from ovp_pipeline.packs.loader import load_default_pack
+    from ovp_pipeline.unified_pipeline_enhanced import STEP_ALIASES
 
     default_pack = load_default_pack()
 
@@ -63,8 +63,8 @@ def test_step_aliases_remain_compatible_with_default_pack():
 
 
 def test_explicit_research_tech_pack_profile_matches_full_profile():
-    from openclaw_pipeline.packs.loader import load_pack
-    from openclaw_pipeline.unified_pipeline_enhanced import build_execution_plan
+    from ovp_pipeline.packs.loader import load_pack
+    from ovp_pipeline.unified_pipeline_enhanced import build_execution_plan
 
     args = Namespace(
         full=True,

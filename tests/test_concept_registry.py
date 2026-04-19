@@ -4,7 +4,7 @@ Tests for concept_registry module.
 
 import pytest
 from pathlib import Path
-from openclaw_pipeline.concept_registry import (
+from ovp_pipeline.concept_registry import (
     ConceptRegistry,
     ConceptEntry,
     STATUS_ACTIVE,

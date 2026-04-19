@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 
-from openclaw_pipeline.handler_registry import resolve_focused_action_handler, resolve_stage_handler
+from ovp_pipeline.handler_registry import resolve_focused_action_handler, resolve_stage_handler
 
 
 def test_compatibility_pack_falls_back_to_base_stage_handler():
@@ -27,12 +27,12 @@ def test_compatibility_pack_falls_back_to_base_focused_action_handler():
     assert spec.action_kind == "deep_dive_workflow"
     assert spec.safe_to_run is True
     assert spec.entrypoint == (
-        "openclaw_pipeline.packs.research_tech.focused_actions:run_deep_dive_workflow_action"
+        "ovp_pipeline.packs.research_tech.focused_actions:run_deep_dive_workflow_action"
     )
 
 
 def test_focused_action_handlers_accept_positional_vault_and_action():
-    from openclaw_pipeline.focused_actions import (
+    from ovp_pipeline.focused_actions import (
         run_deep_dive_workflow_action,
         run_object_extraction_workflow_action,
     )
@@ -42,8 +42,8 @@ def test_focused_action_handlers_accept_positional_vault_and_action():
 
 
 def test_execute_profile_stage_handler_preserves_caller_owned_empty_results(monkeypatch):
-    import openclaw_pipeline.handler_registry as registry_source
-    from openclaw_pipeline.packs.base import StageHandlerSpec
+    import ovp_pipeline.handler_registry as registry_source
+    from ovp_pipeline.packs.base import StageHandlerSpec
 
     captured: dict[str, object] = {}
 
@@ -74,8 +74,8 @@ def test_execute_profile_stage_handler_preserves_caller_owned_empty_results(monk
 
 
 def test_execute_autopilot_stage_handler_preserves_caller_owned_empty_result(monkeypatch):
-    import openclaw_pipeline.handler_registry as registry_source
-    from openclaw_pipeline.packs.base import StageHandlerSpec
+    import ovp_pipeline.handler_registry as registry_source
+    from ovp_pipeline.packs.base import StageHandlerSpec
 
     captured: dict[str, object] = {}
 
@@ -106,9 +106,9 @@ def test_execute_autopilot_stage_handler_preserves_caller_owned_empty_result(mon
 
 
 def test_execute_profile_stage_handler_uses_execution_contract_resolution(monkeypatch):
-    import openclaw_pipeline.handler_registry as registry_source
-    from openclaw_pipeline.execution_contract_registry import ExecutionContractSpec
-    from openclaw_pipeline.packs.base import ProcessorContractSpec, StageHandlerSpec
+    import ovp_pipeline.handler_registry as registry_source
+    from ovp_pipeline.execution_contract_registry import ExecutionContractSpec
+    from ovp_pipeline.packs.base import ProcessorContractSpec, StageHandlerSpec
 
     monkeypatch.setattr(
         registry_source,
@@ -156,9 +156,9 @@ def test_execute_profile_stage_handler_uses_execution_contract_resolution(monkey
 
 
 def test_execute_focused_action_handler_uses_execution_contract_resolution(monkeypatch):
-    import openclaw_pipeline.handler_registry as registry_source
-    from openclaw_pipeline.execution_contract_registry import ExecutionContractSpec
-    from openclaw_pipeline.packs.base import ProcessorContractSpec, StageHandlerSpec
+    import ovp_pipeline.handler_registry as registry_source
+    from ovp_pipeline.execution_contract_registry import ExecutionContractSpec
+    from ovp_pipeline.packs.base import ProcessorContractSpec, StageHandlerSpec
 
     monkeypatch.setattr(
         registry_source,

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from openclaw_pipeline import rebuild_registry as rebuild_source
-from openclaw_pipeline import repair as repair_source
-from openclaw_pipeline.commands import migrate_broken_links as migrate_command
-from openclaw_pipeline.commands import rebuild_registry as rebuild_command
-from openclaw_pipeline.commands import repair as repair_command
-from openclaw_pipeline.concept_registry import (
+from ovp_pipeline import rebuild_registry as rebuild_source
+from ovp_pipeline import repair as repair_source
+from ovp_pipeline.commands import migrate_broken_links as migrate_command
+from ovp_pipeline.commands import rebuild_registry as rebuild_command
+from ovp_pipeline.commands import repair as repair_command
+from ovp_pipeline.concept_registry import (
     ConceptEntry,
     ConceptRegistry,
     STATUS_ALIAS,
     STATUS_DEPRECATED,
     STATUS_REJECTED,
 )
-from openclaw_pipeline.migrate_broken_links import scan_broken_mentions
+from ovp_pipeline.migrate_broken_links import scan_broken_mentions
 
 
 def test_rebuild_registry_reconcile_reports_drift(temp_vault, sample_evergreen_files):

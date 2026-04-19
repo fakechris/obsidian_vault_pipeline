@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openclaw_pipeline.derived.paths import (
+from ovp_pipeline.derived.paths import (
     compiled_view_path,
     extraction_run_path,
     normalize_derived_name,
     review_queue_path,
 )
-from openclaw_pipeline.runtime import VaultLayout
+from ovp_pipeline.runtime import VaultLayout
 
 
 def test_extraction_run_path_is_stable_for_same_inputs(tmp_path):

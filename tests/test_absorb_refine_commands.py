@@ -8,7 +8,7 @@ import pytest
 
 
 def test_absorb_help_includes_expected_arguments(capsys):
-    from openclaw_pipeline.commands.absorb import main
+    from ovp_pipeline.commands.absorb import main
 
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
@@ -23,7 +23,7 @@ def test_absorb_help_includes_expected_arguments(capsys):
 
 
 def test_cleanup_help_includes_expected_arguments(capsys):
-    from openclaw_pipeline.commands.cleanup import main
+    from ovp_pipeline.commands.cleanup import main
 
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
@@ -37,7 +37,7 @@ def test_cleanup_help_includes_expected_arguments(capsys):
 
 
 def test_breakdown_help_includes_expected_arguments(capsys):
-    from openclaw_pipeline.commands.breakdown import main
+    from ovp_pipeline.commands.breakdown import main
 
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
@@ -51,7 +51,7 @@ def test_breakdown_help_includes_expected_arguments(capsys):
 
 
 def test_cleanup_dry_run_returns_json_proposals(temp_vault, capsys):
-    from openclaw_pipeline.commands.cleanup import main
+    from ovp_pipeline.commands.cleanup import main
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "messy-note.md"
     evergreen.write_text(
@@ -83,7 +83,7 @@ Another event happened.
 
 
 def test_breakdown_dry_run_returns_json_proposals(temp_vault, capsys):
-    from openclaw_pipeline.commands.breakdown import main
+    from ovp_pipeline.commands.breakdown import main
 
     evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "big-note.md"
     evergreen.write_text(
@@ -148,7 +148,7 @@ More lines
 
 
 def test_absorb_dry_run_deep_dive_file_returns_zero(temp_vault):
-    from openclaw_pipeline.commands.absorb import main
+    from ovp_pipeline.commands.absorb import main
 
     source_file = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04-07_Test_深度解读.md"
     source_file.parent.mkdir(parents=True, exist_ok=True)
@@ -170,7 +170,7 @@ date: 2026-04-07
 
 
 def test_absorb_json_non_dry_run_emits_structured_summary(temp_vault, capsys, monkeypatch):
-    from openclaw_pipeline.commands import absorb
+    from ovp_pipeline.commands import absorb
 
     source_file = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04-07_Test_深度解读.md"
     source_file.parent.mkdir(parents=True, exist_ok=True)

@@ -199,7 +199,7 @@ def find_related(article, category_dir):
 
 ```bash
 # 创建分支
-git checkout -b bot/openclaw-$(date +%Y%m%d)
+git checkout -b bot/ovp-$(date +%Y%m%d)
 
 # 添加所有更改（显式指定文件，避免添加未跟踪文件）
 git add 50-Inbox/ 20-Areas/ 30-Projects/ 10-Knowledge/
@@ -215,7 +215,7 @@ git commit -m "feat: 新增 N 篇 [分类] 文章深度解读 + M 条书签处�
   - 文章: Z 篇"
 
 # 推送
-git push -u origin bot/openclaw-$(date +%Y%m%d)
+git push -u origin bot/ovp-$(date +%Y%m%d)
 ```
 
 ---

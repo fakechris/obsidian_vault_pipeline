@@ -8,7 +8,7 @@ import sys
 
 
 def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
-    from openclaw_pipeline.commands.doctor import main
+    from ovp_pipeline.commands.doctor import main
 
     exit_code = main(["--json"])
     payload = json.loads(capsys.readouterr().out)
@@ -209,7 +209,7 @@ def test_doctor_command_reports_primary_and_compatibility_roles(capsys):
 
 
 def test_doctor_command_reports_compatibility_pack_metadata(capsys):
-    from openclaw_pipeline.commands.doctor import main
+    from ovp_pipeline.commands.doctor import main
 
     exit_code = main(["--pack", "default-knowledge", "--json"])
     payload = json.loads(capsys.readouterr().out)
@@ -361,7 +361,7 @@ def test_doctor_command_reports_compatibility_pack_metadata(capsys):
 
 
 def test_doctor_command_reports_vault_health(temp_vault, capsys):
-    from openclaw_pipeline.commands.doctor import main
+    from ovp_pipeline.commands.doctor import main
 
     raw = temp_vault / "50-Inbox" / "01-Raw"
     raw.mkdir(parents=True, exist_ok=True)
@@ -379,7 +379,7 @@ def test_doctor_command_reports_vault_health(temp_vault, capsys):
 
 
 def test_doctor_command_text_output_includes_processing_count(temp_vault, capsys):
-    from openclaw_pipeline.commands.doctor import main
+    from ovp_pipeline.commands.doctor import main
 
     processing = temp_vault / "50-Inbox" / "02-Processing"
     processing.mkdir(parents=True, exist_ok=True)
@@ -393,7 +393,7 @@ def test_doctor_command_text_output_includes_processing_count(temp_vault, capsys
 
 
 def test_doctor_help_mentions_pglite(capsys):
-    from openclaw_pipeline.commands.doctor import main
+    from ovp_pipeline.commands.doctor import main
 
     try:
         main(["--help"])
@@ -410,7 +410,7 @@ def test_doctor_module_cli_emits_json():
     repo_root = Path(__file__).resolve().parents[1]
 
     result = subprocess.run(
-        [sys.executable, "-m", "openclaw_pipeline.commands.doctor", "--json"],
+        [sys.executable, "-m", "ovp_pipeline.commands.doctor", "--json"],
         cwd=repo_root,
         capture_output=True,
         text=True,

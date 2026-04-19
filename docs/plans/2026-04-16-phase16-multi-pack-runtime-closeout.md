@@ -84,7 +84,7 @@ Media Pack should **not** patch:
 If Media Pack needs to inspect its effective platform contract, it should use:
 
 ```bash
-PYTHONPATH=src python3.13 -m openclaw_pipeline.commands.doctor --pack <pack-name> --json
+PYTHONPATH=src python3.13 -m ovp_pipeline.commands.doctor --pack <pack-name> --json
 ```
 
 ## What Research Pack Should Assume Now

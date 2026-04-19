@@ -57,7 +57,7 @@ resources:
     - prompts/research-brief.md
 
 entrypoints:
-  pack: openclaw_pack_media.plugin:get_pack
+  pack: ovp_pack_media.plugin:get_pack
 ```
 
 ## 2. Python Entrypoint
@@ -73,8 +73,8 @@ core 通过它拿到 pack 对象。
 
 当前实现支持两种加载路径：
 
-1. 通过 Python entry point 组 `openclaw_pipeline.packs`
-2. 通过 manifest 文件列表 `OPENCLAW_PACK_MANIFESTS`
+1. 通过 Python entry point 组 `ovp.packs`
+2. 通过 manifest 文件列表 `OVP_PACK_MANIFESTS`
 
 manifest 的 `entrypoints.pack` 仍然是最终入口。
 

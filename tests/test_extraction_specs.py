@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_extraction_profile_spec_declares_grounded_projection_contract():
-    from openclaw_pipeline.extraction.specs import (
+    from ovp_pipeline.extraction.specs import (
         ExtractionFieldSpec,
         ExtractionProfileSpec,
         GroundingPolicy,

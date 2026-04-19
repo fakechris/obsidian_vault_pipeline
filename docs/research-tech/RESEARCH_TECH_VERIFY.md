@@ -8,7 +8,7 @@ Use this checklist when validating the primary `research-tech` pack.
 ovp-packs --json
 ovp-doctor --pack research-tech --json
 ovp-truth objects --vault-dir /path/to/vault
-python3 -m openclaw_pipeline.commands.watch_progress --vault-dir /path/to/vault --once
+python3 -m ovp_pipeline.commands.watch_progress --vault-dir /path/to/vault --once
 ovp --help
 ovp-autopilot --help
 ```
@@ -33,7 +33,7 @@ Expected:
 ```bash
 PYTHONPATH=src python3.13 -m pytest -q tests/test_pack_e2e.py tests/test_pack_runtime_e2e.py tests/test_autopilot_contracts.py
 PYTHONPATH=src python3.13 -m pytest -q
-python3.13 -m compileall src/openclaw_pipeline
+python3.13 -m compileall src/ovp_pipeline
 ```
 
 Expected:
@@ -57,7 +57,7 @@ While it is running, inspect the same run through all three operator readers:
 ovp-ui --vault-dir /path/to/vault --port 8787
 
 # Terminal B:
-python3 -m openclaw_pipeline.commands.watch_progress --vault-dir /path/to/vault --once
+python3 -m ovp_pipeline.commands.watch_progress --vault-dir /path/to/vault --once
 curl -s http://127.0.0.1:8787/api/runtime | jq
 open http://127.0.0.1:8787/
 ```

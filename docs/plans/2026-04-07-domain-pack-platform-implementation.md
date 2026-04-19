@@ -16,8 +16,8 @@
 
 **Files:**
 - Create: `tests/test_default_pack_compat.py`
-- Reference: `src/openclaw_pipeline/unified_pipeline_enhanced.py`
-- Reference: `src/openclaw_pipeline/autopilot/daemon.py`
+- Reference: `src/ovp_pipeline/unified_pipeline_enhanced.py`
+- Reference: `src/ovp_pipeline/autopilot/daemon.py`
 
 **Step 1: Write the failing test**
 
@@ -50,9 +50,9 @@ Expected: PASS
 ### Task 2: Create pack manifests and runtime interfaces
 
 **Files:**
-- Create: `src/openclaw_pipeline/packs/__init__.py`
-- Create: `src/openclaw_pipeline/packs/base.py`
-- Create: `src/openclaw_pipeline/packs/loader.py`
+- Create: `src/ovp_pipeline/packs/__init__.py`
+- Create: `src/ovp_pipeline/packs/base.py`
+- Create: `src/ovp_pipeline/packs/loader.py`
 - Test: `tests/test_pack_loader.py`
 
 **Step 1: Write the failing test**
@@ -94,10 +94,10 @@ Expected: PASS
 ### Task 3: Move current domain metadata into `default-knowledge`
 
 **Files:**
-- Create: `src/openclaw_pipeline/packs/default_knowledge/__init__.py`
-- Create: `src/openclaw_pipeline/packs/default_knowledge/pack.py`
-- Create: `src/openclaw_pipeline/packs/default_knowledge/schemas.py`
-- Create: `src/openclaw_pipeline/packs/default_knowledge/profiles.py`
+- Create: `src/ovp_pipeline/packs/default_knowledge/__init__.py`
+- Create: `src/ovp_pipeline/packs/default_knowledge/pack.py`
+- Create: `src/ovp_pipeline/packs/default_knowledge/schemas.py`
+- Create: `src/ovp_pipeline/packs/default_knowledge/profiles.py`
 - Test: `tests/test_default_knowledge_pack.py`
 
 **Step 1: Write the failing test**
@@ -131,8 +131,8 @@ Expected: PASS
 ### Task 4: Add `--pack` and `--profile` runtime selection
 
 **Files:**
-- Modify: `src/openclaw_pipeline/unified_pipeline_enhanced.py`
-- Modify: `src/openclaw_pipeline/autopilot/daemon.py`
+- Modify: `src/ovp_pipeline/unified_pipeline_enhanced.py`
+- Modify: `src/ovp_pipeline/autopilot/daemon.py`
 - Test: `tests/test_pack_profiles.py`
 
 **Step 1: Write the failing test**
@@ -170,8 +170,8 @@ Expected: PASS
 ### Task 5: Introduce pack-aware object metadata without breaking concept registry
 
 **Files:**
-- Create: `src/openclaw_pipeline/object_registry.py`
-- Modify: `src/openclaw_pipeline/concept_registry.py`
+- Create: `src/ovp_pipeline/object_registry.py`
+- Modify: `src/ovp_pipeline/concept_registry.py`
 - Test: `tests/test_object_registry.py`
 
 **Step 1: Write the failing test**
@@ -207,9 +207,9 @@ Expected: PASS
 ### Task 6: Make discovery hooks pack-aware
 
 **Files:**
-- Modify: `src/openclaw_pipeline/discovery.py`
-- Modify: `src/openclaw_pipeline/evidence.py`
-- Modify: `src/openclaw_pipeline/concept_registry.py`
+- Modify: `src/ovp_pipeline/discovery.py`
+- Modify: `src/ovp_pipeline/evidence.py`
+- Modify: `src/ovp_pipeline/concept_registry.py`
 - Test: `tests/test_pack_discovery_hooks.py`
 
 **Step 1: Write the failing test**
@@ -243,9 +243,9 @@ Expected: PASS
 ### Task 7: Add plugin manifest discovery and installation hooks
 
 **Files:**
-- Create: `src/openclaw_pipeline/plugins.py`
+- Create: `src/ovp_pipeline/plugins.py`
 - Modify: `pyproject.toml`
-- Modify: `src/openclaw_pipeline/commands/...` as needed
+- Modify: `src/ovp_pipeline/commands/...` as needed
 - Test: `tests/test_plugin_installation.py`
 
 **Step 1: Write the failing test**
@@ -337,7 +337,7 @@ Expected: PASS
 **Step 3: Run compile verification**
 
 ```bash
-python3 -m compileall src/openclaw_pipeline
+python3 -m compileall src/ovp_pipeline
 ```
 
 Expected: exit 0

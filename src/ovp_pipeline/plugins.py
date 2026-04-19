@@ -11,7 +11,7 @@ from .packs.base import BaseDomainPack
 
 
 PACK_API_VERSION = 1
-ENTRYPOINT_GROUP = "openclaw_pipeline.packs"
+ENTRYPOINT_GROUP = "ovp.packs"
 
 
 @dataclass(frozen=True)

@@ -32,7 +32,7 @@ Phase 4
 - **Status:** complete
 
 ### Phase 3: Comparative Analysis
-- [x] Compare arscontexta assumptions against OpenClaw's current direction
+- [x] Compare arscontexta assumptions against OVP's current direction
 - [x] Separate strong ideas from superficial similarities
 - [x] Record decisions and rationale
 - **Status:** complete
@@ -52,7 +52,7 @@ Phase 4
 ## Key Questions
 1. What problem is arscontexta actually solving beyond "better note taking"?
 2. Which parts of its system are durable ideas versus implementation-specific choices?
-3. What is genuinely useful for OpenClaw now, and what is likely premature?
+3. What is genuinely useful for OVP now, and what is likely premature?
 4. Which external patterns should OVP explicitly reject rather than absorb?
 
 ## Decisions Made

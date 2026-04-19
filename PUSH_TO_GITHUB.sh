@@ -51,7 +51,7 @@ echo ""
 echo "===================================="
 echo "当前仓库状态:"
 echo "===================================="
-cd /Users/chris/Documents/openclaw-template
+cd /Users/chris/Documents/obsidian-vault-pipeline
 git log --oneline -3
 echo ""
 echo "远程配置:"

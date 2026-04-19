@@ -24,7 +24,7 @@
 媒体项目应该单独一个工程，例如：
 
 ```text
-openclaw-pack-media-editorial
+ovp-pack-media-editorial
 ```
 
 原因：

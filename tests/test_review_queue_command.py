@@ -4,10 +4,10 @@ import json
 
 
 def test_review_queue_builder_defaults_to_compatibility_pack(temp_vault):
-    from openclaw_pipeline.extraction.artifacts import write_run_result
-    from openclaw_pipeline.extraction.results import ExtractionRunResult
-    from openclaw_pipeline.operations.runtime import _review_queue_items
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.extraction.artifacts import write_run_result
+    from ovp_pipeline.extraction.results import ExtractionRunResult
+    from ovp_pipeline.operations.runtime import _review_queue_items
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     result = ExtractionRunResult(
@@ -27,7 +27,7 @@ def test_review_queue_builder_defaults_to_compatibility_pack(temp_vault):
 
 
 def test_run_operations_help_mentions_primary_pack(capsys):
-    from openclaw_pipeline.commands.run_operations import main
+    from ovp_pipeline.commands.run_operations import main
 
     try:
         main(["--help"])
@@ -40,8 +40,8 @@ def test_run_operations_help_mentions_primary_pack(capsys):
 
 
 def test_run_operations_command_writes_frontmatter_review_items(temp_vault):
-    from openclaw_pipeline.commands.run_operations import main
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.run_operations import main
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Broken.md"
     note.parent.mkdir(parents=True, exist_ok=True)
@@ -79,10 +79,10 @@ date: 2026-04-10
 
 
 def test_run_operations_command_writes_extraction_review_items(temp_vault):
-    from openclaw_pipeline.commands.run_operations import main
-    from openclaw_pipeline.derived.paths import extraction_run_path
-    from openclaw_pipeline.extraction.results import ExtractionRunResult
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.run_operations import main
+    from ovp_pipeline.derived.paths import extraction_run_path
+    from ovp_pipeline.extraction.results import ExtractionRunResult
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     source_path = temp_vault / "50-Inbox" / "01-Raw" / "example.md"
@@ -131,10 +131,10 @@ def test_run_operations_command_writes_extraction_review_items(temp_vault):
 
 
 def test_run_operations_command_uses_profile_pack_for_extraction_review_items(temp_vault):
-    from openclaw_pipeline.commands.run_operations import main
-    from openclaw_pipeline.derived.paths import extraction_run_path
-    from openclaw_pipeline.extraction.results import ExtractionRunResult
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.run_operations import main
+    from ovp_pipeline.derived.paths import extraction_run_path
+    from ovp_pipeline.extraction.results import ExtractionRunResult
+    from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
     source_path = temp_vault / "50-Inbox" / "01-Raw" / "research.md"
@@ -184,9 +184,9 @@ def test_run_operations_command_uses_profile_pack_for_extraction_review_items(te
 
 
 def test_run_operations_command_writes_contradiction_review_items(temp_vault):
-    from openclaw_pipeline.commands.run_operations import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.run_operations import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     one = temp_vault / "10-Knowledge" / "Evergreen" / "One.md"
     two = temp_vault / "10-Knowledge" / "Evergreen" / "Two.md"
@@ -244,9 +244,9 @@ Agent harness does not support local-first execution for operators.
 
 
 def test_run_operations_command_writes_stale_summary_review_items(temp_vault):
-    from openclaw_pipeline.commands.run_operations import main
-    from openclaw_pipeline.knowledge_index import rebuild_knowledge_index
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.run_operations import main
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Thin.md"
     note.write_text(
@@ -288,8 +288,8 @@ Thin note.
 
 
 def test_run_operations_command_frontmatter_audit_supports_research_tech_pack(temp_vault):
-    from openclaw_pipeline.commands.run_operations import main
-    from openclaw_pipeline.runtime import VaultLayout
+    from ovp_pipeline.commands.run_operations import main
+    from ovp_pipeline.runtime import VaultLayout
 
     note = temp_vault / "10-Knowledge" / "Evergreen" / "Broken.md"
     note.parent.mkdir(parents=True, exist_ok=True)

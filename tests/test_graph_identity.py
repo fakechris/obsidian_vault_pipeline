@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from openclaw_pipeline.concept_registry import ConceptEntry, ConceptRegistry
-from openclaw_pipeline.graph.frontmatter import FrontmatterParser
-from openclaw_pipeline.graph.graph_builder import GraphBuilder
-from openclaw_pipeline.graph.link_parser import LinkParser
+from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+from ovp_pipeline.graph.frontmatter import FrontmatterParser
+from ovp_pipeline.graph.graph_builder import GraphBuilder
+from ovp_pipeline.graph.link_parser import LinkParser
 
 
 def test_frontmatter_and_link_parser_respect_explicit_note_id(temp_vault):

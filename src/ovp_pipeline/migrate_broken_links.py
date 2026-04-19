@@ -11,9 +11,9 @@ This script:
 6. Produces dry-run report or applies fixes
 
 Usage:
-    python -m openclaw_pipeline.migrate_broken_links --scan
-    python -m openclaw_pipeline.migrate_broken_links --resolve --dry-run
-    python -m openclaw_pipeline.migrate_broken_links --apply --min-confidence 0.9
+    python -m ovp_pipeline.migrate_broken_links --scan
+    python -m ovp_pipeline.migrate_broken_links --resolve --dry-run
+    python -m ovp_pipeline.migrate_broken_links --apply --min-confidence 0.9
 """
 
 from __future__ import annotations

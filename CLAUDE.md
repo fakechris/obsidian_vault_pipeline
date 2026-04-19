@@ -339,25 +339,25 @@ ovp-lint --interactive
 
 ```bash
 # 创建新事务
-python3 -m openclaw_pipeline.txn start <type> <description>
+python3 -m ovp_pipeline.txn start <type> <description>
 
 # 更新步骤
-python3 -m openclaw_pipeline.txn step <txn_id> <step_name> <status> [output]
+python3 -m ovp_pipeline.txn step <txn_id> <step_name> <status> [output]
 
 # 完成事务
-python3 -m openclaw_pipeline.txn complete <txn_id>
+python3 -m ovp_pipeline.txn complete <txn_id>
 
 # 失败事务
-python3 -m openclaw_pipeline.txn fail <txn_id> <reason>
+python3 -m ovp_pipeline.txn fail <txn_id> <reason>
 
 # 列出未完成
-python3 -m openclaw_pipeline.txn list
+python3 -m ovp_pipeline.txn list
 
 # 显示详情
-python3 -m openclaw_pipeline.txn show <txn_id>
+python3 -m ovp_pipeline.txn show <txn_id>
 
 # 归档旧事务
-python3 -m openclaw_pipeline.txn archive [days]
+python3 -m ovp_pipeline.txn archive [days]
 ```
 
 **事务JSON结构**:

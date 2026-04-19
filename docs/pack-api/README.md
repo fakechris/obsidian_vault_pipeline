@@ -21,7 +21,7 @@
 
 ## 1. 平台结构
 
-OpenClaw 平台分成三层：
+OVP 平台分成三层：
 
 1. **Core Platform**
 2. **Domain Pack**
@@ -129,10 +129,10 @@ default-knowledge
 推荐目录：
 
 ```text
-openclaw-pack-<name>/
+ovp-pack-<name>/
 ├── README.md
 ├── pyproject.toml
-├── src/openclaw_pack_<name>/
+├── src/ovp_pack_<name>/
 │   ├── __init__.py
 │   ├── plugin.py
 │   ├── manifest.yaml
@@ -171,8 +171,8 @@ ovp --pack media-editorial --profile daily-desk
 
 当前 core 已支持两种发现方式：
 
-- Python entry point 组：`openclaw_pipeline.packs`
-- 显式 manifest 路径：环境变量 `OPENCLAW_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
+- Python entry point 组：`ovp.packs`
+- 显式 manifest 路径：环境变量 `OVP_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
 
 当前也可以直接通过：
 
@@ -309,7 +309,7 @@ Pack 可以定义领域逻辑，但不能破坏 core 的硬边界。
 
 这套 Pack API 的目标有两件事：
 
-1. 建立 OpenClaw 自己的领域扩展体系
+1. 建立 OVP 自己的领域扩展体系
 2. 让我们自己的媒体项目先按这套体系落地，逼出真实接口
 
 补充约束：
