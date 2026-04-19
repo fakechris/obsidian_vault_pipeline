@@ -894,7 +894,8 @@ class EnhancedPipeline:
                         self.logger.log("command_timeout", {"step": step_name, "timeout": timeout})
                         return {"success": False, "timeout": True, "error": f"Timeout after {timeout}s"}
                     if self.txn_id:
-                        self.txn.heartbeat(self.txn_id, step_name=step_name)
+                        progress = self._parse_command_progress(self._read_command_output_snapshot(stdout_file.name))
+                        self.txn.heartbeat(self.txn_id, step_name=step_name, **progress)
                     time.sleep(poll_interval)
 
                 stdout_file.flush()
@@ -925,6 +926,53 @@ class EnhancedPipeline:
         except Exception as e:
             self.logger.log("command_error", {"step": step_name, "error": str(e)})
             return {"success": False, "error": str(e)}
+
+    @staticmethod
+    def _read_command_output_snapshot(path: str) -> str:
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _parse_command_progress(stdout: str) -> dict[str, Any]:
+        resolved_matches = list(re.finditer(r"Resolved\s+(\d+)/(\d+)", stdout))
+        if resolved_matches:
+            match = resolved_matches[-1]
+            done = int(match.group(1))
+            total = int(match.group(2))
+            return {
+                "progress_mode": "counted",
+                "work_units_total": total,
+                "work_units_done": done,
+                "current_item": f"Resolved {done}/{total}",
+                "progress_summary": f"Resolved {done} of {total} items.",
+                "last_meaningful_event": {
+                    "event_type": "command_progress",
+                    "work_units_done": done,
+                    "work_units_total": total,
+                    "line": match.group(0),
+                },
+            }
+
+        found_match = re.search(r"Found\s+(\d+)\s+unique broken mentions", stdout)
+        if found_match:
+            total = int(found_match.group(1))
+            return {
+                "progress_mode": "counted",
+                "work_units_total": total,
+                "work_units_done": 0,
+                "current_item": "resolve broken wikilinks",
+                "progress_summary": f"Found {total} broken wikilink mentions to resolve.",
+                "last_meaningful_event": {
+                    "event_type": "command_progress",
+                    "work_units_done": 0,
+                    "work_units_total": total,
+                    "line": found_match.group(0),
+                },
+            }
+
+        return {}
 
     def _subprocess_env(self) -> dict[str, str]:
         env = os.environ.copy()

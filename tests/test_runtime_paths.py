@@ -1232,6 +1232,58 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
     assert current["current_item"] == "rebuild knowledge index"
 
 
+def test_run_command_streams_resolve_progress_to_run_ledger(tmp_path, monkeypatch):
+    from ovp_pipeline import unified_pipeline_enhanced as pipeline_module
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.txn_id = txn.start("enhanced-pipeline", "Stream subprocess progress")
+
+    class FakeProcess:
+        def __init__(self, cmd, cwd, stdout, stderr, text, env):
+            self.returncode = 0
+            self.stdout = stdout
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            if self.polls == 1:
+                self.stdout.write(
+                    "Loaded 4730 registry entries\n"
+                    "Scanning for broken links...\n"
+                    "Found 5625 unique broken mentions\n"
+                    "Resolving...\n"
+                    "  Resolved 50/5625...\n"
+                )
+                self.stdout.flush()
+                return None
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(pipeline_module.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(pipeline_module.time, "sleep", lambda _seconds: None)
+
+    result = pipeline.run_command(["fake-progress-command"], "fix_links", timeout=30)
+
+    payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
+    current = payload["run_ledger"]["current_step"]
+    assert result["success"] is True
+    assert current["progress_mode"] == "counted"
+    assert current["work_units_total"] == 5625
+    assert current["work_units_done"] == 50
+    assert current["current_item"] == "Resolved 50/5625"
+    assert payload["run_ledger"]["last_meaningful_event"]["event_type"] == "command_progress"
+
+
 def test_step_refine_runs_cleanup_then_breakdown(tmp_path, monkeypatch):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
