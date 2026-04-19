@@ -112,6 +112,39 @@ class TestBrokenLinkResolver:
         assert result.proposed_slug == "unknown-new-concept"
         assert result.confidence == 0.5
 
+    def test_exact_only_resolver_uses_surface_index_without_search(self, temp_vault, monkeypatch):
+        registry = ConceptRegistry(temp_vault)
+        registry.add_entry(ConceptEntry(
+            slug="agent-harness",
+            title="Agent Harness",
+            aliases=["智能体 Harness"],
+            definition="Agent runtime wrapper.",
+            area="ai",
+        ))
+        registry.save()
+
+        def fail_search(*args, **kwargs):
+            raise AssertionError("exact-only resolution must not call registry.search")
+
+        monkeypatch.setattr(registry, "search", fail_search)
+        resolver = BrokenLinkResolver(registry, exact_only=True)
+
+        exact = resolver.resolve_unique_mention(UniqueBrokenMention(
+            surface="Agent Harness",
+            occurrences=[],
+            contexts=[],
+        ))
+        unknown = resolver.resolve_unique_mention(UniqueBrokenMention(
+            surface="Unknown Harness Variant",
+            occurrences=[],
+            contexts=[],
+        ))
+
+        assert exact.action == "link_existing"
+        assert exact.slug == "agent-harness"
+        assert unknown.action == "create_candidate"
+        assert unknown.proposed_slug == "unknown-harness-variant"
+
     def test_resolve_hot_topic_no_link(self, temp_vault, sample_evergreen_files):
         """Test that short, topic-like mentions get no_link."""
         registry = ConceptRegistry(temp_vault)

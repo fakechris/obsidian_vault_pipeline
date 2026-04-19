@@ -1180,6 +1180,7 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
     assert result["success"] is True
     assert captured["step_name"] == "fix_links"
     assert "ovp_pipeline.commands.migrate_broken_links" in " ".join(captured["cmd"])
+    assert "--exact-only" in captured["cmd"]
     assert captured["timeout"] > 300
     current = captured["current_step"]
     assert current["progress_mode"] == "counted"

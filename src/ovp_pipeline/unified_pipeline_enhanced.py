@@ -1530,6 +1530,7 @@ class EnhancedPipeline:
         cmd = [
             sys.executable, "-m", "ovp_pipeline.commands.migrate_broken_links",
             "--write" if not dry_run else "--dry-run",
+            "--exact-only",
             "--vault-dir", str(self.vault_dir),
         ]
 
