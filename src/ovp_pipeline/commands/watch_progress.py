@@ -23,6 +23,7 @@ PROCESS_MARKERS = (
     "ovp_pipeline.auto_github_processor",
     "ovp_pipeline.auto_paper_processor",
     "ovp_pipeline.autopilot.daemon",
+    "/bin/ovp ",
     "pinboard-processor.py",
 )
 

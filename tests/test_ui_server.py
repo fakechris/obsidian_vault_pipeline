@@ -85,11 +85,15 @@ def test_ui_server_root_serves_html_shell(temp_vault):
                     "run_state": "running",
                     "workflow_profile": "full",
                     "pack_name": "research-tech",
+                    "planned_steps": ["pinboard", "absorb", "knowledge_index"],
+                    "started_at": _fresh_timestamp(seconds_ago=360),
                     "heartbeat_at": _fresh_timestamp(seconds_ago=30),
                     "current_step_name": "absorb",
                     "current_step": {
                         "step_name": "absorb",
                         "step_state": "running",
+                        "step_started_at": _fresh_timestamp(seconds_ago=300),
+                        "step_heartbeat_at": _fresh_timestamp(seconds_ago=30),
                         "progress_mode": "counted",
                         "work_units_total": 10,
                         "work_units_done": 3,
@@ -126,7 +130,12 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert "Inspect" in body
     assert "Review" in body
     assert "Current Workflow" in body
+    assert "Stage 2/3: absorb" in body
     assert "3/10 files processed" in body
+    assert "30.0%" in body
+    assert "files/s" in body
+    assert "files/min" in body
+    assert "ETA" in body
     assert "Alpha.md" in body
     assert 'http-equiv="refresh"' in body
     assert 'content="10"' in body
@@ -153,11 +162,15 @@ def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
                     "run_state": "running",
                     "workflow_profile": "full",
                     "pack_name": "research-tech",
+                    "planned_steps": ["pinboard", "absorb", "knowledge_index"],
+                    "started_at": _fresh_timestamp(seconds_ago=660),
                     "heartbeat_at": _fresh_timestamp(seconds_ago=30),
                     "current_step_name": "absorb",
                     "current_step": {
                         "step_name": "absorb",
                         "step_state": "running",
+                        "step_started_at": _fresh_timestamp(seconds_ago=600),
+                        "step_heartbeat_at": _fresh_timestamp(seconds_ago=30),
                         "progress_mode": "counted",
                         "work_units_total": 20,
                         "work_units_done": 5,
@@ -189,6 +202,9 @@ def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
     assert response.status == 200
     assert payload["active_run"]["id"] == "txn-1"
     assert payload["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 25.0
+    assert payload["active_run"]["runtime_progress"]["stage"]["summary"] == "Stage 2/3: absorb"
+    assert payload["active_run"]["runtime_progress"]["work"]["summary"] == "5/20 files processed"
+    assert payload["active_run"]["runtime_progress"]["performance"]["items_per_minute"] > 0
 
 
 def test_ui_server_runtime_endpoint_returns_structured_error(temp_vault, monkeypatch):

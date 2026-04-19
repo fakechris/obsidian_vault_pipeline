@@ -225,11 +225,15 @@ def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
                     "run_state": "running",
                     "workflow_profile": "full",
                     "pack_name": "research-tech",
+                    "planned_steps": ["pinboard", "absorb", "knowledge_index"],
+                    "started_at": "2026-04-09T00:00:00Z",
                     "heartbeat_at": "2026-04-09T00:15:00Z",
                     "current_step_name": "absorb",
                     "current_step": {
                         "step_name": "absorb",
                         "step_state": "running",
+                        "step_started_at": "2026-04-09T00:10:00Z",
+                        "step_heartbeat_at": "2026-04-09T00:15:00Z",
                         "progress_mode": "counted",
                         "work_units_total": 20,
                         "work_units_done": 5,
@@ -277,6 +281,22 @@ def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
     assert payload["active_run"]["id"] == "txn-1"
     assert payload["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 25.0
     assert payload["active_run"]["run_ledger"]["current_step"]["current_item"] == "Alpha.md"
+    runtime_progress = payload["active_run"]["runtime_progress"]
+    assert runtime_progress["stage"]["current_index"] == 2
+    assert runtime_progress["stage"]["total"] == 3
+    assert runtime_progress["stage"]["summary"] == "Stage 2/3: absorb"
+    assert runtime_progress["work"]["done"] == 5
+    assert runtime_progress["work"]["total"] == 20
+    assert runtime_progress["work"]["failed"] == 1
+    assert runtime_progress["work"]["percent"] == 25.0
+    assert runtime_progress["work"]["summary"] == "5/20 files processed"
+    assert runtime_progress["performance"]["elapsed_seconds"] == 600
+    assert runtime_progress["performance"]["items_per_second"] == pytest.approx(0.008333, rel=1e-3)
+    assert runtime_progress["performance"]["items_per_minute"] == pytest.approx(0.5, rel=1e-3)
+    assert runtime_progress["performance"]["eta_seconds"] == 1800
+    assert runtime_progress["performance"]["eta_at"] == "2026-04-09T00:50:00Z"
+    assert runtime_progress["performance"]["rate_summary"] == "0.0083 files/s (0.50 files/min)"
+    assert runtime_progress["performance"]["eta_summary"] == "~30m remaining, ETA 2026-04-09T00:50:00Z"
     assert payload["stale_count"] == 1
 
 

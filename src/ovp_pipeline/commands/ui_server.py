@@ -341,17 +341,49 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
 
     ledger = active_run.get("run_ledger") if isinstance(active_run.get("run_ledger"), dict) else {}
     current = ledger.get("current_step") if isinstance(ledger.get("current_step"), dict) else {}
+    runtime_progress = active_run.get("runtime_progress") if isinstance(active_run.get("runtime_progress"), dict) else {}
+    stage_progress = runtime_progress.get("stage") if isinstance(runtime_progress.get("stage"), dict) else {}
+    work_progress = runtime_progress.get("work") if isinstance(runtime_progress.get("work"), dict) else {}
+    performance = runtime_progress.get("performance") if isinstance(runtime_progress.get("performance"), dict) else {}
     run_state = str(ledger.get("run_state") or active_run.get("status") or "running")
     step_name = str(current.get("step_name") or ledger.get("current_step_name") or active_run.get("checkpoint") or "")
-    progress_summary = str(current.get("progress_summary") or "Progress is currently indeterminate.")
-    current_item = str(current.get("current_item") or "").strip()
+    progress_summary = str(
+        work_progress.get("summary") or current.get("progress_summary") or "Progress is currently indeterminate."
+    )
+    current_item = str(work_progress.get("current_item") or current.get("current_item") or "").strip()
     heartbeat_at = str(ledger.get("heartbeat_at") or active_run.get("last_updated") or "")
     facts = [
         f"<li>Run: {escape(str(active_run.get('id') or ''))}</li>",
         f"<li>State: {escape(run_state)}</li>",
     ]
-    if step_name:
+    stage_summary = str(stage_progress.get("summary") or "").strip()
+    if stage_summary:
+        facts.append(f"<li>Stage: {escape(stage_summary)}</li>")
+    elif step_name:
         facts.append(f"<li>Step: {escape(step_name)}</li>")
+    work_done = work_progress.get("done")
+    work_total = work_progress.get("total")
+    work_percent = work_progress.get("percent")
+    if work_done is not None and work_total is not None:
+        if work_percent is not None:
+            facts.append(
+                f"<li>Files: {escape(str(work_done))}/{escape(str(work_total))} "
+                f"({escape(str(work_percent))}%)</li>"
+            )
+        else:
+            facts.append(f"<li>Files: {escape(str(work_done))}/{escape(str(work_total))}</li>")
+    failed = work_progress.get("failed")
+    if failed:
+        facts.append(f"<li>Failed files: {escape(str(failed))}</li>")
+    rate_summary = str(performance.get("rate_summary") or "").strip()
+    if rate_summary:
+        facts.append(f"<li>Speed: {escape(rate_summary)}</li>")
+    eta_summary = str(performance.get("eta_summary") or "").strip()
+    if eta_summary:
+        facts.append(f"<li>ETA: {escape(eta_summary)}</li>")
+    elapsed_summary = str(performance.get("elapsed_summary") or "").strip()
+    if elapsed_summary:
+        facts.append(f"<li>Stage elapsed: {escape(elapsed_summary)}</li>")
     if heartbeat_at:
         facts.append(f"<li>Heartbeat: {escape(heartbeat_at)}</li>")
     if stale_count:

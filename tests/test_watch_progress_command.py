@@ -123,6 +123,27 @@ def test_collect_progress_snapshot_surfaces_run_ledger_progress(temp_vault):
     assert "Current item: Alpha.md" in rendered
 
 
+def test_detect_ovp_process_lines_matches_console_script_worker(temp_vault, monkeypatch):
+    from ovp_pipeline.commands import watch_progress
+
+    class Result:
+        stdout = (
+            f"chris 111 0.0 0.0 python /env/bin/ovp --from-step absorb --vault-dir {temp_vault}\n"
+            f"chris 222 0.0 0.0 python /env/bin/ovp-ui --vault-dir {temp_vault} --port 8766\n"
+            f"chris 333 0.0 0.0 python /env/bin/ovp-watch-progress --vault-dir {temp_vault}\n"
+        )
+
+    def fake_run(*args, **kwargs):
+        return Result()
+
+    monkeypatch.setattr(watch_progress.subprocess, "run", fake_run)
+
+    lines = watch_progress.detect_ovp_process_lines(temp_vault)
+
+    assert len(lines) == 1
+    assert "/env/bin/ovp --from-step absorb" in lines[0]
+
+
 def test_collect_progress_snapshot_ignores_report_removed_during_sort(temp_vault, monkeypatch):
     layout = VaultLayout.from_vault(temp_vault)
     layout.pipeline_reports_dir.mkdir(parents=True, exist_ok=True)
