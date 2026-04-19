@@ -32,6 +32,7 @@ from .runtime import (
     signal_ledger_write_lock,
 )
 from .runtime_processes import detect_runtime_processes
+from .run_history import list_run_history
 from .txn import classify_run_ledgers
 
 MAX_PAGE_SIZE = 500
@@ -120,6 +121,7 @@ def get_runtime_status(
     if active_run is not None:
         active_run["runtime_progress"] = _build_runtime_progress(active_run, now_iso=generated_at)
     runtime_process_items = detect_runtime_processes(resolved_vault)
+    run_history = list_run_history(layout.transactions_dir, now_iso=generated_at, limit=10)
     return {
         "generated_at": generated_at,
         "active_count": len(classified["active"]),
@@ -130,6 +132,7 @@ def get_runtime_status(
             "active_count": len(runtime_process_items),
             "items": runtime_process_items,
         },
+        "run_history": run_history,
     }
 
 

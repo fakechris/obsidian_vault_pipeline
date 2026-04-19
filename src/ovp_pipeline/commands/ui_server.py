@@ -417,6 +417,46 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
     )
 
 
+def _render_run_history_card(runtime: dict[str, object] | None) -> str:
+    if not isinstance(runtime, dict):
+        return ""
+    history = runtime.get("run_history") if isinstance(runtime.get("run_history"), dict) else {}
+    items = history.get("items") if isinstance(history.get("items"), list) else []
+    if not items:
+        return (
+            "<section class='card'><h2>Recent Runs</h2>"
+            "<p class='muted'>No persisted run history found in the transaction ledger.</p></section>"
+        )
+    rendered_items: list[str] = []
+    for item in items[:6]:
+        if not isinstance(item, dict):
+            continue
+        run_id = str(item.get("run_id") or "")
+        status = str(item.get("status") or "")
+        duration = str(item.get("duration_summary") or "duration unknown")
+        scope = str(item.get("scope_summary") or "scope unknown")
+        work = str(item.get("content_summary") or "No counted work recorded.")
+        started_at = str(item.get("started_at") or "")
+        finished_at = str(item.get("finished_at") or "running")
+        rendered_items.append(
+            "<li>"
+            f"<strong>{escape(run_id)}</strong> "
+            f"<span class='pill'>{escape(status)}</span>"
+            f"<div class='muted'>Duration: {escape(duration)} · {escape(started_at)} → {escape(finished_at)}</div>"
+            f"<div class='muted'>Scope: {escape(scope)}</div>"
+            f"<div class='muted'>Work: {escape(work)}</div>"
+            "</li>"
+        )
+    total_count = history.get("total_count")
+    total_suffix = f"<p class='muted'>Showing {len(rendered_items)} of {escape(str(total_count))} persisted run(s).</p>" if total_count else ""
+    return (
+        "<section class='card'><h2>Recent Runs</h2>"
+        f"{total_suffix}"
+        f"<ul class='list-tight'>{''.join(rendered_items)}</ul>"
+        "</section>"
+    )
+
+
 def _render_operator_rail(payload: dict) -> str:
     items = payload.get("operator_rail")
     if not isinstance(items, list) or not items:
@@ -1233,6 +1273,7 @@ def _render_workflow_groups(groups: list[dict[str, object]]) -> str:
 def _render_dashboard(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     runtime_card = _render_runtime_card(payload.get("runtime"))
+    run_history_card = _render_run_history_card(payload.get("runtime"))
     research_overview = payload.get("research_overview", {})
     research_overview_supported = research_overview.get("status") == "supported"
     orientation = payload.get("orientation", {})
@@ -1345,6 +1386,7 @@ def _render_dashboard(payload: dict) -> str:
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
             "</section>",
             runtime_card,
+            run_history_card,
             "<section class='grid stats'>",
             "".join(stats_cards),
             "</section>",

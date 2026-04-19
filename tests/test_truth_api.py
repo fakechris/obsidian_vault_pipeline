@@ -351,6 +351,129 @@ def test_truth_api_get_runtime_status_surfaces_pipeline_process_identity(temp_va
     assert processes["items"][0]["args_summary"] == "--from-step absorb --pack research-tech"
 
 
+def test_truth_api_get_runtime_status_includes_run_history(temp_vault):
+    from ovp_pipeline.truth_api import get_runtime_status
+
+    transactions_dir = temp_vault / "60-Logs" / "transactions"
+    transactions_dir.mkdir(parents=True, exist_ok=True)
+    (transactions_dir / "pipeline-complete.json").write_text(
+        json.dumps(
+            {
+                "id": "pipeline-complete",
+                "type": "enhanced-pipeline",
+                "status": "completed",
+                "checkpoint": "knowledge_index",
+                "start_time": "2026-04-09T00:00:00Z",
+                "completed_at": "2026-04-09T00:10:00Z",
+                "last_updated": "2026-04-09T00:10:00Z",
+                "steps": {
+                    "pinboard": {
+                        "status": "completed",
+                        "output": "Produced 2 items",
+                        "updated_at": "2026-04-09T00:02:00Z",
+                    },
+                    "articles": {
+                        "status": "completed",
+                        "output": "Produced 3 items",
+                        "updated_at": "2026-04-09T00:05:00Z",
+                    },
+                    "knowledge_index": {
+                        "status": "completed",
+                        "output": "Produced 1 items",
+                        "updated_at": "2026-04-09T00:10:00Z",
+                    },
+                },
+                "run_ledger": {
+                    "run_id": "pipeline-complete",
+                    "run_state": "completed",
+                    "workflow_profile": "full",
+                    "pack_name": "research-tech",
+                    "planned_steps": ["pinboard", "articles", "knowledge_index"],
+                    "started_at": "2026-04-09T00:00:00Z",
+                    "updated_at": "2026-04-09T00:10:00Z",
+                    "current_step_name": "knowledge_index",
+                    "current_step": {
+                        "step_name": "knowledge_index",
+                        "step_state": "completed",
+                        "progress_mode": "counted",
+                        "work_units_total": 20,
+                        "work_units_done": 20,
+                        "work_units_failed": 0,
+                        "progress_percent": 100.0,
+                        "progress_summary": "20/20 files processed",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (transactions_dir / "pipeline-active.json").write_text(
+        json.dumps(
+            {
+                "id": "pipeline-active",
+                "type": "enhanced-pipeline",
+                "status": "in_progress",
+                "checkpoint": "absorb",
+                "start_time": "2026-04-09T00:20:00Z",
+                "last_updated": "2026-04-09T00:30:00Z",
+                "steps": {
+                    "fix_links": {
+                        "status": "completed",
+                        "output": "Produced 0 items",
+                        "updated_at": "2026-04-09T00:21:00Z",
+                    },
+                    "absorb": {
+                        "status": "in_progress",
+                        "output": "",
+                        "updated_at": "2026-04-09T00:30:00Z",
+                    },
+                },
+                "run_ledger": {
+                    "run_id": "pipeline-active",
+                    "run_state": "running",
+                    "workflow_profile": "full",
+                    "pack_name": "research-tech",
+                    "planned_steps": ["fix_links", "absorb", "moc"],
+                    "started_at": "2026-04-09T00:20:00Z",
+                    "heartbeat_at": "2026-04-09T00:30:00Z",
+                    "current_step_name": "absorb",
+                    "current_step": {
+                        "step_name": "absorb",
+                        "step_state": "running",
+                        "progress_mode": "counted",
+                        "work_units_total": 443,
+                        "work_units_done": 137,
+                        "work_units_failed": 0,
+                        "progress_percent": 30.9,
+                        "progress_summary": "137/443 files processed",
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = get_runtime_status(temp_vault, now_iso="2026-04-09T00:40:00Z")
+
+    history = payload["run_history"]
+    assert history["total_count"] == 2
+    assert [item["run_id"] for item in history["items"]] == ["pipeline-active", "pipeline-complete"]
+    active = history["items"][0]
+    assert active["duration_seconds"] == 1200
+    assert active["duration_summary"] == "20m"
+    assert active["scope_summary"] == "fix_links → absorb → moc"
+    assert active["content_summary"] == "137/443 files processed"
+    completed = history["items"][1]
+    assert completed["duration_seconds"] == 600
+    assert completed["duration_summary"] == "10m"
+    assert completed["produced_total"] == 6
+    assert completed["completed_steps"] == 3
+    assert completed["total_steps"] == 3
+    assert completed["content_summary"] == "Produced 6 items; 20/20 files processed"
+
+
 def test_truth_api_builds_note_inbound_capture_summary_and_attaches_it_to_signals(temp_vault):
     from ovp_pipeline.truth_api import get_note_inbound_capture_summary, list_signals
 

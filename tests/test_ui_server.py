@@ -131,6 +131,7 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert "Review" in body
     assert "Current Workflow" in body
     assert body.count("<h2>Current Workflow</h2>") == 1
+    assert "Recent Runs" in body
     assert "Stage 2/3: absorb" in body
     assert "3/10 files processed" in body
     assert "30.0%" in body
@@ -183,6 +184,36 @@ def test_render_runtime_card_shows_pipeline_process_identity():
     assert "one-shot" in html
     assert "1h 2m" in html
     assert "--from-step absorb --pack research-tech" in html
+
+
+def test_render_run_history_card_shows_duration_scope_and_work():
+    from ovp_pipeline.commands.ui_server import _render_run_history_card
+
+    html = _render_run_history_card(
+        {
+            "run_history": {
+                "total_count": 1,
+                "items": [
+                    {
+                        "run_id": "pipeline-complete",
+                        "status": "completed",
+                        "duration_summary": "10m",
+                        "scope_summary": "pinboard → articles → knowledge_index",
+                        "content_summary": "Produced 6 items; 20/20 files processed",
+                        "started_at": "2026-04-09T00:00:00Z",
+                        "finished_at": "2026-04-09T00:10:00Z",
+                    }
+                ],
+            }
+        }
+    )
+
+    assert "<h2>Recent Runs</h2>" in html
+    assert "pipeline-complete" in html
+    assert "completed" in html
+    assert "10m" in html
+    assert "pinboard → articles → knowledge_index" in html
+    assert "Produced 6 items; 20/20 files processed" in html
 
 
 def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
@@ -243,6 +274,7 @@ def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
     assert response.status == 200
     assert payload["active_run"]["id"] == "txn-1"
     assert payload["active_run"]["run_ledger"]["current_step"]["progress_percent"] == 25.0
+    assert payload["run_history"]["items"][0]["run_id"] == "txn-1"
     assert payload["active_run"]["runtime_progress"]["stage"]["summary"] == "Stage 2/3: absorb"
     assert payload["active_run"]["runtime_progress"]["work"]["summary"] == "5/20 files processed"
     assert payload["active_run"]["runtime_progress"]["performance"]["items_per_minute"] > 0
