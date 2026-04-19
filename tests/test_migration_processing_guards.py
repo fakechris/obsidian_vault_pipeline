@@ -460,7 +460,8 @@ Body
 
     payload = json.loads((temp_vault / "60-Logs" / "transactions" / f"{txn_id}.json").read_text(encoding="utf-8"))
     current = payload["run_ledger"]["current_step"]
-    assert results["total"] == 3
+    assert results["queued_total"] == 3
+    assert results["total"] == 1
     assert results["completed"] == 1
     assert current["work_units_total"] == 1
     assert current["work_units_done"] == 1

@@ -1014,6 +1014,7 @@ class AutoArticleProcessor:
         """处理整个inbox"""
         results = {
             "total": 0,
+            "queued_total": 0,
             "completed": 0,
             "failed": 0,
             "skipped": 0,
@@ -1029,11 +1030,12 @@ class AutoArticleProcessor:
         processing_files = sorted(self.processing_dir.glob("*.md"))
         raw_files = sorted(self.raw_dir.glob("*.md"))
         files = processing_files + raw_files
-        results["total"] = len(files)
+        results["queued_total"] = len(files)
 
         if batch_size:
             files = files[:batch_size]
         work_units_total = len(files)
+        results["total"] = work_units_total
 
         if txn_id:
             self.txn.step(
@@ -1162,6 +1164,8 @@ def main():
     print("ARTICLE PROCESSING RESULTS")
     print("="*60)
     print(f"Total: {results['total']}")
+    if results.get("queued_total") != results.get("total"):
+        print(f"Queued: {results['queued_total']}")
     print(f"Completed: {results['completed']}")
     print(f"Failed: {results['failed']}")
     print(f"Skipped: {results['skipped']}")

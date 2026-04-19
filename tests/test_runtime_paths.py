@@ -896,11 +896,11 @@ def test_step_pinboard_process_updates_txn_ledger_with_counted_progress(tmp_path
 
     monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.detect_pinboard_processor", lambda content: "article")
 
-    class _Completed:
-        returncode = 0
-        stderr = ""
-
-    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.subprocess.run", lambda *args, **kwargs: _Completed())
+    monkeypatch.setattr(
+        pipeline,
+        "run_command",
+        lambda *args, **kwargs: {"success": True, "returncode": 0, "stdout": "", "stderr": ""},
+    )
 
     result = pipeline.step_pinboard_process(dry_run=False)
 
