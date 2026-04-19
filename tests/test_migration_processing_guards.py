@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from ovp_pipeline import auto_github_processor as github_module
+from ovp_pipeline import auto_article_processor as article_module
 from ovp_pipeline import auto_paper_processor as paper_module
 from ovp_pipeline.auto_article_processor import (
     AutoArticleProcessor,
@@ -616,6 +617,27 @@ tags: [paper]
 
     assert paper_module.main() == 0
     assert captured["model"] is None
+
+
+def test_article_cli_summary_handles_results_without_queued_total(temp_vault, monkeypatch, capsys):
+    def stub_init_llm(self, *, api_key=None, api_base=None):
+        self.llm = SimpleNamespace(model="stub-model")
+
+    monkeypatch.setattr(article_module.AutoArticleProcessor, "init_llm", stub_init_llm)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "auto_article_processor.py",
+            "--single",
+            "https://example.com/article",
+            "--vault-dir",
+            str(temp_vault),
+        ],
+    )
+
+    assert article_module.main() == 0
+    assert "Queued:" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(("client_class", "patch_mode"), [

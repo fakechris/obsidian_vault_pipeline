@@ -1157,6 +1157,8 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    results.setdefault("skipped", 0)
+    results.setdefault("total_tokens", 0)
     txn.step(txn_id, "process", "completed", f"Completed {results['completed']}/{results['total']}")
 
     # 输出结果
@@ -1164,8 +1166,9 @@ def main():
     print("ARTICLE PROCESSING RESULTS")
     print("="*60)
     print(f"Total: {results['total']}")
-    if results.get("queued_total") != results.get("total"):
-        print(f"Queued: {results['queued_total']}")
+    queued_total = results.get("queued_total")
+    if queued_total is not None and queued_total != results.get("total"):
+        print(f"Queued: {queued_total}")
     print(f"Completed: {results['completed']}")
     print(f"Failed: {results['failed']}")
     print(f"Skipped: {results['skipped']}")
