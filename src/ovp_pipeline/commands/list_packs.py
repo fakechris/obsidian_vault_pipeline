@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-from pathlib import Path
 
 from ..packs.loader import list_builtin_packs
-from ..plugins import discover_entrypoint_packs, discover_plugin_manifests
+from ..plugins import discover_entrypoint_packs, discover_plugin_manifests, manifest_paths_from_env
 
 
 def _serialize_pack(pack: object, *, source: str) -> dict[str, object]:
@@ -43,8 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     ]
     entrypoint_names = {item["name"] for item in entrypoint}
 
-    manifest_env = os.environ.get("OVP_PACK_MANIFESTS", "")
-    manifest_paths = [Path(item) for item in manifest_env.split(os.pathsep) if item]
+    manifest_paths = manifest_paths_from_env()
     manifests = []
     if manifest_paths:
         for manifest in discover_plugin_manifests(manifest_paths).values():

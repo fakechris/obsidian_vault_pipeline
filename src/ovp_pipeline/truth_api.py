@@ -87,6 +87,22 @@ _BRIEFING_EVOLUTION_PRIORITY = {
     "confirms": 70,
     "enriches": 60,
 }
+_NOTE_CAPTURE_EVENT_TYPES = frozenset(
+    {
+        "source_staged_for_processing",
+        "source_archived_to_processed",
+        "source_restored_to_raw",
+        "article_processed",
+        "article_abstained",
+        "article_error",
+        "candidate_upsert_error",
+        "evergreen_error",
+        "candidates_upserted",
+        "evergreen_auto_promoted",
+        "evergreen_created",
+        "refine_mutation_applied",
+    }
+)
 
 
 def get_runtime_status(
@@ -2732,6 +2748,17 @@ def _note_capture_targets(vault_dir: Path | str, note_path: str) -> dict[str, An
     }
 
 
+def _canonicalized_payload_targets(payload: dict[str, Any]) -> set[str]:
+    targets = payload.get("targets", [])
+    if not isinstance(targets, list):
+        return set()
+    return {
+        canonicalize_note_id(str(item))
+        for item in targets
+        if isinstance(item, str) and item.strip()
+    }
+
+
 def _match_note_capture_event(
     vault_dir: Path | str,
     *,
@@ -2743,20 +2770,7 @@ def _match_note_capture_event(
     note_name = str(targets["note_name"])
     note_slug = str(targets["note_slug"])
     event_type = str(payload.get("event_type") or "").strip()
-    if event_type not in {
-        "source_staged_for_processing",
-        "source_archived_to_processed",
-        "source_restored_to_raw",
-        "article_processed",
-        "article_abstained",
-        "article_error",
-        "candidate_upsert_error",
-        "evergreen_error",
-        "candidates_upserted",
-        "evergreen_auto_promoted",
-        "evergreen_created",
-        "refine_mutation_applied",
-    }:
+    if event_type not in _NOTE_CAPTURE_EVENT_TYPES:
         return None
 
     timestamp = str(payload.get("timestamp") or "")
@@ -2903,12 +2917,7 @@ def _match_note_capture_event(
             produced_artifact_count=1,
         )
     if event_type == "refine_mutation_applied":
-        targets_set = {
-            canonicalize_note_id(str(item))
-            for item in payload.get("targets", [])
-            if isinstance(item, str) and item.strip()
-        }
-        if note_slug in targets_set:
+        if note_slug in _canonicalized_payload_targets(payload):
             return _note_capture_item(
                 kind="refine_mutation",
                 label="Refine mutation",

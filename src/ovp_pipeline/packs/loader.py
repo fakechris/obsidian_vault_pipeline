@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 from .base import BaseDomainPack, WorkflowProfile
 
 
@@ -42,14 +39,18 @@ def load_builtin_pack(name: str) -> BaseDomainPack:
 def load_pack(name: str) -> BaseDomainPack:
     if name in BUILTIN_PACK_LOADERS:
         return load_builtin_pack(name)
-    from ..plugins import discover_entrypoint_packs, discover_plugin_manifests, load_manifest_pack
+    from ..plugins import (
+        discover_entrypoint_packs,
+        discover_plugin_manifests,
+        load_manifest_pack,
+        manifest_paths_from_env,
+    )
 
     entrypoint_packs = discover_entrypoint_packs()
     if name in entrypoint_packs:
         return entrypoint_packs[name]
 
-    manifest_env = os.environ.get("OVP_PACK_MANIFESTS", "")
-    manifest_paths = [Path(item) for item in manifest_env.split(os.pathsep) if item]
+    manifest_paths = manifest_paths_from_env()
     if manifest_paths:
         manifests = discover_plugin_manifests(manifest_paths)
         if name in manifests:

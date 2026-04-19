@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from importlib import import_module, metadata
 from pathlib import Path
@@ -12,6 +13,7 @@ from .packs.base import BaseDomainPack
 
 PACK_API_VERSION = 1
 ENTRYPOINT_GROUP = "ovp.packs"
+PACK_MANIFESTS_ENV = "OVP_PACK_MANIFESTS"
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,11 @@ def discover_plugin_manifests(manifest_paths: Iterable[Path]) -> dict[str, Plugi
         manifest = _validate_manifest_data(raw, Path(manifest_path))
         manifests[manifest.name] = manifest
     return manifests
+
+
+def manifest_paths_from_env(value: str | None = None) -> list[Path]:
+    raw_value = os.environ.get(PACK_MANIFESTS_ENV, "") if value is None else value
+    return [Path(item) for item in raw_value.split(os.pathsep) if item]
 
 
 def _load_pack_entrypoint(entrypoint: str) -> BaseDomainPack:
