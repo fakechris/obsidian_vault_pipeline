@@ -3299,32 +3299,25 @@ def _linked_existing_objects_for_note_path(
         return []
     pack_placeholders = ",".join("?" for _ in pack_candidates)
     with sqlite3.connect(db_path) as conn:
-        source_row = conn.execute(
-            """
-            SELECT slug
-            FROM pages_index
-            WHERE path = ?
-            LIMIT 1
-            """,
-            (absolute_path,),
-        ).fetchone()
-        if source_row is None:
-            return []
-        source_slug = str(source_row[0])
         rows = conn.execute(
             f"""
             SELECT objects.pack, objects.object_id, objects.object_kind, objects.title,
                    objects.canonical_path, page_links.target_raw, page_links.line_number
             FROM page_links
             JOIN objects ON objects.object_id = page_links.target_slug
-            WHERE page_links.source_slug = ?
+            WHERE page_links.source_slug = (
+                SELECT slug
+                FROM pages_index
+                WHERE path = ?
+                LIMIT 1
+            )
               AND objects.pack IN ({pack_placeholders})
             ORDER BY CASE objects.pack
               {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
               ELSE {len(pack_candidates)}
             END, page_links.line_number, objects.object_id
             """,
-            (source_slug, *pack_candidates, *pack_candidates),
+            (absolute_path, *pack_candidates, *pack_candidates),
         ).fetchall()
 
     items: dict[str, dict[str, Any]] = {}
@@ -3708,11 +3701,13 @@ def get_note_traceability(
             f"Source note currently traces to {len(deep_dives)} deep dives, "
             f"{len(objects)} objects, {len(atlas_pages)} atlas pages."
         )
-    linked_existing_objects = _linked_existing_objects_for_note_path(
-        vault_dir,
-        note_path,
-        pack_name=pack_name,
-    )
+    linked_existing_objects = []
+    if not objects:
+        linked_existing_objects = _linked_existing_objects_for_note_path(
+            vault_dir,
+            note_path,
+            pack_name=pack_name,
+        )
     brain_first_lookup = _brain_first_lookup_payload(
         stage_label=stage_label,
         canonical_objects=objects,
