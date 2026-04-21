@@ -1858,6 +1858,7 @@ def _review_action_items(
             payload = json.loads(payload_json)
         except json.JSONDecodeError:
             payload = {}
+        mutation_payload = payload.get("mutation")
         action_object_ids = [
             str(value)
             for value in payload.get("object_ids", [])
@@ -1883,6 +1884,7 @@ def _review_action_items(
                 "candidate_slug": str(payload.get("candidate_slug") or ""),
                 "target_slug": str(payload.get("target_slug") or ""),
                 "action": str(payload.get("action") or ""),
+                "mutation": mutation_payload if isinstance(mutation_payload, dict) else {},
                 "knowledge_index_rebuilt": bool(payload.get("knowledge_index_rebuilt")),
                 "knowledge_index_error": str(payload.get("knowledge_index_error") or ""),
                 "contradiction_ids": [

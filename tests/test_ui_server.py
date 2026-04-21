@@ -5,7 +5,7 @@ import sqlite3
 import subprocess
 import threading
 from datetime import datetime, timedelta, timezone
-from http.client import HTTPConnection
+from http.client import HTTPConnection, RemoteDisconnected
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -3391,6 +3391,24 @@ def test_ui_server_candidate_item_keeps_zero_score_and_requires_low_score_merge_
     assert "name='target_slug' value=''" in html
 
 
+def test_ui_server_candidates_page_renders_review_warning():
+    from ovp_pipeline.commands.ui_server import _render_candidates_page
+
+    html = _render_candidates_page(
+        {
+            "query": "",
+            "requested_pack": "",
+            "count": 0,
+            "status_counts": {},
+            "items": [],
+            "candidate_warning": "rebuild failed",
+        }
+    )
+
+    assert "Review Warning" in html
+    assert "rebuild failed" in html
+
+
 def test_ui_server_can_promote_candidate_via_api(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
     from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
@@ -3434,3 +3452,54 @@ def test_ui_server_can_promote_candidate_via_api(temp_vault):
     assert audit["slug"] == "alpha-candidate"
     assert audit["status"] == "promoted"
     assert audit["note"] == "Promote from UI"
+
+
+def test_ui_server_candidate_review_reports_rebuild_failure_without_disconnect(temp_vault, monkeypatch):
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
+
+    _seed_candidate_for_ui(temp_vault)
+
+    def fail_rebuild(vault_dir, *, pack_name=None):
+        raise ValueError("rebuild failed")
+
+    monkeypatch.setattr("ovp_pipeline.truth_api.rebuild_knowledge_index", fail_rebuild)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode(
+            {
+                "slug": "alpha-candidate",
+                "action": "promote",
+                "note": "Promote from UI",
+            }
+        )
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/candidates/review",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            response = conn.getresponse()
+        except RemoteDisconnected as exc:
+            raise AssertionError("candidate review request disconnected") from exc
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    promoted = ConceptRegistry(temp_vault).load().find_by_slug("alpha-candidate")
+    assert response.status == 200
+    assert payload["partial_success"] is True
+    assert payload["action"] == "promote"
+    assert payload["mutation"]["action"] == "promote"
+    assert payload["knowledge_index_rebuilt"] is False
+    assert payload["knowledge_index_error"] == "rebuild failed"
+    assert "candidate review applied" in payload["warning"]
+    assert "candidate_warning=rebuild%20failed" in payload["next_path"]
+    assert promoted.status == STATUS_ACTIVE

@@ -46,6 +46,7 @@ from ..truth_api import (
     enqueue_signal_action,
     ensure_signal_ledger_synced,
     get_runtime_status,
+    list_review_actions,
     record_review_action,
     review_candidate_concept,
     retry_action_queue_item,
@@ -66,6 +67,11 @@ def _shell_href(path: str, requested_pack: str = "") -> str:
         return path
     separator = "&" if "?" in path else "?"
     return f"{path}{separator}pack={quote(requested_pack, safe='')}"
+
+
+def _append_query_param(path: str, key: str, value: str) -> str:
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}{quote(key, safe='')}={quote(value, safe='')}"
 
 
 def _shell_supports_research_nav(requested_pack: str = "") -> bool:
@@ -149,6 +155,7 @@ def _layout(title: str, body: str, *, requested_pack: str = "", auto_refresh_sec
       .shell-head {{ padding: 1.1rem 1.25rem 0; }}
       .shell-body {{ padding: 0 1.25rem 1.25rem; }}
       .card {{ border: 1px solid var(--border); background: var(--surface); border-radius: 16px; padding: 1rem; margin-bottom: 1rem; }}
+      .warning {{ border-color: #d48a2f; background: #fff8ec; }}
       .grid {{ display: grid; gap: 1rem; }}
       .stats {{ grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }}
       .two-col {{ grid-template-columns: minmax(0, 2.1fr) minmax(280px, 1fr); align-items: start; }}
@@ -2481,10 +2488,16 @@ def _render_candidate_items(payload: dict) -> str:
 def _render_candidates_page(payload: dict) -> str:
     query = str(payload.get("query") or "")
     requested_pack = str(payload.get("requested_pack") or "")
+    candidate_warning = str(payload.get("candidate_warning") or "")
     operator_rail = _render_operator_rail(payload)
     status_counts = " ".join(
         f"<span class='pill'>{escape(str(status))}: {escape(str(count))}</span>"
         for status, count in (payload.get("status_counts") or {}).items()
+    )
+    warning_card = (
+        f"<section class='card warning'><h2>Review Warning</h2><p>{escape(candidate_warning)}</p></section>"
+        if candidate_warning
+        else ""
     )
     return _layout(
         "Candidate Workbench",
@@ -2506,6 +2519,7 @@ def _render_candidates_page(payload: dict) -> str:
                 f"<p class='muted'>{escape(str(payload.get('count') or 0))} candidate(s) in view.</p>",
                 f"<section class='card'><h2>Status</h2><div class='link-row'>{status_counts}</div></section>",
                 operator_rail,
+                warning_card,
                 f"<section class='card'><h2>Review Queue</h2>{_render_candidate_items(payload)}</section>",
             ]
         ),
@@ -3438,6 +3452,7 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/candidates":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    candidate_warning = query.get("candidate_warning", [""])[0]
                     if self._guard_research_route(pack_name=pack_name, route_path="/candidates", api=False):
                         return
                     payload = build_candidate_browser_payload(
@@ -3445,6 +3460,7 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                         pack_name=pack_name,
                         query=q,
                     )
+                    payload["candidate_warning"] = candidate_warning
                     self._write_html(_render_candidates_page(payload))
                     return
                 if path == "/api/evolution":
@@ -3918,19 +3934,70 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             target_slug = self._form_first(form, "target_slug").strip() or None
             note = self._form_first(form, "note").strip()
             pack_name = self._form_first(form, "pack").strip() or None
-            payload = review_candidate_concept(
-                resolved_vault,
-                slug=slug,
-                action=action,
-                target_slug=target_slug,
-                note=note,
-                pack_name=pack_name,
-            )
-            payload["next_path"] = self._form_first(form, "next").strip() or _shell_href(
+            next_path = self._form_first(form, "next").strip() or _shell_href(
                 "/candidates",
                 pack_name or "",
             )
+            try:
+                payload = review_candidate_concept(
+                    resolved_vault,
+                    slug=slug,
+                    action=action,
+                    target_slug=target_slug,
+                    note=note,
+                    pack_name=pack_name,
+                )
+            except RuntimeError as exc:
+                payload = self._candidate_review_rebuild_warning_payload(
+                    slug=slug,
+                    action=action,
+                    target_slug=target_slug,
+                    note=note,
+                    error=exc,
+                )
+                if not payload["partial_success"]:
+                    raise
+            payload["next_path"] = next_path
+            knowledge_index_error = str(payload.get("knowledge_index_error") or "")
+            if knowledge_index_error:
+                payload["next_path"] = _append_query_param(
+                    next_path,
+                    "candidate_warning",
+                    knowledge_index_error,
+                )
             return payload
+
+        def _candidate_review_rebuild_warning_payload(
+            self,
+            *,
+            slug: str,
+            action: str,
+            target_slug: str | None,
+            note: str,
+            error: RuntimeError,
+        ) -> dict[str, object]:
+            audit_event: dict[str, object] = {}
+            for item in list_review_actions(resolved_vault, limit=20):
+                if (
+                    item.get("event_type") == "ui_candidate_reviewed"
+                    and item.get("candidate_slug") == slug
+                ):
+                    audit_event = item
+                    break
+            knowledge_index_error = str(audit_event.get("knowledge_index_error") or error)
+            return {
+                "action": str(audit_event.get("action") or action),
+                "slug": str(audit_event.get("candidate_slug") or slug),
+                "target_slug": str(audit_event.get("target_slug") or target_slug or ""),
+                "status": str(audit_event.get("status") or "applied_with_warning"),
+                "note": str(audit_event.get("note") or note),
+                "mutation": audit_event.get("mutation") if isinstance(audit_event.get("mutation"), dict) else {},
+                "knowledge_index_rebuilt": bool(audit_event.get("knowledge_index_rebuilt")),
+                "knowledge_index_error": knowledge_index_error,
+                "warning": str(error),
+                "partial_success": bool(audit_event),
+                "audit_event": audit_event,
+            }
 
         def _enqueue_signal_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             signal_id = self._form_first(form, "signal_id").strip()
