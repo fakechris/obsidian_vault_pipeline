@@ -20,10 +20,17 @@ from .governance_registry import (
 )
 from .handler_registry import execute_focused_action_handler
 from .identity import canonicalize_note_id
-from .knowledge_index import ensure_knowledge_db_current
+from .knowledge_index import ensure_knowledge_db_current, rebuild_knowledge_index
 from .observation_surface_registry import execute_observation_surface_builder
 from .pack_resolution import iter_compatible_packs
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
+from .concept_registry import ConceptRegistry
+from .promote_candidates import (
+    candidate_file_path,
+    merge_candidate,
+    promote_candidate,
+    reject_candidate,
+)
 from .runtime import (
     VaultLayout,
     action_queue_write_lock,
@@ -505,6 +512,192 @@ def record_review_action(
     }
     _append_jsonl(layout.logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl", event)
     return event
+
+
+def _candidate_review_suggestion(registry: ConceptRegistry, entry: Any) -> tuple[str, list[tuple[Any, float]]]:
+    similar = registry.search(entry.title, topk=5)
+    similar = [
+        (candidate, score)
+        for candidate, score in similar
+        if candidate.slug != entry.slug and candidate.status == "active"
+    ]
+    action = "keep_as_candidate"
+    if entry.source_count >= 2 or entry.evidence_count >= 3:
+        if similar and similar[0][1] >= 0.7:
+            action = "merge_as_alias"
+        else:
+            action = "promote_to_active"
+    elif similar and similar[0][1] >= 0.8:
+        action = "merge_as_alias"
+    return action, similar
+
+
+def list_candidate_concepts(
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """List candidate concepts from the registry with review suggestions."""
+    limit, offset = _validate_page_args(limit=limit, offset=offset)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    registry = ConceptRegistry(resolved_vault).load()
+    normalized_query = (query or "").strip().lower()
+    filtered_candidates = []
+    for entry in registry.candidates:
+        searchable = " ".join(
+            [
+                entry.slug,
+                entry.title,
+                entry.definition,
+                entry.area,
+                *entry.aliases,
+            ]
+        ).lower()
+        if normalized_query and normalized_query not in searchable:
+            continue
+        filtered_candidates.append(entry)
+
+    sorted_candidates = sorted(filtered_candidates, key=lambda item: (item.last_seen_at, item.slug), reverse=True)
+    page_candidates = sorted_candidates[offset: offset + limit]
+    items: list[dict[str, Any]] = []
+
+    for entry in page_candidates:
+        suggested_action, similar_existing = _candidate_review_suggestion(registry, entry)
+        candidate_path = candidate_file_path(resolved_vault, entry.slug)
+        candidate_rel = ""
+        candidate_note_path = ""
+        if candidate_path.exists():
+            candidate_rel = str(candidate_path.relative_to(resolved_vault))
+            candidate_note_path = f"/note?path={quote(candidate_rel, safe='')}"
+
+        items.append(
+            {
+                "slug": entry.slug,
+                "title": entry.title,
+                "aliases": list(entry.aliases),
+                "definition": entry.definition,
+                "area": entry.area,
+                "status": entry.status,
+                "review_state": entry.review_state,
+                "source_count": entry.source_count,
+                "evidence_count": entry.evidence_count,
+                "last_seen_at": entry.last_seen_at,
+                "candidate_path": candidate_rel,
+                "candidate_note_path": candidate_note_path,
+                "suggested_action": suggested_action,
+                "similar_existing": [
+                    {
+                        "slug": similar.slug,
+                        "title": similar.title,
+                        "score": score,
+                        "path": f"/object?id={quote(similar.slug, safe='')}",
+                    }
+                    for similar, score in similar_existing
+                ],
+            }
+        )
+
+    return {
+        "screen": "candidates/browser",
+        "query": query or "",
+        "limit": limit,
+        "offset": offset,
+        "count": len(filtered_candidates),
+        "status_counts": {"candidate": len(filtered_candidates)},
+        "items": items,
+    }
+
+
+def review_candidate_concept(
+    vault_dir: Path | str,
+    *,
+    slug: str,
+    action: str,
+    target_slug: str | None = None,
+    note: str = "",
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    """Apply a candidate review action through the existing lifecycle helpers."""
+    resolved_vault = resolve_vault_dir(vault_dir)
+    normalized_slug = slug.strip()
+    normalized_action = action.strip()
+    normalized_target = (target_slug or "").strip()
+    if not normalized_slug:
+        raise ValueError("missing candidate slug")
+
+    action_aliases = {
+        "promote": "promote",
+        "promote_to_active": "promote",
+        "merge": "merge",
+        "merge_as_alias": "merge",
+        "reject": "reject",
+    }
+    lifecycle_action = action_aliases.get(normalized_action)
+    if lifecycle_action is None:
+        raise ValueError("invalid candidate action")
+
+    if lifecycle_action == "promote":
+        mutation = promote_candidate(resolved_vault, normalized_slug, dry_run=False)
+    elif lifecycle_action == "merge":
+        if not normalized_target:
+            raise ValueError("missing target_slug for merge")
+        mutation = merge_candidate(resolved_vault, normalized_slug, normalized_target, dry_run=False)
+    else:
+        mutation = reject_candidate(resolved_vault, normalized_slug, dry_run=False)
+
+    knowledge_index_rebuilt = False
+    knowledge_index_result: dict[str, Any] = {}
+    knowledge_index_error = ""
+    rebuild_exception: Exception | None = None
+    if lifecycle_action in {"promote", "merge"}:
+        try:
+            knowledge_index_result = rebuild_knowledge_index(resolved_vault, pack_name=pack_name)
+            knowledge_index_rebuilt = True
+        except Exception as exc:
+            knowledge_index_error = str(exc)
+            rebuild_exception = exc
+
+    status_by_action = {
+        "promote": "promoted",
+        "merge": "merged",
+        "reject": "rejected",
+    }
+    mutation_payload = mutation.to_dict()
+    event = record_review_action(
+        resolved_vault,
+        event_type="ui_candidate_reviewed",
+        slug=normalized_slug,
+        payload={
+            "candidate_slug": normalized_slug,
+            "target_slug": mutation.target_slug or normalized_target,
+            "action": lifecycle_action,
+            "status": status_by_action[lifecycle_action],
+            "note": note,
+            "pack": _truth_pack_name(pack_name),
+            "mutation": mutation_payload,
+            "knowledge_index_rebuilt": knowledge_index_rebuilt,
+            "knowledge_index_result": knowledge_index_result,
+            "knowledge_index_error": knowledge_index_error,
+        },
+    )
+    if rebuild_exception is not None:
+        raise RuntimeError(
+            f"candidate review applied but knowledge index rebuild failed: {knowledge_index_error}"
+        ) from rebuild_exception
+    return {
+        "action": lifecycle_action,
+        "slug": normalized_slug,
+        "target_slug": mutation.target_slug or normalized_target,
+        "status": status_by_action[lifecycle_action],
+        "note": note,
+        "mutation": mutation_payload,
+        "knowledge_index_rebuilt": knowledge_index_rebuilt,
+        "knowledge_index_result": knowledge_index_result,
+        "knowledge_index_error": knowledge_index_error,
+        "audit_event": event,
+    }
 
 
 def _is_moc_row(note_type: str, path: str) -> bool:
@@ -1665,6 +1858,7 @@ def _review_action_items(
             payload = json.loads(payload_json)
         except json.JSONDecodeError:
             payload = {}
+        mutation_payload = payload.get("mutation")
         action_object_ids = [
             str(value)
             for value in payload.get("object_ids", [])
@@ -1687,6 +1881,12 @@ def _review_action_items(
                 "later_ref": str(payload.get("later_ref") or ""),
                 "link_type": str(payload.get("link_type") or ""),
                 "candidate_link_type": str(payload.get("candidate_link_type") or ""),
+                "candidate_slug": str(payload.get("candidate_slug") or ""),
+                "target_slug": str(payload.get("target_slug") or ""),
+                "action": str(payload.get("action") or ""),
+                "mutation": mutation_payload if isinstance(mutation_payload, dict) else {},
+                "knowledge_index_rebuilt": bool(payload.get("knowledge_index_rebuilt")),
+                "knowledge_index_error": str(payload.get("knowledge_index_error") or ""),
                 "contradiction_ids": [
                     str(value)
                     for value in payload.get("contradiction_ids", [])

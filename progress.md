@@ -1,5 +1,45 @@
 # Progress Log
 
+## Session: 2026-04-21
+
+### Phase 26: Candidate Canonicalization Workbench
+- **Status:** implementation complete; PR verification in progress
+- Actions taken:
+  - Added `list_candidate_concepts(...)` to expose registry candidate metadata, candidate note paths, suggested lifecycle action, and similar active concepts
+  - Added `review_candidate_concept(...)` as the UI/API-safe gateway for candidate lifecycle actions
+  - Kept candidate mutations on the existing lifecycle path:
+    - `promote_candidate`
+    - `merge_candidate`
+    - `reject_candidate`
+  - Added `ui_candidate_reviewed` audit events for promote / merge / reject actions
+  - Rebuilt `knowledge.db` after promote and merge so newly active objects and rewritten links are visible without a separate manual reindex
+  - Added `build_candidate_browser_payload(...)` with operator rails back to briefing, signals, actions, and objects
+  - Added `/api/candidates` and `/candidates`
+  - Added `/api/candidates/review` and `/candidates/review`
+  - Added the `Candidates` nav item for research-compatible shells
+  - Updated roadmap docs to treat Phase 26 as the final Milestone 7 candidate/canonical closeout slice
+  - Clarified that candidate wikilinks are identity/lifecycle state, not typed semantic graph triples
+- Files created/modified:
+  - docs/plans/2026-04-21-phase26-candidate-canonicalization-workbench.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - docs/plans/2026-04-17-ovp-architecture-mapping.md
+  - src/ovp_pipeline/truth_api.py
+  - src/ovp_pipeline/ui/view_models.py
+  - src/ovp_pipeline/commands/ui_server.py
+  - tests/test_truth_api.py
+  - tests/test_ui_server.py
+- Verification so far:
+  - `pytest tests/test_truth_api.py::test_truth_api_lists_candidate_concepts tests/test_truth_api.py::test_truth_api_review_candidate_concept_promotes_and_records_audit tests/test_truth_api.py::test_candidate_browser_payload_exposes_operator_context tests/test_ui_server.py::test_ui_server_candidates_endpoint_returns_payload tests/test_ui_server.py::test_ui_server_candidates_page_renders_review_controls tests/test_ui_server.py::test_ui_server_can_promote_candidate_via_api -q`
+  - `6 passed`
+  - `pytest tests/test_truth_api.py::test_truth_api_review_candidate_concept_merges_into_existing_and_rebuilds tests/test_truth_api.py::test_truth_api_review_candidate_concept_rejects_without_rebuilding_index -q`
+  - `2 passed`
+  - `pytest tests/test_promote_candidates.py tests/test_truth_api.py tests/test_ui_server.py -q`
+  - `188 passed`
+  - `git diff --check`
+  - clean
+  - `pytest -q`
+  - `680 passed`
+
 ## Session: 2026-04-20
 
 ### Phase 24: Brain-First Lookup And Backlink Legibility

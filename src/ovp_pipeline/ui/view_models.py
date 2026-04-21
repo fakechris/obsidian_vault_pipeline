@@ -31,6 +31,7 @@ from ..truth_api import (
     get_review_context,
     get_runtime_status,
     get_topic_neighborhood,
+    list_candidate_concepts,
     list_evolution_candidates,
     list_evolution_links,
     list_review_actions,
@@ -1105,6 +1106,43 @@ def build_action_queue_payload(
             )
         ),
     }
+
+
+def build_candidate_browser_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    requested_pack = pack_name or ""
+    payload = list_candidate_concepts(vault_dir, query=query, limit=limit, offset=offset)
+    payload["requested_pack"] = requested_pack
+    payload["operator_rail"] = [
+        _operator_action(
+            "Orientation Brief",
+            _scoped_path("/briefing", pack_name=requested_pack),
+            "Read the compiled context before changing canonical concepts.",
+        ),
+        _operator_action(
+            "Signals",
+            _scoped_path("/signals", pack_name=requested_pack),
+            "Check whether this candidate is attached to active production signals.",
+        ),
+        _operator_action(
+            "Actions",
+            _scoped_path("/actions", pack_name=requested_pack),
+            "Inspect queued work that may depend on candidate canonicalization.",
+        ),
+        _operator_action(
+            "Objects",
+            _scoped_path("/objects", pack_name=requested_pack),
+            "Compare candidates against active Evergreen objects.",
+        ),
+    ]
+    payload["query"] = query or ""
+    return payload
 
 
 def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = None) -> dict[str, Any]:

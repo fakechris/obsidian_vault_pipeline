@@ -363,10 +363,15 @@ Current slice:
   - note/object traceability exposes `backlink_expectation`
   - production signals carry these contracts into `/signals`
   - deep dives that already wikilink existing objects now surface `reuse_existing` instead of looking like blind object-creation work
+- [[2026-04-21-phase26-candidate-canonicalization-workbench|Phase 26]] closes the remaining candidate/canonical operator gap:
+  - registry candidates are visible through `/candidates` and `/api/candidates`
+  - promote / merge / reject actions reuse the existing candidate lifecycle helpers
+  - review actions write `ui_candidate_reviewed` audit events
+  - promote / merge refresh derived knowledge state so active objects and rewritten links become visible without a separate manual reindex
 
 Next slice:
 
-- Continue Milestone 7 only where there is still a concrete operator loop gap. Do not widen into background intelligence until the reviewed candidate/canonical transition needs stricter enforcement.
+- Milestone 7 should be treated as closed once Phase 26 lands. The next work should move to the explicit roadmap gaps in Milestone 9A rather than widening candidate review into hidden semantic automation.
 
 ### Milestone 8: Knowledge Evolution Layer
 
@@ -543,7 +548,7 @@ Completed references:
 
 Active next reference:
 
-- `Milestone 7: Active Signal Loop` (next execution slice should focus on brain-first lookup + backlink legibility)
+- `Milestone 9A: Background Intelligence Orchestration Integration`, unless Phase 26 follow-up bugs show that candidate review still lacks operator safety.
 
 What those phases accomplished:
 
@@ -555,6 +560,8 @@ What those phases accomplished:
 - `Phase 22` turned passive signal surfaces into a first active loop by making signal/action/result impact legible from the product itself
 - `Phase 23` made inbound note capture legible by turning existing pipeline/refine audit into note, signal, and briefing products
 - `Phase 24` made object-creation routing legible by exposing brain-first lookup and backlink expectation contracts from traceability through signals into the UI
+- `Phase 25` made long-running pipeline execution observable from the same run-ledger truth in CLI, API, and UI
+- `Phase 26` makes candidate/canonical transitions directly reviewable from the operator surface without introducing a second canonicalization system
 
 What this sequence closed:
 
@@ -565,12 +572,13 @@ What this sequence closed:
 - the signal loop no longer stops at passive visibility; it now shows whether execution was productive, stalled, failed, or still waiting
 - the signal loop now also shows what recent inbound note capture actually did before queue execution became relevant
 - the signal loop no longer implies blind downstream object creation when the note already links to canonical brain objects
+- candidate concepts are no longer trapped behind a CLI-only lifecycle; they now have an explicit review surface and audit trail
 
 What the next phase should close:
 
-- reviewed candidate/canonical transitions should become easier to act on from the operator surface
 - if we enforce backlinks at write time, the enforcement should reuse the `backlink_expectation` contract instead of introducing a second source of truth
 - if we add richer semantic relation extraction, it should be a pack-level extraction contract, not a hidden global memory backend
+- background intelligence orchestration should reuse the action queue and run ledger instead of creating another execution path
 
 Sequence rule:
 
@@ -582,7 +590,8 @@ Sequence rule:
 - treat `Phase 22` as the first closeout slice for Milestone 7
 - treat `Phase 23` as the second closeout slice for Milestone 7
 - treat `Phase 24` as the third closeout slice for Milestone 7: brain-first lookup + backlink legibility
-- continue within Milestone 7 only for reviewed candidate/canonical actionability; otherwise move to the next explicit roadmap gap
+- treat `Phase 26` as the final Milestone 7 closeout slice for reviewed candidate/canonical actionability
+- do not continue within Milestone 7 unless Phase 26 reveals a concrete safety defect
 
 This keeps the roadmap moving from substrate -> contracts -> entry products, instead of looping back into infrastructure.
 
@@ -630,18 +639,20 @@ As of this plan:
 - Milestone 4: complete
 - Milestone 5: complete
 - Milestone 6: complete
-- Milestone 7: in progress
-- Milestone 8+: not started
+- Milestone 7: complete once Phase 26 lands
+- Milestone 8: complete
+- Milestone 9: in progress
+- Milestone 9A: planned
 
 So the honest product statement is:
 
-> OVP is already a usable local knowledge workbench core with a real review console, but it is not yet an active knowledge system.
+> OVP is a usable local knowledge workbench with a real review console, observable runtime, and active signal loop. It is not yet a fully orchestrated background intelligence system.
 
 The remaining gap is no longer “can this architecture support it?” It is now a sequence problem:
 
-- finish semantic hardening,
-- make the production chain legible,
-- then add signal capture, evolution, and background intelligence in that order.
+- keep candidate review explicit and auditable,
+- route background actions through the existing queue / run-ledger contracts,
+- add richer pack-level semantic extraction only after the orchestration path is observable.
 
 ## PR Review Gate
 
