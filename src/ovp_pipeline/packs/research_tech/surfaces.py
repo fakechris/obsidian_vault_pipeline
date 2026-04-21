@@ -18,6 +18,31 @@ def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
     return f"{path}{separator}pack={quote(normalized_pack, safe='')}"
 
 
+def _traceability_object_ids(traceability: dict[str, Any]) -> list[str]:
+    object_ids = [
+        str(entry.get("object_id") or "")
+        for entry in traceability.get("objects", [])
+        if str(entry.get("object_id") or "").strip()
+    ]
+    if object_ids:
+        return list(dict.fromkeys(object_ids))
+    brain_lookup = traceability.get("brain_first_lookup") or {}
+    return list(
+        dict.fromkeys(
+            str(entry.get("object_id") or "")
+            for entry in brain_lookup.get("existing_objects", [])
+            if str(entry.get("object_id") or "").strip()
+        )
+    )
+
+
+def _traceability_contract_payload(traceability: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "brain_first_lookup": traceability.get("brain_first_lookup") or {},
+        "backlink_expectation": traceability.get("backlink_expectation") or {},
+    }
+
+
 def list_production_chains(
     vault_dir: Path | str,
     *,
@@ -229,7 +254,7 @@ def build_signal_entries(
         limit=core.MAX_PAGE_SIZE,
     )
     for item in core._production_gap_items_from_chains(production_chains, limit=core.MAX_PAGE_SIZE):
-        object_ids = [entry["object_id"] for entry in item["traceability"]["objects"]]
+        object_ids = _traceability_object_ids(item["traceability"])
         signals.append(
             {
                 "signal_id": item["signal_id"],
@@ -266,6 +291,7 @@ def build_signal_entries(
                     "stage_label": item["stage_label"],
                     "missing": item["missing"],
                     "traceability_counts": item["traceability"]["counts"],
+                    **_traceability_contract_payload(item["traceability"]),
                 },
             }
         )
@@ -305,10 +331,23 @@ def build_signal_entries(
                     "payload": {
                         "stage_label": item["stage_label"],
                         "traceability_counts": traceability["counts"],
+                        **_traceability_contract_payload(traceability),
                     },
                 }
             )
         if item["stage_label"] == "deep_dive" and not traceability["objects"]:
+            object_ids = _traceability_object_ids(traceability)
+            object_effects = [
+                {
+                    "label": f"Existing object: {entry['title']}",
+                    "path": _scoped_path(
+                        f"/object?id={quote(str(entry['object_id']), safe='')}",
+                        pack_name=normalized_pack,
+                    ),
+                }
+                for entry in (traceability.get("brain_first_lookup") or {}).get("existing_objects", [])[:2]
+                if entry.get("object_id")
+            ]
             signals.append(
                 {
                     "signal_id": core._signal_id("deep_dive_needs_objects", item["path"]),
@@ -320,10 +359,11 @@ def build_signal_entries(
                     "explanation": core.SIGNAL_TYPE_EXPLANATIONS["deep_dive_needs_objects"],
                     "source_path": f"/note?path={quote(item['path'], safe='')}",
                     "source_label": "Production",
-                    "object_ids": [],
+                    "object_ids": object_ids,
                     "note_paths": [item["path"]],
                     "downstream_effects": [
                         {"label": "Open deep dive", "path": f"/note?path={quote(item['path'], safe='')}"},
+                        *object_effects,
                         {
                             "label": "Inspect production chain",
                             "path": _scoped_path(
@@ -341,6 +381,7 @@ def build_signal_entries(
                     "payload": {
                         "stage_label": item["stage_label"],
                         "traceability_counts": traceability["counts"],
+                        **_traceability_contract_payload(traceability),
                     },
                 }
             )

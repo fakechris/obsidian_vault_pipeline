@@ -2395,6 +2395,31 @@ def _render_evolution_browser_page(payload: dict) -> str:
     )
 
 
+def _render_signal_context_contract(item: dict) -> str:
+    payload = item.get("payload") or {}
+    brain_lookup = payload.get("brain_first_lookup") or {}
+    backlink_expectation = payload.get("backlink_expectation") or {}
+    parts: list[str] = []
+    if brain_lookup:
+        count = int(brain_lookup.get("existing_object_count") or 0)
+        parts.append(
+            "<div class='muted'>Brain-first lookup: "
+            f"{escape(str(brain_lookup.get('decision') or 'inspect'))} · "
+            f"{escape(str(brain_lookup.get('status') or 'unknown'))} · "
+            f"{count} existing objects"
+            "</div>"
+        )
+    if backlink_expectation:
+        source_count = len(backlink_expectation.get("source_note_paths") or [])
+        parts.append(
+            "<div class='muted'>Backlinks: "
+            f"{escape(str(backlink_expectation.get('status') or 'unknown'))} · "
+            f"{source_count} source notes"
+            "</div>"
+        )
+    return "".join(parts)
+
+
 def _render_signals_page(payload: dict) -> str:
     query = payload.get("query", "")
     selected_type = payload.get("signal_type", "")
@@ -2429,6 +2454,7 @@ def _render_signals_page(payload: dict) -> str:
             if item.get("capture_summary", {}).get("summary")
             else ""
         )
+        + _render_signal_context_contract(item)
         + (
             "<div class='muted'>Recommended Action: "
             + f'<a href="{escape(item["recommended_action"]["path"])}">{escape(item["recommended_action"]["label"])}</a>'

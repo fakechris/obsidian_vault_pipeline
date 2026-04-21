@@ -3285,6 +3285,147 @@ def _deep_dive_objects_for_path(vault_dir: Path | str, note_path: str) -> list[d
     return list(_deep_dive_object_map(vault_dir).get(normalized_target, []))
 
 
+def _linked_existing_objects_for_note_path(
+    vault_dir: Path | str,
+    note_path: str,
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, Any]]:
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    absolute_path = str((resolved_vault / note_path).resolve())
+    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    if not pack_candidates:
+        return []
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
+    with sqlite3.connect(db_path) as conn:
+        source_row = conn.execute(
+            """
+            SELECT slug
+            FROM pages_index
+            WHERE path = ?
+            LIMIT 1
+            """,
+            (absolute_path,),
+        ).fetchone()
+        if source_row is None:
+            return []
+        source_slug = str(source_row[0])
+        rows = conn.execute(
+            f"""
+            SELECT objects.pack, objects.object_id, objects.object_kind, objects.title,
+                   objects.canonical_path, page_links.target_raw, page_links.line_number
+            FROM page_links
+            JOIN objects ON objects.object_id = page_links.target_slug
+            WHERE page_links.source_slug = ?
+              AND objects.pack IN ({pack_placeholders})
+            ORDER BY CASE objects.pack
+              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              ELSE {len(pack_candidates)}
+            END, page_links.line_number, objects.object_id
+            """,
+            (source_slug, *pack_candidates, *pack_candidates),
+        ).fetchall()
+
+    items: dict[str, dict[str, Any]] = {}
+    for pack, object_id, object_kind, title, canonical_path, target_raw, line_number in rows:
+        if object_id in items:
+            continue
+        items[str(object_id)] = {
+            "object_id": str(object_id),
+            "object_kind": str(object_kind),
+            "title": str(title),
+            "canonical_path": _vault_relative_path(resolved_vault, str(canonical_path)),
+            "target_raw": str(target_raw or ""),
+            "line_number": int(line_number or 0),
+            "pack": str(pack),
+        }
+    return list(items.values())
+
+
+def _brain_first_lookup_payload(
+    *,
+    stage_label: str,
+    canonical_objects: list[dict[str, Any]],
+    linked_existing_objects: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if canonical_objects:
+        return {
+            "status": "canonical_objects_present",
+            "decision": "skip_existing",
+            "existing_object_count": len(canonical_objects),
+            "existing_objects": canonical_objects,
+            "lookup_source": "promoted_traceability",
+            "summary": f"{len(canonical_objects)} canonical objects are already attached to this chain.",
+        }
+    if linked_existing_objects:
+        return {
+            "status": "existing_links_found",
+            "decision": "reuse_existing",
+            "existing_object_count": len(linked_existing_objects),
+            "existing_objects": linked_existing_objects,
+            "lookup_source": "page_links",
+            "summary": (
+                f"Brain-first lookup found {len(linked_existing_objects)} existing object links; "
+                "reuse or reconcile before creating new candidates."
+            ),
+        }
+    if stage_label in {"source_note", "deep_dive"}:
+        return {
+            "status": "no_existing_objects",
+            "decision": "create_candidate",
+            "existing_object_count": 0,
+            "existing_objects": [],
+            "lookup_source": "page_links",
+            "summary": "No existing object links were found; candidate creation is allowed if extraction finds a stable concept.",
+        }
+    return {
+        "status": "not_applicable",
+        "decision": "inspect",
+        "existing_object_count": 0,
+        "existing_objects": [],
+        "lookup_source": "page_links",
+        "summary": "Brain-first lookup is not required for this note stage.",
+    }
+
+
+def _note_backlink_expectation_payload(
+    *,
+    note_path: str,
+    stage_label: str,
+    source_notes: list[dict[str, Any]],
+    deep_dives: list[dict[str, Any]],
+    objects: list[dict[str, Any]],
+    atlas_pages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    source_note_paths = [str(item.get("path") or "") for item in source_notes if item.get("path")]
+    deep_dive_paths = [str(item.get("path") or "") for item in deep_dives if item.get("path")]
+    object_ids = [str(item.get("object_id") or item.get("slug") or "") for item in objects if item.get("object_id") or item.get("slug")]
+    atlas_paths = [str(item.get("path") or "") for item in atlas_pages if item.get("path")]
+
+    if stage_label == "source_note":
+        status = "satisfied" if deep_dive_paths or object_ids or atlas_paths else "missing_downstream_links"
+    elif stage_label == "deep_dive":
+        status = "satisfied" if source_note_paths else "missing_source_backlink"
+    elif stage_label in {"evergreen_note", "evergreen_object"}:
+        status = "satisfied" if source_note_paths or deep_dive_paths else "missing_source_backlink"
+    else:
+        status = "inspect"
+
+    return {
+        "status": status,
+        "note_path": str(note_path),
+        "source_note_paths": source_note_paths,
+        "deep_dive_paths": deep_dive_paths,
+        "object_ids": object_ids,
+        "atlas_paths": atlas_paths,
+        "summary": (
+            f"{len(source_note_paths)} source notes, {len(deep_dive_paths)} deep dives, "
+            f"{len(object_ids)} objects, {len(atlas_paths)} atlas pages linked."
+        ),
+    }
+
+
 def _atlas_pages_for_object_ids(
     vault_dir: Path | str,
     object_ids: list[str],
@@ -3567,6 +3708,24 @@ def get_note_traceability(
             f"Source note currently traces to {len(deep_dives)} deep dives, "
             f"{len(objects)} objects, {len(atlas_pages)} atlas pages."
         )
+    linked_existing_objects = _linked_existing_objects_for_note_path(
+        vault_dir,
+        note_path,
+        pack_name=pack_name,
+    )
+    brain_first_lookup = _brain_first_lookup_payload(
+        stage_label=stage_label,
+        canonical_objects=objects,
+        linked_existing_objects=linked_existing_objects,
+    )
+    backlink_expectation = _note_backlink_expectation_payload(
+        note_path=note_path,
+        stage_label=stage_label,
+        source_notes=source_notes,
+        deep_dives=deep_dives,
+        objects=objects,
+        atlas_pages=atlas_pages,
+    )
     missing_stages = [stage for stage, present in stage_presence.items() if not present]
     chain_status = "complete" if not missing_stages else "partial"
     return {
@@ -3580,6 +3739,8 @@ def get_note_traceability(
         "missing_stages": missing_stages,
         "chain_status": chain_status,
         "chain_summary": chain_summary,
+        "brain_first_lookup": brain_first_lookup,
+        "backlink_expectation": backlink_expectation,
         "counts": {
             "source_notes": len(source_notes),
             "deep_dives": len(deep_dives),
@@ -3609,6 +3770,26 @@ def get_object_traceability(
     }
     missing_stages = [stage for stage, present in stage_presence.items() if not present]
     chain_status = "complete" if not missing_stages else "partial"
+    object_as_link = {
+        "object_id": detail["object"]["object_id"],
+        "object_kind": detail["object"].get("object_kind", "evergreen"),
+        "title": detail["object"]["title"],
+        "canonical_path": detail["object"].get("canonical_path", ""),
+        "pack": detail["object"].get("pack", ""),
+    }
+    brain_first_lookup = _brain_first_lookup_payload(
+        stage_label="evergreen_object",
+        canonical_objects=[object_as_link],
+        linked_existing_objects=[],
+    )
+    backlink_expectation = _note_backlink_expectation_payload(
+        note_path=str(detail["provenance"]["evergreen_path"]),
+        stage_label="evergreen_object",
+        source_notes=list(source_note_map.values()),
+        deep_dives=deep_dives,
+        objects=[object_as_link],
+        atlas_pages=detail["provenance"]["mocs"],
+    )
     return {
         "object": detail["object"],
         "stage_label": "evergreen_object",
@@ -3626,6 +3807,8 @@ def get_object_traceability(
             f"Object currently traces to {len(source_note_map)} source notes, "
             f"{len(deep_dives)} deep dives, {len(detail['provenance']['mocs'])} atlas pages."
         ),
+        "brain_first_lookup": brain_first_lookup,
+        "backlink_expectation": backlink_expectation,
         "counts": {
             "source_notes": len(source_note_map),
             "deep_dives": len(deep_dives),
