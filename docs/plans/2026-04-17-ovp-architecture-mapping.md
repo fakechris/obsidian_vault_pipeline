@@ -154,7 +154,7 @@ This means OVP is already doing context assembly, but it has not yet been declar
 
 ### Layer 4: Governance / Resolver / Review
 
-This exists in fragments and is the least explicit.
+This exists and is becoming explicit, but it is still assembled from several surfaces rather than one governance product.
 
 Current components:
 
@@ -167,7 +167,14 @@ Current components:
 - signals log / signal ledger
 - truth API review actions
 
-So governance is not missing. It is **present but not yet unified**.
+So governance is not missing. It is **present and partially unified**.
+
+Phase 26 adds the missing candidate/canonical review surface without changing the identity model:
+
+- `ConceptRegistry` remains the source of truth for candidate / active / rejected state.
+- `/candidates` and `/api/candidates` are an access layer over registry candidates, not a second registry.
+- promote / merge / reject actions route through `promote_candidates.py`, so filesystem, registry, Atlas, link rewrite, audit, and knowledge-index refresh stay in one lifecycle path.
+- candidate links are ordinary canonical Obsidian wikilinks plus lifecycle state. They are not typed graph triples and should not be treated as semantic relations like `replaces`, `enriches`, `confirms`, or `challenges`.
 
 ## The Architectural Upgrade Path
 

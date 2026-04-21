@@ -3283,3 +3283,118 @@ def test_ui_server_module_compiles_on_python311():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def _seed_candidate_for_ui(temp_vault):
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+    from ovp_pipeline.promote_candidates import write_candidate_file
+
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="alpha-existing",
+            title="Alpha Existing",
+            aliases=["Alpha Candidate"],
+            definition="Existing canonical concept.",
+            area="testing",
+        )
+    )
+    candidate = registry.upsert_candidate(
+        slug="alpha-candidate",
+        title="Alpha Candidate",
+        definition="Candidate concept awaiting review.",
+        area="testing",
+        aliases=["alpha draft"],
+    )
+    registry.save()
+    write_candidate_file(temp_vault, candidate, dry_run=False)
+    return candidate
+
+
+def test_ui_server_candidates_endpoint_returns_payload(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
+
+    _seed_candidate_for_ui(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/candidates")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["screen"] == "candidates/browser"
+    assert payload["count"] == 1
+    assert payload["items"][0]["slug"] == "alpha-candidate"
+
+
+def test_ui_server_candidates_page_renders_review_controls(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
+
+    _seed_candidate_for_ui(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/candidates")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Candidate Workbench" in body
+    assert "Alpha Candidate" in body
+    assert "Promote" in body
+    assert "Merge" in body
+    assert "Reject" in body
+
+
+def test_ui_server_can_promote_candidate_via_api(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
+
+    _seed_candidate_for_ui(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = urlencode(
+            {
+                "slug": "alpha-candidate",
+                "action": "promote",
+                "note": "Promote from UI",
+            }
+        )
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "POST",
+            "/api/candidates/review",
+            body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    promoted = ConceptRegistry(temp_vault).load().find_by_slug("alpha-candidate")
+    assert response.status == 200
+    assert payload["action"] == "promote"
+    assert payload["mutation"]["action"] == "promote"
+    assert payload["knowledge_index_rebuilt"] is True
+    assert promoted.status == STATUS_ACTIVE

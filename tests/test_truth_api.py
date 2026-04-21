@@ -4177,3 +4177,160 @@ def test_truth_api_record_review_action_writes_jsonl_without_db_lock(temp_vault,
     assert review_log.exists()
     lines = [line for line in review_log.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == 1
+
+
+def _seed_candidate_registry(temp_vault):
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+    from ovp_pipeline.promote_candidates import write_candidate_file
+
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="alpha-existing",
+            title="Alpha Existing",
+            aliases=["Alpha Candidate"],
+            definition="Existing canonical concept.",
+            area="testing",
+        )
+    )
+    registry.upsert_candidate(
+        slug="alpha-candidate",
+        title="Alpha Candidate",
+        definition="Candidate concept awaiting review.",
+        area="testing",
+        aliases=["alpha draft"],
+    )
+    candidate = registry.upsert_candidate(
+        slug="alpha-candidate",
+        title="Alpha Candidate",
+        definition="Candidate concept awaiting review.",
+        area="testing",
+        aliases=["alpha draft"],
+    )
+    registry.save()
+    write_candidate_file(temp_vault, candidate, dry_run=False)
+    return candidate
+
+
+def test_truth_api_lists_candidate_concepts(temp_vault):
+    from ovp_pipeline.truth_api import list_candidate_concepts
+
+    _seed_candidate_registry(temp_vault)
+
+    payload = list_candidate_concepts(temp_vault)
+
+    assert payload["screen"] == "candidates/browser"
+    assert payload["count"] == 1
+    assert payload["status_counts"] == {"candidate": 1}
+    item = payload["items"][0]
+    assert item["slug"] == "alpha-candidate"
+    assert item["title"] == "Alpha Candidate"
+    assert item["source_count"] == 2
+    assert item["candidate_path"] == "10-Knowledge/Evergreen/_Candidates/alpha-candidate.md"
+    assert item["candidate_note_path"] == "/note?path=10-Knowledge%2FEvergreen%2F_Candidates%2Falpha-candidate.md"
+    assert item["suggested_action"] == "merge_as_alias"
+    assert item["similar_existing"][0]["slug"] == "alpha-existing"
+
+    empty_page = list_candidate_concepts(temp_vault, limit=0)
+    assert empty_page["count"] == 1
+    assert empty_page["items"] == []
+
+
+def test_truth_api_review_candidate_concept_promotes_and_records_audit(temp_vault):
+    from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
+    from ovp_pipeline.truth_api import list_review_actions, review_candidate_concept
+
+    _seed_candidate_registry(temp_vault)
+
+    payload = review_candidate_concept(
+        temp_vault,
+        slug="alpha-candidate",
+        action="promote",
+        note="Promote from workbench",
+    )
+
+    registry = ConceptRegistry(temp_vault).load()
+    promoted = registry.find_by_slug("alpha-candidate")
+    assert payload["action"] == "promote"
+    assert payload["mutation"]["action"] == "promote"
+    assert payload["knowledge_index_rebuilt"] is True
+    assert promoted is not None
+    assert promoted.status == STATUS_ACTIVE
+    assert (temp_vault / "10-Knowledge" / "Evergreen" / "alpha-candidate.md").exists()
+    assert not (temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "alpha-candidate.md").exists()
+
+    audit = list_review_actions(temp_vault, limit=1)[0]
+    assert audit["event_type"] == "ui_candidate_reviewed"
+    assert audit["slug"] == "alpha-candidate"
+    assert audit["status"] == "promoted"
+    assert audit["note"] == "Promote from workbench"
+
+
+def test_truth_api_review_candidate_concept_merges_into_existing_and_rebuilds(temp_vault):
+    from ovp_pipeline.concept_registry import ConceptRegistry
+    from ovp_pipeline.truth_api import review_candidate_concept
+
+    _seed_candidate_registry(temp_vault)
+    article_path = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "Candidate Link.md"
+    article_path.parent.mkdir(parents=True, exist_ok=True)
+    article_path.write_text("Links [[Alpha Candidate]] and [[alpha draft]].\n", encoding="utf-8")
+
+    payload = review_candidate_concept(
+        temp_vault,
+        slug="alpha-candidate",
+        action="merge",
+        target_slug="alpha-existing",
+        note="Merge duplicate surface",
+    )
+
+    registry = ConceptRegistry(temp_vault).load()
+    target = registry.find_by_slug("alpha-existing")
+    assert payload["action"] == "merge"
+    assert payload["status"] == "merged"
+    assert payload["knowledge_index_rebuilt"] is True
+    assert registry.find_by_slug("alpha-candidate") is None
+    assert target is not None
+    assert "alpha-candidate" in target.redirects
+    assert "[[alpha-existing|Alpha Candidate]]" in article_path.read_text(encoding="utf-8")
+
+
+def test_truth_api_review_candidate_concept_rejects_without_rebuilding_index(temp_vault):
+    from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_REJECTED
+    from ovp_pipeline.truth_api import review_candidate_concept
+
+    _seed_candidate_registry(temp_vault)
+
+    payload = review_candidate_concept(
+        temp_vault,
+        slug="alpha-candidate",
+        action="reject",
+        note="Not canonical",
+    )
+
+    rejected = ConceptRegistry(temp_vault).load().find_by_slug("alpha-candidate")
+    assert payload["action"] == "reject"
+    assert payload["status"] == "rejected"
+    assert payload["knowledge_index_rebuilt"] is False
+    assert rejected is not None
+    assert rejected.status == STATUS_REJECTED
+    assert not (temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "alpha-candidate.md").exists()
+
+
+def test_candidate_browser_payload_exposes_operator_context(temp_vault):
+    from ovp_pipeline.ui.view_models import build_candidate_browser_payload
+
+    _seed_candidate_registry(temp_vault)
+
+    payload = build_candidate_browser_payload(temp_vault, pack_name="research-tech", query="alpha")
+
+    assert payload["screen"] == "candidates/browser"
+    assert payload["requested_pack"] == "research-tech"
+    assert payload["query"] == "alpha"
+    assert payload["count"] == 1
+    assert payload["items"][0]["slug"] == "alpha-candidate"
+    assert [item["label"] for item in payload["operator_rail"]] == [
+        "Orientation Brief",
+        "Signals",
+        "Actions",
+        "Objects",
+    ]

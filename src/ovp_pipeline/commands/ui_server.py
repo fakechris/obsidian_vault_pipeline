@@ -24,6 +24,7 @@ from ..ui.view_models import (
     build_action_queue_payload,
     build_atlas_browser_payload,
     build_briefing_payload,
+    build_candidate_browser_payload,
     build_cluster_browser_payload,
     build_cluster_detail_payload,
     build_contradiction_browser_payload,
@@ -46,6 +47,7 @@ from ..truth_api import (
     ensure_signal_ledger_synced,
     get_runtime_status,
     record_review_action,
+    review_candidate_concept,
     retry_action_queue_item,
     review_evolution_candidate,
     run_action_queue,
@@ -85,6 +87,7 @@ def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
     if _shell_supports_research_nav(requested_pack):
         items.extend(
             [
+                ("Candidates", "/candidates"),
                 ("Evolution", "/evolution"),
                 ("Clusters", "/clusters"),
                 ("Atlas", "/atlas"),
@@ -2395,6 +2398,113 @@ def _render_evolution_browser_page(payload: dict) -> str:
     )
 
 
+def _render_candidate_items(payload: dict) -> str:
+    requested_pack = str(payload.get("requested_pack") or "")
+    next_path = _shell_href("/candidates", requested_pack)
+    rendered: list[str] = []
+    for item in payload.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        slug = str(item.get("slug") or "")
+        title = str(item.get("title") or slug)
+        candidate_note_path = str(item.get("candidate_note_path") or "")
+        suggested_action = str(item.get("suggested_action") or "keep_as_candidate")
+        similar_existing = item.get("similar_existing") if isinstance(item.get("similar_existing"), list) else []
+        first_similar = similar_existing[0] if similar_existing else {}
+        default_target = str(first_similar.get("slug") or "") if isinstance(first_similar, dict) else ""
+        similar_html = "".join(
+            "<li>"
+            f"<a href='{escape(str(similar.get('path') or ''))}'>{escape(str(similar.get('title') or similar.get('slug') or ''))}</a> "
+            f"<span class='pill'>{escape(str(similar.get('score') or ''))}</span>"
+            "</li>"
+            for similar in similar_existing[:5]
+            if isinstance(similar, dict)
+        ) or "<li class='muted'>No strong active concept matches.</li>"
+        pack_hidden = (
+            f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+            if requested_pack
+            else ""
+        )
+        title_html = (
+            f"<a href='{escape(candidate_note_path)}'>{escape(title)}</a>"
+            if candidate_note_path
+            else escape(title)
+        )
+        rendered.append(
+            "<li>"
+            f"<h3>{title_html} <span class='pill'>{escape(slug)}</span></h3>"
+            f"<div class='muted'>Suggested: {escape(suggested_action)} · "
+            f"sources {escape(str(item.get('source_count') or 0))} · "
+            f"evidence {escape(str(item.get('evidence_count') or 0))}</div>"
+            f"<p>{escape(str(item.get('definition') or ''))}</p>"
+            "<div class='muted'>Similar active concepts</div>"
+            f"<ul class='list-tight'>{similar_html}</ul>"
+            "<div class='link-row'>"
+            "<form method='post' action='/candidates/review' class='link-row'>"
+            f"{pack_hidden}"
+            f"<input type='hidden' name='slug' value='{escape(slug)}' />"
+            "<input type='hidden' name='action' value='promote' />"
+            f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+            "<button type='submit'>Promote</button>"
+            "</form>"
+            "<form method='post' action='/candidates/review' class='link-row'>"
+            f"{pack_hidden}"
+            f"<input type='hidden' name='slug' value='{escape(slug)}' />"
+            "<input type='hidden' name='action' value='merge' />"
+            f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+            f"<input type='text' name='target_slug' value='{escape(default_target)}' placeholder='target slug' />"
+            "<button type='submit'>Merge</button>"
+            "</form>"
+            "<form method='post' action='/candidates/review' class='link-row'>"
+            f"{pack_hidden}"
+            f"<input type='hidden' name='slug' value='{escape(slug)}' />"
+            "<input type='hidden' name='action' value='reject' />"
+            f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+            "<button type='submit'>Reject</button>"
+            "</form>"
+            "</div>"
+            "</li>"
+        )
+    if not rendered:
+        return "<p class='muted'>No candidate concepts match the current filter.</p>"
+    return f"<ul class='list-tight'>{''.join(rendered)}</ul>"
+
+
+def _render_candidates_page(payload: dict) -> str:
+    query = str(payload.get("query") or "")
+    requested_pack = str(payload.get("requested_pack") or "")
+    operator_rail = _render_operator_rail(payload)
+    status_counts = " ".join(
+        f"<span class='pill'>{escape(str(status))}: {escape(str(count))}</span>"
+        for status, count in (payload.get("status_counts") or {}).items()
+    )
+    return _layout(
+        "Candidate Workbench",
+        "".join(
+            [
+                "<h1>Candidate Workbench</h1>",
+                "<p class='muted'>Review registry candidates before they become canonical Evergreen objects. "
+                "Promote creates an active note, merge rewrites candidate links into an existing object, "
+                "and reject removes the pending candidate artifact.</p>",
+                "<form method='get' action='/candidates' class='link-row'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter candidates' />",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                f"<p class='muted'>{escape(str(payload.get('count') or 0))} candidate(s) in view.</p>",
+                f"<section class='card'><h2>Status</h2><div class='link-row'>{status_counts}</div></section>",
+                operator_rail,
+                f"<section class='card'><h2>Review Queue</h2>{_render_candidate_items(payload)}</section>",
+            ]
+        ),
+        requested_pack=requested_pack,
+    )
+
+
 def _render_signal_context_contract(item: dict) -> str:
     payload = item.get("payload") or {}
     brain_lookup = payload.get("brain_first_lookup") or {}
@@ -3304,6 +3414,31 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     )
                     self._write_html(_render_signals_page(payload))
                     return
+                if path == "/api/candidates":
+                    q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/candidates", api=True):
+                        return
+                    self._write_json(
+                        build_candidate_browser_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            query=q,
+                        )
+                    )
+                    return
+                if path == "/candidates":
+                    q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/candidates", api=False):
+                        return
+                    payload = build_candidate_browser_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
+                    )
+                    self._write_html(_render_candidates_page(payload))
+                    return
                 if path == "/api/evolution":
                     q = query.get("q", [""])[0]
                     status = query.get("status", ["all"])[0] or "all"
@@ -3574,6 +3709,19 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     payload = self._review_evolution_action(form)
                     self._redirect(str(payload["next_path"]))
                     return
+                if path == "/api/candidates/review":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/candidates/review", api=True):
+                        return
+                    self._write_json(self._review_candidate_action(form))
+                    return
+                if path == "/candidates/review":
+                    pack_name = self._form_first(form, "pack").strip() or None
+                    if self._guard_research_route(pack_name=pack_name, route_path="/candidates/review", api=False):
+                        return
+                    payload = self._review_candidate_action(form)
+                    self._redirect(str(payload["next_path"]))
+                    return
                 if path == "/api/actions/enqueue":
                     self._write_json(self._enqueue_signal_action(form))
                     return
@@ -3752,6 +3900,26 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             )
             payload["next_path"] = self._form_first(form, "next").strip() or _shell_href(
                 "/evolution",
+                pack_name or "",
+            )
+            return payload
+
+        def _review_candidate_action(self, form: dict[str, list[str]]) -> dict[str, object]:
+            slug = self._form_first(form, "slug").strip()
+            action = self._form_first(form, "action").strip()
+            target_slug = self._form_first(form, "target_slug").strip() or None
+            note = self._form_first(form, "note").strip()
+            pack_name = self._form_first(form, "pack").strip() or None
+            payload = review_candidate_concept(
+                resolved_vault,
+                slug=slug,
+                action=action,
+                target_slug=target_slug,
+                note=note,
+                pack_name=pack_name,
+            )
+            payload["next_path"] = self._form_first(form, "next").strip() or _shell_href(
+                "/candidates",
                 pack_name or "",
             )
             return payload
