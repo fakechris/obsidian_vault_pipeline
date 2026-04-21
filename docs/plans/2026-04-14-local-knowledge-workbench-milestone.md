@@ -358,11 +358,15 @@ Current slice:
     - `/api/runtime`
     - `/`
   - `/` now uses a runtime-first home shell so current workflow visibility stays fast during live runs
+- [[2026-04-18-phase24-brain-first-lookup-and-backlink-legibility|Phase 24]] now lands the missing legibility contract for object creation:
+  - note traceability exposes `brain_first_lookup`
+  - note/object traceability exposes `backlink_expectation`
+  - production signals carry these contracts into `/signals`
+  - deep dives that already wikilink existing objects now surface `reuse_existing` instead of looking like blind object-creation work
 
 Next slice:
 
-- [[2026-04-18-phase24-brain-first-lookup-and-backlink-legibility|Phase 24: brain-first lookup + backlink legibility]]
-- This is no longer gated on runtime validation.
+- Continue Milestone 7 only where there is still a concrete operator loop gap. Do not widen into background intelligence until the reviewed candidate/canonical transition needs stricter enforcement.
 
 ### Milestone 8: Knowledge Evolution Layer
 
@@ -550,6 +554,7 @@ What those phases accomplished:
 - `Phase 21` turned the trustworthy workbench into a clearer operator shell with workflow IA, next-step rails, and denser page ordering
 - `Phase 22` turned passive signal surfaces into a first active loop by making signal/action/result impact legible from the product itself
 - `Phase 23` made inbound note capture legible by turning existing pipeline/refine audit into note, signal, and briefing products
+- `Phase 24` made object-creation routing legible by exposing brain-first lookup and backlink expectation contracts from traceability through signals into the UI
 
 What this sequence closed:
 
@@ -559,12 +564,13 @@ What this sequence closed:
 - the current product surface now has a clearer default entry path and stronger compiled pages
 - the signal loop no longer stops at passive visibility; it now shows whether execution was productive, stalled, failed, or still waiting
 - the signal loop now also shows what recent inbound note capture actually did before queue execution became relevant
+- the signal loop no longer implies blind downstream object creation when the note already links to canonical brain objects
 
 What the next phase should close:
 
-- the next phase should tighten brain-first lookup before object/link creation
-- newly created downstream objects should make backlink expectations more explicit
-- the operator should be able to see when capture created candidate vs canonical downstream knowledge without widening into opaque background automation
+- reviewed candidate/canonical transitions should become easier to act on from the operator surface
+- if we enforce backlinks at write time, the enforcement should reuse the `backlink_expectation` contract instead of introducing a second source of truth
+- if we add richer semantic relation extraction, it should be a pack-level extraction contract, not a hidden global memory backend
 
 Sequence rule:
 
@@ -575,7 +581,8 @@ Sequence rule:
 - treat `Phase 21` as the closeout for Milestone 6
 - treat `Phase 22` as the first closeout slice for Milestone 7
 - treat `Phase 23` as the second closeout slice for Milestone 7
-- use the next Milestone 7 slice for brain-first lookup + backlink legibility instead of reopening shell UX or widening immediately into background intelligence
+- treat `Phase 24` as the third closeout slice for Milestone 7: brain-first lookup + backlink legibility
+- continue within Milestone 7 only for reviewed candidate/canonical actionability; otherwise move to the next explicit roadmap gap
 
 This keeps the roadmap moving from substrate -> contracts -> entry products, instead of looping back into infrastructure.
 

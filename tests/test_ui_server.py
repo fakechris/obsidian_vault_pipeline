@@ -2160,6 +2160,17 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
                         "impact_detail": "A queueable action exists and is currently waiting to run.",
                         "produced_artifact_count": 0,
                     },
+                    "payload": {
+                        "brain_first_lookup": {
+                            "decision": "reuse_existing",
+                            "status": "existing_links_found",
+                            "existing_object_count": 1,
+                        },
+                        "backlink_expectation": {
+                            "status": "satisfied",
+                            "source_note_paths": ["50-Inbox/03-Processed/Loose Source.md"],
+                        },
+                    },
                 }
             ],
             "count": 1,
@@ -2203,6 +2214,8 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
     assert "Next Actions" in body
     assert "Impact: Waiting on queue execution" in body
     assert "Inbound capture: Observed 1 inbound capture event but no downstream artifact yet." in body
+    assert "Brain-first lookup: reuse_existing · existing_links_found · 1 existing objects" in body
+    assert "Backlinks: satisfied · 1 source notes" in body
 
 
 def test_ui_server_actions_endpoint_accepts_pack_scope(temp_vault, monkeypatch):

@@ -2002,6 +2002,73 @@ date: 2026-04-13
     assert [item["slug"] for item in detail["provenance"]["mocs"]] == ["alias-atlas"]
 
 
+def test_truth_api_note_traceability_exposes_brain_first_lookup_for_existing_links(temp_vault):
+    from ovp_pipeline.truth_api import get_note_traceability
+
+    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_text(
+        """---
+title: Harness
+source: https://example.com/harness
+---
+
+Processed source note.
+""",
+        encoding="utf-8",
+    )
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: harness-deep-dive
+title: Harness Deep Dive
+type: deep_dive
+source: https://example.com/harness
+date: 2026-04-13
+---
+
+# Harness Deep Dive
+
+Mentions the existing canonical object [[Alpha Concept]].
+""",
+        encoding="utf-8",
+    )
+    evergreen = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    evergreen.parent.mkdir(parents=True, exist_ok=True)
+    evergreen.write_text(
+        """---
+note_id: alpha
+title: Alpha
+type: evergreen
+aliases: [Alpha Concept]
+date: 2026-04-13
+---
+
+# Alpha
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+
+    traceability = get_note_traceability(
+        temp_vault,
+        note_path="20-Areas/AI-Research/Topics/2026-04/Harness_深度解读.md",
+    )
+
+    assert traceability["objects"] == []
+    assert traceability["brain_first_lookup"]["decision"] == "reuse_existing"
+    assert traceability["brain_first_lookup"]["status"] == "existing_links_found"
+    assert traceability["brain_first_lookup"]["existing_object_count"] == 1
+    assert traceability["brain_first_lookup"]["existing_objects"][0]["object_id"] == "alpha"
+    assert traceability["brain_first_lookup"]["existing_objects"][0]["target_raw"] == "Alpha Concept"
+    assert traceability["backlink_expectation"]["status"] == "satisfied"
+    assert traceability["backlink_expectation"]["source_note_paths"] == [
+        "50-Inbox/03-Processed/2026-04/Harness.md"
+    ]
+
+
 def test_truth_api_returns_note_traceability_for_processed_source(temp_vault):
     from ovp_pipeline.truth_api import get_note_traceability
 
@@ -3953,6 +4020,57 @@ def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, m
         "source_needs_deep_dive",
         "deep_dive_needs_objects",
     }
+
+
+def test_research_tech_deep_dive_signal_exposes_brain_first_lookup_contract(temp_vault, monkeypatch):
+    from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
+
+    monkeypatch.setattr(research_surfaces.core, "list_contradictions", lambda *args, **kwargs: [])
+    monkeypatch.setattr(research_surfaces.core, "list_stale_summaries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(research_surfaces.core, "list_review_actions", lambda *args, **kwargs: [])
+
+    def fake_chains(vault_dir, *, pack_name=None, query=None, limit=100):
+        return [
+            {
+                "title": "Loose Deep Dive",
+                "path": "20-Areas/AI-Research/Topics/2026-04/Loose Deep Dive_深度解读.md",
+                "stage_label": "deep_dive",
+                "traceability": {
+                    "deep_dives": [],
+                    "objects": [],
+                    "atlas_pages": [],
+                    "source_notes": [{"path": "50-Inbox/03-Processed/2026-04/Loose Source.md"}],
+                    "counts": {
+                        "source_notes": 1,
+                        "deep_dives": 0,
+                        "objects": 0,
+                        "atlas_pages": 0,
+                    },
+                    "brain_first_lookup": {
+                        "decision": "reuse_existing",
+                        "status": "existing_links_found",
+                        "existing_object_count": 1,
+                        "existing_objects": [{"object_id": "alpha", "title": "Alpha"}],
+                    },
+                    "backlink_expectation": {
+                        "status": "satisfied",
+                        "source_note_paths": ["50-Inbox/03-Processed/2026-04/Loose Source.md"],
+                        "deep_dive_paths": [
+                            "20-Areas/AI-Research/Topics/2026-04/Loose Deep Dive_深度解读.md"
+                        ],
+                    },
+                },
+            },
+        ]
+
+    monkeypatch.setattr(research_surfaces.core, "list_production_chains", fake_chains)
+
+    items = research_surfaces.build_signal_entries(temp_vault)
+    signal = next(item for item in items if item["signal_type"] == "deep_dive_needs_objects")
+
+    assert signal["payload"]["brain_first_lookup"]["decision"] == "reuse_existing"
+    assert signal["payload"]["brain_first_lookup"]["existing_objects"][0]["object_id"] == "alpha"
+    assert signal["payload"]["backlink_expectation"]["status"] == "satisfied"
 
 
 def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch):

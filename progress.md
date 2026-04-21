@@ -1,5 +1,43 @@
 # Progress Log
 
+## Session: 2026-04-20
+
+### Phase 24: Brain-First Lookup And Backlink Legibility
+- **Status:** complete
+- Actions taken:
+  - Added note-level `brain_first_lookup` to `truth_api.get_note_traceability(...)`
+  - Added note/object `backlink_expectation` contracts
+  - Made brain-first lookup use existing `knowledge.db` truth:
+    - `pages_index`
+    - `page_links`
+    - `objects`
+  - Preserved the existing write architecture:
+    - `ConceptRegistry` remains the deterministic resolver
+    - promoted objects remain canonical
+    - unresolved extraction still routes through candidates
+  - Updated `research-tech` production signals so `production_gap`, `source_needs_deep_dive`, and `deep_dive_needs_objects` carry lookup/backlink contracts in payloads
+  - Made `deep_dive_needs_objects` associate with existing canonical object ids when a deep dive already wikilinks those objects
+  - Updated `/signals` to render:
+    - brain-first lookup decision/status/count
+    - backlink expectation status/source count
+  - Updated roadmap docs to mark Phase 24 as the third Milestone 7 closeout slice
+- Files modified:
+  - docs/plans/2026-04-18-phase24-brain-first-lookup-and-backlink-legibility.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - src/ovp_pipeline/truth_api.py
+  - src/ovp_pipeline/packs/research_tech/surfaces.py
+  - src/ovp_pipeline/commands/ui_server.py
+  - tests/test_truth_api.py
+  - tests/test_ui_server.py
+- Verification so far:
+  - `PYTHONPATH=src pytest tests/test_truth_api.py::test_truth_api_note_traceability_exposes_brain_first_lookup_for_existing_links tests/test_truth_api.py::test_research_tech_deep_dive_signal_exposes_brain_first_lookup_contract tests/test_ui_server.py::test_ui_server_signals_page_renders_governance_resolver_metadata -q`
+  - `3 passed`
+  - `PYTHONPATH=src pytest tests/test_truth_api.py tests/test_ui_server.py tests/test_ui_smoke.py -q`
+  - `197 passed`
+  - `git diff --check`
+  - `PYTHONPATH=src pytest -q`
+  - `672 passed`
+
 ## Session: 2026-04-18
 
 ### Phase 25: Observable Runtime And Run Ledger

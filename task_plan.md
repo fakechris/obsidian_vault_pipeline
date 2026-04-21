@@ -7,9 +7,10 @@
   - honest counted progress
   - watcher/API/UI reader unification
   - explicit daily `ovp --incremental` entrypoint
-- `Phase 24` is the next active planned slice:
+- `Phase 24` is the active implementation slice in this branch:
   - brain-first lookup before object/link creation
   - backlink legibility
+  - signal/UI propagation of candidate-vs-existing-object decisions
 
 ## Goal
 Build a running comparative map of external memory, context, runtime, and governance systems; classify what each project is actually doing; and extract only the durable ideas that matter for Obsidian Vault Pipeline.
@@ -110,7 +111,10 @@ Phase 4
   - signal rows now expose `capture_summary` inherited from their backing notes
   - note and briefing surfaces now expose `Inbound Capture` compiled sections
   - `/signals` now renders inbound capture legibility directly, not only queue impact
-- Next active planning target after `Phase 23` remains inside `Milestone 7: Active Signal Loop`
-  - focus next on brain-first lookup before object/link creation plus backlink legibility
+- `Phase 24` now closes the brain-first lookup + backlink legibility slice:
+  - traceability exposes lookup/backlink contracts
+  - production signals carry those contracts
+  - `/signals` renders the operator-visible decision
+- Next active planning target remains inside `Milestone 7: Active Signal Loop` only if reviewed candidate/canonical transitions still need operator actionability
   - do not reopen shell UX unless a new operator-navigation gap appears
   - do not widen immediately into temporal truth, harness memory, or benchmark tracks
