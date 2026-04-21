@@ -1252,13 +1252,25 @@ def test_step_absorb_skips_previously_succeeded_items_and_retries_failed_items(t
         qualified_files=[str(succeeded), str(failed)],
         batch_size=2,
     )
+    ledger_path = pipeline._absorb_item_ledger_path()
+    ledger_before_dry_run = ledger_path.read_text(encoding="utf-8")
+    third = pipeline.step_absorb(
+        dry_run=True,
+        quality_score=4.0,
+        qualified_files=[str(succeeded), str(failed)],
+        batch_size=2,
+    )
 
     assert first["success"] is False
     assert second["success"] is True
+    assert third["success"] is True
+    assert third["skipped"] is True
     assert calls == [[failed.name, succeeded.name], [failed.name]]
     assert second["summary"]["files_processed"] == 1
     assert second["item_cache_hits"] == 1
     assert second["item_cache_hit_files"] == [str(succeeded.resolve())]
+    assert third["item_cache_hits"] == 2
+    assert ledger_path.read_text(encoding="utf-8") == ledger_before_dry_run
 
 
 def test_absorb_timeout_scales_with_batch_size(tmp_path):

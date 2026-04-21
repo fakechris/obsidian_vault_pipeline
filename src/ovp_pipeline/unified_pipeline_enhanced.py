@@ -2245,15 +2245,14 @@ class EnhancedPipeline:
         if normalized_files is not None:
             qualified_input_files = list(normalized_files)
             item_cache_hit_files: list[str] = []
-            if not dry_run:
-                item_statuses = self._load_absorb_item_statuses()
-                pending_files: list[str] = []
-                for path in normalized_files:
-                    if self._absorb_item_succeeded(path, item_statuses):
-                        item_cache_hit_files.append(path)
-                    else:
-                        pending_files.append(path)
-                normalized_files = pending_files
+            item_statuses = self._load_absorb_item_statuses()
+            pending_files: list[str] = []
+            for path in normalized_files:
+                if self._absorb_item_succeeded(path, item_statuses):
+                    item_cache_hit_files.append(path)
+                else:
+                    pending_files.append(path)
+            normalized_files = pending_files
 
             total_files = len(qualified_input_files)
             if not normalized_files:
