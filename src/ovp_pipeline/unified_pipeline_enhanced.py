@@ -417,7 +417,7 @@ STAGE_CACHE_POLICIES = {
 STAGE_ALGORITHM_VERSIONS = {
     "quality": QUALITY_STAGE_ALGORITHM_VERSION,
     "fix_links": "fix_links:exact-only:v1",
-    "absorb": "absorb:qualified-files:v1",
+    "absorb": "absorb:qualified-files:item-ledger:v2",
     "registry_sync": "registry_sync:rebuild-registry:v1",
     "moc": "moc:auto-moc-scan:v1",
     "knowledge_index": "knowledge_index:truth-projection:v1",
@@ -800,6 +800,88 @@ class EnhancedPipeline:
                 "algorithm_version": STAGE_ALGORITHM_VERSIONS.get(stage, f"{stage}:v1"),
             }
         )
+
+    def _absorb_item_ledger_path(self) -> Path:
+        return self.layout.logs_dir / "item-ledgers" / "absorb.jsonl"
+
+    def _absorb_item_context(self, source_path: str | Path) -> dict[str, Any]:
+        path = Path(source_path).resolve()
+        file_records = build_file_records(self.vault_dir, [path])
+        file_record = file_records[0]
+        input_digest = hash_json_payload(file_record)
+        algorithm_digest = self._stage_algorithm_digest("absorb")
+        fingerprint = build_stage_fingerprint(
+            stage="absorb_item",
+            input_digest=input_digest,
+            algorithm_digest=algorithm_digest,
+            pack_name=self.workflow_pack_name,
+            workflow_profile=self.workflow_profile_name,
+        )
+        return {
+            "fingerprint": fingerprint,
+            "input_digest": input_digest,
+            "algorithm_digest": algorithm_digest,
+            "source_path": str(path),
+            "source_relpath": file_record["path"],
+            "source_sha256": file_record["sha256"],
+            "source_size": file_record["size"],
+        }
+
+    def _load_absorb_item_statuses(self) -> dict[str, dict[str, Any]]:
+        path = self._absorb_item_ledger_path()
+        if not path.exists():
+            return {}
+        statuses: dict[str, dict[str, Any]] = {}
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return statuses
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict) or record.get("stage") != "absorb":
+                continue
+            fingerprint = record.get("fingerprint")
+            if isinstance(fingerprint, str) and fingerprint:
+                statuses[fingerprint] = record
+        return statuses
+
+    def _absorb_item_succeeded(self, source_path: str | Path, statuses: dict[str, dict[str, Any]]) -> bool:
+        context = self._absorb_item_context(source_path)
+        record = statuses.get(context["fingerprint"])
+        return bool(record and record.get("status") == "succeeded")
+
+    def _append_absorb_item_record(self, source_path: str | Path, event: dict[str, Any]) -> dict[str, Any]:
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        error = result.get("error") or event.get("error") or ""
+        context = self._absorb_item_context(source_path)
+        record = {
+            "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "stage": "absorb",
+            "status": "failed" if error else "succeeded",
+            "run_id": self.txn_id or "",
+            "pack_name": self.workflow_pack_name,
+            "workflow_profile": self.workflow_profile_name,
+            "current_item": str(event.get("current_item") or event.get("file") or ""),
+            "error": str(error) if error else "",
+            **context,
+            "metrics": {
+                "concepts_extracted": _safe_int(result.get("concepts_extracted")),
+                "concepts_created": _safe_int(result.get("concepts_created")),
+                "concepts_promoted": _safe_int(result.get("concepts_promoted")),
+                "concepts_skipped": _safe_int(result.get("concepts_skipped")),
+                "candidates_added": _safe_int(result.get("candidates_added")),
+            },
+        }
+        path = self._absorb_item_ledger_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        return record
 
     def _build_stage_artifact_context(
         self,
@@ -1948,12 +2030,16 @@ class EnhancedPipeline:
         total_files: int | None,
         completed_before: int = 0,
         failed_before: int = 0,
+        staged_sources: dict[str, str] | None = None,
+        record_item_ledger: bool = False,
     ):
         def _callback(event: dict[str, Any]) -> None:
             effective_total = total_files or int(event.get("files_total") or 0) or None
             batch_done = int(event.get("files_done") or 0)
             batch_failed = int(event.get("files_failed") or 0)
             current_item = str(event.get("current_item") or event.get("file") or "").strip() or None
+            if record_item_ledger and current_item and staged_sources and current_item in staged_sources:
+                self._append_absorb_item_record(staged_sources[current_item], event)
             work_units_done = completed_before + batch_done
             work_units_failed = failed_before + batch_failed
             progress_summary = (
@@ -1988,6 +2074,8 @@ class EnhancedPipeline:
         failed_before: int = 0,
         directory: Path | None = None,
         recent: int | None = None,
+        staged_sources: dict[str, str] | None = None,
+        record_item_ledger: bool = False,
     ) -> dict[str, Any]:
         self.logger.log(
             "command_started",
@@ -2021,6 +2109,8 @@ class EnhancedPipeline:
                     total_files=total_files,
                     completed_before=completed_before,
                     failed_before=failed_before,
+                    staged_sources=staged_sources,
+                    record_item_ledger=record_item_ledger,
                 ),
             )
         except Exception as exc:
@@ -2153,8 +2243,52 @@ class EnhancedPipeline:
         print("="*60)
 
         if normalized_files is not None:
-            total_files = len(normalized_files)
-            effective_batch_size = batch_size or total_files
+            qualified_input_files = list(normalized_files)
+            item_cache_hit_files: list[str] = []
+            if not dry_run:
+                item_statuses = self._load_absorb_item_statuses()
+                pending_files: list[str] = []
+                for path in normalized_files:
+                    if self._absorb_item_succeeded(path, item_statuses):
+                        item_cache_hit_files.append(path)
+                    else:
+                        pending_files.append(path)
+                normalized_files = pending_files
+
+            total_files = len(qualified_input_files)
+            if not normalized_files:
+                print("✓ Absorb stage completed from item cache")
+                result = {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "all_absorb_items_cached",
+                    "qualified_files": qualified_input_files,
+                    "pending_qualified_files": [],
+                    "item_cache_hits": len(item_cache_hit_files),
+                    "item_cache_hit_files": item_cache_hit_files,
+                    "summary": {
+                        "files_processed": 0,
+                        "concepts_extracted": 0,
+                        "candidates_added": 0,
+                        "concepts_created": 0,
+                        "concepts_promoted": 0,
+                        "concepts_skipped": 0,
+                        "errors": 0,
+                    },
+                    "results": [],
+                    "stdout": "All qualified files already absorbed",
+                    "stderr": "",
+                    "produced": 0,
+                }
+                if input_artifact is not None:
+                    result["input_artifact"] = {
+                        "stage": input_artifact.get("stage"),
+                        "fingerprint": input_artifact.get("fingerprint"),
+                        "run_id": input_artifact.get("run_id"),
+                    }
+                return result
+
+            effective_batch_size = batch_size or len(normalized_files)
             aggregated_summary = {
                 "files_processed": 0,
                 "concepts_extracted": 0,
@@ -2171,6 +2305,7 @@ class EnhancedPipeline:
                 batch_files = normalized_files[start_index:start_index + effective_batch_size]
                 with tempfile.TemporaryDirectory(prefix="absorb-qualified-", dir=str(self.layout.logs_dir)) as staging_dir:
                     staging_path = Path(staging_dir)
+                    staged_sources: dict[str, str] = {}
                     used_targets: set[Path] = set()
                     for path in batch_files:
                         source = Path(path)
@@ -2186,6 +2321,7 @@ class EnhancedPipeline:
                                     break
                                 counter += 1
                         used_targets.add(target)
+                        staged_sources[target.name] = str(source)
                         try:
                             target.symlink_to(source)
                         except OSError:
@@ -2195,12 +2331,17 @@ class EnhancedPipeline:
                         directory=staging_path,
                         dry_run=dry_run,
                         total_files=total_files,
-                        completed_before=aggregated_summary["files_processed"],
+                        completed_before=len(item_cache_hit_files) + aggregated_summary["files_processed"],
                         failed_before=aggregated_summary["errors"],
+                        staged_sources=staged_sources,
+                        record_item_ledger=not dry_run,
                     )
                     if not result["success"]:
                         print(f"✗ Absorb stage failed: {result.get('error', 'Unknown error')}")
-                        result["qualified_files"] = normalized_files
+                        result["qualified_files"] = qualified_input_files
+                        result["pending_qualified_files"] = normalized_files
+                        result["item_cache_hits"] = len(item_cache_hit_files)
+                        result["item_cache_hit_files"] = item_cache_hit_files
                         result["summary"] = aggregated_summary
                         result["results"] = aggregated_results
                         return result
@@ -2212,7 +2353,10 @@ class EnhancedPipeline:
 
             result = {
                 "success": True,
-                "qualified_files": normalized_files,
+                "qualified_files": qualified_input_files,
+                "pending_qualified_files": normalized_files,
+                "item_cache_hits": len(item_cache_hit_files),
+                "item_cache_hit_files": item_cache_hit_files,
                 "summary": aggregated_summary,
                 "results": aggregated_results,
                 "stdout": json.dumps(

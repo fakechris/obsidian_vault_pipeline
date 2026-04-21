@@ -1178,6 +1178,89 @@ def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, mo
     assert calls[1] == ["absorb_2_深度解读.md"]
 
 
+def test_step_absorb_skips_previously_succeeded_items_and_retries_failed_items(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    succeeded = topic_dir / "succeeded_深度解读.md"
+    failed = topic_dir / "failed_深度解读.md"
+    succeeded.write_text("# succeeded\n", encoding="utf-8")
+    failed.write_text("# failed\n", encoding="utf-8")
+
+    calls: list[list[str]] = []
+
+    def fake_run_absorb_workflow(vault_dir, *, directory=None, progress_callback=None, **_):
+        staged = sorted(p.name for p in Path(directory).glob("*.md"))
+        calls.append(staged)
+        errors = 0
+        for idx, name in enumerate(staged, start=1):
+            result = {
+                "file": str(Path(directory) / name),
+                "concepts_extracted": 1,
+                "concepts_created": 1,
+                "concepts_skipped": 0,
+                "candidates_added": 0,
+                "concepts_promoted": 1,
+                "concepts": [],
+            }
+            if name == failed.name and len(calls) == 1:
+                result["error"] = "transient failure"
+                errors += 1
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "event_type": "absorb_file_processed",
+                        "file": name,
+                        "current_item": name,
+                        "files_total": len(staged),
+                        "files_done": idx,
+                        "files_failed": errors,
+                        "result": result,
+                    }
+                )
+        return {
+            "summary": {
+                "files_processed": len(staged),
+                "concepts_extracted": len(staged),
+                "candidates_added": 0,
+                "concepts_created": len(staged) - errors,
+                "concepts_promoted": len(staged) - errors,
+                "concepts_skipped": 0,
+                "errors": errors,
+            },
+            "results": [],
+        }
+
+    monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
+
+    first = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=4.0,
+        qualified_files=[str(succeeded), str(failed)],
+        batch_size=2,
+    )
+    second = pipeline.step_absorb(
+        dry_run=False,
+        quality_score=4.0,
+        qualified_files=[str(succeeded), str(failed)],
+        batch_size=2,
+    )
+
+    assert first["success"] is False
+    assert second["success"] is True
+    assert calls == [[failed.name, succeeded.name], [failed.name]]
+    assert second["summary"]["files_processed"] == 1
+    assert second["item_cache_hits"] == 1
+    assert second["item_cache_hit_files"] == [str(succeeded.resolve())]
+
+
 def test_absorb_timeout_scales_with_batch_size(tmp_path):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
