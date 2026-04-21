@@ -2337,6 +2337,13 @@ class EnhancedPipeline:
                     )
                     if not result["success"]:
                         print(f"✗ Absorb stage failed: {result.get('error', 'Unknown error')}")
+                        summary = result.get("summary", {})
+                        if isinstance(summary, dict):
+                            for key in aggregated_summary:
+                                aggregated_summary[key] += _safe_int(summary.get(key))
+                        batch_results = result.get("results", [])
+                        if isinstance(batch_results, list):
+                            aggregated_results.extend(batch_results)
                         result["qualified_files"] = qualified_input_files
                         result["pending_qualified_files"] = normalized_files
                         result["item_cache_hits"] = len(item_cache_hit_files)

@@ -1200,6 +1200,7 @@ def test_step_absorb_skips_previously_succeeded_items_and_retries_failed_items(t
         staged = sorted(p.name for p in Path(directory).glob("*.md"))
         calls.append(staged)
         errors = 0
+        result_rows = []
         for idx, name in enumerate(staged, start=1):
             result = {
                 "file": str(Path(directory) / name),
@@ -1213,6 +1214,7 @@ def test_step_absorb_skips_previously_succeeded_items_and_retries_failed_items(t
             if name == failed.name and len(calls) == 1:
                 result["error"] = "transient failure"
                 errors += 1
+            result_rows.append(result)
             if progress_callback is not None:
                 progress_callback(
                     {
@@ -1235,7 +1237,7 @@ def test_step_absorb_skips_previously_succeeded_items_and_retries_failed_items(t
                 "concepts_skipped": 0,
                 "errors": errors,
             },
-            "results": [],
+            "results": result_rows,
         }
 
     monkeypatch.setattr("ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow", fake_run_absorb_workflow)
@@ -1266,6 +1268,9 @@ def test_step_absorb_skips_previously_succeeded_items_and_retries_failed_items(t
     assert third["success"] is True
     assert third["skipped"] is True
     assert calls == [[failed.name, succeeded.name], [failed.name]]
+    assert first["summary"]["files_processed"] == 2
+    assert first["summary"]["errors"] == 1
+    assert len(first["results"]) == 2
     assert second["summary"]["files_processed"] == 1
     assert second["item_cache_hits"] == 1
     assert second["item_cache_hit_files"] == [str(succeeded.resolve())]
