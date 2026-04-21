@@ -550,8 +550,8 @@ def test_truth_api_get_runtime_status_includes_run_history(temp_vault):
     )
 
 
-def test_truth_api_get_runtime_status_includes_action_worker_state(temp_vault):
-    from ovp_pipeline.truth_api import get_runtime_status
+def test_truth_api_get_runtime_status_includes_action_worker_state(temp_vault, monkeypatch):
+    import ovp_pipeline.truth_api as truth_api
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -576,15 +576,28 @@ def test_truth_api_get_runtime_status_includes_action_worker_state(temp_vault):
         ),
         encoding="utf-8",
     )
+    calls = {"count": 0}
 
-    payload = get_runtime_status(temp_vault, now_iso="2026-04-09T00:20:00Z")
+    def fake_detect_runtime_processes(vault_dir):
+        calls["count"] += 1
+        return [
+            {
+                "process_kind": "action_worker",
+                "pid": 56789,
+            }
+        ]
+
+    monkeypatch.setattr(truth_api, "detect_runtime_processes", fake_detect_runtime_processes)
+
+    payload = truth_api.get_runtime_status(temp_vault, now_iso="2026-04-09T00:20:00Z")
 
     worker = payload["action_worker"]
     assert worker["active"] is True
     assert worker["state"] == "running"
     assert worker["mode"] == "loop"
     assert worker["safe_only"] is True
-    assert worker["pid"] == 12345
+    assert worker["pid"] == 56789
+    assert calls["count"] == 1
     assert worker["current_action"]["action_id"] == "action::demo"
     assert worker["current_action"]["action_kind"] == "deep_dive_workflow"
     assert worker["current_action"]["source_signal_id"] == "source_needs_deep_dive::demo"
@@ -3244,7 +3257,7 @@ def test_truth_api_run_next_action_queue_item_blocks_missing_action_target_befor
                 "title": "Missing source",
                 "detail": "Missing source should not run.",
                 "source_path": "/note?path=50-Inbox%2F03-Processed%2FMissing.md",
-                "note_paths": ["50-Inbox/03-Processed/Missing.md"],
+                "note_paths": [],
                 "object_ids": [],
                 "recommended_action": {
                     "kind": "deep_dive_workflow",
@@ -3267,7 +3280,6 @@ def test_truth_api_run_next_action_queue_item_blocks_missing_action_target_befor
                 "source_signal_id": "source_needs_deep_dive::missing",
                 "title": "Missing source",
                 "target_ref": "50-Inbox/03-Processed/Missing.md",
-                "note_paths": ["50-Inbox/03-Processed/Missing.md"],
                 "status": "queued",
                 "created_at": "2026-04-15T00:00:00Z",
                 "safe_to_run": True,
@@ -3282,6 +3294,11 @@ def test_truth_api_run_next_action_queue_item_blocks_missing_action_target_befor
         "execute_focused_action_handler",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("handler should not run")),
         raising=False,
+    )
+    monkeypatch.setattr(
+        truth_api,
+        "_signal_by_id",
+        lambda vault_dir, signal_id, **kwargs: {"signal_id": signal_id},
     )
 
     payload = truth_api.run_next_action_queue_item(temp_vault)
@@ -3501,17 +3518,20 @@ def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkey
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
+    target = temp_vault / "50-Inbox" / "03-Processed" / "Harness.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("---\ntitle: Harness\n---\n", encoding="utf-8")
     (logs_dir / "actions.jsonl").write_text(
         "\n".join(
             [
                 json.dumps(
-                    {
-                        "action_id": "action::manual",
-                        "action_kind": "review_contradiction",
-                        "source_signal_id": "signal::manual",
-                        "title": "Manual review",
-                        "target_ref": "/contradictions",
-                        "status": "queued",
+                        {
+                            "action_id": "action::manual",
+                            "action_kind": "deep_dive_workflow",
+                            "source_signal_id": "signal::manual",
+                            "title": "Manual review",
+                            "target_ref": "50-Inbox/03-Processed/Manual.md",
+                            "status": "queued",
                         "created_at": "2026-04-15T00:00:00Z",
                         "retry_count": 0,
                         "failure_bucket": "",
@@ -3559,13 +3579,15 @@ def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkey
     manual = next(item for item in actions if item["action_id"] == "action::manual")
 
     assert payload["safe_only"] is True
-    assert payload["attempted_count"] == 1
+    assert payload["attempted_count"] == 2
     assert payload["ran_count"] == 1
     assert payload["skipped_unsafe_count"] == 1
     assert payload["obsolete_count"] == 0
     assert payload["failed_count"] == 0
     assert safe["status"] == "succeeded"
-    assert manual["status"] == "queued"
+    assert manual["status"] == "blocked"
+    assert manual["precondition_status"] == "unsafe"
+    assert manual["blocked_reason"] == "action_not_marked_safe_to_run"
 
 
 def test_truth_api_builds_briefing_snapshot(temp_vault):
@@ -3869,6 +3891,9 @@ def test_truth_api_run_next_action_queue_item_uses_action_queue_lock(temp_vault,
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
+    target = temp_vault / "50-Inbox" / "03-Processed" / "Harness.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("---\ntitle: Harness\n---\n", encoding="utf-8")
     (logs_dir / "actions.jsonl").write_text(
         json.dumps(
             {
@@ -3914,7 +3939,7 @@ def test_truth_api_run_next_action_queue_item_uses_action_queue_lock(temp_vault,
     payload = truth_api.run_next_action_queue_item(temp_vault, safe_only=True)
 
     assert payload["ran"] is True
-    assert calls == [f"enter:{True}", "exit", f"enter:{True}", "exit"]
+    assert calls == [f"enter:{True}", "exit", f"enter:{True}", "exit", f"enter:{True}", "exit"]
 
 
 def test_truth_api_refresh_truth_after_action_uses_pack_override(temp_vault, monkeypatch):

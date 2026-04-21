@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from collections import Counter
 import hashlib
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -133,7 +134,9 @@ def get_runtime_status(
         active_run["runtime_progress"] = _build_runtime_progress(active_run, now_iso=generated_at)
     runtime_process_items = detect_runtime_processes(resolved_vault)
     run_history = list_run_history(layout.transactions_dir, now_iso=generated_at, limit=10)
-    action_worker = get_action_worker_status(resolved_vault, now_iso=generated_at)
+    action_worker = get_action_worker_status(
+        resolved_vault, now_iso=generated_at, processes=runtime_process_items
+    )
     return {
         "generated_at": generated_at,
         "active_count": len(classified["active"]),
@@ -160,6 +163,7 @@ def get_action_worker_status(
     vault_dir: Path | str,
     *,
     now_iso: str | None = None,
+    processes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
@@ -172,7 +176,9 @@ def get_action_worker_status(
             parsed = {}
         if isinstance(parsed, dict):
             state = parsed
-    worker_process = _worker_identity_from_processes(detect_runtime_processes(resolved_vault))
+    worker_process = _worker_identity_from_processes(
+        processes if processes is not None else detect_runtime_processes(resolved_vault)
+    )
     started_at = _parse_iso_datetime(state.get("started_at"))
     heartbeat_at = _parse_iso_datetime(state.get("heartbeat_at"))
     elapsed_seconds = max(0, int((now - started_at).total_seconds())) if started_at else None
@@ -190,8 +196,8 @@ def get_action_worker_status(
         "active": active,
         "worker_id": str(state.get("worker_id") or ""),
         "pid": int(
-            state.get("pid") or worker_process.get("pid")
-            if worker_process
+            worker_process.get("pid")
+            if worker_process and worker_process.get("pid")
             else state.get("pid") or 0
         ),
         "state": state_name,
@@ -256,9 +262,18 @@ def record_action_worker_state(
     if max_runs is not None:
         payload["max_runs"] = max_runs
     layout.action_worker_state.parent.mkdir(parents=True, exist_ok=True)
-    layout.action_worker_state.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    tmp_path = layout.action_worker_state.with_name(
+        f"{layout.action_worker_state.name}.{worker_id}.{pid}.tmp"
     )
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, layout.action_worker_state)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
     return payload
 
 
@@ -2318,10 +2333,9 @@ def list_action_queue(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     normalized_query = (query or "").strip().lower()
     normalized_pack = str(pack_name or "").strip()
-    items: list[dict[str, Any]] = []
+    raw_items: list[dict[str, Any]] = []
     with action_queue_write_lock(vault_dir):
         for item in _read_action_queue_rows_unlocked(vault_dir):
-            item = _normalize_action_queue_item(item, vault_dir=vault_dir)
             if (
                 normalized_pack
                 and str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) != normalized_pack
@@ -2337,10 +2351,10 @@ def list_action_queue(
                 ]
                 if not any(normalized_query in haystack for haystack in haystacks):
                     continue
-            items.append(item)
-            if len(items) >= limit:
+            raw_items.append(dict(item))
+            if len(raw_items) >= limit:
                 break
-    return items
+    return [_normalize_action_queue_item(item, vault_dir=vault_dir) for item in raw_items]
 
 
 def _last_result_summary(action: dict[str, Any]) -> str:
@@ -2786,6 +2800,32 @@ def _action_by_id(vault_dir: Path | str, action_id: str) -> dict[str, Any] | Non
         return _action_by_id_unlocked(vault_dir, action_id)
 
 
+def _looks_like_vault_note_path(value: str) -> bool:
+    if not value:
+        return False
+    if "://" in value or value.startswith("/note?"):
+        return False
+    return (
+        Path(value).is_absolute()
+        or value.endswith(".md")
+        or "/" in value
+        or "\\" in value
+        or value.startswith(".")
+    )
+
+
+def _focused_action_note_paths(action: dict[str, Any]) -> list[str]:
+    note_paths = [
+        str(path)
+        for path in action.get("note_paths", [])
+        if isinstance(path, str) and path.strip()
+    ]
+    target_ref = str(action.get("target_ref") or "").strip()
+    if target_ref and _looks_like_vault_note_path(target_ref) and target_ref not in note_paths:
+        note_paths.append(target_ref)
+    return note_paths
+
+
 def _focused_action_precondition(
     vault_dir: Path | str,
     action: dict[str, Any],
@@ -2811,11 +2851,22 @@ def _focused_action_precondition(
             "status": "obsolete",
             "reason": "source_signal_inactive",
         }
-    note_paths = [
-        str(path) for path in action.get("note_paths", []) if isinstance(path, str) and path.strip()
-    ]
-    for note_path in note_paths:
-        if not (resolve_vault_dir(vault_dir) / note_path).exists():
+    vault_root = resolve_vault_dir(vault_dir).resolve()
+    for note_path in _focused_action_note_paths(action):
+        if Path(note_path).is_absolute():
+            return {
+                "status": "blocked",
+                "reason": f"invalid_note_path:{note_path}",
+            }
+        target = (vault_root / note_path).resolve()
+        try:
+            target.relative_to(vault_root)
+        except ValueError:
+            return {
+                "status": "blocked",
+                "reason": f"invalid_note_path:{note_path}",
+            }
+        if not target.is_file():
             return {
                 "status": "blocked",
                 "reason": f"missing_note_path:{note_path}",
@@ -2960,11 +3011,7 @@ def run_next_action_queue_item(
     pack_name: str | None = None,
 ) -> dict[str, Any]:
     with action_queue_write_lock(vault_dir):
-        action = (
-            _next_safe_queued_action_unlocked(vault_dir, pack_name=pack_name)
-            if safe_only
-            else _next_queued_action_unlocked(vault_dir, pack_name=pack_name)
-        )
+        action = _next_queued_action_unlocked(vault_dir, pack_name=pack_name)
         if action is None:
             return {
                 "ran": False,
@@ -2973,26 +3020,43 @@ def run_next_action_queue_item(
                 "requested_pack": str(pack_name or ""),
             }
 
-        try:
-            contract = resolve_focused_action_execution_contract(
-                pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
-                action_kind=str(action.get("action_kind") or ""),
-            )
-        except ValueError:
-            action["status"] = "failed"
-            action["error"] = f"unsupported_action_kind:{action.get('action_kind')}"
-            action["failure_bucket"] = "unsupported_action_kind"
-            action["retry_count"] = int(action.get("retry_count") or 0) + 1
-            action["finished_at"] = _utc_now_text()
-            _replace_action_queue_item_unlocked(vault_dir, action)
+    try:
+        contract = resolve_focused_action_execution_contract(
+            pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+            action_kind=str(action.get("action_kind") or ""),
+        )
+    except ValueError:
+        with action_queue_write_lock(vault_dir):
+            current = _action_by_id_unlocked(vault_dir, str(action.get("action_id") or ""))
+            if current is None or str(current.get("status") or "") != "queued":
+                return {
+                    "ran": False,
+                    "reason": "action_no_longer_queued",
+                    "safe_only": safe_only,
+                }
+            current["status"] = "failed"
+            current["error"] = f"unsupported_action_kind:{current.get('action_kind')}"
+            current["failure_bucket"] = "unsupported_action_kind"
+            current["retry_count"] = int(current.get("retry_count") or 0) + 1
+            current["finished_at"] = _utc_now_text()
+            _replace_action_queue_item_unlocked(vault_dir, current)
+        return {
+            "ran": False,
+            "reason": "unsupported_action_kind",
+            "action": current,
+            "safe_only": safe_only,
+        }
+
+    precondition = _focused_action_precondition(vault_dir, action, safe_only=safe_only)
+    with action_queue_write_lock(vault_dir):
+        current = _action_by_id_unlocked(vault_dir, str(action.get("action_id") or ""))
+        if current is None or str(current.get("status") or "") != "queued":
             return {
                 "ran": False,
-                "reason": "unsupported_action_kind",
-                "action": action,
+                "reason": "action_no_longer_queued",
                 "safe_only": safe_only,
             }
-
-        precondition = _focused_action_precondition(vault_dir, action, safe_only=safe_only)
+        action = current
         if str(precondition.get("status") or "") != "ready":
             action = _apply_failed_precondition(action, precondition)
             _replace_action_queue_item_unlocked(vault_dir, action)
@@ -3068,31 +3132,33 @@ def run_action_queue(
     pack_name: str | None = None,
 ) -> dict[str, Any]:
     limit = max(1, min(int(limit), MAX_PAGE_SIZE))
-    initial_actions = list_action_queue(vault_dir, pack_name=pack_name, limit=MAX_PAGE_SIZE)
-    skipped_unsafe_count = (
-        sum(
-            1
-            for item in initial_actions
-            if item.get("status") == "queued" and not bool(item.get("safe_to_run"))
-        )
-        if safe_only
-        else 0
-    )
     results: list[dict[str, Any]] = []
     stopped_reason = "limit_reached"
-    for _ in range(limit):
+    ran_count = 0
+    for _ in range(MAX_PAGE_SIZE):
+        if ran_count >= limit:
+            break
         payload = run_next_action_queue_item(vault_dir, safe_only=safe_only, pack_name=pack_name)
         results.append(payload)
-        if not payload.get("ran"):
-            stopped_reason = str(payload.get("reason") or "stopped")
-            break
+        if payload.get("ran"):
+            ran_count += 1
+            continue
+        stopped_reason = str(payload.get("reason") or "stopped")
+        if safe_only and stopped_reason == "unsafe":
+            continue
+        break
+    else:
+        if ran_count < limit:
+            stopped_reason = "max_scan_reached"
+    if ran_count >= limit:
+        stopped_reason = "limit_reached"
     return {
         "limit": limit,
         "safe_only": safe_only,
         "requested_pack": str(pack_name or ""),
         "attempted_count": sum(1 for item in results if item.get("reason") != "no_queued_actions"),
-        "ran_count": sum(1 for item in results if item.get("ran")),
-        "skipped_unsafe_count": skipped_unsafe_count,
+        "ran_count": ran_count,
+        "skipped_unsafe_count": sum(1 for item in results if item.get("reason") == "unsafe"),
         "obsolete_count": sum(1 for item in results if item.get("reason") == "obsolete_signal"),
         "failed_count": sum(
             1

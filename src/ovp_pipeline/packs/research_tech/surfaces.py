@@ -632,19 +632,51 @@ def build_briefing_snapshot(
     )
     insights = insights[:limit]
 
+    action_items = core.list_action_queue(
+        vault_dir, pack_name=normalized_pack, limit=core.MAX_PAGE_SIZE
+    )
+    action_by_signal_id = {
+        str(action.get("source_signal_id") or ""): action
+        for action in action_items
+        if str(action.get("source_signal_id") or "")
+    }
+
     priority_items: list[dict[str, Any]] = []
     for item in unresolved_issues:
+        signal_id = str(item["signal_id"])
+        action = action_by_signal_id.get(signal_id, {})
+        recommended_action = item.get("recommended_action")
+        if isinstance(recommended_action, dict) and action:
+            recommended_action = {
+                **recommended_action,
+                "queue_status": str(action.get("status") or ""),
+                "action_id": str(action.get("action_id") or ""),
+                "precondition_status": str(action.get("precondition_status") or ""),
+                "blocked_reason": str(action.get("blocked_reason") or ""),
+                "obsolete_reason": str(action.get("obsolete_reason") or ""),
+            }
         priority_items.append(
             {
-                "signal_id": item["signal_id"],
+                "signal_id": signal_id,
                 "kind": item["signal_type"],
                 "title": item["title"],
                 "detail": item["detail"],
                 "path": item["source_path"],
                 "source_paths": list(item.get("note_paths", [])),
                 "object_ids": list(item.get("object_ids", [])),
-                "recommended_action": item.get("recommended_action"),
-                "action_lifecycle": item.get("action_lifecycle", {}),
+                "recommended_action": recommended_action,
+                "action_lifecycle": item.get("action_lifecycle")
+                or (
+                    {
+                        "queue_status": str(action.get("status") or ""),
+                        "action_id": str(action.get("action_id") or ""),
+                        "precondition_status": str(action.get("precondition_status") or ""),
+                        "blocked_reason": str(action.get("blocked_reason") or ""),
+                        "obsolete_reason": str(action.get("obsolete_reason") or ""),
+                    }
+                    if action
+                    else {}
+                ),
             }
         )
         if len(priority_items) >= limit:
@@ -659,17 +691,39 @@ def build_briefing_snapshot(
         if len(priority_items) >= limit:
             break
     for item in priority_items:
+        signal_id = str(item.get("signal_id") or "")
+        action = action_by_signal_id.get(signal_id, {})
         recommended_action = item.get("recommended_action")
         if isinstance(recommended_action, dict):
+            if action:
+                recommended_action.setdefault("queue_status", str(action.get("status") or ""))
+                recommended_action.setdefault("action_id", str(action.get("action_id") or ""))
+                recommended_action.setdefault(
+                    "precondition_status", str(action.get("precondition_status") or "")
+                )
+                recommended_action.setdefault(
+                    "blocked_reason", str(action.get("blocked_reason") or "")
+                )
+                recommended_action.setdefault(
+                    "obsolete_reason", str(action.get("obsolete_reason") or "")
+                )
             recommended_action.setdefault("queue_status", "")
             recommended_action.setdefault("action_id", "")
+            recommended_action.setdefault("precondition_status", "")
             recommended_action.setdefault("blocked_reason", "")
             recommended_action.setdefault("obsolete_reason", "")
-        item.setdefault("action_lifecycle", {})
+        if action:
+            item["action_lifecycle"] = {
+                "queue_status": str(action.get("status") or ""),
+                "action_id": str(action.get("action_id") or ""),
+                "precondition_status": str(action.get("precondition_status") or ""),
+                "blocked_reason": str(action.get("blocked_reason") or ""),
+                "obsolete_reason": str(action.get("obsolete_reason") or ""),
+                **(item.get("action_lifecycle") if isinstance(item.get("action_lifecycle"), dict) else {}),
+            }
+        else:
+            item.setdefault("action_lifecycle", {})
     first_useful_sign = insights[0] if insights else (priority_items[0] if priority_items else None)
-    action_items = core.list_action_queue(
-        vault_dir, pack_name=normalized_pack, limit=core.MAX_PAGE_SIZE
-    )
     queue_summary = {
         "queued_count": sum(1 for item in action_items if item.get("status") == "queued"),
         "safe_queued_count": sum(
