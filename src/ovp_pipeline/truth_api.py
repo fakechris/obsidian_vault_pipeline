@@ -599,7 +599,6 @@ def list_candidate_concepts(
             }
         )
 
-    paginated = items[offset: offset + limit]
     return {
         "screen": "candidates/browser",
         "query": query or "",
