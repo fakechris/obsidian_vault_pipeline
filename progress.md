@@ -3,7 +3,7 @@
 ## Session: 2026-04-21
 
 ### Phase 26: Candidate Canonicalization Workbench
-- **Status:** implementation complete; PR verification in progress
+- **Status:** complete; merged to `main` in PR #42 (`21dcebf`)
 - Actions taken:
   - Added `list_candidate_concepts(...)` to expose registry candidate metadata, candidate note paths, suggested lifecycle action, and similar active concepts
   - Added `review_candidate_concept(...)` as the UI/API-safe gateway for candidate lifecycle actions
@@ -19,6 +19,13 @@
   - Added the `Candidates` nav item for research-compatible shells
   - Updated roadmap docs to treat Phase 26 as the final Milestone 7 candidate/canonical closeout slice
   - Clarified that candidate wikilinks are identity/lifecycle state, not typed semantic graph triples
+  - Fixed review-found safety issues before merge:
+    - candidate listing now filters / paginates before expensive suggestion and file-existence work
+    - post-mutation knowledge-index rebuild failures still write `ui_candidate_reviewed`
+    - low-score merge forms no longer prefill `target_slug`
+    - zero-valued similarity scores render correctly
+    - candidate review rebuild failures no longer disconnect UI/API requests; they return partial-success warning payloads
+  - Merged PR #42 and fast-forwarded local `main`
 - Files created/modified:
   - docs/plans/2026-04-21-phase26-candidate-canonicalization-workbench.md
   - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
@@ -28,17 +35,84 @@
   - src/ovp_pipeline/commands/ui_server.py
   - tests/test_truth_api.py
   - tests/test_ui_server.py
-- Verification so far:
+- Verification:
   - `pytest tests/test_truth_api.py::test_truth_api_lists_candidate_concepts tests/test_truth_api.py::test_truth_api_review_candidate_concept_promotes_and_records_audit tests/test_truth_api.py::test_candidate_browser_payload_exposes_operator_context tests/test_ui_server.py::test_ui_server_candidates_endpoint_returns_payload tests/test_ui_server.py::test_ui_server_candidates_page_renders_review_controls tests/test_ui_server.py::test_ui_server_can_promote_candidate_via_api -q`
   - `6 passed`
   - `pytest tests/test_truth_api.py::test_truth_api_review_candidate_concept_merges_into_existing_and_rebuilds tests/test_truth_api.py::test_truth_api_review_candidate_concept_rejects_without_rebuilding_index -q`
   - `2 passed`
   - `pytest tests/test_promote_candidates.py tests/test_truth_api.py tests/test_ui_server.py -q`
-  - `188 passed`
+  - `193 passed`
   - `git diff --check`
   - clean
   - `pytest -q`
-  - `680 passed`
+  - `685 passed`
+- Roadmap state after merge:
+  - Milestone 7 is now complete
+  - Next planning target was `Phase 27: Background Intelligence Orchestration Closeout`
+
+### Phase 27: Background Intelligence Orchestration Closeout
+- **Status:** implemented and verified locally
+- Actions taken:
+  - Reconciled the roadmap after Phase 26 landed
+  - Confirmed that the next gap is not another candidate/canonical surface
+  - Confirmed that Milestone 9A already has substantial implementation:
+    - action queue ledger
+    - focused action worker
+    - stage/focused handler registry
+    - auto-queue governance rules
+    - safe-only execution mode
+    - `/actions` UI/API surfaces
+  - Defined Phase 27 as a closeout/hardening slice over the existing orchestration layer rather than a rewrite
+  - Added `action-worker.json` runtime state so `/api/runtime` and the home page can show focused worker mode, pid, safe-only state, heartbeat age, and current action
+  - Added installed `run_actions` state writes for one-shot and loop workers
+  - Added focused-action preconditions before handler execution:
+    - `ready`
+    - `blocked`
+    - `obsolete`
+    - `unsafe`
+  - Persisted deterministic `blocked_reason` / `obsolete_reason` fields on action queue items
+  - Kept focused execution on the existing action queue; no second workflow engine was introduced
+  - Extended action queue items with handler provider, processor provider, source-signal activity, precondition status, and last-result summary
+  - Propagated queue lifecycle state into signals and briefing priority items
+  - Added safe batch execution result counts:
+    - attempted
+    - ran
+    - skipped unsafe
+    - obsolete
+    - blocked
+    - failed
+    - stopped reason
+  - Updated `/actions` rendering to expose handler/processor contracts, source signal status, preconditions, and last result
+- Files created/modified:
+  - docs/plans/2026-04-21-phase27-background-intelligence-orchestration-closeout.md
+  - docs/plans/2026-04-14-local-knowledge-workbench-milestone.md
+  - task_plan.md
+  - src/ovp_pipeline/commands/run_actions.py
+  - src/ovp_pipeline/commands/ui_server.py
+  - src/ovp_pipeline/packs/research_tech/surfaces.py
+  - src/ovp_pipeline/runtime.py
+  - src/ovp_pipeline/runtime_processes.py
+  - src/ovp_pipeline/truth_api.py
+  - tests/test_truth_api.py
+  - tests/test_ui_server.py
+- Verification:
+  - `pytest tests/test_truth_api.py::test_truth_api_get_runtime_status_includes_action_worker_state tests/test_truth_api.py::test_truth_api_run_next_action_queue_item_marks_obsolete_when_signal_is_gone tests/test_truth_api.py::test_truth_api_run_next_action_queue_item_blocks_missing_action_target_before_handler tests/test_truth_api.py::test_truth_api_action_queue_items_include_execution_contract_metadata tests/test_truth_api.py::test_truth_api_list_action_queue_backfills_execution_contract_metadata_for_legacy_rows tests/test_truth_api.py::test_truth_api_run_action_queue_can_limit_to_safe_actions tests/test_truth_api.py::test_truth_api_builds_briefing_snapshot tests/test_ui_server.py::test_render_runtime_card_shows_action_worker_state tests/test_ui_server.py::test_ui_server_actions_page_preserves_pack_scope_in_shell_nav -q`
+  - `9 passed`
+  - `pytest tests/test_run_actions_command.py tests/test_truth_api.py tests/test_ui_view_models.py tests/test_ui_server.py tests/test_watch_progress_command.py -q`
+  - `262 passed`
+  - `ruff check src/ovp_pipeline/commands/run_actions.py src/ovp_pipeline/commands/ui_server.py src/ovp_pipeline/packs/research_tech/surfaces.py src/ovp_pipeline/runtime.py src/ovp_pipeline/runtime_processes.py src/ovp_pipeline/truth_api.py tests/test_truth_api.py tests/test_ui_server.py`
+  - `All checks passed`
+  - `python -m pip install -e .`
+  - installed `obsidian-vault-pipeline==0.8.6` editable from this checkout
+  - local installed-command validation:
+    - `python -m ovp_pipeline.commands.run_actions --vault-dir <temp-vault> --once --safe-only`
+    - returned `reason=blocked`
+    - wrote `60-Logs/action-worker.json`
+    - persisted action `status=blocked`, `precondition_status=blocked`, `blocked_reason=missing_note_path:50-Inbox/03-Processed/Missing.md`
+  - `git diff --check`
+  - clean
+  - `pytest -q`
+  - `688 passed`
 
 ## Session: 2026-04-20
 

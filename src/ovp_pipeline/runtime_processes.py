@@ -25,6 +25,7 @@ DAEMON_PROCESS_MARKERS = (
     "ovp_pipeline.autopilot.daemon",
     "/bin/ovp-autopilot ",
 )
+ACTION_WORKER_PROCESS_MARKERS = ("ovp_pipeline.commands.run_actions",)
 OBSERVER_PROCESS_MARKERS = (
     "/bin/ovp-ui ",
     "/bin/ovp-watch-progress ",
@@ -72,6 +73,8 @@ def _parse_elapsed_seconds(raw_elapsed: str) -> int | None:
 def _classify_process(command: str) -> str | None:
     if any(marker in command for marker in OBSERVER_PROCESS_MARKERS):
         return "observer"
+    if any(marker in command for marker in ACTION_WORKER_PROCESS_MARKERS):
+        return "action_worker"
     if any(marker in command for marker in DAEMON_PROCESS_MARKERS):
         return "daemon"
     if any(marker in command for marker in PIPELINE_PROCESS_MARKERS):
@@ -112,7 +115,9 @@ def _args_summary(command: str) -> str:
     return " ".join(filtered)
 
 
-def detect_runtime_processes(vault_dir: Path | str, *, include_observers: bool = False) -> list[dict[str, Any]]:
+def detect_runtime_processes(
+    vault_dir: Path | str, *, include_observers: bool = False
+) -> list[dict[str, Any]]:
     resolved_vault = Path(vault_dir).resolve()
     ps_executable = shutil.which("ps")
     if ps_executable is None:
@@ -155,7 +160,9 @@ def detect_runtime_processes(vault_dir: Path | str, *, include_observers: bool =
                 "state": state,
                 "elapsed_raw": elapsed_raw,
                 "elapsed_seconds": elapsed_seconds,
-                "elapsed_summary": _format_duration(elapsed_seconds) if elapsed_seconds is not None else elapsed_raw,
+                "elapsed_summary": _format_duration(elapsed_seconds)
+                if elapsed_seconds is not None
+                else elapsed_raw,
                 "args_summary": _args_summary(command),
                 "command": command,
             }

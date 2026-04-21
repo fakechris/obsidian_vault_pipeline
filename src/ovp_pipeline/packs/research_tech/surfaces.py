@@ -269,7 +269,10 @@ def build_signal_entries(
                 "object_ids": object_ids,
                 "note_paths": [item["note_path"]],
                 "downstream_effects": [
-                    {"label": "Open note", "path": f"/note?path={quote(item['note_path'], safe='')}"},
+                    {
+                        "label": "Open note",
+                        "path": f"/note?path={quote(item['note_path'], safe='')}",
+                    },
                     {
                         "label": "Inspect production chain",
                         "path": _scoped_path(
@@ -313,7 +316,10 @@ def build_signal_entries(
                     "object_ids": [],
                     "note_paths": [item["path"]],
                     "downstream_effects": [
-                        {"label": "Open source note", "path": f"/note?path={quote(item['path'], safe='')}"},
+                        {
+                            "label": "Open source note",
+                            "path": f"/note?path={quote(item['path'], safe='')}",
+                        },
                         {
                             "label": "Inspect production chain",
                             "path": _scoped_path(
@@ -345,7 +351,9 @@ def build_signal_entries(
                         pack_name=normalized_pack,
                     ),
                 }
-                for entry in (traceability.get("brain_first_lookup") or {}).get("existing_objects", [])[:2]
+                for entry in (traceability.get("brain_first_lookup") or {}).get(
+                    "existing_objects", []
+                )[:2]
                 if entry.get("object_id")
             ]
             signals.append(
@@ -362,7 +370,10 @@ def build_signal_entries(
                     "object_ids": object_ids,
                     "note_paths": [item["path"]],
                     "downstream_effects": [
-                        {"label": "Open deep dive", "path": f"/note?path={quote(item['path'], safe='')}"},
+                        {
+                            "label": "Open deep dive",
+                            "path": f"/note?path={quote(item['path'], safe='')}",
+                        },
                         *object_effects,
                         {
                             "label": "Inspect production chain",
@@ -406,7 +417,10 @@ def build_signal_entries(
                     "object_ids": item["object_ids"],
                     "note_paths": [],
                     "downstream_effects": [
-                        {"label": "Open resolved contradictions", "path": "/contradictions?status=resolved"},
+                        {
+                            "label": "Open resolved contradictions",
+                            "path": "/contradictions?status=resolved",
+                        },
                         *[
                             {"label": f"Object: {object_id}", "path": f"/object?id={object_id}"}
                             for object_id in item["object_ids"][:2]
@@ -493,7 +507,9 @@ def build_briefing_snapshot(
         "source_needs_deep_dive",
         "deep_dive_needs_objects",
     }
-    unresolved_issues = [item for item in recent_signals if item["signal_type"] in unresolved_signal_types]
+    unresolved_issues = [
+        item for item in recent_signals if item["signal_type"] in unresolved_signal_types
+    ]
     unresolved_issues.sort(
         key=lambda item: (
             core._briefing_priority_score(item),
@@ -557,10 +573,14 @@ def build_briefing_snapshot(
             if object_id
         )
     )
-    evolution_rows = core._batch_object_rows(vault_dir, evolution_object_ids, pack_name=normalized_pack)
+    evolution_rows = core._batch_object_rows(
+        vault_dir, evolution_object_ids, pack_name=normalized_pack
+    )
     merged_insights: dict[tuple[str, str, str], dict[str, Any]] = {}
     for item in evolution_candidates:
-        primary_object_id = next((object_id for object_id in item.get("object_ids", []) if object_id), "")
+        primary_object_id = next(
+            (object_id for object_id in item.get("object_ids", []) if object_id), ""
+        )
         primary_title = (
             evolution_rows.get(primary_object_id, {}).get("title")
             or object_rows.get(primary_object_id, {}).get("title")
@@ -624,6 +644,7 @@ def build_briefing_snapshot(
                 "source_paths": list(item.get("note_paths", [])),
                 "object_ids": list(item.get("object_ids", [])),
                 "recommended_action": item.get("recommended_action"),
+                "action_lifecycle": item.get("action_lifecycle", {}),
             }
         )
         if len(priority_items) >= limit:
@@ -637,12 +658,24 @@ def build_briefing_snapshot(
         seen_priority_keys.add(key)
         if len(priority_items) >= limit:
             break
+    for item in priority_items:
+        recommended_action = item.get("recommended_action")
+        if isinstance(recommended_action, dict):
+            recommended_action.setdefault("queue_status", "")
+            recommended_action.setdefault("action_id", "")
+            recommended_action.setdefault("blocked_reason", "")
+            recommended_action.setdefault("obsolete_reason", "")
+        item.setdefault("action_lifecycle", {})
     first_useful_sign = insights[0] if insights else (priority_items[0] if priority_items else None)
-    action_items = core.list_action_queue(vault_dir, pack_name=normalized_pack, limit=core.MAX_PAGE_SIZE)
+    action_items = core.list_action_queue(
+        vault_dir, pack_name=normalized_pack, limit=core.MAX_PAGE_SIZE
+    )
     queue_summary = {
         "queued_count": sum(1 for item in action_items if item.get("status") == "queued"),
         "safe_queued_count": sum(
-            1 for item in action_items if item.get("status") == "queued" and bool(item.get("safe_to_run"))
+            1
+            for item in action_items
+            if item.get("status") == "queued" and bool(item.get("safe_to_run"))
         ),
         "running_count": sum(1 for item in action_items if item.get("status") == "running"),
         "failed_count": sum(1 for item in action_items if item.get("status") == "failed"),

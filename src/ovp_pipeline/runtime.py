@@ -94,6 +94,10 @@ class VaultLayout:
         return self.logs_dir / "action-worker.lock"
 
     @property
+    def action_worker_state(self) -> Path:
+        return self.logs_dir / "action-worker.json"
+
+    @property
     def transactions_dir(self) -> Path:
         return self.logs_dir / "transactions"
 
