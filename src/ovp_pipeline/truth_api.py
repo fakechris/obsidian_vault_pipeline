@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from collections import Counter
 import hashlib
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -34,7 +35,7 @@ from .promote_candidates import (
 from .runtime import (
     VaultLayout,
     action_queue_write_lock,
-    knowledge_db_write_lock,
+    knowledge_db_write_lock,  # noqa: F401 - kept as a monkeypatch seam for lock-safety tests
     resolve_vault_dir,
     signal_ledger_write_lock,
 )
@@ -48,10 +49,14 @@ _REVIEW_AUDIT_LOG_NAME = "review-actions"
 _SIGNAL_LOG_NAME = "signals"
 _ACTION_LOG_NAME = "actions"
 _ACTION_RUNNING_STALE_AFTER_SECONDS = 3600
-_SOURCE_NOTE_INDEX_CACHE: dict[tuple[str, tuple[tuple[str, int, int], ...]], dict[str, list[dict[str, str]]]] = {}
+_SOURCE_NOTE_INDEX_CACHE: dict[
+    tuple[str, tuple[tuple[str, int, int], ...]], dict[str, list[dict[str, str]]]
+] = {}
 _PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
 _DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
-_SIGNAL_LEDGER_SYNC_CACHE: dict[tuple[str, str, tuple[tuple[str, int, int], ...]], dict[str, Any]] = {}
+_SIGNAL_LEDGER_SYNC_CACHE: dict[
+    tuple[str, str, tuple[tuple[str, int, int], ...]], dict[str, Any]
+] = {}
 _EVOLUTION_CANDIDATE_CACHE: dict[
     tuple[str, tuple[tuple[str, int, int], ...], str, tuple[str, ...]],
     list[dict[str, Any]],
@@ -129,6 +134,9 @@ def get_runtime_status(
         active_run["runtime_progress"] = _build_runtime_progress(active_run, now_iso=generated_at)
     runtime_process_items = detect_runtime_processes(resolved_vault)
     run_history = list_run_history(layout.transactions_dir, now_iso=generated_at, limit=10)
+    action_worker = get_action_worker_status(
+        resolved_vault, now_iso=generated_at, processes=runtime_process_items
+    )
     return {
         "generated_at": generated_at,
         "active_count": len(classified["active"]),
@@ -139,8 +147,134 @@ def get_runtime_status(
             "active_count": len(runtime_process_items),
             "items": runtime_process_items,
         },
+        "action_worker": action_worker,
         "run_history": run_history,
     }
+
+
+def _worker_identity_from_processes(processes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for process in processes:
+        if str(process.get("process_kind") or "") == "action_worker":
+            return process
+    return None
+
+
+def get_action_worker_status(
+    vault_dir: Path | str,
+    *,
+    now_iso: str | None = None,
+    processes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    now = _parse_iso_datetime(now_iso) or datetime.now(timezone.utc)
+    state: dict[str, Any] = {}
+    if layout.action_worker_state.exists():
+        try:
+            parsed = json.loads(layout.action_worker_state.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            parsed = {}
+        if isinstance(parsed, dict):
+            state = parsed
+    worker_process = _worker_identity_from_processes(
+        processes if processes is not None else detect_runtime_processes(resolved_vault)
+    )
+    started_at = _parse_iso_datetime(state.get("started_at"))
+    heartbeat_at = _parse_iso_datetime(state.get("heartbeat_at"))
+    elapsed_seconds = max(0, int((now - started_at).total_seconds())) if started_at else None
+    heartbeat_age_seconds = (
+        max(0, int((now - heartbeat_at).total_seconds())) if heartbeat_at else None
+    )
+    state_name = str(state.get("state") or "stopped")
+    active = state_name in {"running", "idle"} and (
+        heartbeat_age_seconds is None
+        or heartbeat_age_seconds <= _ACTION_RUNNING_STALE_AFTER_SECONDS
+    )
+    if worker_process is not None:
+        active = True
+    return {
+        "active": active,
+        "worker_id": str(state.get("worker_id") or ""),
+        "pid": int(
+            worker_process.get("pid")
+            if worker_process and worker_process.get("pid")
+            else state.get("pid") or 0
+        ),
+        "state": state_name,
+        "mode": str(state.get("mode") or ""),
+        "safe_only": bool(state.get("safe_only", False)),
+        "started_at": str(state.get("started_at") or ""),
+        "heartbeat_at": str(state.get("heartbeat_at") or ""),
+        "elapsed_seconds": elapsed_seconds,
+        "elapsed_summary": _format_duration(elapsed_seconds) if elapsed_seconds is not None else "",
+        "heartbeat_age_seconds": heartbeat_age_seconds,
+        "heartbeat_age_summary": _format_duration(heartbeat_age_seconds)
+        if heartbeat_age_seconds is not None
+        else "",
+        "current_action": state.get("current_action")
+        if isinstance(state.get("current_action"), dict)
+        else {},
+        "last_result": state.get("last_result")
+        if isinstance(state.get("last_result"), dict)
+        else {},
+        "process": worker_process or {},
+    }
+
+
+def record_action_worker_state(
+    vault_dir: Path | str,
+    *,
+    worker_id: str,
+    pid: int,
+    state: str,
+    mode: str,
+    safe_only: bool,
+    current_action: dict[str, Any] | None = None,
+    last_result: dict[str, Any] | None = None,
+    interval_seconds: float | None = None,
+    max_runs: int | None = None,
+    started_at: str | None = None,
+) -> dict[str, Any]:
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    existing: dict[str, Any] = {}
+    if layout.action_worker_state.exists():
+        try:
+            parsed = json.loads(layout.action_worker_state.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            parsed = {}
+        if isinstance(parsed, dict):
+            existing = parsed
+    timestamp = _utc_now_text()
+    payload = {
+        "worker_id": worker_id,
+        "pid": pid,
+        "state": state,
+        "mode": mode,
+        "safe_only": safe_only,
+        "started_at": started_at or str(existing.get("started_at") or timestamp),
+        "heartbeat_at": timestamp,
+        "current_action": current_action or {},
+        "last_result": last_result or existing.get("last_result") or {},
+    }
+    if interval_seconds is not None:
+        payload["interval_seconds"] = max(0.0, float(interval_seconds))
+    if max_runs is not None:
+        payload["max_runs"] = max_runs
+    layout.action_worker_state.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = layout.action_worker_state.with_name(
+        f"{layout.action_worker_state.name}.{worker_id}.{pid}.tmp"
+    )
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, layout.action_worker_state)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+    return payload
 
 
 def _format_utc_timestamp(value: datetime) -> str:
@@ -178,7 +312,9 @@ def _format_duration(seconds: int) -> str:
     return f"{days}d" if remaining_hours == 0 else f"{days}d {remaining_hours}h"
 
 
-def _runtime_planned_steps(active_run: dict[str, Any], ledger: dict[str, Any], current_step_name: str) -> list[str]:
+def _runtime_planned_steps(
+    active_run: dict[str, Any], ledger: dict[str, Any], current_step_name: str
+) -> list[str]:
     raw_planned = ledger.get("planned_steps")
     planned = [str(item) for item in raw_planned if item] if isinstance(raw_planned, list) else []
     if planned:
@@ -195,7 +331,10 @@ def _build_runtime_progress(active_run: dict[str, Any], *, now_iso: str) -> dict
     ledger = active_run.get("run_ledger") if isinstance(active_run.get("run_ledger"), dict) else {}
     current = ledger.get("current_step") if isinstance(ledger.get("current_step"), dict) else {}
     current_step_name = str(
-        current.get("step_name") or ledger.get("current_step_name") or active_run.get("checkpoint") or ""
+        current.get("step_name")
+        or ledger.get("current_step_name")
+        or active_run.get("checkpoint")
+        or ""
     )
     planned_steps = _runtime_planned_steps(active_run, ledger, current_step_name)
     current_index: int | None = None
@@ -239,7 +378,14 @@ def _build_runtime_progress(active_run: dict[str, Any], *, now_iso: str) -> dict
     eta_summary = "ETA unavailable until counted progress starts."
     if started_at is not None:
         elapsed_seconds = max(0, int((now - started_at).total_seconds()))
-    if done is not None and total is not None and total > 0 and done > 0 and elapsed_seconds and elapsed_seconds > 0:
+    if (
+        done is not None
+        and total is not None
+        and total > 0
+        and done > 0
+        and elapsed_seconds
+        and elapsed_seconds > 0
+    ):
         raw_items_per_second = done / elapsed_seconds
         items_per_second = round(raw_items_per_second, 6)
         items_per_minute = round(raw_items_per_second * 60.0, 2)
@@ -274,7 +420,9 @@ def _build_runtime_progress(active_run: dict[str, Any], *, now_iso: str) -> dict
         },
         "performance": {
             "elapsed_seconds": elapsed_seconds,
-            "elapsed_summary": _format_duration(elapsed_seconds) if elapsed_seconds is not None else "",
+            "elapsed_summary": _format_duration(elapsed_seconds)
+            if elapsed_seconds is not None
+            else "",
             "items_per_second": items_per_second,
             "items_per_minute": items_per_minute,
             "rate_summary": rate_summary,
@@ -514,7 +662,9 @@ def record_review_action(
     return event
 
 
-def _candidate_review_suggestion(registry: ConceptRegistry, entry: Any) -> tuple[str, list[tuple[Any, float]]]:
+def _candidate_review_suggestion(
+    registry: ConceptRegistry, entry: Any
+) -> tuple[str, list[tuple[Any, float]]]:
     similar = registry.search(entry.title, topk=5)
     similar = [
         (candidate, score)
@@ -559,8 +709,10 @@ def list_candidate_concepts(
             continue
         filtered_candidates.append(entry)
 
-    sorted_candidates = sorted(filtered_candidates, key=lambda item: (item.last_seen_at, item.slug), reverse=True)
-    page_candidates = sorted_candidates[offset: offset + limit]
+    sorted_candidates = sorted(
+        filtered_candidates, key=lambda item: (item.last_seen_at, item.slug), reverse=True
+    )
+    page_candidates = sorted_candidates[offset : offset + limit]
     items: list[dict[str, Any]] = []
 
     for entry in page_candidates:
@@ -643,7 +795,9 @@ def review_candidate_concept(
     elif lifecycle_action == "merge":
         if not normalized_target:
             raise ValueError("missing target_slug for merge")
-        mutation = merge_candidate(resolved_vault, normalized_slug, normalized_target, dry_run=False)
+        mutation = merge_candidate(
+            resolved_vault, normalized_slug, normalized_target, dry_run=False
+        )
     else:
         mutation = reject_candidate(resolved_vault, normalized_slug, dry_run=False)
 
@@ -714,7 +868,9 @@ def _batch_object_rows(
         return {}
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     placeholders = ",".join("?" for _ in object_ids)
     pack_placeholders = ",".join("?" for _ in pack_candidates)
     with sqlite3.connect(db_path) as conn:
@@ -724,7 +880,7 @@ def _batch_object_rows(
             FROM objects
             WHERE pack IN ({pack_placeholders}) AND object_id IN ({placeholders})
             ORDER BY CASE pack
-              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              {"".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
               ELSE {len(pack_candidates)}
             END, object_id
             """,
@@ -817,7 +973,9 @@ def get_review_context(
             "recent_review_actions": [],
         }
 
-    provenance_map = get_object_provenance_map(vault_dir, normalized_object_ids, pack_name=pack_name)
+    provenance_map = get_object_provenance_map(
+        vault_dir, normalized_object_ids, pack_name=pack_name
+    )
     source_notes: dict[str, dict[str, Any]] = {}
     mocs: dict[str, dict[str, Any]] = {}
     for provenance in provenance_map.values():
@@ -828,7 +986,9 @@ def get_review_context(
 
     db_path = _db_path(vault_dir)
     placeholders = ",".join("?" for _ in normalized_object_ids)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     pack_placeholders = ",".join("?" for _ in pack_candidates)
     with sqlite3.connect(db_path) as conn:
         stale_rows = conn.execute(
@@ -847,7 +1007,7 @@ def get_review_context(
             WHERE objects.object_id IN ({placeholders})
               AND objects.pack IN ({pack_placeholders})
             ORDER BY CASE objects.pack
-              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              {"".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
               ELSE {len(pack_candidates)}
             END, objects.object_id
             """,
@@ -867,7 +1027,7 @@ def get_review_context(
             FROM contradictions
             WHERE pack IN ({pack_placeholders})
             ORDER BY CASE pack
-              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              {"".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
               ELSE {len(pack_candidates)}
             END, contradiction_id
             """,
@@ -926,7 +1086,9 @@ def get_review_context(
         "mocs": list(mocs.values()),
         "stale_summary_object_ids": stale_summary_object_ids,
         "contradiction_object_ids": sorted(contradiction_object_ids),
-        "recent_review_actions": list_review_actions(vault_dir, object_ids=normalized_object_ids, limit=5),
+        "recent_review_actions": list_review_actions(
+            vault_dir, object_ids=normalized_object_ids, limit=5
+        ),
     }
 
 
@@ -960,7 +1122,9 @@ def _claim_details_map(vault_dir: Path | str, claim_ids: list[str]) -> dict[str,
     }
 
 
-def _claim_evidence_map(vault_dir: Path | str, claim_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+def _claim_evidence_map(
+    vault_dir: Path | str, claim_ids: list[str]
+) -> dict[str, list[dict[str, Any]]]:
     normalized_claim_ids = list(dict.fromkeys(claim_id for claim_id in claim_ids if claim_id))
     if not normalized_claim_ids:
         return {}
@@ -991,7 +1155,10 @@ def _claim_evidence_map(vault_dir: Path | str, claim_ids: list[str]) -> dict[str
 def _rank_contradiction_evidence(item: dict[str, Any]) -> list[dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
     rank = 1
-    for polarity, claims in (("positive", item["positive_claims"]), ("negative", item["negative_claims"])):
+    for polarity, claims in (
+        ("positive", item["positive_claims"]),
+        ("negative", item["negative_claims"]),
+    ):
         for claim in claims:
             for evidence in claim["evidence"]:
                 ranked.append(
@@ -1053,10 +1220,7 @@ def _page_paths_for_slugs(vault_dir: Path | str, slugs: list[str]) -> dict[str, 
             """,
             tuple(normalized_slugs),
         ).fetchall()
-    return {
-        str(slug): _vault_relative_path(resolved_vault, path)
-        for slug, path in rows
-    }
+    return {str(slug): _vault_relative_path(resolved_vault, path) for slug, path in rows}
 
 
 def _note_date_text(vault_dir: Path | str, note_path: str) -> str:
@@ -1145,7 +1309,9 @@ def list_objects(
     limit, offset = _validate_page_args(limit=limit, offset=offset)
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     normalized_query = _escape_like(query.strip().lower()) if query else ""
     with sqlite3.connect(db_path) as conn:
         sql = """
@@ -1219,7 +1385,9 @@ def search_vault_surface(
         }
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     escaped_query = _escape_like(normalized_query.lower())
     with sqlite3.connect(db_path) as conn:
         object_rows = conn.execute(
@@ -1308,9 +1476,13 @@ def search_vault_surface(
     }
 
 
-def count_objects(vault_dir: Path | str, *, query: str | None = None, pack_name: str | None = None) -> int:
+def count_objects(
+    vault_dir: Path | str, *, query: str | None = None, pack_name: str | None = None
+) -> int:
     db_path = _db_path(vault_dir)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     normalized_query = _escape_like(query.strip().lower()) if query else ""
     sql = f"SELECT COUNT(DISTINCT object_id) FROM objects WHERE pack IN ({','.join('?' for _ in pack_candidates)})"
     params: list[Any] = [*pack_candidates]
@@ -1359,7 +1531,9 @@ def _list_surface_groups(
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     pack_placeholders = ",".join("?" for _ in pack_candidates)
     where_sql, base_params = _surface_page_query_clauses(
         note_type=note_type,
@@ -1393,7 +1567,7 @@ def _list_surface_groups(
               AND objects.pack IN ({pack_placeholders})
             ORDER BY pages_index.slug,
               CASE objects.pack
-                {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+                {"".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
                 ELSE {len(pack_candidates)}
               END,
               objects.object_id
@@ -1430,7 +1604,9 @@ def get_object_detail(
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     escaped = _escape_like(object_id)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
 
     truth_pack = ""
     with sqlite3.connect(db_path) as conn:
@@ -1610,7 +1786,9 @@ def list_graph_clusters(
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="graph_clusters")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="graph_clusters"
+    )
     requested_pack = pack_name or pack_candidates[0]
     normalized_query = _escape_like(query.strip().lower()) if query else ""
 
@@ -1667,13 +1845,19 @@ def list_graph_clusters(
                 "cluster_kind": str(cluster_kind),
                 "label": str(label),
                 "center_object_id": str(center_object_id),
-                "center_title": object_rows.get(str(center_object_id), {}).get("title", str(center_object_id)),
+                "center_title": object_rows.get(str(center_object_id), {}).get(
+                    "title", str(center_object_id)
+                ),
                 "member_object_ids": member_object_ids,
                 "member_count": len(member_object_ids),
                 "members": [
                     object_rows.get(
                         str(object_id),
-                        {"object_id": str(object_id), "title": str(object_id), "pack": cluster_pack},
+                        {
+                            "object_id": str(object_id),
+                            "title": str(object_id),
+                            "pack": cluster_pack,
+                        },
                     )
                     for object_id in member_object_ids
                 ],
@@ -1694,7 +1878,9 @@ def get_graph_cluster_detail(
     pack_name: str | None = None,
 ) -> dict[str, Any]:
     db_path = _db_path(vault_dir)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="graph_clusters")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="graph_clusters"
+    )
     requested_pack = pack_name or pack_candidates[0]
 
     truth_pack = ""
@@ -1768,7 +1954,9 @@ def get_graph_cluster_detail(
     }
 
 
-def _find_note_by_source(vault_dir: Path, *, source_url: str, exclude_path: str) -> dict[str, str] | None:
+def _find_note_by_source(
+    vault_dir: Path, *, source_url: str, exclude_path: str
+) -> dict[str, str] | None:
     cache_key = (str(vault_dir.resolve()), _search_root_signatures(vault_dir))
     source_index = _SOURCE_NOTE_INDEX_CACHE.get(cache_key)
     if source_index is None:
@@ -1809,14 +1997,20 @@ def _find_note_from_pipeline_log(vault_dir: Path, *, note_path: str) -> dict[str
     if not log_path.exists():
         return None
     index = _pipeline_log_index(vault_dir)
-    return index["original_source_by_output"].get(str((vault_dir / note_path).resolve().relative_to(vault_dir.resolve())))
+    return index["original_source_by_output"].get(
+        str((vault_dir / note_path).resolve().relative_to(vault_dir.resolve()))
+    )
 
 
-def _find_derived_notes_from_pipeline_log(vault_dir: Path, *, note_path: str) -> list[dict[str, str]]:
+def _find_derived_notes_from_pipeline_log(
+    vault_dir: Path, *, note_path: str
+) -> list[dict[str, str]]:
     log_path = VaultLayout.from_vault(vault_dir).logs_dir / "pipeline.jsonl"
     if not log_path.exists():
         return []
-    return list(_pipeline_log_index(vault_dir)["derived_by_source_file"].get(Path(note_path).name, []))
+    return list(
+        _pipeline_log_index(vault_dir)["derived_by_source_file"].get(Path(note_path).name, [])
+    )
 
 
 def list_review_actions(
@@ -1838,7 +2032,9 @@ def list_review_actions(
             json.dumps(item, ensure_ascii=False),
         )
         for item in sorted(
-            _read_jsonl_items(VaultLayout.from_vault(resolved_vault).logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"),
+            _read_jsonl_items(
+                VaultLayout.from_vault(resolved_vault).logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"
+            ),
             key=lambda item: str(item.get("timestamp") or ""),
             reverse=True,
         )[:200]
@@ -1957,7 +2153,8 @@ def list_evolution_review_actions(
             [
                 item
                 for item in _read_jsonl_items(
-                    VaultLayout.from_vault(resolved_vault).logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"
+                    VaultLayout.from_vault(resolved_vault).logs_dir
+                    / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"
                 )
                 if item.get("event_type") == "ui_evolution_reviewed"
                 and str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) == normalized_pack
@@ -2008,6 +2205,10 @@ def _focused_action_contract_metadata(
     except ValueError:
         return {
             "safe_to_run": False,
+            "handler_provider_pack": "",
+            "handler_provider_name": "",
+            "processor_provider_pack": "",
+            "processor_provider_name": "",
             "processor_mode": "",
             "processor_inputs": [],
             "processor_outputs": [],
@@ -2015,6 +2216,10 @@ def _focused_action_contract_metadata(
         }
     return {
         "safe_to_run": bool(contract.handler_spec.safe_to_run),
+        "handler_provider_pack": str(contract.handler_spec.pack or ""),
+        "handler_provider_name": str(contract.handler_spec.name or ""),
+        "processor_provider_pack": str(contract.processor_contract.pack or ""),
+        "processor_provider_name": str(contract.processor_contract.name or ""),
         "processor_mode": str(contract.processor_contract.mode or ""),
         "processor_inputs": list(contract.processor_contract.inputs or ()),
         "processor_outputs": list(contract.processor_contract.outputs or ()),
@@ -2128,11 +2333,13 @@ def list_action_queue(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     normalized_query = (query or "").strip().lower()
     normalized_pack = str(pack_name or "").strip()
-    items: list[dict[str, Any]] = []
+    raw_items: list[dict[str, Any]] = []
     with action_queue_write_lock(vault_dir):
         for item in _read_action_queue_rows_unlocked(vault_dir):
-            item = _normalize_action_queue_item(item)
-            if normalized_pack and str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) != normalized_pack:
+            if (
+                normalized_pack
+                and str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) != normalized_pack
+            ):
                 continue
             if status and item.get("status") != status:
                 continue
@@ -2144,13 +2351,32 @@ def list_action_queue(
                 ]
                 if not any(normalized_query in haystack for haystack in haystacks):
                     continue
-            items.append(item)
-            if len(items) >= limit:
+            raw_items.append(dict(item))
+            if len(raw_items) >= limit:
                 break
-    return items
+    return [_normalize_action_queue_item(item, vault_dir=vault_dir) for item in raw_items]
 
 
-def _normalize_action_queue_item(item: dict[str, Any]) -> dict[str, Any]:
+def _last_result_summary(action: dict[str, Any]) -> str:
+    result = action.get("result")
+    if not isinstance(result, dict) or not result:
+        return "No execution result recorded yet."
+    produced_count, produced_types = _result_artifact_summary(action)
+    if produced_count:
+        noun = "artifact" if produced_count == 1 else "artifacts"
+        type_text = f" ({', '.join(produced_types)})" if produced_types else ""
+        return f"Produced {produced_count} {noun}{type_text}."
+    status = str(result.get("status") or result.get("ok") or "").strip()
+    if status:
+        return f"Last result: {status}."
+    return "Execution completed without a tracked downstream artifact."
+
+
+def _normalize_action_queue_item(
+    item: dict[str, Any],
+    *,
+    vault_dir: Path | str | None = None,
+) -> dict[str, Any]:
     normalized = dict(item)
     action_kind = str(normalized.get("action_kind") or "")
     pack_name = str(normalized.get("pack") or DEFAULT_WORKFLOW_PACK_NAME)
@@ -2170,6 +2396,22 @@ def _normalize_action_queue_item(item: dict[str, Any]) -> dict[str, Any]:
         current = normalized.get(key)
         if key not in normalized or current in (None, "", []):
             normalized[key] = value
+    if "precondition_status" not in normalized:
+        normalized["precondition_status"] = ""
+    if "blocked_reason" not in normalized:
+        normalized["blocked_reason"] = ""
+    if "obsolete_reason" not in normalized:
+        normalized["obsolete_reason"] = ""
+    if "retry_count" not in normalized:
+        normalized["retry_count"] = 0
+    if vault_dir is not None:
+        signal_id = str(normalized.get("source_signal_id") or "")
+        normalized["source_signal_active"] = bool(
+            signal_id and _signal_by_id(vault_dir, signal_id, pack_name=pack_name) is not None
+        )
+    else:
+        normalized.setdefault("source_signal_active", False)
+    normalized["last_result_summary"] = _last_result_summary(normalized)
     normalized["impact_summary"] = _build_action_impact_summary(normalized)
     return normalized
 
@@ -2284,11 +2526,18 @@ def _build_action_impact_summary(action: dict[str, Any]) -> dict[str, Any]:
             "impact_label": "Execution failed",
             "impact_detail": detail,
         }
-    if action_status in {"dismissed", "obsolete"}:
+    if action_status in {"dismissed", "obsolete", "blocked"}:
         detail = (
             "Execution was dismissed before completion."
             if action_status == "dismissed"
-            else "Execution became obsolete because the source signal disappeared."
+            else (
+                "Execution became obsolete because the source signal disappeared."
+                if action_status == "obsolete"
+                else str(
+                    action.get("blocked_reason")
+                    or "Execution was blocked by a failed precondition."
+                )
+            )
         )
         return {
             **base,
@@ -2519,7 +2768,9 @@ def _backfill_auto_queue_actions(
     }
 
 
-def _replace_action_queue_item_unlocked(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
+def _replace_action_queue_item_unlocked(
+    vault_dir: Path | str, action: dict[str, Any]
+) -> dict[str, Any]:
     existing_actions = _read_action_queue_rows_unlocked(vault_dir)
     replaced = False
     for index, item in enumerate(existing_actions):
@@ -2547,6 +2798,105 @@ def _action_by_id_unlocked(vault_dir: Path | str, action_id: str) -> dict[str, A
 def _action_by_id(vault_dir: Path | str, action_id: str) -> dict[str, Any] | None:
     with action_queue_write_lock(vault_dir):
         return _action_by_id_unlocked(vault_dir, action_id)
+
+
+def _looks_like_vault_note_path(value: str) -> bool:
+    if not value:
+        return False
+    if "://" in value or value.startswith("/note?"):
+        return False
+    return (
+        Path(value).is_absolute()
+        or value.endswith(".md")
+        or "/" in value
+        or "\\" in value
+        or value.startswith(".")
+    )
+
+
+def _focused_action_note_paths(action: dict[str, Any]) -> list[str]:
+    note_paths = [
+        str(path)
+        for path in action.get("note_paths", [])
+        if isinstance(path, str) and path.strip()
+    ]
+    target_ref = str(action.get("target_ref") or "").strip()
+    if target_ref and _looks_like_vault_note_path(target_ref) and target_ref not in note_paths:
+        note_paths.append(target_ref)
+    return note_paths
+
+
+def _focused_action_precondition(
+    vault_dir: Path | str,
+    action: dict[str, Any],
+    *,
+    safe_only: bool = False,
+) -> dict[str, Any]:
+    if safe_only and not bool(action.get("safe_to_run")):
+        return {
+            "status": "unsafe",
+            "reason": "action_not_marked_safe_to_run",
+        }
+    signal_id = str(action.get("source_signal_id") or "")
+    if (
+        signal_id
+        and _signal_by_id(
+            vault_dir,
+            signal_id,
+            pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
+        )
+        is None
+    ):
+        return {
+            "status": "obsolete",
+            "reason": "source_signal_inactive",
+        }
+    vault_root = resolve_vault_dir(vault_dir).resolve()
+    for note_path in _focused_action_note_paths(action):
+        if Path(note_path).is_absolute():
+            return {
+                "status": "blocked",
+                "reason": f"invalid_note_path:{note_path}",
+            }
+        target = (vault_root / note_path).resolve()
+        try:
+            target.relative_to(vault_root)
+        except ValueError:
+            return {
+                "status": "blocked",
+                "reason": f"invalid_note_path:{note_path}",
+            }
+        if not target.is_file():
+            return {
+                "status": "blocked",
+                "reason": f"missing_note_path:{note_path}",
+            }
+    return {
+        "status": "ready",
+        "reason": "",
+    }
+
+
+def _apply_failed_precondition(
+    action: dict[str, Any], precondition: dict[str, Any]
+) -> dict[str, Any]:
+    status = str(precondition.get("status") or "blocked")
+    reason = str(precondition.get("reason") or status)
+    action["precondition_status"] = status
+    action["finished_at"] = _utc_now_text()
+    if status == "obsolete":
+        action["status"] = "obsolete"
+        action["obsolete_reason"] = reason
+        action["failure_bucket"] = "obsolete_signal"
+    elif status == "unsafe":
+        action["status"] = "blocked"
+        action["blocked_reason"] = reason
+        action["failure_bucket"] = "unsafe_action"
+    else:
+        action["status"] = "blocked"
+        action["blocked_reason"] = reason
+        action["failure_bucket"] = "precondition_blocked"
+    return action
 
 
 def _next_queued_action_unlocked(
@@ -2579,7 +2929,8 @@ def _next_safe_queued_action_unlocked(
     queued = [
         item
         for item in _read_action_queue_rows_unlocked(vault_dir)
-        if item.get("status") == "queued" and bool(item.get("safe_to_run"))
+        if item.get("status") == "queued"
+        and bool(item.get("safe_to_run"))
         and (
             not normalized_pack
             or str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME) == normalized_pack
@@ -2596,13 +2947,16 @@ def retry_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[st
         action = _action_by_id_unlocked(vault_dir, action_id)
         if action is None:
             raise ValueError("unknown action_id")
-        if str(action.get("status") or "") not in {"failed", "obsolete"}:
+        if str(action.get("status") or "") not in {"failed", "blocked", "obsolete"}:
             raise ValueError("action is not retryable")
         action["status"] = "queued"
         action["started_at"] = ""
         action["finished_at"] = ""
         action["error"] = ""
         action["failure_bucket"] = ""
+        action["precondition_status"] = ""
+        action["blocked_reason"] = ""
+        action["obsolete_reason"] = ""
         action["result"] = {}
         _replace_action_queue_item_unlocked(vault_dir, action)
     return {"retried": True, "action": action}
@@ -2627,7 +2981,9 @@ def _run_deep_dive_workflow_action(vault_dir: Path | str, action: dict[str, Any]
     return run_deep_dive_workflow_action(vault_dir=vault_dir, action=action)
 
 
-def _run_object_extraction_workflow_action(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
+def _run_object_extraction_workflow_action(
+    vault_dir: Path | str, action: dict[str, Any]
+) -> dict[str, Any]:
     from .focused_actions import run_object_extraction_workflow_action
 
     return run_object_extraction_workflow_action(vault_dir=vault_dir, action=action)
@@ -2655,11 +3011,7 @@ def run_next_action_queue_item(
     pack_name: str | None = None,
 ) -> dict[str, Any]:
     with action_queue_write_lock(vault_dir):
-        action = (
-            _next_safe_queued_action_unlocked(vault_dir, pack_name=pack_name)
-            if safe_only
-            else _next_queued_action_unlocked(vault_dir, pack_name=pack_name)
-        )
+        action = _next_queued_action_unlocked(vault_dir, pack_name=pack_name)
         if action is None:
             return {
                 "ran": False,
@@ -2668,25 +3020,6 @@ def run_next_action_queue_item(
                 "requested_pack": str(pack_name or ""),
             }
 
-        started_at = _utc_now_text()
-        action["status"] = "running"
-        action["started_at"] = started_at
-        action["error"] = ""
-        action["failure_bucket"] = ""
-        _replace_action_queue_item_unlocked(vault_dir, action)
-
-    if _signal_by_id(
-        vault_dir,
-        str(action.get("source_signal_id") or ""),
-        pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
-    ) is None:
-        with action_queue_write_lock(vault_dir):
-            action["status"] = "obsolete"
-            action["finished_at"] = _utc_now_text()
-            action["failure_bucket"] = "obsolete_signal"
-            _replace_action_queue_item_unlocked(vault_dir, action)
-        return {"ran": False, "reason": "obsolete_signal", "action": action, "safe_only": safe_only}
-
     try:
         contract = resolve_focused_action_execution_contract(
             pack_name=str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME),
@@ -2694,13 +3027,59 @@ def run_next_action_queue_item(
         )
     except ValueError:
         with action_queue_write_lock(vault_dir):
-            action["status"] = "failed"
-            action["error"] = f"unsupported_action_kind:{action.get('action_kind')}"
-            action["failure_bucket"] = "unsupported_action_kind"
-            action["retry_count"] = int(action.get("retry_count") or 0) + 1
-            action["finished_at"] = _utc_now_text()
+            current = _action_by_id_unlocked(vault_dir, str(action.get("action_id") or ""))
+            if current is None or str(current.get("status") or "") != "queued":
+                return {
+                    "ran": False,
+                    "reason": "action_no_longer_queued",
+                    "safe_only": safe_only,
+                }
+            current["status"] = "failed"
+            current["error"] = f"unsupported_action_kind:{current.get('action_kind')}"
+            current["failure_bucket"] = "unsupported_action_kind"
+            current["retry_count"] = int(current.get("retry_count") or 0) + 1
+            current["finished_at"] = _utc_now_text()
+            _replace_action_queue_item_unlocked(vault_dir, current)
+        return {
+            "ran": False,
+            "reason": "unsupported_action_kind",
+            "action": current,
+            "safe_only": safe_only,
+        }
+
+    precondition = _focused_action_precondition(vault_dir, action, safe_only=safe_only)
+    with action_queue_write_lock(vault_dir):
+        current = _action_by_id_unlocked(vault_dir, str(action.get("action_id") or ""))
+        if current is None or str(current.get("status") or "") != "queued":
+            return {
+                "ran": False,
+                "reason": "action_no_longer_queued",
+                "safe_only": safe_only,
+            }
+        action = current
+        if str(precondition.get("status") or "") != "ready":
+            action = _apply_failed_precondition(action, precondition)
             _replace_action_queue_item_unlocked(vault_dir, action)
-        return {"ran": False, "reason": "unsupported_action_kind", "action": action, "safe_only": safe_only}
+            reason = str(precondition.get("status") or "blocked")
+            if reason == "obsolete":
+                reason = "obsolete_signal"
+            return {
+                "ran": False,
+                "reason": reason,
+                "precondition": precondition,
+                "action": action,
+                "safe_only": safe_only,
+            }
+
+        started_at = _utc_now_text()
+        action["status"] = "running"
+        action["precondition_status"] = "ready"
+        action["blocked_reason"] = ""
+        action["obsolete_reason"] = ""
+        action["started_at"] = started_at
+        action["error"] = ""
+        action["failure_bucket"] = ""
+        _replace_action_queue_item_unlocked(vault_dir, action)
 
     try:
         _, result = execute_focused_action_handler(
@@ -2737,7 +3116,12 @@ def run_next_action_queue_item(
             action["retry_count"] = int(action.get("retry_count") or 0) + 1
             action["finished_at"] = _utc_now_text()
             _replace_action_queue_item_unlocked(vault_dir, action)
-        return {"ran": False, "reason": "execution_failed", "action": action, "safe_only": safe_only}
+        return {
+            "ran": False,
+            "reason": "execution_failed",
+            "action": action,
+            "safe_only": safe_only,
+        }
 
 
 def run_action_queue(
@@ -2750,17 +3134,38 @@ def run_action_queue(
     limit = max(1, min(int(limit), MAX_PAGE_SIZE))
     results: list[dict[str, Any]] = []
     stopped_reason = "limit_reached"
-    for _ in range(limit):
+    ran_count = 0
+    for _ in range(MAX_PAGE_SIZE):
+        if ran_count >= limit:
+            break
         payload = run_next_action_queue_item(vault_dir, safe_only=safe_only, pack_name=pack_name)
         results.append(payload)
-        if not payload.get("ran"):
-            stopped_reason = str(payload.get("reason") or "stopped")
-            break
+        if payload.get("ran"):
+            ran_count += 1
+            continue
+        stopped_reason = str(payload.get("reason") or "stopped")
+        if safe_only and stopped_reason == "unsafe":
+            continue
+        break
+    else:
+        if ran_count < limit:
+            stopped_reason = "max_scan_reached"
+    if ran_count >= limit:
+        stopped_reason = "limit_reached"
     return {
         "limit": limit,
         "safe_only": safe_only,
         "requested_pack": str(pack_name or ""),
-        "ran_count": sum(1 for item in results if item.get("ran")),
+        "attempted_count": sum(1 for item in results if item.get("reason") != "no_queued_actions"),
+        "ran_count": ran_count,
+        "skipped_unsafe_count": sum(1 for item in results if item.get("reason") == "unsafe"),
+        "obsolete_count": sum(1 for item in results if item.get("reason") == "obsolete_signal"),
+        "failed_count": sum(
+            1
+            for item in results
+            if item.get("reason") in {"execution_failed", "unsupported_action_kind"}
+        ),
+        "blocked_count": sum(1 for item in results if item.get("reason") == "blocked"),
         "stopped_reason": stopped_reason,
         "results": results,
     }
@@ -2811,6 +3216,13 @@ def _attach_action_queue_state(
             if action is not None:
                 recommended["queue_status"] = action.get("status", "")
                 recommended["action_id"] = action.get("action_id", "")
+                recommended["precondition_status"] = action.get("precondition_status", "")
+                recommended["blocked_reason"] = action.get("blocked_reason", "")
+                recommended["obsolete_reason"] = action.get("obsolete_reason", "")
+                recommended["handler_provider_pack"] = action.get("handler_provider_pack", "")
+                recommended["handler_provider_name"] = action.get("handler_provider_name", "")
+                recommended["processor_provider_pack"] = action.get("processor_provider_pack", "")
+                recommended["processor_provider_name"] = action.get("processor_provider_name", "")
                 action_pack = str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME)
                 recommended["queue_path"] = (
                     "/actions"
@@ -2840,6 +3252,21 @@ def _attach_action_queue_state(
                 "note_paths": note_paths,
             }
         enriched["impact_summary"] = _build_signal_impact_summary(enriched, action=matched_action)
+        enriched["action_lifecycle"] = (
+            {
+                "queue_status": str(matched_action.get("status") or ""),
+                "action_id": str(matched_action.get("action_id") or ""),
+                "precondition_status": str(matched_action.get("precondition_status") or ""),
+                "blocked_reason": str(matched_action.get("blocked_reason") or ""),
+                "obsolete_reason": str(matched_action.get("obsolete_reason") or ""),
+                "handler_provider_pack": str(matched_action.get("handler_provider_pack") or ""),
+                "handler_provider_name": str(matched_action.get("handler_provider_name") or ""),
+                "processor_provider_pack": str(matched_action.get("processor_provider_pack") or ""),
+                "processor_provider_name": str(matched_action.get("processor_provider_name") or ""),
+            }
+            if matched_action is not None
+            else {}
+        )
         annotated.append(enriched)
     return annotated
 
@@ -2853,7 +3280,9 @@ def list_production_gaps(
 ) -> list[dict[str, Any]]:
     limit, _ = _validate_page_args(limit=limit, offset=0)
     candidate_limit = min(MAX_PAGE_SIZE, max(limit * 5, limit))
-    items = list_production_chains(vault_dir, pack_name=pack_name, query=query, limit=candidate_limit)
+    items = list_production_chains(
+        vault_dir, pack_name=pack_name, query=query, limit=candidate_limit
+    )
     return _production_gap_items_from_chains(items, limit=limit)
 
 
@@ -2895,7 +3324,9 @@ def _production_gap_items_from_chains(
                 "traceability": item["traceability"],
             }
         )
-    weak_points.sort(key=lambda item: (-item["severity"], item["stage_label"], item["title"].lower()))
+    weak_points.sort(
+        key=lambda item: (-item["severity"], item["stage_label"], item["title"].lower())
+    )
     return weak_points[:limit]
 
 
@@ -2930,16 +3361,26 @@ def sync_signal_ledger(vault_dir: Path | str, *, pack_name: str | None = None) -
         signals=signals,
     )
     result["auto_queued_action_count"] = backfill["created_count"]
-    cache_key = (str(resolved_vault.resolve()), normalized_pack, _signal_dependency_signature(resolved_vault))
+    cache_key = (
+        str(resolved_vault.resolve()),
+        normalized_pack,
+        _signal_dependency_signature(resolved_vault),
+    )
     _SIGNAL_LEDGER_SYNC_CACHE.clear()
     _SIGNAL_LEDGER_SYNC_CACHE[cache_key] = result
     return result
 
 
-def ensure_signal_ledger_synced(vault_dir: Path | str, *, pack_name: str | None = None) -> dict[str, Any]:
+def ensure_signal_ledger_synced(
+    vault_dir: Path | str, *, pack_name: str | None = None
+) -> dict[str, Any]:
     resolved_vault = resolve_vault_dir(vault_dir)
     normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
-    cache_key = (str(resolved_vault.resolve()), normalized_pack, _signal_dependency_signature(resolved_vault))
+    cache_key = (
+        str(resolved_vault.resolve()),
+        normalized_pack,
+        _signal_dependency_signature(resolved_vault),
+    )
     cached = _SIGNAL_LEDGER_SYNC_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -3276,8 +3717,12 @@ def _match_note_capture_event(
             or source_name in derived_note_names
         ):
             return None
-        object_id = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
-        label = "Evergreen promoted" if event_type == "evergreen_auto_promoted" else "Evergreen created"
+        object_id = str(
+            payload.get("mutation", {}).get("target_slug") or payload.get("concept") or ""
+        ).strip()
+        label = (
+            "Evergreen promoted" if event_type == "evergreen_auto_promoted" else "Evergreen created"
+        )
         detail = (
             f"Promoted evergreen object {object_id}."
             if event_type == "evergreen_auto_promoted" and object_id
@@ -3288,7 +3733,9 @@ def _match_note_capture_event(
             )
         )
         return _note_capture_item(
-            kind="evergreen_promoted" if event_type == "evergreen_auto_promoted" else "evergreen_created",
+            kind="evergreen_promoted"
+            if event_type == "evergreen_auto_promoted"
+            else "evergreen_created",
             label=label,
             timestamp=timestamp,
             detail=detail,
@@ -3416,7 +3863,10 @@ def _aggregate_note_capture_summaries(
     candidate_count = sum(item["candidate_count"] for item in summaries)
     error_count = sum(item["error_count"] for item in summaries)
     skipped_count = sum(item["skipped_count"] for item in summaries)
-    latest_timestamp = max((str(item["latest_timestamp"]) for item in summaries if item["latest_timestamp"]), default="")
+    latest_timestamp = max(
+        (str(item["latest_timestamp"]) for item in summaries if item["latest_timestamp"]),
+        default="",
+    )
     status = _capture_summary_status(
         event_count=captured_event_count,
         produced_artifact_count=produced_artifact_count,
@@ -3481,7 +3931,9 @@ def _page_row_by_path(vault_dir: Path | str, note_path: str) -> dict[str, str]:
 
 def _deep_dive_objects_for_path(vault_dir: Path | str, note_path: str) -> list[dict[str, str]]:
     resolved_vault = resolve_vault_dir(vault_dir)
-    normalized_target = str((resolved_vault / note_path).resolve().relative_to(resolved_vault.resolve()))
+    normalized_target = str(
+        (resolved_vault / note_path).resolve().relative_to(resolved_vault.resolve())
+    )
     return list(_deep_dive_object_map(vault_dir).get(normalized_target, []))
 
 
@@ -3494,7 +3946,9 @@ def _linked_existing_objects_for_note_path(
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     absolute_path = str((resolved_vault / note_path).resolve())
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     if not pack_candidates:
         return []
     pack_placeholders = ",".join("?" for _ in pack_candidates)
@@ -3513,7 +3967,7 @@ def _linked_existing_objects_for_note_path(
             )
               AND objects.pack IN ({pack_placeholders})
             ORDER BY CASE objects.pack
-              {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+              {"".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
               ELSE {len(pack_candidates)}
             END, page_links.line_number, objects.object_id
             """,
@@ -3593,11 +4047,19 @@ def _note_backlink_expectation_payload(
 ) -> dict[str, Any]:
     source_note_paths = [str(item.get("path") or "") for item in source_notes if item.get("path")]
     deep_dive_paths = [str(item.get("path") or "") for item in deep_dives if item.get("path")]
-    object_ids = [str(item.get("object_id") or item.get("slug") or "") for item in objects if item.get("object_id") or item.get("slug")]
+    object_ids = [
+        str(item.get("object_id") or item.get("slug") or "")
+        for item in objects
+        if item.get("object_id") or item.get("slug")
+    ]
     atlas_paths = [str(item.get("path") or "") for item in atlas_pages if item.get("path")]
 
     if stage_label == "source_note":
-        status = "satisfied" if deep_dive_paths or object_ids or atlas_paths else "missing_downstream_links"
+        status = (
+            "satisfied"
+            if deep_dive_paths or object_ids or atlas_paths
+            else "missing_downstream_links"
+        )
     elif stage_label == "deep_dive":
         status = "satisfied" if source_note_paths else "missing_source_backlink"
     elif stage_label in {"evergreen_note", "evergreen_object"}:
@@ -3626,7 +4088,9 @@ def _atlas_pages_for_object_ids(
     pack_name: str | None = None,
 ) -> list[dict[str, str]]:
     atlas_pages: dict[str, dict[str, str]] = {}
-    for provenance in get_object_provenance_map(vault_dir, object_ids, pack_name=pack_name).values():
+    for provenance in get_object_provenance_map(
+        vault_dir, object_ids, pack_name=pack_name
+    ).values():
         for item in provenance["mocs"]:
             atlas_pages.setdefault(item["slug"], item)
     return list(atlas_pages.values())
@@ -3664,7 +4128,9 @@ def _pipeline_log_index(vault_dir: Path) -> dict[str, Any]:
                 article_outputs[relative_path] = file_name
                 frontmatter = _parse_frontmatter(candidate.read_text(encoding="utf-8"))
                 derived_by_source_file.setdefault(file_name, [])
-                if not any(item["path"] == relative_path for item in derived_by_source_file[file_name]):
+                if not any(
+                    item["path"] == relative_path for item in derived_by_source_file[file_name]
+                ):
                     derived_by_source_file[file_name].append(
                         {
                             "title": str(frontmatter.get("title") or candidate.stem).strip(),
@@ -3682,7 +4148,9 @@ def _pipeline_log_index(vault_dir: Path) -> dict[str, Any]:
                 if not candidate.is_absolute():
                     candidate = (vault_dir / target).resolve()
                 if candidate.is_file():
-                    archived_by_article_file[article_file] = str(candidate.resolve().relative_to(vault_dir.resolve()))
+                    archived_by_article_file[article_file] = str(
+                        candidate.resolve().relative_to(vault_dir.resolve())
+                    )
 
     original_source_by_output: dict[str, dict[str, str]] = {}
     for output_path, article_file in article_outputs.items():
@@ -3747,7 +4215,9 @@ def _deep_dive_object_map(vault_dir: Path | str) -> dict[str, list[dict[str, str
         except json.JSONDecodeError:
             continue
         source_name = str(payload.get("source") or "").strip()
-        object_id = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
+        object_id = str(
+            payload.get("mutation", {}).get("target_slug") or payload.get("concept") or ""
+        ).strip()
         if not source_name or not object_id:
             continue
         grouped_promotions.setdefault(source_name, {})[object_id] = {
@@ -3794,7 +4264,9 @@ def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> li
             payload = json.loads(payload_json)
         except json.JSONDecodeError:
             continue
-        target_slug = str(payload.get("mutation", {}).get("target_slug") or payload.get("concept") or "").strip()
+        target_slug = str(
+            payload.get("mutation", {}).get("target_slug") or payload.get("concept") or ""
+        ).strip()
         source_name = str(payload.get("source") or "").strip()
         if target_slug == object_id and source_name:
             promoted_source_names.add(source_name)
@@ -3955,7 +4427,9 @@ def get_object_traceability(
     deep_dives = _promoted_deep_dives_for_object(vault_dir, object_id)
     source_note_map: dict[str, dict[str, str]] = {}
     for deep_dive in deep_dives:
-        original = get_note_provenance(vault_dir, note_path=deep_dive["path"])["original_source_note"]
+        original = get_note_provenance(vault_dir, note_path=deep_dive["path"])[
+            "original_source_note"
+        ]
         if original:
             source_note_map.setdefault(original["path"], original)
     stage_presence = {
@@ -4040,7 +4514,9 @@ def list_contradictions(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="contradictions")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="contradictions"
+    )
     pack_placeholders = ",".join("?" for _ in pack_candidates)
     sql = """
         SELECT contradiction_id, subject_key, positive_claim_ids_json, negative_claim_ids_json, status, resolution_note, resolved_at
@@ -4193,7 +4669,8 @@ def _eligible_evolution_object_ids(
         if item.get("object_id")
     }
     existing_object_ids = {
-        item["object_id"] for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE, pack_name=pack_name)
+        item["object_id"]
+        for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE, pack_name=pack_name)
     }
     return sorted(promoted_object_ids.intersection(existing_object_ids))
 
@@ -4205,7 +4682,9 @@ def _compute_evolution_candidates(
     pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    normalized_object_ids = list(dict.fromkeys(object_id for object_id in (object_ids or []) if object_id))
+    normalized_object_ids = list(
+        dict.fromkeys(object_id for object_id in (object_ids or []) if object_id)
+    )
     scoped_object_id_set = set(normalized_object_ids)
 
     open_contradictions = list_contradictions(
@@ -4219,8 +4698,7 @@ def _compute_evolution_candidates(
             item
             for item in open_contradictions
             if scoped_object_id_set.intersection(
-                claim["object_id"]
-                for claim in (item["positive_claims"] + item["negative_claims"])
+                claim["object_id"] for claim in (item["positive_claims"] + item["negative_claims"])
             )
         ]
     contradiction_object_ids = sorted(
@@ -4252,15 +4730,14 @@ def _compute_evolution_candidates(
         if not positive_claims or not negative_claims:
             continue
         contradiction_item_object_ids = sorted(
-            {
-                claim["object_id"]
-                for claim in (positive_claims + negative_claims)
-            }
+            {claim["object_id"] for claim in (positive_claims + negative_claims)}
         )
 
         claim_dates: dict[str, tuple[tuple[int, float, str], str]] = {}
         for claim in positive_claims + negative_claims:
-            canonical_path = contradiction_object_paths.get(claim["object_id"], {}).get("canonical_path", "")
+            canonical_path = contradiction_object_paths.get(claim["object_id"], {}).get(
+                "canonical_path", ""
+            )
             date_text = _note_date_text(vault_dir, canonical_path) if canonical_path else ""
             claim_dates[claim["claim_id"]] = (_note_date_sort_key(date_text), date_text)
 
@@ -4422,7 +4899,9 @@ def _compute_evolution_candidates(
                 continue
             if _has_supersession_cue(vault_dir, note["path"]):
                 continue
-            inferred_link_type = "confirms" if _has_confirmation_cue(vault_dir, note["path"]) else "enriches"
+            inferred_link_type = (
+                "confirms" if _has_confirmation_cue(vault_dir, note["path"]) else "enriches"
+            )
             record = {
                 "evolution_id": _candidate_evolution_id(
                     link_type=inferred_link_type,
@@ -4440,7 +4919,12 @@ def _compute_evolution_candidates(
                 "later_ref": f"{note.get('note_type') or 'note'}://{note['path']}",
                 "earlier_date": earlier_date,
                 "later_date": later_date,
-                "reason_codes": ["later_traceability_neighbor", f"lexical_{inferred_link_type}" if inferred_link_type == "confirms" else "later_context"],
+                "reason_codes": [
+                    "later_traceability_neighbor",
+                    f"lexical_{inferred_link_type}"
+                    if inferred_link_type == "confirms"
+                    else "later_context",
+                ],
                 "confidence": 0.7 if inferred_link_type == "confirms" else 0.6,
                 "evidence": [
                     {
@@ -4450,7 +4934,9 @@ def _compute_evolution_candidates(
                         "date": later_date,
                     }
                 ],
-                "source_paths": [path for path in dict.fromkeys([earlier_path, note["path"]]) if path],
+                "source_paths": [
+                    path for path in dict.fromkeys([earlier_path, note["path"]]) if path
+                ],
             }
             candidates.append(record)
 
@@ -4480,7 +4966,9 @@ def _all_evolution_candidates(
     pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     resolved_vault = resolve_vault_dir(vault_dir)
-    normalized_object_ids = tuple(dict.fromkeys(object_id for object_id in (object_ids or []) if object_id))
+    normalized_object_ids = tuple(
+        dict.fromkeys(object_id for object_id in (object_ids or []) if object_id)
+    )
     cache_key = (
         str(resolved_vault.resolve()),
         _evolution_dependency_signature(resolved_vault),
@@ -4535,7 +5023,9 @@ def list_evolution_links(
 ) -> list[dict[str, Any]]:
     normalized_query = (query or "").strip().lower()
     latest_by_evolution_id: dict[str, dict[str, Any]] = {}
-    for action in list_evolution_review_actions(vault_dir, object_ids=object_ids, pack_name=pack_name):
+    for action in list_evolution_review_actions(
+        vault_dir, object_ids=object_ids, pack_name=pack_name
+    ):
         evolution_id = str(action.get("evolution_id") or "")
         if not evolution_id or evolution_id in latest_by_evolution_id:
             continue
@@ -4623,7 +5113,9 @@ def get_topic_neighborhood(
 
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     pack_order = "".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))
     with sqlite3.connect(db_path) as conn:
         center = conn.execute(
@@ -4800,7 +5292,9 @@ def list_timeline_events(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     pack_placeholders = ",".join("?" for _ in pack_candidates)
     candidate_limit = min(MAX_PAGE_SIZE, max(limit * max(1, len(pack_candidates)), limit))
     sql = f"""
@@ -4826,7 +5320,7 @@ def list_timeline_events(
     sql += f"""
         ORDER BY timeline_events.event_date DESC,
           CASE objects.pack
-            {''.join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
+            {"".join(f"WHEN ? THEN {index} " for index, _ in enumerate(pack_candidates))}
             ELSE {len(pack_candidates)}
           END,
           objects.object_id
@@ -4838,7 +5332,16 @@ def list_timeline_events(
 
     items: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
-    for event_date, event_type, heading, payload_json, row_pack, object_id, title, summary_text in rows:
+    for (
+        event_date,
+        event_type,
+        heading,
+        payload_json,
+        row_pack,
+        object_id,
+        title,
+        summary_text,
+    ) in rows:
         key = (str(event_date or ""), str(event_type or ""), str(object_id))
         if key in seen:
             continue
@@ -4871,7 +5374,9 @@ def list_stale_summaries(
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
-    pack_candidates = _materialized_truth_packs(vault_dir, pack_name=pack_name, table_name="objects")
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
     pack_placeholders = ",".join("?" for _ in pack_candidates)
     sql = """
         SELECT objects.object_id, objects.title, compiled_summaries.summary_text,
@@ -4889,7 +5394,9 @@ def list_stale_summaries(
     params: list[Any] = [*pack_candidates]
     where_clauses: list[str] = [f"objects.pack IN ({pack_placeholders})"]
     if object_ids:
-        normalized_object_ids = list(dict.fromkeys(object_id for object_id in object_ids if object_id))
+        normalized_object_ids = list(
+            dict.fromkeys(object_id for object_id in object_ids if object_id)
+        )
         if not normalized_object_ids:
             return []
         placeholders = ",".join("?" for _ in normalized_object_ids)
@@ -4958,7 +5465,9 @@ def list_stale_summaries(
                 "object_path": f"/object?id={object_id}",
                 "reason_codes": reason_codes,
                 "reason_texts": reason_texts,
-                "review_history": list_review_actions(vault_dir, object_ids=[str(object_id)], limit=5),
+                "review_history": list_review_actions(
+                    vault_dir, object_ids=[str(object_id)], limit=5
+                ),
                 "latest_event_date": latest_event_map.get(str(object_id), ""),
             }
         )

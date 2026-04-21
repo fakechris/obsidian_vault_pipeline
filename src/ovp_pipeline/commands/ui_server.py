@@ -16,7 +16,11 @@ import yaml
 from markdown_it import MarkdownIt
 
 from ..identity import canonicalize_note_id
-from ..knowledge_index import contradiction_object_ids, rebuild_compiled_summaries, resolve_contradictions
+from ..knowledge_index import (
+    contradiction_object_ids,
+    rebuild_compiled_summaries,
+    resolve_contradictions,
+)
 from ..pack_resolution import iter_compatible_packs
 from ..packs.loader import PRIMARY_PACK_NAME
 from ..runtime import VaultLayout, resolve_vault_dir
@@ -76,7 +80,9 @@ def _append_query_param(path: str, key: str, value: str) -> str:
 
 def _shell_supports_research_nav(requested_pack: str = "") -> bool:
     try:
-        return any(pack.name == PRIMARY_PACK_NAME for pack in iter_compatible_packs(requested_pack or None))
+        return any(
+            pack.name == PRIMARY_PACK_NAME for pack in iter_compatible_packs(requested_pack or None)
+        )
     except ValueError:
         return False
 
@@ -107,7 +113,9 @@ def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
     return items
 
 
-def _layout(title: str, body: str, *, requested_pack: str = "", auto_refresh_seconds: int | None = None) -> str:
+def _layout(
+    title: str, body: str, *, requested_pack: str = "", auto_refresh_seconds: int | None = None
+) -> str:
     nav_items = "".join(
         f'<a href="{escape(_shell_href(path, requested_pack))}">{escape(label)}</a>'
         for label, path in _shell_nav_items(requested_pack)
@@ -232,7 +240,11 @@ def _render_surface_contract_card(payload: dict) -> str:
             f"This shared shell surface has no provider for {escape(surface_kind)} "
             f"in the current pack scope."
         )
-    title = f"{surface_kind.replace('_', ' ').title()} Surface Contract" if surface_kind else "Surface Contract"
+    title = (
+        f"{surface_kind.replace('_', ' ').title()} Surface Contract"
+        if surface_kind
+        else "Surface Contract"
+    )
     error_text = str(payload.get("surface_error") or "").strip()
     extra = f"<p class='muted'>{escape(error_text)}</p>" if error_text else ""
     return f"<section class='card'><h2>{escape(title)}</h2><p class='muted'>{detail}</p>{extra}</section>"
@@ -299,7 +311,9 @@ def _render_governance_contract_card(payload: dict) -> str:
     description = str(contract.get("description") or "")
     review_queue_names = [str(item) for item in contract.get("review_queue_names", []) if str(item)]
     signal_rule_names = [str(item) for item in contract.get("signal_rule_names", []) if str(item)]
-    resolver_rule_names = [str(item) for item in contract.get("resolver_rule_names", []) if str(item)]
+    resolver_rule_names = [
+        str(item) for item in contract.get("resolver_rule_names", []) if str(item)
+    ]
     if status == "declared":
         detail = f"This governance contract is declared by {escape(provider_name)} in {escape(provider_pack)}."
     elif status == "inherited":
@@ -321,7 +335,11 @@ def _render_governance_contract_card(payload: dict) -> str:
             ),
             (
                 f"<li>Resolver rules: {int(contract.get('resolver_rule_count') or 0)}"
-                + (f" · {escape(', '.join(resolver_rule_names[:4]))}" if resolver_rule_names else "")
+                + (
+                    f" · {escape(', '.join(resolver_rule_names[:4]))}"
+                    if resolver_rule_names
+                    else ""
+                )
                 + "</li>"
             ),
         )
@@ -334,9 +352,59 @@ def _render_governance_contract_card(payload: dict) -> str:
     )
 
 
+def _render_action_worker_card(runtime: dict[str, object] | None) -> str:
+    if not isinstance(runtime, dict):
+        return ""
+    worker = runtime.get("action_worker") if isinstance(runtime.get("action_worker"), dict) else {}
+    if not worker:
+        return ""
+    current_action = (
+        worker.get("current_action") if isinstance(worker.get("current_action"), dict) else {}
+    )
+    facts = [
+        f"<li>State: {escape(str(worker.get('state') or 'stopped'))}</li>",
+    ]
+    mode = str(worker.get("mode") or "").strip()
+    if mode:
+        facts.append(f"<li>Mode: {escape(mode)}</li>")
+    if worker.get("safe_only"):
+        facts.append("<li>Execution policy: safe-only</li>")
+    pid = worker.get("pid")
+    if pid:
+        facts.append(f"<li>PID {escape(str(pid))}</li>")
+    elapsed = str(worker.get("elapsed_summary") or "").strip()
+    if elapsed:
+        facts.append(f"<li>Running for: {escape(elapsed)}</li>")
+    heartbeat_age = str(worker.get("heartbeat_age_summary") or "").strip()
+    if heartbeat_age:
+        facts.append(f"<li>Heartbeat age: {escape(heartbeat_age)}</li>")
+    if current_action:
+        facts.append(
+            f"<li>Current action: {escape(str(current_action.get('action_id') or ''))}</li>"
+        )
+        facts.append(
+            f"<li>Action kind: {escape(str(current_action.get('action_kind') or ''))}</li>"
+        )
+        signal_id = str(current_action.get("source_signal_id") or "").strip()
+        if signal_id:
+            facts.append(f"<li>Source signal: {escape(signal_id)}</li>")
+        target_ref = str(current_action.get("target_ref") or "").strip()
+        if target_ref:
+            facts.append(f"<li>Target: {escape(target_ref)}</li>")
+    if not bool(worker.get("active")):
+        facts.append("<li>Active: no</li>")
+    return (
+        "<section class='card'><h2>Action Worker</h2>"
+        "<p class='muted'>Focused background action execution state.</p>"
+        f"<ul class='list-tight'>{''.join(facts)}</ul>"
+        "</section>"
+    )
+
+
 def _render_runtime_card(runtime: dict[str, object] | None) -> str:
     if not isinstance(runtime, dict):
         return ""
+    action_worker_card = _render_action_worker_card(runtime)
     active_run = runtime.get("active_run")
     try:
         stale_count = int(runtime.get("stale_count") or 0)
@@ -349,29 +417,59 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
             if stale_count
             else ""
         )
-        return f"<section class='card'><h2>Current Workflow</h2><p class='muted'>{detail}</p>{stale_html}</section>"
+        return (
+            f"<section class='card'><h2>Current Workflow</h2><p class='muted'>{detail}</p>{stale_html}</section>"
+            + action_worker_card
+        )
 
     ledger = active_run.get("run_ledger") if isinstance(active_run.get("run_ledger"), dict) else {}
     current = ledger.get("current_step") if isinstance(ledger.get("current_step"), dict) else {}
-    runtime_progress = active_run.get("runtime_progress") if isinstance(active_run.get("runtime_progress"), dict) else {}
-    stage_progress = runtime_progress.get("stage") if isinstance(runtime_progress.get("stage"), dict) else {}
-    work_progress = runtime_progress.get("work") if isinstance(runtime_progress.get("work"), dict) else {}
-    performance = runtime_progress.get("performance") if isinstance(runtime_progress.get("performance"), dict) else {}
+    runtime_progress = (
+        active_run.get("runtime_progress")
+        if isinstance(active_run.get("runtime_progress"), dict)
+        else {}
+    )
+    stage_progress = (
+        runtime_progress.get("stage") if isinstance(runtime_progress.get("stage"), dict) else {}
+    )
+    work_progress = (
+        runtime_progress.get("work") if isinstance(runtime_progress.get("work"), dict) else {}
+    )
+    performance = (
+        runtime_progress.get("performance")
+        if isinstance(runtime_progress.get("performance"), dict)
+        else {}
+    )
     run_state = str(ledger.get("run_state") or active_run.get("status") or "running")
-    step_name = str(current.get("step_name") or ledger.get("current_step_name") or active_run.get("checkpoint") or "")
+    step_name = str(
+        current.get("step_name")
+        or ledger.get("current_step_name")
+        or active_run.get("checkpoint")
+        or ""
+    )
     steps = active_run.get("steps") if isinstance(active_run.get("steps"), dict) else {}
     current_step_record = steps.get(step_name) if isinstance(steps.get(step_name), dict) else {}
     progress_summary = str(
-        work_progress.get("summary") or current.get("progress_summary") or "Progress is currently indeterminate."
+        work_progress.get("summary")
+        or current.get("progress_summary")
+        or "Progress is currently indeterminate."
     )
-    current_item = str(work_progress.get("current_item") or current.get("current_item") or "").strip()
+    current_item = str(
+        work_progress.get("current_item") or current.get("current_item") or ""
+    ).strip()
     heartbeat_at = str(ledger.get("heartbeat_at") or active_run.get("last_updated") or "")
     facts = [
         f"<li>Run: {escape(str(active_run.get('id') or ''))}</li>",
         f"<li>State: {escape(run_state)}</li>",
     ]
-    runtime_processes = runtime.get("runtime_processes") if isinstance(runtime.get("runtime_processes"), dict) else {}
-    process_items = runtime_processes.get("items") if isinstance(runtime_processes.get("items"), list) else []
+    runtime_processes = (
+        runtime.get("runtime_processes")
+        if isinstance(runtime.get("runtime_processes"), dict)
+        else {}
+    )
+    process_items = (
+        runtime_processes.get("items") if isinstance(runtime_processes.get("items"), list) else []
+    )
     if process_items:
         for process in process_items[:2]:
             if not isinstance(process, dict):
@@ -405,7 +503,9 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
     ).strip()
     if blocked_reason:
         facts.append(f"<li>Blocked reason: {escape(blocked_reason)}</li>")
-    stage_fingerprint = str(current_step_record.get("stage_fingerprint") or current.get("stage_fingerprint") or "").strip()
+    stage_fingerprint = str(
+        current_step_record.get("stage_fingerprint") or current.get("stage_fingerprint") or ""
+    ).strip()
     if stage_fingerprint:
         facts.append(f"<li>Fingerprint: {escape(stage_fingerprint)}</li>")
     work_done = work_progress.get("done")
@@ -435,13 +535,15 @@ def _render_runtime_card(runtime: dict[str, object] | None) -> str:
         facts.append(f"<li>Heartbeat: {escape(heartbeat_at)}</li>")
     if stale_count:
         facts.append(f"<li>Stale runs: {stale_count}</li>")
-    current_item_html = f"<p class='muted'>Current item: {escape(current_item)}</p>" if current_item else ""
+    current_item_html = (
+        f"<p class='muted'>Current item: {escape(current_item)}</p>" if current_item else ""
+    )
     return (
         "<section class='card'><h2>Current Workflow</h2>"
         f"<p class='muted'>{escape(progress_summary)}</p>"
         f"{current_item_html}"
         f"<ul class='list-tight'>{''.join(facts)}</ul>"
-        "</section>"
+        "</section>" + action_worker_card
     )
 
 
@@ -466,7 +568,9 @@ def _render_run_history_card(runtime: dict[str, object] | None) -> str:
         work = str(item.get("content_summary") or "No counted work recorded.")
         started_at = str(item.get("started_at") or "")
         finished_at = str(item.get("finished_at") or "running")
-        step_summaries = item.get("step_summaries") if isinstance(item.get("step_summaries"), list) else []
+        step_summaries = (
+            item.get("step_summaries") if isinstance(item.get("step_summaries"), list) else []
+        )
         step_items: list[str] = []
         for step in step_summaries[:8]:
             if not isinstance(step, dict):
@@ -497,7 +601,11 @@ def _render_run_history_card(runtime: dict[str, object] | None) -> str:
             "</li>"
         )
     total_count = history.get("total_count")
-    total_suffix = f"<p class='muted'>Showing {len(rendered_items)} of {escape(str(total_count))} persisted run(s).</p>" if total_count else ""
+    total_suffix = (
+        f"<p class='muted'>Showing {len(rendered_items)} of {escape(str(total_count))} persisted run(s).</p>"
+        if total_count
+        else ""
+    )
     return (
         "<section class='card'><h2>Recent Runs</h2>"
         f"{total_suffix}"
@@ -531,7 +639,9 @@ def _render_operator_rail(payload: dict) -> str:
     )
 
 
-def _split_lead_compiled_sections(sections: list[dict[str, object]] | None) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+def _split_lead_compiled_sections(
+    sections: list[dict[str, object]] | None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     normalized = [section for section in (sections or []) if isinstance(section, dict)]
     if not normalized:
         return [], []
@@ -547,22 +657,25 @@ def _render_compiled_sections(sections: list[dict[str, object]]) -> str:
         anchor = str(section.get("anchor") or str(section.get("id") or "").replace("_", "-"))
         summary = str(section.get("summary") or "")
         items = section.get("items") or []
-        item_html = "".join(
-            "<li>"
-            + (
-                f'<a href="{escape(str(item.get("path") or ""))}">{escape(str(item.get("label") or ""))}</a>'
-                if str(item.get("path") or "")
-                else escape(str(item.get("label") or ""))
+        item_html = (
+            "".join(
+                "<li>"
+                + (
+                    f'<a href="{escape(str(item.get("path") or ""))}">{escape(str(item.get("label") or ""))}</a>'
+                    if str(item.get("path") or "")
+                    else escape(str(item.get("label") or ""))
+                )
+                + (
+                    f"<div class='muted'>{escape(str(item.get('detail') or ''))}</div>"
+                    if str(item.get("detail") or "")
+                    else ""
+                )
+                + "</li>"
+                for item in items
+                if isinstance(item, dict)
             )
-            + (
-                f"<div class='muted'>{escape(str(item.get('detail') or ''))}</div>"
-                if str(item.get("detail") or "")
-                else ""
-            )
-            + "</li>"
-            for item in items
-            if isinstance(item, dict)
-        ) or "<li class='muted'>No items surfaced.</li>"
+            or "<li class='muted'>No items surfaced.</li>"
+        )
         summary_html = f"<p class='muted'>{escape(summary)}</p>" if summary else ""
         rendered_sections.append(
             f"<section id='{escape(anchor)}' class='card'>"
@@ -632,10 +745,14 @@ def _read_vault_asset(vault_dir: Path, relative_path: str) -> tuple[bytes, str]:
         raise ValueError("invalid asset path") from exc
     if not candidate.is_file():
         raise ValueError(f"asset not found: {relative_path}")
-    return candidate.read_bytes(), mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+    return candidate.read_bytes(), mimetypes.guess_type(candidate.name)[
+        0
+    ] or "application/octet-stream"
 
 
-def _lookup_wikilink_target(vault_dir: Path, target: str, *, requested_pack: str = "") -> tuple[str, str] | None:
+def _lookup_wikilink_target(
+    vault_dir: Path, target: str, *, requested_pack: str = ""
+) -> tuple[str, str] | None:
     db_path = VaultLayout.from_vault(vault_dir).knowledge_db
     if not db_path.exists():
         return None
@@ -696,7 +813,9 @@ def _lookup_wikilink_target(vault_dir: Path, target: str, *, requested_pack: str
             relative_path = str(candidate.resolve().relative_to(vault_dir.resolve()))
             if "10-Knowledge/Evergreen/" in relative_path:
                 return (
-                    _shell_href(f"/object?id={quote(canonicalize_note_id(stem), safe='')}", requested_pack),
+                    _shell_href(
+                        f"/object?id={quote(canonicalize_note_id(stem), safe='')}", requested_pack
+                    ),
                     canonicalize_note_id(stem),
                 )
             return (_note_href(relative_path, requested_pack), relative_path)
@@ -756,9 +875,7 @@ def _parse_frontmatter(markdown: str) -> tuple[dict[str, object], str]:
 def _render_frontmatter(frontmatter: dict[str, object]) -> str:
     def render_value(value: object) -> str:
         if isinstance(value, str) and value.startswith(("http://", "https://")):
-            return (
-                f'<a href="{escape(value)}" target="_blank" rel="noopener noreferrer">{escape(value)}</a>'
-            )
+            return f'<a href="{escape(value)}" target="_blank" rel="noopener noreferrer">{escape(value)}</a>'
         if isinstance(value, (list, dict)):
             return escape(json.dumps(value, ensure_ascii=False))
         return escape(str(value))
@@ -766,29 +883,27 @@ def _render_frontmatter(frontmatter: dict[str, object]) -> str:
     if not frontmatter:
         return ""
     rows = "".join(
-        "<tr>"
-        f"<th>{escape(str(key))}</th>"
-        f"<td>{render_value(value)}</td>"
-        "</tr>"
+        f"<tr><th>{escape(str(key))}</th><td>{render_value(value)}</td></tr>"
         for key, value in frontmatter.items()
     )
     return (
-        "<section class='card'>"
-        "<h2>Frontmatter</h2>"
-        "<table><tbody>"
-        f"{rows}"
-        "</tbody></table>"
-        "</section>"
+        f"<section class='card'><h2>Frontmatter</h2><table><tbody>{rows}</tbody></table></section>"
     )
 
 
-def _replace_wikilinks_with_markdown_links(vault_dir: Path, markdown: str, *, requested_pack: str = "") -> str:
+def _replace_wikilinks_with_markdown_links(
+    vault_dir: Path, markdown: str, *, requested_pack: str = ""
+) -> str:
     def replace_match(match: re.Match[str]) -> str:
         raw_inner = match.group(1)
         target_part, _, label_part = raw_inner.partition("|")
         label = label_part.strip() or target_part.split("#", 1)[0].strip()
         resolved = _lookup_wikilink_target(vault_dir, target_part, requested_pack=requested_pack)
-        href = resolved[0] if resolved else _search_href(target_part.split("#", 1)[0].strip() or label, requested_pack)
+        href = (
+            resolved[0]
+            if resolved
+            else _search_href(target_part.split("#", 1)[0].strip() or label, requested_pack)
+        )
         emoji = "🔍" if _is_search_href(href) else "🎯"
         safe_label = label.replace("[", "\\[").replace("]", "\\]")
         return f"[{emoji} {safe_label}]({href})"
@@ -862,7 +977,11 @@ def _convert_box_table_fences(markdown: str, *, github_repo_base: str | None) ->
                     break
                 index += 1
             body = fence[1:-1]
-            if body and any("│" in row for row in body) and any("┌" in row or "├" in row or "└" in row for row in body):
+            if (
+                body
+                and any("│" in row for row in body)
+                and any("┌" in row or "├" in row or "└" in row for row in body)
+            ):
                 rows: list[tuple[str, str]] = []
                 for row in body:
                     if "│" not in row:
@@ -910,7 +1029,9 @@ def _linkify_keywords(markdown: str, *, requested_pack: str = "") -> str:
     return "\n".join(output)
 
 
-def _linkify_related_knowledge_section(vault_dir: Path, markdown: str, *, requested_pack: str = "") -> str:
+def _linkify_related_knowledge_section(
+    vault_dir: Path, markdown: str, *, requested_pack: str = ""
+) -> str:
     output_lines: list[str] = []
     in_related = False
 
@@ -926,20 +1047,26 @@ def _linkify_related_knowledge_section(vault_dir: Path, markdown: str, *, reques
             resolved = _lookup_wikilink_target(vault_dir, concept, requested_pack=requested_pack)
             href = resolved[0] if resolved else _search_href(concept, requested_pack)
             emoji = "🔍" if _is_search_href(href) else "🎯"
-            output_lines.append(f'- [{emoji} {concept}]({href}) — {remainder}')
+            output_lines.append(f"- [{emoji} {concept}]({href}) — {remainder}")
             continue
         output_lines.append(line)
 
     return "\n".join(output_lines)
 
 
-def _render_markdown_note(vault_dir: Path, markdown: str, *, requested_pack: str = "") -> tuple[str, str]:
+def _render_markdown_note(
+    vault_dir: Path, markdown: str, *, requested_pack: str = ""
+) -> tuple[str, str]:
     frontmatter, body = _parse_frontmatter(markdown)
     github_repo_base = _infer_github_repo_base(frontmatter, body)
     rendered_body = _convert_box_table_fences(body, github_repo_base=github_repo_base)
     rendered_body = _rewrite_local_image_links(vault_dir, rendered_body)
-    rendered_body = _replace_wikilinks_with_markdown_links(vault_dir, rendered_body, requested_pack=requested_pack)
-    rendered_body = _linkify_related_knowledge_section(vault_dir, rendered_body, requested_pack=requested_pack)
+    rendered_body = _replace_wikilinks_with_markdown_links(
+        vault_dir, rendered_body, requested_pack=requested_pack
+    )
+    rendered_body = _linkify_related_knowledge_section(
+        vault_dir, rendered_body, requested_pack=requested_pack
+    )
     rendered_body = _linkify_keywords(rendered_body, requested_pack=requested_pack).strip()
     if not rendered_body:
         html_body = "<p class='muted'>Empty note.</p>"
@@ -948,9 +1075,13 @@ def _render_markdown_note(vault_dir: Path, markdown: str, *, requested_pack: str
     return _render_frontmatter(frontmatter), html_body
 
 
-def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payload: dict | None = None) -> str:
+def _render_note_page(
+    vault_dir: Path, relative_path: str, markdown: str, payload: dict | None = None
+) -> str:
     requested_pack = payload.get("requested_pack", "") if payload else ""
-    frontmatter_html, note_html = _render_markdown_note(vault_dir, markdown, requested_pack=requested_pack)
+    frontmatter_html, note_html = _render_markdown_note(
+        vault_dir, markdown, requested_pack=requested_pack
+    )
     source_note = None
     derived_notes: list[dict[str, str]] = []
     production_chain = None
@@ -990,7 +1121,12 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
         )
     production_chain_html = ""
     if production_chain:
-        missing_stages = ", ".join(str(item).replace("_", " ") for item in production_chain.get("missing_stages", [])) or "None"
+        missing_stages = (
+            ", ".join(
+                str(item).replace("_", " ") for item in production_chain.get("missing_stages", [])
+            )
+            or "None"
+        )
         production_chain_html = (
             "<section class='card'>"
             "<h2>Production Chain</h2>"
@@ -1034,16 +1170,22 @@ def _render_note_page(vault_dir: Path, relative_path: str, markdown: str, payloa
 def _render_search_page(payload: dict) -> str:
     query = payload["query"]
     requested_pack = payload.get("requested_pack", "")
-    object_items = "".join(
-        f'<li><a href="{escape(item.get("object_path") or _object_href(item["object_id"], requested_pack=requested_pack))}">{escape(item["title"])}</a> '
-        f'<span class="muted">({escape(item["object_id"])})</span></li>'
-        for item in payload["objects"]
-    ) or "<li class='muted'>No object hits.</li>"
-    note_items = "".join(
-        f'<li><a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
-        f'<span class="pill">{escape(item["note_type"])}</span></li>'
-        for item in payload["notes"]
-    ) or "<li class='muted'>No note hits.</li>"
+    object_items = (
+        "".join(
+            f'<li><a href="{escape(item.get("object_path") or _object_href(item["object_id"], requested_pack=requested_pack))}">{escape(item["title"])}</a> '
+            f'<span class="muted">({escape(item["object_id"])})</span></li>'
+            for item in payload["objects"]
+        )
+        or "<li class='muted'>No object hits.</li>"
+    )
+    note_items = (
+        "".join(
+            f'<li><a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
+            f'<span class="pill">{escape(item["note_type"])}</span></li>'
+            for item in payload["notes"]
+        )
+        or "<li class='muted'>No note hits.</li>"
+    )
     return _layout(
         f"Search: {query}",
         "".join(
@@ -1088,10 +1230,14 @@ def _render_object_links(items: list[dict[str, str]], *, requested_pack: str = "
 
 
 def _render_evolution_link_type_select(selected: str) -> str:
-    return "<select name='link_type'>" + "".join(
-        f"<option value='{escape(option)}' {'selected' if option == selected else ''}>{escape(option)}</option>"
-        for option in _EVOLUTION_LINK_TYPES
-    ) + "</select>"
+    return (
+        "<select name='link_type'>"
+        + "".join(
+            f"<option value='{escape(option)}' {'selected' if option == selected else ''}>{escape(option)}</option>"
+            for option in _EVOLUTION_LINK_TYPES
+        )
+        + "</select>"
+    )
 
 
 def _render_evolution_review_form(
@@ -1161,10 +1307,13 @@ def _render_evolution_candidates(
         return "<p class='muted'>No evolution candidates surfaced for this scope.</p>"
     rows = []
     for item in items[: 3 if compact else len(items)]:
-        source_paths = ", ".join(
-            f'<a href="{escape(_note_href(path, requested_pack))}">{escape(path)}</a>'
-            for path in item["source_paths"]
-        ) or "<span class='muted'>None</span>"
+        source_paths = (
+            ", ".join(
+                f'<a href="{escape(_note_href(path, requested_pack))}">{escape(path)}</a>'
+                for path in item["source_paths"]
+            )
+            or "<span class='muted'>None</span>"
+        )
         evidence = ", ".join(
             escape(str(entry.get("source_slug") or entry.get("path") or entry.get("title") or ""))
             for entry in item["evidence"][:2]
@@ -1192,11 +1341,19 @@ def _render_evolution_candidates(
     return "<ul class='list-tight'>" + "".join(rows) + "</ul>"
 
 
-def _render_review_context_card(context: dict[str, object], *, title: str = "Review Context") -> str:
+def _render_review_context_card(
+    context: dict[str, object], *, title: str = "Review Context"
+) -> str:
     latest_event_date = str(context.get("latest_event_date") or "")
-    latest_event_html = escape(latest_event_date) if latest_event_date else "<span class='muted'>None</span>"
-    stale_summary_ids = ", ".join(str(item) for item in context.get("stale_summary_object_ids", [])) or "None"
-    contradiction_object_ids = ", ".join(str(item) for item in context.get("contradiction_object_ids", [])) or "None"
+    latest_event_html = (
+        escape(latest_event_date) if latest_event_date else "<span class='muted'>None</span>"
+    )
+    stale_summary_ids = (
+        ", ".join(str(item) for item in context.get("stale_summary_object_ids", [])) or "None"
+    )
+    contradiction_object_ids = (
+        ", ".join(str(item) for item in context.get("contradiction_object_ids", [])) or "None"
+    )
     return (
         "<section class='card'>"
         f"<h2>{escape(title)}</h2>"
@@ -1264,10 +1421,13 @@ def _render_production_summary_card(
     title: str = "Production Contribution",
     requested_pack: str = "",
 ) -> str:
-    signal_items = "".join(
-        f"<li>{escape(str(signal['label']))}: {int(signal['count'])}</li>"
-        for signal in summary["signals"]
-    ) or "<li class='muted'>No production-chain gaps surfaced for this scope.</li>"
+    signal_items = (
+        "".join(
+            f"<li>{escape(str(signal['label']))}: {int(signal['count'])}</li>"
+            for signal in summary["signals"]
+        )
+        or "<li class='muted'>No production-chain gaps surfaced for this scope.</li>"
+    )
     count_items = "".join(
         f"<li>{escape(label)}: {int(summary['counts'][key])}</li>"
         for key, label in (
@@ -1328,57 +1488,80 @@ def _render_dashboard(payload: dict) -> str:
     orientation = payload.get("orientation", {})
     signals_surface_contract = _render_surface_contract_card(payload["signals"])
     production_surface_contract = _render_surface_contract_card(payload["production"])
-    orientation_assembly_contract = _render_assembly_contract_card(orientation) if isinstance(orientation, dict) else ""
-    orientation_governance_contract = _render_governance_contract_card(orientation) if isinstance(orientation, dict) else ""
+    orientation_assembly_contract = (
+        _render_assembly_contract_card(orientation) if isinstance(orientation, dict) else ""
+    )
+    orientation_governance_contract = (
+        _render_governance_contract_card(orientation) if isinstance(orientation, dict) else ""
+    )
     entry_sections_html = _render_compiled_sections(payload.get("entry_sections", []))
     workflow_groups_html = _render_workflow_groups(payload.get("workflow_groups", []))
-    object_items = "".join(
-        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a></li>'
-        for item in payload["objects"]["items"]
-    ) or "<li>None</li>"
-    contradiction_items = "".join(
-        f'<li><span class="pill">{escape(item["status"])}</span>{escape(item["subject_key"])}</li>'
-        for item in payload["contradictions"]["items"]
-    ) or "<li>None</li>"
-    event_items = "".join(
-        f"<li>{escape(item['event_date'])} - "
-        f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a></li>'
-        for item in payload["events"]["items"]
-    ) or "<li>None</li>"
-    stale_summary_items = "".join(
-        f'<li><a href="{escape(item["object_path"])}">{escape(item["title"])}</a> '
-        f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
-        for item in payload["stale_summaries"]["items"]
-    ) or "<li>None</li>"
+    object_items = (
+        "".join(
+            f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a></li>'
+            for item in payload["objects"]["items"]
+        )
+        or "<li>None</li>"
+    )
+    contradiction_items = (
+        "".join(
+            f'<li><span class="pill">{escape(item["status"])}</span>{escape(item["subject_key"])}</li>'
+            for item in payload["contradictions"]["items"]
+        )
+        or "<li>None</li>"
+    )
+    event_items = (
+        "".join(
+            f"<li>{escape(item['event_date'])} - "
+            f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a></li>'
+            for item in payload["events"]["items"]
+        )
+        or "<li>None</li>"
+    )
+    stale_summary_items = (
+        "".join(
+            f'<li><a href="{escape(item["object_path"])}">{escape(item["title"])}</a> '
+            f"<span class='muted'>({escape(item['summary_text'])})</span></li>"
+            for item in payload["stale_summaries"]["items"]
+        )
+        or "<li>None</li>"
+    )
     evolution_items = _render_evolution_candidates(
         payload["evolution"]["items"],
         compact=False,
         requested_pack=requested_pack,
         next_path=_shell_href("/evolution", requested_pack),
     )
-    production_gap_items = "".join(
-        f'<li><span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
-        f'<a href="{escape(_note_href(item["note_path"], requested_pack))}">{escape(item["title"])}</a>'
-        f"<div class='muted'>Missing: {escape(item['detail'])}</div></li>"
-        for item in payload["production"]["weak_points"]
-    ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
-    signal_items = "".join(
-        f'<li><span class="pill">{escape(item["signal_type"])}</span> '
-        f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
-        f"<div class='muted'>{escape(item['detail'])}</div></li>"
-        for item in payload["signals"]["items"]
-    ) or "<li class='muted'>No active signals surfaced.</li>"
-    priority_items = "".join(
-        f'<li><span class="pill">{escape(item["kind"].replace("_", " "))}</span> '
-        f'<a href="{escape(item["path"])}">{escape(item["label"])}</a>'
-        f"<div class='muted'>{escape(item['detail'])}</div></li>"
-        for item in payload["priorities"]
-    ) or "<li class='muted'>No urgent maintenance items surfaced.</li>"
+    production_gap_items = (
+        "".join(
+            f'<li><span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
+            f'<a href="{escape(_note_href(item["note_path"], requested_pack))}">{escape(item["title"])}</a>'
+            f"<div class='muted'>Missing: {escape(item['detail'])}</div></li>"
+            for item in payload["production"]["weak_points"]
+        )
+        or "<li class='muted'>No production-chain weak points surfaced.</li>"
+    )
+    signal_items = (
+        "".join(
+            f'<li><span class="pill">{escape(item["signal_type"])}</span> '
+            f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
+            f"<div class='muted'>{escape(item['detail'])}</div></li>"
+            for item in payload["signals"]["items"]
+        )
+        or "<li class='muted'>No active signals surfaced.</li>"
+    )
+    priority_items = (
+        "".join(
+            f'<li><span class="pill">{escape(item["kind"].replace("_", " "))}</span> '
+            f'<a href="{escape(item["path"])}">{escape(item["label"])}</a>'
+            f"<div class='muted'>{escape(item['detail'])}</div></li>"
+            for item in payload["priorities"]
+        )
+        or "<li class='muted'>No urgent maintenance items surfaced.</li>"
+    )
     stats_cards = [
-        "<div class='card'><h2>Objects Indexed</h2>"
-        f"<p>{payload['objects']['count']}</p></div>",
-        "<div class='card'><h2>Signal Count</h2>"
-        f"<p>{payload['signals']['count']}</p></div>",
+        f"<div class='card'><h2>Objects Indexed</h2><p>{payload['objects']['count']}</p></div>",
+        f"<div class='card'><h2>Signal Count</h2><p>{payload['signals']['count']}</p></div>",
         "<div class='card'><h2>Weak Point Count</h2>"
         f"<p>{payload['production']['weak_point_count']}</p></div>",
     ]
@@ -1386,8 +1569,7 @@ def _render_dashboard(payload: dict) -> str:
         stats_cards[1:1] = [
             "<div class='card'><h2>Contradictions Open</h2>"
             f"<p>{payload['contradictions']['open_count']}</p></div>",
-            "<div class='card'><h2>Event Count</h2>"
-            f"<p>{payload['events']['count']}</p></div>",
+            f"<div class='card'><h2>Event Count</h2><p>{payload['events']['count']}</p></div>",
             "<div class='card'><h2>Stale Summary Count</h2>"
             f"<p>{payload['stale_summaries']['count']}</p></div>",
             "<div class='card'><h2>Evolution Candidates</h2>"
@@ -1426,7 +1608,9 @@ def _render_dashboard(payload: dict) -> str:
         right_sections.append(
             f"<section class='card'><h2><a href='{escape(payload['contradictions']['browser_path'])}'>Contradiction Queue</a></h2><ul class='list-tight'>{contradiction_items}</ul></section>"
         )
-    right_sections.append(_render_review_history(payload['recent_review_actions'], title='Recent Review Actions'))
+    right_sections.append(
+        _render_review_history(payload["recent_review_actions"], title="Recent Review Actions")
+    )
     dashboard_body = "".join(
         [
             "<section class='hero'>",
@@ -1497,8 +1681,12 @@ def _render_objects_index(payload: dict) -> str:
 
 def _render_object_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
-    research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
-    next_path = _shell_href(f"/object?id={quote(str(payload['object']['object_id']), safe='')}", requested_pack)
+    research_shell_enabled = bool(
+        payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack))
+    )
+    next_path = _shell_href(
+        f"/object?id={quote(str(payload['object']['object_id']), safe='')}", requested_pack
+    )
     assembly_contract_card = _render_assembly_contract_card(payload)
     operator_rail_card = _render_operator_rail(payload)
     evergreen_path = payload["provenance"]["evergreen_path"]
@@ -1513,41 +1701,70 @@ def _render_object_page(payload: dict) -> str:
         if canonical_path
         else "<span class='muted'>None</span>"
     )
-    claims = "".join(f"<li>{escape(item['claim_text'])}</li>" for item in payload["claims"]) or "<li>None</li>"
-    relations = "".join(
-        f'<li><a href="{escape(_object_href(item["target_object_id"], item.get("target_path", ""), requested_pack=requested_pack))}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
-        f' <span class="muted">({escape(item["relation_type"])})</span></li>'
-        for item in payload["relations"]
-    ) or "<li>None</li>"
-    contradictions = "".join(
-        f'<li><span class="pill">{escape(item["status"])}</span>{escape(item["subject_key"])}</li>'
-        for item in payload["contradictions"]
-    ) or "<li>None</li>"
-    stale_summary_signals = "".join(
-        f"<li>{escape(reason)}</li>"
-        for item in payload["stale_summary_details"]
-        for reason in item["reason_texts"]
-    ) or "<li class='muted'>No stale summary signals for this object.</li>"
-    source_notes = "".join(
-        f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
-        f"<span class='muted'>({escape(item['note_type'])})</span></li>"
-        for item in payload["provenance"]["source_notes"]
-    ) or "<li>None</li>"
-    mocs = "".join(
-        f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a></li>'
-        for item in payload["provenance"]["mocs"]
-    ) or "<li>None</li>"
+    claims = (
+        "".join(f"<li>{escape(item['claim_text'])}</li>" for item in payload["claims"])
+        or "<li>None</li>"
+    )
+    relations = (
+        "".join(
+            f'<li><a href="{escape(_object_href(item["target_object_id"], item.get("target_path", ""), requested_pack=requested_pack))}">{escape(item.get("target_title", item["target_object_id"]))}</a>'
+            f' <span class="muted">({escape(item["relation_type"])})</span></li>'
+            for item in payload["relations"]
+        )
+        or "<li>None</li>"
+    )
+    contradictions = (
+        "".join(
+            f'<li><span class="pill">{escape(item["status"])}</span>{escape(item["subject_key"])}</li>'
+            for item in payload["contradictions"]
+        )
+        or "<li>None</li>"
+    )
+    stale_summary_signals = (
+        "".join(
+            f"<li>{escape(reason)}</li>"
+            for item in payload["stale_summary_details"]
+            for reason in item["reason_texts"]
+        )
+        or "<li class='muted'>No stale summary signals for this object.</li>"
+    )
+    source_notes = (
+        "".join(
+            f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
+            f"<span class='muted'>({escape(item['note_type'])})</span></li>"
+            for item in payload["provenance"]["source_notes"]
+        )
+        or "<li>None</li>"
+    )
+    mocs = (
+        "".join(
+            f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a></li>'
+            for item in payload["provenance"]["mocs"]
+        )
+        or "<li>None</li>"
+    )
     summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
     evolution = payload.get(
         "evolution",
-        {"candidate_items": [], "accepted_links": [], "accepted_count": 0, "candidate_count": 0, "link_types": []},
+        {
+            "candidate_items": [],
+            "accepted_links": [],
+            "accepted_count": 0,
+            "candidate_count": 0,
+            "link_types": [],
+        },
     )
-    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
+    lead_sections, remaining_sections = _split_lead_compiled_sections(
+        payload.get("compiled_sections", [])
+    )
     section_nav_items = [
-        item for item in payload["section_nav"] if research_shell_enabled or item["href"] != "#contradictions"
+        item
+        for item in payload["section_nav"]
+        if research_shell_enabled or item["href"] != "#contradictions"
     ]
     section_nav = "".join(
-        f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>' for item in section_nav_items
+        f'<a href="{escape(item["href"])}">{escape(item["label"])}</a>'
+        for item in section_nav_items
     )
     contradiction_form = (
         "<form method='post' action='/contradictions/resolve' class='link-row'>"
@@ -1596,13 +1813,15 @@ def _render_object_page(payload: dict) -> str:
         f"<div class='card'><h2>Relations</h2><p>{payload['relation_count']}</p></div>",
     ]
     if research_shell_enabled:
-        stats_cards.append(f"<div class='card'><h2>Contradictions</h2><p>{payload['contradiction_count']}</p></div>")
+        stats_cards.append(
+            f"<div class='card'><h2>Contradictions</h2><p>{payload['contradiction_count']}</p></div>"
+        )
     right_sections = []
     if research_shell_enabled:
         right_sections.extend(
             [
-                _render_review_context_card(payload['review_context']),
-                _render_review_history(payload['review_history']),
+                _render_review_context_card(payload["review_context"]),
+                _render_review_history(payload["review_history"]),
                 "<section class='card'><h2>Quick Maintenance</h2>"
                 f"{contradiction_form}"
                 f"{summary_form}"
@@ -1683,23 +1902,41 @@ def _render_object_page(payload: dict) -> str:
 
 def _render_topic_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
-    research_shell_enabled = bool(payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack)))
-    next_path = _shell_href(f"/topic?id={quote(str(payload['center']['object_id']), safe='')}", requested_pack)
+    research_shell_enabled = bool(
+        payload.get("research_shell_enabled", _shell_supports_research_nav(requested_pack))
+    )
+    next_path = _shell_href(
+        f"/topic?id={quote(str(payload['center']['object_id']), safe='')}", requested_pack
+    )
     assembly_contract_card = _render_assembly_contract_card(payload)
     operator_rail_card = _render_operator_rail(payload)
-    neighbors = "".join(
-        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a></li>'
-        for item in payload["neighbors"]
-    ) or "<li>None</li>"
-    mocs = "".join(
-        f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a></li>'
-        for item in payload["provenance"]["mocs"]
-    ) or "<li>None</li>"
+    neighbors = (
+        "".join(
+            f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a></li>'
+            for item in payload["neighbors"]
+        )
+        or "<li>None</li>"
+    )
+    mocs = (
+        "".join(
+            f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a></li>'
+            for item in payload["provenance"]["mocs"]
+        )
+        or "<li>None</li>"
+    )
     evolution = payload.get(
         "evolution",
-        {"candidate_items": [], "accepted_links": [], "accepted_count": 0, "candidate_count": 0, "link_types": []},
+        {
+            "candidate_items": [],
+            "accepted_links": [],
+            "accepted_count": 0,
+            "candidate_count": 0,
+            "link_types": [],
+        },
     )
-    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
+    lead_sections, remaining_sections = _split_lead_compiled_sections(
+        payload.get("compiled_sections", [])
+    )
     section_nav = "".join(
         f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
         for item in payload.get("section_nav", [])
@@ -1752,8 +1989,8 @@ def _render_topic_page(payload: dict) -> str:
                 + f"<h3>Accepted Links</h3>{_render_evolution_links(evolution['accepted_links'], empty_text='No accepted evolution links yet.')}"
                 + f"<h3>Candidate Links</h3>{_render_evolution_candidates(evolution['candidate_items'], compact=True, reviewable=True, requested_pack=requested_pack, next_path=next_path)}"
                 + "</section>",
-                _render_review_context_card(payload['review_context']),
-                _render_review_history(payload['review_history']),
+                _render_review_context_card(payload["review_context"]),
+                _render_review_history(payload["review_history"]),
                 "<section class='card'><h2>Quick Maintenance</h2>"
                 f"{contradiction_entry}"
                 f"{summary_form}"
@@ -1762,7 +1999,11 @@ def _render_topic_page(payload: dict) -> str:
         )
     else:
         right_sections.append(_render_research_scope_notice(requested_pack))
-    right_sections.append(_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack))
+    right_sections.append(
+        _render_production_summary_card(
+            payload["production_summary"], requested_pack=requested_pack
+        )
+    )
     return _layout(
         f"Topic: {payload['center']['title']}",
         (
@@ -1791,7 +2032,9 @@ def _render_events_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     assembly_contract_card = _render_assembly_contract_card(payload)
     operator_rail_card = _render_operator_rail(payload)
-    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
+    lead_sections, remaining_sections = _split_lead_compiled_sections(
+        payload.get("compiled_sections", [])
+    )
     limit_note = (
         f" Showing the most recent {payload['limit']} timeline rows in this dossier window."
         if payload.get("is_limited")
@@ -1828,42 +2071,45 @@ def _render_events_page(payload: dict) -> str:
         f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
         for item in payload.get("section_nav", [])
     )
-    events = "".join(
-        f'<section id="date-{escape(section["date"])}" class="card"><h2>{escape(section["date"])}</h2><ul class="list-tight">'
-        + "".join(
-            (
-                "<li>"
-                + f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a>'
-                + f" <span class='pill'>{item['row_count']} timeline rows</span>"
-                + (
-                    f" <span class='muted'>({escape(', '.join(item['event_labels']))})</span>"
-                    if item["event_labels"]
-                    else ""
+    events = (
+        "".join(
+            f'<section id="date-{escape(section["date"])}" class="card"><h2>{escape(section["date"])}</h2><ul class="list-tight">'
+            + "".join(
+                (
+                    "<li>"
+                    + f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a>'
+                    + f" <span class='pill'>{item['row_count']} timeline rows</span>"
+                    + (
+                        f" <span class='muted'>({escape(', '.join(item['event_labels']))})</span>"
+                        if item["event_labels"]
+                        else ""
+                    )
+                    + (
+                        f"<div class='muted'>Anchors: {escape(', '.join(item['timeline_anchor_labels']))}</div>"
+                        if item["timeline_anchor_labels"]
+                        else ""
+                    )
+                    + (
+                        f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path'], requested_pack))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
+                        if item["provenance"]["evergreen_path"]
+                        else "<div class='muted'>Evergreen: <span class='muted'>None</span></div>"
+                    )
+                    + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
+                    + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
+                    + "<div class='link-row'>"
+                    + f"<a href='{escape(item['review_links']['topic_path'])}'>Topic</a>"
+                    + f"<a href='{escape(item['review_links']['contradictions_path'])}'>Contradictions</a>"
+                    + f"<a href='{escape(item['review_links']['summaries_path'])}'>Stale summaries</a>"
+                    + "</div>"
+                    + "</li>"
                 )
-                + (
-                    f"<div class='muted'>Anchors: {escape(', '.join(item['timeline_anchor_labels']))}</div>"
-                    if item["timeline_anchor_labels"]
-                    else ""
-                )
-                + (
-                    f"<div class='muted'>Evergreen: <a href=\"{escape(_note_href(item['provenance']['evergreen_path'], requested_pack))}\">{escape(item['provenance']['evergreen_path'])}</a></div>"
-                    if item["provenance"]["evergreen_path"]
-                    else "<div class='muted'>Evergreen: <span class='muted'>None</span></div>"
-                )
-                + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
-                + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
-                + "<div class='link-row'>"
-                + f"<a href='{escape(item['review_links']['topic_path'])}'>Topic</a>"
-                + f"<a href='{escape(item['review_links']['contradictions_path'])}'>Contradictions</a>"
-                + f"<a href='{escape(item['review_links']['summaries_path'])}'>Stale summaries</a>"
-                + "</div>"
-                + "</li>"
+                for item in section["clusters"]
             )
-            for item in section["clusters"]
+            + "</ul></section>"
+            for section in payload["cluster_sections"]
         )
-        + "</ul></section>"
-        for section in payload["cluster_sections"]
-    ) or "<li>None</li>"
+        or "<li>None</li>"
+    )
     summary_form = (
         "<form method='post' action='/summaries/rebuild' class='link-row'>"
         + "".join(
@@ -1875,7 +2121,9 @@ def _render_events_page(payload: dict) -> str:
         if payload["scoped_stale_summary_ids"]
         else "<p class='muted'>No stale summaries in the visible event scope.</p>"
     )
-    contradiction_query_path = _shell_href(f"/contradictions?q={quote(query, safe='')}", requested_pack)
+    contradiction_query_path = _shell_href(
+        f"/contradictions?q={quote(query, safe='')}", requested_pack
+    )
     contradiction_browser_path = _shell_href("/contradictions", requested_pack)
     contradiction_entry = (
         f"<div class='link-row'><a href='{escape(contradiction_query_path)}'>Review visible contradictions</a></div>"
@@ -1936,30 +2184,33 @@ def _render_atlas_page(payload: dict) -> str:
         if payload.get("is_limited")
         else ""
     )
-    items = "".join(
-        "<li>"
-        f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
-        + f" <span class='pill'>{item['member_count']} objects</span>"
-        + f" <span class='pill'>{len(item['deep_dives'])} deep dives</span>"
-        + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
-        + (
-            " <span class='muted'>"
-            + ", ".join(
-                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
-                for member in item["members"]
+    items = (
+        "".join(
+            "<li>"
+            f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
+            + f" <span class='pill'>{item['member_count']} objects</span>"
+            + f" <span class='pill'>{len(item['deep_dives'])} deep dives</span>"
+            + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
+            + (
+                " <span class='muted'>"
+                + ", ".join(
+                    f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
+                    for member in item["members"]
+                )
+                + "</span>"
             )
-            + "</span>"
+            + (
+                f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
+                if item["preview_titles"]
+                else ""
+            )
+            + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
+            + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['deep_dives'], requested_pack=requested_pack)}</div>"
+            + "</li>"
+            for item in payload["items"]
         )
-        + (
-            f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
-            if item["preview_titles"]
-            else ""
-        )
-        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
-        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['deep_dives'], requested_pack=requested_pack)}</div>"
-        + "</li>"
-        for item in payload["items"]
-    ) or "<li>None</li>"
+        or "<li>None</li>"
+    )
     return _layout(
         "Atlas / MOC Browser",
         "".join(
@@ -1993,30 +2244,33 @@ def _render_derivations_page(payload: dict) -> str:
         if payload.get("is_limited")
         else ""
     )
-    items = "".join(
-        "<li>"
-        f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
-        + f" <span class='pill'>{item['derived_object_count']} derived objects</span>"
-        + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
-        + f" <span class='pill'>{len(item['atlas_pages'])} atlas pages</span>"
-        + (
-            " <span class='muted'>"
-            + ", ".join(
-                f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
-                for member in item["derived_objects"]
+    items = (
+        "".join(
+            "<li>"
+            f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
+            + f" <span class='pill'>{item['derived_object_count']} derived objects</span>"
+            + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
+            + f" <span class='pill'>{len(item['atlas_pages'])} atlas pages</span>"
+            + (
+                " <span class='muted'>"
+                + ", ".join(
+                    f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
+                    for member in item["derived_objects"]
+                )
+                + "</span>"
             )
-            + "</span>"
+            + (
+                f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
+                if item["preview_titles"]
+                else ""
+            )
+            + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
+            + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['atlas_pages'], requested_pack=requested_pack)}</div>"
+            + "</li>"
+            for item in payload["items"]
         )
-        + (
-            f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
-            if item["preview_titles"]
-            else ""
-        )
-        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
-        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['atlas_pages'], requested_pack=requested_pack)}</div>"
-        + "</li>"
-        for item in payload["items"]
-    ) or "<li>None</li>"
+        or "<li>None</li>"
+    )
     return _layout(
         "Deep Dive Derivations",
         "".join(
@@ -2047,37 +2301,45 @@ def _render_production_browser_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     surface_contract_card = _render_surface_contract_card(payload)
     operator_rail_card = _render_operator_rail(payload)
-    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
+    lead_sections, remaining_sections = _split_lead_compiled_sections(
+        payload.get("compiled_sections", [])
+    )
     limit_note = (
         f" Showing the most recent {payload['limit']} production-chain entries in this browser window."
         if payload.get("is_limited")
         else ""
     )
-    items = "".join(
-        "<li>"
-        f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
-        + f" <span class='pill'>{escape(item['stage_label'].replace('_', ' '))}</span>"
-        + f" <span class='pill'>{escape(str(item['traceability'].get('chain_status') or ''))}</span>"
-        + f" <span class='pill'>{item['traceability']['counts']['deep_dives']} deep dives</span>"
-        + f" <span class='pill'>{item['traceability']['counts']['objects']} objects</span>"
-        + f" <span class='pill'>{item['traceability']['counts']['atlas_pages']} atlas pages</span>"
-        + f"<div class='muted'>Chain status: {escape(str(item['traceability'].get('chain_status') or ''))}</div>"
-        + f"<div class='muted'>Missing stages: {escape(', '.join(str(value).replace('_', ' ') for value in item['traceability'].get('missing_stages', [])) or 'None')}</div>"
-        + f"<div class='muted'>Chain summary: {escape(str(item['traceability'].get('chain_summary') or ''))}</div>"
-        + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'], requested_pack=requested_pack)}</div>"
-        + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'], requested_pack=requested_pack)}</div>"
-        + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'], requested_pack=requested_pack)}</div>"
-        + "</li>"
-        for item in payload["items"]
-    ) or "<li class='muted'>No production chains found.</li>"
-    weak_points = "".join(
-        "<li>"
-        f'<span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
-        f'<a href="{escape(_note_href(item["note_path"], requested_pack))}">{escape(item["title"])}</a>'
-        f"<div class='muted'>Missing: {escape(item['detail'])}</div>"
-        "</li>"
-        for item in payload["weak_points"]
-    ) or "<li class='muted'>No production-chain weak points surfaced.</li>"
+    items = (
+        "".join(
+            "<li>"
+            f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
+            + f" <span class='pill'>{escape(item['stage_label'].replace('_', ' '))}</span>"
+            + f" <span class='pill'>{escape(str(item['traceability'].get('chain_status') or ''))}</span>"
+            + f" <span class='pill'>{item['traceability']['counts']['deep_dives']} deep dives</span>"
+            + f" <span class='pill'>{item['traceability']['counts']['objects']} objects</span>"
+            + f" <span class='pill'>{item['traceability']['counts']['atlas_pages']} atlas pages</span>"
+            + f"<div class='muted'>Chain status: {escape(str(item['traceability'].get('chain_status') or ''))}</div>"
+            + f"<div class='muted'>Missing stages: {escape(', '.join(str(value).replace('_', ' ') for value in item['traceability'].get('missing_stages', [])) or 'None')}</div>"
+            + f"<div class='muted'>Chain summary: {escape(str(item['traceability'].get('chain_summary') or ''))}</div>"
+            + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'], requested_pack=requested_pack)}</div>"
+            + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'], requested_pack=requested_pack)}</div>"
+            + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'], requested_pack=requested_pack)}</div>"
+            + "</li>"
+            for item in payload["items"]
+        )
+        or "<li class='muted'>No production chains found.</li>"
+    )
+    weak_points = (
+        "".join(
+            "<li>"
+            f'<span class="pill">{escape(item["stage_label"].replace("_", " "))}</span> '
+            f'<a href="{escape(_note_href(item["note_path"], requested_pack))}">{escape(item["title"])}</a>'
+            f"<div class='muted'>Missing: {escape(item['detail'])}</div>"
+            "</li>"
+            for item in payload["weak_points"]
+        )
+        or "<li class='muted'>No production-chain weak points surfaced.</li>"
+    )
     section_nav = "".join(
         f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
         for item in payload.get("section_nav", [])
@@ -2121,65 +2383,71 @@ def _render_clusters_page(payload: dict) -> str:
         if payload.get("is_limited")
         else ""
     )
-    kind_counts = "".join(
-        f"<span class='pill'>{escape(cluster_kind)}: {count}</span>"
-        for cluster_kind, count in payload["cluster_kind_counts"].items()
-    ) or "<span class='muted'>None</span>"
-    items = "".join(
-        "<li>"
-        f'<a href="{escape(item["detail_path"])}">{escape(item.get("display_title") or item["label"])}</a>'
-        + f" <span class='pill'>{escape(item['cluster_kind'])}</span>"
-        + f" <span class='pill'>{escape(item['priority_band'])}</span>"
-        + f" <span class='pill'>{item['member_count']} objects</span>"
-        + (
-            " <span class='muted'>"
-            + ", ".join(
-                f'<a href="{escape(member["path"])}">{escape(member["title"])}</a>'
-                for member in item["member_links"]
+    kind_counts = (
+        "".join(
+            f"<span class='pill'>{escape(cluster_kind)}: {count}</span>"
+            for cluster_kind, count in payload["cluster_kind_counts"].items()
+        )
+        or "<span class='muted'>None</span>"
+    )
+    items = (
+        "".join(
+            "<li>"
+            f'<a href="{escape(item["detail_path"])}">{escape(item.get("display_title") or item["label"])}</a>'
+            + f" <span class='pill'>{escape(item['cluster_kind'])}</span>"
+            + f" <span class='pill'>{escape(item['priority_band'])}</span>"
+            + f" <span class='pill'>{item['member_count']} objects</span>"
+            + (
+                " <span class='muted'>"
+                + ", ".join(
+                    f'<a href="{escape(member["path"])}">{escape(member["title"])}</a>'
+                    for member in item["member_links"]
+                )
+                + "</span>"
             )
-            + "</span>"
+            + f"<div class='muted'>Canonical cluster: {escape(item['label'])}</div>"
+            + f"<div class='muted'>Center: <a href='{escape(item['center_object_path'])}'>{escape(item['center_title'])}</a></div>"
+            + f"<div class='muted'>Priority: {escape(item['priority_reason'])}</div>"
+            + (
+                f"<div class='muted'>Relation patterns: {escape(item['relation_pattern_preview'])}</div>"
+                if item.get("relation_pattern_preview")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Related clusters: {item['related_cluster_count']} · {escape(item['related_cluster_preview'])}</div>"
+                if item.get("related_cluster_count")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Neighborhood: {escape(item['neighborhood_band'])} · {escape(item['neighborhood_bridge_kind'])} · {escape(item['neighborhood_reason'])}</div>"
+                if item.get("neighborhood_score")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Next read: <a href='{escape(item['next_read_path'])}'>{escape(item['next_read_title'])}</a> · {escape(item['next_read_reason'])}</div>"
+                if item.get("next_read_title")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Top route: {escape(item['top_reading_route_kind'])} · {escape(item['top_reading_route_title'])} · {escape(item['top_reading_route_reason'])}</div>"
+                if item.get("top_reading_route_kind")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Reading intents: {item['reading_intent_count']} · {escape(item['reading_intent_preview'])}</div>"
+                if item.get("reading_intent_count")
+                else ""
+            )
+            + (
+                f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
+                if item.get("top_summary_bullet")
+                else ""
+            )
+            + "</li>"
+            for item in payload["items"]
         )
-        + f"<div class='muted'>Canonical cluster: {escape(item['label'])}</div>"
-        + f"<div class='muted'>Center: <a href='{escape(item['center_object_path'])}'>{escape(item['center_title'])}</a></div>"
-        + f"<div class='muted'>Priority: {escape(item['priority_reason'])}</div>"
-        + (
-            f"<div class='muted'>Relation patterns: {escape(item['relation_pattern_preview'])}</div>"
-            if item.get("relation_pattern_preview")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Related clusters: {item['related_cluster_count']} · {escape(item['related_cluster_preview'])}</div>"
-            if item.get("related_cluster_count")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Neighborhood: {escape(item['neighborhood_band'])} · {escape(item['neighborhood_bridge_kind'])} · {escape(item['neighborhood_reason'])}</div>"
-            if item.get("neighborhood_score")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Next read: <a href='{escape(item['next_read_path'])}'>{escape(item['next_read_title'])}</a> · {escape(item['next_read_reason'])}</div>"
-            if item.get("next_read_title")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Top route: {escape(item['top_reading_route_kind'])} · {escape(item['top_reading_route_title'])} · {escape(item['top_reading_route_reason'])}</div>"
-            if item.get("top_reading_route_kind")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Reading intents: {item['reading_intent_count']} · {escape(item['reading_intent_preview'])}</div>"
-            if item.get("reading_intent_count")
-            else ""
-        )
-        + (
-            f"<div class='muted'>{escape(item['top_summary_bullet'])}</div>"
-            if item.get("top_summary_bullet")
-            else ""
-        )
-        + "</li>"
-        for item in payload["items"]
-    ) or "<li class='muted'>No graph clusters found.</li>"
+        or "<li class='muted'>No graph clusters found.</li>"
+    )
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     return _layout(
         "Graph Clusters",
@@ -2210,115 +2478,155 @@ def _render_clusters_page(payload: dict) -> str:
 def _render_cluster_detail_page(payload: dict) -> str:
     cluster = payload["cluster"]
     requested_pack = payload.get("requested_pack", "")
-    edge_kind_counts = "".join(
-        f"<span class='pill'>{escape(edge_kind)}: {count}</span>"
-        for edge_kind, count in payload["edge_kind_counts"].items()
-    ) or "<span class='muted'>None</span>"
-    object_kind_counts = "".join(
-        f"<span class='pill'>{escape(object_kind)}: {count}</span>"
-        for object_kind, count in payload["object_kind_counts"].items()
-    ) or "<span class='muted'>None</span>"
-    summary_bullets = "".join(
-        f"<li>{escape(item)}</li>"
-        for item in payload["summary_bullets"]
-    ) or "<li class='muted'>No cluster summary available.</li>"
-    members = "".join(
-        f'<li><a href="{escape(member["path"])}">{escape(member["title"])}</a></li>'
-        for member in cluster["member_links"]
-    ) or "<li class='muted'>No members.</li>"
-    edges = "".join(
-        "<li>"
-        f'<a href="{escape(edge["source_path"])}">{escape(edge["source_title"])}</a>'
-        f" <span class='pill'>{escape(edge['edge_kind'])}</span> "
-        f'<a href="{escape(edge["target_path"])}">{escape(edge["target_title"])}</a>'
-        + (
-            f" <span class='muted'>source: {escape(edge['evidence_source_slug'])}</span>"
-            if edge["evidence_source_slug"]
-            else ""
+    edge_kind_counts = (
+        "".join(
+            f"<span class='pill'>{escape(edge_kind)}: {count}</span>"
+            for edge_kind, count in payload["edge_kind_counts"].items()
         )
-        + "</li>"
-        for edge in payload["edges"]
-    ) or "<li class='muted'>No internal edges for this cluster.</li>"
-    top_source_notes = "".join(
-        f"<li>{escape(item['title'])} <span class='pill'>{item['object_count']} objects</span></li>"
-        for item in payload["top_source_notes"]
-    ) or "<li class='muted'>No source-note coverage.</li>"
-    top_mocs = "".join(
-        f"<li>{escape(item['title'])} <span class='pill'>{item['object_count']} objects</span></li>"
-        for item in payload["top_mocs"]
-    ) or "<li class='muted'>No atlas coverage.</li>"
-    open_contradictions = "".join(
-        f"<li><a href=\"{escape(item['path'])}\">{escape(item['subject_key'])}</a> <span class='pill'>{len(item['object_ids'])} objects</span></li>"
-        for item in payload["open_contradictions"]
-    ) or "<li class='muted'>No open contradictions in this cluster.</li>"
-    stale_summaries = "".join(
-        f"<li><a href=\"{escape(item['object_path'])}\">{escape(item['title'])}</a> <span class='pill'>{', '.join(escape(code) for code in item['reason_codes'])}</span></li>"
-        for item in payload["stale_summaries"]
-    ) or "<li class='muted'>No stale summaries in this cluster.</li>"
-    related_clusters = "".join(
-        "<li>"
-        f"<a href=\"{escape(item['detail_path'])}\">{escape(item['display_title'])}</a> "
-        f"<span class='pill'>{item['member_count']} objects</span> "
-        f"<span class='pill'>{escape(item['bridge_kind'])}</span> "
-        f"<span class='pill'>{escape(item['reason'])}</span>"
-        + (
-            f"<div class='muted'>Shared source notes: {escape(', '.join(item['shared_source_titles']))}</div>"
-            if item["shared_source_titles"]
-            else ""
+        or "<span class='muted'>None</span>"
+    )
+    object_kind_counts = (
+        "".join(
+            f"<span class='pill'>{escape(object_kind)}: {count}</span>"
+            for object_kind, count in payload["object_kind_counts"].items()
         )
-        + (
-            f"<div class='muted'>Shared atlas pages: {escape(', '.join(item['shared_moc_titles']))}</div>"
-            if item["shared_moc_titles"]
-            else ""
+        or "<span class='muted'>None</span>"
+    )
+    summary_bullets = (
+        "".join(f"<li>{escape(item)}</li>" for item in payload["summary_bullets"])
+        or "<li class='muted'>No cluster summary available.</li>"
+    )
+    members = (
+        "".join(
+            f'<li><a href="{escape(member["path"])}">{escape(member["title"])}</a></li>'
+            for member in cluster["member_links"]
         )
-        + "</li>"
-        for item in payload["related_clusters"]
-    ) or "<li class='muted'>No related clusters surfaced for this scope.</li>"
-    related_cluster_groups = "".join(
-        f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span>"
-        + (
-            f"<div class='muted'>{escape(', '.join(item['cluster_titles'][:3]))}</div>"
-            if item["cluster_titles"]
-            else ""
+        or "<li class='muted'>No members.</li>"
+    )
+    edges = (
+        "".join(
+            "<li>"
+            f'<a href="{escape(edge["source_path"])}">{escape(edge["source_title"])}</a>'
+            f" <span class='pill'>{escape(edge['edge_kind'])}</span> "
+            f'<a href="{escape(edge["target_path"])}">{escape(edge["target_title"])}</a>'
+            + (
+                f" <span class='muted'>source: {escape(edge['evidence_source_slug'])}</span>"
+                if edge["evidence_source_slug"]
+                else ""
+            )
+            + "</li>"
+            for edge in payload["edges"]
         )
-        + "</li>"
-        for item in payload["related_cluster_groups"]
-    ) or "<li class='muted'>No neighborhood groups surfaced for this cluster.</li>"
-    reading_routes = "".join(
-        "<li>"
-        f"<span class='pill'>#{item['route_rank']}</span> "
-        f"{escape(item['display_name'])}: "
-        f"<a href=\"{escape(item['detail_path'])}\">{escape(item['display_title'])}</a> "
-        f"<span class='pill'>{escape(item['bridge_kind'])}</span> "
-        f"<span class='pill'>{escape(item['bridge_band'])}</span>"
-        f"<div class='muted'>Score: {item['route_score']} · {escape(item['route_reason'])}</div>"
-        f"<div class='muted'>Bridge evidence: {escape(item['reason'])}</div>"
-        "</li>"
-        for item in payload["reading_routes"]
-    ) or "<li class='muted'>No reading routes derived for this cluster.</li>"
+        or "<li class='muted'>No internal edges for this cluster.</li>"
+    )
+    top_source_notes = (
+        "".join(
+            f"<li>{escape(item['title'])} <span class='pill'>{item['object_count']} objects</span></li>"
+            for item in payload["top_source_notes"]
+        )
+        or "<li class='muted'>No source-note coverage.</li>"
+    )
+    top_mocs = (
+        "".join(
+            f"<li>{escape(item['title'])} <span class='pill'>{item['object_count']} objects</span></li>"
+            for item in payload["top_mocs"]
+        )
+        or "<li class='muted'>No atlas coverage.</li>"
+    )
+    open_contradictions = (
+        "".join(
+            f"<li><a href=\"{escape(item['path'])}\">{escape(item['subject_key'])}</a> <span class='pill'>{len(item['object_ids'])} objects</span></li>"
+            for item in payload["open_contradictions"]
+        )
+        or "<li class='muted'>No open contradictions in this cluster.</li>"
+    )
+    stale_summaries = (
+        "".join(
+            f"<li><a href=\"{escape(item['object_path'])}\">{escape(item['title'])}</a> <span class='pill'>{', '.join(escape(code) for code in item['reason_codes'])}</span></li>"
+            for item in payload["stale_summaries"]
+        )
+        or "<li class='muted'>No stale summaries in this cluster.</li>"
+    )
+    related_clusters = (
+        "".join(
+            "<li>"
+            f'<a href="{escape(item["detail_path"])}">{escape(item["display_title"])}</a> '
+            f"<span class='pill'>{item['member_count']} objects</span> "
+            f"<span class='pill'>{escape(item['bridge_kind'])}</span> "
+            f"<span class='pill'>{escape(item['reason'])}</span>"
+            + (
+                f"<div class='muted'>Shared source notes: {escape(', '.join(item['shared_source_titles']))}</div>"
+                if item["shared_source_titles"]
+                else ""
+            )
+            + (
+                f"<div class='muted'>Shared atlas pages: {escape(', '.join(item['shared_moc_titles']))}</div>"
+                if item["shared_moc_titles"]
+                else ""
+            )
+            + "</li>"
+            for item in payload["related_clusters"]
+        )
+        or "<li class='muted'>No related clusters surfaced for this scope.</li>"
+    )
+    related_cluster_groups = (
+        "".join(
+            f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span>"
+            + (
+                f"<div class='muted'>{escape(', '.join(item['cluster_titles'][:3]))}</div>"
+                if item["cluster_titles"]
+                else ""
+            )
+            + "</li>"
+            for item in payload["related_cluster_groups"]
+        )
+        or "<li class='muted'>No neighborhood groups surfaced for this cluster.</li>"
+    )
+    reading_routes = (
+        "".join(
+            "<li>"
+            f"<span class='pill'>#{item['route_rank']}</span> "
+            f"{escape(item['display_name'])}: "
+            f'<a href="{escape(item["detail_path"])}">{escape(item["display_title"])}</a> '
+            f"<span class='pill'>{escape(item['bridge_kind'])}</span> "
+            f"<span class='pill'>{escape(item['bridge_band'])}</span>"
+            f"<div class='muted'>Score: {item['route_score']} · {escape(item['route_reason'])}</div>"
+            f"<div class='muted'>Bridge evidence: {escape(item['reason'])}</div>"
+            "</li>"
+            for item in payload["reading_routes"]
+        )
+        or "<li class='muted'>No reading routes derived for this cluster.</li>"
+    )
     next_read_cluster = payload.get("next_read_cluster")
     next_read_route = (
-        "<p>"
-        f"<a href=\"{escape(next_read_cluster['detail_path'])}\">{escape(next_read_cluster['display_title'])}</a> "
-        f"<span class='pill'>{escape(next_read_cluster['bridge_kind'])}</span> "
-        f"<span class='pill'>{escape(next_read_cluster['bridge_band'])}</span>"
-        "</p>"
-        f"<p class='muted'>{escape(next_read_cluster['reason'])}</p>"
-        + (
-            f"<p class='muted'>Shared source notes: {escape(', '.join(next_read_cluster['shared_source_titles']))}</p>"
-            if next_read_cluster["shared_source_titles"]
-            else ""
+        (
+            "<p>"
+            f'<a href="{escape(next_read_cluster["detail_path"])}">{escape(next_read_cluster["display_title"])}</a> '
+            f"<span class='pill'>{escape(next_read_cluster['bridge_kind'])}</span> "
+            f"<span class='pill'>{escape(next_read_cluster['bridge_band'])}</span>"
+            "</p>"
+            f"<p class='muted'>{escape(next_read_cluster['reason'])}</p>"
+            + (
+                f"<p class='muted'>Shared source notes: {escape(', '.join(next_read_cluster['shared_source_titles']))}</p>"
+                if next_read_cluster["shared_source_titles"]
+                else ""
+            )
+            + (
+                f"<p class='muted'>Shared atlas pages: {escape(', '.join(next_read_cluster['shared_moc_titles']))}</p>"
+                if next_read_cluster["shared_moc_titles"]
+                else ""
+            )
         )
-        + (
-            f"<p class='muted'>Shared atlas pages: {escape(', '.join(next_read_cluster['shared_moc_titles']))}</p>"
-            if next_read_cluster["shared_moc_titles"]
-            else ""
+        if next_read_cluster
+        else "<p class='muted'>No next reading route surfaced for this cluster.</p>"
+    )
+    relation_patterns = (
+        "".join(
+            f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span></li>"
+            for item in payload["relation_pattern_items"]
         )
-    ) if next_read_cluster else "<p class='muted'>No next reading route surfaced for this cluster.</p>"
-    relation_patterns = "".join(
-        f"<li>{escape(item['display_name'])} <span class='pill'>{item['count']}</span></li>"
-        for item in payload["relation_pattern_items"]
-    ) or "<li class='muted'>No relation patterns in this cluster.</li>"
+        or "<li class='muted'>No relation patterns in this cluster.</li>"
+    )
     review_context = payload["review_context"]
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     return _layout(
@@ -2364,10 +2672,13 @@ def _render_evolution_browser_page(payload: dict) -> str:
     selected_link_type = payload.get("link_type", "")
     requested_pack = payload.get("requested_pack", "")
     next_path = _shell_href("/evolution", requested_pack)
-    type_counts = "".join(
-        f"<span class='pill'>{escape(link_type)}: {count}</span>"
-        for link_type, count in payload["type_counts"].items()
-    ) or "<span class='muted'>None</span>"
+    type_counts = (
+        "".join(
+            f"<span class='pill'>{escape(link_type)}: {count}</span>"
+            for link_type, count in payload["type_counts"].items()
+        )
+        or "<span class='muted'>None</span>"
+    )
     return _layout(
         "Evolution Browser",
         "".join(
@@ -2417,7 +2728,9 @@ def _render_candidate_items(payload: dict) -> str:
         title = str(item.get("title") or slug)
         candidate_note_path = str(item.get("candidate_note_path") or "")
         suggested_action = str(item.get("suggested_action") or "keep_as_candidate")
-        similar_existing = item.get("similar_existing") if isinstance(item.get("similar_existing"), list) else []
+        similar_existing = (
+            item.get("similar_existing") if isinstance(item.get("similar_existing"), list) else []
+        )
         first_similar = similar_existing[0] if similar_existing else {}
         default_target = ""
         if isinstance(first_similar, dict):
@@ -2427,14 +2740,17 @@ def _render_candidate_items(payload: dict) -> str:
                 first_score = 0.0
             if first_score >= _CANDIDATE_MERGE_AUTOFILL_THRESHOLD:
                 default_target = str(first_similar.get("slug") or "")
-        similar_html = "".join(
-            "<li>"
-            f"<a href='{escape(str(similar.get('path') or ''))}'>{escape(str(similar.get('title') or similar.get('slug') or ''))}</a> "
-            f"<span class='pill'>{escape(str(similar['score']) if 'score' in similar else '')}</span>"
-            "</li>"
-            for similar in similar_existing[:5]
-            if isinstance(similar, dict)
-        ) or "<li class='muted'>No strong active concept matches.</li>"
+        similar_html = (
+            "".join(
+                "<li>"
+                f"<a href='{escape(str(similar.get('path') or ''))}'>{escape(str(similar.get('title') or similar.get('slug') or ''))}</a> "
+                f"<span class='pill'>{escape(str(similar['score']) if 'score' in similar else '')}</span>"
+                "</li>"
+                for similar in similar_existing[:5]
+                if isinstance(similar, dict)
+            )
+            or "<li class='muted'>No strong active concept matches.</li>"
+        )
         pack_hidden = (
             f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
             if requested_pack
@@ -2566,91 +2882,95 @@ def _render_signals_page(payload: dict) -> str:
         f"{escape(option or 'all signal types')}</option>"
         for option in options
     )
-    items = "".join(
-        "<li>"
-        f'<span class="pill">{escape(item["signal_type"])}</span> '
-        f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
-        f"<div class='muted'>{escape(item['detail'])}</div>"
-        + (
-            f"<div class='muted'>Impact: {escape(str(item['impact_summary']['impact_label']))}</div>"
-            if item.get("impact_summary", {}).get("impact_label")
-            else ""
-        )
-        + (
-            f"<div class='muted'>{escape(str(item['impact_summary']['impact_detail']))}</div>"
-            if item.get("impact_summary", {}).get("impact_detail")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Inbound capture: {escape(str(item['capture_summary']['summary']))}</div>"
-            if item.get("capture_summary", {}).get("summary")
-            else ""
-        )
-        + _render_signal_context_contract(item)
-        + (
-            "<div class='muted'>Recommended Action: "
-            + f'<a href="{escape(item["recommended_action"]["path"])}">{escape(item["recommended_action"]["label"])}</a>'
+    items = (
+        "".join(
+            "<li>"
+            f'<span class="pill">{escape(item["signal_type"])}</span> '
+            f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
+            f"<div class='muted'>{escape(item['detail'])}</div>"
             + (
-                f" <span class='pill'>{escape(str(item['recommended_action']['queue_status']))}</span>"
-                if item["recommended_action"].get("queue_status")
-                else (
-                    " <span class='pill'>executable</span>"
-                    if item["recommended_action"].get("executable")
-                    else " <span class='pill'>manual</span>"
+                f"<div class='muted'>Impact: {escape(str(item['impact_summary']['impact_label']))}</div>"
+                if item.get("impact_summary", {}).get("impact_label")
+                else ""
+            )
+            + (
+                f"<div class='muted'>{escape(str(item['impact_summary']['impact_detail']))}</div>"
+                if item.get("impact_summary", {}).get("impact_detail")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Inbound capture: {escape(str(item['capture_summary']['summary']))}</div>"
+                if item.get("capture_summary", {}).get("summary")
+                else ""
+            )
+            + _render_signal_context_contract(item)
+            + (
+                "<div class='muted'>Recommended Action: "
+                + f'<a href="{escape(item["recommended_action"]["path"])}">{escape(item["recommended_action"]["label"])}</a>'
+                + (
+                    f" <span class='pill'>{escape(str(item['recommended_action']['queue_status']))}</span>"
+                    if item["recommended_action"].get("queue_status")
+                    else (
+                        " <span class='pill'>executable</span>"
+                        if item["recommended_action"].get("executable")
+                        else " <span class='pill'>manual</span>"
+                    )
                 )
-            )
-            + (
-                f"<div class='muted'>Resolver: {escape(str(item['recommended_action']['resolution_kind']))}</div>"
-                if item["recommended_action"].get("resolution_kind")
+                + (
+                    f"<div class='muted'>Resolver: {escape(str(item['recommended_action']['resolution_kind']))}</div>"
+                    if item["recommended_action"].get("resolution_kind")
+                    else ""
+                )
+                + (
+                    f"<div class='muted'>Dispatch: {escape(str(item['recommended_action']['dispatch_mode']))}</div>"
+                    if item["recommended_action"].get("dispatch_mode")
+                    else ""
+                )
+                + (
+                    f"<div class='muted'>Rule: {escape(str(item['recommended_action']['resolver_rule_name']))}</div>"
+                    if item["recommended_action"].get("resolver_rule_name")
+                    else ""
+                )
+                + (
+                    f"<div class='muted'>Governance contract: {escape(str(item['recommended_action']['governance_provider_name']))} · {escape(str(item['recommended_action']['governance_provider_pack']))}</div>"
+                    if item["recommended_action"].get("governance_provider_name")
+                    or item["recommended_action"].get("governance_provider_pack")
+                    else ""
+                )
+                + (
+                    "<div class='muted'>Governance: safe</div>"
+                    if item["recommended_action"].get("safe_to_run")
+                    else ""
+                )
+                + "</div>"
+                if item.get("recommended_action")
                 else ""
             )
             + (
-                f"<div class='muted'>Dispatch: {escape(str(item['recommended_action']['dispatch_mode']))}</div>"
-                if item["recommended_action"].get("dispatch_mode")
+                "<form method='post' action='/actions/enqueue' class='link-row'>"
+                + f"<input type='hidden' name='signal_id' value='{escape(item['signal_id'])}' />"
+                + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+                + "<button type='submit'>Queue action</button>"
+                + "</form>"
+                if item.get("recommended_action")
+                and not item["recommended_action"].get("queue_status")
                 else ""
             )
             + (
-                f"<div class='muted'>Rule: {escape(str(item['recommended_action']['resolver_rule_name']))}</div>"
-                if item["recommended_action"].get("resolver_rule_name")
+                "<div class='muted'>Downstream: "
+                + ", ".join(
+                    f'<a href="{escape(effect["path"])}">{escape(effect["label"])}</a>'
+                    for effect in item["downstream_effects"]
+                )
+                + "</div>"
+                if item["downstream_effects"]
                 else ""
             )
-            + (
-                f"<div class='muted'>Governance contract: {escape(str(item['recommended_action']['governance_provider_name']))} · {escape(str(item['recommended_action']['governance_provider_pack']))}</div>"
-                if item["recommended_action"].get("governance_provider_name")
-                or item["recommended_action"].get("governance_provider_pack")
-                else ""
-            )
-            + (
-                "<div class='muted'>Governance: safe</div>"
-                if item["recommended_action"].get("safe_to_run")
-                else ""
-            )
-            + "</div>"
-            if item.get("recommended_action")
-            else ""
+            + "</li>"
+            for item in payload["items"]
         )
-        + (
-            "<form method='post' action='/actions/enqueue' class='link-row'>"
-            + f"<input type='hidden' name='signal_id' value='{escape(item['signal_id'])}' />"
-            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
-            + "<button type='submit'>Queue action</button>"
-            + "</form>"
-            if item.get("recommended_action") and not item["recommended_action"].get("queue_status")
-            else ""
-        )
-        + (
-            "<div class='muted'>Downstream: "
-            + ", ".join(
-                f'<a href="{escape(effect["path"])}">{escape(effect["label"])}</a>'
-                for effect in item["downstream_effects"]
-            )
-            + "</div>"
-            if item["downstream_effects"]
-            else ""
-        )
-        + "</li>"
-        for item in payload["items"]
-    ) or "<li class='muted'>No active signals found.</li>"
+        or "<li class='muted'>No active signals found.</li>"
+    )
     explanations = "".join(
         f"<li><span class='pill'>{escape(signal_type)}</span> {escape(text)}</li>"
         for signal_type, text in payload["signal_type_explanations"].items()
@@ -2697,12 +3017,14 @@ def _render_briefing_page(payload: dict) -> str:
     assembly_contract_card = _render_assembly_contract_card(payload)
     governance_contract_card = _render_governance_contract_card(payload)
     operator_rail_card = _render_operator_rail(payload)
-    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
+    lead_sections, remaining_sections = _split_lead_compiled_sections(
+        payload.get("compiled_sections", [])
+    )
     first_useful_sign = payload.get("first_useful_sign")
     first_useful_sign_html = (
         "<li>"
         + f"<span class='pill'>{escape(str(first_useful_sign['kind']))}</span> "
-        + f"<a href=\"{escape(str(first_useful_sign['path']))}\">{escape(str(first_useful_sign['title']))}</a>"
+        + f'<a href="{escape(str(first_useful_sign["path"]))}">{escape(str(first_useful_sign["title"]))}</a>'
         + f"<div class='muted'>{escape(str(first_useful_sign['detail']))}</div>"
         + (
             f"<div class='muted'>Sources: {escape(', '.join(first_useful_sign.get('source_paths', [])))}</div>"
@@ -2713,108 +3035,131 @@ def _render_briefing_page(payload: dict) -> str:
         if first_useful_sign
         else "<li class='muted'>No useful sign surfaced yet.</li>"
     )
-    insights = "".join(
-        "<li>"
-        + f"<span class='pill'>{escape(str(item['link_type']))}</span> "
-        + f"<a href=\"{escape(str(item['path']))}\">{escape(str(item['title']))}</a>"
-        + f"<div class='muted'>{escape(str(item['detail']))}</div>"
-        + (
-            f"<div class='muted'>Sources: {escape(', '.join(item.get('source_paths', [])))}</div>"
-            if item.get("source_paths")
-            else ""
-        )
-        + "</li>"
-        for item in payload["insights"]
-    ) or "<li class='muted'>No evolution insights surfaced.</li>"
-    priority_items = "".join(
-        "<li>"
-        + f"<span class='pill'>{escape(str(item['kind']))}</span> "
-        + f"<a href=\"{escape(str(item['path']))}\">{escape(str(item['title']))}</a>"
-        + f"<div class='muted'>{escape(str(item['detail']))}</div>"
-        + (
-            "<div class='muted'>Recommended Action: "
-            + f'<a href="{escape(str(item["recommended_action"]["path"]))}">{escape(str(item["recommended_action"]["label"]))}</a>'
+    insights = (
+        "".join(
+            "<li>"
+            + f"<span class='pill'>{escape(str(item['link_type']))}</span> "
+            + f'<a href="{escape(str(item["path"]))}">{escape(str(item["title"]))}</a>'
+            + f"<div class='muted'>{escape(str(item['detail']))}</div>"
             + (
-                f" <span class='pill'>{escape(str(item['recommended_action']['queue_status']))}</span>"
-                if item["recommended_action"].get("queue_status")
-                else (
-                    " <span class='pill'>executable</span>"
-                    if item["recommended_action"].get("executable")
-                    else " <span class='pill'>manual</span>"
+                f"<div class='muted'>Sources: {escape(', '.join(item.get('source_paths', [])))}</div>"
+                if item.get("source_paths")
+                else ""
+            )
+            + "</li>"
+            for item in payload["insights"]
+        )
+        or "<li class='muted'>No evolution insights surfaced.</li>"
+    )
+    priority_items = (
+        "".join(
+            "<li>"
+            + f"<span class='pill'>{escape(str(item['kind']))}</span> "
+            + f'<a href="{escape(str(item["path"]))}">{escape(str(item["title"]))}</a>'
+            + f"<div class='muted'>{escape(str(item['detail']))}</div>"
+            + (
+                "<div class='muted'>Recommended Action: "
+                + f'<a href="{escape(str(item["recommended_action"]["path"]))}">{escape(str(item["recommended_action"]["label"]))}</a>'
+                + (
+                    f" <span class='pill'>{escape(str(item['recommended_action']['queue_status']))}</span>"
+                    if item["recommended_action"].get("queue_status")
+                    else (
+                        " <span class='pill'>executable</span>"
+                        if item["recommended_action"].get("executable")
+                        else " <span class='pill'>manual</span>"
+                    )
                 )
-            )
-            + (
-                f"<div class='muted'>Resolver: {escape(str(item['recommended_action']['resolution_kind']))}</div>"
-                if item["recommended_action"].get("resolution_kind")
+                + (
+                    f"<div class='muted'>Resolver: {escape(str(item['recommended_action']['resolution_kind']))}</div>"
+                    if item["recommended_action"].get("resolution_kind")
+                    else ""
+                )
+                + (
+                    f"<div class='muted'>Dispatch: {escape(str(item['recommended_action']['dispatch_mode']))}</div>"
+                    if item["recommended_action"].get("dispatch_mode")
+                    else ""
+                )
+                + (
+                    f"<div class='muted'>Rule: {escape(str(item['recommended_action']['resolver_rule_name']))}</div>"
+                    if item["recommended_action"].get("resolver_rule_name")
+                    else ""
+                )
+                + (
+                    f"<div class='muted'>Governance contract: {escape(str(item['recommended_action']['governance_provider_name']))} · {escape(str(item['recommended_action']['governance_provider_pack']))}</div>"
+                    if item["recommended_action"].get("governance_provider_name")
+                    or item["recommended_action"].get("governance_provider_pack")
+                    else ""
+                )
+                + (
+                    "<div class='muted'>Governance: safe</div>"
+                    if item["recommended_action"].get("safe_to_run")
+                    else ""
+                )
+                + "</div>"
+                if item.get("recommended_action")
                 else ""
             )
             + (
-                f"<div class='muted'>Dispatch: {escape(str(item['recommended_action']['dispatch_mode']))}</div>"
-                if item["recommended_action"].get("dispatch_mode")
+                "<form method='post' action='/actions/enqueue' class='link-row'>"
+                + f"<input type='hidden' name='signal_id' value='{escape(str(item['signal_id']))}' />"
+                + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+                + "<button type='submit'>Queue action</button>"
+                + "</form>"
+                if item.get("signal_id")
+                and item.get("recommended_action")
+                and not item["recommended_action"].get("queue_status")
                 else ""
             )
-            + (
-                f"<div class='muted'>Rule: {escape(str(item['recommended_action']['resolver_rule_name']))}</div>"
-                if item["recommended_action"].get("resolver_rule_name")
-                else ""
-            )
-            + (
-                f"<div class='muted'>Governance contract: {escape(str(item['recommended_action']['governance_provider_name']))} · {escape(str(item['recommended_action']['governance_provider_pack']))}</div>"
-                if item["recommended_action"].get("governance_provider_name")
-                or item["recommended_action"].get("governance_provider_pack")
-                else ""
-            )
-            + (
-                "<div class='muted'>Governance: safe</div>"
-                if item["recommended_action"].get("safe_to_run")
-                else ""
-            )
-            + "</div>"
-            if item.get("recommended_action")
-            else ""
+            + "</li>"
+            for item in payload["priority_items"]
         )
-        + (
-            "<form method='post' action='/actions/enqueue' class='link-row'>"
-            + f"<input type='hidden' name='signal_id' value='{escape(str(item['signal_id']))}' />"
-            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
-            + "<button type='submit'>Queue action</button>"
-            + "</form>"
-            if item.get("signal_id") and item.get("recommended_action") and not item["recommended_action"].get("queue_status")
-            else ""
+        or "<li class='muted'>No priority items surfaced.</li>"
+    )
+    recent_signals = (
+        "".join(
+            f'<li><span class="pill">{escape(item["signal_type"])}</span> '
+            f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
+            f"<div class='muted'>{escape(item['detail'])}</div></li>"
+            for item in payload["recent_signals"]
         )
-        + "</li>"
-        for item in payload["priority_items"]
-    ) or "<li class='muted'>No priority items surfaced.</li>"
-    recent_signals = "".join(
-        f'<li><span class="pill">{escape(item["signal_type"])}</span> '
-        f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a>'
-        f"<div class='muted'>{escape(item['detail'])}</div></li>"
-        for item in payload["recent_signals"]
-    ) or "<li class='muted'>No recent signals.</li>"
-    unresolved = "".join(
-        f'<li><span class="pill">{escape(item["signal_type"])}</span> '
-        f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a></li>'
-        for item in payload["unresolved_issues"]
-    ) or "<li class='muted'>No unresolved issues.</li>"
-    changed_objects = "".join(
-        f'<li><a href="{escape(item["path"])}">{escape(item["title"])}</a></li>'
-        for item in payload["changed_objects"]
-    ) or "<li class='muted'>No recent changed objects.</li>"
-    active_topics = "".join(
-        f'<li><a href="{escape(item["path"])}">{escape(item["title"])}</a> '
-        f"<span class='muted'>({item['signal_count']} signals)</span></li>"
-        for item in payload["active_topics"]
-    ) or "<li class='muted'>No active topics surfaced.</li>"
+        or "<li class='muted'>No recent signals.</li>"
+    )
+    unresolved = (
+        "".join(
+            f'<li><span class="pill">{escape(item["signal_type"])}</span> '
+            f'<a href="{escape(item["source_path"])}">{escape(item["title"])}</a></li>'
+            for item in payload["unresolved_issues"]
+        )
+        or "<li class='muted'>No unresolved issues.</li>"
+    )
+    changed_objects = (
+        "".join(
+            f'<li><a href="{escape(item["path"])}">{escape(item["title"])}</a></li>'
+            for item in payload["changed_objects"]
+        )
+        or "<li class='muted'>No recent changed objects.</li>"
+    )
+    active_topics = (
+        "".join(
+            f'<li><a href="{escape(item["path"])}">{escape(item["title"])}</a> '
+            f"<span class='muted'>({item['signal_count']} signals)</span></li>"
+            for item in payload["active_topics"]
+        )
+        or "<li class='muted'>No active topics surfaced.</li>"
+    )
     section_nav = "".join(
         f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
         for item in payload.get("section_nav", [])
     )
     queue_summary = payload.get("queue_summary", {})
     loop_summary = payload.get("loop_summary", {})
-    failure_buckets = "".join(
-        f"<li><span class='pill'>{escape(bucket)}</span> {count}</li>"
-        for bucket, count in queue_summary.get("failure_buckets", {}).items()
-    ) or "<li class='muted'>No failed actions.</li>"
+    failure_buckets = (
+        "".join(
+            f"<li><span class='pill'>{escape(bucket)}</span> {count}</li>"
+            for bucket, count in queue_summary.get("failure_buckets", {}).items()
+        )
+        or "<li class='muted'>No failed actions.</li>"
+    )
     return _layout(
         "Working Memory Snapshot",
         "".join(
@@ -2867,114 +3212,152 @@ def _render_actions_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     next_path = _shell_href("/actions", requested_pack)
     governance_contract_card = _render_governance_contract_card(payload)
-    options = ["", "queued", "running", "succeeded", "failed", "dismissed", "obsolete"]
+    options = ["", "queued", "running", "succeeded", "failed", "blocked", "dismissed", "obsolete"]
     option_html = "".join(
         f"<option value='{escape(option)}' {'selected' if option == selected_status else ''}>"
         f"{escape(option or 'all statuses')}</option>"
         for option in options
     )
-    items = "".join(
-        "<li>"
-        f"<span class='pill'>{escape(str(item['status']))}</span> "
-        f"<span class='pill'>{escape(str(item['action_kind']))}</span> "
-        + (
-            " <span class='pill'>safe</span>"
-            if item.get("safe_to_run")
-            else " <span class='pill'>manual</span>"
+    items = (
+        "".join(
+            "<li>"
+            f"<span class='pill'>{escape(str(item['status']))}</span> "
+            f"<span class='pill'>{escape(str(item['action_kind']))}</span> "
+            + (
+                " <span class='pill'>safe</span>"
+                if item.get("safe_to_run")
+                else " <span class='pill'>manual</span>"
+            )
+            + " "
+            + f"{escape(str(item['title']))}"
+            + (
+                f"<div class='muted'>Target: {escape(str(item['target_ref']))}</div>"
+                if item.get("target_ref")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Created at {escape(str(item['created_at']))}</div>"
+                if item.get("created_at")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Retry count: {int(item.get('retry_count') or 0)}</div>"
+                if item.get("retry_count") is not None
+                else ""
+            )
+            + (
+                f"<div class='muted'>Failure bucket: {escape(str(item['failure_bucket']))}</div>"
+                if item.get("failure_bucket")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Impact: {escape(str(item['impact_summary']['impact_label']))}</div>"
+                if item.get("impact_summary", {}).get("impact_label")
+                else ""
+            )
+            + (
+                f"<div class='muted'>{escape(str(item['impact_summary']['impact_detail']))}</div>"
+                if item.get("impact_summary", {}).get("impact_detail")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Processor: {escape(str(item['processor_mode']))}</div>"
+                if item.get("processor_mode")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Resolver: {escape(str(item['resolution_kind']))}</div>"
+                if item.get("resolution_kind")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Dispatch: {escape(str(item['dispatch_mode']))}</div>"
+                if item.get("dispatch_mode")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Rule: {escape(str(item['resolver_rule_name']))}</div>"
+                if item.get("resolver_rule_name")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Governance contract: {escape(str(item['governance_provider_name']))} · {escape(str(item['governance_provider_pack']))}</div>"
+                if item.get("governance_provider_name") or item.get("governance_provider_pack")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Handler contract: {escape(str(item['handler_provider_name']))} · {escape(str(item['handler_provider_pack']))}</div>"
+                if item.get("handler_provider_name") or item.get("handler_provider_pack")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Processor contract: {escape(str(item['processor_provider_name']))} · {escape(str(item['processor_provider_pack']))}</div>"
+                if item.get("processor_provider_name") or item.get("processor_provider_pack")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Source signal: {'active' if item.get('source_signal_active') else 'inactive'}</div>"
+                if "source_signal_active" in item
+                else ""
+            )
+            + (
+                f"<div class='muted'>Precondition: {escape(str(item['precondition_status']))}</div>"
+                if item.get("precondition_status")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Blocked reason: {escape(str(item['blocked_reason']))}</div>"
+                if item.get("blocked_reason")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Obsolete reason: {escape(str(item['obsolete_reason']))}</div>"
+                if item.get("obsolete_reason")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Last result: {escape(str(item['last_result_summary']))}</div>"
+                if item.get("last_result_summary")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Inputs: {escape(', '.join(str(value) for value in item['processor_inputs']))}</div>"
+                if item.get("processor_inputs")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Outputs: {escape(', '.join(str(value) for value in item['processor_outputs']))}</div>"
+                if item.get("processor_outputs")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Quality hooks: {escape(', '.join(str(value) for value in item['processor_quality_hooks']))}</div>"
+                if item.get("processor_quality_hooks")
+                else ""
+            )
+            + (
+                "<form method='post' action='/actions/retry' class='link-row'>"
+                + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
+                + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+                + "<button type='submit'>Retry</button>"
+                + "</form>"
+                if item.get("status") in {"failed", "blocked", "obsolete"}
+                else ""
+            )
+            + (
+                "<form method='post' action='/actions/dismiss' class='link-row'>"
+                + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
+                + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+                + "<button type='submit'>Dismiss</button>"
+                + "</form>"
+                if item.get("status") in {"queued", "failed", "blocked", "obsolete", "running"}
+                else ""
+            )
+            + "</li>"
+            for item in payload["items"]
         )
-        + " "
-        + f"{escape(str(item['title']))}"
-        + (
-            f"<div class='muted'>Target: {escape(str(item['target_ref']))}</div>"
-            if item.get("target_ref")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Created at {escape(str(item['created_at']))}</div>"
-            if item.get("created_at")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Retry count: {int(item.get('retry_count') or 0)}</div>"
-            if item.get("retry_count") is not None
-            else ""
-        )
-        + (
-            f"<div class='muted'>Failure bucket: {escape(str(item['failure_bucket']))}</div>"
-            if item.get("failure_bucket")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Impact: {escape(str(item['impact_summary']['impact_label']))}</div>"
-            if item.get("impact_summary", {}).get("impact_label")
-            else ""
-        )
-        + (
-            f"<div class='muted'>{escape(str(item['impact_summary']['impact_detail']))}</div>"
-            if item.get("impact_summary", {}).get("impact_detail")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Processor: {escape(str(item['processor_mode']))}</div>"
-            if item.get("processor_mode")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Resolver: {escape(str(item['resolution_kind']))}</div>"
-            if item.get("resolution_kind")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Dispatch: {escape(str(item['dispatch_mode']))}</div>"
-            if item.get("dispatch_mode")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Rule: {escape(str(item['resolver_rule_name']))}</div>"
-            if item.get("resolver_rule_name")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Governance contract: {escape(str(item['governance_provider_name']))} · {escape(str(item['governance_provider_pack']))}</div>"
-            if item.get("governance_provider_name") or item.get("governance_provider_pack")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Inputs: {escape(', '.join(str(value) for value in item['processor_inputs']))}</div>"
-            if item.get("processor_inputs")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Outputs: {escape(', '.join(str(value) for value in item['processor_outputs']))}</div>"
-            if item.get("processor_outputs")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Quality hooks: {escape(', '.join(str(value) for value in item['processor_quality_hooks']))}</div>"
-            if item.get("processor_quality_hooks")
-            else ""
-        )
-        + (
-            "<form method='post' action='/actions/retry' class='link-row'>"
-            + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
-            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
-            + "<button type='submit'>Retry</button>"
-            + "</form>"
-            if item.get("status") in {"failed", "obsolete"}
-            else ""
-        )
-        + (
-            "<form method='post' action='/actions/dismiss' class='link-row'>"
-            + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
-            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
-            + "<button type='submit'>Dismiss</button>"
-            + "</form>"
-            if item.get("status") in {"queued", "failed", "obsolete", "running"}
-            else ""
-        )
-        + "</li>"
-        for item in payload["items"]
-    ) or "<li class='muted'>No queued actions yet.</li>"
+        or "<li class='muted'>No queued actions yet.</li>"
+    )
     return _layout(
         "Action Queue",
         "".join(
@@ -3040,10 +3423,14 @@ def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
-    next_path = "/contradictions" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    next_path = "/contradictions" + (
+        f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
+    )
     assembly_contract_card = _render_assembly_contract_card(payload)
     operator_rail_card = _render_operator_rail(payload)
-    lead_sections, remaining_sections = _split_lead_compiled_sections(payload.get("compiled_sections", []))
+    lead_sections, remaining_sections = _split_lead_compiled_sections(
+        payload.get("compiled_sections", [])
+    )
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     scope_summary = payload["scope_summary"]
     scope_summary_items = (
@@ -3070,135 +3457,138 @@ def _render_contradictions_page(payload: dict) -> str:
         f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
         for item in payload.get("section_nav", [])
     )
-    items = "".join(
-        "<li>"
-        + (
-            f"<label><input type='checkbox' form='contradiction-batch-form' name='contradiction_id' value='{escape(item['contradiction_id'])}' /> batch</label> "
-            if item["status"] == "open"
-            else ""
-        )
-        + f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
-        + f" <span class='muted'>[{escape(item['detection_model'])} / {escape(item['detection_confidence'])} / {escape(item['status_bucket'])}]</span>"
-        + f"<div class='muted'>Status Meaning: {escape(item['status_explanation'])}</div>"
-        + (
-            "<div class='muted'>Scope Summary: "
-            + f"{item['scope_summary']['object_count']} objects, "
-            + f"{item['scope_summary']['positive_claim_count']} positive claims, "
-            + f"{item['scope_summary']['negative_claim_count']} negative claims, "
-            + f"{item['scope_summary']['source_note_count']} source notes"
-            + "</div>"
-        )
-        + (
-            " <span class='muted'>"
-            + ", ".join(
-                f'<a href="{escape(link["path"])}">{escape(item["object_titles"].get(link["object_id"], link["object_id"]))}</a>'
-                for link in item["object_links"]
+    items = (
+        "".join(
+            "<li>"
+            + (
+                f"<label><input type='checkbox' form='contradiction-batch-form' name='contradiction_id' value='{escape(item['contradiction_id'])}' /> batch</label> "
+                if item["status"] == "open"
+                else ""
             )
-            + "</span>"
-            if item["object_links"]
-            else ""
-        )
-        + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
-        + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
-        + (
-            "<details><summary>Ranked Evidence</summary><ol class='list-tight'>"
-            + "".join(
-                f"<li>#{evidence['rank']} {escape(evidence['polarity'])}: {escape(evidence['quote_text'])} "
-                + f"<span class='muted'>({escape(evidence['object_title'])} / {escape(evidence['source_slug'])} / {escape(evidence['evidence_kind'])})</span></li>"
-                for evidence in item["ranked_evidence"]
+            + f"<span class='pill'>{escape(item['status'])}</span>{escape(item['subject_key'])}"
+            + f" <span class='muted'>[{escape(item['detection_model'])} / {escape(item['detection_confidence'])} / {escape(item['status_bucket'])}]</span>"
+            + f"<div class='muted'>Status Meaning: {escape(item['status_explanation'])}</div>"
+            + (
+                "<div class='muted'>Scope Summary: "
+                + f"{item['scope_summary']['object_count']} objects, "
+                + f"{item['scope_summary']['positive_claim_count']} positive claims, "
+                + f"{item['scope_summary']['negative_claim_count']} negative claims, "
+                + f"{item['scope_summary']['source_note_count']} source notes"
+                + "</div>"
             )
-            + "</ol></details>"
-            if item["ranked_evidence"]
-            else ""
-        )
-        + (
-            "<details><summary>Claim Evidence</summary><ul class='list-tight'>"
-            + "".join(
-                "<li>Positive: "
-                + f"{escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span>"
-                + (
-                    "<ul class='list-tight'>"
-                    + "".join(
-                        f"<li>{escape(evidence['evidence_kind'])}: {escape(evidence['quote_text'])} <span class='muted'>({escape(evidence['source_slug'])})</span></li>"
-                        for evidence in claim["evidence"]
+            + (
+                " <span class='muted'>"
+                + ", ".join(
+                    f'<a href="{escape(link["path"])}">{escape(item["object_titles"].get(link["object_id"], link["object_id"]))}</a>'
+                    for link in item["object_links"]
+                )
+                + "</span>"
+                if item["object_links"]
+                else ""
+            )
+            + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
+            + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
+            + (
+                "<details><summary>Ranked Evidence</summary><ol class='list-tight'>"
+                + "".join(
+                    f"<li>#{evidence['rank']} {escape(evidence['polarity'])}: {escape(evidence['quote_text'])} "
+                    + f"<span class='muted'>({escape(evidence['object_title'])} / {escape(evidence['source_slug'])} / {escape(evidence['evidence_kind'])})</span></li>"
+                    for evidence in item["ranked_evidence"]
+                )
+                + "</ol></details>"
+                if item["ranked_evidence"]
+                else ""
+            )
+            + (
+                "<details><summary>Claim Evidence</summary><ul class='list-tight'>"
+                + "".join(
+                    "<li>Positive: "
+                    + f"{escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span>"
+                    + (
+                        "<ul class='list-tight'>"
+                        + "".join(
+                            f"<li>{escape(evidence['evidence_kind'])}: {escape(evidence['quote_text'])} <span class='muted'>({escape(evidence['source_slug'])})</span></li>"
+                            for evidence in claim["evidence"]
+                        )
+                        + "</ul>"
+                        if claim["evidence"]
+                        else ""
                     )
-                    + "</ul>"
-                    if claim["evidence"]
-                    else ""
+                    + "</li>"
+                    for claim in item["positive_claims"]
                 )
-                + "</li>"
-                for claim in item["positive_claims"]
-            )
-            + "".join(
-                "<li>Negative: "
-                + f"{escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span>"
-                + (
-                    "<ul class='list-tight'>"
-                    + "".join(
-                        f"<li>{escape(evidence['evidence_kind'])}: {escape(evidence['quote_text'])} <span class='muted'>({escape(evidence['source_slug'])})</span></li>"
-                        for evidence in claim["evidence"]
+                + "".join(
+                    "<li>Negative: "
+                    + f"{escape(claim['claim_text'])} <span class='muted'>({escape(claim['object_title'])})</span>"
+                    + (
+                        "<ul class='list-tight'>"
+                        + "".join(
+                            f"<li>{escape(evidence['evidence_kind'])}: {escape(evidence['quote_text'])} <span class='muted'>({escape(evidence['source_slug'])})</span></li>"
+                            for evidence in claim["evidence"]
+                        )
+                        + "</ul>"
+                        if claim["evidence"]
+                        else ""
                     )
-                    + "</ul>"
-                    if claim["evidence"]
-                    else ""
+                    + "</li>"
+                    for claim in item["negative_claims"]
                 )
-                + "</li>"
-                for claim in item["negative_claims"]
+                + "</ul></details>"
             )
-            + "</ul></details>"
-        )
-        + f"<div class='muted'>Tension Summary: {escape(str(item.get('tension_summary') or ''))}</div>"
-        + (
-            "<details><summary>Review History</summary><ul class='list-tight'>"
-            + "".join(
-                f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
-                + (
-                    f"<div class='muted'>Status: {escape(str(history['status']))}</div>"
-                    if history.get("status")
-                    else ""
+            + f"<div class='muted'>Tension Summary: {escape(str(item.get('tension_summary') or ''))}</div>"
+            + (
+                "<details><summary>Review History</summary><ul class='list-tight'>"
+                + "".join(
+                    f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
+                    + (
+                        f"<div class='muted'>Status: {escape(str(history['status']))}</div>"
+                        if history.get("status")
+                        else ""
+                    )
+                    + (
+                        f"<div class='muted'>Note: {escape(str(history['note']))}</div>"
+                        if history.get("note")
+                        else ""
+                    )
+                    + "</li>"
+                    for history in item["review_history"]
                 )
-                + (
-                    f"<div class='muted'>Note: {escape(str(history['note']))}</div>"
-                    if history.get("note")
-                    else ""
-                )
-                + "</li>"
-                for history in item["review_history"]
+                + "</ul></details>"
+                if item["review_history"]
+                else ""
             )
-            + "</ul></details>"
-            if item["review_history"]
-            else ""
+            + (
+                f"<div class='muted'>Resolution Note: {escape(item['resolution_note'])}</div>"
+                if item.get("resolution_note")
+                else ""
+            )
+            + (
+                f"<div class='muted'>Resolved At: {escape(item['resolved_at'])}</div>"
+                if item.get("resolved_at")
+                else ""
+            )
+            + (
+                "<form method='post' action='/contradictions/resolve' class='link-row'>"
+                f"<input type='hidden' name='contradiction_id' value='{escape(item['contradiction_id'])}' />"
+                f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+                "<select name='status'>"
+                "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
+                "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
+                "<option value='dismissed'>dismissed</option>"
+                "<option value='needs_human'>needs_human</option>"
+                "</select>"
+                "<input type='text' name='note' placeholder='Resolution note' />"
+                "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>"
+                "<button type='submit'>Resolve</button>"
+                "</form>"
+                if item["status"] == "open"
+                else ""
+            )
+            + "</li>"
+            for item in payload["items"]
         )
-        + (
-            f"<div class='muted'>Resolution Note: {escape(item['resolution_note'])}</div>"
-            if item.get("resolution_note")
-            else ""
-        )
-        + (
-            f"<div class='muted'>Resolved At: {escape(item['resolved_at'])}</div>"
-            if item.get("resolved_at")
-            else ""
-        )
-        + (
-            "<form method='post' action='/contradictions/resolve' class='link-row'>"
-            f"<input type='hidden' name='contradiction_id' value='{escape(item['contradiction_id'])}' />"
-            f"<input type='hidden' name='next' value='{escape(next_path)}' />"
-            "<select name='status'>"
-            "<option value='resolved_keep_positive'>resolved_keep_positive</option>"
-            "<option value='resolved_keep_negative'>resolved_keep_negative</option>"
-            "<option value='dismissed'>dismissed</option>"
-            "<option value='needs_human'>needs_human</option>"
-            "</select>"
-            "<input type='text' name='note' placeholder='Resolution note' />"
-            "<label><input type='checkbox' name='rebuild_summaries' value='1' /> rebuild summaries</label>"
-            "<button type='submit'>Resolve</button>"
-            "</form>"
-            if item["status"] == "open"
-            else ""
-        )
-        + "</li>"
-        for item in payload["items"]
-    ) or f"<li>{escape(payload['empty_state'])}</li>"
+        or f"<li>{escape(payload['empty_state'])}</li>"
+    )
     return _layout(
         "Contradictions",
         "".join(
@@ -3256,45 +3646,48 @@ def _render_stale_summaries_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     next_path = "/summaries" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
-    items = "".join(
-        "<li>"
-        f"<label><input type='checkbox' form='summary-batch-form' name='object_id' value='{escape(item['object_id'])}' /> batch</label> "
-        f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a> '
-        f"<span class='muted'>({escape(item['object_id'])})</span>"
-        f"<div class='muted'>Summary: {escape(item['summary_text'])}</div>"
-        f"<div class='muted'>Outgoing relations: {item['outgoing_relation_count']}</div>"
-        + (
-            f"<div class='muted'>Latest event date: {escape(item['latest_event_date'])}</div>"
-            if item["latest_event_date"]
-            else ""
-        )
-        + "<ul class='list-tight'>"
-        + "".join(f"<li>{escape(reason)}</li>" for reason in item["reason_texts"])
-        + "</ul>"
-        + (
-            "<details><summary>Review History</summary><ul class='list-tight'>"
-            + "".join(
-                f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
-                + (
-                    f"<div class='muted'>Rebuilt: {escape(', '.join(str(v) for v in history['rebuilt_object_ids']))}</div>"
-                    if history.get("rebuilt_object_ids")
-                    else ""
-                )
-                + "</li>"
-                for history in item["review_history"]
+    items = (
+        "".join(
+            "<li>"
+            f"<label><input type='checkbox' form='summary-batch-form' name='object_id' value='{escape(item['object_id'])}' /> batch</label> "
+            f'<a href="{escape(item["object_path"])}">{escape(item["title"])}</a> '
+            f"<span class='muted'>({escape(item['object_id'])})</span>"
+            f"<div class='muted'>Summary: {escape(item['summary_text'])}</div>"
+            f"<div class='muted'>Outgoing relations: {item['outgoing_relation_count']}</div>"
+            + (
+                f"<div class='muted'>Latest event date: {escape(item['latest_event_date'])}</div>"
+                if item["latest_event_date"]
+                else ""
             )
-            + "</ul></details>"
-            if item["review_history"]
-            else ""
+            + "<ul class='list-tight'>"
+            + "".join(f"<li>{escape(reason)}</li>" for reason in item["reason_texts"])
+            + "</ul>"
+            + (
+                "<details><summary>Review History</summary><ul class='list-tight'>"
+                + "".join(
+                    f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
+                    + (
+                        f"<div class='muted'>Rebuilt: {escape(', '.join(str(v) for v in history['rebuilt_object_ids']))}</div>"
+                        if history.get("rebuilt_object_ids")
+                        else ""
+                    )
+                    + "</li>"
+                    for history in item["review_history"]
+                )
+                + "</ul></details>"
+                if item["review_history"]
+                else ""
+            )
+            + "<form method='post' action='/summaries/rebuild' class='link-row'>"
+            + f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
+            + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
+            + "<button type='submit'>Rebuild Summary</button>"
+            + "</form>"
+            + "</li>"
+            for item in payload["items"]
         )
-        + "<form method='post' action='/summaries/rebuild' class='link-row'>"
-        + f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
-        + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
-        + "<button type='submit'>Rebuild Summary</button>"
-        + "</form>"
-        + "</li>"
-        for item in payload["items"]
-    ) or "<li class='muted'>No stale summaries detected.</li>"
+        or "<li class='muted'>No stale summaries detected.</li>"
+    )
     return _layout(
         "Stale Summaries",
         "".join(
@@ -3329,7 +3722,9 @@ def _render_stale_summaries_page(payload: dict) -> str:
     )
 
 
-def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int = 8787) -> ThreadingHTTPServer:
+def create_server(
+    vault_dir: Path | str, *, host: str = "127.0.0.1", port: int = 8787
+) -> ThreadingHTTPServer:
     resolved_vault = resolve_vault_dir(vault_dir)
 
     class Handler(BaseHTTPRequestHandler):
@@ -3395,7 +3790,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/search":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    self._write_json(build_search_payload(resolved_vault, query=q, pack_name=pack_name))
+                    self._write_json(
+                        build_search_payload(resolved_vault, query=q, pack_name=pack_name)
+                    )
                     return
                 if path == "/search":
                     q = query.get("q", [""])[0]
@@ -3409,7 +3806,11 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     return
                 if path == "/briefing":
                     pack_name = query.get("pack", [""])[0] or None
-                    self._write_html(_render_briefing_page(build_briefing_payload(resolved_vault, pack_name=pack_name)))
+                    self._write_html(
+                        _render_briefing_page(
+                            build_briefing_payload(resolved_vault, pack_name=pack_name)
+                        )
+                    )
                     return
                 if path == "/api/signals":
                     q = query.get("q", [""])[0]
@@ -3439,7 +3840,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/candidates":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/candidates", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/candidates", api=True
+                    ):
                         return
                     self._write_json(
                         build_candidate_browser_payload(
@@ -3453,7 +3856,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     candidate_warning = query.get("candidate_warning", [""])[0]
-                    if self._guard_research_route(pack_name=pack_name, route_path="/candidates", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/candidates", api=False
+                    ):
                         return
                     payload = build_candidate_browser_payload(
                         resolved_vault,
@@ -3468,7 +3873,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     status = query.get("status", ["all"])[0] or "all"
                     link_type = query.get("link_type", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/evolution", api=True
+                    ):
                         return
                     self._write_json(
                         build_evolution_browser_payload(
@@ -3485,7 +3892,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     status = query.get("status", ["all"])[0] or "all"
                     link_type = query.get("link_type", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/evolution", api=False
+                    ):
                         return
                     payload = build_evolution_browser_payload(
                         resolved_vault,
@@ -3499,109 +3908,167 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/object":
                     object_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
-                    self._write_json(build_object_page_payload(resolved_vault, object_id, pack_name=pack_name))
+                    self._write_json(
+                        build_object_page_payload(resolved_vault, object_id, pack_name=pack_name)
+                    )
                     return
                 if path == "/object":
                     object_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
-                    payload = build_object_page_payload(resolved_vault, object_id, pack_name=pack_name)
+                    payload = build_object_page_payload(
+                        resolved_vault, object_id, pack_name=pack_name
+                    )
                     self._write_html(_render_object_page(payload))
                     return
                 if path == "/api/topic":
                     object_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
-                    self._write_json(build_topic_overview_payload(resolved_vault, object_id, pack_name=pack_name))
+                    self._write_json(
+                        build_topic_overview_payload(resolved_vault, object_id, pack_name=pack_name)
+                    )
                     return
                 if path == "/topic":
                     object_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
-                    payload = build_topic_overview_payload(resolved_vault, object_id, pack_name=pack_name)
+                    payload = build_topic_overview_payload(
+                        resolved_vault, object_id, pack_name=pack_name
+                    )
                     self._write_html(_render_topic_page(payload))
                     return
                 if path == "/api/events":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/events", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/events", api=True
+                    ):
                         return
-                    self._write_json(build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q))
+                    self._write_json(
+                        build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q)
+                    )
                     return
                 if path == "/events":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/events", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/events", api=False
+                    ):
                         return
-                    payload = build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q)
+                    payload = build_event_dossier_payload(
+                        resolved_vault, pack_name=pack_name, query=q
+                    )
                     self._write_html(_render_events_page(payload))
                     return
                 if path == "/api/atlas":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/atlas", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/atlas", api=True
+                    ):
                         return
-                    self._write_json(build_atlas_browser_payload(resolved_vault, pack_name=pack_name, query=q))
+                    self._write_json(
+                        build_atlas_browser_payload(resolved_vault, pack_name=pack_name, query=q)
+                    )
                     return
                 if path == "/atlas":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/atlas", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/atlas", api=False
+                    ):
                         return
-                    payload = build_atlas_browser_payload(resolved_vault, pack_name=pack_name, query=q)
+                    payload = build_atlas_browser_payload(
+                        resolved_vault, pack_name=pack_name, query=q
+                    )
                     self._write_html(_render_atlas_page(payload))
                     return
                 if path == "/api/deep-dives":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/deep-dives", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/deep-dives", api=True
+                    ):
                         return
-                    self._write_json(build_derivation_browser_payload(resolved_vault, pack_name=pack_name, query=q))
+                    self._write_json(
+                        build_derivation_browser_payload(
+                            resolved_vault, pack_name=pack_name, query=q
+                        )
+                    )
                     return
                 if path == "/deep-dives":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/deep-dives", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/deep-dives", api=False
+                    ):
                         return
-                    payload = build_derivation_browser_payload(resolved_vault, pack_name=pack_name, query=q)
+                    payload = build_derivation_browser_payload(
+                        resolved_vault, pack_name=pack_name, query=q
+                    )
                     self._write_html(_render_derivations_page(payload))
                     return
                 if path == "/api/production":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    self._write_json(build_production_browser_payload(resolved_vault, pack_name=pack_name, query=q))
+                    self._write_json(
+                        build_production_browser_payload(
+                            resolved_vault, pack_name=pack_name, query=q
+                        )
+                    )
                     return
                 if path == "/production":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    payload = build_production_browser_payload(resolved_vault, pack_name=pack_name, query=q)
+                    payload = build_production_browser_payload(
+                        resolved_vault, pack_name=pack_name, query=q
+                    )
                     self._write_html(_render_production_browser_page(payload))
                     return
                 if path == "/api/clusters":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/clusters", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/clusters", api=True
+                    ):
                         return
-                    self._write_json(build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q))
+                    self._write_json(
+                        build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q)
+                    )
                     return
                 if path == "/clusters":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/clusters", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/clusters", api=False
+                    ):
                         return
-                    payload = build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q)
+                    payload = build_cluster_browser_payload(
+                        resolved_vault, pack_name=pack_name, query=q
+                    )
                     self._write_html(_render_clusters_page(payload))
                     return
                 if path == "/api/cluster":
                     cluster_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/cluster", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/cluster", api=True
+                    ):
                         return
-                    self._write_json(build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name))
+                    self._write_json(
+                        build_cluster_detail_payload(
+                            resolved_vault, cluster_id=cluster_id, pack_name=pack_name
+                        )
+                    )
                     return
                 if path == "/cluster":
                     cluster_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/cluster", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/cluster", api=False
+                    ):
                         return
-                    payload = build_cluster_detail_payload(resolved_vault, cluster_id=cluster_id, pack_name=pack_name)
+                    payload = build_cluster_detail_payload(
+                        resolved_vault, cluster_id=cluster_id, pack_name=pack_name
+                    )
                     self._write_html(_render_cluster_detail_page(payload))
                     return
                 if path == "/api/actions":
@@ -3632,24 +4099,38 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 if path == "/api/summaries":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/summaries", api=True
+                    ):
                         return
-                    self._write_json(build_stale_summary_browser_payload(resolved_vault, pack_name=pack_name, query=q))
+                    self._write_json(
+                        build_stale_summary_browser_payload(
+                            resolved_vault, pack_name=pack_name, query=q
+                        )
+                    )
                     return
                 if path == "/summaries":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/summaries", api=False
+                    ):
                         return
-                    payload = build_stale_summary_browser_payload(resolved_vault, pack_name=pack_name, query=q)
+                    payload = build_stale_summary_browser_payload(
+                        resolved_vault, pack_name=pack_name, query=q
+                    )
                     self._write_html(_render_stale_summaries_page(payload))
                     return
                 if path == "/note":
                     relative_path = self._required(query, "path")
                     pack_name = query.get("pack", [""])[0] or None
                     _, markdown = _read_vault_note(resolved_vault, relative_path)
-                    payload = build_note_page_payload(resolved_vault, note_path=relative_path, pack_name=pack_name)
-                    self._write_html(_render_note_page(resolved_vault, relative_path, markdown, payload))
+                    payload = build_note_page_payload(
+                        resolved_vault, note_path=relative_path, pack_name=pack_name
+                    )
+                    self._write_html(
+                        _render_note_page(resolved_vault, relative_path, markdown, payload)
+                    )
                     return
                 if path == "/asset":
                     relative_path = self._required(query, "path")
@@ -3660,7 +4141,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/contradictions", api=True
+                    ):
                         return
                     self._write_json(
                         build_contradiction_browser_payload(
@@ -3675,7 +4158,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/contradictions", api=False
+                    ):
                         return
                     payload = build_contradiction_browser_payload(
                         resolved_vault,
@@ -3696,52 +4181,70 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 form = self._read_form()
                 if path == "/api/contradictions/resolve":
                     pack_name = self._form_first(form, "pack").strip() or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions/resolve", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/contradictions/resolve", api=True
+                    ):
                         return
                     self._write_json(self._resolve_contradiction_action(form))
                     return
                 if path == "/contradictions/resolve":
                     pack_name = self._form_first(form, "pack").strip() or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/contradictions/resolve", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/contradictions/resolve", api=False
+                    ):
                         return
                     self._resolve_contradiction_action(form)
-                    self._redirect(self._form_first(form, "next").strip() or "/contradictions?status=resolved")
+                    self._redirect(
+                        self._form_first(form, "next").strip() or "/contradictions?status=resolved"
+                    )
                     return
                 if path == "/api/summaries/rebuild":
                     pack_name = self._form_first(form, "pack").strip() or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries/rebuild", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/summaries/rebuild", api=True
+                    ):
                         return
                     self._write_json(self._rebuild_summary_action(form))
                     return
                 if path == "/summaries/rebuild":
                     pack_name = self._form_first(form, "pack").strip() or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/summaries/rebuild", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/summaries/rebuild", api=False
+                    ):
                         return
                     self._rebuild_summary_action(form)
                     self._redirect(self._form_first(form, "next").strip() or "/summaries")
                     return
                 if path == "/api/evolution/review":
                     pack_name = self._form_first(form, "pack").strip() or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution/review", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/evolution/review", api=True
+                    ):
                         return
                     self._write_json(self._review_evolution_action(form))
                     return
                 if path == "/evolution/review":
                     pack_name = self._form_first(form, "pack").strip() or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/evolution/review", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/evolution/review", api=False
+                    ):
                         return
                     payload = self._review_evolution_action(form)
                     self._redirect(str(payload["next_path"]))
                     return
                 if path == "/api/candidates/review":
                     pack_name = self._form_first(form, "pack").strip() or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/candidates/review", api=True):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/candidates/review", api=True
+                    ):
                         return
                     self._write_json(self._review_candidate_action(form))
                     return
                 if path == "/candidates/review":
                     pack_name = self._form_first(form, "pack").strip() or None
-                    if self._guard_research_route(pack_name=pack_name, route_path="/candidates/review", api=False):
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/candidates/review", api=False
+                    ):
                         return
                     payload = self._review_candidate_action(form)
                     self._redirect(str(payload["next_path"]))
@@ -3835,7 +4338,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
         def _form_all(self, form: dict[str, list[str]], key: str) -> list[str]:
             return form.get(key, [])
 
-        def _guard_research_route(self, *, pack_name: str | None, route_path: str, api: bool) -> bool:
+        def _guard_research_route(
+            self, *, pack_name: str | None, route_path: str, api: bool
+        ) -> bool:
             requested_pack = pack_name or ""
             if _shell_supports_research_nav(requested_pack):
                 return False
@@ -3847,7 +4352,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             return True
 
         def _resolve_contradiction_action(self, form: dict[str, list[str]]) -> dict[str, object]:
-            contradiction_ids = [item.strip() for item in self._form_all(form, "contradiction_id") if item.strip()]
+            contradiction_ids = [
+                item.strip() for item in self._form_all(form, "contradiction_id") if item.strip()
+            ]
             status = self._form_first(form, "status").strip()
             note = self._form_first(form, "note").strip()
             if not contradiction_ids:
@@ -3866,12 +4373,18 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 note=note,
             )
             if payload["resolved_count"] and self._form_first(form, "rebuild_summaries") == "1":
-                affected_object_ids = contradiction_object_ids(resolved_vault, payload["contradiction_ids"])
-                rebuild_payload = rebuild_compiled_summaries(resolved_vault, object_ids=affected_object_ids)
+                affected_object_ids = contradiction_object_ids(
+                    resolved_vault, payload["contradiction_ids"]
+                )
+                rebuild_payload = rebuild_compiled_summaries(
+                    resolved_vault, object_ids=affected_object_ids
+                )
                 payload["rebuilt_summary_count"] = rebuild_payload["objects_rebuilt"]
                 payload["rebuilt_object_ids"] = rebuild_payload["object_ids"]
             else:
-                affected_object_ids = contradiction_object_ids(resolved_vault, payload["contradiction_ids"])
+                affected_object_ids = contradiction_object_ids(
+                    resolved_vault, payload["contradiction_ids"]
+                )
                 payload["rebuilt_summary_count"] = 0
                 payload["rebuilt_object_ids"] = []
             if payload["resolved_count"]:
@@ -3891,7 +4404,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
             return payload
 
         def _rebuild_summary_action(self, form: dict[str, list[str]]) -> dict[str, object]:
-            object_ids = [item.strip() for item in self._form_all(form, "object_id") if item.strip()]
+            object_ids = [
+                item.strip() for item in self._form_all(form, "object_id") if item.strip()
+            ]
             if not object_ids:
                 raise ValueError("missing object_id")
             payload = rebuild_compiled_summaries(resolved_vault, object_ids=object_ids)
@@ -3991,7 +4506,9 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
                 "target_slug": str(audit_event.get("target_slug") or target_slug or ""),
                 "status": str(audit_event.get("status") or "applied_with_warning"),
                 "note": str(audit_event.get("note") or note),
-                "mutation": audit_event.get("mutation") if isinstance(audit_event.get("mutation"), dict) else {},
+                "mutation": audit_event.get("mutation")
+                if isinstance(audit_event.get("mutation"), dict)
+                else {},
                 "knowledge_index_rebuilt": bool(audit_event.get("knowledge_index_rebuilt")),
                 "knowledge_index_error": knowledge_index_error,
                 "warning": str(error),
@@ -4054,6 +4571,7 @@ def create_server(vault_dir: Path | str, *, host: str = "127.0.0.1", port: int =
 
     return ThreadingHTTPServer((host, port), Handler)
 
+
 def _spawn_action_worker_process(vault_dir: Path | str, *, interval_seconds: float = 2.0) -> None:
     subprocess.Popen(
         [
@@ -4089,8 +4607,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault directory")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
-    parser.add_argument("--with-action-worker", action="store_true", help="Spawn a detached action worker process")
-    parser.add_argument("--action-worker-interval", type=float, default=2.0, help="Polling interval for the detached action worker")
+    parser.add_argument(
+        "--with-action-worker", action="store_true", help="Spawn a detached action worker process"
+    )
+    parser.add_argument(
+        "--action-worker-interval",
+        type=float,
+        default=2.0,
+        help="Polling interval for the detached action worker",
+    )
     args = parser.parse_args(argv)
 
     resolved_vault = resolve_vault_dir(args.vault_dir)
@@ -4109,7 +4634,10 @@ def main(argv: list[str] | None = None) -> int:
         server.server_close()
         return 1
 
-    print(json.dumps({"host": args.host, "port": args.port, "vault_dir": str(resolved_vault)}), flush=True)
+    print(
+        json.dumps({"host": args.host, "port": args.port, "vault_dir": str(resolved_vault)}),
+        flush=True,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:  # pragma: no cover

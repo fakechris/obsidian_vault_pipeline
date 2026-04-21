@@ -124,10 +124,7 @@ def test_truth_api_rebuilds_legacy_knowledge_db_before_object_queries(temp_vault
         "target-note",
     ]
     with sqlite3.connect(db_path) as conn:
-        object_columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(objects)").fetchall()
-        }
+        object_columns = {row[1] for row in conn.execute("PRAGMA table_info(objects)").fetchall()}
     assert "pack" in object_columns
 
 
@@ -298,7 +295,9 @@ def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
     assert runtime_progress["performance"]["eta_seconds"] == 1800
     assert runtime_progress["performance"]["eta_at"] == "2026-04-09T00:50:00Z"
     assert runtime_progress["performance"]["rate_summary"] == "0.0083 files/s (0.50 files/min)"
-    assert runtime_progress["performance"]["eta_summary"] == "~30m remaining, ETA 2026-04-09T00:50:00Z"
+    assert (
+        runtime_progress["performance"]["eta_summary"] == "~30m remaining, ETA 2026-04-09T00:50:00Z"
+    )
     assert payload["stale_count"] == 1
 
 
@@ -397,7 +396,9 @@ def test_runtime_processes_detects_ovp_variant_and_strips_vault_dir(temp_vault, 
     class Result:
         stdout = f"80018 00:04:00 Ss /env/bin/python /env/bin/ovp-article --vault-dir {temp_vault} --batch-size 5\n"
 
-    monkeypatch.setattr(runtime_processes.shutil, "which", lambda name: "/bin/ps" if name == "ps" else None)
+    monkeypatch.setattr(
+        runtime_processes.shutil, "which", lambda name: "/bin/ps" if name == "ps" else None
+    )
     monkeypatch.setattr(runtime_processes.subprocess, "run", lambda *_args, **_kwargs: Result())
 
     processes = runtime_processes.detect_runtime_processes(temp_vault)
@@ -413,7 +414,9 @@ def test_runtime_processes_treats_ps_timeout_as_no_processes(temp_vault, monkeyp
     def raise_timeout(*_args, **_kwargs):
         raise subprocess.TimeoutExpired(cmd=["ps"], timeout=5)
 
-    monkeypatch.setattr(runtime_processes.shutil, "which", lambda name: "/bin/ps" if name == "ps" else None)
+    monkeypatch.setattr(
+        runtime_processes.shutil, "which", lambda name: "/bin/ps" if name == "ps" else None
+    )
     monkeypatch.setattr(runtime_processes.subprocess, "run", raise_timeout)
 
     assert runtime_processes.detect_runtime_processes(temp_vault) == []
@@ -541,7 +544,66 @@ def test_truth_api_get_runtime_status_includes_run_history(temp_vault):
     assert completed["completed_steps"] == 3
     assert completed["total_steps"] == 3
     assert completed["content_summary"] == "Produced 6 items; 20/20 files processed"
-    assert completed["step_summaries"][2]["stage_artifact"] == "60-Logs/stage-artifacts/knowledge_index/demo.json"
+    assert (
+        completed["step_summaries"][2]["stage_artifact"]
+        == "60-Logs/stage-artifacts/knowledge_index/demo.json"
+    )
+
+
+def test_truth_api_get_runtime_status_includes_action_worker_state(temp_vault, monkeypatch):
+    import ovp_pipeline.truth_api as truth_api
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "action-worker.json").write_text(
+        json.dumps(
+            {
+                "worker_id": "action-worker-123",
+                "pid": 12345,
+                "state": "running",
+                "mode": "loop",
+                "safe_only": True,
+                "started_at": "2026-04-09T00:00:00Z",
+                "heartbeat_at": "2026-04-09T00:10:00Z",
+                "current_action": {
+                    "action_id": "action::demo",
+                    "action_kind": "deep_dive_workflow",
+                    "source_signal_id": "source_needs_deep_dive::demo",
+                    "target_ref": "50-Inbox/03-Processed/Demo.md",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    calls = {"count": 0}
+
+    def fake_detect_runtime_processes(vault_dir):
+        calls["count"] += 1
+        return [
+            {
+                "process_kind": "action_worker",
+                "pid": 56789,
+            }
+        ]
+
+    monkeypatch.setattr(truth_api, "detect_runtime_processes", fake_detect_runtime_processes)
+
+    payload = truth_api.get_runtime_status(temp_vault, now_iso="2026-04-09T00:20:00Z")
+
+    worker = payload["action_worker"]
+    assert worker["active"] is True
+    assert worker["state"] == "running"
+    assert worker["mode"] == "loop"
+    assert worker["safe_only"] is True
+    assert worker["pid"] == 56789
+    assert calls["count"] == 1
+    assert worker["current_action"]["action_id"] == "action::demo"
+    assert worker["current_action"]["action_kind"] == "deep_dive_workflow"
+    assert worker["current_action"]["source_signal_id"] == "source_needs_deep_dive::demo"
+    assert worker["current_action"]["target_ref"] == "50-Inbox/03-Processed/Demo.md"
+    assert worker["elapsed_seconds"] == 1200
+    assert worker["heartbeat_age_seconds"] == 600
 
 
 def test_run_history_keeps_running_run_open_when_payload_status_is_missing():
@@ -624,7 +686,9 @@ Processed source note.
 """,
         encoding="utf-8",
     )
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -741,7 +805,9 @@ Processed source note without downstream chain.
     assert source_signal["capture_summary"]["status"] == "observed"
     assert source_signal["capture_summary"]["captured_event_count"] == 1
     assert source_signal["capture_summary"]["produced_artifact_count"] == 0
-    assert source_signal["capture_summary"]["summary"].startswith("Observed 1 inbound capture event")
+    assert source_signal["capture_summary"]["summary"].startswith(
+        "Observed 1 inbound capture event"
+    )
 
 
 def test_truth_api_marks_non_executable_recommended_actions_as_review_only():
@@ -780,7 +846,9 @@ def test_truth_api_aggregates_note_capture_summaries_with_single_log_scan_per_fi
 ):
     import ovp_pipeline.truth_api as truth_api
 
-    note_alpha = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Alpha_深度解读.md"
+    note_alpha = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Alpha_深度解读.md"
+    )
     note_beta = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Beta_深度解读.md"
     note_alpha.parent.mkdir(parents=True, exist_ok=True)
     note_alpha.write_text(
@@ -855,10 +923,7 @@ type: deep_dive
 
 def test_truth_api_avoids_datetime_utc_import_for_python_310_compatibility():
     source = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "ovp_pipeline"
-        / "truth_api.py"
+        Path(__file__).resolve().parents[1] / "src" / "ovp_pipeline" / "truth_api.py"
     ).read_text(encoding="utf-8")
 
     assert "from datetime import UTC" not in source
@@ -959,7 +1024,10 @@ def test_truth_api_returns_object_detail_with_claims_relations_and_summary(temp_
     detail = get_object_detail(vault, "source-note")
 
     assert detail["object"]["object_id"] == "source-note"
-    assert detail["summary"]["summary_text"] == "Agent harness supports local-first execution for operators."
+    assert (
+        detail["summary"]["summary_text"]
+        == "Agent harness supports local-first execution for operators."
+    )
     assert detail["claims"][0]["claim_kind"] == "page_summary"
     assert detail["relations"][0]["target_object_id"] == "target-note"
     assert detail["evidence"][0]["evidence_kind"] == "body_summary"
@@ -1189,7 +1257,11 @@ Zeta platform does not support high-trust execution for operators.
         encoding="utf-8",
     )
     rebuild_knowledge_index(vault)
-    contradiction = next(item for item in list_contradictions(vault, limit=10) if item["subject_key"] == "zeta platform")
+    contradiction = next(
+        item
+        for item in list_contradictions(vault, limit=10)
+        if item["subject_key"] == "zeta platform"
+    )
     record_review_action(
         vault,
         event_type="ui_contradictions_resolved",
@@ -1245,7 +1317,9 @@ Legacy note.
 """,
         encoding="utf-8",
     )
-    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Legacy Dive_深度解读.md"
+    deep_dive = (
+        vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Legacy Dive_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -1279,9 +1353,13 @@ This note supersedes [[legacy-note]] and confirms the migration path.
 
     items = list_evolution_candidates(vault, query="legacy")
 
-    assert any(item["link_type"] == "replaces" and item["subject_id"] == "legacy-note" for item in items)
+    assert any(
+        item["link_type"] == "replaces" and item["subject_id"] == "legacy-note" for item in items
+    )
 
-    enrich_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Source Enrichment_深度解读.md"
+    enrich_dive = (
+        vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Source Enrichment_深度解读.md"
+    )
     enrich_dive.parent.mkdir(parents=True, exist_ok=True)
     enrich_dive.write_text(
         """---
@@ -1313,7 +1391,10 @@ Source note builds on [[source-note]] with more deployment detail.
 
     items = list_evolution_candidates(vault, query="source-note")
 
-    assert any(item["link_type"] in {"enriches", "confirms"} and item["subject_id"] == "source-note" for item in items)
+    assert any(
+        item["link_type"] in {"enriches", "confirms"} and item["subject_id"] == "source-note"
+        for item in items
+    )
 
 
 def test_truth_api_expresses_all_four_evolution_link_types(temp_vault):
@@ -1335,7 +1416,9 @@ Legacy note.
 """,
         encoding="utf-8",
     )
-    replace_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Legacy Replace_深度解读.md"
+    replace_dive = (
+        vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Legacy Replace_深度解读.md"
+    )
     replace_dive.parent.mkdir(parents=True, exist_ok=True)
     replace_dive.write_text(
         """---
@@ -1351,7 +1434,9 @@ This note supersedes [[legacy-note]] and instead recommends the new path.
 """,
         encoding="utf-8",
     )
-    enrich_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Source Enrichment_深度解读.md"
+    enrich_dive = (
+        vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Source Enrichment_深度解读.md"
+    )
     enrich_dive.write_text(
         """---
 note_id: source-enrichment
@@ -1364,7 +1449,14 @@ Source note builds on [[source-note]] with more deployment detail.
 """,
         encoding="utf-8",
     )
-    confirm_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Source Confirmation_深度解读.md"
+    confirm_dive = (
+        vault
+        / "20-Areas"
+        / "AI-Research"
+        / "Topics"
+        / "2026-04"
+        / "Source Confirmation_深度解读.md"
+    )
     confirm_dive.write_text(
         """---
 note_id: source-confirmation
@@ -1421,7 +1513,9 @@ Source note confirms the local-first rollout guidance from independent testing.
     assert {"replaces", "enriches", "confirms", "challenges"}.issubset(link_types)
 
 
-def test_truth_api_scopes_evolution_candidate_traceability_to_requested_objects(temp_vault, monkeypatch):
+def test_truth_api_scopes_evolution_candidate_traceability_to_requested_objects(
+    temp_vault, monkeypatch
+):
     from ovp_pipeline import truth_api
 
     vault = _seed_truth_vault(temp_vault)
@@ -1481,10 +1575,16 @@ date: 2026-04-14
 
 
 def test_truth_api_reviews_evolution_candidate_and_lists_links(temp_vault):
-    from ovp_pipeline.truth_api import list_evolution_candidates, list_evolution_links, review_evolution_candidate
+    from ovp_pipeline.truth_api import (
+        list_evolution_candidates,
+        list_evolution_links,
+        review_evolution_candidate,
+    )
 
     vault = _seed_truth_vault(temp_vault)
-    candidate = next(item for item in list_evolution_candidates(vault) if item["link_type"] == "challenges")
+    candidate = next(
+        item for item in list_evolution_candidates(vault) if item["link_type"] == "challenges"
+    )
 
     payload = review_evolution_candidate(
         vault,
@@ -1520,7 +1620,9 @@ Legacy note.
 """,
         encoding="utf-8",
     )
-    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Legacy Dive_深度解读.md"
+    deep_dive = (
+        vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Legacy Dive_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -1722,7 +1824,9 @@ def test_truth_api_searches_objects_and_notes(temp_vault):
     from ovp_pipeline.truth_api import search_vault_surface
 
     vault = _seed_truth_vault(temp_vault)
-    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    deep_dive = (
+        vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -1754,7 +1858,13 @@ Mentions [[source-note]].
 def test_truth_api_resolves_deep_dive_source_note_from_frontmatter_and_logs(temp_vault):
     from ovp_pipeline.truth_api import get_note_provenance
 
-    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
+    processed = (
+        temp_vault
+        / "50-Inbox"
+        / "03-Processed"
+        / "2026-04"
+        / "2026-04-01_The_Harness_Wars_Begin.md"
+    )
     processed.parent.mkdir(parents=True, exist_ok=True)
     processed.write_text(
         """---
@@ -1766,7 +1876,14 @@ Processed source note.
 """,
         encoding="utf-8",
     )
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "2026-04-09_The Harness Wars Begin_深度解读.md"
+    deep_dive = (
+        temp_vault
+        / "20-Areas"
+        / "AI-Research"
+        / "Topics"
+        / "2026-04"
+        / "2026-04-09_The Harness Wars Begin_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """```yaml
@@ -1798,7 +1915,12 @@ type: "ai"
                 json.dumps(
                     {
                         "event_type": "source_archived_to_processed",
-                        "source": str(temp_vault / "50-Inbox" / "02-Processing" / "2026-04-01_The_Harness_Wars_Begin.md"),
+                        "source": str(
+                            temp_vault
+                            / "50-Inbox"
+                            / "02-Processing"
+                            / "2026-04-01_The_Harness_Wars_Begin.md"
+                        ),
                         "archived": str(processed),
                     },
                     ensure_ascii=False,
@@ -1823,7 +1945,13 @@ type: "ai"
 def test_truth_api_resolves_processed_note_to_derived_deep_dives(temp_vault):
     from ovp_pipeline.truth_api import get_note_provenance
 
-    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "2026-04-01_The_Harness_Wars_Begin.md"
+    processed = (
+        temp_vault
+        / "50-Inbox"
+        / "03-Processed"
+        / "2026-04"
+        / "2026-04-01_The_Harness_Wars_Begin.md"
+    )
     processed.parent.mkdir(parents=True, exist_ok=True)
     processed.write_text(
         """---
@@ -1835,7 +1963,14 @@ Processed source note.
 """,
         encoding="utf-8",
     )
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "2026-04-09_The Harness Wars Begin_深度解读.md"
+    deep_dive = (
+        temp_vault
+        / "20-Areas"
+        / "AI-Research"
+        / "Topics"
+        / "2026-04"
+        / "2026-04-09_The Harness Wars Begin_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """```yaml
@@ -1882,7 +2017,9 @@ type: "ai"
 def test_truth_api_returns_object_provenance_and_moc_membership(temp_vault):
     from ovp_pipeline.truth_api import get_object_detail
 
-    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source = (
+        temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    )
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(
         """---
@@ -1946,7 +2083,9 @@ date: 2026-04-13
 def test_truth_api_uses_page_links_for_provenance_resolution(temp_vault):
     from ovp_pipeline.truth_api import get_object_detail
 
-    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Alias Deep Dive_深度解读.md"
+    source = (
+        temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Alias Deep Dive_深度解读.md"
+    )
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(
         """---
@@ -2017,7 +2156,9 @@ Processed source note.
 """,
         encoding="utf-8",
     )
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -2062,7 +2203,9 @@ date: 2026-04-13
     assert traceability["brain_first_lookup"]["status"] == "existing_links_found"
     assert traceability["brain_first_lookup"]["existing_object_count"] == 1
     assert traceability["brain_first_lookup"]["existing_objects"][0]["object_id"] == "alpha"
-    assert traceability["brain_first_lookup"]["existing_objects"][0]["target_raw"] == "Alpha Concept"
+    assert (
+        traceability["brain_first_lookup"]["existing_objects"][0]["target_raw"] == "Alpha Concept"
+    )
     assert traceability["backlink_expectation"]["status"] == "satisfied"
     assert traceability["backlink_expectation"]["source_note_paths"] == [
         "50-Inbox/03-Processed/2026-04/Harness.md"
@@ -2084,7 +2227,9 @@ Processed source note.
 """,
         encoding="utf-8",
     )
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -2196,7 +2341,9 @@ Processed source note.
 """,
         encoding="utf-8",
     )
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -2264,7 +2411,9 @@ date: 2026-04-13
 
     assert traceability["object"]["object_id"] == "alpha"
     assert [item["slug"] for item in traceability["deep_dives"]] == ["harness-deep-dive"]
-    assert [item["path"] for item in traceability["source_notes"]] == ["50-Inbox/03-Processed/2026-04/Harness.md"]
+    assert [item["path"] for item in traceability["source_notes"]] == [
+        "50-Inbox/03-Processed/2026-04/Harness.md"
+    ]
     assert [item["slug"] for item in traceability["atlas_pages"]] == ["atlas-index"]
     assert traceability["stage_label"] == "evergreen_object"
     assert traceability["chain_status"] == "complete"
@@ -2292,7 +2441,9 @@ Processed source note.
 """,
         encoding="utf-8",
     )
-    promoted = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    promoted = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    )
     promoted.parent.mkdir(parents=True, exist_ok=True)
     promoted.write_text(
         """---
@@ -2309,7 +2460,9 @@ Mentions [[alpha]].
 """,
         encoding="utf-8",
     )
-    incidental = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Incidental_深度解读.md"
+    incidental = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Incidental_深度解读.md"
+    )
     incidental.write_text(
         """---
 note_id: incidental-deep-dive
@@ -2376,7 +2529,9 @@ Processed source note.
 """,
         encoding="utf-8",
     )
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -2447,7 +2602,9 @@ date: 2026-04-13
 
     assert traceability["note"]["note_type"] == "evergreen"
     assert [item["slug"] for item in traceability["deep_dives"]] == ["harness-deep-dive"]
-    assert [item["path"] for item in traceability["source_notes"]] == ["50-Inbox/03-Processed/2026-04/Harness.md"]
+    assert [item["path"] for item in traceability["source_notes"]] == [
+        "50-Inbox/03-Processed/2026-04/Harness.md"
+    ]
     assert [item["object_id"] for item in traceability["objects"]] == ["alpha"]
     assert [item["slug"] for item in traceability["atlas_pages"]] == ["atlas-index"]
 
@@ -2475,13 +2632,15 @@ date: 2026-04-13
     monkeypatch.setattr(
         truth_api,
         "get_object_traceability",
-        lambda vault_dir, object_id, *, pack_name=None: calls.append(pack_name)
-        or {
-            "object": {"object_id": object_id, "title": "Alpha"},
-            "source_notes": [],
-            "deep_dives": [],
-            "atlas_pages": [],
-        },
+        lambda vault_dir, object_id, *, pack_name=None: (
+            calls.append(pack_name)
+            or {
+                "object": {"object_id": object_id, "title": "Alpha"},
+                "source_notes": [],
+                "deep_dives": [],
+                "atlas_pages": [],
+            }
+        ),
     )
 
     truth_api.get_note_traceability(
@@ -2757,7 +2916,9 @@ Processed source note without any derived deep dive.
 """,
         encoding="utf-8",
     )
-    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    deep_dive = (
+        vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -2782,9 +2943,13 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
     assert any(item["signal_type"] == "source_needs_deep_dive" for item in items)
     assert any(item["signal_type"] == "deep_dive_needs_objects" for item in items)
     source_signal = next(item for item in items if item["signal_type"] == "source_needs_deep_dive")
-    deep_dive_signal = next(item for item in items if item["signal_type"] == "deep_dive_needs_objects")
+    deep_dive_signal = next(
+        item for item in items if item["signal_type"] == "deep_dive_needs_objects"
+    )
     assert source_signal["note_paths"] == ["50-Inbox/03-Processed/2026-04/Harness Source.md"]
-    assert deep_dive_signal["note_paths"] == ["20-Areas/AI-Research/Topics/2026-04/Harness Deep Dive_深度解读.md"]
+    assert deep_dive_signal["note_paths"] == [
+        "20-Areas/AI-Research/Topics/2026-04/Harness Deep Dive_深度解读.md"
+    ]
     assert source_signal["recommended_action"]["kind"] == "deep_dive_workflow"
     assert source_signal["recommended_action"]["label"] == "Create deep dive"
     assert source_signal["recommended_action"]["executable"] is False
@@ -2801,8 +2966,12 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
     assert deep_dive_signal["recommended_action"]["executable"] is False
     assert deep_dive_signal["recommended_action"]["resolution_kind"] == "focused_action"
     assert deep_dive_signal["recommended_action"]["dispatch_mode"] == "queue_only"
-    assert deep_dive_signal["recommended_action"]["resolver_rule_name"] == "object_extraction_workflow"
-    assert deep_dive_signal["recommended_action"]["governance_provider_name"] == "research_governance"
+    assert (
+        deep_dive_signal["recommended_action"]["resolver_rule_name"] == "object_extraction_workflow"
+    )
+    assert (
+        deep_dive_signal["recommended_action"]["governance_provider_name"] == "research_governance"
+    )
     assert deep_dive_signal["recommended_action"]["governance_provider_pack"] == "research-tech"
     assert deep_dive_signal["recommended_action"]["safe_to_run"] is True
     assert deep_dive_signal["recommended_action"]["queue_status"] == "queued"
@@ -2863,7 +3032,9 @@ Processed source note without any derived deep dive.
 """,
         encoding="utf-8",
     )
-    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    deep_dive = (
+        vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -2922,7 +3093,9 @@ Processed source note without downstream chain.
     rebuild_knowledge_index(vault)
 
     sync_signal_ledger(vault)
-    action = next(item for item in list_action_queue(vault) if item["action_kind"] == "deep_dive_workflow")
+    action = next(
+        item for item in list_action_queue(vault) if item["action_kind"] == "deep_dive_workflow"
+    )
 
     assert action["safe_to_run"] is True
     assert action["resolution_kind"] == "focused_action"
@@ -2931,9 +3104,17 @@ Processed source note without downstream chain.
     assert action["processor_inputs"] == ["source_note"]
     assert action["processor_outputs"] == ["deep_dive"]
     assert action["processor_quality_hooks"] == ["quality"]
+    assert action["handler_provider_pack"] == "research-tech"
+    assert action["handler_provider_name"] == "deep_dive_workflow"
+    assert action["processor_provider_pack"] == "research-tech"
+    assert action["processor_provider_name"] == "deep_dive_workflow"
+    assert action["source_signal_active"] is True
+    assert action["last_result_summary"] == "No execution result recorded yet."
 
 
-def test_truth_api_list_action_queue_backfills_execution_contract_metadata_for_legacy_rows(temp_vault):
+def test_truth_api_list_action_queue_backfills_execution_contract_metadata_for_legacy_rows(
+    temp_vault,
+):
     from ovp_pipeline.truth_api import list_action_queue
 
     logs_dir = temp_vault / "60-Logs"
@@ -2968,6 +3149,11 @@ def test_truth_api_list_action_queue_backfills_execution_contract_metadata_for_l
     assert action["processor_inputs"] == ["source_note"]
     assert action["processor_outputs"] == ["deep_dive"]
     assert action["processor_quality_hooks"] == ["quality"]
+    assert action["handler_provider_pack"] == "research-tech"
+    assert action["handler_provider_name"] == "deep_dive_workflow"
+    assert action["processor_provider_pack"] == "research-tech"
+    assert action["processor_provider_name"] == "deep_dive_workflow"
+    assert action["source_signal_active"] is False
 
 
 def test_truth_api_run_next_action_queue_item_executes_deep_dive_workflow(temp_vault, monkeypatch):
@@ -3021,7 +3207,9 @@ Processed source note without any derived deep dive.
     assert actions[0]["impact_summary"]["produced_artifact_types"] == ["deep_dive"]
 
 
-def test_truth_api_run_next_action_queue_item_marks_obsolete_when_signal_is_gone(temp_vault, monkeypatch):
+def test_truth_api_run_next_action_queue_item_marks_obsolete_when_signal_is_gone(
+    temp_vault, monkeypatch
+):
     import ovp_pipeline.truth_api as truth_api
 
     vault = _seed_truth_vault(temp_vault)
@@ -3049,6 +3237,79 @@ Processed source note without any derived deep dive.
     assert payload["reason"] == "obsolete_signal"
     assert payload["action"]["status"] == "obsolete"
     assert actions[0]["status"] == "obsolete"
+    assert actions[0]["precondition_status"] == "obsolete"
+    assert actions[0]["obsolete_reason"] == "source_signal_inactive"
+
+
+def test_truth_api_run_next_action_queue_item_blocks_missing_action_target_before_handler(
+    temp_vault, monkeypatch
+):
+    import ovp_pipeline.truth_api as truth_api
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "signals.jsonl").write_text(
+        json.dumps(
+            {
+                "signal_id": "source_needs_deep_dive::missing",
+                "signal_type": "source_needs_deep_dive",
+                "status": "active",
+                "title": "Missing source",
+                "detail": "Missing source should not run.",
+                "source_path": "/note?path=50-Inbox%2F03-Processed%2FMissing.md",
+                "note_paths": [],
+                "object_ids": [],
+                "recommended_action": {
+                    "kind": "deep_dive_workflow",
+                    "label": "Create deep dive",
+                    "path": "/note?path=50-Inbox%2F03-Processed%2FMissing.md",
+                    "executable": True,
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (logs_dir / "actions.jsonl").write_text(
+        json.dumps(
+            {
+                "action_id": "action::missing",
+                "action_kind": "deep_dive_workflow",
+                "pack": "research-tech",
+                "source_signal_id": "source_needs_deep_dive::missing",
+                "title": "Missing source",
+                "target_ref": "50-Inbox/03-Processed/Missing.md",
+                "status": "queued",
+                "created_at": "2026-04-15T00:00:00Z",
+                "safe_to_run": True,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        truth_api,
+        "execute_focused_action_handler",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("handler should not run")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        truth_api,
+        "_signal_by_id",
+        lambda vault_dir, signal_id, **kwargs: {"signal_id": signal_id},
+    )
+
+    payload = truth_api.run_next_action_queue_item(temp_vault)
+    action = truth_api.list_action_queue(temp_vault)[0]
+
+    assert payload["ran"] is False
+    assert payload["reason"] == "blocked"
+    assert action["status"] == "blocked"
+    assert action["precondition_status"] == "blocked"
+    assert action["blocked_reason"] == "missing_note_path:50-Inbox/03-Processed/Missing.md"
+    assert action["retry_count"] == 0
 
 
 def test_truth_api_can_retry_failed_action_queue_item(temp_vault, monkeypatch):
@@ -3168,7 +3429,9 @@ Processed source note without any derived deep dive.
 """,
         encoding="utf-8",
     )
-    deep_dive = vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    deep_dive = (
+        vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness Deep Dive_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -3193,7 +3456,9 @@ Mentions [[source-note]] but has not produced any evergreen objects yet.
         "execute_focused_action_handler",
         lambda vault_dir, action, **kwargs: (
             object(),
-            {"ok": "deep_dive"} if action["action_kind"] == "deep_dive_workflow" else {"ok": "objects"},
+            {"ok": "deep_dive"}
+            if action["action_kind"] == "deep_dive_workflow"
+            else {"ok": "objects"},
         ),
         raising=False,
     )
@@ -3230,7 +3495,9 @@ Processed source note without any derived deep dive.
     monkeypatch.setattr(
         truth_api,
         "execute_focused_action_handler",
-        lambda vault_dir, action, **kwargs: (_ for _ in ()).throw(FileNotFoundError("source note not found")),
+        lambda vault_dir, action, **kwargs: (_ for _ in ()).throw(
+            FileNotFoundError("source note not found")
+        ),
         raising=False,
     )
 
@@ -3251,17 +3518,20 @@ def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkey
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
+    target = temp_vault / "50-Inbox" / "03-Processed" / "Harness.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("---\ntitle: Harness\n---\n", encoding="utf-8")
     (logs_dir / "actions.jsonl").write_text(
         "\n".join(
             [
                 json.dumps(
-                    {
-                        "action_id": "action::manual",
-                        "action_kind": "review_contradiction",
-                        "source_signal_id": "signal::manual",
-                        "title": "Manual review",
-                        "target_ref": "/contradictions",
-                        "status": "queued",
+                        {
+                            "action_id": "action::manual",
+                            "action_kind": "deep_dive_workflow",
+                            "source_signal_id": "signal::manual",
+                            "title": "Manual review",
+                            "target_ref": "50-Inbox/03-Processed/Manual.md",
+                            "status": "queued",
                         "created_at": "2026-04-15T00:00:00Z",
                         "retry_count": 0,
                         "failure_bucket": "",
@@ -3309,13 +3579,23 @@ def test_truth_api_run_action_queue_can_limit_to_safe_actions(temp_vault, monkey
     manual = next(item for item in actions if item["action_id"] == "action::manual")
 
     assert payload["safe_only"] is True
+    assert payload["attempted_count"] == 2
     assert payload["ran_count"] == 1
+    assert payload["skipped_unsafe_count"] == 1
+    assert payload["obsolete_count"] == 0
+    assert payload["failed_count"] == 0
     assert safe["status"] == "succeeded"
-    assert manual["status"] == "queued"
+    assert manual["status"] == "blocked"
+    assert manual["precondition_status"] == "unsafe"
+    assert manual["blocked_reason"] == "action_not_marked_safe_to_run"
 
 
 def test_truth_api_builds_briefing_snapshot(temp_vault):
-    from ovp_pipeline.truth_api import get_briefing_snapshot, record_review_action, sync_signal_ledger
+    from ovp_pipeline.truth_api import (
+        get_briefing_snapshot,
+        record_review_action,
+        sync_signal_ledger,
+    )
 
     vault = _seed_truth_vault(temp_vault)
     thin = vault / "10-Knowledge" / "Evergreen" / "Thin.md"
@@ -3358,6 +3638,10 @@ Thin.
     assert payload["priority_items"]
     assert payload["first_useful_sign"] in payload["insights"]
     assert any(item.get("recommended_action") for item in payload["priority_items"])
+    actionable = next(item for item in payload["priority_items"] if item.get("recommended_action"))
+    assert actionable["recommended_action"]["queue_status"] in {"queued", ""}
+    assert actionable["recommended_action"]["resolver_rule_name"]
+    assert "action_lifecycle" in actionable
 
 
 def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, monkeypatch):
@@ -3432,7 +3716,9 @@ def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault,
             },
         ],
     )
-    monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24, pack_name=None: [])
+    monkeypatch.setattr(
+        truth_api, "list_evolution_candidates", lambda vault_dir, limit=24, pack_name=None: []
+    )
 
     from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
 
@@ -3442,7 +3728,12 @@ def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault,
 
 
 def test_truth_api_enqueues_signal_actions_idempotently(temp_vault):
-    from ovp_pipeline.truth_api import enqueue_signal_action, list_action_queue, list_signals, sync_signal_ledger
+    from ovp_pipeline.truth_api import (
+        enqueue_signal_action,
+        list_action_queue,
+        list_signals,
+        sync_signal_ledger,
+    )
 
     vault = _seed_truth_vault(temp_vault)
     processed = vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness Source.md"
@@ -3459,12 +3750,16 @@ Processed source note without any derived deep dive.
     )
     rebuild_knowledge_index(vault)
     sync_signal_ledger(vault)
-    source_signal = next(item for item in list_signals(vault) if item["signal_type"] == "source_needs_deep_dive")
+    source_signal = next(
+        item for item in list_signals(vault) if item["signal_type"] == "source_needs_deep_dive"
+    )
 
     first = enqueue_signal_action(vault, signal_id=source_signal["signal_id"])
     second = enqueue_signal_action(vault, signal_id=source_signal["signal_id"])
     actions = list_action_queue(vault)
-    refreshed_signal = next(item for item in list_signals(vault) if item["signal_id"] == source_signal["signal_id"])
+    refreshed_signal = next(
+        item for item in list_signals(vault) if item["signal_id"] == source_signal["signal_id"]
+    )
 
     assert first["created"] is False
     assert second["created"] is False
@@ -3485,7 +3780,9 @@ def test_truth_api_enqueue_signal_action_uses_action_queue_lock(temp_vault, monk
     rebuild_knowledge_index(vault)
     truth_api.sync_signal_ledger(vault)
     contradiction_signal = next(
-        item for item in truth_api.list_signals(vault) if item["signal_type"] == "contradiction_open"
+        item
+        for item in truth_api.list_signals(vault)
+        if item["signal_type"] == "contradiction_open"
     )
     calls: list[str] = []
 
@@ -3578,7 +3875,10 @@ def test_truth_api_sync_signal_ledger_uses_signal_ledger_lock(temp_vault, monkey
     monkeypatch.setattr(
         truth_api,
         "_backfill_auto_queue_actions",
-        lambda vault_dir, *, pack_name=None, signals=None: {"created_count": 0, "created_action_ids": []},
+        lambda vault_dir, *, pack_name=None, signals=None: {
+            "created_count": 0,
+            "created_action_ids": [],
+        },
     )
 
     truth_api.sync_signal_ledger(vault)
@@ -3591,6 +3891,9 @@ def test_truth_api_run_next_action_queue_item_uses_action_queue_lock(temp_vault,
 
     logs_dir = temp_vault / "60-Logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
+    target = temp_vault / "50-Inbox" / "03-Processed" / "Harness.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("---\ntitle: Harness\n---\n", encoding="utf-8")
     (logs_dir / "actions.jsonl").write_text(
         json.dumps(
             {
@@ -3636,7 +3939,7 @@ def test_truth_api_run_next_action_queue_item_uses_action_queue_lock(temp_vault,
     payload = truth_api.run_next_action_queue_item(temp_vault, safe_only=True)
 
     assert payload["ran"] is True
-    assert calls == [f"enter:{True}", "exit", f"enter:{True}", "exit"]
+    assert calls == [f"enter:{True}", "exit", f"enter:{True}", "exit", f"enter:{True}", "exit"]
 
 
 def test_truth_api_refresh_truth_after_action_uses_pack_override(temp_vault, monkeypatch):
@@ -3653,7 +3956,9 @@ def test_truth_api_refresh_truth_after_action_uses_pack_override(temp_vault, mon
     monkeypatch.setattr(
         truth_api_source,
         "sync_signal_ledger",
-        lambda vault_dir, **kwargs: captured.update({"synced": vault_dir, "synced_pack": kwargs.get("pack_name")}),
+        lambda vault_dir, **kwargs: captured.update(
+            {"synced": vault_dir, "synced_pack": kwargs.get("pack_name")}
+        ),
     )
 
     truth_api_source._refresh_truth_after_action(
@@ -3759,7 +4064,9 @@ def test_action_id_includes_pack_to_avoid_cross_pack_collisions():
     assert research != media
 
 
-def test_truth_api_list_signals_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
+def test_truth_api_list_signals_dispatches_via_observation_surface_registry(
+    temp_vault, monkeypatch
+):
     import ovp_pipeline.truth_api as truth_api_source
 
     calls: list[tuple[str, str | None]] = []
@@ -3788,7 +4095,8 @@ def test_truth_api_list_signals_dispatches_via_observation_surface_registry(temp
         truth_api_source,
         "_rewrite_jsonl",
         lambda path, items: path.write_text(
-            "\n".join(json.dumps(item, ensure_ascii=False) for item in items) + ("\n" if items else ""),
+            "\n".join(json.dumps(item, ensure_ascii=False) for item in items)
+            + ("\n" if items else ""),
             encoding="utf-8",
         ),
     )
@@ -3841,7 +4149,9 @@ def test_research_tech_build_signal_entries_uses_pack_aware_core_surfaces(temp_v
     assert production_calls == ["default-knowledge"]
 
 
-def test_research_tech_observation_surface_build_signals_delegates_to_surface_module(temp_vault, monkeypatch):
+def test_research_tech_observation_surface_build_signals_delegates_to_surface_module(
+    temp_vault, monkeypatch
+):
     from ovp_pipeline.packs.research_tech import observation_surfaces, surfaces
 
     calls: list[tuple[Path, str | None]] = []
@@ -3849,7 +4159,9 @@ def test_research_tech_observation_surface_build_signals_delegates_to_surface_mo
     monkeypatch.setattr(
         surfaces,
         "build_signal_entries",
-        lambda vault_dir, *, pack_name=None: calls.append((vault_dir, pack_name)) or [{"signal_id": "signal::delegated"}],
+        lambda vault_dir, *, pack_name=None: (
+            calls.append((vault_dir, pack_name)) or [{"signal_id": "signal::delegated"}]
+        ),
     )
 
     items = observation_surfaces.build_signals(
@@ -3861,14 +4173,20 @@ def test_research_tech_observation_surface_build_signals_delegates_to_surface_mo
     assert calls == [(temp_vault, "default-knowledge")]
 
 
-def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
+def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_registry(
+    temp_vault, monkeypatch
+):
     import ovp_pipeline.truth_api as truth_api_source
 
     def fake_execute(*, surface_kind, vault_dir, pack_name=None, **kwargs):
         if surface_kind == "signals":
             return object(), []
         if surface_kind == "briefing":
-            return object(), {"generated_at": "2026-04-15T00:00:00Z", "priority_item_count": 1, "recent_signals": []}
+            return object(), {
+                "generated_at": "2026-04-15T00:00:00Z",
+                "priority_item_count": 1,
+                "recent_signals": [],
+            }
         raise AssertionError(f"unexpected surface {surface_kind}")
 
     monkeypatch.setattr(
@@ -3878,12 +4196,16 @@ def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_regi
         raising=False,
     )
 
-    payload = truth_api_source.get_briefing_snapshot(temp_vault, pack_name="default-knowledge", limit=5)
+    payload = truth_api_source.get_briefing_snapshot(
+        temp_vault, pack_name="default-knowledge", limit=5
+    )
 
     assert payload["priority_item_count"] == 1
 
 
-def test_research_tech_observation_surface_build_briefing_delegates_to_surface_module(temp_vault, monkeypatch):
+def test_research_tech_observation_surface_build_briefing_delegates_to_surface_module(
+    temp_vault, monkeypatch
+):
     from ovp_pipeline.packs.research_tech import observation_surfaces, surfaces
 
     calls: list[tuple[Path, str | None, int]] = []
@@ -3891,8 +4213,10 @@ def test_research_tech_observation_surface_build_briefing_delegates_to_surface_m
     monkeypatch.setattr(
         surfaces,
         "build_briefing_snapshot",
-        lambda vault_dir, *, pack_name=None, limit=8: calls.append((vault_dir, pack_name, limit))
-        or {"generated_at": "2026-04-16T00:00:00Z", "priority_item_count": 2},
+        lambda vault_dir, *, pack_name=None, limit=8: (
+            calls.append((vault_dir, pack_name, limit))
+            or {"generated_at": "2026-04-16T00:00:00Z", "priority_item_count": 2}
+        ),
     )
 
     payload = observation_surfaces.build_briefing(
@@ -3905,7 +4229,9 @@ def test_research_tech_observation_surface_build_briefing_delegates_to_surface_m
     assert calls == [(temp_vault, "default-knowledge", 5)]
 
 
-def test_truth_api_list_production_chains_dispatches_via_observation_surface_registry(temp_vault, monkeypatch):
+def test_truth_api_list_production_chains_dispatches_via_observation_surface_registry(
+    temp_vault, monkeypatch
+):
     import ovp_pipeline.truth_api as truth_api_source
 
     calls: list[tuple[str, str | None, str | None]] = []
@@ -3942,8 +4268,9 @@ def test_research_tech_observation_surface_build_production_chains_delegates_to_
     monkeypatch.setattr(
         surfaces,
         "list_production_chains",
-        lambda vault_dir, *, pack_name=None, query=None, limit=100: calls.append((vault_dir, pack_name, query, limit))
-        or [{"title": "delegated chain"}],
+        lambda vault_dir, *, pack_name=None, query=None, limit=100: (
+            calls.append((vault_dir, pack_name, query, limit)) or [{"title": "delegated chain"}]
+        ),
     )
 
     items = observation_surfaces.build_production_chains(
@@ -4009,7 +4336,9 @@ def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, m
     monkeypatch.setattr(
         research_surfaces.core,
         "list_production_gaps",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not call list_production_gaps")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("should not call list_production_gaps")
+        ),
     )
 
     items = research_surfaces.build_signal_entries(temp_vault)
@@ -4022,7 +4351,9 @@ def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, m
     }
 
 
-def test_research_tech_deep_dive_signal_exposes_brain_first_lookup_contract(temp_vault, monkeypatch):
+def test_research_tech_deep_dive_signal_exposes_brain_first_lookup_contract(
+    temp_vault, monkeypatch
+):
     from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
 
     monkeypatch.setattr(research_surfaces.core, "list_contradictions", lambda *args, **kwargs: [])
@@ -4105,7 +4436,9 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
             },
         ],
     )
-    monkeypatch.setattr(truth_api, "list_evolution_candidates", lambda vault_dir, limit=24, pack_name=None: [])
+    monkeypatch.setattr(
+        truth_api, "list_evolution_candidates", lambda vault_dir, limit=24, pack_name=None: []
+    )
     monkeypatch.setattr(
         truth_api,
         "list_action_queue",
@@ -4115,10 +4448,7 @@ def test_truth_api_briefing_batches_topic_title_lookups(temp_vault, monkeypatch)
     def fake_batch(vault_dir, object_ids, pack_name=None):
         assert pack_name == "default-knowledge"
         calls.append(tuple(object_ids))
-        return {
-            object_id: {"title": f"title:{object_id}"}
-            for object_id in object_ids
-        }
+        return {object_id: {"title": f"title:{object_id}"} for object_id in object_ids}
 
     monkeypatch.setattr(truth_api, "_batch_object_rows", fake_batch)
 
@@ -4228,7 +4558,10 @@ def test_truth_api_lists_candidate_concepts(temp_vault):
     assert item["title"] == "Alpha Candidate"
     assert item["source_count"] == 2
     assert item["candidate_path"] == "10-Knowledge/Evergreen/_Candidates/alpha-candidate.md"
-    assert item["candidate_note_path"] == "/note?path=10-Knowledge%2FEvergreen%2F_Candidates%2Falpha-candidate.md"
+    assert (
+        item["candidate_note_path"]
+        == "/note?path=10-Knowledge%2FEvergreen%2F_Candidates%2Falpha-candidate.md"
+    )
     assert item["suggested_action"] == "merge_as_alias"
     assert item["similar_existing"][0]["slug"] == "alpha-existing"
 
@@ -4274,7 +4607,9 @@ def test_truth_api_review_candidate_concept_promotes_and_records_audit(temp_vaul
     assert promoted is not None
     assert promoted.status == STATUS_ACTIVE
     assert (temp_vault / "10-Knowledge" / "Evergreen" / "alpha-candidate.md").exists()
-    assert not (temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "alpha-candidate.md").exists()
+    assert not (
+        temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "alpha-candidate.md"
+    ).exists()
 
     audit = list_review_actions(temp_vault, limit=1)[0]
     assert audit["event_type"] == "ui_candidate_reviewed"
@@ -4283,7 +4618,9 @@ def test_truth_api_review_candidate_concept_promotes_and_records_audit(temp_vaul
     assert audit["note"] == "Promote from workbench"
 
 
-def test_truth_api_review_candidate_concept_records_audit_when_rebuild_fails(temp_vault, monkeypatch):
+def test_truth_api_review_candidate_concept_records_audit_when_rebuild_fails(
+    temp_vault, monkeypatch
+):
     from ovp_pipeline import truth_api
     from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
     from ovp_pipeline.truth_api import list_review_actions
@@ -4295,7 +4632,9 @@ def test_truth_api_review_candidate_concept_records_audit_when_rebuild_fails(tem
 
     monkeypatch.setattr(truth_api, "rebuild_knowledge_index", fail_rebuild)
 
-    with pytest.raises(RuntimeError, match="candidate review applied but knowledge index rebuild failed"):
+    with pytest.raises(
+        RuntimeError, match="candidate review applied but knowledge index rebuild failed"
+    ):
         truth_api.review_candidate_concept(
             temp_vault,
             slug="alpha-candidate",
@@ -4369,7 +4708,9 @@ def test_truth_api_review_candidate_concept_rejects_without_rebuilding_index(tem
     assert payload["knowledge_index_rebuilt"] is False
     assert rejected is not None
     assert rejected.status == STATUS_REJECTED
-    assert not (temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "alpha-candidate.md").exists()
+    assert not (
+        temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "alpha-candidate.md"
+    ).exists()
     audit = list_review_actions(temp_vault, limit=1)[0]
     assert audit["event_type"] == "ui_candidate_reviewed"
     assert audit["slug"] == "alpha-candidate"

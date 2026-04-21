@@ -13,7 +13,9 @@ from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 
 
 def _fresh_timestamp(*, seconds_ago: int = 0) -> str:
-    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
 
 
 def _seed_truth_store(temp_vault):
@@ -66,6 +68,8 @@ Alpha does not support local-first execution.
         encoding="utf-8",
     )
     rebuild_knowledge_index(temp_vault)
+
+
 def test_ui_server_root_serves_html_shell(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
 
@@ -102,7 +106,10 @@ def test_ui_server_root_serves_html_shell(temp_vault):
                         "progress_percent": 30.0,
                         "progress_summary": "3/10 files processed",
                     },
-                    "last_meaningful_event": {"event_type": "absorb_file_processed", "file": "Alpha.md"},
+                    "last_meaningful_event": {
+                        "event_type": "absorb_file_processed",
+                        "file": "Alpha.md",
+                    },
                 },
             },
             ensure_ascii=False,
@@ -162,7 +169,10 @@ def test_render_runtime_card_shows_pipeline_process_identity():
                 "run_ledger": {
                     "run_state": "running",
                     "heartbeat_at": "2026-04-09T00:20:00Z",
-                    "current_step": {"step_name": "absorb", "progress_summary": "3/10 files processed"},
+                    "current_step": {
+                        "step_name": "absorb",
+                        "progress_summary": "3/10 files processed",
+                    },
                 },
             },
             "stale_count": 0,
@@ -184,6 +194,40 @@ def test_render_runtime_card_shows_pipeline_process_identity():
     assert "one-shot" in html
     assert "1h 2m" in html
     assert "--from-step absorb --pack research-tech" in html
+
+
+def test_render_runtime_card_shows_action_worker_state():
+    from ovp_pipeline.commands.ui_server import _render_runtime_card
+
+    html = _render_runtime_card(
+        {
+            "active_run": None,
+            "stale_count": 0,
+            "action_worker": {
+                "active": True,
+                "state": "running",
+                "mode": "loop",
+                "safe_only": True,
+                "pid": 12345,
+                "elapsed_summary": "20m",
+                "heartbeat_age_summary": "10m",
+                "current_action": {
+                    "action_id": "action::demo",
+                    "action_kind": "deep_dive_workflow",
+                    "source_signal_id": "signal::demo",
+                    "target_ref": "50-Inbox/03-Processed/Demo.md",
+                },
+            },
+        }
+    )
+
+    assert "Action Worker" in html
+    assert "PID 12345" in html
+    assert "loop" in html
+    assert "safe-only" in html
+    assert "action::demo" in html
+    assert "deep_dive_workflow" in html
+    assert "50-Inbox/03-Processed/Demo.md" in html
 
 
 def test_render_runtime_card_shows_cache_skip_and_blocked_reason():
@@ -452,7 +496,9 @@ def test_ui_server_search_endpoint_returns_objects_and_notes(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    deep_dive = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -493,7 +539,9 @@ def test_ui_server_search_endpoint_accepts_pack_scope(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    deep_dive = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Agent Harness_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -551,7 +599,10 @@ def test_ui_server_search_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/search?pack=default-knowledge"' in body
-    assert "name='pack' value='default-knowledge'" in body or 'name="pack" value="default-knowledge"' in body
+    assert (
+        "name='pack' value='default-knowledge'" in body
+        or 'name="pack" value="default-knowledge"' in body
+    )
     assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
 
 
@@ -624,7 +675,9 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/objects?pack=default-knowledge"' in body
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/atlas?pack=default-knowledge"' in body
-    assert 'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
+    assert (
+        'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
+    )
     assert "Assembly Contract" in body
     assert "inherited from object_brief in research-tech" in body
     assert "Source contract: wiki_view · object/page" in body
@@ -650,7 +703,9 @@ Processed source note.
 """,
         encoding="utf-8",
     )
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    deep_dive = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Harness_深度解读.md"
+    )
     deep_dive.parent.mkdir(parents=True, exist_ok=True)
     deep_dive.write_text(
         """---
@@ -750,7 +805,10 @@ date: 2026-04-13
     assert 'href="/search?pack=default-knowledge"' in body
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
-    assert 'href="/note?path=20-Areas%2FAI-Research%2FTopics%2F2026-04%2FHarness_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md&amp;pack=default-knowledge"' in body
+    assert (
+        'href="/note?path=20-Areas%2FAI-Research%2FTopics%2F2026-04%2FHarness_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md&amp;pack=default-knowledge"'
+        in body
+    )
     assert "Current State" in body
     assert "Inbound Capture" in body
     assert "Captured 4 inbound events" in body
@@ -1020,7 +1078,9 @@ def test_ui_server_research_api_route_rejects_non_research_pack(temp_vault, monk
     monkeypatch.setattr(
         ui_server,
         "build_cluster_browser_payload",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cluster builder should not run")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cluster builder should not run")
+        ),
     )
 
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1050,7 +1110,9 @@ def test_ui_server_research_html_route_rejects_non_research_pack(temp_vault, mon
     monkeypatch.setattr(
         ui_server,
         "build_cluster_browser_payload",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cluster builder should not run")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cluster builder should not run")
+        ),
     )
 
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -1153,7 +1215,9 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/signals?pack=default-knowledge"' in body
     assert 'href="/atlas?pack=default-knowledge"' in body
-    assert 'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
+    assert (
+        'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
+    )
     assert "Assembly Contract" in body
     assert "inherited from event_dossier in research-tech" in body
     assert "Source contract: wiki_view · event/dossier" in body
@@ -1236,7 +1300,9 @@ def test_ui_server_evolution_endpoint_accepts_pack_scope(temp_vault, monkeypatch
 
     captured: dict[str, str | None] = {}
 
-    def fake_build_evolution_browser_payload(vault_dir, *, pack_name=None, query=None, status="all", link_type=None):
+    def fake_build_evolution_browser_payload(
+        vault_dir, *, pack_name=None, query=None, status="all", link_type=None
+    ):
         captured["pack_name"] = pack_name
         captured["query"] = query
         captured["status"] = status
@@ -1259,7 +1325,9 @@ def test_ui_server_evolution_endpoint_accepts_pack_scope(temp_vault, monkeypatch
             "link_types": [],
         }
 
-    monkeypatch.setattr(ui_server, "build_evolution_browser_payload", fake_build_evolution_browser_payload)
+    monkeypatch.setattr(
+        ui_server, "build_evolution_browser_payload", fake_build_evolution_browser_payload
+    )
 
     server = create_server(temp_vault, host="127.0.0.1", port=0)
     port = server.server_address[1]
@@ -1267,7 +1335,9 @@ def test_ui_server_evolution_endpoint_accepts_pack_scope(temp_vault, monkeypatch
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/api/evolution?pack=default-knowledge&q=alpha&status=all&link_type=enriches")
+        conn.request(
+            "GET", "/api/evolution?pack=default-knowledge&q=alpha&status=all&link_type=enriches"
+        )
         response = conn.getresponse()
         payload = json.loads(response.read().decode("utf-8"))
     finally:
@@ -1426,7 +1496,9 @@ date: 2026-04-13
 """,
         encoding="utf-8",
     )
-    shared_source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    shared_source = (
+        temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    )
     shared_source.parent.mkdir(parents=True, exist_ok=True)
     shared_source.write_text(
         """---
@@ -1548,7 +1620,9 @@ date: 2026-04-13
 """,
         encoding="utf-8",
     )
-    shared_source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    shared_source = (
+        temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Shared Deep Dive_深度解读.md"
+    )
     shared_source.parent.mkdir(parents=True, exist_ok=True)
     shared_source.write_text(
         """---
@@ -1618,7 +1692,9 @@ def test_ui_server_can_accept_evolution_candidate_via_api(temp_vault):
     from ovp_pipeline.truth_api import list_evolution_candidates
 
     _seed_truth_store(temp_vault)
-    candidate = next(item for item in list_evolution_candidates(temp_vault) if item["link_type"] == "challenges")
+    candidate = next(
+        item for item in list_evolution_candidates(temp_vault) if item["link_type"] == "challenges"
+    )
     server = create_server(temp_vault, host="127.0.0.1", port=0)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1971,7 +2047,10 @@ Processed source note without downstream chain.
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md&amp;pack=default-knowledge"' in body
+    assert (
+        'href="/note?path=50-Inbox%2F03-Processed%2F2026-04%2FLoose%20Source.md&amp;pack=default-knowledge"'
+        in body
+    )
     assert "inherited from research-tech-production-chains" in body
     assert "Chain status:" in body
     assert "Missing stages:" in body
@@ -2213,7 +2292,9 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
     assert "declared by research_governance in research-tech" in body
     assert "Next Actions" in body
     assert "Impact: Waiting on queue execution" in body
-    assert "Inbound capture: Observed 1 inbound capture event but no downstream artifact yet." in body
+    assert (
+        "Inbound capture: Observed 1 inbound capture event but no downstream artifact yet." in body
+    )
     assert "Brain-first lookup: reuse_existing · existing_links_found · 1 existing objects" in body
     assert "Backlinks: satisfied · 1 source notes" in body
 
@@ -2409,7 +2490,10 @@ def test_ui_server_briefing_endpoint_preserves_contract_metadata(temp_vault, mon
     assert payload["assembly_contract"]["source_provider_pack"] == "research-tech"
     assert payload["governance_contract"]["status"] == "inherited"
     assert payload["governance_contract"]["provider_pack"] == "research-tech"
-    assert payload["priority_items"][0]["recommended_action"]["resolver_rule_name"] == "deep_dive_workflow"
+    assert (
+        payload["priority_items"][0]["recommended_action"]["resolver_rule_name"]
+        == "deep_dive_workflow"
+    )
     assert (
         payload["priority_items"][0]["recommended_action"]["governance_provider_name"]
         == "research_governance"
@@ -2500,7 +2584,10 @@ def test_ui_server_signals_endpoint_preserves_contract_metadata(temp_vault, monk
     assert payload["governance_contract"]["status"] == "inherited"
     assert payload["governance_contract"]["provider_pack"] == "research-tech"
     assert payload["items"][0]["recommended_action"]["resolver_rule_name"] == "deep_dive_workflow"
-    assert payload["items"][0]["recommended_action"]["governance_provider_name"] == "research_governance"
+    assert (
+        payload["items"][0]["recommended_action"]["governance_provider_name"]
+        == "research_governance"
+    )
     assert payload["items"][0]["recommended_action"]["governance_provider_pack"] == "research-tech"
 
 
@@ -2521,6 +2608,12 @@ def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, mo
                     "action_kind": "deep_dive_workflow",
                     "title": "Create deep dive",
                     "safe_to_run": True,
+                    "handler_provider_pack": "research-tech",
+                    "handler_provider_name": "deep_dive_workflow",
+                    "processor_provider_pack": "research-tech",
+                    "processor_provider_name": "deep_dive_workflow",
+                    "source_signal_active": True,
+                    "last_result_summary": "No execution result recorded yet.",
                 }
             ],
             "count": 1,
@@ -2551,6 +2644,9 @@ def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, mo
     assert 'href="/?pack=default-knowledge"' in body
     assert "name='pack' value='default-knowledge'" in body
     assert "value='/actions?pack=default-knowledge'" in body
+    assert "Handler contract: deep_dive_workflow · research-tech" in body
+    assert "Processor contract: deep_dive_workflow · research-tech" in body
+    assert "Source signal: active" in body
 
 
 def test_ui_server_can_run_next_action_via_api(temp_vault, monkeypatch):
@@ -2797,7 +2893,11 @@ def test_ui_server_can_resolve_contradiction_via_api(temp_vault):
 
     review_log = (layout.logs_dir / "review-actions.jsonl").read_text(encoding="utf-8").splitlines()
     latest_review = json.loads(review_log[-1])
-    contradiction = next(item for item in list_contradictions(temp_vault, status="resolved") if item["contradiction_id"] == contradiction_id)
+    contradiction = next(
+        item
+        for item in list_contradictions(temp_vault, status="resolved")
+        if item["contradiction_id"] == contradiction_id
+    )
     assert contradiction["status"] == "resolved_keep_positive"
     assert contradiction["resolution_note"] == "Reviewed in UI"
     assert latest_review["event_type"] == "ui_contradictions_resolved"
@@ -2841,14 +2941,23 @@ Delta does not support local-first execution.
     rebuild_knowledge_index(temp_vault)
     layout = VaultLayout.from_vault(temp_vault)
     with sqlite3.connect(layout.knowledge_db) as conn:
-        contradiction_ids = [row[0] for row in conn.execute("SELECT contradiction_id FROM contradictions ORDER BY contradiction_id").fetchall()]
+        contradiction_ids = [
+            row[0]
+            for row in conn.execute(
+                "SELECT contradiction_id FROM contradictions ORDER BY contradiction_id"
+            ).fetchall()
+        ]
 
     server = create_server(temp_vault, host="127.0.0.1", port=0)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        body = "contradiction_id=" + "&contradiction_id=".join(contradiction_ids) + "&status=dismissed&note=Batch+reviewed"
+        body = (
+            "contradiction_id="
+            + "&contradiction_id=".join(contradiction_ids)
+            + "&status=dismissed&note=Batch+reviewed"
+        )
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request(
             "POST",
@@ -2920,8 +3029,10 @@ Thin note.
     assert payload["objects_rebuilt"] == 1
     assert payload["object_ids"] == ["thin-note"]
     review_log = (
-        VaultLayout.from_vault(temp_vault).logs_dir / "review-actions.jsonl"
-    ).read_text(encoding="utf-8").splitlines()
+        (VaultLayout.from_vault(temp_vault).logs_dir / "review-actions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
     latest_review = json.loads(review_log[-1])
     assert latest_review["event_type"] == "ui_summaries_rebuilt"
 
@@ -2979,7 +3090,9 @@ def test_ui_server_research_mutation_rejects_non_research_pack(temp_vault, monke
     monkeypatch.setattr(
         ui_server,
         "resolve_contradictions",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("contradiction resolver should not run")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("contradiction resolver should not run")
+        ),
     )
 
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -3093,13 +3206,19 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert "Source provider: default-knowledge · overview/topic" in body
 
 
-def test_render_object_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):
+def test_render_object_page_hides_research_affordances_when_pack_lacks_research_semantics(
+    temp_vault, monkeypatch
+):
     import ovp_pipeline.commands.ui_server as ui_server
     import ovp_pipeline.ui.view_models as view_models
 
     _seed_truth_store(temp_vault)
-    monkeypatch.setattr(view_models, "_supports_research_shell", lambda pack_name=None: False, raising=False)
-    payload = view_models.build_object_page_payload(temp_vault, "alpha", pack_name="default-knowledge")
+    monkeypatch.setattr(
+        view_models, "_supports_research_shell", lambda pack_name=None: False, raising=False
+    )
+    payload = view_models.build_object_page_payload(
+        temp_vault, "alpha", pack_name="default-knowledge"
+    )
     monkeypatch.setattr(ui_server, "_shell_supports_research_nav", lambda requested_pack="": False)
 
     body = ui_server._render_object_page(payload)
@@ -3111,7 +3230,9 @@ def test_render_object_page_hides_research_affordances_when_pack_lacks_research_
     assert "<h2>Contradictions</h2>" not in body
 
 
-def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_semantics(temp_vault, monkeypatch):
+def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_semantics(
+    temp_vault, monkeypatch
+):
     import ovp_pipeline.commands.ui_server as ui_server
     from ovp_pipeline.ui.view_models import build_topic_overview_payload
 
@@ -3140,7 +3261,11 @@ def test_render_topic_page_includes_production_chain_section(temp_vault):
     body = ui_server._render_topic_page(payload)
 
     assert "<h2>Production Chain</h2>" in body
-    assert "Missing source notes" in body or "Missing deep dives" in body or "Missing Atlas / MOC reach" in body
+    assert (
+        "Missing source notes" in body
+        or "Missing deep dives" in body
+        or "Missing Atlas / MOC reach" in body
+    )
 
 
 def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, monkeypatch):
@@ -3189,7 +3314,9 @@ def test_ui_server_main_starts_server_with_requested_bind(temp_vault, capsys, mo
     }
 
 
-def test_ui_server_main_can_spawn_detached_action_worker_when_enabled(temp_vault, capsys, monkeypatch):
+def test_ui_server_main_can_spawn_detached_action_worker_when_enabled(
+    temp_vault, capsys, monkeypatch
+):
     from ovp_pipeline.commands.ui_server import main
 
     calls = {}
@@ -3240,7 +3367,11 @@ def test_ui_server_main_can_spawn_detached_action_worker_when_enabled(temp_vault
 
     assert exit_code == 0
     assert payload == {"host": "127.0.0.1", "port": 9999, "vault_dir": str(temp_vault)}
-    assert calls["worker_process"]["cmd"][1:4] == ["-m", "ovp_pipeline.commands.run_actions", "--vault-dir"]
+    assert calls["worker_process"]["cmd"][1:4] == [
+        "-m",
+        "ovp_pipeline.commands.run_actions",
+        "--vault-dir",
+    ]
     assert "--loop" in calls["worker_process"]["cmd"]
     assert calls["worker_process"]["kwargs"]["start_new_session"] is True
 
@@ -3454,7 +3585,9 @@ def test_ui_server_can_promote_candidate_via_api(temp_vault):
     assert audit["note"] == "Promote from UI"
 
 
-def test_ui_server_candidate_review_reports_rebuild_failure_without_disconnect(temp_vault, monkeypatch):
+def test_ui_server_candidate_review_reports_rebuild_failure_without_disconnect(
+    temp_vault, monkeypatch
+):
     from ovp_pipeline.commands.ui_server import create_server
     from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
 

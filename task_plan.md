@@ -1,120 +1,115 @@
-# Task Plan: External Project Discovery for OVP
+# Task Plan: OVP Roadmap Closeout And Phase 27
 
 ## Runtime Note
 
-- `Phase 25` is complete in the codebase and validated against a real local incremental run:
-  - canonical run ledger
-  - honest counted progress
-  - watcher/API/UI reader unification
-  - explicit daily `ovp --incremental` entrypoint
-- `Phase 24` is the active implementation slice in this branch:
-  - brain-first lookup before object/link creation
-  - backlink legibility
-  - signal/UI propagation of candidate-vs-existing-object decisions
+- Current branch: `main`
+- Current merged head: `21dcebf Add candidate canonicalization workbench`
+- Last full verification on `main`: `pytest -q` -> `685 passed`
+- Untracked local files intentionally not part of the roadmap work:
+  - `.review-venv/`
+  - `AGENTS.md`
+  - `important_files_diff.txt`
 
-## Goal
-Build a running comparative map of external memory, context, runtime, and governance systems; classify what each project is actually doing; and extract only the durable ideas that matter for Obsidian Vault Pipeline.
+## Current Product State
+
+OVP is now a usable local knowledge workbench with:
+
+- explicit truth/object browsing
+- source-to-knowledge traceability
+- review console surfaces
+- candidate/canonical review actions
+- observable pipeline run ledger
+- active signal loop
+- action queue and focused action worker execution surface
+
+The current missing product claim is:
+
+> OVP has a single focused execution surface, but broader background intelligence is still an incremental roadmap, not a hosted scheduler or autonomous harness.
 
 ## Current Phase
-Phase 4
 
-## Phases
+`Phase 27: Background Intelligence Orchestration Closeout` is implemented locally.
 
-### Phase 1: Local Project Context
-- [x] Understand current project goals and structure
-- [x] Identify where note-taking, article generation, or knowledge workflows already exist
-- [x] Capture findings in findings.md
-- **Status:** complete
+Canonical plan:
 
-### Phase 2: arscontexta Discovery
-- [x] Read repository docs and structure
-- [x] Inspect core implementation files and architecture
-- [x] Capture findings in findings.md
-- **Status:** complete
+- `docs/plans/2026-04-21-phase27-background-intelligence-orchestration-closeout.md`
 
-### Phase 3: Comparative Analysis
-- [x] Compare arscontexta assumptions against OVP's current direction
-- [x] Separate strong ideas from superficial similarities
-- [x] Record decisions and rationale
-- **Status:** complete
+## Roadmap Status
 
-### Phase 4: Synthesis for Articles
-- [x] Extract 3-5 research/article directions
-- [x] Explain significance and tradeoffs
-- [x] Prepare concise delivery
-- **Status:** complete
+| Milestone | Status | Notes |
+| --- | --- | --- |
+| Milestone 0 | Complete | Template and baseline vault structure |
+| Milestone 1 | Complete | Knowledge DB foundation |
+| Milestone 2 | Complete | Truth and source projection |
+| Milestone 3 | Complete | UI access to local truth |
+| Milestone 4 | Complete | Event/contradiction semantics |
+| Milestone 5 | Complete | Production traceability |
+| Milestone 6 | Complete | Product shell and operator UX |
+| Milestone 7 | Complete | Active signal loop, runtime visibility, candidate/canonical workbench |
+| Milestone 8 | Complete | Knowledge evolution layer |
+| Milestone 9 | In Progress | Background intelligence has observable execution foundations; broader intelligence loops remain future work |
+| Milestone 9A | Complete | Single focused execution surface via action queue / worker / handler contracts |
 
-### Phase 5: Delivery
-- [x] Review findings for accuracy
-- [x] Deliver conclusions with concrete recommendations
-- [x] Include source references
-- **Status:** complete
+## Completed Recent Phases
 
-## Key Questions
-1. What problem is arscontexta actually solving beyond "better note taking"?
-2. Which parts of its system are durable ideas versus implementation-specific choices?
-3. What is genuinely useful for OVP now, and what is likely premature?
-4. Which external patterns should OVP explicitly reject rather than absorb?
+- `Phase 22`: active signal impact accounting
+- `Phase 23`: inbound capture audit visibility
+- `Phase 24`: brain-first lookup and backlink legibility
+- `Phase 25`: observable runtime and run ledger
+- `Phase 26`: candidate canonicalization workbench
+- `Phase 27`: background intelligence orchestration closeout
 
-## Decisions Made
+## Current TODO
+
+- Phase 27 implementation is done locally.
+- Diff has been reviewed for unrelated tracked-file changes.
+- Remaining before PR:
+  - commit and open PR when requested
+
+Completed verification:
+
+- `pytest tests/test_run_actions_command.py tests/test_truth_api.py tests/test_ui_view_models.py tests/test_ui_server.py tests/test_watch_progress_command.py -q` -> `262 passed`
+- `ruff check ...` on touched Python files -> `All checks passed`
+- `python -m pip install -e .` -> installed editable `obsidian-vault-pipeline==0.8.6`
+- installed-command validation with `python -m ovp_pipeline.commands.run_actions --once --safe-only` -> blocked missing target with persisted worker state
+- `git diff --check` -> clean
+- `pytest -q` -> `688 passed`
+
+## Implemented In Phase 27
+
+- `/api/runtime` now includes action-worker state from `60-Logs/action-worker.json`.
+- `run_actions` writes worker state for one-shot and loop execution.
+- `/` renders both the current broad workflow and the focused action worker.
+- focused actions now run preconditions before handler execution.
+- action queue items persist deterministic `blocked_reason` and `obsolete_reason`.
+- `/signals`, `/briefing`, and `/actions` share action lifecycle state.
+- safe batch execution returns attempted / ran / skipped unsafe / obsolete / blocked / failed / stopped counts.
+- `/actions` exposes handler provider, processor provider, source-signal activity, precondition state, and last result.
+
+## Decisions
+
 | Decision | Rationale |
-|----------|-----------|
-| Use file-based planning for this task | The work spans local context, external repo inspection, and synthesis across multiple tool calls |
-| Evaluate external repos by implemented runtime shape, not README positioning alone | This prevents marketing language from being mistaken for architectural reality |
-| Keep the survey centered on OVP rather than drifting into generic “agent platform” analysis | The user explicitly corrected this, and it materially changes what counts as relevant |
+| --- | --- |
+| Do not continue in Milestone 7 | Phase 26 closed the remaining candidate/canonical operator gap. |
+| Do not create a second execution system | Phase 27 kept the existing action queue as the single focused execution surface. |
+| Treat Phase 27 as closeout/hardening, not greenfield | The implementation hardened action queue, worker, handler registry, focused action contracts, and auto-queue rather than adding a new engine. |
+| Keep `ovp --incremental` / `ovp --full` as broad reconcilers | The action queue is for focused follow-up execution, not batch replacement. |
+| Defer richer semantic extraction | It should enter later as a pack-level extraction contract after orchestration is observable. |
 
-## Errors Encountered
-| Error | Attempt | Resolution |
-|-------|---------|------------|
-|       | 1       |            |
+## Non-Goals For The Next Phase
 
-## Notes
-- Re-read this plan before major synthesis decisions
-- Distinguish repository claims from implemented reality
-- Prefer primary sources: repo docs, code, and official project pages
-- Keep updating `docs/plans/2026-04-17-external-project-discovery-log.md` as the canonical survey artifact
-- Keep `docs/plans/2026-04-17-ovp-architecture-mapping.md` and `docs/plans/2026-04-17-ovp-interface-contract-mapping.md` as the current architecture interpretation layer for future design work
-- Use `docs/plans/2026-04-17-ovp-contract-evolution-design.md` as the current proposal for how new pack-side contracts should be introduced without rewriting the runtime
-- Treat `docs/plans/2026-04-17-phase18-knowledge-compiler-contract-consolidation-plan.md` as the current roadmap placement for this work: after `Phase 17`, before deeper temporal-truth/memory/evaluation expansions
-- Current implementation slices landed: `ArtifactSpec`, `AssemblyRecipeSpec`, `GovernanceSpec`; contract-consumption is now live in `ovp-export`, `truth_api`, the shared UI shell, and `ovp-doctor`, including recipe-provider vs source-provider resolution for access artifacts
-- Current contract-consumption depth:
-  - access surfaces now explain `recipe provider -> source provider`
-  - runtime/operator surfaces now explain `governance provider -> review/signal/resolver rules`
-  - `truth_api` resolver metadata and shared UI governance cards now read from the same governance registry
-  - item-level runtime outputs now explain `resolver rule -> governance provider`
-  - `ovp-doctor` shell payload now explains which governance contract the current pack scope actually resolves to
-- `Phase 18` closeout work now also includes:
-  - registry-backed effective artifact enumeration via `artifact_registry`
-  - registry-backed effective assembly/governance enumeration in `ovp-doctor`
-  - explicit `/api/briefing`, `/api/signals`, and `/api/actions` endpoint assertions for contract provenance
-  - closeout docs marking `Phase 18` complete / ready to close
-- `Phase 19` implementation is now complete:
-  - `orientation_brief` exists as a first-class assembly recipe
-  - `ovp-export --target orientation-brief` exports a compiled JSON entry product
-  - `/briefing` is now the orientation page
-  - `/` workbench home now exposes entry sections and routes into orientation
-  - object/topic/event/contradiction pages now expose stable compiled sections
-  - docs and verify checklists now treat orientation and compiled-page contracts as pack-level product semantics
-- `Phase 20` is complete:
-  - event / contradiction semantics are now explicit on the product surface
-  - production-chain traceability is now legible across note/object/topic/production views
-- `Phase 21` is complete:
-  - `/` now exposes workflow-group IA instead of only a flat card pile
-  - key shell surfaces now expose explicit `Next Actions`
-  - shell pages now lead with a compiled lead section before deeper detail blocks
-- `Phase 22` is complete:
-  - signals and queued actions now expose deterministic `impact_summary` contracts
-  - `/signals`, `/actions`, and `/briefing` now speak the same lifecycle language about loop productivity
-  - the first Milestone 7 slice is now about visible impact, not only passive signal presence
-- `Phase 23` is complete:
-  - note-level inbound capture is now a deterministic contract over existing pipeline/refine logs
-  - signal rows now expose `capture_summary` inherited from their backing notes
-  - note and briefing surfaces now expose `Inbound Capture` compiled sections
-  - `/signals` now renders inbound capture legibility directly, not only queue impact
-- `Phase 24` now closes the brain-first lookup + backlink legibility slice:
-  - traceability exposes lookup/backlink contracts
-  - production signals carry those contracts
-  - `/signals` renders the operator-visible decision
-- Next active planning target remains inside `Milestone 7: Active Signal Loop` only if reviewed candidate/canonical transitions still need operator actionability
-  - do not reopen shell UX unless a new operator-navigation gap appears
-  - do not widen immediately into temporal truth, harness memory, or benchmark tracks
+- No hosted scheduler.
+- No harness/session memory backend.
+- No new semantic relation extractor.
+- No direct UI-to-workflow execution outside the action queue.
+- No broad frontend redesign.
+
+## Verification Habit
+
+Before opening or closing the Phase 27 implementation PR:
+
+1. run targeted tests for the changed action/runtime path,
+2. run `pytest tests/test_truth_api.py tests/test_ui_view_models.py tests/test_ui_server.py tests/test_watch_progress_command.py -q`,
+3. run `pytest -q`,
+4. inspect review automation and thread state,
+5. merge only after no current blocking review threads remain.

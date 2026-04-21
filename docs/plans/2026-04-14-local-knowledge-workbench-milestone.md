@@ -318,7 +318,7 @@ That transition should stay constrained by a few hard product rules:
 
 ### Milestone 7: Active Signal Loop
 
-Status: **In Progress**
+Status: **Complete**
 
 Goal:
 
@@ -369,9 +369,9 @@ Current slice:
   - review actions write `ui_candidate_reviewed` audit events
   - promote / merge refresh derived knowledge state so active objects and rewritten links become visible without a separate manual reindex
 
-Next slice:
+Closeout:
 
-- Milestone 7 should be treated as closed once Phase 26 lands. The next work should move to the explicit roadmap gaps in Milestone 9A rather than widening candidate review into hidden semantic automation.
+- Milestone 7 is closed as of Phase 26. The next work moves to the explicit roadmap gaps in Milestone 9A rather than widening candidate review into hidden semantic automation.
 
 ### Milestone 8: Knowledge Evolution Layer
 
@@ -443,7 +443,7 @@ Current progress:
 
 ### Milestone 9A: Background Intelligence Orchestration Integration
 
-Status: **Planned**
+Status: **Complete**
 
 Goal:
 
@@ -468,8 +468,33 @@ Exit condition:
 
 Reference plan:
 
+- [2026-04-21-phase27-background-intelligence-orchestration-closeout.md](2026-04-21-phase27-background-intelligence-orchestration-closeout.md)
 - [2026-04-15-phase14-orchestration-integration-plan.md](2026-04-15-phase14-orchestration-integration-plan.md)
 - [2026-04-15-stage-handler-registry-design.md](2026-04-15-stage-handler-registry-design.md)
+
+Implemented foundation:
+
+- action queue ledger and `/actions` surfaces exist,
+- focused action worker exists through `ovp_pipeline.commands.run_actions`,
+- `run_actions` writes observable worker runtime state to `60-Logs/action-worker.json`,
+- `/api/runtime` and `/` expose focused action-worker state beside broad pipeline runtime state,
+- stage / focused-action handler registry exists,
+- governance-backed resolver rules exist,
+- `source_needs_deep_dive` and `deep_dive_needs_objects` auto-queue rules exist,
+- safe-only execution exists and returns auditable batch counts,
+- focused actions have explicit precondition state:
+  - `ready`
+  - `blocked`
+  - `obsolete`
+  - `unsafe`
+- action queue rows expose handler provider, processor provider, source-signal activity, blocked / obsolete reasons, and last result summary,
+- signals, briefing, and actions expose the same action lifecycle truth.
+
+Closeout result:
+
+- the product now has many observation surfaces but one focused execution surface,
+- `ovp --full` and `ovp --incremental` remain broad reconcilers,
+- queued focused work flows through the action queue and handler contracts.
 
 Architecture follow-up:
 
@@ -535,6 +560,9 @@ The just-finished sequence was:
 5. `Phase 21`
 6. `Phase 22`
 7. `Phase 23`
+8. `Phase 24`
+9. `Phase 25`
+10. `Phase 26`
 
 Completed references:
 
@@ -545,10 +573,10 @@ Completed references:
 - [[2026-04-17-phase21-product-shell-and-operator-ux]]
 - [[2026-04-17-phase22-active-signal-impact-accounting]]
 - [[2026-04-18-phase23-inbound-capture-audit-visibility]]
-
-Active next reference:
-
-- `Milestone 9A: Background Intelligence Orchestration Integration`, unless Phase 26 follow-up bugs show that candidate review still lacks operator safety.
+- [[2026-04-18-phase24-brain-first-lookup-and-backlink-legibility]]
+- [[2026-04-18-phase25-observable-runtime-and-run-ledger]]
+- [[2026-04-21-phase26-candidate-canonicalization-workbench]]
+- [[2026-04-21-phase27-background-intelligence-orchestration-closeout|Phase 27: Background Intelligence Orchestration Closeout]]
 
 What those phases accomplished:
 
@@ -639,10 +667,10 @@ As of this plan:
 - Milestone 4: complete
 - Milestone 5: complete
 - Milestone 6: complete
-- Milestone 7: complete once Phase 26 lands
+- Milestone 7: complete
 - Milestone 8: complete
 - Milestone 9: in progress
-- Milestone 9A: planned
+- Milestone 9A: complete
 
 So the honest product statement is:
 
