@@ -4193,6 +4193,7 @@ def _seed_candidate_registry(temp_vault):
             area="testing",
         )
     )
+    # Intentional duplicate upsert: this fixture needs source_count == 2.
     registry.upsert_candidate(
         slug="alpha-candidate",
         title="Alpha Candidate",
@@ -4236,6 +4237,22 @@ def test_truth_api_lists_candidate_concepts(temp_vault):
     assert empty_page["items"] == []
 
 
+def test_truth_api_candidate_listing_filters_before_expensive_suggestions(temp_vault, monkeypatch):
+    from ovp_pipeline import truth_api
+
+    _seed_candidate_registry(temp_vault)
+
+    def fail_candidate_review_suggestion(registry, entry):
+        raise AssertionError("candidate suggestions should not run for an empty filtered page")
+
+    monkeypatch.setattr(truth_api, "_candidate_review_suggestion", fail_candidate_review_suggestion)
+
+    payload = truth_api.list_candidate_concepts(temp_vault, query="no-match")
+
+    assert payload["count"] == 0
+    assert payload["items"] == []
+
+
 def test_truth_api_review_candidate_concept_promotes_and_records_audit(temp_vault):
     from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
     from ovp_pipeline.truth_api import list_review_actions, review_candidate_concept
@@ -4266,9 +4283,41 @@ def test_truth_api_review_candidate_concept_promotes_and_records_audit(temp_vaul
     assert audit["note"] == "Promote from workbench"
 
 
+def test_truth_api_review_candidate_concept_records_audit_when_rebuild_fails(temp_vault, monkeypatch):
+    from ovp_pipeline import truth_api
+    from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
+    from ovp_pipeline.truth_api import list_review_actions
+
+    _seed_candidate_registry(temp_vault)
+
+    def fail_rebuild(vault_dir, *, pack_name=None):
+        raise RuntimeError("rebuild failed")
+
+    monkeypatch.setattr(truth_api, "rebuild_knowledge_index", fail_rebuild)
+
+    with pytest.raises(RuntimeError, match="candidate review applied but knowledge index rebuild failed"):
+        truth_api.review_candidate_concept(
+            temp_vault,
+            slug="alpha-candidate",
+            action="promote",
+            note="Promote with rebuild failure",
+        )
+
+    promoted = ConceptRegistry(temp_vault).load().find_by_slug("alpha-candidate")
+    audit = list_review_actions(temp_vault, limit=1)[0]
+    assert promoted is not None
+    assert promoted.status == STATUS_ACTIVE
+    assert audit["event_type"] == "ui_candidate_reviewed"
+    assert audit["slug"] == "alpha-candidate"
+    assert audit["status"] == "promoted"
+    assert audit["note"] == "Promote with rebuild failure"
+    assert audit["knowledge_index_rebuilt"] is False
+    assert audit["knowledge_index_error"] == "rebuild failed"
+
+
 def test_truth_api_review_candidate_concept_merges_into_existing_and_rebuilds(temp_vault):
     from ovp_pipeline.concept_registry import ConceptRegistry
-    from ovp_pipeline.truth_api import review_candidate_concept
+    from ovp_pipeline.truth_api import list_review_actions, review_candidate_concept
 
     _seed_candidate_registry(temp_vault)
     article_path = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "Candidate Link.md"
@@ -4291,12 +4340,19 @@ def test_truth_api_review_candidate_concept_merges_into_existing_and_rebuilds(te
     assert registry.find_by_slug("alpha-candidate") is None
     assert target is not None
     assert "alpha-candidate" in target.redirects
-    assert "[[alpha-existing|Alpha Candidate]]" in article_path.read_text(encoding="utf-8")
+    article_text = article_path.read_text(encoding="utf-8")
+    assert "[[alpha-existing|Alpha Candidate]]" in article_text
+    assert "[[alpha-existing|alpha draft]]" in article_text
+    audit = list_review_actions(temp_vault, limit=1)[0]
+    assert audit["event_type"] == "ui_candidate_reviewed"
+    assert audit["slug"] == "alpha-candidate"
+    assert audit["status"] == "merged"
+    assert audit["note"] == "Merge duplicate surface"
 
 
 def test_truth_api_review_candidate_concept_rejects_without_rebuilding_index(temp_vault):
     from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_REJECTED
-    from ovp_pipeline.truth_api import review_candidate_concept
+    from ovp_pipeline.truth_api import list_review_actions, review_candidate_concept
 
     _seed_candidate_registry(temp_vault)
 
@@ -4314,6 +4370,11 @@ def test_truth_api_review_candidate_concept_rejects_without_rebuilding_index(tem
     assert rejected is not None
     assert rejected.status == STATUS_REJECTED
     assert not (temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates" / "alpha-candidate.md").exists()
+    audit = list_review_actions(temp_vault, limit=1)[0]
+    assert audit["event_type"] == "ui_candidate_reviewed"
+    assert audit["slug"] == "alpha-candidate"
+    assert audit["status"] == "rejected"
+    assert audit["note"] == "Not canonical"
 
 
 def test_candidate_browser_payload_exposes_operator_context(temp_vault):

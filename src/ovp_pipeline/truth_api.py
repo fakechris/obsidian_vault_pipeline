@@ -30,7 +30,6 @@ from .promote_candidates import (
     merge_candidate,
     promote_candidate,
     reject_candidate,
-    review_candidates,
 )
 from .runtime import (
     VaultLayout,
@@ -515,6 +514,24 @@ def record_review_action(
     return event
 
 
+def _candidate_review_suggestion(registry: ConceptRegistry, entry: Any) -> tuple[str, list[tuple[Any, float]]]:
+    similar = registry.search(entry.title, topk=5)
+    similar = [
+        (candidate, score)
+        for candidate, score in similar
+        if candidate.slug != entry.slug and candidate.status == "active"
+    ]
+    action = "keep_as_candidate"
+    if entry.source_count >= 2 or entry.evidence_count >= 3:
+        if similar and similar[0][1] >= 0.7:
+            action = "merge_as_alias"
+        else:
+            action = "promote_to_active"
+    elif similar and similar[0][1] >= 0.8:
+        action = "merge_as_alias"
+    return action, similar
+
+
 def list_candidate_concepts(
     vault_dir: Path | str,
     *,
@@ -527,13 +544,8 @@ def list_candidate_concepts(
     resolved_vault = resolve_vault_dir(vault_dir)
     registry = ConceptRegistry(resolved_vault).load()
     normalized_query = (query or "").strip().lower()
-    suggestions = {
-        entry.slug: (suggested_action, similar_existing)
-        for entry, suggested_action, similar_existing in review_candidates(registry)
-    }
-    items: list[dict[str, Any]] = []
-
-    for entry in sorted(registry.candidates, key=lambda item: (item.last_seen_at, item.slug), reverse=True):
+    filtered_candidates = []
+    for entry in registry.candidates:
         searchable = " ".join(
             [
                 entry.slug,
@@ -545,8 +557,14 @@ def list_candidate_concepts(
         ).lower()
         if normalized_query and normalized_query not in searchable:
             continue
+        filtered_candidates.append(entry)
 
-        suggested_action, similar_existing = suggestions.get(entry.slug, ("keep_as_candidate", []))
+    sorted_candidates = sorted(filtered_candidates, key=lambda item: (item.last_seen_at, item.slug), reverse=True)
+    page_candidates = sorted_candidates[offset: offset + limit]
+    items: list[dict[str, Any]] = []
+
+    for entry in page_candidates:
+        suggested_action, similar_existing = _candidate_review_suggestion(registry, entry)
         candidate_path = candidate_file_path(resolved_vault, entry.slug)
         candidate_rel = ""
         candidate_note_path = ""
@@ -587,9 +605,9 @@ def list_candidate_concepts(
         "query": query or "",
         "limit": limit,
         "offset": offset,
-        "count": len(items),
-        "status_counts": {"candidate": len(items)},
-        "items": paginated,
+        "count": len(filtered_candidates),
+        "status_counts": {"candidate": len(filtered_candidates)},
+        "items": items,
     }
 
 
@@ -632,9 +650,15 @@ def review_candidate_concept(
 
     knowledge_index_rebuilt = False
     knowledge_index_result: dict[str, Any] = {}
+    knowledge_index_error = ""
+    rebuild_exception: Exception | None = None
     if lifecycle_action in {"promote", "merge"}:
-        knowledge_index_result = rebuild_knowledge_index(resolved_vault, pack_name=pack_name)
-        knowledge_index_rebuilt = True
+        try:
+            knowledge_index_result = rebuild_knowledge_index(resolved_vault, pack_name=pack_name)
+            knowledge_index_rebuilt = True
+        except Exception as exc:
+            knowledge_index_error = str(exc)
+            rebuild_exception = exc
 
     status_by_action = {
         "promote": "promoted",
@@ -656,8 +680,13 @@ def review_candidate_concept(
             "mutation": mutation_payload,
             "knowledge_index_rebuilt": knowledge_index_rebuilt,
             "knowledge_index_result": knowledge_index_result,
+            "knowledge_index_error": knowledge_index_error,
         },
     )
+    if rebuild_exception is not None:
+        raise RuntimeError(
+            f"candidate review applied but knowledge index rebuild failed: {knowledge_index_error}"
+        ) from rebuild_exception
     return {
         "action": lifecycle_action,
         "slug": normalized_slug,
@@ -667,6 +696,7 @@ def review_candidate_concept(
         "mutation": mutation_payload,
         "knowledge_index_rebuilt": knowledge_index_rebuilt,
         "knowledge_index_result": knowledge_index_result,
+        "knowledge_index_error": knowledge_index_error,
         "audit_event": event,
     }
 
@@ -1851,6 +1881,11 @@ def _review_action_items(
                 "later_ref": str(payload.get("later_ref") or ""),
                 "link_type": str(payload.get("link_type") or ""),
                 "candidate_link_type": str(payload.get("candidate_link_type") or ""),
+                "candidate_slug": str(payload.get("candidate_slug") or ""),
+                "target_slug": str(payload.get("target_slug") or ""),
+                "action": str(payload.get("action") or ""),
+                "knowledge_index_rebuilt": bool(payload.get("knowledge_index_rebuilt")),
+                "knowledge_index_error": str(payload.get("knowledge_index_error") or ""),
                 "contradiction_ids": [
                     str(value)
                     for value in payload.get("contradiction_ids", [])

@@ -371,7 +371,7 @@ Current slice:
 
 Next slice:
 
-- Milestone 7 should be treated as closed once Phase 26 lands. The next work should move to the explicit roadmap gaps in Milestone 9A / 10 rather than widening candidate review into hidden semantic automation.
+- Milestone 7 should be treated as closed once Phase 26 lands. The next work should move to the explicit roadmap gaps in Milestone 9A rather than widening candidate review into hidden semantic automation.
 
 ### Milestone 8: Knowledge Evolution Layer
 

@@ -58,6 +58,7 @@ _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).e
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
 _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
+_CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
 
 
 def _shell_href(path: str, requested_pack: str = "") -> str:
@@ -2411,11 +2412,18 @@ def _render_candidate_items(payload: dict) -> str:
         suggested_action = str(item.get("suggested_action") or "keep_as_candidate")
         similar_existing = item.get("similar_existing") if isinstance(item.get("similar_existing"), list) else []
         first_similar = similar_existing[0] if similar_existing else {}
-        default_target = str(first_similar.get("slug") or "") if isinstance(first_similar, dict) else ""
+        default_target = ""
+        if isinstance(first_similar, dict):
+            try:
+                first_score = float(first_similar.get("score", 0.0))
+            except (TypeError, ValueError):
+                first_score = 0.0
+            if first_score >= _CANDIDATE_MERGE_AUTOFILL_THRESHOLD:
+                default_target = str(first_similar.get("slug") or "")
         similar_html = "".join(
             "<li>"
             f"<a href='{escape(str(similar.get('path') or ''))}'>{escape(str(similar.get('title') or similar.get('slug') or ''))}</a> "
-            f"<span class='pill'>{escape(str(similar.get('score') or ''))}</span>"
+            f"<span class='pill'>{escape(str(similar['score']) if 'score' in similar else '')}</span>"
             "</li>"
             for similar in similar_existing[:5]
             if isinstance(similar, dict)

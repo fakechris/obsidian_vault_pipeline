@@ -3361,9 +3361,40 @@ def test_ui_server_candidates_page_renders_review_controls(temp_vault):
     assert "Reject" in body
 
 
+def test_ui_server_candidate_item_keeps_zero_score_and_requires_low_score_merge_target():
+    from ovp_pipeline.commands.ui_server import _render_candidate_items
+
+    html = _render_candidate_items(
+        {
+            "requested_pack": "research-tech",
+            "items": [
+                {
+                    "slug": "alpha-candidate",
+                    "title": "Alpha Candidate",
+                    "definition": "Candidate concept awaiting review.",
+                    "source_count": 1,
+                    "evidence_count": 1,
+                    "similar_existing": [
+                        {
+                            "slug": "alpha-existing",
+                            "title": "Alpha Existing",
+                            "score": 0.0,
+                            "path": "/object?id=alpha-existing",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert "<span class='pill'>0.0</span>" in html
+    assert "name='target_slug' value=''" in html
+
+
 def test_ui_server_can_promote_candidate_via_api(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
     from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
+    from ovp_pipeline.truth_api import list_review_actions
 
     _seed_candidate_for_ui(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
@@ -3398,3 +3429,8 @@ def test_ui_server_can_promote_candidate_via_api(temp_vault):
     assert payload["mutation"]["action"] == "promote"
     assert payload["knowledge_index_rebuilt"] is True
     assert promoted.status == STATUS_ACTIVE
+    audit = list_review_actions(temp_vault, limit=1)[0]
+    assert audit["event_type"] == "ui_candidate_reviewed"
+    assert audit["slug"] == "alpha-candidate"
+    assert audit["status"] == "promoted"
+    assert audit["note"] == "Promote from UI"
