@@ -66,8 +66,11 @@ Canonical plan:
 - Phase 27 has been squash-merged to `origin/main` in PR #43.
 - Phase 28 adds background-intelligence value proof and policy legibility.
 - Phase 29 enforces backlink expectations before focused object writes.
-- Remaining before PR:
-  - commit and open PR when requested
+- PR #44 is open for Phase 28/29 and currently in review/merge validation.
+- Remaining before merge:
+  - resolve current review findings
+  - rerun targeted and full verification
+  - merge after no blocking review threads remain
 
 Latest completed Phase 27 verification:
 
@@ -116,7 +119,7 @@ Completed Phase 28/29 verification:
 
 ## Verification Habit
 
-Before opening or closing the Phase 27 implementation PR:
+Before closing the Phase 28/29 implementation PR:
 
 1. run targeted tests for the changed action/runtime path,
 2. run `pytest tests/test_truth_api.py tests/test_ui_view_models.py tests/test_ui_server.py tests/test_watch_progress_command.py -q`,

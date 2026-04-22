@@ -3175,9 +3175,21 @@ def _render_briefing_page(payload: dict) -> str:
     review_only_signal_types = background_policy.get("review_only_signal_types")
     if not isinstance(review_only_signal_types, list):
         review_only_signal_types = []
+
+    def _safe_count(value: object) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    loop_blocked_count = _safe_count(loop_summary.get("failed_count")) + _safe_count(
+        loop_summary.get("stalled_count")
+    )
+    skipped_signal_count = _safe_count(background_policy.get("skipped_signal_count"))
     failure_buckets = (
         "".join(
-            f"<li><span class='pill'>{escape(bucket)}</span> {count}</li>"
+            f"<li><span class='pill'>{escape(str(bucket))}</span> "
+            f"{_safe_count(count)}</li>"
             for bucket, count in failure_bucket_values.items()
         )
         or "<li class='muted'>No failed actions.</li>"
@@ -3187,9 +3199,9 @@ def _render_briefing_page(payload: dict) -> str:
             "<li>"
             f"<span class='pill'>{escape(str(signal_type))}</span> "
             f"{escape(str(decision.get('decision') or ''))}"
-            f"<div class='muted'>Active: {escape(str(decision.get('active_signal_count') or 0))} · "
-            f"Queued: {escape(str(decision.get('queued_action_count') or 0))} · "
-            f"Skipped: {escape(str(decision.get('skipped_count') or 0))}</div>"
+            f"<div class='muted'>Active: {_safe_count(decision.get('active_signal_count'))} · "
+            f"Queued: {_safe_count(decision.get('queued_action_count'))} · "
+            f"Skipped: {_safe_count(decision.get('skipped_count'))}</div>"
             "</li>"
             for signal_type, decision in signal_type_decisions.items()
             if isinstance(decision, dict)
@@ -3201,12 +3213,14 @@ def _render_briefing_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Orientation Brief</h1>",
-                f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.",
+                f"<p class='muted'>Generated at {escape(str(payload['generated_at']))}. "
+                f"{_safe_count(payload.get('recent_signal_count'))} recent signals, "
+                f"{_safe_count(payload.get('unresolved_issue_count'))} unresolved issues.",
                 (
                     " "
-                    + f"Loop: {loop_summary.get('productive_count', 0)} productive, "
-                    + f"{loop_summary.get('waiting_count', 0)} waiting, "
-                    + f"{loop_summary.get('failed_count', 0) + loop_summary.get('stalled_count', 0)} blocked."
+                    + f"Loop: {_safe_count(loop_summary.get('productive_count'))} productive, "
+                    + f"{_safe_count(loop_summary.get('waiting_count'))} waiting, "
+                    + f"{loop_blocked_count} blocked."
                 ),
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
@@ -3243,15 +3257,15 @@ def _render_briefing_page(payload: dict) -> str:
                     or "none"
                 )
                 + ".</p>"
-                f"<p class='muted'>Skipped: {escape(str(background_policy.get('skipped_signal_count') or 0))}</p>"
+                f"<p class='muted'>Skipped: {skipped_signal_count}</p>"
                 f"<ul class='list-tight'>{policy_decisions}</ul></section>",
                 f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>",
                 f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>",
                 "<section class='card'><h2>Execution Surface</h2>",
-                f"<p class='muted'>{queue_summary.get('queued_count', 0)} queued, ",
-                f"{queue_summary.get('safe_queued_count', 0)} safe to auto-run, ",
-                f"{queue_summary.get('running_count', 0)} running, ",
-                f"{queue_summary.get('failed_count', 0)} failed.</p>",
+                f"<p class='muted'>{_safe_count(queue_summary.get('queued_count'))} queued, ",
+                f"{_safe_count(queue_summary.get('safe_queued_count'))} safe to auto-run, ",
+                f"{_safe_count(queue_summary.get('running_count'))} running, ",
+                f"{_safe_count(queue_summary.get('failed_count'))} failed.</p>",
                 "<form method='post' action='/actions/run-batch' class='link-row'>",
                 "<input type='hidden' name='limit' value='5' />",
                 "<input type='hidden' name='safe_only' value='1' />",

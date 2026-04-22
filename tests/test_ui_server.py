@@ -1878,13 +1878,36 @@ def test_render_briefing_page_tolerates_malformed_background_policy():
             "section_nav": [],
             "first_useful_sign": None,
             "first_useful_sign_check": ["bad"],
-            "background_policy": "bad",
+            "background_policy": {
+                "auto_queue_enabled_signal_types": "bad",
+                "review_only_signal_types": "bad",
+                "skipped_signal_count": "<script>bad</script>",
+                "signal_type_decisions": {
+                    "<b>signal</b>": {
+                        "decision": "<b>review</b>",
+                        "active_signal_count": "bad",
+                        "queued_action_count": "<script>bad</script>",
+                        "skipped_count": object(),
+                    }
+                },
+            },
             "surface_contract": {},
             "assembly_contract": {},
             "governance_contract": {},
             "operator_rail": [],
-            "queue_summary": {"failure_buckets": ["bad"]},
-            "loop_summary": {},
+            "queue_summary": {
+                "queued_count": "bad",
+                "safe_queued_count": object(),
+                "running_count": "<script>bad</script>",
+                "failed_count": None,
+                "failure_buckets": {"<b>bucket</b>": "<script>bad</script>"},
+            },
+            "loop_summary": {
+                "productive_count": "bad",
+                "waiting_count": "<script>bad</script>",
+                "failed_count": "bad",
+                "stalled_count": object(),
+            },
             "insights": [],
             "priority_items": [],
             "recent_signals": [],
@@ -1897,6 +1920,8 @@ def test_render_briefing_page_tolerates_malformed_background_policy():
     assert "Value Proof" in body
     assert "Background Policy" in body
     assert "Auto-queue enabled: none" in body
+    assert "&lt;b&gt;bucket&lt;/b&gt;" in body
+    assert "<script>bad</script>" not in body
 
 
 def test_ui_server_briefing_page_renders_governance_resolver_metadata(temp_vault, monkeypatch):
