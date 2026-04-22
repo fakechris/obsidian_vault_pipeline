@@ -3151,26 +3151,76 @@ def _render_briefing_page(payload: dict) -> str:
         f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
         for item in payload.get("section_nav", [])
     )
-    queue_summary = payload.get("queue_summary", {})
-    loop_summary = payload.get("loop_summary", {})
+    queue_summary = payload.get("queue_summary")
+    if not isinstance(queue_summary, dict):
+        queue_summary = {}
+    loop_summary = payload.get("loop_summary")
+    if not isinstance(loop_summary, dict):
+        loop_summary = {}
+    first_useful_sign_check = payload.get("first_useful_sign_check")
+    if not isinstance(first_useful_sign_check, dict):
+        first_useful_sign_check = {}
+    background_policy = payload.get("background_policy")
+    if not isinstance(background_policy, dict):
+        background_policy = {}
+    failure_bucket_values = queue_summary.get("failure_buckets")
+    if not isinstance(failure_bucket_values, dict):
+        failure_bucket_values = {}
+    signal_type_decisions = background_policy.get("signal_type_decisions")
+    if not isinstance(signal_type_decisions, dict):
+        signal_type_decisions = {}
+    auto_queue_enabled_signal_types = background_policy.get("auto_queue_enabled_signal_types")
+    if not isinstance(auto_queue_enabled_signal_types, list):
+        auto_queue_enabled_signal_types = []
+    review_only_signal_types = background_policy.get("review_only_signal_types")
+    if not isinstance(review_only_signal_types, list):
+        review_only_signal_types = []
+
+    def _safe_count(value: object) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    loop_blocked_count = _safe_count(loop_summary.get("failed_count")) + _safe_count(
+        loop_summary.get("stalled_count")
+    )
+    skipped_signal_count = _safe_count(background_policy.get("skipped_signal_count"))
     failure_buckets = (
         "".join(
-            f"<li><span class='pill'>{escape(bucket)}</span> {count}</li>"
-            for bucket, count in queue_summary.get("failure_buckets", {}).items()
+            f"<li><span class='pill'>{escape(str(bucket))}</span> "
+            f"{_safe_count(count)}</li>"
+            for bucket, count in failure_bucket_values.items()
         )
         or "<li class='muted'>No failed actions.</li>"
+    )
+    policy_decisions = (
+        "".join(
+            "<li>"
+            f"<span class='pill'>{escape(str(signal_type))}</span> "
+            f"{escape(str(decision.get('decision') or ''))}"
+            f"<div class='muted'>Active: {_safe_count(decision.get('active_signal_count'))} · "
+            f"Queued: {_safe_count(decision.get('queued_action_count'))} · "
+            f"Skipped: {_safe_count(decision.get('skipped_count'))}</div>"
+            "</li>"
+            for signal_type, decision in signal_type_decisions.items()
+            if isinstance(decision, dict)
+        )
+        or "<li class='muted'>No governed signal policy decisions are active.</li>"
     )
     return _layout(
         "Working Memory Snapshot",
         "".join(
             [
                 "<h1>Orientation Brief</h1>",
-                f"<p class='muted'>Generated at {escape(payload['generated_at'])}. {payload['recent_signal_count']} recent signals, {payload['unresolved_issue_count']} unresolved issues.",
+                f"<p class='muted'>Generated at {escape(str(payload['generated_at']))}. "
+                f"{_safe_count(payload.get('recent_signal_count'))} recent signals, "
+                f"{_safe_count(payload.get('unresolved_issue_count'))} unresolved issues.",
                 (
                     " "
-                    + f"Loop: {loop_summary.get('productive_count', 0)} productive, "
-                    + f"{loop_summary.get('waiting_count', 0)} waiting, "
-                    + f"{loop_summary.get('failed_count', 0) + loop_summary.get('stalled_count', 0)} blocked."
+                    + f"Loop: {_safe_count(loop_summary.get('productive_count'))} productive, "
+                    + f"{_safe_count(loop_summary.get('waiting_count'))} waiting, "
+                    + f"{loop_blocked_count} blocked."
                 ),
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 "</p>",
@@ -3182,13 +3232,40 @@ def _render_briefing_page(payload: dict) -> str:
                 f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "",
                 _render_compiled_sections(remaining_sections),
                 f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
+                "<section class='card'><h2>Value Proof</h2>"
+                f"<p class='muted'>{escape(str(first_useful_sign_check.get('reason') or 'No value proof yet.'))}</p>"
+                "<div class='link-row'>"
+                f"<span class='pill'>Status: {escape(str(first_useful_sign_check.get('status') or 'empty'))}</span>"
+                f"<span class='pill'>Evidence: {escape(str(first_useful_sign_check.get('evidence_count') or 0))}</span>"
+                f"<span class='pill'>Actionability: {escape(str(first_useful_sign_check.get('actionability') or 'review'))}</span>"
+                "</div></section>",
+                "<section class='card'><h2>Background Policy</h2>"
+                "<p class='muted'>Auto-queue enabled: "
+                + escape(
+                    ", ".join(
+                        str(item)
+                        for item in auto_queue_enabled_signal_types
+                        if str(item or "").strip()
+                    )
+                    or "none"
+                )
+                + ". Review-only: "
+                + escape(
+                    ", ".join(
+                        str(item) for item in review_only_signal_types if str(item or "").strip()
+                    )
+                    or "none"
+                )
+                + ".</p>"
+                f"<p class='muted'>Skipped: {skipped_signal_count}</p>"
+                f"<ul class='list-tight'>{policy_decisions}</ul></section>",
                 f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>",
                 f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>",
                 "<section class='card'><h2>Execution Surface</h2>",
-                f"<p class='muted'>{queue_summary.get('queued_count', 0)} queued, ",
-                f"{queue_summary.get('safe_queued_count', 0)} safe to auto-run, ",
-                f"{queue_summary.get('running_count', 0)} running, ",
-                f"{queue_summary.get('failed_count', 0)} failed.</p>",
+                f"<p class='muted'>{_safe_count(queue_summary.get('queued_count'))} queued, ",
+                f"{_safe_count(queue_summary.get('safe_queued_count'))} safe to auto-run, ",
+                f"{_safe_count(queue_summary.get('running_count'))} running, ",
+                f"{_safe_count(queue_summary.get('failed_count'))} failed.</p>",
                 "<form method='post' action='/actions/run-batch' class='link-row'>",
                 "<input type='hidden' name='limit' value='5' />",
                 "<input type='hidden' name='safe_only' value='1' />",

@@ -2871,10 +2871,54 @@ def _focused_action_precondition(
                 "status": "blocked",
                 "reason": f"missing_note_path:{note_path}",
             }
+    backlink_precondition = _focused_action_backlink_precondition(vault_dir, action)
+    if str(backlink_precondition.get("status") or "") != "ready":
+        return backlink_precondition
     return {
         "status": "ready",
         "reason": "",
     }
+
+
+def _focused_action_backlink_precondition(
+    vault_dir: Path | str,
+    action: dict[str, Any],
+) -> dict[str, Any]:
+    action_kind = str(action.get("action_kind") or "")
+    if action_kind != "object_extraction_workflow":
+        return {"status": "ready", "reason": ""}
+    pack_name = str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME)
+    note_paths = _focused_action_note_paths(action)
+    if not note_paths:
+        return {
+            "status": "blocked",
+            "reason": "backlink_expectation_unavailable:missing_note_path",
+        }
+    for note_path in note_paths:
+        try:
+            traceability = get_note_traceability(
+                vault_dir,
+                note_path=note_path,
+                pack_name=pack_name,
+            )
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            return {
+                "status": "blocked",
+                "reason": f"backlink_expectation_unavailable:{note_path}:{type(exc).__name__}",
+            }
+        expectation = traceability.get("backlink_expectation")
+        if not isinstance(expectation, dict):
+            return {
+                "status": "blocked",
+                "reason": f"backlink_expectation_unavailable:{note_path}:missing_payload",
+            }
+        expectation_status = str(expectation.get("status") or "")
+        if expectation_status != "satisfied":
+            return {
+                "status": "blocked",
+                "reason": f"backlink_expectation_failed:{expectation_status}:{note_path}",
+            }
+    return {"status": "ready", "reason": ""}
 
 
 def _apply_failed_precondition(

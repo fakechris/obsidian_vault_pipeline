@@ -1664,6 +1664,92 @@ def test_build_briefing_payload_preserves_requested_pack(temp_vault):
     assert payload["governance_contract"]["provider_name"] == "research_governance"
 
 
+def test_build_briefing_payload_recomputes_value_check_for_productive_override(
+    temp_vault, monkeypatch
+):
+    from ovp_pipeline.ui import view_models
+
+    monkeypatch.setattr(
+        view_models,
+        "get_briefing_snapshot",
+        lambda *args, **kwargs: {
+            "generated_at": "2026-04-21T00:00:00Z",
+            "recent_signal_count": 1,
+            "unresolved_issue_count": 0,
+            "changed_object_count": 0,
+            "active_topic_count": 0,
+            "recent_signals": [
+                {
+                    "signal_id": "signal::productive",
+                    "signal_type": "source_needs_deep_dive",
+                    "title": "Productive signal",
+                    "detail": "Action produced a deep dive.",
+                    "source_path": "/signals",
+                    "note_paths": ["50-Inbox/03-Processed/Productive.md"],
+                    "object_ids": ["productive-object"],
+                    "recommended_action": {
+                        "label": "Inspect action",
+                        "path": "/actions",
+                        "queue_path": "/actions",
+                        "queue_status": "succeeded",
+                    },
+                    "impact_summary": {
+                        "impact_status": "productive",
+                        "impact_detail": "Produced 1 tracked artifact.",
+                    },
+                }
+            ],
+            "unresolved_issues": [],
+            "changed_objects": [],
+            "active_topics": [],
+            "insight_count": 1,
+            "priority_item_count": 1,
+            "insights": [],
+            "priority_items": [],
+            "first_useful_sign": {
+                "kind": "old_insight",
+                "title": "Old insight",
+                "detail": "Old detail.",
+                "path": "/old",
+                "source_paths": ["old.md"],
+                "object_ids": [],
+                "evidence_count": 1,
+                "actionability": "executable",
+            },
+            "first_useful_sign_check": {
+                "status": "useful",
+                "kind": "old_insight",
+                "reason": "Old insight surfaced with 1 evidence reference(s).",
+                "evidence_count": 1,
+                "actionability": "executable",
+            },
+            "background_policy": {
+                "governed_signal_types": [],
+                "auto_queue_enabled_signal_types": [],
+                "review_only_signal_types": [],
+                "active_auto_queue_signal_count": 0,
+                "active_review_only_signal_count": 0,
+                "skipped_signal_count": 0,
+                "skipped_reasons": {},
+                "signal_type_decisions": {},
+            },
+            "queue_summary": {
+                "queued_count": 0,
+                "safe_queued_count": 0,
+                "running_count": 0,
+                "failed_count": 0,
+                "failure_buckets": {},
+            },
+        },
+    )
+
+    payload = view_models.build_briefing_payload(temp_vault)
+
+    assert payload["first_useful_sign"]["title"] == "Productive signal"
+    assert payload["first_useful_sign_check"]["kind"] == "source_needs_deep_dive"
+    assert "Productive signal" in payload["first_useful_sign_check"]["reason"]
+
+
 def test_build_briefing_payload_handles_missing_surface_contract(temp_vault, monkeypatch):
     from ovp_pipeline.ui import view_models
 
@@ -2319,7 +2405,6 @@ Processed source note without downstream chain.
 
 def test_build_derivation_browser_payload_filters_stale_object_ids(temp_vault):
     from ovp_pipeline.ui.view_models import build_derivation_browser_payload
-    from ovp_pipeline.runtime import VaultLayout
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(

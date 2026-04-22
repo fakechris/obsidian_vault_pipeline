@@ -607,6 +607,10 @@ What the next phase should close:
 - if we enforce backlinks at write time, the enforcement should reuse the `backlink_expectation` contract instead of introducing a second source of truth
 - if we add richer semantic relation extraction, it should be a pack-level extraction contract, not a hidden global memory backend
 - background intelligence orchestration should reuse the action queue and run ledger instead of creating another execution path
+- after Phase 27, the immediate next closeout is Phase 28/29:
+  - prove background-intelligence value directly in the briefing surface
+  - enforce backlink expectations before focused object writes
+  - keep semantic relation extraction deferred until this trust boundary is closed
 
 Sequence rule:
 
@@ -680,7 +684,15 @@ The remaining gap is no longer “can this architecture support it?” It is now
 
 - keep candidate review explicit and auditable,
 - route background actions through the existing queue / run-ledger contracts,
+- prove that background intelligence is useful with explicit evidence and policy reasons,
+- enforce backlink expectations before object extraction creates downstream knowledge,
 - add richer pack-level semantic extraction only after the orchestration path is observable.
+
+Phase 28/29 status:
+
+- background-intelligence value proof is now implemented in the briefing payload and UI,
+- background policy is now visible from effective governance signal rules,
+- focused object extraction now blocks when the target deep dive lacks source backlink provenance.
 
 ## PR Review Gate
 
