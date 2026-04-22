@@ -200,24 +200,26 @@ def _get_version() -> str:
         from importlib.metadata import PackageNotFoundError, version
 
         return version("obsidian-vault-pipeline")
-    except PackageNotFoundError:
-        pass
-    except Exception:
+    except (ImportError, PackageNotFoundError):
         pass
 
     try:
         import tomllib
+    except ModuleNotFoundError:
+        tomllib = None
 
+    if tomllib is not None:
         for parent in Path(__file__).resolve().parents:
             pyproject = parent / "pyproject.toml"
             if not pyproject.exists():
                 continue
-            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            try:
+                data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            except (OSError, tomllib.TOMLDecodeError, UnicodeError):
+                continue
             project_version = data.get("project", {}).get("version")
             if project_version:
                 return str(project_version)
-    except Exception:
-        pass
     return "0.3.2"
 
 

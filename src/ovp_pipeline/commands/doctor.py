@@ -420,7 +420,7 @@ def _semantic_relation_contract_payload(
                 "evidence_required": bool(getattr(relation, "evidence_required", True)),
                 "review_required": bool(getattr(relation, "review_required", True)),
             }
-            for relation in list(getattr(spec, "relation_types", ()) or ())
+            for relation in getattr(spec, "relation_types", [])
         ],
     }
 
