@@ -1180,6 +1180,23 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
             "compiled_sections": [],
             "section_nav": [],
             "first_useful_sign": None,
+            "first_useful_sign_check": {
+                "status": "empty",
+                "kind": "",
+                "reason": "No briefing surface is available for this pack.",
+                "evidence_count": 0,
+                "actionability": "review",
+            },
+            "background_policy": {
+                "governed_signal_types": [],
+                "auto_queue_enabled_signal_types": [],
+                "review_only_signal_types": [],
+                "active_auto_queue_signal_count": 0,
+                "active_review_only_signal_count": 0,
+                "skipped_signal_count": 0,
+                "skipped_reasons": {},
+                "signal_type_decisions": {},
+            },
             "loop_summary": {
                 "productive_count": 0,
                 "waiting_count": 0,
@@ -2515,7 +2532,6 @@ def build_cluster_detail_payload(
     cluster = detail["cluster"]
     requested_pack = pack_name or str(cluster["pack"])
     member_index = {str(member["object_id"]): member for member in cluster["members"]}
-    member_object_ids = [str(member["object_id"]) for member in cluster["members"]]
     detail_path = (
         f"/cluster?id={quote(str(cluster['cluster_id']), safe='')}"
         f"&pack={quote(requested_pack, safe='')}"

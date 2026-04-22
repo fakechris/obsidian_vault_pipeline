@@ -43,6 +43,156 @@ def _traceability_contract_payload(traceability: dict[str, Any]) -> dict[str, An
     }
 
 
+def _briefing_evidence_count(item: dict[str, Any]) -> int:
+    evidence: set[str] = set()
+    for key in ("source_paths", "note_paths", "object_ids"):
+        value = item.get(key)
+        if isinstance(value, list):
+            evidence.update(str(entry) for entry in value if str(entry or "").strip())
+    for key in ("signal_id", "path"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            evidence.add(value)
+    return len(evidence)
+
+
+def _briefing_actionability(item: dict[str, Any]) -> str:
+    recommended_action = item.get("recommended_action")
+    if not isinstance(recommended_action, dict):
+        return "review"
+    if str(recommended_action.get("queue_status") or "").strip():
+        return "queued"
+    if bool(recommended_action.get("executable")):
+        return "executable"
+    return "review"
+
+
+def _annotate_briefing_value(
+    item: dict[str, Any],
+    *,
+    value_kind: str,
+    value_reason: str,
+) -> dict[str, Any]:
+    item["value_kind"] = value_kind
+    item["value_reason"] = value_reason
+    item["evidence_count"] = _briefing_evidence_count(item)
+    item["actionability"] = _briefing_actionability(item)
+    return item
+
+
+def _first_useful_sign_check(first_useful_sign: dict[str, Any] | None) -> dict[str, Any]:
+    if not first_useful_sign:
+        return {
+            "status": "empty",
+            "kind": "",
+            "reason": "No background insight or priority item has enough current evidence to surface.",
+            "evidence_count": 0,
+            "actionability": "review",
+        }
+    evidence_count = int(
+        first_useful_sign.get("evidence_count")
+        if "evidence_count" in first_useful_sign
+        else _briefing_evidence_count(first_useful_sign)
+    )
+    actionability = str(
+        first_useful_sign.get("actionability") or _briefing_actionability(first_useful_sign)
+    )
+    kind = str(first_useful_sign.get("kind") or "")
+    title = str(first_useful_sign.get("title") or "")
+    return {
+        "status": "useful",
+        "kind": kind,
+        "reason": (
+            f"{title or kind} surfaced with {evidence_count} evidence reference(s) "
+            f"and {actionability} follow-up."
+        ),
+        "evidence_count": evidence_count,
+        "actionability": actionability,
+    }
+
+
+def _background_policy_summary(
+    *,
+    pack_name: str,
+    recent_signals: list[dict[str, Any]],
+    action_by_signal_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    governed: dict[str, dict[str, Any]] = {}
+    for governance_spec in core.list_effective_governance_specs(pack_name=pack_name):
+        for rule in governance_spec.signal_rules:
+            signal_type = str(rule.signal_type or "").strip()
+            if not signal_type:
+                continue
+            governed[signal_type] = {
+                "signal_type": signal_type,
+                "resolver_rule": str(rule.resolver_rule or ""),
+                "auto_queue": bool(rule.auto_queue),
+                "provider_pack": str(governance_spec.pack or ""),
+                "provider_name": str(governance_spec.name or ""),
+            }
+
+    signal_counts = Counter(str(item.get("signal_type") or "") for item in recent_signals)
+    signal_type_decisions: dict[str, dict[str, Any]] = {}
+    skipped_reasons: Counter[str] = Counter()
+    for signal_type, rule in sorted(governed.items()):
+        matching = [
+            item
+            for item in recent_signals
+            if str(item.get("signal_type") or "") == signal_type
+        ]
+        queued_count = sum(
+            1
+            for item in matching
+            if str(item.get("signal_id") or "") in action_by_signal_id
+        )
+        skipped_count = 0
+        type_reasons: Counter[str] = Counter()
+        if rule["auto_queue"]:
+            for item in matching:
+                recommended_action = item.get("recommended_action")
+                if not isinstance(recommended_action, dict) or not recommended_action.get("kind"):
+                    skipped_count += 1
+                    type_reasons["missing_recommended_action"] += 1
+                elif str(item.get("signal_id") or "") not in action_by_signal_id:
+                    skipped_count += 1
+                    type_reasons["not_queued"] += 1
+        else:
+            skipped_count = len(matching)
+            if matching:
+                type_reasons["review_only"] = len(matching)
+
+        skipped_reasons.update(type_reasons)
+        signal_type_decisions[signal_type] = {
+            **rule,
+            "decision": "auto_queue_enabled" if rule["auto_queue"] else "review_only",
+            "active_signal_count": int(signal_counts.get(signal_type, 0)),
+            "queued_action_count": queued_count,
+            "skipped_count": skipped_count,
+            "skipped_reasons": dict(type_reasons),
+        }
+
+    auto_queue_types = sorted(
+        signal_type for signal_type, rule in governed.items() if rule["auto_queue"]
+    )
+    review_only_types = sorted(
+        signal_type for signal_type, rule in governed.items() if not rule["auto_queue"]
+    )
+    return {
+        "governed_signal_types": sorted(governed),
+        "auto_queue_enabled_signal_types": auto_queue_types,
+        "review_only_signal_types": review_only_types,
+        "active_auto_queue_signal_count": sum(
+            int(signal_counts.get(signal_type, 0)) for signal_type in auto_queue_types
+        ),
+        "active_review_only_signal_count": sum(
+            int(signal_counts.get(signal_type, 0)) for signal_type in review_only_types
+        ),
+        "skipped_signal_count": sum(skipped_reasons.values()),
+        "skipped_reasons": dict(skipped_reasons),
+        "signal_type_decisions": signal_type_decisions,
+    }
+
+
 def list_production_chains(
     vault_dir: Path | str,
     *,
@@ -610,6 +760,11 @@ def build_briefing_snapshot(
                 executable=True,
             ),
         }
+        _annotate_briefing_value(
+            insight,
+            value_kind="synthesis",
+            value_reason="Evolution candidates connect current objects to source-backed change signals.",
+        )
         key = (str(insight["kind"]), str(insight["title"]), str(insight["path"]))
         existing = merged_insights.get(key)
         if existing is None:
@@ -655,30 +810,37 @@ def build_briefing_snapshot(
                 "blocked_reason": str(action.get("blocked_reason") or ""),
                 "obsolete_reason": str(action.get("obsolete_reason") or ""),
             }
-        priority_items.append(
-            {
-                "signal_id": signal_id,
-                "kind": item["signal_type"],
-                "title": item["title"],
-                "detail": item["detail"],
-                "path": item["source_path"],
-                "source_paths": list(item.get("note_paths", [])),
-                "object_ids": list(item.get("object_ids", [])),
-                "recommended_action": recommended_action,
-                "action_lifecycle": item.get("action_lifecycle")
-                or (
-                    {
-                        "queue_status": str(action.get("status") or ""),
-                        "action_id": str(action.get("action_id") or ""),
-                        "precondition_status": str(action.get("precondition_status") or ""),
-                        "blocked_reason": str(action.get("blocked_reason") or ""),
-                        "obsolete_reason": str(action.get("obsolete_reason") or ""),
-                    }
-                    if action
-                    else {}
-                ),
-            }
+        priority_item = {
+            "signal_id": signal_id,
+            "kind": item["signal_type"],
+            "title": item["title"],
+            "detail": item["detail"],
+            "path": item["source_path"],
+            "source_paths": list(item.get("note_paths", [])),
+            "object_ids": list(item.get("object_ids", [])),
+            "recommended_action": recommended_action,
+            "action_lifecycle": item.get("action_lifecycle")
+            or (
+                {
+                    "queue_status": str(action.get("status") or ""),
+                    "action_id": str(action.get("action_id") or ""),
+                    "precondition_status": str(action.get("precondition_status") or ""),
+                    "blocked_reason": str(action.get("blocked_reason") or ""),
+                    "obsolete_reason": str(action.get("obsolete_reason") or ""),
+                }
+                if action
+                else {}
+            ),
+        }
+        _annotate_briefing_value(
+            priority_item,
+            value_kind="actionable_priority",
+            value_reason=(
+                "Active signals with resolver metadata indicate maintenance work the operator "
+                "does not need to rediscover manually."
+            ),
         )
+        priority_items.append(priority_item)
         if len(priority_items) >= limit:
             break
     seen_priority_keys = {(item["kind"], item["title"], item["path"]) for item in priority_items}
@@ -724,6 +886,12 @@ def build_briefing_snapshot(
         else:
             item.setdefault("action_lifecycle", {})
     first_useful_sign = insights[0] if insights else (priority_items[0] if priority_items else None)
+    first_useful_sign_check = _first_useful_sign_check(first_useful_sign)
+    background_policy = _background_policy_summary(
+        pack_name=normalized_pack,
+        recent_signals=recent_signals,
+        action_by_signal_id=action_by_signal_id,
+    )
     queue_summary = {
         "queued_count": sum(1 for item in action_items if item.get("status") == "queued"),
         "safe_queued_count": sum(
@@ -757,5 +925,7 @@ def build_briefing_snapshot(
         "insights": insights,
         "priority_items": priority_items,
         "first_useful_sign": first_useful_sign,
+        "first_useful_sign_check": first_useful_sign_check,
+        "background_policy": background_policy,
         "queue_summary": queue_summary,
     }

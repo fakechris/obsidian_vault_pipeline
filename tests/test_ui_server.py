@@ -1760,6 +1760,8 @@ def test_ui_server_briefing_endpoint_returns_payload(temp_vault):
     assert payload["recent_signal_count"] >= 1
     assert payload["active_topics"]
     assert payload["assembly_contract"]["recipe_name"] == "orientation_brief"
+    assert payload["first_useful_sign_check"]["status"] in {"useful", "empty"}
+    assert "auto_queue_enabled_signal_types" in payload["background_policy"]
     assert [section["id"] for section in payload["compiled_sections"]] == [
         "signal_loop",
         "inbound_capture",
@@ -1857,6 +1859,9 @@ Processed source note without downstream chain.
     assert "Inbound Capture" in body
     assert "What Changed" in body
     assert "Next Actions" in body
+    assert "Value Proof" in body
+    assert "Background Policy" in body
+    assert "Auto-queue enabled" in body
     assert body.index("Signal Loop") < body.index("Next Actions") < body.index("Inbound Capture")
 
 

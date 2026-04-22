@@ -2925,7 +2925,7 @@ Processed source note without any derived deep dive.
 note_id: harness-deep-dive
 title: Harness Deep Dive
 type: deep_dive
-source: https://example.com/another-harness
+source: https://example.com/harness
 date: 2026-04-13
 ---
 
@@ -3041,7 +3041,7 @@ Processed source note without any derived deep dive.
 note_id: harness-deep-dive
 title: Harness Deep Dive
 type: deep_dive
-source: https://example.com/another-harness
+source: https://example.com/harness
 date: 2026-04-13
 ---
 
@@ -3312,6 +3312,82 @@ def test_truth_api_run_next_action_queue_item_blocks_missing_action_target_befor
     assert action["retry_count"] == 0
 
 
+def test_truth_api_run_next_action_queue_item_blocks_object_extraction_without_source_backlink(
+    temp_vault, monkeypatch
+):
+    import ovp_pipeline.truth_api as truth_api
+
+    deep_dive = (
+        temp_vault
+        / "20-Areas"
+        / "AI-Research"
+        / "Topics"
+        / "2026-04"
+        / "Orphan Dive_深度解读.md"
+    )
+    deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text(
+        """---
+note_id: orphan-dive
+title: Orphan Dive
+type: deep_dive
+date: 2026-04-21
+---
+
+# Orphan Dive
+
+Mentions [[agent-memory]] but has no source provenance.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+    relative_path = str(deep_dive.relative_to(temp_vault))
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        json.dumps(
+            {
+                "action_id": "action::orphan-object-extraction",
+                "action_kind": "object_extraction_workflow",
+                "pack": "research-tech",
+                "source_signal_id": "deep_dive_needs_objects::orphan",
+                "title": "Extract orphan objects",
+                "target_ref": relative_path,
+                "note_paths": [relative_path],
+                "status": "queued",
+                "created_at": "2026-04-21T00:00:00Z",
+                "safe_to_run": True,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        truth_api,
+        "_signal_by_id",
+        lambda vault_dir, signal_id, **kwargs: {"signal_id": signal_id},
+    )
+    monkeypatch.setattr(
+        truth_api,
+        "execute_focused_action_handler",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("handler should not run")),
+        raising=False,
+    )
+
+    payload = truth_api.run_next_action_queue_item(temp_vault)
+    action = truth_api.list_action_queue(temp_vault)[0]
+
+    assert payload["ran"] is False
+    assert payload["reason"] == "blocked"
+    assert action["status"] == "blocked"
+    assert action["precondition_status"] == "blocked"
+    assert (
+        action["blocked_reason"]
+        == f"backlink_expectation_failed:missing_source_backlink:{relative_path}"
+    )
+
+
 def test_truth_api_can_retry_failed_action_queue_item(temp_vault, monkeypatch):
     import ovp_pipeline.truth_api as truth_api
 
@@ -3438,7 +3514,7 @@ Processed source note without any derived deep dive.
 note_id: harness-deep-dive
 title: Harness Deep Dive
 type: deep_dive
-source: https://example.com/another-harness
+source: https://example.com/harness
 date: 2026-04-13
 ---
 
@@ -3637,11 +3713,28 @@ Thin.
     assert payload["insights"]
     assert payload["priority_items"]
     assert payload["first_useful_sign"] in payload["insights"]
+    assert payload["first_useful_sign_check"]["status"] == "useful"
+    assert payload["first_useful_sign_check"]["evidence_count"] >= 1
+    assert payload["first_useful_sign_check"]["actionability"] in {
+        "review",
+        "queued",
+        "executable",
+    }
+    assert payload["background_policy"]["auto_queue_enabled_signal_types"] == [
+        "deep_dive_needs_objects",
+        "source_needs_deep_dive",
+    ]
+    assert payload["background_policy"]["active_review_only_signal_count"] >= 1
+    assert "source_needs_deep_dive" in payload["background_policy"]["signal_type_decisions"]
     assert any(item.get("recommended_action") for item in payload["priority_items"])
     actionable = next(item for item in payload["priority_items"] if item.get("recommended_action"))
     assert actionable["recommended_action"]["queue_status"] in {"queued", ""}
     assert actionable["recommended_action"]["resolver_rule_name"]
     assert "action_lifecycle" in actionable
+    assert actionable["value_kind"]
+    assert actionable["value_reason"]
+    assert actionable["evidence_count"] >= 1
+    assert actionable["actionability"] in {"review", "queued", "executable"}
 
 
 def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, monkeypatch):

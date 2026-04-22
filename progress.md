@@ -51,7 +51,7 @@
   - Next planning target was `Phase 27: Background Intelligence Orchestration Closeout`
 
 ### Phase 27: Background Intelligence Orchestration Closeout
-- **Status:** implemented and verified locally
+- **Status:** complete; merged to `main` in PR #43 (`75febbd`)
 - Actions taken:
   - Reconciled the roadmap after Phase 26 landed
   - Confirmed that the next gap is not another candidate/canonical surface
@@ -99,7 +99,7 @@
   - `pytest tests/test_truth_api.py::test_truth_api_get_runtime_status_includes_action_worker_state tests/test_truth_api.py::test_truth_api_run_next_action_queue_item_marks_obsolete_when_signal_is_gone tests/test_truth_api.py::test_truth_api_run_next_action_queue_item_blocks_missing_action_target_before_handler tests/test_truth_api.py::test_truth_api_action_queue_items_include_execution_contract_metadata tests/test_truth_api.py::test_truth_api_list_action_queue_backfills_execution_contract_metadata_for_legacy_rows tests/test_truth_api.py::test_truth_api_run_action_queue_can_limit_to_safe_actions tests/test_truth_api.py::test_truth_api_builds_briefing_snapshot tests/test_ui_server.py::test_render_runtime_card_shows_action_worker_state tests/test_ui_server.py::test_ui_server_actions_page_preserves_pack_scope_in_shell_nav -q`
   - `9 passed`
   - `pytest tests/test_run_actions_command.py tests/test_truth_api.py tests/test_ui_view_models.py tests/test_ui_server.py tests/test_watch_progress_command.py -q`
-  - `262 passed`
+  - `263 passed`
   - `ruff check src/ovp_pipeline/commands/run_actions.py src/ovp_pipeline/commands/ui_server.py src/ovp_pipeline/packs/research_tech/surfaces.py src/ovp_pipeline/runtime.py src/ovp_pipeline/runtime_processes.py src/ovp_pipeline/truth_api.py tests/test_truth_api.py tests/test_ui_server.py`
   - `All checks passed`
   - `python -m pip install -e .`
@@ -112,7 +112,33 @@
   - `git diff --check`
   - clean
   - `pytest -q`
-  - `688 passed`
+  - `689 passed`
+
+### Phase 28/29: Background Value And Backlink Enforcement
+- **Status:** implemented and verified locally
+- Goal:
+  - Phase 28: prove background intelligence value in `/briefing` with evidence, actionability, and policy legibility.
+  - Phase 29: reuse `backlink_expectation` as a focused-action precondition before object extraction writes downstream knowledge.
+- Canonical plan:
+  - docs/plans/2026-04-21-phase28-29-background-value-and-backlink-enforcement.md
+- Actions taken:
+  - Added `first_useful_sign_check` to briefing snapshots.
+  - Added `value_kind`, `value_reason`, `evidence_count`, and `actionability` to briefing insights and priority items.
+  - Added `background_policy` over effective governance signal rules, auto-queue policy, review-only policy, active signal counts, queue counts, and skipped reasons.
+  - Rendered `Value Proof` and `Background Policy` on `/briefing`.
+  - Added focused-action backlink precondition enforcement for `object_extraction_workflow`.
+  - Preserved `deep_dive_workflow` behavior; source notes with missing downstream links are still runnable.
+- Verification:
+  - `pytest tests/test_truth_api.py::test_truth_api_builds_briefing_snapshot tests/test_truth_api.py::test_truth_api_run_next_action_queue_item_blocks_object_extraction_without_source_backlink tests/test_ui_server.py::test_ui_server_briefing_endpoint_returns_payload tests/test_ui_server.py::test_ui_server_briefing_page_preserves_pack_scope_in_shell_nav -q`
+  - `4 passed`
+  - `ruff check src/ovp_pipeline/truth_api.py src/ovp_pipeline/packs/research_tech/surfaces.py src/ovp_pipeline/ui/view_models.py src/ovp_pipeline/commands/ui_server.py tests/test_truth_api.py tests/test_ui_server.py`
+  - `All checks passed!`
+  - `pytest tests/test_truth_api.py tests/test_ui_view_models.py tests/test_ui_server.py -q`
+  - `255 passed`
+  - `pytest -q`
+  - `690 passed`
+  - `git diff --check`
+  - clean
 
 ## Session: 2026-04-20
 

@@ -3153,12 +3153,30 @@ def _render_briefing_page(payload: dict) -> str:
     )
     queue_summary = payload.get("queue_summary", {})
     loop_summary = payload.get("loop_summary", {})
+    first_useful_sign_check = payload.get("first_useful_sign_check") or {}
+    background_policy = payload.get("background_policy") or {}
     failure_buckets = (
         "".join(
             f"<li><span class='pill'>{escape(bucket)}</span> {count}</li>"
             for bucket, count in queue_summary.get("failure_buckets", {}).items()
         )
         or "<li class='muted'>No failed actions.</li>"
+    )
+    policy_decisions = (
+        "".join(
+            "<li>"
+            f"<span class='pill'>{escape(str(signal_type))}</span> "
+            f"{escape(str(decision.get('decision') or ''))}"
+            f"<div class='muted'>Active: {escape(str(decision.get('active_signal_count') or 0))} · "
+            f"Queued: {escape(str(decision.get('queued_action_count') or 0))} · "
+            f"Skipped: {escape(str(decision.get('skipped_count') or 0))}</div>"
+            "</li>"
+            for signal_type, decision in (
+                background_policy.get("signal_type_decisions") or {}
+            ).items()
+            if isinstance(decision, dict)
+        )
+        or "<li class='muted'>No governed signal policy decisions are active.</li>"
     )
     return _layout(
         "Working Memory Snapshot",
@@ -3182,6 +3200,24 @@ def _render_briefing_page(payload: dict) -> str:
                 f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "",
                 _render_compiled_sections(remaining_sections),
                 f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
+                "<section class='card'><h2>Value Proof</h2>"
+                f"<p class='muted'>{escape(str(first_useful_sign_check.get('reason') or 'No value proof yet.'))}</p>"
+                "<div class='link-row'>"
+                f"<span class='pill'>Status: {escape(str(first_useful_sign_check.get('status') or 'empty'))}</span>"
+                f"<span class='pill'>Evidence: {escape(str(first_useful_sign_check.get('evidence_count') or 0))}</span>"
+                f"<span class='pill'>Actionability: {escape(str(first_useful_sign_check.get('actionability') or 'review'))}</span>"
+                "</div></section>",
+                "<section class='card'><h2>Background Policy</h2>"
+                "<p class='muted'>Auto-queue enabled: "
+                + escape(
+                    ", ".join(background_policy.get("auto_queue_enabled_signal_types") or [])
+                    or "none"
+                )
+                + ". Review-only: "
+                + escape(", ".join(background_policy.get("review_only_signal_types") or []) or "none")
+                + ".</p>"
+                f"<p class='muted'>Skipped: {escape(str(background_policy.get('skipped_signal_count') or 0))}</p>"
+                f"<ul class='list-tight'>{policy_decisions}</ul></section>",
                 f"<section class='card'><h2>Insights</h2><ul class='list-tight'>{insights}</ul></section>",
                 f"<section class='card'><h2>Priority Items</h2><ul class='list-tight'>{priority_items}</ul></section>",
                 "<section class='card'><h2>Execution Surface</h2>",
