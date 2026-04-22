@@ -2888,14 +2888,20 @@ def _focused_action_backlink_precondition(
     if action_kind != "object_extraction_workflow":
         return {"status": "ready", "reason": ""}
     pack_name = str(action.get("pack") or DEFAULT_WORKFLOW_PACK_NAME)
-    for note_path in _focused_action_note_paths(action):
+    note_paths = _focused_action_note_paths(action)
+    if not note_paths:
+        return {
+            "status": "blocked",
+            "reason": "backlink_expectation_unavailable:missing_note_path",
+        }
+    for note_path in note_paths:
         try:
             traceability = get_note_traceability(
                 vault_dir,
                 note_path=note_path,
                 pack_name=pack_name,
             )
-        except Exception as exc:
+        except (OSError, sqlite3.Error, ValueError) as exc:
             return {
                 "status": "blocked",
                 "reason": f"backlink_expectation_unavailable:{note_path}:{type(exc).__name__}",

@@ -1865,6 +1865,40 @@ Processed source note without downstream chain.
     assert body.index("Signal Loop") < body.index("Next Actions") < body.index("Inbound Capture")
 
 
+def test_render_briefing_page_tolerates_malformed_background_policy():
+    from ovp_pipeline.commands import ui_server
+
+    body = ui_server._render_briefing_page(
+        {
+            "requested_pack": "",
+            "generated_at": "2026-04-21T00:00:00Z",
+            "recent_signal_count": 0,
+            "unresolved_issue_count": 0,
+            "compiled_sections": [],
+            "section_nav": [],
+            "first_useful_sign": None,
+            "first_useful_sign_check": ["bad"],
+            "background_policy": "bad",
+            "surface_contract": {},
+            "assembly_contract": {},
+            "governance_contract": {},
+            "operator_rail": [],
+            "queue_summary": {"failure_buckets": ["bad"]},
+            "loop_summary": {},
+            "insights": [],
+            "priority_items": [],
+            "recent_signals": [],
+            "unresolved_issues": [],
+            "changed_objects": [],
+            "active_topics": [],
+        }
+    )
+
+    assert "Value Proof" in body
+    assert "Background Policy" in body
+    assert "Auto-queue enabled: none" in body
+
+
 def test_ui_server_briefing_page_renders_governance_resolver_metadata(temp_vault, monkeypatch):
     import ovp_pipeline.commands.ui_server as ui_server
     from ovp_pipeline.commands.ui_server import create_server

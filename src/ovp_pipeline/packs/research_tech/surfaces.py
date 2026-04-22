@@ -60,7 +60,8 @@ def _briefing_actionability(item: dict[str, Any]) -> str:
     recommended_action = item.get("recommended_action")
     if not isinstance(recommended_action, dict):
         return "review"
-    if str(recommended_action.get("queue_status") or "").strip():
+    queue_status = str(recommended_action.get("queue_status") or "").strip().lower()
+    if queue_status in {"queued", "running", "pending", "scheduled", "in_progress"}:
         return "queued"
     if bool(recommended_action.get("executable")):
         return "executable"
@@ -89,13 +90,16 @@ def _first_useful_sign_check(first_useful_sign: dict[str, Any] | None) -> dict[s
             "evidence_count": 0,
             "actionability": "review",
         }
-    evidence_count = int(
-        first_useful_sign.get("evidence_count")
-        if "evidence_count" in first_useful_sign
-        else _briefing_evidence_count(first_useful_sign)
-    )
-    actionability = str(
-        first_useful_sign.get("actionability") or _briefing_actionability(first_useful_sign)
+    raw_evidence = first_useful_sign.get("evidence_count")
+    try:
+        evidence_count = int(raw_evidence)
+    except (TypeError, ValueError):
+        evidence_count = _briefing_evidence_count(first_useful_sign)
+    raw_actionability = first_useful_sign.get("actionability")
+    actionability = (
+        str(raw_actionability).strip()
+        if str(raw_actionability or "").strip()
+        else _briefing_actionability(first_useful_sign)
     )
     kind = str(first_useful_sign.get("kind") or "")
     title = str(first_useful_sign.get("title") or "")
@@ -132,14 +136,13 @@ def _background_policy_summary(
             }
 
     signal_counts = Counter(str(item.get("signal_type") or "") for item in recent_signals)
+    signals_by_type: dict[str, list[dict[str, Any]]] = {}
+    for item in recent_signals:
+        signals_by_type.setdefault(str(item.get("signal_type") or ""), []).append(item)
     signal_type_decisions: dict[str, dict[str, Any]] = {}
     skipped_reasons: Counter[str] = Counter()
     for signal_type, rule in sorted(governed.items()):
-        matching = [
-            item
-            for item in recent_signals
-            if str(item.get("signal_type") or "") == signal_type
-        ]
+        matching = signals_by_type.get(signal_type, [])
         queued_count = sum(
             1
             for item in matching
@@ -157,11 +160,10 @@ def _background_policy_summary(
                     skipped_count += 1
                     type_reasons["not_queued"] += 1
         else:
-            skipped_count = len(matching)
-            if matching:
-                type_reasons["review_only"] = len(matching)
+            skipped_count = 0
 
-        skipped_reasons.update(type_reasons)
+        if rule["auto_queue"]:
+            skipped_reasons.update(type_reasons)
         signal_type_decisions[signal_type] = {
             **rule,
             "decision": "auto_queue_enabled" if rule["auto_queue"] else "review_only",
@@ -191,6 +193,40 @@ def _background_policy_summary(
         "skipped_reasons": dict(skipped_reasons),
         "signal_type_decisions": signal_type_decisions,
     }
+
+
+def _merge_briefing_action_metadata(
+    item: dict[str, Any],
+    action: dict[str, Any],
+) -> None:
+    recommended_action = item.get("recommended_action")
+    if isinstance(recommended_action, dict):
+        if action:
+            recommended_action["queue_status"] = str(action.get("status") or "")
+            recommended_action["action_id"] = str(action.get("action_id") or "")
+            recommended_action["precondition_status"] = str(
+                action.get("precondition_status") or ""
+            )
+            recommended_action["blocked_reason"] = str(action.get("blocked_reason") or "")
+            recommended_action["obsolete_reason"] = str(action.get("obsolete_reason") or "")
+        recommended_action.setdefault("queue_status", "")
+        recommended_action.setdefault("action_id", "")
+        recommended_action.setdefault("precondition_status", "")
+        recommended_action.setdefault("blocked_reason", "")
+        recommended_action.setdefault("obsolete_reason", "")
+    if action:
+        item["action_lifecycle"] = {
+            **(item.get("action_lifecycle") if isinstance(item.get("action_lifecycle"), dict) else {}),
+            "queue_status": str(action.get("status") or ""),
+            "action_id": str(action.get("action_id") or ""),
+            "precondition_status": str(action.get("precondition_status") or ""),
+            "blocked_reason": str(action.get("blocked_reason") or ""),
+            "obsolete_reason": str(action.get("obsolete_reason") or ""),
+        }
+    else:
+        item.setdefault("action_lifecycle", {})
+    item["evidence_count"] = _briefing_evidence_count(item)
+    item["actionability"] = _briefing_actionability(item)
 
 
 def list_production_chains(
@@ -776,6 +812,8 @@ def build_briefing_snapshot(
             existing["object_ids"] = list(
                 dict.fromkeys([*existing.get("object_ids", []), *insight.get("object_ids", [])])
             )
+            existing["evidence_count"] = _briefing_evidence_count(existing)
+            existing["actionability"] = _briefing_actionability(existing)
     insights = list(merged_insights.values())
     insights.sort(
         key=lambda item: (
@@ -819,18 +857,7 @@ def build_briefing_snapshot(
             "source_paths": list(item.get("note_paths", [])),
             "object_ids": list(item.get("object_ids", [])),
             "recommended_action": recommended_action,
-            "action_lifecycle": item.get("action_lifecycle")
-            or (
-                {
-                    "queue_status": str(action.get("status") or ""),
-                    "action_id": str(action.get("action_id") or ""),
-                    "precondition_status": str(action.get("precondition_status") or ""),
-                    "blocked_reason": str(action.get("blocked_reason") or ""),
-                    "obsolete_reason": str(action.get("obsolete_reason") or ""),
-                }
-                if action
-                else {}
-            ),
+            "action_lifecycle": item.get("action_lifecycle") or {},
         }
         _annotate_briefing_value(
             priority_item,
@@ -855,36 +882,9 @@ def build_briefing_snapshot(
     for item in priority_items:
         signal_id = str(item.get("signal_id") or "")
         action = action_by_signal_id.get(signal_id, {})
-        recommended_action = item.get("recommended_action")
-        if isinstance(recommended_action, dict):
-            if action:
-                recommended_action.setdefault("queue_status", str(action.get("status") or ""))
-                recommended_action.setdefault("action_id", str(action.get("action_id") or ""))
-                recommended_action.setdefault(
-                    "precondition_status", str(action.get("precondition_status") or "")
-                )
-                recommended_action.setdefault(
-                    "blocked_reason", str(action.get("blocked_reason") or "")
-                )
-                recommended_action.setdefault(
-                    "obsolete_reason", str(action.get("obsolete_reason") or "")
-                )
-            recommended_action.setdefault("queue_status", "")
-            recommended_action.setdefault("action_id", "")
-            recommended_action.setdefault("precondition_status", "")
-            recommended_action.setdefault("blocked_reason", "")
-            recommended_action.setdefault("obsolete_reason", "")
-        if action:
-            item["action_lifecycle"] = {
-                "queue_status": str(action.get("status") or ""),
-                "action_id": str(action.get("action_id") or ""),
-                "precondition_status": str(action.get("precondition_status") or ""),
-                "blocked_reason": str(action.get("blocked_reason") or ""),
-                "obsolete_reason": str(action.get("obsolete_reason") or ""),
-                **(item.get("action_lifecycle") if isinstance(item.get("action_lifecycle"), dict) else {}),
-            }
-        else:
-            item.setdefault("action_lifecycle", {})
+        _merge_briefing_action_metadata(item, action)
+    for item in insights:
+        _merge_briefing_action_metadata(item, {})
     first_useful_sign = insights[0] if insights else (priority_items[0] if priority_items else None)
     first_useful_sign_check = _first_useful_sign_check(first_useful_sign)
     background_policy = _background_policy_summary(

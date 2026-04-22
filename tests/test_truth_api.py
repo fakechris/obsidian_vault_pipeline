@@ -3312,6 +3312,46 @@ def test_truth_api_run_next_action_queue_item_blocks_missing_action_target_befor
     assert action["retry_count"] == 0
 
 
+def test_truth_api_run_next_action_queue_item_blocks_object_extraction_without_note_target(
+    temp_vault, monkeypatch
+):
+    import ovp_pipeline.truth_api as truth_api
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        json.dumps(
+            {
+                "action_id": "action::missing-object-target",
+                "action_kind": "object_extraction_workflow",
+                "pack": "research-tech",
+                "title": "Extract missing target",
+                "target_ref": "",
+                "note_paths": [],
+                "status": "queued",
+                "created_at": "2026-04-21T00:00:00Z",
+                "safe_to_run": True,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        truth_api,
+        "execute_focused_action_handler",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("handler should not run")),
+        raising=False,
+    )
+
+    payload = truth_api.run_next_action_queue_item(temp_vault)
+    action = truth_api.list_action_queue(temp_vault)[0]
+
+    assert payload["ran"] is False
+    assert payload["reason"] == "blocked"
+    assert action["blocked_reason"] == "backlink_expectation_unavailable:missing_note_path"
+
+
 def test_truth_api_run_next_action_queue_item_blocks_object_extraction_without_source_backlink(
     temp_vault, monkeypatch
 ):
@@ -3721,9 +3761,12 @@ Thin.
         "executable",
     }
     assert payload["background_policy"]["auto_queue_enabled_signal_types"] == [
+        *sorted(payload["background_policy"]["auto_queue_enabled_signal_types"])
+    ]
+    assert {
         "deep_dive_needs_objects",
         "source_needs_deep_dive",
-    ]
+    }.issubset(payload["background_policy"]["auto_queue_enabled_signal_types"])
     assert payload["background_policy"]["active_review_only_signal_count"] >= 1
     assert "source_needs_deep_dive" in payload["background_policy"]["signal_type_decisions"]
     assert any(item.get("recommended_action") for item in payload["priority_items"])
@@ -3756,7 +3799,7 @@ def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, mo
                 "link_type": "challenges",
                 "subject_id": "agent harness",
                 "object_ids": ["source-note"],
-                "source_paths": ["10-Knowledge/Evergreen/Source.md"],
+                "source_paths": ["10-Knowledge/Evergreen/Other.md"],
             },
         ],
     )
@@ -3767,6 +3810,42 @@ def test_truth_api_briefing_dedupes_equivalent_evolution_insights(temp_vault, mo
 
     assert len(payload["insights"]) == 1
     assert len(payload["priority_items"]) == 1
+    assert payload["insights"][0]["source_paths"] == [
+        "10-Knowledge/Evergreen/Source.md",
+        "10-Knowledge/Evergreen/Other.md",
+    ]
+    assert payload["insights"][0]["evidence_count"] >= 4
+
+
+def test_research_tech_briefing_value_helpers_handle_terminal_and_malformed_inputs():
+    from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
+
+    assert (
+        research_surfaces._briefing_actionability(
+            {"recommended_action": {"queue_status": "blocked", "executable": False}}
+        )
+        == "review"
+    )
+    assert (
+        research_surfaces._briefing_actionability(
+            {"recommended_action": {"queue_status": "queued", "executable": False}}
+        )
+        == "queued"
+    )
+
+    check = research_surfaces._first_useful_sign_check(
+        {
+            "signal_id": "sig-malformed",
+            "kind": None,
+            "title": None,
+            "evidence_count": None,
+            "recommended_action": {"queue_status": "blocked"},
+        }
+    )
+
+    assert check["status"] == "useful"
+    assert check["evidence_count"] >= 1
+    assert check["actionability"] == "review"
 
 
 def test_truth_api_briefing_prioritizes_actionable_unresolved_issues(temp_vault, monkeypatch):

@@ -3151,14 +3151,34 @@ def _render_briefing_page(payload: dict) -> str:
         f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
         for item in payload.get("section_nav", [])
     )
-    queue_summary = payload.get("queue_summary", {})
-    loop_summary = payload.get("loop_summary", {})
-    first_useful_sign_check = payload.get("first_useful_sign_check") or {}
-    background_policy = payload.get("background_policy") or {}
+    queue_summary = payload.get("queue_summary")
+    if not isinstance(queue_summary, dict):
+        queue_summary = {}
+    loop_summary = payload.get("loop_summary")
+    if not isinstance(loop_summary, dict):
+        loop_summary = {}
+    first_useful_sign_check = payload.get("first_useful_sign_check")
+    if not isinstance(first_useful_sign_check, dict):
+        first_useful_sign_check = {}
+    background_policy = payload.get("background_policy")
+    if not isinstance(background_policy, dict):
+        background_policy = {}
+    failure_bucket_values = queue_summary.get("failure_buckets")
+    if not isinstance(failure_bucket_values, dict):
+        failure_bucket_values = {}
+    signal_type_decisions = background_policy.get("signal_type_decisions")
+    if not isinstance(signal_type_decisions, dict):
+        signal_type_decisions = {}
+    auto_queue_enabled_signal_types = background_policy.get("auto_queue_enabled_signal_types")
+    if not isinstance(auto_queue_enabled_signal_types, list):
+        auto_queue_enabled_signal_types = []
+    review_only_signal_types = background_policy.get("review_only_signal_types")
+    if not isinstance(review_only_signal_types, list):
+        review_only_signal_types = []
     failure_buckets = (
         "".join(
             f"<li><span class='pill'>{escape(bucket)}</span> {count}</li>"
-            for bucket, count in queue_summary.get("failure_buckets", {}).items()
+            for bucket, count in failure_bucket_values.items()
         )
         or "<li class='muted'>No failed actions.</li>"
     )
@@ -3171,9 +3191,7 @@ def _render_briefing_page(payload: dict) -> str:
             f"Queued: {escape(str(decision.get('queued_action_count') or 0))} · "
             f"Skipped: {escape(str(decision.get('skipped_count') or 0))}</div>"
             "</li>"
-            for signal_type, decision in (
-                background_policy.get("signal_type_decisions") or {}
-            ).items()
+            for signal_type, decision in signal_type_decisions.items()
             if isinstance(decision, dict)
         )
         or "<li class='muted'>No governed signal policy decisions are active.</li>"
@@ -3210,11 +3228,20 @@ def _render_briefing_page(payload: dict) -> str:
                 "<section class='card'><h2>Background Policy</h2>"
                 "<p class='muted'>Auto-queue enabled: "
                 + escape(
-                    ", ".join(background_policy.get("auto_queue_enabled_signal_types") or [])
+                    ", ".join(
+                        str(item)
+                        for item in auto_queue_enabled_signal_types
+                        if str(item or "").strip()
+                    )
                     or "none"
                 )
                 + ". Review-only: "
-                + escape(", ".join(background_policy.get("review_only_signal_types") or []) or "none")
+                + escape(
+                    ", ".join(
+                        str(item) for item in review_only_signal_types if str(item or "").strip()
+                    )
+                    or "none"
+                )
                 + ".</p>"
                 f"<p class='muted'>Skipped: {escape(str(background_policy.get('skipped_signal_count') or 0))}</p>"
                 f"<ul class='list-tight'>{policy_decisions}</ul></section>",

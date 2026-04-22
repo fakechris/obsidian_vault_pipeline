@@ -103,6 +103,65 @@ def _workflow_group(
     }
 
 
+def _briefing_value_evidence_count(item: dict[str, Any]) -> int:
+    evidence: set[str] = set()
+    for key in ("source_paths", "note_paths", "object_ids"):
+        value = item.get(key)
+        if isinstance(value, list):
+            evidence.update(str(entry) for entry in value if str(entry or "").strip())
+    for key in ("signal_id", "path"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            evidence.add(value)
+    return len(evidence)
+
+
+def _briefing_value_actionability(item: dict[str, Any]) -> str:
+    recommended_action = item.get("recommended_action")
+    if not isinstance(recommended_action, dict):
+        return "review"
+    queue_status = str(recommended_action.get("queue_status") or "").strip().lower()
+    if queue_status in {"queued", "running", "pending", "scheduled", "in_progress"}:
+        return "queued"
+    if bool(recommended_action.get("executable")):
+        return "executable"
+    return "review"
+
+
+def _briefing_value_check(first_useful_sign: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(first_useful_sign, dict):
+        return {
+            "status": "empty",
+            "kind": "",
+            "reason": "No background insight or priority item has enough current evidence to surface.",
+            "evidence_count": 0,
+            "actionability": "review",
+        }
+    raw_evidence = first_useful_sign.get("evidence_count")
+    try:
+        evidence_count = int(raw_evidence)
+    except (TypeError, ValueError):
+        evidence_count = _briefing_value_evidence_count(first_useful_sign)
+    raw_actionability = first_useful_sign.get("actionability")
+    actionability = (
+        str(raw_actionability).strip()
+        if str(raw_actionability or "").strip()
+        else _briefing_value_actionability(first_useful_sign)
+    )
+    kind = str(first_useful_sign.get("kind") or "")
+    title = str(first_useful_sign.get("title") or "")
+    return {
+        "status": "useful",
+        "kind": kind,
+        "reason": (
+            f"{title or kind} surfaced with {evidence_count} evidence reference(s) "
+            f"and {actionability} follow-up."
+        ),
+        "evidence_count": evidence_count,
+        "actionability": actionability,
+    }
+
+
 def _build_dashboard_workflow_groups(
     *,
     requested_pack: str,
@@ -1333,6 +1392,7 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         if productive_signal is not None
         else snapshot.get("first_useful_sign")
     )
+    first_useful_sign_check = _briefing_value_check(first_useful_sign)
     inbound_capture_items = [
         {
             "kind": "capture_signal",
@@ -1425,6 +1485,7 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         "governance_contract": governance_contract,
         **snapshot,
         "first_useful_sign": first_useful_sign,
+        "first_useful_sign_check": first_useful_sign_check,
         "loop_summary": loop_summary,
         "operator_rail": operator_rail,
         "compiled_sections": compiled_sections,

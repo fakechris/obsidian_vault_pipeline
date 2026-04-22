@@ -25,7 +25,7 @@ OVP is now a usable local knowledge workbench with:
 The current missing product claims are:
 
 > OVP has a single focused execution surface, but broader background intelligence still needs a clearer value proof: why a briefing item is useful, what evidence supports it, and what background policy allowed or skipped it.
-
+>
 > OVP exposes backlink expectations, but focused object writes do not yet enforce them before creating downstream knowledge.
 
 ## Current Phase
