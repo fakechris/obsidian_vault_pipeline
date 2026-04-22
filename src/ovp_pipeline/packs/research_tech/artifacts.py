@@ -141,4 +141,44 @@ def build_artifact_specs(pack_name: str = "research-tech") -> list[ArtifactSpec]
                 projection_rebuild_policy="none",
             ),
         ),
+        ArtifactSpec(
+            name="semantic_relation_candidate",
+            pack=pack_name,
+            layer="governance",
+            family="semantic_relation_candidate",
+            description=(
+                "Evidence-grounded relation proposal between canonical objects. "
+                "Candidates must be reviewed before promotion to any canonical graph."
+            ),
+            fields=[
+                ArtifactFieldSpec("relation_type", "string", "Declared relation vocabulary item", required=True),
+                ArtifactFieldSpec("source_object_id", "string", "Source object identifier", required=True),
+                ArtifactFieldSpec("target_object_id", "string", "Target object identifier", required=True),
+                ArtifactFieldSpec("source_slug", "string", "Grounding source note slug", required=True),
+                ArtifactFieldSpec("evidence_quote", "string", "Quoted evidence for the relation", required=True),
+                ArtifactFieldSpec("confidence", "float", "Extractor confidence before review", required=True),
+            ],
+            identity_policy=ArtifactIdentityPolicy(
+                id_strategy="compound",
+                id_fields=["relation_type", "source_object_id", "target_object_id", "source_slug"],
+                subject_fields=["source_object_id", "target_object_id"],
+            ),
+            evidence_policy=ArtifactEvidencePolicy(
+                requires_evidence=True,
+                require_quote=True,
+                require_source_slug=True,
+                require_traceability_links=True,
+            ),
+            storage_policy=ArtifactStoragePolicy(
+                storage_mode="review_queue_artifact",
+                canonical_path_template="60-Logs/derived/review-queue/semantic-relations/{subject}.json",
+                review_queue_name="semantic-relations",
+            ),
+            lifecycle_policy=ArtifactLifecyclePolicy(
+                mutable=True,
+                review_required_on_create=True,
+                review_required_on_update=True,
+                projection_rebuild_policy="none",
+            ),
+        ),
     ]

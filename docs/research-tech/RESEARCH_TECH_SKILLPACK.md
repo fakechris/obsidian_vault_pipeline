@@ -13,6 +13,7 @@
   - evidence
   - compiled overviews
   - review items
+  - semantic relation candidates
 - explicit assembly recipes for:
   - orientation brief
   - topic overview
@@ -23,6 +24,10 @@
   - review queues
   - signal rules
   - resolver rules
+- explicit semantic relation contracts for:
+  - relation vocabulary
+  - evidence requirements
+  - review-gated promotion policy
 - materialized views:
   - workbench home / entry surface
   - orientation brief
@@ -60,6 +65,7 @@
 - `ovp-doctor --pack research-tech --json`
   - 看 `declared` / `effective` contract families
   - 看 shared shell 解析到的 `governance_contract`
+  - 看 `semantic_relation_contracts` 是否仍然是 pack-owned、evidence-gated、review-gated
 - `ovp-ui --vault-dir /path/to/vault --port 8787`
   - 看 `/` workbench home 的 entry sections
   - 看 `/briefing` 的 orientation sections
@@ -69,6 +75,17 @@
   - 看 orientation product 走到的 `assembly recipe -> source contract -> source provider` 链路
 - `ovp-export --pack research-tech --target topic-overview --output-path out/topic.md`
   - 看 export target 走到的 `assembly recipe -> source contract -> source provider` 链路
+
+## Semantic Relation Boundary
+
+`research-tech` can declare relation vocabulary such as `supports`, `challenges`, `extends`, `replaces`, and `uses`, but this pack does not treat extraction output as canonical graph truth by default.
+
+The safe path is:
+
+1. extractor creates `semantic_relation_candidate`,
+2. candidate carries source slug and quote evidence,
+3. candidate enters `semantic-relations`,
+4. a later review action promotes or rejects it.
 
 ## What This Pack Is Not
 

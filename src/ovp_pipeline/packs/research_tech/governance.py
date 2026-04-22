@@ -48,6 +48,15 @@ def build_governance_specs(pack_name: str = "research-tech") -> list[GovernanceS
                     proposal_types=["stale_summary"],
                     review_mode="rebuild_review",
                 ),
+                ReviewQueueSpec(
+                    name="semantic-relations",
+                    description=(
+                        "Evidence-grounded semantic relation candidates awaiting human "
+                        "promotion or rejection."
+                    ),
+                    proposal_types=["semantic_relation_candidate"],
+                    review_mode="relation_review",
+                ),
             ],
             signal_rules=[
                 SignalRuleSpec(

@@ -1,10 +1,12 @@
-# Task Plan: OVP Roadmap Closeout And Phase 28/29
+# Task Plan: OVP Roadmap Closeout, Phase 30, And Phase 31
 
 ## Runtime Note
 
-- Current branch: `phase28-29-background-value-backlinks`
-- Current remote base: `75febbd Add Phase 27 orchestration closeout`
-- Last full verification on merged Phase 27 branch: `pytest -q` -> `689 passed`
+- Current branch: `main`
+- Current remote base: `81e6b9c Add background value and backlink enforcement (#44)`
+- Local `main` is aligned with `origin/main`
+- Pre-sync local main backup branch: `backup/main-before-origin-main-sync-20260422-032720`
+- Latest local install: `python -m pip install -e .` -> installed editable `obsidian-vault-pipeline==0.8.6`
 - Untracked local files intentionally not part of the roadmap work:
   - `.review-venv/`
   - `AGENTS.md`
@@ -22,7 +24,7 @@ OVP is now a usable local knowledge workbench with:
 - active signal loop
 - action queue and focused action worker execution surface
 
-The current missing product claims are:
+The previous missing product claims are now closed by Phase 28/29:
 
 > OVP has a single focused execution surface, but broader background intelligence still needs a clearer value proof: why a briefing item is useful, what evidence supports it, and what background policy allowed or skipped it.
 >
@@ -30,11 +32,14 @@ The current missing product claims are:
 
 ## Current Phase
 
-`Phase 28/29: Background Value And Backlink Enforcement` is implemented and verified locally.
+`Phase 30: Release Hygiene And Roadmap Reconciliation` is complete in this working tree.
 
-Canonical plan:
+`Phase 31: Pack-Level Semantic Relation Contract` is implemented as a minimal contract slice in this working tree.
 
-- `docs/plans/2026-04-21-phase28-29-background-value-and-backlink-enforcement.md`
+Canonical plans:
+
+- `docs/plans/2026-04-22-phase30-release-hygiene-and-roadmap-reconciliation.md`
+- `docs/plans/2026-04-22-phase31-pack-semantic-relation-contract.md`
 
 ## Roadmap Status
 
@@ -49,7 +54,7 @@ Canonical plan:
 | Milestone 6 | Complete | Product shell and operator UX |
 | Milestone 7 | Complete | Active signal loop, runtime visibility, candidate/canonical workbench |
 | Milestone 8 | Complete | Knowledge evolution layer |
-| Milestone 9 | In Progress | Background intelligence has observable execution foundations; Phase 28 now closes value proof and policy legibility |
+| Milestone 9 | In Progress | Background intelligence has observable execution foundations; Phase 28/29 closed value proof, policy legibility, and backlink enforcement |
 | Milestone 9A | Complete | Single focused execution surface via action queue / worker / handler contracts |
 
 ## Completed Recent Phases
@@ -60,17 +65,23 @@ Canonical plan:
 - `Phase 25`: observable runtime and run ledger
 - `Phase 26`: candidate canonicalization workbench
 - `Phase 27`: background intelligence orchestration closeout
+- `Phase 28/29`: background value proof and backlink enforcement
+- `Phase 30`: release hygiene and roadmap reconciliation
+- `Phase 31`: pack-level semantic relation contract, without extractor or truth promotion
 
 ## Current TODO
 
 - Phase 27 has been squash-merged to `origin/main` in PR #43.
-- Phase 28 adds background-intelligence value proof and policy legibility.
-- Phase 29 enforces backlink expectations before focused object writes.
-- PR #44 is open for Phase 28/29 and currently in review/merge validation.
-- Remaining before merge:
-  - resolve current review findings
-  - rerun targeted and full verification
-  - merge after no blocking review threads remain
+- Phase 28/29 has been squash-merged to `origin/main` in PR #44.
+- Phase 30 fixed local release hygiene:
+  - `ovp --version` reads installed package metadata before falling back to repo metadata
+  - roadmap/progress docs describe PR #44 as merged
+  - `docs/research-tech/RESEARCH_TECH_VERIFY.md` documents local install smoke checks
+- Phase 31 added the semantic relation contract boundary:
+  - `research-tech` declares `research_semantic_relations`
+  - `semantic_relation_candidate` is a review-queue artifact, not canonical graph truth
+  - `ovp-doctor` exposes declared/effective semantic relation contracts
+- Next major feature phase should build a reviewed semantic relation extractor that emits candidates only.
 
 Latest completed Phase 27 verification:
 
@@ -87,6 +98,28 @@ Completed Phase 28/29 verification:
 - `pytest tests/test_truth_api.py tests/test_ui_view_models.py tests/test_ui_server.py -q` -> `255 passed`
 - `pytest -q` -> `690 passed`
 - `git diff --check` -> clean
+
+Post-merge local install verification:
+
+- local `main` aligned to `origin/main` at `81e6b9c`
+- `python -m pip install -e .` -> installed editable `obsidian-vault-pipeline==0.8.6`
+- `python -m pip show obsidian-vault-pipeline` -> editable project location is this checkout
+- `ovp --check` -> environment ready
+- `ovp-packs --json` -> built-in `default-knowledge` and `research-tech` packs detected
+- `ovp-doctor --pack research-tech --json` -> research-tech contracts detected
+- fixed: `ovp --version` now reports package metadata instead of stale fallback `0.3.2`
+
+Completed Phase 30/31 focused verification:
+
+- `pytest tests/test_unified_pipeline_version.py::test_unified_pipeline_version_matches_distribution_metadata -q` -> `1 passed`
+- `pytest tests/test_semantic_relation_contracts.py -q` -> `3 passed`
+- `ruff check` on touched Python files/tests -> `All checks passed`
+- `pytest tests/test_unified_pipeline_version.py tests/test_semantic_relation_contracts.py tests/test_doctor_command.py tests/test_artifact_registry.py -q` -> `12 passed`
+- `pytest -q` -> `698 passed`
+- `python -m pip install -e .` -> installed editable `obsidian-vault-pipeline==0.8.6`
+- `ovp --version` -> `ovp 0.8.6`
+- `ovp --check` -> environment ready
+- `ovp-doctor --pack research-tech --json` -> valid JSON with `research_semantic_relations`
 
 ## Implemented In Phase 27
 
@@ -109,17 +142,18 @@ Completed Phase 28/29 verification:
 | Keep `ovp --incremental` / `ovp --full` as broad reconcilers | The action queue is for focused follow-up execution, not batch replacement. |
 | Defer richer semantic extraction | It should enter later as a pack-level extraction contract after value proof and backlink trust boundaries are closed. |
 
-## Non-Goals For The Next Phase
+## Non-Goals For Phase 30/31
 
 - No hosted scheduler.
 - No harness/session memory backend.
-- No new semantic relation extractor; Phase 29 only enforces the existing backlink contract.
+- No new semantic relation extractor; Phase 31 declares the contract boundary only.
+- No automatic relation promotion into canonical graph truth.
 - No direct UI-to-workflow execution outside the action queue.
 - No broad frontend redesign.
 
 ## Verification Habit
 
-Before closing the Phase 28/29 implementation PR:
+Before closing any implementation PR:
 
 1. run targeted tests for the changed action/runtime path,
 2. run `pytest tests/test_truth_api.py tests/test_ui_view_models.py tests/test_ui_server.py tests/test_watch_progress_command.py -q`,
