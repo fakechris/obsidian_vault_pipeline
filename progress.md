@@ -1,5 +1,60 @@
 # Progress Log
 
+## Session: 2026-04-22
+
+### Phase 30/31: Release Hygiene And Semantic Relation Contract
+- **Status:** implemented and verified in working tree
+- Phase 30 actions taken:
+  - Added a regression test proving `ovp` version reporting matches installed package metadata.
+  - Fixed `src/ovp_pipeline/unified_pipeline_enhanced.py::_get_version()` to read `importlib.metadata.version("obsidian-vault-pipeline")` before falling back to repository `pyproject.toml`.
+  - Added post-merge install smoke checks to `docs/research-tech/RESEARCH_TECH_VERIFY.md`.
+  - Updated README version metadata to `v0.8.6`.
+- Phase 31 actions taken:
+  - Added pack-owned semantic relation contract dataclasses.
+  - Added `research-tech` relation vocabulary:
+    - `supports`
+    - `challenges`
+    - `extends`
+    - `replaces`
+    - `uses`
+  - Added `semantic_relation_candidate` as an evidence-required, quote-required, review-queue artifact.
+  - Added the `semantic-relations` review queue.
+  - Added a semantic relation registry for effective contract resolution through compatibility chains.
+  - Exposed declared/effective `semantic_relation_contracts` in `ovp-doctor --json`.
+  - Documented the boundary in `docs/plans/2026-04-22-phase31-pack-semantic-relation-contract.md`.
+- Verification so far:
+  - `pytest tests/test_unified_pipeline_version.py::test_unified_pipeline_version_matches_distribution_metadata -q` -> `1 passed`
+  - `pytest tests/test_semantic_relation_contracts.py -q` -> `3 passed`
+  - `ruff check` on touched Python files and tests -> `All checks passed`
+  - `pytest tests/test_unified_pipeline_version.py tests/test_semantic_relation_contracts.py tests/test_doctor_command.py tests/test_artifact_registry.py -q` -> `12 passed`
+  - `pytest -q` -> `698 passed`
+  - `python -m pip install -e .` -> installed editable `obsidian-vault-pipeline==0.8.6`
+  - `ovp --version` -> `ovp 0.8.6`
+  - `ovp --check` -> environment ready
+  - `ovp-packs --json` -> built-in `default-knowledge` and `research-tech` packs detected
+  - `ovp-doctor --pack research-tech --json` -> valid JSON with `research_semantic_relations`
+
+### Post-PR #44 Main Sync And Local Install
+- **Status:** complete; local `main` aligned with `origin/main` at `81e6b9c Add background value and backlink enforcement (#44)`
+- Actions taken:
+  - Confirmed local `main` had diverged from `origin/main` because of a pre-squash local Phase 27 commit
+  - Preserved the old local pointer as `backup/main-before-origin-main-sync-20260422-032720`
+  - Repointed local `main` to `origin/main` without touching untracked local files
+  - Reinstalled OVP from the aligned checkout with `python -m pip install -e .`
+  - Verified installed package metadata:
+    - distribution: `obsidian-vault-pipeline==0.8.6`
+    - editable project location: `<local-checkout>`
+  - Verified core local commands:
+    - `ovp --check`
+    - `ovp-packs --json`
+    - `ovp-doctor --pack research-tech --json`
+- Finding:
+  - Initial local smoke testing found that `ovp --version` used stale fallback output even though package metadata was `0.8.6`
+  - Root cause was stale fallback logic in `src/ovp_pipeline/unified_pipeline_enhanced.py::_get_version()`
+- Next plan:
+  - Added `docs/plans/2026-04-22-phase30-release-hygiene-and-roadmap-reconciliation.md`
+  - Phase 30 should fix CLI version reporting, reconcile post-merge roadmap state, and document the install smoke checklist before starting the next feature phase
+
 ## Session: 2026-04-21
 
 ### Phase 26: Candidate Canonicalization Workbench

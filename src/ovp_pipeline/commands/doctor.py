@@ -19,6 +19,7 @@ from ..execution_contract_registry import (
 )
 from ..pack_resolution import iter_compatible_packs
 from ..processor_contract_registry import list_effective_processor_contracts
+from ..semantic_relation_registry import list_effective_semantic_relation_contracts
 from ..packs.loader import (
     DEFAULT_PACK_NAME,
     DEFAULT_WORKFLOW_PACK_NAME,
@@ -388,6 +389,42 @@ def _governance_spec_payload(
     }
 
 
+def _semantic_relation_contract_payload(
+    spec: object,
+    *,
+    status: str = "declared",
+    provider_pack: str | None = None,
+) -> dict[str, object]:
+    resolved_provider_pack = provider_pack if provider_pack is not None else getattr(spec, "pack", "")
+    return {
+        "name": getattr(spec, "name", ""),
+        "pack": getattr(spec, "pack", ""),
+        "provider_pack": resolved_provider_pack,
+        "status": status,
+        "description": getattr(spec, "description", ""),
+        "source_contract_kind": getattr(spec, "source_contract_kind", ""),
+        "source_contract_name": getattr(spec, "source_contract_name", ""),
+        "review_queue_name": getattr(spec, "review_queue_name", ""),
+        "write_policy": getattr(spec, "write_policy", ""),
+        "relation_types": [
+            {
+                "name": getattr(relation, "name", ""),
+                "description": getattr(relation, "description", ""),
+                "source_object_kinds": list(
+                    getattr(relation, "source_object_kinds", ()) or ()
+                ),
+                "target_object_kinds": list(
+                    getattr(relation, "target_object_kinds", ()) or ()
+                ),
+                "directionality": getattr(relation, "directionality", ""),
+                "evidence_required": bool(getattr(relation, "evidence_required", True)),
+                "review_required": bool(getattr(relation, "review_required", True)),
+            }
+            for relation in getattr(spec, "relation_types", [])
+        ],
+    }
+
+
 def _extraction_profile_payload(spec: object) -> dict[str, object]:
     projection_target = getattr(spec, "projection_target", None)
     grounding_policy = getattr(spec, "grounding_policy", None)
@@ -647,6 +684,10 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
     declared_governance_specs = [
         _governance_spec_payload(spec, provider_pack=pack.name) for spec in pack.governance_specs()
     ]
+    declared_semantic_relation_contracts = [
+        _semantic_relation_contract_payload(spec, provider_pack=pack.name)
+        for spec in pack.semantic_relation_contracts()
+    ]
     declared_wiki_views = [_wiki_view_payload(spec) for spec in pack.wiki_views()]
     declared_extraction_profiles = [_extraction_profile_payload(spec) for spec in pack.extraction_profiles()]
     declared_operation_profiles = [_operation_profile_payload(spec) for spec in pack.operation_profiles()]
@@ -702,6 +743,17 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
         )
         for spec in list_effective_governance_specs(pack_name=pack_name)
     ]
+    declared_semantic_relation_names = {
+        spec.name for spec in pack.semantic_relation_contracts()
+    }
+    effective_semantic_relation_contracts = [
+        _semantic_relation_contract_payload(
+            spec,
+            status="declared" if spec.name in declared_semantic_relation_names else "inherited",
+            provider_pack=spec.pack,
+        )
+        for spec in list_effective_semantic_relation_contracts(pack_name=pack_name)
+    ]
     effective_execution_contracts = [
         _execution_contract_payload(spec)
         for spec in list_effective_execution_contracts(pack_name=pack_name)
@@ -718,6 +770,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "artifact_specs": declared_artifact_specs,
             "assembly_recipes": declared_assembly_recipes,
             "governance_specs": declared_governance_specs,
+            "semantic_relation_contracts": declared_semantic_relation_contracts,
             "wiki_views": declared_wiki_views,
             "extraction_profiles": declared_extraction_profiles,
             "operation_profiles": declared_operation_profiles,
@@ -732,6 +785,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
             "artifact_specs": effective_artifact_specs,
             "assembly_recipes": effective_assembly_recipes,
             "governance_specs": effective_governance_specs,
+            "semantic_relation_contracts": effective_semantic_relation_contracts,
             "execution_contracts": effective_execution_contracts,
         },
         "workflow_profiles": declared_workflow_profiles,
@@ -745,6 +799,7 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
         "artifact_specs": declared_artifact_specs,
         "assembly_recipes": declared_assembly_recipes,
         "governance_specs": declared_governance_specs,
+        "semantic_relation_contracts": declared_semantic_relation_contracts,
         "wiki_views": declared_wiki_views,
         "extraction_profiles": declared_extraction_profiles,
         "operation_profiles": declared_operation_profiles,
@@ -822,6 +877,11 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
                 "instead of leaving queue ownership and action reachability scattered across "
                 "runtime modules."
             ),
+            "semantic_relation_contract_behavior": (
+                "Semantic relation contracts are pack-owned vocabulary and promotion gates. "
+                "They should declare evidence, review queues, and write policy before any "
+                "extractor can promote relation candidates into canonical graph truth."
+            ),
         },
     }
 
@@ -845,6 +905,9 @@ def _payload(pack_name: str, vault_dir: Path | None) -> dict[str, object]:
             "artifact_specs": [spec.name for spec in pack.artifact_specs()],
             "assembly_recipes": [spec.name for spec in pack.assembly_recipes()],
             "governance_specs": [spec.name for spec in pack.governance_specs()],
+            "semantic_relation_contracts": [
+                spec.name for spec in pack.semantic_relation_contracts()
+            ],
             "wiki_views": [view.name for view in pack.wiki_views()],
         },
         "storage": {

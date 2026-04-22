@@ -28,6 +28,32 @@ Expected:
 - `ovp-ui` starts a local DB-backed browser surface
 - `watch_progress --once` reports one canonical runtime view instead of forcing operator inference from `ps` + JSONL
 
+## Post-Merge Install Smoke Checks
+
+Run these checks after updating local `main` and before real vault work:
+
+```bash
+git fetch --prune
+git switch main
+git pull --ff-only origin main
+python -m pip install -e .
+python -m pip show obsidian-vault-pipeline
+ovp --version
+ovp-lint --check --vault-dir /path/to/vault
+ovp --check
+ovp-packs --json
+ovp-doctor --pack research-tech --json
+```
+
+Expected:
+
+- `python -m pip show obsidian-vault-pipeline` points at the current checkout
+- package metadata and `ovp --version` report the same version
+- `ovp-lint --check` reports no WIGS integrity violations before vault work
+- `ovp --check` succeeds before running pipeline work
+- `ovp-packs --json` lists `research-tech` and `default-knowledge`
+- `ovp-doctor --pack research-tech --json` returns valid contract JSON
+
 ## Test Checks
 
 ```bash
@@ -218,6 +244,8 @@ Inspect:
 
 - effective `assembly_recipes`
 - shell `governance_contract`
+- declared and effective `artifact_specs`
+- declared and effective `semantic_relation_contracts`
 
 Expected:
 
@@ -226,6 +254,13 @@ Expected:
 - `orientation_brief` keeps both recipe provider and source provider on `research-tech`
 - effective `governance_specs` stay inherited from `research-tech` for `default-knowledge`
 - shell governance summary also resolves as inherited from `research-tech`
+- `semantic_relation_contracts` stay pack-owned and review-gated when present
+
+Tool-specific contract expectations:
+
+- `ovp-doctor` is the operator view for declared/effective contract families, including artifact, assembly, governance, and semantic relation contracts.
+- `ovp-ui` should display resolved assembly/governance provenance from payloads and must not invent hidden contract ownership.
+- `ovp-export` should follow assembly recipes to the resolved source provider and include export metadata for recipe/source provenance.
 
 ## API Contract Checks
 

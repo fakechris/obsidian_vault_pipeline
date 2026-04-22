@@ -213,6 +213,29 @@ class GovernanceSpec:
     resolver_rules: list[ResolverRuleSpec] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class SemanticRelationTypeSpec:
+    name: str
+    description: str
+    source_object_kinds: tuple[str, ...] = ()
+    target_object_kinds: tuple[str, ...] = ()
+    directionality: str = "directed"
+    evidence_required: bool = True
+    review_required: bool = True
+
+
+@dataclass(frozen=True)
+class SemanticRelationContractSpec:
+    name: str
+    pack: str
+    description: str = ""
+    relation_types: list[SemanticRelationTypeSpec] = field(default_factory=list)
+    source_contract_kind: str = "artifact_spec"
+    source_contract_name: str = "semantic_relation_candidate"
+    review_queue_name: str = "semantic-relations"
+    write_policy: str = "review_required"
+
+
 @dataclass
 class BaseDomainPack:
     name: str
@@ -233,6 +256,7 @@ class BaseDomainPack:
     _artifact_specs: list[ArtifactSpec] = field(default_factory=list)
     _assembly_recipes: list[AssemblyRecipeSpec] = field(default_factory=list)
     _governance_specs: list[GovernanceSpec] = field(default_factory=list)
+    _semantic_relation_contracts: list[SemanticRelationContractSpec] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.role not in ALLOWED_PACK_ROLES:
@@ -281,6 +305,11 @@ class BaseDomainPack:
             if spec.pack != self.name:
                 raise ValueError(
                     f"Pack '{self.name}' declares governance spec for '{spec.pack}'"
+                )
+        for spec in self._semantic_relation_contracts:
+            if spec.pack != self.name:
+                raise ValueError(
+                    f"Pack '{self.name}' declares semantic relation contract for '{spec.pack}'"
                 )
         for spec in self._extraction_profiles:
             if getattr(spec, "pack", self.name) != self.name:
@@ -380,3 +409,14 @@ class BaseDomainPack:
             if spec.name == name:
                 return spec
         raise ValueError(f"Unknown governance spec '{name}' for pack '{self.name}'")
+
+    def semantic_relation_contracts(self) -> list[SemanticRelationContractSpec]:
+        return list(self._semantic_relation_contracts)
+
+    def semantic_relation_contract(self, name: str) -> SemanticRelationContractSpec:
+        for spec in self._semantic_relation_contracts:
+            if spec.name == name:
+                return spec
+        raise ValueError(
+            f"Unknown semantic relation contract '{name}' for pack '{self.name}'"
+        )

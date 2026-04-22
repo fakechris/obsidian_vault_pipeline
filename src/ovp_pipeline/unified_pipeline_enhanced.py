@@ -44,7 +44,7 @@ from typing import Any
 
 try:
     from .handler_registry import execute_profile_stage_handler
-    from .runtime import VaultLayout, resolve_vault_dir
+    from .runtime import VaultLayout
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
@@ -58,7 +58,7 @@ try:
     )
 except ImportError:  # pragma: no cover - script mode fallback
     from handler_registry import execute_profile_stage_handler
-    from runtime import VaultLayout, resolve_vault_dir
+    from runtime import VaultLayout
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
@@ -195,15 +195,34 @@ def _load_env(vault_dir: Path | None = None) -> bool:
 
 
 def _get_version() -> str:
-    """从pyproject.toml读取版本"""
+    """Read the installed package version, falling back to repository metadata."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version("obsidian-vault-pipeline")
+    except (ImportError, PackageNotFoundError):
+        pass
+
     try:
         import tomllib
-        pyproject = Path(__file__).parent.parent.parent / "pyproject.toml"
-        if pyproject.exists():
-            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-            return data.get("project", {}).get("version", "0.3.2")
-    except Exception:
-        pass
+    except ModuleNotFoundError:
+        try:
+            import tomli as tomllib
+        except ModuleNotFoundError:
+            tomllib = None
+
+    if tomllib is not None:
+        for parent in Path(__file__).resolve().parents:
+            pyproject = parent / "pyproject.toml"
+            if not pyproject.exists():
+                continue
+            try:
+                data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            except (OSError, tomllib.TOMLDecodeError, UnicodeError):
+                continue
+            project_version = data.get("project", {}).get("version")
+            if project_version:
+                return str(project_version)
     return "0.3.2"
 
 
@@ -294,7 +313,7 @@ PINBOARD_TOKEN=your_username:your_token
         print("\n❌ 未提供 API Key，初始化取消")
         print(f"\n你可以稍后手动创建 {ENV_FILE}:")
         print(f"  cp {ENV_EXAMPLE} {ENV_FILE}")
-        print(f"  然后编辑填入你的 Key")
+        print("  然后编辑填入你的 Key")
         return 1
 
     # 选择提供商
@@ -372,7 +391,7 @@ def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
     if found_env:
         issues.append(f".env file: Found at {found_env}")
     else:
-        issues.append(f".env file: NOT FOUND")
+        issues.append(".env file: NOT FOUND")
 
     return key_ok, issues
 
@@ -2702,7 +2721,7 @@ class EnhancedPipeline:
             lines.append(f"| {step} | {status} | {detail} |")
 
         all_success = all(r.get("success") for r in results.values())
-        lines.append(f"\n## 总体状态")
+        lines.append("\n## 总体状态")
         lines.append(f"\n**{'全部成功' if all_success else '部分失败'}**")
         lines.append(f"\n完成步骤: {sum(1 for r in results.values() if r.get('success'))}/{len(results)}")
 

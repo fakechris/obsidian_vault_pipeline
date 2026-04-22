@@ -590,6 +590,10 @@ What those phases accomplished:
 - `Phase 24` made object-creation routing legible by exposing brain-first lookup and backlink expectation contracts from traceability through signals into the UI
 - `Phase 25` made long-running pipeline execution observable from the same run-ledger truth in CLI, API, and UI
 - `Phase 26` makes candidate/canonical transitions directly reviewable from the operator surface without introducing a second canonicalization system
+- `Phase 27` closed the focused action queue as the single background execution surface
+- `Phase 28/29` proved background value in briefing and enforced backlink expectations before focused object writes
+- `Phase 30` closed release/install hygiene after PR #44 merged
+- `Phase 31` introduced pack-level semantic relation contracts without adding a hidden extractor or truth writer
 
 What this sequence closed:
 
@@ -601,16 +605,16 @@ What this sequence closed:
 - the signal loop now also shows what recent inbound note capture actually did before queue execution became relevant
 - the signal loop no longer implies blind downstream object creation when the note already links to canonical brain objects
 - candidate concepts are no longer trapped behind a CLI-only lifecycle; they now have an explicit review surface and audit trail
+- background actions are routed through the action queue and run ledger instead of a second execution engine
+- background briefing items now carry value proof, evidence, actionability, and policy legibility
+- focused object extraction now reuses backlink expectations as a write precondition
+- semantic relation extraction now has a pack-owned contract boundary before implementation
 
 What the next phase should close:
 
-- if we enforce backlinks at write time, the enforcement should reuse the `backlink_expectation` contract instead of introducing a second source of truth
-- if we add richer semantic relation extraction, it should be a pack-level extraction contract, not a hidden global memory backend
-- background intelligence orchestration should reuse the action queue and run ledger instead of creating another execution path
-- after Phase 27, the immediate next closeout is Phase 28/29:
-  - prove background-intelligence value directly in the briefing surface
-  - enforce backlink expectations before focused object writes
-  - keep semantic relation extraction deferred until this trust boundary is closed
+- build the first semantic relation extractor as a candidate-only producer
+- route relation candidates through the declared `semantic-relations` review queue
+- promote accepted relations into graph truth only through an explicit review action
 
 Sequence rule:
 
@@ -623,7 +627,11 @@ Sequence rule:
 - treat `Phase 23` as the second closeout slice for Milestone 7
 - treat `Phase 24` as the third closeout slice for Milestone 7: brain-first lookup + backlink legibility
 - treat `Phase 26` as the final Milestone 7 closeout slice for reviewed candidate/canonical actionability
-- do not continue within Milestone 7 unless Phase 26 reveals a concrete safety defect
+- treat `Phase 27` as the Milestone 9A execution-surface closeout
+- treat `Phase 28/29` as the background value/backlink trust-boundary closeout
+- treat `Phase 30` as release hygiene, not product feature work
+- treat `Phase 31` as the semantic relation contract boundary, not the extractor
+- do not continue within Milestone 7 unless a concrete safety defect appears
 
 This keeps the roadmap moving from substrate -> contracts -> entry products, instead of looping back into infrastructure.
 
@@ -686,13 +694,21 @@ The remaining gap is no longer “can this architecture support it?” It is now
 - route background actions through the existing queue / run-ledger contracts,
 - prove that background intelligence is useful with explicit evidence and policy reasons,
 - enforce backlink expectations before object extraction creates downstream knowledge,
-- add richer pack-level semantic extraction only after the orchestration path is observable.
+- add richer pack-level semantic extraction only as review-gated candidates first.
 
 Phase 28/29 status:
 
 - background-intelligence value proof is now implemented in the briefing payload and UI,
 - background policy is now visible from effective governance signal rules,
 - focused object extraction now blocks when the target deep dive lacks source backlink provenance.
+
+Phase 30/31 status:
+
+- local install smoke checks are documented,
+- `ovp --version` reports package metadata instead of a stale fallback,
+- `research-tech` declares `research_semantic_relations`,
+- semantic relation proposals are constrained to `semantic_relation_candidate` artifacts and the `semantic-relations` review queue,
+- no extractor or automatic graph-truth promotion has been introduced.
 
 ## PR Review Gate
 

@@ -11,6 +11,7 @@ from .operation_profiles import RESEARCH_TECH_OPERATION_PROFILES
 from .processor_contracts import build_processor_contracts
 from .profiles import RESEARCH_TECH_WORKFLOW_PROFILES
 from .schemas import RESEARCH_TECH_OBJECT_KINDS
+from .semantic_relations import build_semantic_relation_contracts
 from .wiki_views import RESEARCH_TECH_WIKI_VIEWS
 
 
@@ -30,6 +31,7 @@ def get_pack() -> BaseDomainPack:
         _artifact_specs=build_artifact_specs(),
         _assembly_recipes=build_assembly_recipes(),
         _governance_specs=build_governance_specs(),
+        _semantic_relation_contracts=build_semantic_relation_contracts(),
         _truth_projection=TruthProjectionSpec(
             name="research-tech-default",
             pack="research-tech",
