@@ -236,6 +236,92 @@ class SemanticRelationContractSpec:
     write_policy: str = "review_required"
 
 
+# ---------------------------------------------------------------------------
+# Phase 34 — Policy Promotion contract additions
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AutoPromoteRule:
+    """Concept-promotion auto-lane criteria.
+
+    ``legacy_or_rule=True`` is the bit-for-bit escape hatch used by
+    ``default-knowledge``: ``promotion_policy.evaluate_concept`` short-circuits
+    to the historical ``source_count >= 2 or evidence_count >= 3`` rule. Strict
+    packs leave it ``False`` and rely on the structured fields.
+    """
+
+    require_independent_sources: int = 1
+    require_evidence_kinds: tuple[str, ...] = ()
+    require_no_open_contradiction: bool = False
+    legacy_or_rule: bool = False
+
+
+@dataclass(frozen=True)
+class EscalateRule:
+    """When auto-promote fails, escalate to the human review queue if any of
+    these flags fire. All-False = never escalate (auto-only or reject)."""
+
+    on_partial_evidence: bool = False
+    on_disputed: bool = False
+    on_unverified_evidence: bool = False
+
+
+@dataclass(frozen=True)
+class RejectRule:
+    """Hard floor for rejection — anything below this is rejected outright."""
+
+    min_evidence_floor: int = 0
+
+
+@dataclass(frozen=True)
+class PromotionPolicySpec:
+    auto_promote: AutoPromoteRule = field(default_factory=AutoPromoteRule)
+    escalate_to_workbench: EscalateRule = field(default_factory=EscalateRule)
+    reject: RejectRule = field(default_factory=RejectRule)
+
+
+@dataclass(frozen=True)
+class WorkspaceZonesSpec:
+    """Glob patterns identifying agent-owned vs accepted-state zones.
+
+    ``agent_owned``: paths agents may write freely (drafts, briefings, inbox).
+    ``accepted``: paths gated by promotion (Plan.md, Roadmap.md, Decisions.md).
+    ``append_only``: declared exception within ``accepted`` (e.g.
+    ``00-Polaris/Writing-Prompts.md``) — appends OK, overwrites refused.
+    """
+
+    agent_owned: tuple[str, ...] = ("**",)
+    accepted: tuple[str, ...] = ()
+    append_only: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class EvidenceRequirementsSpec:
+    """Phase 34 hook for Phase 33's lint EVIDENCE_INCOMPLETE.
+
+    ``claim_must_have``/``relation_must_have`` enumerate evidence column names
+    that must be non-empty before a row counts as complete (e.g. ``locator``,
+    ``content_hash``). Permissive packs leave both empty so lint stays silent.
+    """
+
+    claim_must_have: tuple[str, ...] = ()
+    relation_must_have: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReuseSignalsSpec:
+    """Optional pack tuning for Phase 32's ``trusted_reuse_event`` derivation.
+
+    Packs may add surfaces beyond the closed default vocabulary
+    (``query|briefing|writing_prompt|compiled_view|export|truth_api|prompt``)
+    or scope provenance-clean lookback differently.
+    """
+
+    extra_surfaces: tuple[str, ...] = ()
+    provenance_clean_lookback_days: int = 30
+
+
 @dataclass
 class BaseDomainPack:
     name: str
@@ -257,6 +343,11 @@ class BaseDomainPack:
     _assembly_recipes: list[AssemblyRecipeSpec] = field(default_factory=list)
     _governance_specs: list[GovernanceSpec] = field(default_factory=list)
     _semantic_relation_contracts: list[SemanticRelationContractSpec] = field(default_factory=list)
+    # Phase 34 — all optional; absence = core defaults = current behavior.
+    _promotion_policy: PromotionPolicySpec | None = None
+    _workspace_zones: WorkspaceZonesSpec | None = None
+    _evidence_requirements: EvidenceRequirementsSpec | None = None
+    _reuse_signals: ReuseSignalsSpec | None = None
 
     def __post_init__(self) -> None:
         if self.role not in ALLOWED_PACK_ROLES:
@@ -420,3 +511,17 @@ class BaseDomainPack:
         raise ValueError(
             f"Unknown semantic relation contract '{name}' for pack '{self.name}'"
         )
+
+    # ---- Phase 34 accessors --------------------------------------------------
+
+    def promotion_policy(self) -> PromotionPolicySpec:
+        return self._promotion_policy or PromotionPolicySpec()
+
+    def workspace_zones(self) -> WorkspaceZonesSpec:
+        return self._workspace_zones or WorkspaceZonesSpec()
+
+    def evidence_requirements(self) -> EvidenceRequirementsSpec:
+        return self._evidence_requirements or EvidenceRequirementsSpec()
+
+    def reuse_signals(self) -> ReuseSignalsSpec:
+        return self._reuse_signals or ReuseSignalsSpec()

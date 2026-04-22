@@ -8,6 +8,7 @@ from pathlib import Path
 from ..assembly_recipe_registry import resolve_assembly_recipe_spec, resolve_assembly_source_contract
 from ..observation_surface_registry import execute_observation_surface_builder
 from ..packs.loader import PRIMARY_PACK_NAME, load_pack
+from ..reuse_emitter import collect_object_ids, emit_reuse_events_for_object_ids
 from ..runtime import resolve_vault_dir
 from ..wiki_views.runtime import build_view
 
@@ -112,6 +113,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"and object_id={args.object_id!r}: {exc}"
             )
         shutil.copyfile(source_path, output_path)
+        if args.object_id:
+            emit_reuse_events_for_object_ids(
+                vault_dir,
+                pack=pack.name,
+                object_ids=[args.object_id],
+                surface="export",
+                consumer_ref=f"export:{args.target}",
+            )
         print(
             json.dumps(
                 {
@@ -142,6 +151,15 @@ def main(argv: list[str] | None = None) -> int:
                 f"'{getattr(recipe, 'source_contract_name', None)}': {exc}"
             )
         _write_json_export(output_path, payload)
+        object_ids = collect_object_ids(payload)
+        if object_ids:
+            emit_reuse_events_for_object_ids(
+                vault_dir,
+                pack=pack.name,
+                object_ids=object_ids,
+                surface="compiled_view",
+                consumer_ref=f"export:{args.target}",
+            )
         print(
             json.dumps(
                 {

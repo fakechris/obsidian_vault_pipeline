@@ -106,6 +106,10 @@ ovp-migrate-pack-provenance = "ovp_pipeline.commands.migrate_pack_provenance:mai
 ovp-doctor = "ovp_pipeline.commands.doctor:main"
 ovp-export = "ovp_pipeline.commands.export_artifact:main"
 ovp-truth = "ovp_pipeline.commands.truth_api:main"
+ovp-reuse = "ovp_pipeline.commands.reuse_report:main"
+ovp-evidence = "ovp_pipeline.commands.evidence_verify:main"
+ovp-promote = "ovp_pipeline.commands.promote:main"
+ovp-init = "ovp_pipeline.commands.init_project:main"
 ovp-ui = "ovp_pipeline.commands.ui_server:main"
 
 [project.entry-points."ovp.packs"]

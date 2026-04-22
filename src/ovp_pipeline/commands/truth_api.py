@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from ..reuse_emitter import collect_object_ids, emit_reuse_events_for_object_ids
 from ..runtime import resolve_vault_dir
 from ..truth_api import (
     get_graph_cluster_detail,
@@ -92,6 +93,20 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
+
+    if args.command in {"object", "neighborhood"}:
+        if args.command == "object":
+            truth_pack = str((payload.get("object") or {}).get("pack") or "")
+        else:
+            truth_pack = str((payload.get("center") or {}).get("row_pack") or "")
+        if truth_pack:
+            emit_reuse_events_for_object_ids(
+                vault_dir,
+                pack=truth_pack,
+                object_ids=collect_object_ids(payload),
+                surface="truth_api",
+                consumer_ref=f"truth_api:{args.command}",
+            )
 
     print(json.dumps(payload, ensure_ascii=False))
     return 0

@@ -105,8 +105,30 @@ EMBEDDING_MODEL = "local-hash-v1"
 TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug"),
     "claims": ("pack", "claim_id", "object_id", "claim_kind", "claim_text", "confidence"),
-    "claim_evidence": ("pack", "claim_id", "source_slug", "evidence_kind", "quote_text"),
-    "relations": ("pack", "source_object_id", "target_object_id", "relation_type", "evidence_source_slug"),
+    "claim_evidence": (
+        "pack",
+        "claim_id",
+        "source_slug",
+        "evidence_kind",
+        "quote_text",
+        "locator",
+        "content_hash",
+        "retrieval_context",
+        "status",
+        "verified_at",
+    ),
+    "relations": (
+        "pack",
+        "source_object_id",
+        "target_object_id",
+        "relation_type",
+        "evidence_source_slug",
+        "locator",
+        "content_hash",
+        "retrieval_context",
+        "status",
+        "verified_at",
+    ),
     "compiled_summaries": ("pack", "object_id", "summary_text", "source_slug"),
     "contradictions": (
         "pack",
@@ -320,6 +342,44 @@ def _infer_audit_slug(payload: dict[str, object]) -> str:
     return ""
 
 
+def _collect_reuse_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, str, str, str, int, int, int, str]]:
+    rows: list[tuple[str, str, str, str, str, str, str, int, int, int, str]] = []
+    log_path = layout.logs_dir / "reuse-events.jsonl"
+    if not log_path.exists():
+        return rows
+    seen_event_ids: set[str] = set()
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        event_id = str(payload.get("event_id") or "")
+        if not event_id or event_id in seen_event_ids:
+            continue
+        seen_event_ids.add(event_id)
+        rows.append(
+            (
+                event_id,
+                str(payload.get("ts") or ""),
+                str(payload.get("pack") or ""),
+                str(payload.get("object_id") or ""),
+                str(payload.get("object_kind") or ""),
+                str(payload.get("surface") or ""),
+                str(payload.get("consumer_ref") or ""),
+                int(bool(payload.get("evidence_present"))),
+                int(bool(payload.get("provenance_clean"))),
+                int(bool(payload.get("trusted"))),
+                json.dumps(payload, ensure_ascii=False),
+            )
+        )
+    return rows
+
+
 def _collect_audit_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, str, str]]:
     rows: list[tuple[str, str, str, str, str, str]] = []
     log_specs = [
@@ -437,13 +497,14 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
         "timeline_events": {"slug", "event_date", "event_type", "heading", "payload_json"},
         "objects": {"pack"},
         "claims": {"pack"},
-        "claim_evidence": {"pack"},
-        "relations": {"pack"},
+        "claim_evidence": {"pack", "locator", "content_hash", "status", "verified_at"},
+        "relations": {"pack", "locator", "content_hash", "status", "verified_at"},
         "compiled_summaries": {"pack"},
         "contradictions": {"pack"},
         "graph_edges": {"pack"},
         "graph_clusters": {"pack"},
         "truth_projections": {"pack", "owner_pack", "builder_name", "built_at"},
+        "reuse_events": {"event_id", "ts", "pack", "surface", "trusted"},
     }
     try:
         with sqlite3.connect(db_path) as conn:
@@ -635,35 +696,41 @@ def rebuild_knowledge_index(
                 INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                truth_projection.objects,
+                [row.to_row() for row in truth_projection.objects],
             )
             conn.executemany(
                 """
                 INSERT INTO claims (pack, claim_id, object_id, claim_kind, claim_text, confidence)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                truth_projection.claims,
+                [row.to_row() for row in truth_projection.claims],
             )
             conn.executemany(
                 """
-                INSERT INTO claim_evidence (pack, claim_id, source_slug, evidence_kind, quote_text)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO claim_evidence (
+                    pack, claim_id, source_slug, evidence_kind, quote_text,
+                    locator, content_hash, retrieval_context, status, verified_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                truth_projection.claim_evidence,
+                [row.to_row() for row in truth_projection.claim_evidence],
             )
             conn.executemany(
                 """
-                INSERT INTO relations (pack, source_object_id, target_object_id, relation_type, evidence_source_slug)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO relations (
+                    pack, source_object_id, target_object_id, relation_type, evidence_source_slug,
+                    locator, content_hash, retrieval_context, status, verified_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                truth_projection.relations,
+                [row.to_row() for row in truth_projection.relations],
             )
             conn.executemany(
                 """
                 INSERT INTO compiled_summaries (pack, object_id, summary_text, source_slug)
                 VALUES (?, ?, ?, ?)
                 """,
-                truth_projection.compiled_summaries,
+                [row.to_row() for row in truth_projection.compiled_summaries],
             )
             conn.executemany(
                 """
@@ -679,7 +746,7 @@ def rebuild_knowledge_index(
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                truth_projection.contradictions,
+                [row.to_row() for row in truth_projection.contradictions],
             )
             conn.executemany(
                 """
@@ -694,7 +761,7 @@ def rebuild_knowledge_index(
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                truth_projection.graph_edges,
+                [row.to_row() for row in truth_projection.graph_edges],
             )
             conn.executemany(
                 """
@@ -709,7 +776,7 @@ def rebuild_knowledge_index(
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                truth_projection.graph_clusters,
+                [row.to_row() for row in truth_projection.graph_clusters],
             )
             conn.execute(
                 """
@@ -749,6 +816,18 @@ def rebuild_knowledge_index(
                 """,
                 audit_rows,
             )
+            reuse_rows = _collect_reuse_rows(layout)
+            conn.executemany(
+                """
+                INSERT INTO reuse_events (
+                    event_id, ts, pack, object_id, object_kind, surface,
+                    consumer_ref, evidence_present, provenance_clean, trusted,
+                    payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                reuse_rows,
+            )
             conn.executemany(
                 """
                 INSERT INTO page_embeddings (slug, chunk_index, section_title, chunk_text, embedding_blob, embedding_model)
@@ -776,6 +855,7 @@ def rebuild_knowledge_index(
                 "raw_records_indexed": len(raw_rows),
                 "timeline_events_indexed": len(timeline_rows),
                 "audit_events_indexed": len(audit_rows),
+                "reuse_events_indexed": len(reuse_rows),
                 "embedding_chunks_indexed": len(embedding_rows),
                 "objects_indexed": len(truth_projection.objects),
                 "claims_indexed": len(truth_projection.claims),
@@ -1128,6 +1208,7 @@ def knowledge_index_stats(vault_dir: Path, *, pack_name: str | None = None) -> d
         "raw_records": "SELECT COUNT(*) FROM raw_data",
         "timeline_events": "SELECT COUNT(*) FROM timeline_events",
         "audit_events": "SELECT COUNT(*) FROM audit_events",
+        "reuse_events": "SELECT COUNT(*) FROM reuse_events",
         "embedding_chunks": "SELECT COUNT(*) FROM page_embeddings",
         "objects": "SELECT COUNT(*) FROM objects WHERE pack = ?",
         "claims": "SELECT COUNT(*) FROM claims WHERE pack = ?",

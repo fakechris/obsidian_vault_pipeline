@@ -157,6 +157,16 @@ area: {area}
 
 > Auto-created {kind} MOC for {area}.
 """
+        # Phase 34: MOC creation runs inside the autopilot loop and writes
+        # into the accepted-state Atlas/Topics zone — wrap in promotion mode
+        # and emit the audit *before* the write so mtime ≤ audit ts.
+        from .workspace_promotion import WRITE_MODE_PROMOTION, enforce_zone_write
+
+        enforce_zone_write(
+            moc_path,
+            vault_dir=self.vault_dir,
+            mode=WRITE_MODE_PROMOTION,
+        )
         moc_path.write_text(content, encoding="utf-8")
         self.logger.log("moc_created", {
             "area": area,

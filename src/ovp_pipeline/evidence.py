@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
+import re
 import sqlite3
 from itertools import islice
 from pathlib import Path
@@ -11,6 +14,14 @@ from .knowledge_index import knowledge_index_stats, recent_audit_events
 from .packs.base import BaseDomainPack
 from .packs.loader import DEFAULT_PACK_NAME, load_pack
 from .runtime import VaultLayout, resolve_vault_dir
+from .truth_store import (
+    EVIDENCE_STATUS_BROKEN,
+    EVIDENCE_STATUS_STALE,
+    EVIDENCE_STATUS_UNVERIFIED,
+    EVIDENCE_STATUS_VERIFIED,
+)
+
+_EVIDENCE_CONTEXT_CHARS = 200
 
 
 def _resolve_pack(pack: str | BaseDomainPack | None) -> BaseDomainPack:
@@ -248,3 +259,182 @@ def build_evidence_payload(
             extraction_profile=extraction_profile,
         )
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Phase 33 — re-locatable evidence (locator / hash / context / verify)
+# ---------------------------------------------------------------------------
+
+
+def _utc_now_text() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _resolve_source_path(source_path: Path | str, vault_dir: Path | str | None) -> Path:
+    candidate = Path(source_path)
+    if candidate.is_absolute():
+        return candidate
+    if vault_dir is not None:
+        vault = Path(vault_dir)
+        joined = (vault / candidate).resolve()
+        if joined.exists():
+            return joined
+    return candidate
+
+
+def compute_content_hash(source_path: Path | str, *, vault_dir: Path | str | None = None) -> str:
+    """SHA-256 of the source file's bytes, or empty string when unreadable.
+
+    The hash anchors a ``claim_evidence`` row to a specific snapshot of its
+    source. When the source mutates the hash diverges and the verifier flips
+    status to ``stale``.
+    """
+    if not source_path:
+        return ""
+    path = _resolve_source_path(source_path, vault_dir)
+    if not path.exists() or not path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+
+
+def compute_locator(
+    source_path: Path | str,
+    quote_text: str,
+    *,
+    vault_dir: Path | str | None = None,
+) -> str:
+    """Best-effort ``section#heading@paragraph_index`` pointer for a quote.
+
+    Returns ``""`` when the quote cannot be located (e.g. paraphrased) — in
+    that case the verifier still has ``content_hash`` to fall back on.
+    """
+    if not quote_text:
+        return ""
+    path = _resolve_source_path(source_path, vault_dir)
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    needle = quote_text.strip()
+    if not needle:
+        return ""
+
+    section_heading = ""
+    paragraph_index = 0
+    matched_paragraph = -1
+    paragraphs_in_section: list[str] = []
+    sections: list[tuple[str, list[str]]] = [("", [])]
+
+    paragraph_buffer: list[str] = []
+
+    def flush_paragraph() -> None:
+        if paragraph_buffer:
+            sections[-1][1].append("\n".join(paragraph_buffer).strip())
+            paragraph_buffer.clear()
+
+    for line in text.splitlines():
+        heading_match = _HEADING_RE.match(line)
+        if heading_match:
+            flush_paragraph()
+            heading_title = heading_match.group(2).strip()
+            sections.append((heading_title, []))
+            continue
+        if line.strip():
+            paragraph_buffer.append(line)
+        else:
+            flush_paragraph()
+    flush_paragraph()
+
+    for heading, paragraphs in sections:
+        for index, paragraph in enumerate(paragraphs):
+            if needle in paragraph:
+                section_heading = heading
+                paragraph_index = index
+                matched_paragraph = index
+                paragraphs_in_section = paragraphs
+                break
+        if matched_paragraph >= 0:
+            break
+
+    _ = paragraphs_in_section  # informational; reserved for future locator metadata
+    if matched_paragraph < 0:
+        return ""
+    safe_heading = re.sub(r"\s+", "-", section_heading.strip().lower()) if section_heading else ""
+    return f"section#{safe_heading}@{paragraph_index}"
+
+
+def compute_retrieval_context(
+    source_path: Path | str,
+    quote_text: str,
+    *,
+    vault_dir: Path | str | None = None,
+    radius: int = _EVIDENCE_CONTEXT_CHARS,
+) -> str:
+    """Surrounding ``±radius`` characters around ``quote_text`` in the source.
+
+    Empty string when source missing or the quote can't be found verbatim. The
+    UI uses this to render an evidence preview without re-reading the file.
+    """
+    if not quote_text:
+        return ""
+    path = _resolve_source_path(source_path, vault_dir)
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    needle = quote_text.strip()
+    if not needle:
+        return ""
+    location = text.find(needle)
+    if location == -1:
+        return ""
+    start = max(0, location - radius)
+    end = min(len(text), location + len(needle) + radius)
+    return text[start:end]
+
+
+def verify_evidence_row(
+    row: dict[str, Any],
+    vault_dir: Path | str,
+) -> tuple[str, str]:
+    """Return ``(status, verified_at)`` for a single ``claim_evidence`` row.
+
+    ``row`` is keyed dict-style (``source_slug``, ``quote_text``,
+    ``content_hash``). Resolution rule:
+
+    * source path missing / unreadable → ``broken`` (timestamped)
+    * stored ``content_hash`` empty → ``unverified`` (no anchor to compare)
+    * recomputed hash matches → ``verified``
+    * recomputed hash diverges → ``stale``
+
+    Quote re-location (locator drift) is intentionally not promoted to
+    ``stale`` — quotes can be edited cosmetically without invalidating the
+    underlying claim. Hash drift is the load-bearing signal.
+    """
+    source_path = str(row.get("source_slug") or row.get("source_path") or "")
+    if not source_path:
+        return EVIDENCE_STATUS_UNVERIFIED, ""
+
+    resolved = _resolve_source_path(source_path, vault_dir)
+    if not resolved.exists() or not resolved.is_file():
+        return EVIDENCE_STATUS_BROKEN, _utc_now_text()
+
+    stored_hash = str(row.get("content_hash") or "")
+    if not stored_hash:
+        return EVIDENCE_STATUS_UNVERIFIED, ""
+
+    actual_hash = compute_content_hash(resolved)
+    if actual_hash and actual_hash == stored_hash:
+        return EVIDENCE_STATUS_VERIFIED, _utc_now_text()
+    return EVIDENCE_STATUS_STALE, _utc_now_text()

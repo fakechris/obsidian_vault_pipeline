@@ -84,3 +84,34 @@ def test_explicit_research_tech_pack_profile_matches_full_profile():
     assert plan["pack"] == "research-tech"
     assert plan["profile"] == "full"
     assert plan["steps"] == pack.profile("full").stages
+
+
+def test_default_knowledge_legacy_or_rule_byte_for_byte_compat():
+    """Phase 34 §5.12 guarantee: default-knowledge `legacy_or_rule=True` must
+    reproduce the historical `source_count >= 2 or evidence_count >= 3` rule
+    across the full lane decision matrix (auto vs hold)."""
+    from ovp_pipeline.concept_registry import ConceptEntry
+    from ovp_pipeline.packs.loader import load_pack
+    from ovp_pipeline.promotion_policy import LANE_AUTO, LANE_HOLD, evaluate_concept
+
+    pack = load_pack("default-knowledge")
+    for source_count in range(0, 5):
+        for evidence_count in range(0, 5):
+            entry = ConceptEntry(
+                slug=f"slug-{source_count}-{evidence_count}",
+                title="t",
+                aliases=[],
+                definition="d",
+                area="a",
+                status="candidate",
+                source_count=source_count,
+                evidence_count=evidence_count,
+            )
+            decision = evaluate_concept(entry, pack=pack)
+            historical = source_count >= 2 or evidence_count >= 3
+            expected_lane = LANE_AUTO if historical else LANE_HOLD
+            assert decision.lane == expected_lane, (
+                f"legacy_or_rule diverged for "
+                f"source={source_count} evidence={evidence_count}: "
+                f"got {decision.lane}, expected {expected_lane}"
+            )

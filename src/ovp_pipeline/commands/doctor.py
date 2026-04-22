@@ -20,6 +20,7 @@ from ..execution_contract_registry import (
 from ..pack_resolution import iter_compatible_packs
 from ..processor_contract_registry import list_effective_processor_contracts
 from ..semantic_relation_registry import list_effective_semantic_relation_contracts
+import sqlite3
 from ..packs.loader import (
     DEFAULT_PACK_NAME,
     DEFAULT_WORKFLOW_PACK_NAME,
@@ -886,6 +887,301 @@ def _contracts_payload(pack_name: str) -> dict[str, object]:
     }
 
 
+def _reuse_payload(vault_dir: Path | None, *, pack_name: str) -> dict[str, object]:
+    """Phase 32 reuse-event health snapshot for the requested pack.
+
+    Reads ``60-Logs/knowledge.db`` directly so it stays read-only and never
+    triggers a rebuild from the doctor command.
+    """
+    if vault_dir is None:
+        return {
+            "events_total": 0,
+            "trusted_events_total": 0,
+            "trusted_share": 0.0,
+            "never_reused_count": 0,
+            "knowledge_db_exists": False,
+        }
+    db_path = VaultLayout.from_vault(vault_dir).knowledge_db
+    if not db_path.exists():
+        return {
+            "events_total": 0,
+            "trusted_events_total": 0,
+            "trusted_share": 0.0,
+            "never_reused_count": 0,
+            "knowledge_db_exists": False,
+        }
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(trusted),0) FROM reuse_events WHERE pack = ?",
+                (pack_name,),
+            ).fetchone()
+            never_row = conn.execute(
+                """
+                SELECT COUNT(*) FROM (
+                  SELECT objects.object_id
+                  FROM objects
+                  LEFT JOIN reuse_events
+                         ON reuse_events.pack = objects.pack
+                        AND reuse_events.object_id = objects.object_id
+                  WHERE objects.pack = ?
+                  GROUP BY objects.object_id
+                  HAVING COUNT(reuse_events.event_id) = 0
+                )
+                """,
+                (pack_name,),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return {
+            "events_total": 0,
+            "trusted_events_total": 0,
+            "trusted_share": 0.0,
+            "never_reused_count": 0,
+            "knowledge_db_exists": True,
+            "schema_stale": True,
+        }
+    events_total = int(row[0])
+    trusted_events_total = int(row[1])
+    return {
+        "events_total": events_total,
+        "trusted_events_total": trusted_events_total,
+        "trusted_share": (trusted_events_total / events_total) if events_total else 0.0,
+        "never_reused_count": int(never_row[0]),
+        "knowledge_db_exists": True,
+    }
+
+
+def _promotion_health_payload(vault_dir: Path | None, *, pack_name: str) -> dict[str, object]:
+    """Phase 34 — concept lane rates + unreviewed canonical mutation count.
+
+    Reads ``audit_events`` (event_type='promotion' / 'zone_violation') from the
+    knowledge.db. Since the lint check already records mtime-vs-audit
+    violations as ``zone_violation`` events on each scan, the doctor count is
+    a simple SQL aggregation.
+    """
+    from ..promotion_policy import (
+        LANE_AUTO,
+        LANE_ESCALATE,
+        LANE_HOLD,
+        LANE_REJECT,
+        evaluate_concept,
+    )
+
+    if vault_dir is None:
+        return {
+            "lane_counts": {},
+            "unreviewed_canonical_mutations": 0,
+            "knowledge_db_exists": False,
+        }
+    db_path = VaultLayout.from_vault(vault_dir).knowledge_db
+
+    # Lane counts come from a fresh policy evaluation across current candidates;
+    # we don't need the DB for them, just the registry.
+    lane_counts: dict[str, int] = {LANE_AUTO: 0, LANE_ESCALATE: 0, LANE_HOLD: 0, LANE_REJECT: 0}
+    try:
+        from ..concept_registry import ConceptRegistry
+
+        pack = load_pack(pack_name)
+        registry = ConceptRegistry(vault_dir).load()
+        for entry in registry.candidates:
+            decision = evaluate_concept(entry, pack=pack, registry=registry)
+            lane_counts[decision.lane] = lane_counts.get(decision.lane, 0) + 1
+    except Exception:
+        pass
+
+    unreviewed_mutations = 0
+    if db_path.exists():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) FROM audit_events
+                    WHERE event_type = 'zone_violation'
+                    """
+                ).fetchone()
+                unreviewed_mutations = int(row[0]) if row else 0
+        except sqlite3.OperationalError:
+            pass
+
+    return {
+        "lane_counts": lane_counts,
+        "unreviewed_canonical_mutations": unreviewed_mutations,
+        "knowledge_db_exists": db_path.exists(),
+    }
+
+
+def _feedback_payload(vault_dir: Path | None, *, pack_name: str) -> dict[str, object]:
+    """Phase 36 — query→candidate yield + query→reuse ratio.
+
+    Reads ``feedback_yield`` events from ``60-Logs/pipeline.jsonl`` (no DB
+    dependency, so the doctor stays read-only). Counts candidates produced and
+    open questions logged. Reuse share is computed against the existing reuse
+    payload which already counts ``trusted_reuse_event`` events.
+    """
+    if vault_dir is None:
+        return {
+            "candidate_yield": 0,
+            "open_questions": 0,
+            "writing_prompts": 0,
+            "proposed_relations": 0,
+            "events_total": 0,
+        }
+    log = vault_dir / "60-Logs" / "pipeline.jsonl"
+    if not log.exists():
+        return {
+            "candidate_yield": 0,
+            "open_questions": 0,
+            "writing_prompts": 0,
+            "proposed_relations": 0,
+            "events_total": 0,
+        }
+    counts = {
+        "candidate_concept": 0,
+        "open_question": 0,
+        "writing_prompt": 0,
+        "proposed_relation": 0,
+    }
+    total = 0
+    for line in log.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("event_type") != "feedback_yield":
+            continue
+        if pack_name and row.get("pack") and row["pack"] != pack_name:
+            continue
+        total += 1
+        stream = row.get("stream", "")
+        if stream in counts:
+            counts[stream] += 1
+    return {
+        "candidate_yield": counts["candidate_concept"],
+        "open_questions": counts["open_question"],
+        "writing_prompts": counts["writing_prompt"],
+        "proposed_relations": counts["proposed_relation"],
+        "events_total": total,
+    }
+
+
+def _relations_health_payload(vault_dir: Path | None, *, pack_name: str) -> dict[str, object]:
+    """Phase 35 — semantic relation extraction + promotion snapshot.
+
+    Counts unpromoted candidates in the review queue, archived rejections, and
+    promoted ``relations`` rows. Extraction-rate / promotion-rate / contradiction-rate
+    are derived in user-facing print, not stored, to keep the payload minimal.
+    """
+    if vault_dir is None:
+        return {
+            "candidates_in_queue": 0,
+            "rejected_archived": 0,
+            "relations_total": 0,
+            "knowledge_db_exists": False,
+        }
+    layout = VaultLayout.from_vault(vault_dir)
+    queue_dir = layout.review_queue_dir / "semantic-relations"
+    rejected_dir = layout.derived_dir / "rejected-relations"
+    candidates_in_queue = (
+        sum(1 for _ in queue_dir.glob("*.json")) if queue_dir.exists() else 0
+    )
+    rejected_archived = (
+        sum(1 for _ in rejected_dir.glob("*.json")) if rejected_dir.exists() else 0
+    )
+    relations_total = 0
+    db_path = layout.knowledge_db
+    if db_path.exists():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM relations WHERE pack = ?",
+                    (pack_name,),
+                ).fetchone()
+                relations_total = int(row[0]) if row else 0
+        except sqlite3.OperationalError:
+            pass
+    return {
+        "candidates_in_queue": candidates_in_queue,
+        "rejected_archived": rejected_archived,
+        "relations_total": relations_total,
+        "knowledge_db_exists": db_path.exists(),
+    }
+
+
+def _evidence_health_payload(vault_dir: Path | None, *, pack_name: str) -> dict[str, object]:
+    """Phase 33 Evidence Health snapshot — per-status counts + top-10 stale paths.
+
+    Reads ``60-Logs/knowledge.db`` directly so the doctor stays read-only and
+    never triggers a rebuild. Counts cover both ``claim_evidence`` and
+    ``relations`` since Phase 35 promotes relations through the same pipeline.
+    """
+    if vault_dir is None:
+        return {
+            "claim_evidence": {},
+            "relations": {},
+            "top_stale_sources": [],
+            "knowledge_db_exists": False,
+        }
+    db_path = VaultLayout.from_vault(vault_dir).knowledge_db
+    if not db_path.exists():
+        return {
+            "claim_evidence": {},
+            "relations": {},
+            "top_stale_sources": [],
+            "knowledge_db_exists": False,
+        }
+    try:
+        with sqlite3.connect(db_path) as conn:
+            claim_status_rows = conn.execute(
+                """
+                SELECT status, COUNT(*)
+                FROM claim_evidence
+                WHERE pack = ?
+                GROUP BY status
+                """,
+                (pack_name,),
+            ).fetchall()
+            relation_status_rows = conn.execute(
+                """
+                SELECT status, COUNT(*)
+                FROM relations
+                WHERE pack = ?
+                GROUP BY status
+                """,
+                (pack_name,),
+            ).fetchall()
+            stale_rows = conn.execute(
+                """
+                SELECT source_slug, COUNT(*) AS stale_count
+                FROM claim_evidence
+                WHERE pack = ?
+                  AND status IN ('stale', 'broken')
+                GROUP BY source_slug
+                ORDER BY stale_count DESC, source_slug
+                LIMIT 10
+                """,
+                (pack_name,),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {
+            "claim_evidence": {},
+            "relations": {},
+            "top_stale_sources": [],
+            "knowledge_db_exists": True,
+            "schema_stale": True,
+        }
+    return {
+        "claim_evidence": {str(status or ""): int(count) for status, count in claim_status_rows},
+        "relations": {str(status or ""): int(count) for status, count in relation_status_rows},
+        "top_stale_sources": [
+            {"source_slug": str(slug), "stale_count": int(count)}
+            for slug, count in stale_rows
+        ],
+        "knowledge_db_exists": True,
+    }
+
+
 def _payload(pack_name: str, vault_dir: Path | None) -> dict[str, object]:
     repo_root = _repo_root()
     pack = load_pack(pack_name)
@@ -922,6 +1218,11 @@ def _payload(pack_name: str, vault_dir: Path | None) -> dict[str, object]:
         "docs": _docs_payload(repo_root, pack_name=pack_name),
         "vault": _vault_payload(vault_dir),
         "contracts": _contracts_payload(pack_name),
+        "reuse": _reuse_payload(vault_dir, pack_name=pack_name),
+        "evidence_health": _evidence_health_payload(vault_dir, pack_name=pack_name),
+        "promotion_health": _promotion_health_payload(vault_dir, pack_name=pack_name),
+        "relations_health": _relations_health_payload(vault_dir, pack_name=pack_name),
+        "feedback": _feedback_payload(vault_dir, pack_name=pack_name),
     }
 
 
@@ -962,6 +1263,57 @@ def main(argv: list[str] | None = None) -> int:
             f"pinboard={vault['pinboard_count']} processing={vault['processing_count']} "
             f"processed={vault['processed_count']} "
             f"evergreen={vault['evergreen_count']} knowledge_db_exists={vault['knowledge_db_exists']}"
+        )
+    reuse = payload.get("reuse") or {}
+    if reuse.get("knowledge_db_exists"):
+        events = int(reuse.get("events_total", 0))
+        trusted = int(reuse.get("trusted_events_total", 0))
+        share = float(reuse.get("trusted_share", 0.0))
+        never = int(reuse.get("never_reused_count", 0))
+        print(
+            "Reuse: "
+            f"events={events} trusted={trusted} trusted_share={share:.0%} "
+            f"never_reused={never}"
+        )
+    evidence_health = payload.get("evidence_health") or {}
+    if evidence_health.get("knowledge_db_exists"):
+        claim_status = evidence_health.get("claim_evidence") or {}
+        relation_status = evidence_health.get("relations") or {}
+        claim_summary = " ".join(
+            f"{key}={value}" for key, value in sorted(claim_status.items())
+        ) or "(empty)"
+        relation_summary = " ".join(
+            f"{key}={value}" for key, value in sorted(relation_status.items())
+        ) or "(empty)"
+        print(f"Evidence Health (claim_evidence): {claim_summary}")
+        print(f"Evidence Health (relations): {relation_summary}")
+        for row in (evidence_health.get("top_stale_sources") or [])[:5]:
+            print(f"  stale: {row['source_slug']} (rows={row['stale_count']})")
+    promotion_health = payload.get("promotion_health") or {}
+    if promotion_health:
+        lanes = promotion_health.get("lane_counts") or {}
+        unreviewed = promotion_health.get("unreviewed_canonical_mutations", 0)
+        lane_summary = " ".join(
+            f"{key}={value}" for key, value in sorted(lanes.items())
+        ) or "(no candidates)"
+        print(f"Promotion lanes: {lane_summary}")
+        print(f"Unreviewed canonical mutations: {unreviewed}")
+    relations_health = payload.get("relations_health") or {}
+    if relations_health:
+        queued = int(relations_health.get("candidates_in_queue", 0))
+        rejected = int(relations_health.get("rejected_archived", 0))
+        promoted = int(relations_health.get("relations_total", 0))
+        print(
+            f"Relations: queued={queued} rejected_archived={rejected} promoted={promoted}"
+        )
+    feedback = payload.get("feedback") or {}
+    if feedback.get("events_total", 0):
+        print(
+            "Feedback yield: "
+            f"candidates={feedback['candidate_yield']} "
+            f"open_questions={feedback['open_questions']} "
+            f"writing_prompts={feedback['writing_prompts']} "
+            f"proposed_relations={feedback['proposed_relations']}"
         )
     return 0
 

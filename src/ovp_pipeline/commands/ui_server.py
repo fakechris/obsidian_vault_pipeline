@@ -24,6 +24,7 @@ from ..knowledge_index import (
 from ..pack_resolution import iter_compatible_packs
 from ..packs.loader import PRIMARY_PACK_NAME
 from ..runtime import VaultLayout, resolve_vault_dir
+from .reuse_report import build_reuse_report_payload
 from ..ui.view_models import (
     build_action_queue_payload,
     build_atlas_browser_payload,
@@ -3799,6 +3800,154 @@ def _render_stale_summaries_page(payload: dict) -> str:
     )
 
 
+def _render_reuse_report_fragment(payload: dict) -> str:
+    """Self-contained HTML fragment summarising reuse events (Phase 32).
+
+    Plain table markup, no ``<html>`` wrapper — designed so the Phase 37
+    Workbench can iframe or fetch this directly without re-parsing UI chrome.
+    """
+    pack = escape(str(payload.get("pack") or ""))
+    weekly_rows = payload.get("weekly") or []
+    never_reused = payload.get("never_reused_after_30_days") or []
+    window_days = int(payload.get("never_reused_window_days") or 30)
+
+    if weekly_rows:
+        weekly_html = (
+            "<table class='reuse-weekly'>"
+            "<thead><tr><th>ISO Week</th><th>Pack</th><th>Surface</th>"
+            "<th>Events</th><th>Trusted</th></tr></thead><tbody>"
+            + "".join(
+                f"<tr><td>{escape(str(row['iso_week']))}</td>"
+                f"<td>{escape(str(row['pack']))}</td>"
+                f"<td>{escape(str(row['surface']))}</td>"
+                f"<td>{int(row['events'])}</td>"
+                f"<td>{int(row['trusted_events'])}</td></tr>"
+                for row in weekly_rows
+            )
+            + "</tbody></table>"
+        )
+    else:
+        weekly_html = "<p class='empty'>No reuse events recorded yet.</p>"
+
+    if never_reused:
+        never_html = (
+            f"<h3>Never reused after {window_days} days</h3>"
+            "<ul class='reuse-never'>"
+            + "".join(
+                f"<li><code>{escape(str(item['object_id']))}</code> "
+                f"— {escape(str(item.get('title') or ''))}</li>"
+                for item in never_reused
+            )
+            + "</ul>"
+        )
+    else:
+        never_html = ""
+
+    return (
+        f"<section class='reuse-report' data-pack='{pack}'>"
+        f"<h2>Trusted reuse — pack <code>{pack}</code></h2>"
+        f"{weekly_html}{never_html}"
+        f"</section>"
+    )
+
+
+def _render_reuse_report_page(payload: dict) -> str:
+    fragment = _render_reuse_report_fragment(payload)
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>Reuse Report</title>"
+        "<style>"
+        "body{font-family:system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem}"
+        "table{border-collapse:collapse;width:100%}"
+        "th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}"
+        "th{background:#f4f4f4}"
+        "code{background:#f0f0f0;padding:0 .2rem;border-radius:3px}"
+        ".empty{color:#888;font-style:italic}"
+        "</style></head><body>"
+        f"{fragment}"
+        "</body></html>"
+    )
+
+
+def _build_open_questions_payload(vault_dir: Path) -> dict:
+    """Phase 36 — read ``60-Logs/open-questions.jsonl`` for the UI panel.
+
+    Stays read-only; never mutates the log. Returns the most recent 100
+    entries reverse-chronologically so the panel shows fresh items first.
+    """
+    import json as _json
+    log = vault_dir / "60-Logs" / "open-questions.jsonl"
+    if not log.exists():
+        return {"questions": []}
+    rows: list[dict] = []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(_json.loads(line))
+        except _json.JSONDecodeError:
+            continue
+    rows.reverse()
+    return {"questions": rows[:100]}
+
+
+def _build_writing_prompts_payload(vault_dir: Path) -> dict:
+    """Phase 36 — read ``00-Polaris/Writing-Prompts.md`` body for the UI panel.
+
+    The file is append-only (router invariant), so we just stream its current
+    contents. Returns plain markdown — the page renderer wraps it.
+    """
+    target = vault_dir / "00-Polaris" / "Writing-Prompts.md"
+    if not target.exists():
+        return {"body": ""}
+    return {"body": target.read_text(encoding="utf-8")}
+
+
+def _render_open_questions_fragment(payload: dict) -> str:
+    rows = payload.get("questions") or []
+    if not rows:
+        return "<section class='open-questions'><p class='empty'>No open questions yet.</p></section>"
+    items = "".join(
+        f"<li><strong>{escape(str(row.get('question') or ''))}</strong>"
+        f" <small>{escape(str(row.get('ts') or ''))}</small></li>"
+        for row in rows
+    )
+    return f"<section class='open-questions'><ul>{items}</ul></section>"
+
+
+def _render_open_questions_page(payload: dict) -> str:
+    fragment = _render_open_questions_fragment(payload)
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>Open Questions</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem}"
+        ".empty{color:#888;font-style:italic}"
+        "li{margin:.4rem 0}small{color:#888;margin-left:.5rem}"
+        "</style></head><body>"
+        f"{fragment}</body></html>"
+    )
+
+
+def _render_writing_prompts_fragment(payload: dict) -> str:
+    body = str(payload.get("body") or "").strip()
+    if not body:
+        return "<section class='writing-prompts'><p class='empty'>No writing prompts captured yet.</p></section>"
+    return f"<section class='writing-prompts'><pre>{escape(body)}</pre></section>"
+
+
+def _render_writing_prompts_page(payload: dict) -> str:
+    fragment = _render_writing_prompts_fragment(payload)
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>Writing Prompts</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem}"
+        "pre{white-space:pre-wrap;background:#f7f7f7;padding:1rem;border-radius:4px}"
+        ".empty{color:#888;font-style:italic}"
+        "</style></head><body>"
+        f"{fragment}</body></html>"
+    )
+
+
 def create_server(
     vault_dir: Path | str, *, host: str = "127.0.0.1", port: int = 8787
 ) -> ThreadingHTTPServer:
@@ -4246,6 +4395,34 @@ def create_server(
                         query=q,
                     )
                     self._write_html(_render_contradictions_page(payload))
+                    return
+                if path in {"/reuse", "/reuse/fragment", "/api/reuse"}:
+                    pack_name = query.get("pack", [""])[0] or PRIMARY_PACK_NAME
+                    payload = build_reuse_report_payload(resolved_vault, pack=pack_name)
+                    if path == "/api/reuse":
+                        self._write_json(payload)
+                    elif path == "/reuse/fragment":
+                        self._write_html(_render_reuse_report_fragment(payload))
+                    else:
+                        self._write_html(_render_reuse_report_page(payload))
+                    return
+                if path in {"/open-questions", "/open-questions/fragment", "/api/open-questions"}:
+                    payload = _build_open_questions_payload(resolved_vault)
+                    if path == "/api/open-questions":
+                        self._write_json(payload)
+                    elif path == "/open-questions/fragment":
+                        self._write_html(_render_open_questions_fragment(payload))
+                    else:
+                        self._write_html(_render_open_questions_page(payload))
+                    return
+                if path in {"/writing-prompts", "/writing-prompts/fragment", "/api/writing-prompts"}:
+                    payload = _build_writing_prompts_payload(resolved_vault)
+                    if path == "/api/writing-prompts":
+                        self._write_json(payload)
+                    elif path == "/writing-prompts/fragment":
+                        self._write_html(_render_writing_prompts_fragment(payload))
+                    else:
+                        self._write_html(_render_writing_prompts_page(payload))
                     return
                 self.send_error(404, "Not Found")
             except ValueError as exc:

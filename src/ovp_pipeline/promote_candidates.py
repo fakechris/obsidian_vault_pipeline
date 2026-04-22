@@ -115,6 +115,20 @@ area: {entry.area}
 *Promoted from candidate on {datetime.now().strftime("%Y-%m-%d")}*
 '''
 
+    from .workspace_promotion import WRITE_MODE_PROMOTION, enforce_zone_write
+
+    try:
+        enforce_zone_write(
+            evergreen_path,
+            vault_dir=vault_dir,
+            mode=WRITE_MODE_PROMOTION,
+        )
+    except Exception:
+        # Permissive packs raise nothing; strict packs honor the gate. We
+        # never skip the actual write — the gate fires only on misuse from
+        # callers that forgot to pass mode='promotion'.
+        raise
+
     evergreen_path.write_text(frontmatter, encoding="utf-8")
     print(f"  Created: {evergreen_path}")
     return evergreen_path
@@ -378,12 +392,29 @@ def list_candidates(registry: ConceptRegistry) -> None:
         print()
 
 
-def review_candidates(registry: ConceptRegistry) -> list[tuple[ConceptEntry, str, list]]:
+def review_candidates(
+    registry: ConceptRegistry,
+    *,
+    pack: "BaseDomainPack | None" = None,
+) -> list[tuple[ConceptEntry, str, list]]:
     """
     Review candidates and suggest actions.
 
     Returns list of (entry, suggested_action, similar_existing) tuples.
+
+    Phase 34: routes through ``promotion_policy.evaluate_concept`` so each
+    pack's ``PromotionPolicySpec`` decides the lane. ``default-knowledge``
+    short-circuits to the legacy OR rule (bit-for-bit compat); strict packs
+    apply ``require_independent_sources`` / ``require_evidence_kinds`` etc.
     """
+    from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME, load_pack
+    from .promotion_policy import (
+        LANE_AUTO,
+        LANE_ESCALATE,
+        evaluate_concept,
+    )
+
+    resolved_pack = pack or load_pack(DEFAULT_WORKFLOW_PACK_NAME)
     suggestions = []
 
     for entry in registry.candidates:
@@ -391,18 +422,19 @@ def review_candidates(registry: ConceptRegistry) -> list[tuple[ConceptEntry, str
         similar = registry.search(entry.title, topk=5)
         similar = [(e, s) for e, s in similar if e.slug != entry.slug and e.status == STATUS_ACTIVE]
 
-        # Determine suggested action based on criteria
-        action = "keep_as_candidate"
+        decision = evaluate_concept(entry, pack=resolved_pack, registry=registry)
 
-        # If appears in multiple sources, consider promote
-        if entry.source_count >= 2 or entry.evidence_count >= 3:
+        if decision.lane == LANE_AUTO:
             if similar and similar[0][1] >= 0.7:
                 action = "merge_as_alias"
             else:
                 action = "promote_to_active"
-        elif similar and similar[0][1] >= 0.8:
-            # Very similar to existing concept
-            action = "merge_as_alias"
+        elif decision.lane == LANE_ESCALATE:
+            action = "escalate_to_workbench"
+        else:  # LANE_HOLD or LANE_REJECT
+            action = "keep_as_candidate"
+            if similar and similar[0][1] >= 0.8:
+                action = "merge_as_alias"
 
         suggestions.append((entry, action, similar))
 

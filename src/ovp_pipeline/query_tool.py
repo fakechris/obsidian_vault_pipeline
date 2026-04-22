@@ -30,6 +30,11 @@ except ImportError:
     from evidence import build_evidence_payload  # type: ignore
 
 try:
+    from .reuse_emitter import emit_reuse_events, extract_cited_slugs
+except ImportError:
+    from reuse_emitter import emit_reuse_events, extract_cited_slugs  # type: ignore
+
+try:
     from .runtime import resolve_vault_dir
 except ImportError:
     from runtime import resolve_vault_dir  # type: ignore
@@ -477,6 +482,16 @@ def main(argv: list[str] | None = None):
         default=DEFAULT_PACK_NAME,
         help=f"Pack name (default compatibility pack: {DEFAULT_PACK_NAME}; primary pack: research-tech)",
     )
+    parser.add_argument(
+        "--feedback",
+        action="store_true",
+        help=(
+            "Phase 36: route the query through the feedback router. Unresolved "
+            "mention terms become candidate concepts; the question itself is "
+            "appended to 60-Logs/open-questions.jsonl when no canonical "
+            "evidence backed the answer."
+        ),
+    )
 
     args = parser.parse_args(argv)
 
@@ -529,6 +544,45 @@ def main(argv: list[str] | None = None):
         limit=min(args.top_k, 5),
         pack=args.pack,
     )
+    cited_slugs = extract_cited_slugs(answer["evidence"])
+    emit_reuse_events(
+        vault_dir,
+        pack=args.pack,
+        slugs=cited_slugs,
+        surface="query",
+        consumer_ref=question,
+    )
+
+    if args.feedback:
+        try:
+            from .feedback_router import (
+                CandidateConcept,
+                OpenQuestion,
+                route_candidate_concepts,
+                route_open_questions,
+            )
+            from .packs.loader import load_pack as _load_pack
+
+            pack_obj = _load_pack(args.pack)
+            unresolved = [
+                result.title
+                for result in results[:5]
+                if Path(result.file).stem not in cited_slugs
+            ]
+            if unresolved:
+                route_candidate_concepts(
+                    [CandidateConcept(term=term) for term in unresolved],
+                    vault_dir=vault_dir,
+                    pack=pack_obj,
+                )
+            if not cited_slugs:
+                route_open_questions(
+                    [OpenQuestion(question=question, consumer_ref="ovp-query")],
+                    vault_dir=vault_dir,
+                    pack=pack_obj,
+                )
+        except Exception as exc:
+            querier.log(f"feedback routing failed: {exc}")
 
     print(f"\n💡 回答:\n")
     print(answer['answer'])
