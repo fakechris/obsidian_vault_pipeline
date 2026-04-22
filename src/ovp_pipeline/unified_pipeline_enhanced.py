@@ -206,7 +206,10 @@ def _get_version() -> str:
     try:
         import tomllib
     except ModuleNotFoundError:
-        tomllib = None
+        try:
+            import tomli as tomllib
+        except ModuleNotFoundError:
+            tomllib = None
 
     if tomllib is not None:
         for parent in Path(__file__).resolve().parents:

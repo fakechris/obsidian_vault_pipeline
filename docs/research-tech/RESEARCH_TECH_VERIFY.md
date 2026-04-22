@@ -33,11 +33,13 @@ Expected:
 Run these checks after updating local `main` and before real vault work:
 
 ```bash
-git switch main
 git fetch --prune
+git switch main
+git pull --ff-only origin main
 python -m pip install -e .
 python -m pip show obsidian-vault-pipeline
 ovp --version
+ovp-lint --check --vault-dir /path/to/vault
 ovp --check
 ovp-packs --json
 ovp-doctor --pack research-tech --json
@@ -47,6 +49,7 @@ Expected:
 
 - `python -m pip show obsidian-vault-pipeline` points at the current checkout
 - package metadata and `ovp --version` report the same version
+- `ovp-lint --check` reports no WIGS integrity violations before vault work
 - `ovp --check` succeeds before running pipeline work
 - `ovp-packs --json` lists `research-tech` and `default-knowledge`
 - `ovp-doctor --pack research-tech --json` returns valid contract JSON

@@ -43,7 +43,7 @@
   - Reinstalled OVP from the aligned checkout with `python -m pip install -e .`
   - Verified installed package metadata:
     - distribution: `obsidian-vault-pipeline==0.8.6`
-    - editable project location: `/Users/chris/Documents/openclaw-template`
+    - editable project location: `<local-checkout>`
   - Verified core local commands:
     - `ovp --check`
     - `ovp-packs --json`
