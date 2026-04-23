@@ -226,6 +226,12 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
         'transition-property': 'opacity, line-color, width',
         'transition-duration': '120ms'
     }}}},
+    {{ selector: 'edge.edgetype-promoted_from', style: {{
+        'line-color': '#a78bfa',
+        'target-arrow-color': '#a78bfa',
+        'line-style': 'dashed',
+        'opacity': 0.6
+    }}}},
     {{ selector: '.faded', style: {{ 'opacity': 0.08 }} }},
     {{ selector: '.highlighted', style: {{
         'border-color':'#00d4ff',

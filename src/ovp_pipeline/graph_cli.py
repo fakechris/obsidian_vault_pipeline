@@ -28,6 +28,14 @@ def _load_graph_from_index(vault_dir: Path) -> tuple[list[dict], list[dict], Pat
 
     pages_index → nodes、page_links → edges。Registry 解析在那边一次性跑完，
     这里只做 SELECT，比扫盘快几个数量级。
+
+    *额外补充*：absorb 管道把 evergreen 从源文档抽出来后**不会**回写
+    `[[concept]]` 到源文档 body 里，所以 page_links 里压根没有
+    "source_md → evergreen" 的边。但每次 promote 都发了一条
+    `evergreen_auto_promoted` 审计事件，里面带 (concept, source) 对。
+    我们在这里把这条隐式 provenance 翻译成显式 graph edge
+    (`edge_type='promoted_from'`)，不然图谱里几乎所有源文档都会"漂"在
+    evergreen 网外面。
     """
     import sqlite3
 
@@ -80,6 +88,40 @@ def _load_graph_from_index(vault_dir: Path) -> tuple[list[dict], list[dict], Pat
                 "anchor_text": target_raw or "",
                 "evidence_line": line_number or 0,
             })
+
+        # Provenance edges: source MD → evergreen，从 audit_events 重建
+        # （audit_events.payload_json.source 是 basename，所以用 LIKE '%/'||source 匹配 path）
+        promo_count = 0
+        for src_slug, concept_slug in conn.execute(
+            """
+            SELECT DISTINCT p_src.slug, p_concept.slug
+            FROM audit_events a
+            JOIN pages_index p_src
+              ON p_src.path LIKE '%/' || json_extract(a.payload_json, '$.source')
+            JOIN pages_index p_concept
+              ON p_concept.slug = json_extract(a.payload_json, '$.concept')
+            WHERE a.event_type='evergreen_auto_promoted'
+            """
+        ):
+            if not src_slug or not concept_slug or src_slug == concept_slug:
+                continue
+            edge_id = f"promoted-{src_slug}-{concept_slug}"
+            if edge_id in seen_edges:
+                continue
+            seen_edges.add(edge_id)
+            edges.append({
+                "edge_id": edge_id,
+                "source": src_slug,
+                "target": concept_slug,
+                "edge_type": "promoted_from",
+                "weight": 1.0,
+                "is_new_today": False,
+                "anchor_text": "",
+                "evidence_line": 0,
+            })
+            promo_count += 1
+        if promo_count:
+            print(f"📜 Provenance: 从 audit_events 补 {promo_count} 条 source→evergreen 边")
 
     return nodes, edges, db_path
 
