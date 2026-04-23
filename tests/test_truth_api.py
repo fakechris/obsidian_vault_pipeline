@@ -1855,6 +1855,167 @@ Mentions [[source-note]].
     )
 
 
+def test_truth_api_search_matches_words_out_of_order(temp_vault):
+    """A query should match a row that contains the words anywhere, not only
+    as one contiguous substring — the LIKE-substring search this replaced
+    silently dropped any match where the words were re-ordered or split by
+    intervening text."""
+    from ovp_pipeline.truth_api import search_vault_surface
+
+    vault = _seed_truth_vault(temp_vault)
+    note = vault / "10-Knowledge" / "Evergreen" / "Reordered.md"
+    note.write_text(
+        """---
+note_id: reordered-note
+title: Reordered Note
+type: evergreen
+date: 2026-04-13
+---
+
+# Reordered Note
+
+Memory persists across sessions for every agent we operate.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    payload = search_vault_surface(vault, query="agent memory")
+    note_slugs = {item["slug"] for item in payload["notes"]}
+    assert "reordered-note" in note_slugs
+
+
+def test_truth_api_search_paginates_and_reports_totals(temp_vault):
+    """The seed vault has multiple notes mentioning 'agent harness'. Asking
+    for page_size=1 must return one row plus a total >= 2 so the UI can show
+    a real pager instead of pretending the first slice is the whole result."""
+    from ovp_pipeline.truth_api import search_vault_surface
+
+    vault = _seed_truth_vault(temp_vault)
+    page1 = search_vault_surface(vault, query="agent harness", note_limit=1, note_offset=0)
+    page2 = search_vault_surface(vault, query="agent harness", note_limit=1, note_offset=1)
+
+    assert page1["note_total"] >= 2
+    assert page1["note_total"] == page2["note_total"]
+    assert len(page1["notes"]) == 1
+    assert len(page2["notes"]) == 1
+    assert {n["slug"] for n in page1["notes"]} != {n["slug"] for n in page2["notes"]}
+
+
+def test_truth_api_search_ranks_objects_by_title_phrase_not_alphabetical(temp_vault):
+    """Objects pane was sorting by `object_id` ASC, so any concept whose
+    slug starts with 'a' beat real title hits. Title-phrase matches must now
+    win regardless of where they fall alphabetically."""
+    from ovp_pipeline.truth_api import search_vault_surface
+
+    vault = temp_vault
+    ev = vault / "10-Knowledge" / "Evergreen"
+    ev.mkdir(parents=True, exist_ok=True)
+    # Slug starts with 'a' so it would alphabetically come first.
+    (ev / "Adjacent.md").write_text(
+        """---
+note_id: adjacent-memory-topic
+title: Adjacent memory topic about agents
+type: evergreen
+date: 2026-04-13
+---
+
+Mentions agent and memory in body.
+""",
+        encoding="utf-8",
+    )
+    # Slug starts with 'z' but title literally contains 'agent memory'.
+    (ev / "Zenith.md").write_text(
+        """---
+note_id: zenith-agent-memory
+title: agent memory layer
+type: evergreen
+date: 2026-04-13
+---
+
+Body content about agent memory.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    payload = search_vault_surface(vault, query="agent memory")
+    object_ids = [o["object_id"] for o in payload["objects"]]
+    assert "zenith-agent-memory" in object_ids and "adjacent-memory-topic" in object_ids
+    assert object_ids.index("zenith-agent-memory") < object_ids.index("adjacent-memory-topic")
+
+
+def test_truth_api_search_ranks_title_matches_above_body_only_matches(temp_vault):
+    """Title hits must outrank body-only hits — the previous bm25 call left
+    the title column at default weight, so notes with the query in the body
+    sometimes beat notes whose title literally was the query."""
+    from ovp_pipeline.truth_api import search_vault_surface
+
+    vault = temp_vault
+    ev = vault / "10-Knowledge" / "Evergreen"
+    ev.mkdir(parents=True, exist_ok=True)
+    (ev / "Title-hit.md").write_text(
+        """---
+note_id: title-hit
+title: Agent memory systems
+type: evergreen
+date: 2026-04-13
+---
+
+Some unrelated body text about caches.
+""",
+        encoding="utf-8",
+    )
+    (ev / "Body-only.md").write_text(
+        """---
+note_id: body-only
+title: Caching strategies
+type: evergreen
+date: 2026-04-13
+---
+
+The agent has a memory subsystem with memory eviction and memory tiering.
+The memory layer is the agent's long-term storage. agent memory.
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    payload = search_vault_surface(vault, query="agent memory")
+    note_slugs = [n["slug"] for n in payload["notes"]]
+    assert "title-hit" in note_slugs and "body-only" in note_slugs
+    assert note_slugs.index("title-hit") < note_slugs.index("body-only")
+
+
+def test_truth_api_search_supports_chinese_via_jieba(temp_vault):
+    """Chinese queries should be jieba-segmented before hitting FTS — without
+    that step the FTS5 unicode61 tokenizer treats the whole CJK run as one
+    opaque blob and misses every page."""
+    from ovp_pipeline.truth_api import search_vault_surface
+
+    vault = _seed_truth_vault(temp_vault)
+    note = vault / "10-Knowledge" / "Evergreen" / "智能体记忆.md"
+    note.write_text(
+        """---
+note_id: chinese-memory-note
+title: 智能体的记忆机制
+type: evergreen
+date: 2026-04-13
+---
+
+# 智能体的记忆机制
+
+智能体通过持久化的记忆来跨会话维持上下文与状态。
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(vault)
+
+    payload = search_vault_surface(vault, query="智能体 记忆")
+    note_slugs = {item["slug"] for item in payload["notes"]}
+    assert "chinese-memory-note" in note_slugs
+
+
 def test_truth_api_resolves_deep_dive_source_note_from_frontmatter_and_logs(temp_vault):
     from ovp_pipeline.truth_api import get_note_provenance
 

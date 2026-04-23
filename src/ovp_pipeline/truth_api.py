@@ -593,6 +593,69 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+
+
+def _tokenize_for_search(query: str) -> list[str]:
+    """Split a free-form query into searchable tokens.
+
+    English words come straight from a word-character regex. Chinese segments
+    are run through jieba (when available) so that "智能体记忆" splits into
+    ["智能体", "记忆"] instead of being treated as one opaque blob — which is
+    what the FTS5 unicode61 tokenizer would otherwise see.
+    """
+    if not query or not query.strip():
+        return []
+    lowered = query.lower()
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    def _add(tok: str) -> None:
+        tok = tok.strip()
+        if not tok or tok in seen:
+            return
+        # Drop pure ASCII single chars (too noisy); keep single Chinese chars.
+        if len(tok) == 1 and not _CJK_RE.match(tok):
+            return
+        seen.add(tok)
+        tokens.append(tok)
+
+    # ASCII words first — covers `agent-memory`, `RAG`, `gpt-4`.
+    for match in _ASCII_TOKEN_RE.findall(lowered):
+        _add(match)
+
+    # Chinese segments via jieba (best-effort: degrade to char-level if absent).
+    if _CJK_RE.search(lowered):
+        try:
+            import jieba
+
+            for word in jieba.cut(lowered):
+                if _CJK_RE.search(word):
+                    _add(word)
+        except ImportError:
+            for ch in lowered:
+                if _CJK_RE.match(ch):
+                    _add(ch)
+    return tokens
+
+
+def _build_fts_match(tokens: list[str]) -> str:
+    """Quote each token and AND them together into an FTS5 MATCH expression.
+
+    The trigram tokenizer silently drops tokens shorter than 3 characters
+    (anything that can't fit a full trigram), so an AND-clause containing a
+    2-char token would force the whole query to return nothing. Filter those
+    out here and let the caller decide whether to fall back to a substring
+    scan when no tokens remain.
+    """
+    long_enough = [tok for tok in tokens if len(tok) >= 3]
+    if not long_enough:
+        return ""
+    quoted = [f'"{tok.replace(chr(34), chr(34) * 2)}"' for tok in long_enough]
+    return " AND ".join(quoted)
+
+
 def _parse_frontmatter(markdown: str) -> dict[str, Any]:
     fenced_match = _FENCED_FRONTMATTER_RE.match(markdown)
     if fenced_match:
@@ -1369,84 +1432,205 @@ def search_vault_surface(
     vault_dir: Path | str,
     *,
     query: str,
-    object_limit: int = 25,
-    note_limit: int = 25,
+    object_limit: int = 50,
+    note_limit: int = 50,
+    object_offset: int = 0,
+    note_offset: int = 0,
     pack_name: str | None = None,
 ) -> dict[str, Any]:
     normalized_query = query.strip()
-    object_limit, _ = _validate_page_args(limit=object_limit, offset=0)
-    note_limit, _ = _validate_page_args(limit=note_limit, offset=0)
+    object_limit, object_offset = _validate_page_args(limit=object_limit, offset=object_offset)
+    note_limit, note_offset = _validate_page_args(limit=note_limit, offset=note_offset)
     requested_pack = _truth_pack_name(pack_name)
     if not normalized_query:
         return {
             "query": "",
             "objects": [],
             "notes": [],
+            "object_total": 0,
+            "note_total": 0,
+            "object_offset": object_offset,
+            "note_offset": note_offset,
+            "object_limit": object_limit,
+            "note_limit": note_limit,
+        }
+    tokens = _tokenize_for_search(normalized_query)
+    if not tokens:
+        return {
+            "query": normalized_query,
+            "objects": [],
+            "notes": [],
+            "object_total": 0,
+            "note_total": 0,
+            "object_offset": object_offset,
+            "note_offset": note_offset,
+            "object_limit": object_limit,
+            "note_limit": note_limit,
         }
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     pack_candidates = _materialized_truth_packs(
         vault_dir, pack_name=pack_name, table_name="objects"
     )
-    escaped_query = _escape_like(normalized_query.lower())
-    with sqlite3.connect(db_path) as conn:
-        object_rows = conn.execute(
-            f"""
-            SELECT DISTINCT objects.object_id, objects.object_kind, objects.title, objects.canonical_path, objects.source_slug, objects.pack
-            FROM objects
-            LEFT JOIN compiled_summaries
-              ON compiled_summaries.pack = objects.pack
-             AND compiled_summaries.object_id = objects.object_id
-            LEFT JOIN claims
-              ON claims.pack = objects.pack
-             AND claims.object_id = objects.object_id
-            WHERE objects.pack IN ({",".join("?" for _ in pack_candidates)})
-              AND (
-                lower(objects.object_id) LIKE ? ESCAPE '\\'
-                OR lower(objects.title) LIKE ? ESCAPE '\\'
-                OR lower(objects.source_slug) LIKE ? ESCAPE '\\'
-                OR lower(compiled_summaries.summary_text) LIKE ? ESCAPE '\\'
-                OR lower(claims.claim_text) LIKE ? ESCAPE '\\'
-              )
-            ORDER BY objects.object_id
-            LIMIT ?
-            """,
-            (
-                *pack_candidates,
-                f"%{escaped_query}%",
-                f"%{escaped_query}%",
-                f"%{escaped_query}%",
-                f"%{escaped_query}%",
-                f"%{escaped_query}%",
-                object_limit,
-            ),
-        ).fetchall()
-        note_rows = conn.execute(
-            """
+
+    # Objects: per-token (field1 LIKE %tok% OR ...) joined by AND so a query
+    # like "agent memory" matches a row mentioning the words anywhere, not
+    # only as a contiguous substring. Then rank by a hand-rolled relevance
+    # score (no FTS index on objects) so a title containing the literal
+    # phrase "agent memory" beats one whose object_id just happens to come
+    # first alphabetically.
+    object_fields = (
+        "objects.object_id",
+        "objects.title",
+        "objects.source_slug",
+        "compiled_summaries.summary_text",
+        "claims.claim_text",
+    )
+    token_clauses: list[str] = []
+    base_object_filter_params: list[Any] = list(pack_candidates)
+    for tok in tokens:
+        like = f"%{_escape_like(tok)}%"
+        token_clauses.append(
+            "("
+            + " OR ".join(f"lower({field}) LIKE ? ESCAPE '\\'" for field in object_fields)
+            + ")"
+        )
+        base_object_filter_params.extend([like] * len(object_fields))
+    object_join_where = f"""
+        FROM objects
+        LEFT JOIN compiled_summaries
+          ON compiled_summaries.pack = objects.pack
+         AND compiled_summaries.object_id = objects.object_id
+        LEFT JOIN claims
+          ON claims.pack = objects.pack
+         AND claims.object_id = objects.object_id
+        WHERE objects.pack IN ({",".join("?" for _ in pack_candidates)})
+          AND {" AND ".join(token_clauses)}
+    """
+    object_count_sql = f"""
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT objects.object_id
+            {object_join_where}
+        )
+    """
+    # Relevance: full phrase in title is the strongest signal; slug phrase
+    # next; then per-token title/slug hits. Higher = better, so we ORDER DESC.
+    title_lower_query = normalized_query.lower()
+    per_token_title_bonus = " + ".join(
+        "CASE WHEN instr(lower(objects.title), ?) > 0 THEN 10 ELSE 0 END" for _ in tokens
+    )
+    per_token_slug_bonus = " + ".join(
+        "CASE WHEN instr(lower(objects.object_id), ?) > 0 THEN 5 ELSE 0 END" for _ in tokens
+    )
+    object_relevance_expr = (
+        "CASE WHEN instr(lower(objects.title), ?) > 0 THEN 100 ELSE 0 END"
+        " + CASE WHEN instr(lower(objects.object_id), ?) > 0 THEN 50 ELSE 0 END"
+        f" + ({per_token_title_bonus})"
+        f" + ({per_token_slug_bonus})"
+    )
+    object_relevance_params = (
+        title_lower_query,
+        title_lower_query,
+        *tokens,  # per_token_title_bonus
+        *tokens,  # per_token_slug_bonus
+    )
+    object_sql = f"""
+        SELECT DISTINCT objects.object_id, objects.object_kind, objects.title,
+               objects.canonical_path, objects.source_slug, objects.pack,
+               {object_relevance_expr} AS relevance
+        {object_join_where}
+        ORDER BY relevance DESC, objects.object_id
+        LIMIT ? OFFSET ?
+    """
+
+    # Notes: feed jieba-tokenized query into FTS5 (`page_fts`) and rank by
+    # bm25 with the title column boosted, plus explicit title-substring
+    # bonuses so a note titled "agent memory" beats a note that just
+    # mentions "memory" many times in its body. Trigram tokenizer can't
+    # index <3-char tokens, so when every token is too short (e.g. a bare
+    # 2-char Chinese query like "记忆") we fall back to a per-token
+    # body-LIKE scan. Note: bm25() weights are positional across ALL
+    # declared columns including UNINDEXED ones, so the schema
+    # (slug UNINDEXED, title, body) takes three weights:
+    # (slug=ignored, title=5x, body=1x). The bonuses subtract from rank
+    # because FTS5 bm25 is negative-better.
+    fts_match = _build_fts_match(tokens)
+    if fts_match:
+        title_lower_query = normalized_query.lower()
+        # Per-token title bonus accumulates so multi-word out-of-order title
+        # matches still rise above body-only ones.
+        per_token_bonus_sql = " + ".join(
+            "CASE WHEN instr(lower(pages_index.title), ?) > 0 THEN 2.0 ELSE 0.0 END"
+            for _ in tokens
+        )
+        # Whole-query phrase bonus: a literal substring hit in the title is
+        # the strongest signal a human would want surfaced first.
+        rank_expr = (
+            "bm25(page_fts, 1.0, 5.0, 1.0)"
+            f" - ({per_token_bonus_sql})"
+            " - CASE WHEN instr(lower(pages_index.title), ?) > 0 THEN 8.0 ELSE 0.0 END"
+        )
+        note_count_sql = """
+            SELECT COUNT(*) FROM page_fts WHERE page_fts MATCH ?
+        """
+        note_sql = f"""
+            SELECT pages_index.slug, pages_index.title, pages_index.note_type,
+                   pages_index.path, {rank_expr} AS rank
+            FROM page_fts
+            JOIN pages_index ON pages_index.slug = page_fts.slug
+            WHERE page_fts MATCH ?
+            ORDER BY rank
+            LIMIT ? OFFSET ?
+        """
+        note_count_params: tuple[Any, ...] = (fts_match,)
+        note_params = (
+            *tokens,
+            title_lower_query,
+            fts_match,
+            note_limit,
+            note_offset,
+        )
+    else:
+        note_token_clauses: list[str] = []
+        note_like_params: list[Any] = []
+        for tok in tokens:
+            like = f"%{_escape_like(tok)}%"
+            note_token_clauses.append(
+                "(lower(slug) LIKE ? ESCAPE '\\' OR lower(title) LIKE ? ESCAPE '\\' "
+                "OR lower(path) LIKE ? ESCAPE '\\' OR lower(body) LIKE ? ESCAPE '\\')"
+            )
+            note_like_params.extend([like] * 4)
+        note_where = f"WHERE {' AND '.join(note_token_clauses)}"
+        note_count_sql = f"SELECT COUNT(*) FROM pages_index {note_where}"
+        note_sql = f"""
             SELECT slug, title, note_type, path
             FROM pages_index
-            WHERE lower(slug) LIKE ? ESCAPE '\\'
-               OR lower(title) LIKE ? ESCAPE '\\'
-               OR lower(path) LIKE ? ESCAPE '\\'
-               OR lower(body) LIKE ? ESCAPE '\\'
-            ORDER BY
-              CASE note_type
-                WHEN 'evergreen' THEN 0
-                WHEN 'deep_dive' THEN 1
-                WHEN 'moc' THEN 2
-                ELSE 3
-              END,
-              slug
-            LIMIT ?
-            """,
+            {note_where}
+            ORDER BY slug
+            LIMIT ? OFFSET ?
+        """
+        note_count_params = tuple(note_like_params)
+        note_params = (*note_like_params, note_limit, note_offset)
+    with sqlite3.connect(db_path) as conn:
+        object_total = conn.execute(
+            object_count_sql, tuple(base_object_filter_params)
+        ).fetchone()[0]
+        object_rows = conn.execute(
+            object_sql,
             (
-                f"%{escaped_query}%",
-                f"%{escaped_query}%",
-                f"%{escaped_query}%",
-                f"%{escaped_query}%",
-                note_limit,
+                *object_relevance_params,
+                *base_object_filter_params,
+                object_limit,
+                object_offset,
             ),
         ).fetchall()
+        try:
+            note_total = conn.execute(note_count_sql, note_count_params).fetchone()[0]
+            note_rows = conn.execute(note_sql, note_params).fetchall()
+        except sqlite3.OperationalError:
+            # FTS query parser rejected the expression — fall back to empty.
+            note_total = 0
+            note_rows = []
 
     objects = [
         {
@@ -1473,6 +1657,12 @@ def search_vault_surface(
         "query": normalized_query,
         "objects": objects,
         "notes": notes,
+        "object_total": int(object_total),
+        "note_total": int(note_total),
+        "object_offset": object_offset,
+        "note_offset": note_offset,
+        "object_limit": object_limit,
+        "note_limit": note_limit,
     }
 
 
