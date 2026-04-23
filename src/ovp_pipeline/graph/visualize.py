@@ -285,15 +285,19 @@ class GraphVisualizer:
                 'title': f"{edge.get('edge_type', '')}\n{edge['source']} → {edge['target']}"
             })
 
-        # 渲染
+        # 渲染。把 </ 转成 <\/ 防止节点 title 里的 "</script>" 字面值
+        # 提前关闭 <script> 块（JS 字符串里 \/ 仍然合法）。
+        def _safe_json(payload: object) -> str:
+            return json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+
         html = html_template.format(
             day_id=self.delta.get('day_id', ''),
             generated_at=self.delta.get('generated_at', ''),
             node_count=len(nodes_data),
             edge_count=len(edges_data),
             seed_count=len(self.delta.get('seed_note_ids', [])),
-            nodes_json=json.dumps(nodes_data, ensure_ascii=False),
-            edges_json=json.dumps(edges_data, ensure_ascii=False)
+            nodes_json=_safe_json(nodes_data),
+            edges_json=_safe_json(edges_data),
         )
 
         if output_path:
