@@ -3708,9 +3708,22 @@ def build_search_payload(
     *,
     query: str,
     pack_name: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
-    results = search_vault_surface(vault_dir, query=query, pack_name=pack_name)
+    page = max(1, int(page))
+    page_size = max(1, min(int(page_size), 200))
+    offset = (page - 1) * page_size
+    results = search_vault_surface(
+        vault_dir,
+        query=query,
+        pack_name=pack_name,
+        object_limit=page_size,
+        note_limit=page_size,
+        object_offset=offset,
+        note_offset=offset,
+    )
     return {
         "screen": "search/results",
         "requested_pack": requested_pack,
@@ -3737,6 +3750,8 @@ def build_search_payload(
         ],
         "object_count": len(results["objects"]),
         "note_count": len(results["notes"]),
+        "page": page,
+        "page_size": page_size,
     }
 
 

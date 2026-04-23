@@ -38,10 +38,14 @@ CREATE TABLE pages_index (
   body TEXT NOT NULL
 );
 
+-- Trigram tokenizer gives substring-style matching that works for English
+-- and CJK alike (the default unicode61 tokenizer treats consecutive Chinese
+-- characters as one opaque token, missing every mid-sentence query).
 CREATE VIRTUAL TABLE page_fts USING fts5(
   slug UNINDEXED,
   title,
-  body
+  body,
+  tokenize='trigram'
 );
 
 CREATE TABLE page_links (

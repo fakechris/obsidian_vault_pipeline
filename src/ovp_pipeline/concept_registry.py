@@ -176,6 +176,17 @@ def slug_to_surface(slug: str) -> str:
     return normalize_surface(slug.replace("/", " ").replace("-", " ").replace("_", " "))
 
 
+def _trigrams(text: str) -> set[str]:
+    """Character 3-grams of `text`. Strings shorter than 3 chars are padded
+    so the returned set is non-empty (otherwise pruning would drop them
+    entirely instead of falling through to the full scan)."""
+    if not text:
+        return set()
+    if len(text) < 3:
+        text = text.ljust(3)
+    return {text[i : i + 3] for i in range(len(text) - 2)}
+
+
 # =============================================================================
 # Legacy ConceptEntry (for backwards compatibility with existing code)
 # =============================================================================
@@ -331,6 +342,26 @@ class ConceptRegistry:
         self._surface_index: dict[str, list[SurfaceRecord]] = defaultdict(list)
         self._surface_records: list[SurfaceRecord] = []
 
+        # Trigram inverted index over normalized surfaces. _safe_near_candidates
+        # otherwise scans every surface for every mention; with N=12k surfaces
+        # and ~45k wikilinks per rebuild that's ~500M comparisons. Pruning to
+        # candidates that share at least one trigram cuts it ~100x. Pruning is
+        # safety-preserving because the score formula weights trigram-Jaccard
+        # at 0.35 — if Jaccard=0 the max possible score (0.45+0.20=0.65) cannot
+        # cross the 0.72 threshold.
+        self._trigram_index: dict[str, set[int]] = defaultdict(set)
+
+        # Parallel arrays to _surface_records: precomputed token/ngram sets so
+        # _safe_near_candidates can skip per-iteration tokenization (was
+        # ~12k * O(len) recomputations per mention).
+        self._surface_tokens: list[set[str]] = []
+        self._surface_ngrams: list[set[str]] = []
+
+        # Mention resolution cache: same surface mention is linked many times
+        # across the vault, so memoizing skips repeated near-match scans.
+        # Cleared whenever load() rebuilds the surface tables.
+        self._mention_cache: dict[tuple[str, str | None, bool], ResolutionResult] = {}
+
     # ========== Persistence ==========
 
     @property
@@ -345,6 +376,7 @@ class ConceptRegistry:
         """Load registry from disk."""
         self._entries = []
         self._registry_entries = []
+        self._mention_cache.clear()
 
         if not self.registry_path.exists():
             return self
@@ -392,6 +424,10 @@ class ConceptRegistry:
         """
         self._surface_index = defaultdict(list)
         self._surface_records = []
+        self._trigram_index = defaultdict(set)
+        self._surface_tokens = []
+        self._surface_ngrams = []
+        self._mention_cache.clear()
 
         # Use _entries (ConceptEntry) to check resolver eligibility
         for entry in self._entries:
@@ -423,7 +459,16 @@ class ConceptRegistry:
                     source=source,
                 )
                 self._surface_index[norm].append(rec)
+                rec_idx = len(self._surface_records)
                 self._surface_records.append(rec)
+                norm_trigrams = _trigrams(norm)
+                for tri in norm_trigrams:
+                    self._trigram_index[tri].add(rec_idx)
+                self._surface_tokens.append(set(tokenize_surface(norm)))
+                # Use the same padded-ngram convention as _trigram_jaccard so
+                # the precomputed sets are interchangeable with the existing
+                # scoring math (no behavior change).
+                self._surface_ngrams.append(ConceptRegistry._char_ngrams(norm, 3))
 
     # ========== Query (Legacy compatibility) ==========
 
@@ -506,6 +551,26 @@ class ConceptRegistry:
     # ========== New Resolution API ==========
 
     def resolve_mention(
+        self,
+        mention: str,
+        area: str | None = None,
+        *,
+        include_related_context: bool = True,
+    ) -> ResolutionResult:
+        """Cached wrapper — same mention is resolved many times across the
+        vault. Underlying scan is O(N) over all surfaces.
+        """
+        cache_key = (mention, area, include_related_context)
+        cached = self._mention_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        result = self._resolve_mention_uncached(
+            mention, area, include_related_context=include_related_context
+        )
+        self._mention_cache[cache_key] = result
+        return result
+
+    def _resolve_mention_uncached(
         self,
         mention: str,
         area: str | None = None,
@@ -672,18 +737,65 @@ class ConceptRegistry:
         """
         norm = normalize_surface(mention)
         q_tokens = tokenize_surface(norm)
+        q_token_set = set(q_tokens)
+        q_ngrams = ConceptRegistry._char_ngrams(norm, 3)
+        q_len = len(norm)
+        q_tokens_len = len(q_tokens)
         out: list[NearMatch] = []
 
-        for rec in self._surface_records:
+        # Trigram prune: any surface that shares zero trigrams with the query
+        # has tri=0, capping its max possible score at 0.45*tf1 + 0.20*lr <=
+        # 0.65 < 0.72 threshold, so it cannot pass. Skip them entirely.
+        q_tris = _trigrams(norm)
+        candidate_ids: set[int] = set()
+        for tri in q_tris:
+            bucket = self._trigram_index.get(tri)
+            if bucket:
+                candidate_ids.update(bucket)
+        if not candidate_ids and self._surface_records:
+            return []
+        if candidate_ids:
+            iter_ids: list[int] = list(candidate_ids)
+        else:
+            iter_ids = list(range(len(self._surface_records)))
+
+        for idx in iter_ids:
+            rec = self._surface_records[idx]
             if area and rec.entry.area and rec.entry.area != area:
                 continue
-            t_tokens = tokenize_surface(rec.normalized)
 
-            tf1 = self._token_f1(q_tokens, t_tokens)
-            tri = self._trigram_jaccard(norm, rec.normalized)
-            lr = self._length_ratio(norm, rec.normalized)
-            extra = max(0, len(set(t_tokens) - set(q_tokens)))
-            missing = max(0, len(set(q_tokens) - set(t_tokens)))
+            t_token_set = self._surface_tokens[idx]
+            t_ngrams = self._surface_ngrams[idx]
+            t_len = len(rec.normalized)
+            t_tokens_len = len(t_token_set)
+
+            # token F1
+            if not q_token_set or not t_token_set:
+                tf1 = 0.0
+            else:
+                inter = len(q_token_set & t_token_set)
+                if inter == 0:
+                    tf1 = 0.0
+                else:
+                    p = inter / t_tokens_len
+                    r = inter / len(q_token_set)
+                    tf1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+
+            # trigram Jaccard
+            if not q_ngrams or not t_ngrams:
+                tri = 0.0
+            else:
+                ng_inter = len(q_ngrams & t_ngrams)
+                tri = ng_inter / (len(q_ngrams) + len(t_ngrams) - ng_inter)
+
+            # length ratio
+            if not q_len or not t_len:
+                lr = 0.0
+            else:
+                lr = min(q_len, t_len) / max(q_len, t_len)
+
+            extra = max(0, t_tokens_len - len(q_token_set & t_token_set))
+            missing = max(0, len(q_token_set) - len(q_token_set & t_token_set))
 
             # Weighted combination
             score = 0.45 * tf1 + 0.35 * tri + 0.20 * lr
@@ -696,7 +808,7 @@ class ConceptRegistry:
 
             # Prevent short entity names from matching long命题 slugs
             # e.g., "Claude Code" should NOT auto-match "claude-code-uses-index-not..."
-            if len(q_tokens) <= 3 and len(t_tokens) - len(q_tokens) >= 2:
+            if q_tokens_len <= 3 and t_tokens_len - q_tokens_len >= 2:
                 score -= 0.25
 
             if score >= 0.72:

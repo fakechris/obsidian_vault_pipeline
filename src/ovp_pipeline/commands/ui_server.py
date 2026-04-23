@@ -1174,6 +1174,37 @@ def _render_note_page(
 def _render_search_page(payload: dict) -> str:
     query = payload["query"]
     requested_pack = payload.get("requested_pack", "")
+    page = int(payload.get("page", 1))
+    page_size = int(payload.get("page_size", len(payload["objects"]) or 1))
+    object_total = int(payload.get("object_total", payload["object_count"]))
+    note_total = int(payload.get("note_total", payload["note_count"]))
+
+    def _pager(total: int, label: str) -> str:
+        last_page = max(1, (total + page_size - 1) // page_size)
+        if last_page <= 1:
+            return ""
+        from urllib.parse import urlencode
+
+        def _link(target_page: int, text: str, disabled: bool) -> str:
+            if disabled:
+                return f"<span class='muted'>{text}</span>"
+            params = {"q": query, "page": target_page}
+            if requested_pack:
+                params["pack"] = requested_pack
+            href = "/search?" + urlencode(params)
+            return f"<a href='{escape(href)}'>{text}</a>"
+
+        prev_link = _link(max(1, page - 1), "« Prev", page <= 1)
+        next_link = _link(min(last_page, page + 1), "Next »", page >= last_page)
+        # Objects and notes share the same `page` cursor but may have different
+        # totals, so clamp the displayed value to avoid "page 3 of 2" when the
+        # smaller result set runs out.
+        displayed_page = min(page, last_page)
+        return (
+            f"<p class='muted'>{label}: page {displayed_page} of {last_page} "
+            f"&middot; {prev_link} &middot; {next_link}</p>"
+        )
+
     object_items = (
         "".join(
             f'<li><a href="{escape(item.get("object_path") or _object_href(item["object_id"], requested_pack=requested_pack))}">{escape(item["title"])}</a> '
@@ -1190,6 +1221,10 @@ def _render_search_page(payload: dict) -> str:
         )
         or "<li class='muted'>No note hits.</li>"
     )
+    showing = (
+        f"Showing {payload['object_count']} of {object_total} object hits, "
+        f"{payload['note_count']} of {note_total} note hits."
+    )
     return _layout(
         f"Search: {query}",
         "".join(
@@ -1204,10 +1239,18 @@ def _render_search_page(payload: dict) -> str:
                 f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> ",
                 "<button type='submit'>Search</button>",
                 "</form>",
-                f"<p class='muted'>{payload['object_count']} object hits, {payload['note_count']} note hits.</p>",
+                f"<p class='muted'>{escape(showing)}</p>",
                 "<section class='grid two-col'>",
-                f"<section class='card'><h2>Objects</h2><ul class='list-tight'>{object_items}</ul></section>",
-                f"<section class='card'><h2>Notes</h2><ul class='list-tight'>{note_items}</ul></section>",
+                "<section class='card'>"
+                f"<h2>Objects</h2>"
+                f"<ul class='list-tight'>{object_items}</ul>"
+                f"{_pager(object_total, 'Objects')}"
+                "</section>",
+                "<section class='card'>"
+                f"<h2>Notes</h2>"
+                f"<ul class='list-tight'>{note_items}</ul>"
+                f"{_pager(note_total, 'Notes')}"
+                "</section>",
                 "</section>",
             ]
         ),
@@ -4248,14 +4291,26 @@ def create_server(
                 if path == "/api/search":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    try:
+                        page = max(1, int(query.get("page", ["1"])[0]))
+                    except (TypeError, ValueError):
+                        page = 1
                     self._write_json(
-                        build_search_payload(resolved_vault, query=q, pack_name=pack_name)
+                        build_search_payload(
+                            resolved_vault, query=q, pack_name=pack_name, page=page
+                        )
                     )
                     return
                 if path == "/search":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
-                    payload = build_search_payload(resolved_vault, query=q, pack_name=pack_name)
+                    try:
+                        page = max(1, int(query.get("page", ["1"])[0]))
+                    except (TypeError, ValueError):
+                        page = 1
+                    payload = build_search_payload(
+                        resolved_vault, query=q, pack_name=pack_name, page=page
+                    )
                     self._write_html(_render_search_page(payload))
                     return
                 if path == "/api/briefing":
