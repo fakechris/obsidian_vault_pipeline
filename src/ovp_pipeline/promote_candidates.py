@@ -423,7 +423,9 @@ def review_candidates(
     resolved_pack = pack or load_pack(DEFAULT_WORKFLOW_PACK_NAME)
     layout = VaultLayout.from_vault(registry.vault_dir)
     kinds_by_id, disputed_ids = collect_pack_signals(
-        layout.knowledge_db, pack_name=resolved_pack.name
+        layout.knowledge_db,
+        pack_name=resolved_pack.name,
+        candidates_dir=registry.vault_dir / CANDIDATES_DIR,
     )
     suggestions = []
 

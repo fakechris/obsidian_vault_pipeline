@@ -856,6 +856,23 @@ def rebuild_knowledge_index(
                 """,
                 embedding_rows,
             )
+
+            # Phase 35 durability: re-apply promoted relations that the
+            # projection (which only sees wikilink-derived relations) does not
+            # know about. Phase 33 durability: re-apply per-row evidence
+            # verification metadata (locator/content_hash/status/verified_at)
+            # for both ``claim_evidence`` and ``relations`` rows. Both replays
+            # are JSONL-backed so they survive arbitrary rebuilds.
+            from .relation_promotion import replay_relation_promotions
+            from .evidence_replay import replay_evidence_verifications
+
+            relations_replayed = replay_relation_promotions(
+                conn, layout, pack_name=truth_pack
+            )
+            evidence_updates = replay_evidence_verifications(
+                conn, layout, pack_name=truth_pack
+            )
+
             conn.commit()
         except Exception:
             if conn is not None:
@@ -881,6 +898,8 @@ def rebuild_knowledge_index(
                 "objects_indexed": len(truth_projection.objects),
                 "claims_indexed": len(truth_projection.claims),
                 "relations_indexed": len(truth_projection.relations),
+                "relations_replayed": relations_replayed,
+                "evidence_updates_replayed": evidence_updates,
                 "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
                 "contradictions_indexed": len(truth_projection.contradictions),
                 "graph_edges_indexed": len(truth_projection.graph_edges),

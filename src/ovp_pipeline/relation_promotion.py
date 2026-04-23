@@ -6,6 +6,12 @@ and :mod:`truth_store` (which holds the canonical ``relations`` and
 ``promotion_policy.evaluate_relation``; auto-lane writes both a ``relations``
 row (with the Phase 33 evidence columns) and a ``graph_edges`` row.
 
+Durability: ``rebuild_knowledge_index`` recreates ``relations`` from the pack
+projection, which would otherwise drop every row written here. Each AUTO
+promotion appends one ``relation_promoted`` event to
+``60-Logs/relation-promotions.jsonl`` carrying the full row, and
+:func:`replay_relation_promotions` re-applies them on rebuild.
+
 The CLI surface is :mod:`commands.promote` (``ovp-promote relations``).
 """
 
@@ -19,6 +25,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .derived.paths import review_queue_path
+from .event_emitter import collect_for_index, emit
 from .extraction.semantic_relations import (
     SemanticRelationCandidate,
     candidate_subject,
@@ -31,6 +38,9 @@ from .promotion_policy import LANE_AUTO, LANE_ESCALATE, LANE_REJECT, evaluate_re
 from .runtime import VaultLayout
 from .state_lifecycle import State
 from .truth_store import EVIDENCE_STATUS_UNVERIFIED
+
+
+RELATION_PROMOTIONS_LOG = "relation-promotions.jsonl"
 
 
 @dataclass
@@ -113,6 +123,119 @@ def _ensure_graph_edge_row(
     )
 
 
+def _emit_relation_promoted(
+    layout: VaultLayout,
+    candidate: SemanticRelationCandidate,
+) -> None:
+    """Append the full row payload so :func:`replay_relation_promotions`
+    can rehydrate after the projection clears the table on rebuild."""
+    emit(
+        layout.vault_dir,
+        RELATION_PROMOTIONS_LOG,
+        "relation_promoted",
+        {
+            "pack": candidate.pack,
+            "source_object_id": candidate.source_object_id,
+            "target_object_id": candidate.target_object_id,
+            "relation_type": candidate.relation_type,
+            "evidence_source_slug": candidate.source_slug,
+            "quote_text": candidate.evidence_quote,
+            "locator": candidate.locator,
+            "content_hash": candidate.content_hash,
+            "retrieval_context": candidate.retrieval_context,
+            "edge_weight": float(candidate.confidence or 1.0),
+            "edge_id": _edge_id(candidate),
+        },
+        pack=candidate.pack,
+    )
+
+
+def replay_relation_promotions(
+    conn: sqlite3.Connection,
+    layout: VaultLayout,
+    *,
+    pack_name: str,
+) -> int:
+    """Re-apply every ``relation_promoted`` event for ``pack_name``.
+
+    Called from :func:`knowledge_index.rebuild_knowledge_index` after the
+    projection has finished inserting its (link-derived) relations. The
+    natural key of ``relations`` is ``(pack, source, target, type,
+    evidence_source_slug)``; we dedupe against rows already present so a
+    promotion that happens to overlap a wikilink-derived relation does not
+    produce a second row. ``graph_edges`` uses ``INSERT OR REPLACE`` keyed by
+    the deterministic ``edge_id``.
+    """
+    events = [
+        ev for ev in collect_for_index(layout, RELATION_PROMOTIONS_LOG)
+        if ev.get("event_type") == "relation_promoted" and ev.get("pack") == pack_name
+    ]
+    if not events:
+        return 0
+
+    existing_keys: set[tuple[str, str, str, str, str]] = set()
+    for row in conn.execute(
+        "SELECT pack, source_object_id, target_object_id, relation_type, evidence_source_slug "
+        "FROM relations WHERE pack = ?",
+        (pack_name,),
+    ):
+        existing_keys.add(tuple(str(value or "") for value in row))  # type: ignore[arg-type]
+
+    inserted = 0
+    for event in events:
+        key = (
+            str(event.get("pack") or ""),
+            str(event.get("source_object_id") or ""),
+            str(event.get("target_object_id") or ""),
+            str(event.get("relation_type") or ""),
+            str(event.get("evidence_source_slug") or ""),
+        )
+        if key in existing_keys:
+            continue
+        conn.execute(
+            """
+            INSERT INTO relations (
+              pack, source_object_id, target_object_id, relation_type,
+              evidence_source_slug, quote_text, locator, content_hash,
+              retrieval_context, status, verified_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                *key,
+                str(event.get("quote_text") or ""),
+                str(event.get("locator") or ""),
+                str(event.get("content_hash") or ""),
+                str(event.get("retrieval_context") or ""),
+                EVIDENCE_STATUS_UNVERIFIED,
+                "",
+            ),
+        )
+        existing_keys.add(key)
+        edge_id = str(event.get("edge_id") or "")
+        if edge_id:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO graph_edges (
+                  pack, edge_id, source_object_id, target_object_id, edge_kind,
+                  weight, evidence_source_slug
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    key[0],
+                    edge_id,
+                    key[1],
+                    key[2],
+                    key[3],
+                    float(event.get("edge_weight") or 1.0),
+                    key[4],
+                ),
+            )
+        inserted += 1
+    return inserted
+
+
 def _archive_candidate(
     layout: VaultLayout,
     candidate: SemanticRelationCandidate,
@@ -171,6 +294,7 @@ def promote_candidates(
             if decision.lane == LANE_AUTO:
                 _ensure_relation_row(conn, candidate)
                 _ensure_graph_edge_row(conn, candidate)
+                _emit_relation_promoted(layout, candidate)
                 emit_promotion(
                     layout.vault_dir,
                     pack=pack.name,

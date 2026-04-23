@@ -2,9 +2,13 @@
 
 Subcommands:
 
-* ``run``       Re-run concept policy across all current candidates and report
-                lane assignments. Auto-lane candidates are promoted; escalate
-                lane lands in the review queue; reject lane is archived.
+* ``run``       Re-run concept policy across all current candidates. With
+                ``--apply``, AUTO-lane candidates are promoted via
+                :func:`promote_candidates.promote_candidate`, ESCALATE and
+                REJECT lanes write JSON files into the review queue
+                (``60-Logs/derived/review-queue/{concepts,rejected-concepts}/``)
+                so downstream review tooling has something to read. Without
+                ``--apply`` the command is a dry report (the previous default).
 * ``workspace`` Promote a single agent-owned draft to an accepted-state file.
                 Wraps :func:`workspace_promotion.promote` and emits the
                 matching ``promotion`` audit event so the lint mtime check
@@ -22,14 +26,16 @@ from pathlib import Path
 from typing import Any
 
 from ..concept_registry import ConceptRegistry
+from ..derived.paths import review_queue_path
 from ..packs.loader import DEFAULT_WORKFLOW_PACK_NAME, load_pack
-from ..promote_candidates import review_candidates
+from ..promote_candidates import promote_candidate
 from ..promotion_audit import emit_promotion
 from ..promotion_policy import (
     LANE_AUTO,
     LANE_ESCALATE,
     LANE_HOLD,
     LANE_REJECT,
+    PolicyDecision,
     collect_pack_signals,
     evaluate_concept,
     evaluate_workspace,
@@ -40,13 +46,41 @@ from ..state_lifecycle import State
 from ..workspace_promotion import promote as workspace_promote
 
 
+def _candidate_lane_payload(entry: Any, decision: PolicyDecision) -> dict[str, Any]:
+    return {
+        "slug": entry.slug,
+        "title": entry.title,
+        "area": entry.area,
+        "definition": entry.definition,
+        "source_count": entry.source_count,
+        "evidence_count": entry.evidence_count,
+        "reason_code": decision.reason_code,
+        "blocking_facts": list(decision.blocking_facts),
+    }
+
+
+def _write_queue_file(
+    layout: VaultLayout,
+    *,
+    queue_name: str,
+    subject: str,
+    body: dict[str, Any],
+) -> Path:
+    path = review_queue_path(layout, queue_name=queue_name, subject=subject)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
 def _run_concept(args: argparse.Namespace) -> int:
     vault_dir = resolve_vault_dir(args.vault_dir)
     pack = load_pack(args.pack or DEFAULT_WORKFLOW_PACK_NAME)
     registry = ConceptRegistry(vault_dir).load()
     layout = VaultLayout.from_vault(vault_dir)
     kinds_by_id, disputed_ids = collect_pack_signals(
-        layout.knowledge_db, pack_name=pack.name
+        layout.knowledge_db,
+        pack_name=pack.name,
+        candidates_dir=vault_dir / "10-Knowledge" / "Evergreen" / "_Candidates",
     )
 
     by_lane: dict[str, list[dict[str, Any]]] = {
@@ -55,7 +89,14 @@ def _run_concept(args: argparse.Namespace) -> int:
         LANE_HOLD: [],
         LANE_REJECT: [],
     }
-    for entry in registry.candidates:
+    actions: dict[str, list[dict[str, Any]]] = {
+        "promoted": [],
+        "escalated_files": [],
+        "rejected_files": [],
+        "errors": [],
+    }
+    candidates = list(registry.candidates)
+    for entry in candidates:
         decision = evaluate_concept(
             entry,
             pack=pack,
@@ -63,29 +104,78 @@ def _run_concept(args: argparse.Namespace) -> int:
             evidence_kinds=kinds_by_id.get(entry.slug, frozenset()),
             has_open_contradiction=entry.slug in disputed_ids,
         )
-        by_lane.setdefault(decision.lane, []).append(
-            {
-                "slug": entry.slug,
-                "title": entry.title,
-                "reason_code": decision.reason_code,
-                "blocking_facts": list(decision.blocking_facts),
-            }
-        )
+        by_lane.setdefault(decision.lane, []).append(_candidate_lane_payload(entry, decision))
+
+        if not args.apply:
+            continue
+
+        if decision.lane == LANE_AUTO:
+            try:
+                mutation = promote_candidate(vault_dir, entry.slug, dry_run=False)
+            except Exception as exc:  # pragma: no cover - defensive
+                actions["errors"].append({"slug": entry.slug, "error": str(exc)})
+                continue
+            emit_promotion(
+                vault_dir,
+                pack=pack.name,
+                from_state=State.CANDIDATE,
+                to_state=State.CANONICAL,
+                target_path=Path(mutation.touched_files[0]) if mutation.touched_files else vault_dir,
+                actor="ovp-promote run",
+                reason=decision.reason_code,
+                payload={"slug": entry.slug},
+            )
+            actions["promoted"].append({"slug": entry.slug, "mutation": mutation.to_dict()})
+        elif decision.lane == LANE_ESCALATE:
+            path = _write_queue_file(
+                layout,
+                queue_name="concepts",
+                subject=entry.slug,
+                body={
+                    "lane": LANE_ESCALATE,
+                    "pack": pack.name,
+                    **_candidate_lane_payload(entry, decision),
+                },
+            )
+            actions["escalated_files"].append(str(path))
+        elif decision.lane == LANE_REJECT:
+            path = _write_queue_file(
+                layout,
+                queue_name="rejected-concepts",
+                subject=entry.slug,
+                body={
+                    "lane": LANE_REJECT,
+                    "pack": pack.name,
+                    **_candidate_lane_payload(entry, decision),
+                },
+            )
+            actions["rejected_files"].append(str(path))
 
     payload = {
         "vault_dir": str(vault_dir),
         "pack": pack.name,
+        "applied": bool(args.apply),
         "lanes": {lane: rows for lane, rows in by_lane.items()},
         "totals": {lane: len(rows) for lane, rows in by_lane.items()},
+        "actions": actions,
     }
 
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
+        suffix = "" if args.apply else " (dry-report; pass --apply to act)"
+        print(f"pack={pack.name}{suffix}")
         for lane, rows in by_lane.items():
             print(f"{lane}: {len(rows)}")
             for row in rows[:5]:
                 print(f"  - {row['slug']} ({row['reason_code']})")
+        if args.apply:
+            print(
+                f"applied: promoted={len(actions['promoted'])} "
+                f"escalated={len(actions['escalated_files'])} "
+                f"rejected={len(actions['rejected_files'])} "
+                f"errors={len(actions['errors'])}"
+            )
     return 0
 
 
@@ -210,6 +300,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--vault-dir", type=Path, default=None)
     run.add_argument("--pack", default=None)
     run.add_argument("--json", action="store_true")
+    run.add_argument(
+        "--apply",
+        action="store_true",
+        help="Promote AUTO lanes and write ESCALATE/REJECT queue files (default: dry report)",
+    )
     run.set_defaults(func=_run_concept)
 
     workspace = sub.add_parser(
