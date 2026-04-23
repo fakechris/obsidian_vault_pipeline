@@ -4,6 +4,22 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import re
+from typing import Any, Iterable
+
+
+EVIDENCE_STATUS_UNVERIFIED = "unverified"
+EVIDENCE_STATUS_VERIFIED = "verified"
+EVIDENCE_STATUS_STALE = "stale"
+EVIDENCE_STATUS_BROKEN = "broken"
+
+EVIDENCE_STATUS_VALUES = frozenset(
+    {
+        EVIDENCE_STATUS_UNVERIFIED,
+        EVIDENCE_STATUS_VERIFIED,
+        EVIDENCE_STATUS_STALE,
+        EVIDENCE_STATUS_BROKEN,
+    }
+)
 
 
 TRUTH_STORE_SCHEMA = """
@@ -34,21 +50,34 @@ CREATE TABLE claim_evidence (
   claim_id TEXT NOT NULL,
   source_slug TEXT NOT NULL,
   evidence_kind TEXT NOT NULL,
-  quote_text TEXT NOT NULL DEFAULT ''
+  quote_text TEXT NOT NULL DEFAULT '',
+  locator TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL DEFAULT '',
+  retrieval_context TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'unverified',
+  verified_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX idx_claim_evidence_pack_claim ON claim_evidence(pack, claim_id);
+CREATE INDEX idx_claim_evidence_status ON claim_evidence(pack, status);
 
 CREATE TABLE relations (
   pack TEXT NOT NULL,
   source_object_id TEXT NOT NULL,
   target_object_id TEXT NOT NULL,
   relation_type TEXT NOT NULL,
-  evidence_source_slug TEXT NOT NULL DEFAULT ''
+  evidence_source_slug TEXT NOT NULL DEFAULT '',
+  quote_text TEXT NOT NULL DEFAULT '',
+  locator TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL DEFAULT '',
+  retrieval_context TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'unverified',
+  verified_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX idx_relations_pack_source ON relations(pack, source_object_id);
 CREATE INDEX idx_relations_pack_target ON relations(pack, target_object_id);
+CREATE INDEX idx_relations_status ON relations(pack, status);
 
 CREATE TABLE compiled_summaries (
   pack TEXT NOT NULL,
@@ -105,6 +134,24 @@ CREATE TABLE truth_projections (
   builder_name TEXT NOT NULL DEFAULT '',
   built_at TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE reuse_events (
+  event_id TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  pack TEXT NOT NULL,
+  object_id TEXT NOT NULL DEFAULT '',
+  object_kind TEXT NOT NULL DEFAULT '',
+  surface TEXT NOT NULL,
+  consumer_ref TEXT NOT NULL DEFAULT '',
+  evidence_present INTEGER NOT NULL DEFAULT 0,
+  provenance_clean INTEGER NOT NULL DEFAULT 0,
+  trusted INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX idx_reuse_events_pack_surface ON reuse_events(pack, surface);
+CREATE INDEX idx_reuse_events_object       ON reuse_events(pack, object_id);
+CREATE INDEX idx_reuse_events_ts           ON reuse_events(ts);
 """
 
 CONTRADICTION_HEURISTIC_NOTE = (
@@ -175,12 +222,243 @@ def _detect_contradictions(
 
 
 @dataclass(frozen=True)
+class ObjectRow:
+    pack: str
+    object_id: str
+    object_kind: str
+    title: str
+    canonical_path: str
+    source_slug: str
+
+    def to_row(self) -> tuple[str, str, str, str, str, str]:
+        return (
+            self.pack,
+            self.object_id,
+            self.object_kind,
+            self.title,
+            self.canonical_path,
+            self.source_slug,
+        )
+
+
+@dataclass(frozen=True)
+class ClaimRow:
+    pack: str
+    claim_id: str
+    object_id: str
+    claim_kind: str
+    claim_text: str
+    confidence: float = 1.0
+
+    def to_row(self) -> tuple[str, str, str, str, str, float]:
+        return (
+            self.pack,
+            self.claim_id,
+            self.object_id,
+            self.claim_kind,
+            self.claim_text,
+            float(self.confidence),
+        )
+
+
+@dataclass(frozen=True)
+class ClaimEvidenceRow:
+    """One ``claim_evidence`` row.
+
+    Phase 33 widened this to include locator/content_hash/retrieval_context for
+    re-locatability and status/verified_at for the verifier loop. Old 5-field
+    callers may pass positional args; new fields default to '' / 'unverified'.
+    """
+
+    pack: str
+    claim_id: str
+    source_slug: str
+    evidence_kind: str
+    quote_text: str = ""
+    locator: str = ""
+    content_hash: str = ""
+    retrieval_context: str = ""
+    status: str = EVIDENCE_STATUS_UNVERIFIED
+    verified_at: str = ""
+
+    def to_row(self) -> tuple[str, str, str, str, str, str, str, str, str, str]:
+        return (
+            self.pack,
+            self.claim_id,
+            self.source_slug,
+            self.evidence_kind,
+            self.quote_text,
+            self.locator,
+            self.content_hash,
+            self.retrieval_context,
+            self.status,
+            self.verified_at,
+        )
+
+
+@dataclass(frozen=True)
+class RelationRow:
+    """One ``relations`` row.
+
+    Phase 33 added the same evidence columns as ``ClaimEvidenceRow`` so Phase 35
+    can promote semantic relations with re-locatable evidence without a second
+    migration.
+    """
+
+    pack: str
+    source_object_id: str
+    target_object_id: str
+    relation_type: str
+    evidence_source_slug: str = ""
+    quote_text: str = ""
+    locator: str = ""
+    content_hash: str = ""
+    retrieval_context: str = ""
+    status: str = EVIDENCE_STATUS_UNVERIFIED
+    verified_at: str = ""
+
+    def to_row(self) -> tuple[str, str, str, str, str, str, str, str, str, str, str]:
+        return (
+            self.pack,
+            self.source_object_id,
+            self.target_object_id,
+            self.relation_type,
+            self.evidence_source_slug,
+            self.quote_text,
+            self.locator,
+            self.content_hash,
+            self.retrieval_context,
+            self.status,
+            self.verified_at,
+        )
+
+
+@dataclass(frozen=True)
+class CompiledSummaryRow:
+    pack: str
+    object_id: str
+    summary_text: str
+    source_slug: str
+
+    def to_row(self) -> tuple[str, str, str, str]:
+        return (self.pack, self.object_id, self.summary_text, self.source_slug)
+
+
+@dataclass(frozen=True)
+class ContradictionRow:
+    pack: str
+    contradiction_id: str
+    subject_key: str
+    positive_claim_ids_json: str
+    negative_claim_ids_json: str
+    status: str = "open"
+    resolution_note: str = ""
+    resolved_at: str = ""
+
+    def to_row(self) -> tuple[str, str, str, str, str, str, str, str]:
+        return (
+            self.pack,
+            self.contradiction_id,
+            self.subject_key,
+            self.positive_claim_ids_json,
+            self.negative_claim_ids_json,
+            self.status,
+            self.resolution_note,
+            self.resolved_at,
+        )
+
+
+@dataclass(frozen=True)
+class GraphEdgeRow:
+    pack: str
+    edge_id: str
+    source_object_id: str
+    target_object_id: str
+    edge_kind: str
+    weight: float = 1.0
+    evidence_source_slug: str = ""
+
+    def to_row(self) -> tuple[str, str, str, str, str, float, str]:
+        return (
+            self.pack,
+            self.edge_id,
+            self.source_object_id,
+            self.target_object_id,
+            self.edge_kind,
+            float(self.weight),
+            self.evidence_source_slug,
+        )
+
+
+@dataclass(frozen=True)
+class GraphClusterRow:
+    pack: str
+    cluster_id: str
+    cluster_kind: str
+    label: str
+    center_object_id: str
+    member_object_ids_json: str
+    score: float = 0.0
+
+    def to_row(self) -> tuple[str, str, str, str, str, str, float]:
+        return (
+            self.pack,
+            self.cluster_id,
+            self.cluster_kind,
+            self.label,
+            self.center_object_id,
+            self.member_object_ids_json,
+            float(self.score),
+        )
+
+
+_ROW_DATACLASSES: dict[str, type] = {
+    "objects": ObjectRow,
+    "claims": ClaimRow,
+    "claim_evidence": ClaimEvidenceRow,
+    "relations": RelationRow,
+    "compiled_summaries": CompiledSummaryRow,
+    "contradictions": ContradictionRow,
+    "graph_edges": GraphEdgeRow,
+    "graph_clusters": GraphClusterRow,
+}
+
+
+def _coerce_rows(values: Iterable[Any], row_type: type) -> list[Any]:
+    coerced: list[Any] = []
+    for item in values:
+        if isinstance(item, row_type):
+            coerced.append(item)
+        elif isinstance(item, tuple):
+            coerced.append(row_type(*item))
+        elif isinstance(item, dict):
+            coerced.append(row_type(**item))
+        else:
+            coerced.append(item)
+    return coerced
+
+
+@dataclass(frozen=True)
 class TruthStoreProjection:
-    objects: list[tuple[str, str, str, str, str, str]] = field(default_factory=list)
-    claims: list[tuple[str, str, str, str, str, float]] = field(default_factory=list)
-    claim_evidence: list[tuple[str, str, str, str, str]] = field(default_factory=list)
-    relations: list[tuple[str, str, str, str, str]] = field(default_factory=list)
-    compiled_summaries: list[tuple[str, str, str, str]] = field(default_factory=list)
-    contradictions: list[tuple[str, str, str, str, str, str, str, str]] = field(default_factory=list)
-    graph_edges: list[tuple[str, str, str, str, str, float, str]] = field(default_factory=list)
-    graph_clusters: list[tuple[str, str, str, str, str, str, float]] = field(default_factory=list)
+    """Per-row dataclass projection (Phase 33).
+
+    Fields accept either dataclass instances OR positional tuples — tuples are
+    coerced in ``__post_init__``. ``to_row()`` on each row returns the SQL
+    insert tuple. Callers should construct dataclass instances directly; tuple
+    input is preserved for the small number of legacy tests that build empty
+    projections by name.
+    """
+
+    objects: list[ObjectRow] = field(default_factory=list)
+    claims: list[ClaimRow] = field(default_factory=list)
+    claim_evidence: list[ClaimEvidenceRow] = field(default_factory=list)
+    relations: list[RelationRow] = field(default_factory=list)
+    compiled_summaries: list[CompiledSummaryRow] = field(default_factory=list)
+    contradictions: list[ContradictionRow] = field(default_factory=list)
+    graph_edges: list[GraphEdgeRow] = field(default_factory=list)
+    graph_clusters: list[GraphClusterRow] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        for field_name, row_type in _ROW_DATACLASSES.items():
+            current = getattr(self, field_name)
+            object.__setattr__(self, field_name, _coerce_rows(current, row_type))

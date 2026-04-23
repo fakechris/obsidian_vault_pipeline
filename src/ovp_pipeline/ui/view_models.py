@@ -12,6 +12,7 @@ from ..governance_registry import describe_governance_contract
 from ..observation_surface_registry import describe_observation_surface_contract
 from ..pack_resolution import iter_compatible_packs
 from ..packs.loader import PRIMARY_PACK_NAME
+from ..reuse_emitter import collect_object_ids, emit_reuse_events_for_object_ids
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
 from ..truth_api import (
@@ -58,6 +59,35 @@ def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
         return path
     separator = "&" if "?" in path else "?"
     return f"{path}{separator}pack={quote(pack_name, safe='')}"
+
+
+def _emit_briefing_reuse(
+    vault_dir: Path | str,
+    payload: dict[str, Any],
+    *,
+    pack: str,
+    consumer_ref: str,
+) -> None:
+    """Emit one ``briefing``-surface reuse event per canonical object in payload.
+
+    Reuse-event emission is best-effort instrumentation — a JSONL append
+    failure must never block the view-builder from returning a payload.
+    """
+    if not pack:
+        return
+    try:
+        object_ids = collect_object_ids(payload)
+        if not object_ids:
+            return
+        emit_reuse_events_for_object_ids(
+            vault_dir,
+            pack=pack,
+            object_ids=object_ids,
+            surface="briefing",
+            consumer_ref=consumer_ref,
+        )
+    except Exception:  # noqa: BLE001 — best-effort instrumentation
+        return
 
 
 def _supports_research_shell(pack_name: str | None = None) -> bool:
@@ -1477,7 +1507,7 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
             "Jump into freeform search from the current orientation pass.",
         ),
     ]
-    return {
+    payload: dict[str, Any] = {
         "screen": "briefing/intelligence",
         "requested_pack": requested_pack,
         "surface_contract": surface_contract,
@@ -1491,6 +1521,14 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         "compiled_sections": compiled_sections,
         "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
+    _emit_briefing_reuse(
+        vault_dir,
+        payload,
+        pack=requested_pack or PRIMARY_PACK_NAME,
+        consumer_ref="view:briefing",
+    )
+    return payload
+
 
 def build_object_page_payload(
     vault_dir: Path | str,
@@ -1770,7 +1808,7 @@ def build_object_page_payload(
             "Inspect downstream production chain state.",
         ),
     ]
-    return {
+    payload: dict[str, Any] = {
         "screen": "object/page",
         "requested_pack": requested_pack,
         "assembly_contract": _assembly_contract("object_brief", pack_name=pack_name),
@@ -1815,6 +1853,13 @@ def build_object_page_payload(
             ),
         ],
     }
+    _emit_briefing_reuse(
+        vault_dir,
+        payload,
+        pack=str((detail.get("object") or {}).get("pack") or requested_pack),
+        consumer_ref=f"view:object_page:{object_id}",
+    )
+    return payload
 
 
 def build_topic_overview_payload(
@@ -2103,7 +2148,7 @@ def build_topic_overview_payload(
             "Inspect production-chain weak points in the current shell.",
         ),
     ]
-    return {
+    payload: dict[str, Any] = {
         "screen": "overview/topic",
         "requested_pack": requested_pack,
         "assembly_contract": _assembly_contract("topic_overview", pack_name=pack_name),
@@ -2158,6 +2203,13 @@ def build_topic_overview_payload(
         "compiled_sections": compiled_sections,
         "section_nav": _section_nav_from_compiled_sections(compiled_sections),
     }
+    _emit_briefing_reuse(
+        vault_dir,
+        payload,
+        pack=str((neighborhood.get("center") or {}).get("row_pack") or requested_pack),
+        consumer_ref=f"view:topic_overview:{object_id}",
+    )
+    return payload
 
 
 def _escape_like(value: str) -> str:

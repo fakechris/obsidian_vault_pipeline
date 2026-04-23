@@ -23,7 +23,7 @@ import json
 import argparse
 import subprocess
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
@@ -78,6 +78,8 @@ class KnowledgeLinter:
     UNINDEXED_DEEP = "unindexed-deep"  # 未索引的深度解读
     GIT_UNCOMMITTED = "git-uncommitted"  # Git未提交
     ARCHIVE_OLD = "archive-old"  # 需归档的旧文件
+    EVIDENCE_INCOMPLETE = "evidence-incomplete"  # Phase 33: claim_evidence missing locator/content_hash
+    ZONE_BOUNDARY_VIOLATION = "zone-boundary-violation"  # Phase 34: accepted-zone mutated outside promotion
 
     def __init__(self, vault_dir: Path, wigs_mode: bool = True):
         self.vault_dir = Path(vault_dir)
@@ -635,6 +637,149 @@ class KnowledgeLinter:
             ))
             self.stats["archive_old"] = len(old_files)
 
+    def check_evidence_completeness(self, *, strict_packs: Optional[Set[str]] = None):
+        """Phase 33 — fires when ``claim_evidence`` rows lack locator/content_hash.
+
+        Only enforced for packs in ``strict_packs`` (default: ``{"research-tech"}``)
+        until Phase 34's ``EvidenceRequirementsSpec`` lands and lets each pack
+        opt in via ``evidence_requirements.claim.must_have``.
+        """
+        import sqlite3 as _sqlite3
+        from .runtime import VaultLayout
+
+        strict_packs = strict_packs or {"research-tech"}
+        db_path = VaultLayout.from_vault(self.vault_dir).knowledge_db
+        if not db_path.exists():
+            return
+        try:
+            with _sqlite3.connect(db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT pack, source_slug, claim_id, locator, content_hash, quote_text
+                    FROM claim_evidence
+                    WHERE quote_text != ''
+                    """
+                ).fetchall()
+        except _sqlite3.OperationalError:
+            return
+        incomplete = 0
+        for pack, source_slug, claim_id, locator, content_hash, _quote in rows:
+            if str(pack or "") not in strict_packs:
+                continue
+            if locator and content_hash:
+                continue
+            incomplete += 1
+            missing: List[str] = []
+            if not locator:
+                missing.append("locator")
+            if not content_hash:
+                missing.append("content_hash")
+            self.issues.append(
+                LintIssue(
+                    layer="L4",
+                    level="warning",
+                    type=self.EVIDENCE_INCOMPLETE,
+                    file=str(source_slug or ""),
+                    message=(
+                        f"claim_evidence pack={pack} claim_id={claim_id} 缺少 "
+                        f"{'/'.join(missing)} (research-tech evidence requirement)"
+                    ),
+                    suggestion="ovp-evidence backfill --json (Phase 33)",
+                    auto_fixable=False,
+                )
+            )
+        if incomplete:
+            self.stats["evidence_incomplete"] = incomplete
+
+    def check_zone_boundary(self, *, ignore_mtime_from_hours: float = 0.0):
+        """Phase 34 — fires when an accepted-state file has been mtime-touched
+        more recently than the most recent matching ``promotion`` audit event.
+
+        Reads ``pack`` from the active workflow pack; permissive packs
+        (``WorkspaceZonesSpec.accepted == ()``) become a no-op. Append-only
+        files are skipped because Phase 36 query feedback intentionally appends
+        to them outside of the promotion lane.
+
+        Operator escape hatch: ``ignore_mtime_from_hours`` skips files touched
+        within the last N hours (useful for git checkout / rsync churn).
+        """
+        import sqlite3 as _sqlite3
+        from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME, load_pack
+        from .runtime import VaultLayout
+        from .workspace_promotion import is_accepted_zone, is_append_only
+
+        pack = load_pack(DEFAULT_WORKFLOW_PACK_NAME)
+        zones = pack.workspace_zones()
+        if not zones.accepted:
+            return
+
+        db_path = VaultLayout.from_vault(self.vault_dir).knowledge_db
+        if not db_path.exists():
+            return
+
+        try:
+            with _sqlite3.connect(db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT slug, MAX(timestamp)
+                    FROM audit_events
+                    WHERE event_type = 'promotion'
+                    GROUP BY slug
+                    """
+                ).fetchall()
+        except _sqlite3.OperationalError:
+            return
+        latest_promotion_ts: Dict[str, str] = {row[0] or "": row[1] or "" for row in rows}
+
+        cutoff_seconds = float(ignore_mtime_from_hours) * 3600.0
+        now_ts = datetime.now(tz=timezone.utc).timestamp()
+        violations = 0
+
+        for accepted_glob in zones.accepted:
+            for path in self.vault_dir.glob(accepted_glob):
+                if not path.is_file():
+                    continue
+                if is_append_only(path, pack=pack, vault_dir=self.vault_dir):
+                    continue
+                if not is_accepted_zone(path, pack=pack, vault_dir=self.vault_dir):
+                    continue
+                rel = str(path.relative_to(self.vault_dir))
+                mtime = path.stat().st_mtime
+                if cutoff_seconds and (now_ts - mtime) < cutoff_seconds:
+                    continue
+                file_iso = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
+                # Match audit event by vault-relative target_path so files that
+                # share a basename (e.g. 30-Projects/*/Plan.md) don't collide.
+                slug_key = rel
+                last_promo = latest_promotion_ts.get(slug_key, "")
+                if last_promo and last_promo >= file_iso:
+                    continue  # promotion covers this mtime
+                if not last_promo:
+                    # Pre-existing file without any promotion record. Until we
+                    # backfill provenance for these, only complain when mtime
+                    # has visibly changed within the recent window.
+                    continue
+                violations += 1
+                self.issues.append(
+                    LintIssue(
+                        layer="L4",
+                        level="error",
+                        type=self.ZONE_BOUNDARY_VIOLATION,
+                        file=rel,
+                        message=(
+                            f"accepted-zone file mtime={file_iso} > last promotion "
+                            f"audit_ts={last_promo} for slug='{slug_key}'"
+                        ),
+                        suggestion="Route the change through ovp-promote workspace "
+                        "or emit a promotion audit event before writing.",
+                        auto_fixable=False,
+                    )
+                )
+        if violations:
+            self.stats["zone_boundary_violations"] = violations
+
     def run_all_checks(self, stale_days: int = 90):
         """运行所有检查"""
         self.scan()
@@ -652,6 +797,8 @@ class KnowledgeLinter:
         self.check_missing_concepts()
         self.check_stale_content(days=stale_days)
         self.check_broken_links()
+        self.check_evidence_completeness()
+        self.check_zone_boundary()
 
     def report(self) -> str:
         """生成检查报告"""
@@ -802,6 +949,14 @@ aliases: []
 """
 
         target.parent.mkdir(parents=True, exist_ok=True)
+        # Phase 34: stub creation only happens via --fix; treat as promotion.
+        from .workspace_promotion import WRITE_MODE_PROMOTION, enforce_zone_write
+
+        enforce_zone_write(
+            target,
+            vault_dir=self.vault_dir,
+            mode=WRITE_MODE_PROMOTION,
+        )
         target.write_text(content, encoding='utf-8')
         self.log(f"已创建占位页面: {target}")
 

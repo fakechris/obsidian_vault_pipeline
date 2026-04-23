@@ -15,8 +15,46 @@
 - 第三方领域包通过 Pack API 接入，文档见 `docs/pack-api/`
 
 ---
-schema_version: "1.0.0"
-note_id: claude-0db92ed6
+
+## 0. Development (Python 包)
+
+本仓库既是 Python 包 (`src/ovp_pipeline/`，发布为 `obsidian-vault-pipeline`)，也是一个样例 vault。Sections 1–9 描述 vault schema；本节覆盖如何在包本身上做开发。
+
+### 开发安装
+
+```bash
+pip install -e ".[dev]"   # editable + pytest/ruff/black/mypy
+```
+
+### 测试
+
+```bash
+pytest -q                                       # 全量 (~80 个测试文件)
+pytest tests/test_knowledge_index.py -q         # 单个文件
+pytest tests/test_knowledge_index.py::test_name # 单个用例
+pytest -k "absorb and not refine"               # 按关键字筛选
+```
+
+`conftest.py` 提供临时 vault fixture。优先写集成测试（真跑 registry / knowledge.db），避免 mock 掉这两者。
+
+### Lint / 格式化 / 类型检查
+
+```bash
+ruff check src tests
+black src tests          # line-length 100, py310 target
+mypy src                 # 配置在 pyproject.toml
+```
+
+### 流水线冒烟测试
+
+```bash
+ovp --check                              # 环境/配置诊断
+ovp --full --dry-run                     # 预览完整 DAG，不写盘
+ovp-doctor --pack research-tech --json   # pack 健康状态
+ovp-lint --check --vault-dir <vault>     # 链接/结构检查
+```
+
+---
 
 ## 1. 目录结构 (PARA Method)
 
@@ -478,6 +516,46 @@ AUTO_DOWNLOAD_IMAGES=true
 2. 提取图片路径
 3. LLM 单独查看图片获取视觉信息
 4. 综合文本和图片生成解读
+
+---
+
+## 7a. 代码架构 (Python 包)
+
+源码在 `src/ovp_pipeline/`。要在这个 codebase 上做改动，先理解以下几层 —— 它们和 Section 6 "真实运行模型" 的六层职责一一对应。完整 DAG 见 `README.md` §`ovp --full` 现在到底跑什么。
+
+### Entry points
+
+- `unified_pipeline_enhanced.py` — `ovp` 主入口；编排完整 DAG（`pinboard → pinboard_process → clippings → articles → quality → fix_links → absorb → registry_sync → moc → knowledge_index`）
+- `autopilot/daemon.py` — `ovp-autopilot` watcher 守护进程
+- `commands/*.py` — 每个 `ovp-*` CLI 一个模块，全部在 `pyproject.toml [project.scripts]` 注册
+- `installer.py` — `python -m ovp_pipeline.installer` 安装器
+
+### Core platform (稳定部分)
+
+- `runtime.py`, `runtime_processes.py` — DAG / 步骤执行模型
+- `handler_registry.py`, `workflow_handlers.py` — step handler 注册与分派
+- `pack_resolution.py`, `packs/` — pack/profile 解析；`packs/base.py` 定义 `BaseDomainPack`，`packs/{default_knowledge,research_tech}/` 是内置 pack
+- `plugins.py` — entry-point + `OVP_PACK_MANIFESTS` 两种发现路径
+- `identity.py`, `concept_registry.py`, `concept_resolver.py` — canonical identity；**source of truth，LLM 不能绕过**
+- `*_registry.py` — artifact / assembly_recipe / execution_contract / governance / object / observation_surface / processor_contract / semantic_relation / truth_projection / run_history
+- `txn.py` — 事务系统（见 Section 5.4）
+
+### 分层模块
+
+- **Ingest**: `clippings_processor.py`；顶层 `pinboard-processor.py`
+- **Interpret**: `auto_article_processor.py`, `auto_github_processor.py`, `auto_paper_processor.py`, `image_downloader.py`, `markdown_generation.py`
+- **Absorb**: `commands/absorb.py`, `auto_evergreen_extractor.py`, `batch_evergreen.py`, `promote_candidates.py`
+- **Refine**: `commands/cleanup.py`, `commands/breakdown.py`, `refine.py`
+- **Canonical**: `commands/rebuild_registry.py`, `auto_moc_updater.py`, `migrate_broken_links.py`, `migrate_pack_provenance.py`
+- **Derived**: `commands/knowledge_index.py`, `knowledge_index.py`, `graph/`, `graph_cli.py`, `lint_checker.py`, `query_tool.py`, `truth_store.py`, `truth_api.py`
+- **Extraction / Ops / Views**: `extraction/`, `operations/`, `materializers/`, `derived/`, `wiki_views/`, `ui/`
+
+### 硬边界（改动时守住）
+
+1. `knowledge.db` 是派生索引，**不是** source of truth；canonical 判断只能走 registry + vault markdown
+2. Pack 代码不能把 semantic retrieval 直接升格成 canonical identity
+3. 所有 derived state 必须可由 `ovp-knowledge-index`、`ovp-moc`、`ovp-rebuild-registry` 重建
+4. 审计事件走 `60-Logs/pipeline.jsonl` 和 `audit_events` 表；不要绕开
 
 ---
 

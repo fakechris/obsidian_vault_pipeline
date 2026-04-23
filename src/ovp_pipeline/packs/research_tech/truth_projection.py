@@ -6,7 +6,17 @@ import json
 import re
 from pathlib import Path
 
-from ...truth_store import TruthStoreProjection
+from ...truth_store import (
+    ClaimEvidenceRow,
+    ClaimRow,
+    CompiledSummaryRow,
+    ContradictionRow,
+    GraphClusterRow,
+    GraphEdgeRow,
+    ObjectRow,
+    RelationRow,
+    TruthStoreProjection,
+)
 
 _NEGATION_RE = re.compile(
     r"\b(?:does not|doesn't|do not|is not|isn't|are not|aren't|has not|hasn't|have not|haven't|cannot|can't|not)\b"
@@ -61,18 +71,18 @@ def _is_negative_claim(claim_text: str) -> bool:
 
 def _detect_contradictions(
     pack_name: str,
-    claims: list[tuple[str, str, str, str, str, float]],
-) -> list[tuple[str, str, str, str, str, str, str, str]]:
+    claims: list[ClaimRow],
+) -> list[ContradictionRow]:
     grouped: dict[str, list[tuple[str, str]]] = {}
-    for _pack, claim_id, _object_id, claim_kind, claim_text, _confidence in claims:
-        if claim_kind != "page_summary":
+    for claim in claims:
+        if claim.claim_kind != "page_summary":
             continue
-        subject = _subject_key(claim_text)
+        subject = _subject_key(claim.claim_text)
         if not subject:
             continue
-        grouped.setdefault(subject, []).append((claim_id, claim_text))
+        grouped.setdefault(subject, []).append((claim.claim_id, claim.claim_text))
 
-    contradictions: list[tuple[str, str, str, str, str, str, str, str]] = []
+    contradictions: list[ContradictionRow] = []
     for subject, rows in grouped.items():
         positives = [claim_id for claim_id, text in rows if not _is_negative_claim(text)]
         negatives = [claim_id for claim_id, text in rows if _is_negative_claim(text)]
@@ -80,15 +90,13 @@ def _detect_contradictions(
             continue
         contradiction_id = _contradiction_id_for_subject(pack_name, subject)
         contradictions.append(
-            (
-                pack_name,
-                contradiction_id,
-                subject,
-                json.dumps(positives, ensure_ascii=False),
-                json.dumps(negatives, ensure_ascii=False),
-                "open",
-                "",
-                "",
+            ContradictionRow(
+                pack=pack_name,
+                contradiction_id=contradiction_id,
+                subject_key=subject,
+                positive_claim_ids_json=json.dumps(positives, ensure_ascii=False),
+                negative_claim_ids_json=json.dumps(negatives, ensure_ascii=False),
+                status="open",
             )
         )
     return contradictions
@@ -107,35 +115,38 @@ def _graph_cluster_id(member_object_ids: list[str]) -> str:
 def _build_graph_seeds(
     pack_name: str,
     *,
-    objects: list[tuple[str, str, str, str, str, str]],
-    relations: list[tuple[str, str, str, str, str]],
-    contradictions: list[tuple[str, str, str, str, str, str, str, str]],
-) -> tuple[
-    list[tuple[str, str, str, str, str, float, str]],
-    list[tuple[str, str, str, str, str, str, float]],
-]:
-    edge_rows: dict[str, tuple[str, str, str, str, str, float, str]] = {}
+    objects: list[ObjectRow],
+    relations: list[RelationRow],
+    contradictions: list[ContradictionRow],
+) -> tuple[list[GraphEdgeRow], list[GraphClusterRow]]:
+    edge_rows: dict[str, GraphEdgeRow] = {}
     adjacency: dict[str, set[str]] = defaultdict(set)
-    object_titles = {object_id: title for _pack, object_id, _kind, title, _path, _source in objects}
+    object_titles = {row.object_id: row.title for row in objects}
 
-    for _pack, source_object_id, target_object_id, relation_type, evidence_source_slug in relations:
-        edge_kind = f"relation:{relation_type}"
-        edge_id = _graph_edge_id(source_object_id, target_object_id, edge_kind)
-        edge_rows[edge_id] = (
-            pack_name,
-            edge_id,
-            source_object_id,
-            target_object_id,
-            edge_kind,
-            1.0,
-            evidence_source_slug,
+    for relation in relations:
+        edge_kind = f"relation:{relation.relation_type}"
+        edge_id = _graph_edge_id(relation.source_object_id, relation.target_object_id, edge_kind)
+        edge_rows[edge_id] = GraphEdgeRow(
+            pack=pack_name,
+            edge_id=edge_id,
+            source_object_id=relation.source_object_id,
+            target_object_id=relation.target_object_id,
+            edge_kind=edge_kind,
+            weight=1.0,
+            evidence_source_slug=relation.evidence_source_slug,
         )
-        adjacency[source_object_id].add(target_object_id)
-        adjacency[target_object_id].add(source_object_id)
+        adjacency[relation.source_object_id].add(relation.target_object_id)
+        adjacency[relation.target_object_id].add(relation.source_object_id)
 
-    for _pack, _contradiction_id, _subject_key, positive_json, negative_json, _status, _note, _resolved_at in contradictions:
-        positive_ids = {claim_id.split("::", 1)[0] for claim_id in json.loads(positive_json)}
-        negative_ids = {claim_id.split("::", 1)[0] for claim_id in json.loads(negative_json)}
+    for contradiction in contradictions:
+        positive_ids = {
+            claim_id.split("::", 1)[0]
+            for claim_id in json.loads(contradiction.positive_claim_ids_json)
+        }
+        negative_ids = {
+            claim_id.split("::", 1)[0]
+            for claim_id in json.loads(contradiction.negative_claim_ids_json)
+        }
         for source_object_id in sorted(positive_ids):
             for target_object_id in sorted(negative_ids):
                 if source_object_id == target_object_id:
@@ -143,20 +154,20 @@ def _build_graph_seeds(
                 ordered = tuple(sorted([source_object_id, target_object_id]))
                 edge_kind = "contradiction:subject"
                 edge_id = _graph_edge_id(ordered[0], ordered[1], edge_kind)
-                edge_rows[edge_id] = (
-                    pack_name,
-                    edge_id,
-                    ordered[0],
-                    ordered[1],
-                    edge_kind,
-                    0.8,
-                    "",
+                edge_rows[edge_id] = GraphEdgeRow(
+                    pack=pack_name,
+                    edge_id=edge_id,
+                    source_object_id=ordered[0],
+                    target_object_id=ordered[1],
+                    edge_kind=edge_kind,
+                    weight=0.8,
+                    evidence_source_slug="",
                 )
                 adjacency[ordered[0]].add(ordered[1])
                 adjacency[ordered[1]].add(ordered[0])
 
     visited: set[str] = set()
-    cluster_rows: list[tuple[str, str, str, str, str, str, float]] = []
+    cluster_rows: list[GraphClusterRow] = []
     for object_id in sorted(object_titles):
         if object_id in visited:
             continue
@@ -181,14 +192,14 @@ def _build_graph_seeds(
             ),
         )
         cluster_rows.append(
-            (
-                pack_name,
-                _graph_cluster_id(component),
-                "relation_component",
-                object_titles.get(center_object_id, center_object_id),
-                center_object_id,
-                json.dumps(component, ensure_ascii=False),
-                float(len(component)),
+            GraphClusterRow(
+                pack=pack_name,
+                cluster_id=_graph_cluster_id(component),
+                cluster_kind="relation_component",
+                label=object_titles.get(center_object_id, center_object_id),
+                center_object_id=center_object_id,
+                member_object_ids_json=json.dumps(component, ensure_ascii=False),
+                score=float(len(component)),
             )
         )
 
@@ -206,21 +217,60 @@ def build_truth_projection(
     _ = vault_dir, spec
     resolved_pack_name = str(pack_name or "research-tech")
 
-    objects: list[tuple[str, str, str, str, str, str]] = []
-    claims: list[tuple[str, str, str, str, str, float]] = []
-    claim_evidence: list[tuple[str, str, str, str, str]] = []
-    compiled_summaries: list[tuple[str, str, str, str]] = []
+    objects: list[ObjectRow] = []
+    claims: list[ClaimRow] = []
+    claim_evidence: list[ClaimEvidenceRow] = []
+    compiled_summaries: list[CompiledSummaryRow] = []
 
     for slug, title, note_type, path, _day_id, _frontmatter_json, body in page_rows:
-        objects.append((resolved_pack_name, slug, note_type, title, path, slug))
+        objects.append(
+            ObjectRow(
+                pack=resolved_pack_name,
+                object_id=slug,
+                object_kind=note_type,
+                title=title,
+                canonical_path=path,
+                source_slug=slug,
+            )
+        )
         summary = _page_summary(body, fallback=title)
         claim_id = _claim_id(slug, summary)
-        claims.append((resolved_pack_name, claim_id, slug, "page_summary", summary, 1.0))
-        claim_evidence.append((resolved_pack_name, claim_id, slug, "body_summary", summary))
-        compiled_summaries.append((resolved_pack_name, slug, summary, slug))
+        claims.append(
+            ClaimRow(
+                pack=resolved_pack_name,
+                claim_id=claim_id,
+                object_id=slug,
+                claim_kind="page_summary",
+                claim_text=summary,
+                confidence=1.0,
+            )
+        )
+        claim_evidence.append(
+            ClaimEvidenceRow(
+                pack=resolved_pack_name,
+                claim_id=claim_id,
+                source_slug=slug,
+                evidence_kind="body_summary",
+                quote_text=summary,
+            )
+        )
+        compiled_summaries.append(
+            CompiledSummaryRow(
+                pack=resolved_pack_name,
+                object_id=slug,
+                summary_text=summary,
+                source_slug=slug,
+            )
+        )
 
     relations = [
-        (resolved_pack_name, source_slug, target_slug, relation_type, source_slug)
+        RelationRow(
+            pack=resolved_pack_name,
+            source_object_id=source_slug,
+            target_object_id=target_slug,
+            relation_type=relation_type,
+            evidence_source_slug=source_slug,
+        )
         for source_slug, target_slug, _target_raw, relation_type, _line_number in link_rows
     ]
     contradictions = _detect_contradictions(resolved_pack_name, claims)

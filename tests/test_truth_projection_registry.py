@@ -59,6 +59,6 @@ def test_execute_truth_projection_builder_namespaces_rows_to_requested_pack(temp
     )
 
     assert spec.pack == "research-tech"
-    assert projection.objects[0][0] == "default-knowledge"
-    assert projection.claims[0][0] == "default-knowledge"
-    assert projection.compiled_summaries[0][0] == "default-knowledge"
+    assert projection.objects[0].pack == "default-knowledge"
+    assert projection.claims[0].pack == "default-knowledge"
+    assert projection.compiled_summaries[0].pack == "default-knowledge"

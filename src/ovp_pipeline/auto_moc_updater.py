@@ -157,6 +157,19 @@ area: {area}
 
 > Auto-created {kind} MOC for {area}.
 """
+        # Phase 34: route through the zone gate in promotion mode. MOC paths
+        # currently fall under agent-owned globs so the gate is a no-op, but
+        # the wrapping makes a future move into an accepted zone (e.g. under
+        # 10-Knowledge/Atlas/) safe by construction. If that move happens, add
+        # an emit_promotion call here too — without it the lint mtime check
+        # would fire on the next scan.
+        from .workspace_promotion import WRITE_MODE_PROMOTION, enforce_zone_write
+
+        enforce_zone_write(
+            moc_path,
+            vault_dir=self.vault_dir,
+            mode=WRITE_MODE_PROMOTION,
+        )
         moc_path.write_text(content, encoding="utf-8")
         self.logger.log("moc_created", {
             "area": area,

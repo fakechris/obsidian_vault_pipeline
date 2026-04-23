@@ -3,6 +3,7 @@ from __future__ import annotations
 from .assembly_recipes import build_assembly_recipes
 from ..base import BaseDomainPack, TruthProjectionSpec
 from .artifacts import build_artifact_specs
+from .evidence_requirements import RESEARCH_TECH_EVIDENCE_REQUIREMENTS
 from .extraction_profiles import RESEARCH_TECH_EXTRACTION_PROFILES
 from .governance import build_governance_specs
 from .handlers import build_stage_handlers
@@ -10,9 +11,12 @@ from .observation_surfaces import build_observation_surfaces
 from .operation_profiles import RESEARCH_TECH_OPERATION_PROFILES
 from .processor_contracts import build_processor_contracts
 from .profiles import RESEARCH_TECH_WORKFLOW_PROFILES
+from .promotion_policy import RESEARCH_TECH_PROMOTION_POLICY
+from .reuse_signals import RESEARCH_TECH_REUSE_SIGNALS
 from .schemas import RESEARCH_TECH_OBJECT_KINDS
 from .semantic_relations import build_semantic_relation_contracts
 from .wiki_views import RESEARCH_TECH_WIKI_VIEWS
+from .workspace_zones import RESEARCH_TECH_WORKSPACE_ZONES
 
 
 def get_pack() -> BaseDomainPack:
@@ -39,4 +43,8 @@ def get_pack() -> BaseDomainPack:
             description="Default research-tech truth projection",
         ),
         _observation_surfaces=build_observation_surfaces(),
+        _promotion_policy=RESEARCH_TECH_PROMOTION_POLICY,
+        _workspace_zones=RESEARCH_TECH_WORKSPACE_ZONES,
+        _evidence_requirements=RESEARCH_TECH_EVIDENCE_REQUIREMENTS,
+        _reuse_signals=RESEARCH_TECH_REUSE_SIGNALS,
     )
