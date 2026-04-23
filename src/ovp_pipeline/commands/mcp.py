@@ -20,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-from ..mcp_server import MCPServer
+from ..mcp_server import MCPServer, _InvalidParams
 from ..runtime import resolve_vault_dir
 
 
@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         except KeyError:
             print(json.dumps({"error": f"Unknown tool: {args.call}"}), file=sys.stderr)
             return 2
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, _InvalidParams) as exc:
             print(json.dumps({"error": str(exc)}), file=sys.stderr)
             return 2
         print(json.dumps(result, ensure_ascii=False, indent=2))

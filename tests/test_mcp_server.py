@@ -408,6 +408,38 @@ def test_evaluate_promotion_workspace_empty_paths_invalid(temp_vault: Path) -> N
 # ---------------------------------------------------------------------------
 
 
+def test_cli_call_invalid_params_returns_clean_error(
+    temp_vault: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``ovp-mcp --call`` must catch ``_InvalidParams`` (raised by tool
+    bodies for missing required fields) and emit a JSON error envelope on
+    stderr — never an unhandled traceback."""
+    from ovp_pipeline.commands.mcp import main
+
+    rc = main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--call",
+            "evaluate_promotion",
+            "--json",
+            json.dumps(
+                {
+                    "candidate_kind": "workspace",
+                    "pack": "default-knowledge",
+                    "payload": {"draft": "", "target": ""},
+                }
+            ),
+        ]
+    )
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert captured.err.strip()  # non-empty error
+    payload = json.loads(captured.err.strip())
+    assert "error" in payload
+    assert "non-empty" in payload["error"]
+
+
 def test_tools_call_result_has_mcp_content_array(temp_vault: Path) -> None:
     """``tools/call`` must return MCP-shaped content + isError so a generic
     MCP client can render the reply without knowing per-tool schemas."""
