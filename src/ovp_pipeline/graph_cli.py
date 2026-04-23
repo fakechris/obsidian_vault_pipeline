@@ -159,15 +159,37 @@ def cmd_build(args):
             print(f"⚠️ --seed-match {seed_match!r} 没有匹配到任何节点")
             return 1
 
-        edge_index = {edge["edge_id"]: edge for edge in all_edges}
+        # --source-walk: 剔除 evergreen↔evergreen / evergreen↔moc 这种"概念内部"
+        # 的边，让 BFS 从概念种子直接跳到产生它的源文档（deep_dive / raw / article ...）
+        # 而不是在 evergreen 网里空转。
+        traversal_edges = all_edges
+        if getattr(args, "source_walk", False):
+            type_by_id = {n["note_id"]: n.get("note_type", "") for n in all_nodes}
+            bridge_types = {"evergreen", "moc"}
+            traversal_edges = [
+                e
+                for e in all_edges
+                if not (
+                    type_by_id.get(e["source"]) in bridge_types
+                    and type_by_id.get(e["target"]) in bridge_types
+                )
+            ]
+            print(
+                f"🚦 source-walk: 剔除 evergreen/moc 之间的桥接边"
+                f" ({len(all_edges) - len(traversal_edges)}/{len(all_edges)})"
+            )
+
+        edge_index = {edge["edge_id"]: edge for edge in traversal_edges}
         delta_helper = DailyDelta(vault_dir)
         expanded_ids, distance_map = delta_helper._expand_hops(
             seed_ids, edge_index, expand_hops
         )
 
         all_nodes = [n for n in all_nodes if n["note_id"] in expanded_ids]
+        # 渲染用的边集和 BFS 用的边集保持一致——source-walk 模式下不要把刚剔掉的
+        # evergreen↔evergreen 桥又画回到图上，否则视觉上还是一团 evergreen mesh
         all_edges = [
-            e for e in all_edges
+            e for e in traversal_edges
             if e["source"] in expanded_ids and e["target"] in expanded_ids
         ]
         for node in all_nodes:
@@ -435,6 +457,12 @@ def main():
         "--no-index",
         action="store_true",
         help="跳过 knowledge.db，强制扫盘构建（默认走 db，秒级；扫盘可能十分钟）",
+    )
+    build_parser.add_argument(
+        "--source-walk",
+        action="store_true",
+        help="BFS 时剔除 evergreen↔evergreen / evergreen↔moc 边，让 evergreen 种子"
+             "直接跳到产生它的源文档（deep_dive / raw / article），而不是在概念网里空转",
     )
 
     # ovp-graph --daily

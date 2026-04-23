@@ -7,12 +7,13 @@ from pathlib import Path
 from ovp_pipeline.graph_cli import cmd_build
 
 
-def _write_note(directory: Path, slug: str, title: str, links: list[str] = ()) -> None:
+def _write_note(directory: Path, slug: str, title: str, links: list[str] = (),
+                note_type: str = "evergreen") -> None:
     body = "\n".join(f"[[{target}]]" for target in links)
     (directory / f"{slug}.md").write_text(
         "---\n"
         f'title: "{title}"\n'
-        "type: evergreen\n"
+        f"type: {note_type}\n"
         "date: 2026-04-07\n"
         "---\n\n"
         f"# {title}\n\n"
@@ -46,7 +47,7 @@ def _make_vault(tmp_path: Path) -> Path:
 
 
 def _build_args(vault: Path, output: Path, *, seed_match=None, expand_hops=1,
-                open=False, no_index=True):
+                open=False, no_index=True, source_walk=False):
     # 默认 no_index=True：现有用例走扫盘路径，避免依赖 ovp-knowledge-index 的 fixture
     return argparse.Namespace(
         vault_dir=vault,
@@ -55,6 +56,7 @@ def _build_args(vault: Path, output: Path, *, seed_match=None, expand_hops=1,
         expand_hops=expand_hops,
         open=open,
         no_index=no_index,
+        source_walk=source_walk,
     )
 
 
@@ -202,6 +204,43 @@ def test_build_falls_back_to_filesystem_when_db_missing(tmp_path, capsys):
 
     data = json.loads(output.read_text(encoding="utf-8"))
     assert any(n["title"] == "Agent Memory Core" for n in data["nodes"])
+
+
+def test_build_source_walk_skips_evergreen_bridges_to_reach_deep_dive(tmp_path):
+    """--source-walk 模式：从 evergreen 种子出发，1 跳就能到引用它的源 markdown
+    (deep_dive)，而不是被困在 evergreen 之间互链上。"""
+    vault = tmp_path / "vault"
+    evergreen = vault / "10-Knowledge" / "Evergreen"
+    areas = vault / "20-Areas" / "Topics" / "2026-04"
+    evergreen.mkdir(parents=True)
+    areas.mkdir(parents=True)
+
+    # Seed evergreen, also linked to another evergreen (the noisy bridge)
+    _write_note(evergreen, "Agent-Memory-Core", "Agent Memory Core",
+                links=["Episodic Buffer"])
+    # Bridge evergreen — without source-walk, BFS would land here on hop 1
+    _write_note(evergreen, "Episodic-Buffer", "Episodic Buffer",
+                links=["Cache Policy"])
+    _write_note(evergreen, "Cache-Policy", "Cache Policy")
+
+    # Source markdown that REFERENCES the seed evergreen — this is what user wants
+    _write_note(areas, "agent-memory-deep-dive", "Agent Memory 深度解读",
+                links=["Agent Memory Core"], note_type="deep_dive")
+
+    output = tmp_path / "src.json"
+    rc = cmd_build(_build_args(vault, output, seed_match="agent memory",
+                               expand_hops=1, source_walk=True))
+    assert rc == 0
+
+    data = json.loads(output.read_text(encoding="utf-8"))
+    titles = {n["title"] for n in data["nodes"]}
+
+    # Deep dive (the source markdown) must reach the result via the surviving edge
+    assert "Agent Memory 深度解读" in titles
+    # Bridge evergreens must NOT be pulled in (their evergreen↔evergreen edges
+    # were stripped from the BFS adjacency)
+    assert "Episodic Buffer" not in titles
+    assert "Cache Policy" not in titles
 
 
 def test_build_without_seed_match_writes_full_graph(tmp_path):
