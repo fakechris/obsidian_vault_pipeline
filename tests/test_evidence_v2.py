@@ -618,3 +618,69 @@ date: 2026-04-22
     assert health["claim_evidence"].get(EVIDENCE_STATUS_BROKEN) == 1
     stale_sources = {row["source_slug"] for row in health["top_stale_sources"]}
     assert "10-Knowledge/Evergreen/Watched.md" in stale_sources
+
+
+def test_evidence_verify_does_not_clobber_sibling_relation_rows(temp_vault, capsys):
+    """Two relation rows sharing (pack, source, target, type) but different
+    evidence slugs must verify independently. Regression for the missing
+    ``evidence_source_slug`` in the UPDATE WHERE clause — the old key matched
+    both rows, so verifying one would silently overwrite the other.
+    """
+    src1 = _write_source(
+        temp_vault,
+        "DeepDive-One.md",
+        "---\nnote_id: dd1\ntitle: DD1\ntype: derived\ndate: 2026-04-22\n---\n\nFirst quote.\n",
+    )
+    src2 = _write_source(
+        temp_vault,
+        "DeepDive-Two.md",
+        "---\nnote_id: dd2\ntitle: DD2\ntype: derived\ndate: 2026-04-22\n---\n\nSecond quote.\n",
+    )
+    rebuild_knowledge_index(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+
+    # Two rows: same triple, different evidence slugs + quotes + content_hashes.
+    with sqlite3.connect(db_path) as conn:
+        for slug, quote, src in (
+            ("10-Knowledge/Evergreen/DeepDive-One.md", "First quote.", src1),
+            ("10-Knowledge/Evergreen/DeepDive-Two.md", "Second quote.", src2),
+        ):
+            conn.execute(
+                """
+                INSERT INTO relations
+                  (pack, source_object_id, target_object_id, relation_type,
+                   evidence_source_slug, quote_text, locator, content_hash,
+                   retrieval_context, status, verified_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "research-tech", "ai-agent", "rag", "uses",
+                    slug, quote, "", "", "",
+                    EVIDENCE_STATUS_UNVERIFIED, "",
+                ),
+            )
+        conn.commit()
+
+    from ovp_pipeline.commands.evidence_verify import main as evidence_main
+
+    rc = evidence_main([
+        "backfill",
+        "--vault-dir", str(temp_vault),
+        "--pack", "research-tech",
+        "--json",
+    ])
+    assert rc == 0
+    capsys.readouterr()
+
+    expected_hash_1 = compute_content_hash(src1)
+    expected_hash_2 = compute_content_hash(src2)
+    with sqlite3.connect(db_path) as conn:
+        rows = dict(
+            conn.execute(
+                "SELECT evidence_source_slug, content_hash FROM relations "
+                "WHERE pack='research-tech' AND source_object_id='ai-agent'"
+            ).fetchall()
+        )
+    assert rows["10-Knowledge/Evergreen/DeepDive-One.md"] == expected_hash_1
+    assert rows["10-Knowledge/Evergreen/DeepDive-Two.md"] == expected_hash_2
+    assert expected_hash_1 != expected_hash_2  # the bug masked precisely this

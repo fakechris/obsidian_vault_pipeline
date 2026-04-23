@@ -43,9 +43,21 @@ from ..truth_store import (
 
 
 _TARGET_TABLES = ("claim_evidence", "relations")
+# The ``relations`` table has no unique constraint on the (pack, source, target,
+# type) tuple — multiple rows can carry the same triple but different
+# ``evidence_source_slug`` values when the relation is independently attested
+# in two deep dives. Including ``evidence_source_slug`` in the WHERE keeps each
+# UPDATE scoped to the row that was actually verified; otherwise one slug's
+# verification would silently overwrite another's metadata.
 _TABLE_KEY_COLUMNS: dict[str, tuple[str, ...]] = {
     "claim_evidence": ("pack", "claim_id", "source_slug", "evidence_kind"),
-    "relations": ("pack", "source_object_id", "target_object_id", "relation_type"),
+    "relations": (
+        "pack",
+        "source_object_id",
+        "target_object_id",
+        "relation_type",
+        "evidence_source_slug",
+    ),
 }
 
 
@@ -115,19 +127,7 @@ def _key_clause(table: str) -> str:
 
 
 def _key_values(table: str, row_dict: dict[str, Any]) -> tuple[Any, ...]:
-    if table == "claim_evidence":
-        return (
-            row_dict["pack"],
-            row_dict["claim_id"],
-            row_dict["source_slug"],
-            row_dict["evidence_kind"],
-        )
-    return (
-        row_dict["pack"],
-        row_dict["source_object_id"],
-        row_dict["target_object_id"],
-        row_dict["relation_type"],
-    )
+    return tuple(row_dict[col] for col in _TABLE_KEY_COLUMNS[table])
 
 
 def _quote_text_for(table: str, row_dict: dict[str, Any]) -> str:
