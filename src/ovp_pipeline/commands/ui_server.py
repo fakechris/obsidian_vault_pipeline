@@ -7,6 +7,7 @@ import sqlite3
 import re
 import subprocess
 import sys
+import time
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,6 +24,7 @@ from ..knowledge_index import (
 )
 from ..pack_resolution import iter_compatible_packs
 from ..packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME
+from ..pulse import initial_positions, tail_events
 from ..runtime import VaultLayout, resolve_vault_dir
 from .reuse_report import build_reuse_report_payload
 from ..ui.view_models import (
@@ -97,6 +99,7 @@ def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
         ("Briefing", "/briefing"),
         ("Actions", "/actions"),
         ("Production", "/production"),
+        ("Workbench", "/workbench"),
     ]
     if _shell_supports_research_nav(requested_pack):
         items.extend(
@@ -3952,6 +3955,199 @@ def _render_writing_prompts_page(payload: dict) -> str:
     )
 
 
+_SHELL_BODY_OPEN = '<div class="shell-body">'
+
+
+def _fragment_from_page(page_html: str) -> str:
+    """Extract the body content from a ``_layout``-wrapped page.
+
+    Phase 37 reuses every existing page renderer for the Workbench panes by
+    un-wrapping the chrome instead of refactoring each renderer.
+
+    Strategy: find the literal ``shell-body`` opener, then walk forward
+    through the body counting balanced ``<div ...>`` / ``</div>`` to locate
+    the matching close. This is whitespace-insensitive and tolerates inner
+    ``<div>`` tags inside the body content.
+
+    Returns the raw body HTML. Falls back to the full page if the opening
+    marker is not found (defensive — never raise).
+    """
+    open_idx = page_html.find(_SHELL_BODY_OPEN)
+    if open_idx == -1:
+        return page_html
+    cursor = open_idx + len(_SHELL_BODY_OPEN)
+    depth = 1
+    n = len(page_html)
+    while cursor < n and depth > 0:
+        next_open = page_html.find("<div", cursor)
+        next_close = page_html.find("</div>", cursor)
+        if next_close == -1:
+            return page_html
+        if next_open != -1 and next_open < next_close:
+            # Skip past the opening tag's `>` to avoid matching attributes.
+            tag_end = page_html.find(">", next_open)
+            if tag_end == -1:
+                return page_html
+            depth += 1
+            cursor = tag_end + 1
+        else:
+            depth -= 1
+            if depth == 0:
+                return page_html[open_idx + len(_SHELL_BODY_OPEN) : next_close].strip("\n")
+            cursor = next_close + len("</div>")
+    return page_html
+
+
+def _render_pulse_fragment() -> str:
+    """Phase 37 — self-contained Pulse SSE consumer.
+
+    The fragment opens an ``EventSource`` against ``/pulse/stream`` and
+    appends frames into a tight scrolling list. Designed for the Workbench
+    bottom pane; works equally well as a standalone iframe.
+    """
+    return (
+        "<section class='pulse'>"
+        "<style>"
+        ".pulse{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;}"
+        ".pulse ul{list-style:none;margin:0;padding:.4rem;max-height:240px;overflow:auto;"
+        "background:#0e1116;color:#d6deeb;border-radius:6px;}"
+        ".pulse li{margin:.1rem 0;white-space:pre-wrap;}"
+        ".pulse li .ts{color:#7c8593;margin-right:.4rem;}"
+        ".pulse li .et{color:#82aaff;margin-right:.4rem;}"
+        ".pulse li .pk{color:#c792ea;margin-right:.4rem;}"
+        ".pulse .empty{color:#7c8593;padding:.4rem;}"
+        "</style>"
+        "<ul id='pulse-feed'><li class='empty'>Waiting for events…</li></ul>"
+        "<script>(function(){"
+        "var feed=document.getElementById('pulse-feed');"
+        "var empty=feed.querySelector('.empty');"
+        "var src=new EventSource('/pulse/stream');"
+        "src.onmessage=function(ev){"
+        "if(empty){empty.remove();empty=null;}"
+        "try{var obj=JSON.parse(ev.data);"
+        "var li=document.createElement('li');"
+        "var ts=document.createElement('span');ts.className='ts';ts.textContent=obj.ts||'';"
+        "var et=document.createElement('span');et.className='et';et.textContent=obj.event_type||'';"
+        "var pk=document.createElement('span');pk.className='pk';pk.textContent=obj.pack||'';"
+        "var body=document.createElement('span');"
+        "var keys=Object.keys(obj).filter(function(k){"
+        "return k!=='ts'&&k!=='event_type'&&k!=='pack'&&k!=='event_id'&&k!=='session_id';});"
+        "body.textContent=keys.slice(0,3).map(function(k){"
+        "return k+'='+JSON.stringify(obj[k]).slice(0,80);}).join(' ');"
+        "li.appendChild(ts);li.appendChild(et);li.appendChild(pk);li.appendChild(body);"
+        "feed.appendChild(li);"
+        "while(feed.children.length>200){feed.removeChild(feed.firstChild);}"
+        "feed.scrollTop=feed.scrollHeight;"
+        "}catch(e){/* swallow */}};"
+        "src.onerror=function(){src.close();};"
+        "})();</script>"
+        "</section>"
+    )
+
+
+def _render_pulse_page() -> str:
+    fragment = _render_pulse_fragment()
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>Pulse</title>"
+        "<style>body{font-family:system-ui,sans-serif;max-width:1080px;margin:1.5rem auto;padding:0 1rem}"
+        "h1{margin-bottom:.4rem}p.muted{color:#71675d}"
+        "</style></head><body>"
+        "<h1>Pulse</h1>"
+        "<p class='muted'>Live tail of <code>60-Logs/*.jsonl</code> (pipeline, reuse, "
+        "evidence, open-questions). Polls once per second.</p>"
+        f"{fragment}</body></html>"
+    )
+
+
+def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
+    """Phase 37 — 4-pane reviewer surface composed from existing fragments.
+
+    Layout (CSS grid):
+
+        ┌───────────────┬──────────────────────────┬───────────────┐
+        │ Candidates    │ Object body (top)        │ Actions       │
+        │ (left)        │ Briefing  (bottom)       │ (right)       │
+        ├───────────────┴──────────────────────────┴───────────────┤
+        │ Pulse (full-width)                                       │
+        └──────────────────────────────────────────────────────────┘
+
+    Selecting an object_id is a query-string param so back/forward navigation
+    just works. Iframes post a ``select_object`` message to the parent on
+    candidate clicks; the parent updates child ``src`` attributes and
+    rewrites ``location.search`` via ``history.replaceState``.
+    """
+    # Fragment URLs. Candidate / Briefing / Actions are pack-aware but do not
+    # care about the object id; Object pane needs the id and is hidden when
+    # none is selected (the iframe falls back to the Objects index).
+    cand_src = "/candidates/fragment" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    actions_src = "/actions/fragment" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    briefing_src = "/briefing/fragment" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    object_src = (
+        f"/object/fragment?id={quote(object_id, safe='')}"
+        + (f"&pack={quote(requested_pack, safe='')}" if requested_pack else "")
+        if object_id
+        else "/objects" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    )
+    pulse_src = "/pulse/fragment"
+
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1' />"
+        "<title>Workbench</title>"
+        "<style>"
+        "*{box-sizing:border-box}"
+        "body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;background:#f7f6f2;color:#1f1a17}"
+        "header{padding:.6rem 1rem;border-bottom:1px solid #e7e1d8;display:flex;gap:1rem;align-items:center}"
+        "header h1{font-size:1rem;margin:0;color:#9f4f24}"
+        "header .meta{color:#71675d;font-size:.85rem}"
+        ".grid{display:grid;height:calc(100vh - 56px);"
+        "grid-template-columns:280px 1fr 280px;"
+        "grid-template-rows:1fr 1fr 220px;"
+        "gap:1px;background:#e7e1d8;}"
+        ".pane{background:#fffdfa;overflow:auto}"
+        ".pane iframe{width:100%;height:100%;border:0;display:block}"
+        ".pane.cand{grid-row:1/3}"
+        ".pane.obj{grid-row:1/2}"
+        ".pane.brief{grid-row:2/3}"
+        ".pane.act{grid-row:1/3}"
+        ".pane.pulse{grid-column:1/4;grid-row:3/4}"
+        "</style></head><body>"
+        "<header>"
+        "<h1>Workbench</h1>"
+        f"<span class='meta'>object: <code id='wb-object'>{escape(object_id) or '∅'}</code></span>"
+        f"<span class='meta'>pack: <code>{escape(requested_pack) or '∅'}</code></span>"
+        "<a href='/' style='margin-left:auto;color:#9f4f24;text-decoration:none'>← Shell</a>"
+        "</header>"
+        "<div class='grid'>"
+        f"<section class='pane cand'><iframe id='pane-cand' src='{escape(cand_src)}'></iframe></section>"
+        f"<section class='pane obj'><iframe id='pane-obj' src='{escape(object_src)}'></iframe></section>"
+        f"<section class='pane brief'><iframe id='pane-brief' src='{escape(briefing_src)}'></iframe></section>"
+        f"<section class='pane act'><iframe id='pane-act' src='{escape(actions_src)}'></iframe></section>"
+        f"<section class='pane pulse'><iframe id='pane-pulse' src='{escape(pulse_src)}'></iframe></section>"
+        "</div>"
+        "<script>(function(){"
+        f"var pack={json.dumps(requested_pack)};"
+        "function selectObject(id){"
+        "var packQs=pack?'&pack='+encodeURIComponent(pack):'';"
+        "var packQsLead=pack?'?pack='+encodeURIComponent(pack):'';"
+        "document.getElementById('pane-obj').src=id"
+        "?'/object/fragment?id='+encodeURIComponent(id)+packQs"
+        ":'/objects'+packQsLead;"
+        "document.getElementById('wb-object').textContent=id||'∅';"
+        "var url=new URL(window.location.href);"
+        "if(id){url.searchParams.set('object_id',id);}else{url.searchParams.delete('object_id');}"
+        "history.replaceState({},'',url.toString());"
+        "}"
+        "window.addEventListener('message',function(ev){"
+        "var d=ev.data;if(!d||typeof d!=='object')return;"
+        "if(d.type==='select_object'&&typeof d.id==='string'){selectObject(d.id);}"
+        "});"
+        "})();</script>"
+        "</body></html>"
+    )
+
+
 def create_server(
     vault_dir: Path | str, *, host: str = "127.0.0.1", port: int = 8787
 ) -> ThreadingHTTPServer:
@@ -4034,13 +4230,15 @@ def create_server(
                     pack_name = query.get("pack", [""])[0] or None
                     self._write_json(build_briefing_payload(resolved_vault, pack_name=pack_name))
                     return
-                if path == "/briefing":
+                if path in {"/briefing", "/briefing/fragment"}:
                     pack_name = query.get("pack", [""])[0] or None
-                    self._write_html(
-                        _render_briefing_page(
-                            build_briefing_payload(resolved_vault, pack_name=pack_name)
-                        )
+                    page = _render_briefing_page(
+                        build_briefing_payload(resolved_vault, pack_name=pack_name)
                     )
+                    if path == "/briefing/fragment":
+                        self._write_html(_fragment_from_page(page))
+                    else:
+                        self._write_html(page)
                     return
                 if path == "/api/signals":
                     q = query.get("q", [""])[0]
@@ -4082,7 +4280,7 @@ def create_server(
                         )
                     )
                     return
-                if path == "/candidates":
+                if path in {"/candidates", "/candidates/fragment"}:
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     candidate_warning = query.get("candidate_warning", [""])[0]
@@ -4096,7 +4294,11 @@ def create_server(
                         query=q,
                     )
                     payload["candidate_warning"] = candidate_warning
-                    self._write_html(_render_candidates_page(payload))
+                    page = _render_candidates_page(payload)
+                    if path == "/candidates/fragment":
+                        self._write_html(_fragment_from_page(page))
+                    else:
+                        self._write_html(page)
                     return
                 if path == "/api/evolution":
                     q = query.get("q", [""])[0]
@@ -4142,13 +4344,17 @@ def create_server(
                         build_object_page_payload(resolved_vault, object_id, pack_name=pack_name)
                     )
                     return
-                if path == "/object":
+                if path in {"/object", "/object/fragment"}:
                     object_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_object_page_payload(
                         resolved_vault, object_id, pack_name=pack_name
                     )
-                    self._write_html(_render_object_page(payload))
+                    page = _render_object_page(payload)
+                    if path == "/object/fragment":
+                        self._write_html(_fragment_from_page(page))
+                    else:
+                        self._write_html(page)
                     return
                 if path == "/api/topic":
                     object_id = self._required(query, "id")
@@ -4314,7 +4520,7 @@ def create_server(
                         )
                     )
                     return
-                if path == "/actions":
+                if path in {"/actions", "/actions/fragment"}:
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
@@ -4324,7 +4530,11 @@ def create_server(
                         status=status,
                         query=q,
                     )
-                    self._write_html(_render_actions_page(payload))
+                    page = _render_actions_page(payload)
+                    if path == "/actions/fragment":
+                        self._write_html(_fragment_from_page(page))
+                    else:
+                        self._write_html(page)
                     return
                 if path == "/api/summaries":
                     q = query.get("q", [""])[0]
@@ -4430,6 +4640,30 @@ def create_server(
                         self._write_html(_render_writing_prompts_fragment(payload))
                     else:
                         self._write_html(_render_writing_prompts_page(payload))
+                    return
+                if path == "/workbench":
+                    object_id = query.get("object_id", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or ""
+                    self._write_html(
+                        _render_workbench_page(
+                            object_id=object_id, requested_pack=pack_name
+                        )
+                    )
+                    return
+                if path == "/pulse":
+                    self._write_html(_render_pulse_page())
+                    return
+                if path == "/pulse/fragment":
+                    self._write_html(_render_pulse_fragment())
+                    return
+                if path == "/pulse/stream":
+                    raw_max = query.get("max_polls", [""])[0]
+                    raw_interval = query.get("poll_interval", [""])[0]
+                    max_polls = int(raw_max) if raw_max else None
+                    poll_interval = float(raw_interval) if raw_interval else 1.0
+                    self._stream_pulse_sse(
+                        poll_interval=poll_interval, max_polls=max_polls
+                    )
                     return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
@@ -4816,6 +5050,62 @@ def create_server(
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _stream_pulse_sse(
+            self,
+            *,
+            poll_interval: float = 1.0,
+            max_polls: int | None = None,
+        ) -> None:
+            """Stream events from ``60-Logs/*.jsonl`` to the client as SSE.
+
+            Long-lived response. ``max_polls`` is for tests; production callers
+            leave it ``None`` (loop until the client disconnects). Each event
+            becomes one SSE frame with ``event:`` set to its ``event_type`` and
+            ``data:`` carrying the JSON-encoded payload — matching the closed
+            vocabulary documented in :mod:`event_emitter`.
+            """
+            layout = VaultLayout.from_vault(resolved_vault)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+
+            try:
+                self.wfile.write(b": ovp pulse stream\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+            positions = initial_positions(layout)
+            polls = 0
+            while True:
+                if max_polls is not None and polls >= max_polls:
+                    return
+                polls += 1
+                events, positions = tail_events(layout, since_position=positions)
+                for event in events:
+                    event_id = str(event.get("event_id") or "")
+                    event_type = str(event.get("event_type") or "message")
+                    data = json.dumps(event, ensure_ascii=False)
+                    frame = (
+                        (f"id: {event_id}\n" if event_id else "")
+                        + f"event: {event_type}\n"
+                        + f"data: {data}\n\n"
+                    ).encode("utf-8")
+                    try:
+                        self.wfile.write(frame)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                if not events:
+                    try:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                time.sleep(poll_interval)
 
         def _write_bytes(self, body: bytes, content_type: str) -> None:
             self.send_response(200)

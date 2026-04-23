@@ -111,6 +111,7 @@ ovp-evidence = "ovp_pipeline.commands.evidence_verify:main"
 ovp-promote = "ovp_pipeline.commands.promote:main"
 ovp-init = "ovp_pipeline.commands.init_project:main"
 ovp-ui = "ovp_pipeline.commands.ui_server:main"
+ovp-mcp = "ovp_pipeline.commands.mcp:main"
 
 [project.entry-points."ovp.packs"]
 default-knowledge = "ovp_pipeline.packs.default_knowledge:get_pack"
