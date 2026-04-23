@@ -117,6 +117,57 @@ def test_policy_decision_rejects_invalid_lane():
         PolicyDecision(lane="bogus", reason_code="x")
 
 
+def test_collect_pack_signals_supplies_evidence_kinds(temp_vault):
+    """Round-trip: candidate with claim_evidence in DB gets promote suggestion."""
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.promote_candidates import review_candidates
+    from ovp_pipeline.promotion_policy import collect_pack_signals
+    from ovp_pipeline.runtime import VaultLayout
+
+    rebuild_knowledge_index(temp_vault)
+    pack = load_pack("research-tech")
+    layout = VaultLayout.from_vault(temp_vault)
+
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        conn.execute(
+            "INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (pack.name, "ai-agent", "concept", "AI Agent", "Evergreen/AI Agent.md", "ai-agent"),
+        )
+        conn.execute(
+            "INSERT INTO claims (pack, claim_id, object_id, claim_kind, claim_text, confidence) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (pack.name, "c1", "ai-agent", "definition", "AI Agent is X", 0.9),
+        )
+        conn.execute(
+            "INSERT INTO claim_evidence (pack, claim_id, source_slug, evidence_kind) "
+            "VALUES (?, ?, ?, ?)",
+            (pack.name, "c1", "agent-memory", "page_summary"),
+        )
+        conn.commit()
+
+    kinds_by_id, disputed = collect_pack_signals(layout.knowledge_db, pack_name=pack.name)
+    assert kinds_by_id == {"ai-agent": frozenset({"page_summary"})}
+    assert disputed == frozenset()
+
+    # And review_candidates threads them through end-to-end.
+    registry = ConceptRegistry(temp_vault).load()
+    entry = registry.upsert_candidate(
+        slug="ai-agent",
+        title="AI Agent",
+        definition="An autonomous loop.",
+        area="AI-Research",
+    )
+    # research-tech requires 2 independent sources; bump until satisfied.
+    entry.source_count = 3
+    entry.evidence_count = 2
+    registry.save()
+    registry = ConceptRegistry(temp_vault).load()
+    suggestions = review_candidates(registry, pack=pack)
+    actions = {entry.slug: action for entry, action, _ in suggestions}
+    assert actions.get("ai-agent") == "promote_to_active"
+
+
 # ---------------------------------------------------------------------------
 # Workspace zone enforcement
 # ---------------------------------------------------------------------------

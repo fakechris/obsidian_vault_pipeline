@@ -18,6 +18,7 @@ fields in :class:`AutoPromoteRule`.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,64 @@ class PolicyDecision:
 # ---------------------------------------------------------------------------
 # Concept lane evaluation
 # ---------------------------------------------------------------------------
+
+
+def collect_pack_signals(
+    db_path: Path | None,
+    *,
+    pack_name: str,
+) -> tuple[dict[str, frozenset[str]], frozenset[str]]:
+    """Bulk-load (object_id → evidence_kinds, object_ids with open contradiction).
+
+    Both signals are inputs to :func:`evaluate_concept`'s strict path. Without
+    them, every required ``evidence_kind`` is treated as missing — which makes
+    strict packs (research-tech) escalate every candidate regardless of actual
+    evidence. Centralizing the queries here so doctor / ``ovp-promote run`` /
+    ``review_candidates`` all ask the DB the same way.
+
+    Returns ``({}, frozenset())`` when the DB is missing or the schema isn't
+    materialized yet (zero-state vaults). Strict callers should treat that as
+    "no evidence available" — same semantic as today.
+    """
+    if db_path is None or not Path(db_path).exists():
+        return {}, frozenset()
+    try:
+        with sqlite3.connect(db_path) as conn:
+            kinds_map: dict[str, set[str]] = {}
+            for object_id, kind in conn.execute(
+                "SELECT c.object_id, ce.evidence_kind "
+                "FROM claim_evidence ce "
+                "JOIN claims c ON c.pack = ce.pack AND c.claim_id = ce.claim_id "
+                "WHERE c.pack = ?",
+                (pack_name,),
+            ):
+                if not object_id or not kind:
+                    continue
+                kinds_map.setdefault(object_id, set()).add(kind)
+
+            disputed: set[str] = set()
+            for object_id, claim_id in conn.execute(
+                "SELECT object_id, claim_id FROM claims WHERE pack = ?",
+                (pack_name,),
+            ):
+                if not object_id or not claim_id:
+                    continue
+                hit = conn.execute(
+                    """
+                    SELECT 1 FROM contradictions
+                    WHERE pack = ? AND status = 'open'
+                      AND (positive_claim_ids_json LIKE ?
+                        OR negative_claim_ids_json LIKE ?)
+                    LIMIT 1
+                    """,
+                    (pack_name, f'%"{claim_id}"%', f'%"{claim_id}"%'),
+                ).fetchone()
+                if hit:
+                    disputed.add(object_id)
+    except sqlite3.OperationalError:
+        return {}, frozenset()
+
+    return {oid: frozenset(kinds) for oid, kinds in kinds_map.items()}, frozenset(disputed)
 
 
 def independent_source_count(

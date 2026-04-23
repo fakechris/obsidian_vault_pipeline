@@ -30,6 +30,7 @@ from ..promotion_policy import (
     LANE_ESCALATE,
     LANE_HOLD,
     LANE_REJECT,
+    collect_pack_signals,
     evaluate_concept,
     evaluate_workspace,
 )
@@ -43,6 +44,10 @@ def _run_concept(args: argparse.Namespace) -> int:
     vault_dir = resolve_vault_dir(args.vault_dir)
     pack = load_pack(args.pack or DEFAULT_WORKFLOW_PACK_NAME)
     registry = ConceptRegistry(vault_dir).load()
+    layout = VaultLayout.from_vault(vault_dir)
+    kinds_by_id, disputed_ids = collect_pack_signals(
+        layout.knowledge_db, pack_name=pack.name
+    )
 
     by_lane: dict[str, list[dict[str, Any]]] = {
         LANE_AUTO: [],
@@ -51,7 +56,13 @@ def _run_concept(args: argparse.Namespace) -> int:
         LANE_REJECT: [],
     }
     for entry in registry.candidates:
-        decision = evaluate_concept(entry, pack=pack, registry=registry)
+        decision = evaluate_concept(
+            entry,
+            pack=pack,
+            registry=registry,
+            evidence_kinds=kinds_by_id.get(entry.slug, frozenset()),
+            has_open_contradiction=entry.slug in disputed_ids,
+        )
         by_lane.setdefault(decision.lane, []).append(
             {
                 "slug": entry.slug,

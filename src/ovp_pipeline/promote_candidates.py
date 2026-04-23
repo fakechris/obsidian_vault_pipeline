@@ -415,10 +415,16 @@ def review_candidates(
     from .promotion_policy import (
         LANE_AUTO,
         LANE_ESCALATE,
+        collect_pack_signals,
         evaluate_concept,
     )
+    from .runtime import VaultLayout
 
     resolved_pack = pack or load_pack(DEFAULT_WORKFLOW_PACK_NAME)
+    layout = VaultLayout.from_vault(registry.vault_dir)
+    kinds_by_id, disputed_ids = collect_pack_signals(
+        layout.knowledge_db, pack_name=resolved_pack.name
+    )
     suggestions = []
 
     for entry in registry.candidates:
@@ -426,7 +432,13 @@ def review_candidates(
         similar = registry.search(entry.title, topk=5)
         similar = [(e, s) for e, s in similar if e.slug != entry.slug and e.status == STATUS_ACTIVE]
 
-        decision = evaluate_concept(entry, pack=resolved_pack, registry=registry)
+        decision = evaluate_concept(
+            entry,
+            pack=resolved_pack,
+            registry=registry,
+            evidence_kinds=kinds_by_id.get(entry.slug, frozenset()),
+            has_open_contradiction=entry.slug in disputed_ids,
+        )
 
         if decision.lane == LANE_AUTO:
             if similar and similar[0][1] >= 0.7:

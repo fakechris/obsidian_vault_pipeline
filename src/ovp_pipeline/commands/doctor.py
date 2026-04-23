@@ -976,6 +976,7 @@ def _promotion_health_payload(vault_dir: Path | None, *, pack_name: str) -> dict
         LANE_ESCALATE,
         LANE_HOLD,
         LANE_REJECT,
+        collect_pack_signals,
         evaluate_concept,
     )
 
@@ -987,16 +988,24 @@ def _promotion_health_payload(vault_dir: Path | None, *, pack_name: str) -> dict
         }
     db_path = VaultLayout.from_vault(vault_dir).knowledge_db
 
-    # Lane counts come from a fresh policy evaluation across current candidates;
-    # we don't need the DB for them, just the registry.
+    # Lane counts come from a fresh policy evaluation across current candidates.
+    # The DB feeds evidence_kinds + open-contradiction signals into the strict
+    # path; without them, research-tech would escalate every candidate.
     lane_counts: dict[str, int] = {LANE_AUTO: 0, LANE_ESCALATE: 0, LANE_HOLD: 0, LANE_REJECT: 0}
     try:
         from ..concept_registry import ConceptRegistry
 
         pack = load_pack(pack_name)
         registry = ConceptRegistry(vault_dir).load()
+        kinds_by_id, disputed_ids = collect_pack_signals(db_path, pack_name=pack.name)
         for entry in registry.candidates:
-            decision = evaluate_concept(entry, pack=pack, registry=registry)
+            decision = evaluate_concept(
+                entry,
+                pack=pack,
+                registry=registry,
+                evidence_kinds=kinds_by_id.get(entry.slug, frozenset()),
+                has_open_contradiction=entry.slug in disputed_ids,
+            )
             lane_counts[decision.lane] = lane_counts.get(decision.lane, 0) + 1
     except Exception:
         pass
