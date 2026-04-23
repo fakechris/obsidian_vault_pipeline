@@ -18,7 +18,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
-from .event_emitter import collect_for_index, emit
+from .event_emitter import emit, iter_for_index
 from .runtime import VaultLayout
 
 
@@ -108,17 +108,17 @@ def replay_evidence_verifications(
     underlying source markdown was deleted) are silently dropped — that row
     will simply remain in the ``unverified`` state on the next verify pass.
     """
-    events = collect_for_index(layout, EVIDENCE_VERIFICATIONS_LOG)
-    if not events:
-        return 0
-    pack_events = [
-        ev for ev in events if str(ev.get("pack") or "") == pack_name
-    ]
-    if not pack_events:
+    pack_events = (
+        ev
+        for ev in iter_for_index(layout, EVIDENCE_VERIFICATIONS_LOG)
+        if str(ev.get("pack") or "") == pack_name
+    )
+    latest = _latest_per_key(pack_events)
+    if not latest:
         return 0
 
     applied = 0
-    for (table, key_tuple), event in _latest_per_key(pack_events).items():
+    for (table, key_tuple), event in latest.items():
         key_columns = _TABLE_KEY_COLUMNS[table]
         where_sql = " AND ".join(f"{col} = ?" for col in key_columns)
         key_values = tuple(value for _, value in key_tuple)

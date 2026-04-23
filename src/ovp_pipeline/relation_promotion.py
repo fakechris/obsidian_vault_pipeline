@@ -22,10 +22,10 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from .derived.paths import review_queue_path
-from .event_emitter import collect_for_index, emit
+from .event_emitter import emit, iter_for_index
 from .extraction.semantic_relations import (
     SemanticRelationCandidate,
     candidate_subject,
@@ -150,6 +150,30 @@ def _emit_relation_promoted(
     )
 
 
+def _latest_promotion_per_key(
+    events: Iterable[dict[str, Any]],
+) -> dict[tuple[str, str, str, str, str], dict[str, Any]]:
+    """Collapse N ``relation_promoted`` events per natural key into the latest.
+
+    JSONL is append-only and chronological, so iterating the log to overwrite
+    per-key entries leaves the most-recent event in the dict. This makes
+    re-promotion-with-updated-metadata survive rebuild — without this step the
+    first event would win and any later ``locator``/``content_hash`` updates
+    would silently revert. Mirrors :func:`evidence_replay._latest_per_key`.
+    """
+    latest: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    for event in events:
+        key = (
+            str(event.get("pack") or ""),
+            str(event.get("source_object_id") or ""),
+            str(event.get("target_object_id") or ""),
+            str(event.get("relation_type") or ""),
+            str(event.get("evidence_source_slug") or ""),
+        )
+        latest[key] = event
+    return latest
+
+
 def replay_relation_promotions(
     conn: sqlite3.Connection,
     layout: VaultLayout,
@@ -161,16 +185,20 @@ def replay_relation_promotions(
     Called from :func:`knowledge_index.rebuild_knowledge_index` after the
     projection has finished inserting its (link-derived) relations. The
     natural key of ``relations`` is ``(pack, source, target, type,
-    evidence_source_slug)``; we dedupe against rows already present so a
-    promotion that happens to overlap a wikilink-derived relation does not
-    produce a second row. ``graph_edges`` uses ``INSERT OR REPLACE`` keyed by
-    the deterministic ``edge_id``.
+    evidence_source_slug)``; we collapse multiple events per key to the latest
+    (last-event-wins) so re-promotions with updated evidence metadata survive
+    rebuild, then dedupe against rows already present so a promotion that
+    happens to overlap a wikilink-derived relation does not produce a second
+    row. ``graph_edges`` uses ``INSERT OR REPLACE`` keyed by the deterministic
+    ``edge_id``.
     """
-    events = [
-        ev for ev in collect_for_index(layout, RELATION_PROMOTIONS_LOG)
+    pack_events = (
+        ev
+        for ev in iter_for_index(layout, RELATION_PROMOTIONS_LOG)
         if ev.get("event_type") == "relation_promoted" and ev.get("pack") == pack_name
-    ]
-    if not events:
+    )
+    latest = _latest_promotion_per_key(pack_events)
+    if not latest:
         return 0
 
     existing_keys: set[tuple[str, str, str, str, str]] = set()
@@ -182,14 +210,7 @@ def replay_relation_promotions(
         existing_keys.add(tuple(str(value or "") for value in row))  # type: ignore[arg-type]
 
     inserted = 0
-    for event in events:
-        key = (
-            str(event.get("pack") or ""),
-            str(event.get("source_object_id") or ""),
-            str(event.get("target_object_id") or ""),
-            str(event.get("relation_type") or ""),
-            str(event.get("evidence_source_slug") or ""),
-        )
+    for key, event in latest.items():
         if key in existing_keys:
             continue
         conn.execute(
