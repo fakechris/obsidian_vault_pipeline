@@ -16,7 +16,16 @@ Closed `event_type` vocabulary (forward-compat for Phase 37 Pulse feed):
   promotion                — Phase 32/34/35. State boundary crossed
                              (candidate→canonical, draft→accepted,
                               relation_candidate→relation_row).
+  relation_promoted        — Phase 35 durability. Carries the full row payload
+                             written into the ``relations`` table so
+                             ``rebuild_knowledge_index`` can replay it after
+                             the projection clears the table.
   evidence_reverified      — Phase 33. claim_evidence row re-hashed.
+  evidence_verified        — Phase 33 durability. Carries the per-row
+                             verification fields (locator/content_hash/
+                             retrieval_context/status/verified_at) so rebuild
+                             can re-apply them after the projection re-inserts
+                             the base row.
   zone_violation           — Phase 34. Accepted-zone file mutated outside
                              promotion command.
   feedback_yield           — Phase 36. ovp-query produced a downstream

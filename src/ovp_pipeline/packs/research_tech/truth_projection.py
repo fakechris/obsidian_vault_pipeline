@@ -250,7 +250,7 @@ def build_truth_projection(
                 pack=resolved_pack_name,
                 claim_id=claim_id,
                 source_slug=slug,
-                evidence_kind="body_summary",
+                evidence_kind="page_summary",
                 quote_text=summary,
             )
         )

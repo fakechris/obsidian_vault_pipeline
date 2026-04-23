@@ -997,7 +997,11 @@ def _promotion_health_payload(vault_dir: Path | None, *, pack_name: str) -> dict
 
         pack = load_pack(pack_name)
         registry = ConceptRegistry(vault_dir).load()
-        kinds_by_id, disputed_ids = collect_pack_signals(db_path, pack_name=pack.name)
+        kinds_by_id, disputed_ids = collect_pack_signals(
+            db_path,
+            pack_name=pack.name,
+            candidates_dir=vault_dir / "10-Knowledge" / "Evergreen" / "_Candidates",
+        )
         for entry in registry.candidates:
             decision = evaluate_concept(
                 entry,

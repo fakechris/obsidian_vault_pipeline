@@ -31,6 +31,7 @@ from ..evidence import (
     verify_evidence_row,
 )
 from ..event_emitter import emit
+from ..evidence_replay import emit_evidence_verified
 from ..knowledge_index import ensure_knowledge_db_current
 from ..packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from ..runtime import resolve_vault_dir
@@ -246,6 +247,21 @@ def _process_table(
                 verified_at,
                 *_key_values(table, row_dict),
             ),
+        )
+
+        # Phase 33 durability: also emit a JSONL event so the next
+        # rebuild_knowledge_index can re-apply this verification after the
+        # projection re-inserts the row in its 'unverified' default state.
+        emit_evidence_verified(
+            vault_dir,
+            table=table,
+            key={col: row_dict.get(col) for col in _TABLE_KEY_COLUMNS[table]},
+            locator=new_locator,
+            content_hash=new_content_hash,
+            retrieval_context=new_context,
+            status=status,
+            verified_at=verified_at,
+            pack=str(row_dict.get("pack") or ""),
         )
 
     return {

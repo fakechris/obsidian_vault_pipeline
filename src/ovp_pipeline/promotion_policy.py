@@ -24,12 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .concept_registry import ConceptEntry, ConceptRegistry
-from .packs.base import (
-    BaseDomainPack,
-    EscalateRule,
-    PromotionPolicySpec,
-    RejectRule,
-)
+from .packs.base import BaseDomainPack, PromotionPolicySpec
 from .state_lifecycle import State
 
 
@@ -70,8 +65,9 @@ def collect_pack_signals(
     db_path: Path | None,
     *,
     pack_name: str,
+    candidates_dir: Path | None = None,
 ) -> tuple[dict[str, frozenset[str]], frozenset[str]]:
-    """Bulk-load (object_id → evidence_kinds, object_ids with open contradiction).
+    """Bulk-load (slug → evidence_kinds, slugs with open contradiction).
 
     Both signals are inputs to :func:`evaluate_concept`'s strict path. Without
     them, every required ``evidence_kind`` is treated as missing — which makes
@@ -79,47 +75,62 @@ def collect_pack_signals(
     evidence. Centralizing the queries here so doctor / ``ovp-promote run`` /
     ``review_candidates`` all ask the DB the same way.
 
-    Returns ``({}, frozenset())`` when the DB is missing or the schema isn't
-    materialized yet (zero-state vaults). Strict callers should treat that as
-    "no evidence available" — same semantic as today.
-    """
-    if db_path is None or not Path(db_path).exists():
-        return {}, frozenset()
-    try:
-        with sqlite3.connect(db_path) as conn:
-            kinds_map: dict[str, set[str]] = {}
-            for object_id, kind in conn.execute(
-                "SELECT c.object_id, ce.evidence_kind "
-                "FROM claim_evidence ce "
-                "JOIN claims c ON c.pack = ce.pack AND c.claim_id = ce.claim_id "
-                "WHERE c.pack = ?",
-                (pack_name,),
-            ):
-                if not object_id or not kind:
-                    continue
-                kinds_map.setdefault(object_id, set()).add(kind)
+    The ``kinds_map`` is keyed by slug. For canonical objects the slug is the
+    ``objects.object_id`` and the kinds come from ``claim_evidence``. For
+    pre-promotion candidates the slug is the candidate's filename stem and the
+    kind is implicitly ``page_summary`` — the candidate file *is* a page-level
+    summary written by ``write_candidate_file``. Without this seed, strict
+    packs that require a ``page_summary`` evidence kind would never auto-
+    promote any candidate, because candidates don't yet appear in the
+    canonical objects table the projection writes from.
 
-            disputed: set[str] = set()
-            for object_id, claim_id in conn.execute(
-                "SELECT object_id, claim_id FROM claims WHERE pack = ?",
-                (pack_name,),
-            ):
-                if not object_id or not claim_id:
-                    continue
-                hit = conn.execute(
-                    """
-                    SELECT 1 FROM contradictions
-                    WHERE pack = ? AND status = 'open'
-                      AND (positive_claim_ids_json LIKE ?
-                        OR negative_claim_ids_json LIKE ?)
-                    LIMIT 1
-                    """,
-                    (pack_name, f'%"{claim_id}"%', f'%"{claim_id}"%'),
-                ).fetchone()
-                if hit:
-                    disputed.add(object_id)
-    except sqlite3.OperationalError:
-        return {}, frozenset()
+    Returns ``({}, frozenset())`` when the DB is missing or the schema isn't
+    materialized yet (zero-state vaults).
+    """
+    kinds_map: dict[str, set[str]] = {}
+    disputed: set[str] = set()
+
+    if db_path is not None and Path(db_path).exists():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                for object_id, kind in conn.execute(
+                    "SELECT c.object_id, ce.evidence_kind "
+                    "FROM claim_evidence ce "
+                    "JOIN claims c ON c.pack = ce.pack AND c.claim_id = ce.claim_id "
+                    "WHERE c.pack = ?",
+                    (pack_name,),
+                ):
+                    if not object_id or not kind:
+                        continue
+                    kinds_map.setdefault(object_id, set()).add(kind)
+
+                for object_id, claim_id in conn.execute(
+                    "SELECT object_id, claim_id FROM claims WHERE pack = ?",
+                    (pack_name,),
+                ):
+                    if not object_id or not claim_id:
+                        continue
+                    hit = conn.execute(
+                        """
+                        SELECT 1 FROM contradictions
+                        WHERE pack = ? AND status = 'open'
+                          AND (positive_claim_ids_json LIKE ?
+                            OR negative_claim_ids_json LIKE ?)
+                        LIMIT 1
+                        """,
+                        (pack_name, f'%"{claim_id}"%', f'%"{claim_id}"%'),
+                    ).fetchone()
+                    if hit:
+                        disputed.add(object_id)
+        except sqlite3.OperationalError:
+            kinds_map.clear()
+            disputed.clear()
+
+    if candidates_dir is not None and Path(candidates_dir).exists():
+        for entry in Path(candidates_dir).glob("*.md"):
+            if not entry.is_file():
+                continue
+            kinds_map.setdefault(entry.stem, set()).add("page_summary")
 
     return {oid: frozenset(kinds) for oid, kinds in kinds_map.items()}, frozenset(disputed)
 

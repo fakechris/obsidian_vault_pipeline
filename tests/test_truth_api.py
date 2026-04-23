@@ -1030,7 +1030,7 @@ def test_truth_api_returns_object_detail_with_claims_relations_and_summary(temp_
     )
     assert detail["claims"][0]["claim_kind"] == "page_summary"
     assert detail["relations"][0]["target_object_id"] == "target-note"
-    assert detail["evidence"][0]["evidence_kind"] == "body_summary"
+    assert detail["evidence"][0]["evidence_kind"] == "page_summary"
     assert detail["contradictions"][0]["subject_key"] == "agent harness"
 
 

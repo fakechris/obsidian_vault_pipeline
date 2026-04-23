@@ -361,3 +361,148 @@ def test_doctor_relations_health_counts(temp_vault):
     payload = _relations_health_payload(temp_vault, pack_name=pack.name)
     assert payload["candidates_in_queue"] == 1
     assert payload["rejected_archived"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Durability across rebuild_knowledge_index
+# ---------------------------------------------------------------------------
+
+
+def test_promoted_relation_survives_rebuild(temp_vault):
+    """``rebuild_knowledge_index`` recreates ``relations`` from the projection,
+    which would clobber every promoted row. The JSONL replay path must restore
+    them with the original locator/content_hash and the deterministic edge.
+    """
+    pack = load_pack("research-tech")
+    layout = VaultLayout.from_vault(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    cand = SemanticRelationCandidate(
+        relation_type="uses",
+        source_object_id="ai-agent",
+        target_object_id="rag",
+        source_slug="agent-memory",
+        evidence_quote="AI Agent uses RAG",
+        confidence=0.9,
+        locator="section#background@0",
+        content_hash="abc123",
+        retrieval_context="surrounding context window",
+        pack=pack.name,
+    )
+    promote_candidates([cand], pack=pack, layout=layout)
+
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        before = conn.execute(
+            "SELECT source_object_id, target_object_id, relation_type, "
+            "evidence_source_slug, locator, content_hash, retrieval_context "
+            "FROM relations WHERE pack = ?",
+            (pack.name,),
+        ).fetchall()
+        edge_before = conn.execute(
+            "SELECT edge_id, source_object_id, target_object_id, edge_kind, weight "
+            "FROM graph_edges WHERE pack = ?",
+            (pack.name,),
+        ).fetchall()
+    assert len(before) == 1
+    assert len(edge_before) == 1
+
+    rebuild_knowledge_index(temp_vault)
+
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        after = conn.execute(
+            "SELECT source_object_id, target_object_id, relation_type, "
+            "evidence_source_slug, locator, content_hash, retrieval_context "
+            "FROM relations WHERE pack = ?",
+            (pack.name,),
+        ).fetchall()
+        edge_after = conn.execute(
+            "SELECT edge_id, source_object_id, target_object_id, edge_kind, weight "
+            "FROM graph_edges WHERE pack = ?",
+            (pack.name,),
+        ).fetchall()
+
+    assert after == before
+    assert edge_after == edge_before
+
+
+def test_promoted_relation_replay_uses_latest_event_per_key(temp_vault):
+    """If the same relation is promoted twice with updated evidence metadata,
+    the rebuild must surface the latest values — not the first event's stale
+    payload. Regression for the first-event-wins bug flagged on PR #47.
+    """
+    pack = load_pack("research-tech")
+    layout = VaultLayout.from_vault(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    first = SemanticRelationCandidate(
+        relation_type="uses",
+        source_object_id="ai-agent",
+        target_object_id="rag",
+        source_slug="agent-memory",
+        evidence_quote="first quote",
+        confidence=0.9,
+        locator="section#first@0",
+        content_hash="hash-first",
+        retrieval_context="first context",
+        pack=pack.name,
+    )
+    promote_candidates([first], pack=pack, layout=layout)
+
+    # Re-promote the same key with updated evidence metadata. Append-only JSONL
+    # gets two events; replay must collapse to the latest.
+    second = SemanticRelationCandidate(
+        relation_type="uses",
+        source_object_id="ai-agent",
+        target_object_id="rag",
+        source_slug="agent-memory",
+        evidence_quote="second quote",
+        confidence=0.9,
+        locator="section#second@1",
+        content_hash="hash-second",
+        retrieval_context="second context",
+        pack=pack.name,
+    )
+    promote_candidates([second], pack=pack, layout=layout)
+
+    rebuild_knowledge_index(temp_vault)
+
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        rows = conn.execute(
+            "SELECT quote_text, locator, content_hash, retrieval_context "
+            "FROM relations WHERE pack = ?",
+            (pack.name,),
+        ).fetchall()
+    assert rows == [("second quote", "section#second@1", "hash-second", "second context")]
+
+
+def test_promoted_relation_replay_is_idempotent(temp_vault):
+    """Two consecutive rebuilds must not duplicate the replayed relation row."""
+    pack = load_pack("research-tech")
+    layout = VaultLayout.from_vault(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    cand = SemanticRelationCandidate(
+        relation_type="uses",
+        source_object_id="ai-agent",
+        target_object_id="rag",
+        source_slug="agent-memory",
+        evidence_quote="AI Agent uses RAG",
+        confidence=0.9,
+        locator="section#background@0",
+        content_hash="abc123",
+        retrieval_context="…",
+        pack=pack.name,
+    )
+    promote_candidates([cand], pack=pack, layout=layout)
+    rebuild_knowledge_index(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        rel_count = conn.execute(
+            "SELECT COUNT(*) FROM relations WHERE pack = ?", (pack.name,)
+        ).fetchone()[0]
+        edge_count = conn.execute(
+            "SELECT COUNT(*) FROM graph_edges WHERE pack = ?", (pack.name,)
+        ).fetchone()[0]
+    assert rel_count == 1
+    assert edge_count == 1
