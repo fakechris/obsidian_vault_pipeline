@@ -29,7 +29,7 @@ import json
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Callable, IO
+from typing import Any, Callable, ClassVar, IO
 
 from .concept_registry import ConceptEntry
 from .feedback_router import (
@@ -155,8 +155,8 @@ class MCPServer:
     beyond what each tool already persists through its existing emit paths.
     """
 
-    PROTOCOL_VERSION = "2026-04-22"
-    SERVER_INFO = {"name": "ovp-mcp", "version": "0.1.0"}
+    PROTOCOL_VERSION: ClassVar[str] = "2026-04-22"
+    SERVER_INFO: ClassVar[dict[str, str]] = {"name": "ovp-mcp", "version": "0.1.0"}
 
     def __init__(self, vault_dir: Path | str) -> None:
         self.vault_dir = Path(vault_dir)
@@ -233,14 +233,22 @@ class MCPServer:
         try:
             result = self._dispatch(method, params)
         except _MethodNotFound:
+            # JSON-RPC 2.0 §4.1: notifications MUST NOT receive any reply,
+            # not even an error envelope.
+            if request_id is None:
+                return None
             return _error_envelope(
                 request_id,
                 _METHOD_NOT_FOUND,
                 f"Method not implemented: {method}",
             )
         except _InvalidParams as exc:
+            if request_id is None:
+                return None
             return _error_envelope(request_id, _INVALID_PARAMS, str(exc))
         except Exception as exc:  # noqa: BLE001 — guard the loop
+            if request_id is None:
+                return None
             return _error_envelope(request_id, _INTERNAL_ERROR, str(exc))
 
         # Notifications (no id) get no reply.
@@ -266,11 +274,22 @@ class MCPServer:
                 raise _InvalidParams("tools/call 'arguments' must be an object")
             try:
                 result = self.call_tool(name, arguments)
-            except KeyError:
-                raise _InvalidParams(f"Unknown tool: {name}")
+            except KeyError as exc:
+                raise _InvalidParams(f"Unknown tool: {name}") from exc
             except TypeError as exc:
-                raise _InvalidParams(str(exc))
-            return {"result": result}
+                raise _InvalidParams(str(exc)) from exc
+            # MCP tools/call result shape: a content array of typed parts
+            # plus an isError flag. We serialize the tool's dict as JSON text
+            # so MCP clients can both display it and parse it back. The raw
+            # dict is also exposed under "result" for callers that want to
+            # skip the JSON round-trip.
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(result, ensure_ascii=False)}
+                ],
+                "isError": False,
+                "result": result,
+            }
         raise _MethodNotFound(method)
 
     # -- Tool implementations ----------------------------------------------
@@ -301,9 +320,15 @@ class MCPServer:
                 has_open_contradiction=has_open_contradiction,
             )
         elif candidate_kind == "workspace":
-            draft = Path(str(payload.get("draft", "")))
-            target = Path(str(payload.get("target", "")))
-            decision = evaluate_workspace(draft, target, pack=pack_obj)
+            draft_str = str(payload.get("draft", ""))
+            target_str = str(payload.get("target", ""))
+            if not draft_str or not target_str:
+                raise _InvalidParams(
+                    "workspace payload requires non-empty 'draft' and 'target'"
+                )
+            decision = evaluate_workspace(
+                Path(draft_str), Path(target_str), pack=pack_obj
+            )
         else:
             raise _InvalidParams(f"Unknown candidate_kind: {candidate_kind}")
         result = asdict(decision)

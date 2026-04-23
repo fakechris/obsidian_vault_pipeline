@@ -323,3 +323,116 @@ def test_call_tool_unknown_raises_keyerror(temp_vault: Path) -> None:
     server = MCPServer(temp_vault)
     with pytest.raises(KeyError):
         server.call_tool("nope", {})
+
+
+# ---------------------------------------------------------------------------
+# JSON-RPC 2.0 §4.1: notifications never receive any reply, even on error.
+# ---------------------------------------------------------------------------
+
+
+def test_notification_unknown_method_returns_no_reply(temp_vault: Path) -> None:
+    server = MCPServer(temp_vault)
+    reply = server.handle_line(json.dumps({"jsonrpc": "2.0", "method": "resources/read"}))
+    assert reply is None
+
+
+def test_notification_invalid_params_returns_no_reply(temp_vault: Path) -> None:
+    server = MCPServer(temp_vault)
+    reply = server.handle_line(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {"name": "frobnicate", "arguments": {}},
+            }
+        )
+    )
+    assert reply is None
+
+
+def test_notification_internal_error_returns_no_reply(temp_vault: Path) -> None:
+    """A notification that triggers a generic exception inside a tool must
+    still get no reply."""
+    server = MCPServer(temp_vault)
+    reply = server.handle_line(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    "name": "evaluate_promotion",
+                    "arguments": {
+                        "candidate_kind": "concept",
+                        "pack": "default-knowledge",
+                        # Missing required 'slug' raises _InvalidParams inside
+                        # the tool body.
+                        "payload": {"source_count": 1, "evidence_count": 1},
+                    },
+                },
+            }
+        )
+    )
+    assert reply is None
+
+
+# ---------------------------------------------------------------------------
+# Workspace candidate kind validation
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_promotion_workspace_empty_paths_invalid(temp_vault: Path) -> None:
+    server = MCPServer(temp_vault)
+    request = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "tools/call",
+            "params": {
+                "name": "evaluate_promotion",
+                "arguments": {
+                    "candidate_kind": "workspace",
+                    "pack": "default-knowledge",
+                    "payload": {"draft": "", "target": ""},
+                },
+            },
+        }
+    )
+    reply = server.handle_line(request)
+    assert reply is not None
+    assert reply["error"]["code"] == -32602
+    assert "non-empty" in reply["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# tools/call result follows the MCP shape
+# ---------------------------------------------------------------------------
+
+
+def test_tools_call_result_has_mcp_content_array(temp_vault: Path) -> None:
+    """``tools/call`` must return MCP-shaped content + isError so a generic
+    MCP client can render the reply without knowing per-tool schemas."""
+    server = MCPServer(temp_vault)
+    reply = server.handle_line(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "evaluate_promotion",
+                    "arguments": {
+                        "candidate_kind": "concept",
+                        "pack": "default-knowledge",
+                        "payload": {"slug": "x", "source_count": 5, "evidence_count": 5},
+                    },
+                },
+            }
+        )
+    )
+    assert reply is not None
+    result = reply["result"]
+    assert result["isError"] is False
+    assert isinstance(result["content"], list)
+    assert result["content"][0]["type"] == "text"
+    parsed = json.loads(result["content"][0]["text"])
+    assert parsed["lane"] == "auto"

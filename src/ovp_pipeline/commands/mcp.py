@@ -33,7 +33,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--vault-dir",
         type=Path,
         default=None,
-        help="Path to the vault. Defaults to env / discovery via resolve_vault_dir.",
+        help="Path to the vault. Defaults to the current working directory.",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(

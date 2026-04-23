@@ -94,6 +94,40 @@ def test_tail_events_picks_up_new_file_mid_session(temp_vault: Path) -> None:
     assert any(e["event_type"] == "evidence_verified" for e in events)
 
 
+def test_tail_events_skips_unterminated_trailing_line(temp_vault: Path) -> None:
+    """Partial-write safety: a poll that races a writer must not advance the
+    offset past an incomplete tail line; otherwise the next poll skips the
+    line entirely once the writer flushes the trailing newline.
+
+    Setup: emit one complete event, then write a half-line directly to the
+    file (no newline). After the first tail call we expect the complete event
+    AND the offset to point at the start of the partial tail. After we then
+    flush a newline + the rest of the line, the next tail call must surface it.
+    """
+    layout = _make_layout(temp_vault)
+    log = layout.logs_dir / "pipeline.jsonl"
+
+    # One complete event followed by a half-written second line.
+    emit(temp_vault, "pipeline.jsonl", "promotion", {"n": 1}, pack="p")
+    with log.open("ab") as handle:
+        handle.write(b'{"event_id":"y","ts":"2099-01-02T00:00:00Z","session_id":"s",')
+        # No newline yet — this is a partial write the next poll must NOT eat.
+
+    events, positions = tail_events(layout)
+    # We see the complete first event but NOT a corrupted parse of the second.
+    assert len(events) == 1
+    assert events[0]["n"] == 1
+
+    # Now finish writing the partial line + add the terminator.
+    with log.open("ab") as handle:
+        handle.write(b'"pack":"p","event_type":"promotion","n":2}\n')
+
+    events, _ = tail_events(layout, since_position=positions)
+    # The previously-partial line is now complete and surfaces in this poll.
+    assert len(events) == 1
+    assert events[0]["n"] == 2
+
+
 def test_tail_events_handles_truncation(temp_vault: Path) -> None:
     layout = _make_layout(temp_vault)
     log = layout.logs_dir / "pipeline.jsonl"

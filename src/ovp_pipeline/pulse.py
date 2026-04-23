@@ -1,6 +1,6 @@
-"""Phase 37 — Pulse: poll-based tail of the JSONL event logs.
+"""Phase 37 - Pulse: poll-based tail of the JSONL event logs.
 
-Phases 32–36 already declared a closed ``event_type`` vocabulary in
+Phases 32-36 already declared a closed ``event_type`` vocabulary in
 :mod:`event_emitter`; Pulse is its first real-time consumer. The Workbench
 shell embeds Pulse in its bottom pane and any future UI (or external watcher)
 can consume the same stream over SSE.
@@ -16,6 +16,10 @@ Design decisions:
   (``evidence-verifications.jsonl`` after the first ``ovp-evidence verify``)
   enters the position dict at offset 0 on its first sighting and is read in
   full from then on.
+* **Partial-write safety.** A poll that races a partial JSONL append must not
+  advance the offset past the incomplete tail line. We split on newlines and
+  only commit the offset up to the last terminator we actually read; the
+  trailing partial bytes get re-read on the next poll once the writer flushes.
 """
 
 from __future__ import annotations
@@ -72,9 +76,15 @@ def tail_events(
         with log_path.open("rb") as handle:
             handle.seek(offset)
             chunk = handle.read(size - offset)
-            new_offset = handle.tell()
 
-        for raw_line in chunk.splitlines():
+        lines = chunk.splitlines(keepends=True)
+        if lines and not lines[-1].endswith((b"\n", b"\r")):
+            partial = lines.pop()
+            new_offset = offset + len(chunk) - len(partial)
+        else:
+            new_offset = offset + len(chunk)
+
+        for raw_line in lines:
             stripped = raw_line.strip()
             if not stripped:
                 continue

@@ -3958,6 +3958,26 @@ def _render_writing_prompts_page(payload: dict) -> str:
 _SHELL_BODY_OPEN = '<div class="shell-body">'
 
 
+# Bridge script appended to every fragment so iframe clicks on `/object?id=...`
+# anchors become `postMessage({type:'select_object', id})` calls — the
+# Workbench parent listens for this and re-points the object pane without a
+# full page reload.
+_FRAGMENT_BRIDGE_SCRIPT = (
+    "<script>(function(){"
+    "if(window.parent===window)return;"
+    "document.addEventListener('click',function(ev){"
+    "var a=ev.target&&ev.target.closest&&ev.target.closest('a[href]');"
+    "if(!a)return;"
+    "var href=a.getAttribute('href')||'';"
+    "var m=href.match(/\\/object(?:\\/fragment)?\\?(?:[^#]*&)?id=([^&#]+)/);"
+    "if(!m)return;"
+    "ev.preventDefault();"
+    "window.parent.postMessage({type:'select_object',id:decodeURIComponent(m[1])},'*');"
+    "},true);"
+    "})();</script>"
+)
+
+
 def _fragment_from_page(page_html: str) -> str:
     """Extract the body content from a ``_layout``-wrapped page.
 
@@ -3968,6 +3988,10 @@ def _fragment_from_page(page_html: str) -> str:
     through the body counting balanced ``<div ...>`` / ``</div>`` to locate
     the matching close. This is whitespace-insensitive and tolerates inner
     ``<div>`` tags inside the body content.
+
+    A small bridge script is appended so anchor clicks on ``/object?id=...``
+    bubble up to the Workbench parent as ``select_object`` messages instead
+    of navigating the iframe in isolation.
 
     Returns the raw body HTML. Falls back to the full page if the opening
     marker is not found (defensive — never raise).
@@ -3993,7 +4017,8 @@ def _fragment_from_page(page_html: str) -> str:
         else:
             depth -= 1
             if depth == 0:
-                return page_html[open_idx + len(_SHELL_BODY_OPEN) : next_close].strip("\n")
+                body = page_html[open_idx + len(_SHELL_BODY_OPEN) : next_close].strip("\n")
+                return body + _FRAGMENT_BRIDGE_SCRIPT
             cursor = next_close + len("</div>")
     return page_html
 
@@ -4022,7 +4047,7 @@ def _render_pulse_fragment() -> str:
         "var feed=document.getElementById('pulse-feed');"
         "var empty=feed.querySelector('.empty');"
         "var src=new EventSource('/pulse/stream');"
-        "src.onmessage=function(ev){"
+        "function render(ev){"
         "if(empty){empty.remove();empty=null;}"
         "try{var obj=JSON.parse(ev.data);"
         "var li=document.createElement('li');"
@@ -4038,7 +4063,14 @@ def _render_pulse_fragment() -> str:
         "feed.appendChild(li);"
         "while(feed.children.length>200){feed.removeChild(feed.firstChild);}"
         "feed.scrollTop=feed.scrollHeight;"
-        "}catch(e){/* swallow */}};"
+        "}catch(e){/* swallow */}}"
+        # Server emits named SSE frames (`event: <event_type>`) — onmessage
+        # only fires for default-named frames, so subscribe to every event_type
+        # in our closed vocabulary plus a generic 'message' fallback.
+        "var TYPES=['trusted_reuse_event','promotion','relation_promoted',"
+        "'evidence_reverified','evidence_verified','zone_violation','feedback_yield'];"
+        "TYPES.forEach(function(t){src.addEventListener(t,render);});"
+        "src.onmessage=render;"
         "src.onerror=function(){src.close();};"
         "})();</script>"
         "</section>"
@@ -4661,6 +4693,12 @@ def create_server(
                     raw_interval = query.get("poll_interval", [""])[0]
                     max_polls = int(raw_max) if raw_max else None
                     poll_interval = float(raw_interval) if raw_interval else 1.0
+                    if poll_interval <= 0:
+                        self.send_error(400, "poll_interval must be > 0")
+                        return
+                    if max_polls is not None and max_polls < 0:
+                        self.send_error(400, "max_polls must be >= 0")
+                        return
                     self._stream_pulse_sse(
                         poll_interval=poll_interval, max_polls=max_polls
                     )
