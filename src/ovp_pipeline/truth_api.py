@@ -1555,6 +1555,10 @@ def search_vault_surface(
     # (slug=ignored, title=5x, body=1x). The bonuses subtract from rank
     # because FTS5 bm25 is negative-better.
     fts_match = _build_fts_match(tokens)
+    # Trigram FTS5 can't index <3-char tokens, so they were dropped from the
+    # MATCH expression. Re-apply them as LIKE filters against pages_index so a
+    # query like "AI agent" doesn't return every "agent" page regardless of "AI".
+    short_tokens = [tok for tok in tokens if len(tok) < 3]
     if fts_match:
         title_lower_query = normalized_query.lower()
         # Per-token title bonus accumulates so multi-word out-of-order title
@@ -1570,23 +1574,39 @@ def search_vault_surface(
             f" - ({per_token_bonus_sql})"
             " - CASE WHEN instr(lower(pages_index.title), ?) > 0 THEN 8.0 ELSE 0.0 END"
         )
-        note_count_sql = """
-            SELECT COUNT(*) FROM page_fts WHERE page_fts MATCH ?
+        short_filter_sql = ""
+        short_filter_params: list[Any] = []
+        if short_tokens:
+            short_clauses: list[str] = []
+            for tok in short_tokens:
+                like = f"%{_escape_like(tok)}%"
+                short_clauses.append(
+                    "(lower(pages_index.title) LIKE ? ESCAPE '\\' "
+                    "OR lower(pages_index.body) LIKE ? ESCAPE '\\' "
+                    "OR lower(pages_index.slug) LIKE ? ESCAPE '\\')"
+                )
+                short_filter_params.extend([like] * 3)
+            short_filter_sql = " AND " + " AND ".join(short_clauses)
+        note_count_sql = f"""
+            SELECT COUNT(*) FROM page_fts
+            JOIN pages_index ON pages_index.slug = page_fts.slug
+            WHERE page_fts MATCH ?{short_filter_sql}
         """
         note_sql = f"""
             SELECT pages_index.slug, pages_index.title, pages_index.note_type,
                    pages_index.path, {rank_expr} AS rank
             FROM page_fts
             JOIN pages_index ON pages_index.slug = page_fts.slug
-            WHERE page_fts MATCH ?
+            WHERE page_fts MATCH ?{short_filter_sql}
             ORDER BY rank
             LIMIT ? OFFSET ?
         """
-        note_count_params: tuple[Any, ...] = (fts_match,)
+        note_count_params: tuple[Any, ...] = (fts_match, *short_filter_params)
         note_params = (
             *tokens,
             title_lower_query,
             fts_match,
+            *short_filter_params,
             note_limit,
             note_offset,
         )

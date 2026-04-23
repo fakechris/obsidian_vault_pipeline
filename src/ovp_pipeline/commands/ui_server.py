@@ -1196,8 +1196,12 @@ def _render_search_page(payload: dict) -> str:
 
         prev_link = _link(max(1, page - 1), "« Prev", page <= 1)
         next_link = _link(min(last_page, page + 1), "Next »", page >= last_page)
+        # Objects and notes share the same `page` cursor but may have different
+        # totals, so clamp the displayed value to avoid "page 3 of 2" when the
+        # smaller result set runs out.
+        displayed_page = min(page, last_page)
         return (
-            f"<p class='muted'>{label}: page {page} of {last_page} "
+            f"<p class='muted'>{label}: page {displayed_page} of {last_page} "
             f"&middot; {prev_link} &middot; {next_link}</p>"
         )
 
