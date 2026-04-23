@@ -1,0 +1,109 @@
+# note_type normalization map (Phase 38.D)
+#
+# Keys are case-insensitive legacy values found in the wild. Values are the
+# canonical types defined in note_type_normalize.CANONICAL_NOTE_TYPES.
+#
+# Adding a new legacy value:
+#   1. Add a lowercased key under `mapping:` here.
+#   2. Set the value to one of the 8 canonical types: raw, deep_dive,
+#      evergreen, moc, daily_view, article, project, essay.
+#   3. Run `ovp-note-type-normalize --dry-run` to see what would change.
+#
+# Pack manifests can declare extra canonical types via `extras:`, e.g. when a
+# domain pack genuinely needs a non-shared note_type. Lint will not flag those.
+
+extras: []
+
+mapping:
+  # --- Long-form articles, blog posts, technical write-ups ---
+  article: article
+  technical-article: article
+  technical-analysis: article
+  technical-essay: article
+  technical-tutorial: article
+  technical-research: article
+  technical-guide: article
+  technical-feature-release: article
+  technical-manifesto: article
+  technical-blog: article
+  technical-blog-post: article
+  technical-paper: article
+  technical-doc: article
+  engineering: article
+  engineering-article: article
+  engineering-blog: article
+  engineering-blog-post: article
+  engineering-best-practices: article
+  engineering-case-study: article
+  engineering-process: article
+  engineering-strategy: article
+  ai: article
+  ai-engineering-pattern: article
+  ai-strategy: article
+  ai-marketing-automation: article
+  ai-tools-analysis: article
+  ai-design-guidelines: article
+  ai-skill: article
+  ai-productivity: article
+  ai-platform: article
+  ai-framework: article
+  ai-agent-framework: article
+  ai-transformation: article
+  ai-security-research: article
+  tutorial: article
+  primer: article
+  strategy-guide: article
+  research-report: article
+  research-paper: article
+  industry-analysis: article
+  market-analysis: article
+  threat intelligence report: article
+  论文深度解读: article
+  技术解读: article
+  技术分析: article
+  analysis: article
+  article-analysis: article
+  opinion/analysis: article
+  product-documentation: article
+  programming: article
+  investing: article
+  trading-system: article
+  interpretation: article
+
+  # --- External code/tools ---
+  github-project: project
+  tools: project
+  tool-review: project
+  project: project
+
+  # --- Long-form opinion / manifesto ---
+  ai-safety-essay: essay
+  essay: essay
+
+  # --- Inbox / raw imports (pinboard, clippings, raw articles) ---
+  pinboard-github: raw
+  pinboard-article: raw
+  pinboard-social: raw
+  raw-article: raw
+  raw-document: raw
+  clippings: raw
+  bookmark: raw
+  website: raw
+  note: raw
+  proconv: raw
+
+  # --- Daily snapshots ---
+  daily: daily_view
+
+  # --- Concept candidates (pre-promotion evergreens) ---
+  candidate: evergreen
+  evergreen-candidate: evergreen
+
+  # --- Already-canonical (kept here so lint doesn't have to special-case) ---
+  raw: raw
+  deep_dive: deep_dive
+  deep-dive: deep_dive
+  evergreen: evergreen
+  moc: moc
+  daily_view: daily_view
+  daily-view: daily_view
