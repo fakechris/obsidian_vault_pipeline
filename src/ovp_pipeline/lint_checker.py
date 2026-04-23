@@ -23,7 +23,7 @@ import json
 import argparse
 import subprocess
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
@@ -732,7 +732,7 @@ class KnowledgeLinter:
         latest_promotion_ts: Dict[str, str] = {row[0] or "": row[1] or "" for row in rows}
 
         cutoff_seconds = float(ignore_mtime_from_hours) * 3600.0
-        now_ts = datetime.now().timestamp()
+        now_ts = datetime.now(tz=timezone.utc).timestamp()
         violations = 0
 
         for accepted_glob in zones.accepted:
@@ -747,7 +747,9 @@ class KnowledgeLinter:
                 mtime = path.stat().st_mtime
                 if cutoff_seconds and (now_ts - mtime) < cutoff_seconds:
                     continue
-                file_iso = datetime.fromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M:%SZ")
+                file_iso = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
                 # Match audit event by vault-relative target_path so files that
                 # share a basename (e.g. 30-Projects/*/Plan.md) don't collide.
                 slug_key = rel

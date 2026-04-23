@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from .extraction.semantic_relations import SemanticRelationCandidate, load_candidates
+from .derived.paths import review_queue_path
+from .extraction.semantic_relations import (
+    SemanticRelationCandidate,
+    candidate_subject,
+    load_candidates,
+)
 from .knowledge_index import ensure_knowledge_db_current
 from .packs.base import BaseDomainPack
 from .promotion_audit import emit_promotion
@@ -124,22 +129,41 @@ def _archive_candidate(
     return path
 
 
+def _queue_path_for(
+    layout: VaultLayout,
+    candidate: SemanticRelationCandidate,
+    queue_name: str,
+) -> Path:
+    return review_queue_path(
+        layout,
+        queue_name=queue_name,
+        subject=candidate_subject(candidate),
+    )
+
+
 def promote_candidates(
     candidates: Iterable[SemanticRelationCandidate],
     *,
     pack: BaseDomainPack,
     layout: VaultLayout,
     actor: str = "ovp-promote relations",
+    queue_name: str = "semantic-relations",
 ) -> RelationPromotionReport:
     """Apply pack policy to each candidate and write auto-lane rows to truth.
 
-    Idempotency: ``relations`` is append-only by design (no PK), so re-promotion
-    yields duplicate rows. ``graph_edges`` uses ``INSERT OR REPLACE`` keyed by a
-    deterministic edge id, so the same candidate stays one edge.
+    The ``relations`` table has no unique constraint on
+    ``(pack, source, target, type)``, so duplicate inserts cannot be deduped at
+    the SQL layer. Instead, after a successful AUTO promotion (or REJECT
+    archival) the originating queue file is deleted so the next
+    ``ovp-promote relations`` run does not re-process it. ``graph_edges`` uses
+    ``INSERT OR REPLACE`` keyed by a deterministic edge id, so the same
+    candidate stays one edge regardless.
     """
     report = RelationPromotionReport()
     db_path = ensure_knowledge_db_current(layout.vault_dir)
     conn = sqlite3.connect(db_path)
+    auto_to_clean: list[SemanticRelationCandidate] = []
+    reject_to_clean: list[SemanticRelationCandidate] = []
 
     try:
         for candidate in candidates:
@@ -163,14 +187,25 @@ def promote_candidates(
                     },
                 )
                 report.promoted.append(candidate)
+                auto_to_clean.append(candidate)
             elif decision.lane == LANE_ESCALATE:
                 report.escalated.append((candidate, decision.blocking_facts))
             elif decision.lane == LANE_REJECT:
                 _archive_candidate(layout, candidate, decision.blocking_facts)
                 report.rejected.append((candidate, decision.blocking_facts))
+                reject_to_clean.append(candidate)
         conn.commit()
     finally:
         conn.close()
+
+    # Drop queue files only after the DB commit succeeds so a mid-run crash
+    # leaves the queue intact for retry.
+    for candidate in auto_to_clean + reject_to_clean:
+        queue_file = _queue_path_for(layout, candidate, queue_name)
+        try:
+            queue_file.unlink()
+        except FileNotFoundError:
+            pass
 
     return report
 
@@ -183,4 +218,4 @@ def promote_review_queue(
 ) -> RelationPromotionReport:
     """Convenience: load every candidate file in the queue and promote it."""
     candidates = load_candidates(layout, queue_name=queue_name)
-    return promote_candidates(candidates, pack=pack, layout=layout)
+    return promote_candidates(candidates, pack=pack, layout=layout, queue_name=queue_name)

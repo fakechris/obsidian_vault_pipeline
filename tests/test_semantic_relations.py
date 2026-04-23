@@ -279,6 +279,43 @@ def test_promote_candidates_writes_relations_and_graph_edges(temp_vault):
     assert ("uses",) in edge_rows
 
 
+def test_promote_review_queue_removes_promoted_files(temp_vault):
+    """A successfully promoted candidate must not re-promote on the next run."""
+    pack = load_pack("research-tech")
+    layout = VaultLayout.from_vault(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    cand = SemanticRelationCandidate(
+        relation_type="uses",
+        source_object_id="ai-agent",
+        target_object_id="rag",
+        source_slug="agent-memory",
+        evidence_quote="AI Agent uses RAG",
+        confidence=0.9,
+        locator="section#background@0",
+        content_hash="abc123",
+        retrieval_context="…",
+        pack=pack.name,
+    )
+    write_candidates([cand], layout=layout)
+    queue_dir = layout.review_queue_dir / "semantic-relations"
+    assert len(list(queue_dir.glob("*.json"))) == 1
+
+    first = promote_review_queue(layout, pack=pack)
+    assert first.lane_counts()["auto"] == 1
+    assert list(queue_dir.glob("*.json")) == []  # consumed
+
+    second = promote_review_queue(layout, pack=pack)
+    assert second.lane_counts() == {"auto": 0, "escalate": 0, "reject": 0}
+
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        rel_count = conn.execute(
+            "SELECT COUNT(*) FROM relations WHERE pack = ?",
+            (pack.name,),
+        ).fetchone()[0]
+    assert rel_count == 1  # not duplicated by the second run
+
+
 def test_promote_review_queue_archives_rejected(temp_vault):
     """A candidate that fails strict requirements with no escalation lane is archived."""
     pack = load_pack("research-tech")

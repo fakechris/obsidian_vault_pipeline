@@ -186,7 +186,12 @@ def extract_relations(
     return report
 
 
-def _candidate_subject(candidate: SemanticRelationCandidate) -> str:
+def candidate_subject(candidate: SemanticRelationCandidate) -> str:
+    """Derive the review-queue file stem for a candidate.
+
+    Public so the promoter can locate (and delete) a candidate's queue file
+    after promotion without re-globbing the directory.
+    """
     return f"{candidate.source_object_id}__{candidate.relation_type}__{candidate.target_object_id}"
 
 
@@ -207,7 +212,7 @@ def write_candidates(
         path = review_queue_path(
             layout,
             queue_name=queue_name,
-            subject=_candidate_subject(candidate),
+            subject=candidate_subject(candidate),
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
