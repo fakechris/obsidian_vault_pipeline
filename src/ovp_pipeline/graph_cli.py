@@ -84,6 +84,83 @@ def _load_graph_from_index(vault_dir: Path) -> tuple[list[dict], list[dict], Pat
     return nodes, edges, db_path
 
 
+# 概念网类型：evergreen 是原子概念，moc 是索引页，两者一起构成"概念波"。
+# --layered 模式下，hop 2 跳到非概念网的节点 (即 source markdown / 原文档)。
+#
+# 之所以用"反白名单"而不是正向枚举 source 类型：vault 里 source markdown 的
+# note_type 字段实际有 50+ 种变体（deep_dive / technical-analysis / engineering /
+# ai-skill / 论文深度解读 / Threat Intelligence Report ...），每加一个 pack 都要
+# 维护这个列表会持续踩坑。任何"非 evergreen 非 moc"都视为源文档更稳。
+CONCEPT_NETWORK_TYPES = frozenset({"evergreen", "moc"})
+
+
+def _is_source_markdown(note_type: str) -> bool:
+    return bool(note_type) and note_type not in CONCEPT_NETWORK_TYPES
+
+
+def _expand_layered(
+    seed_ids: set[str],
+    edge_index: dict,
+    type_by_id: dict[str, str],
+) -> tuple[set[str], dict[str, int], list[dict]]:
+    """两层 BFS（用于 --layered）：
+
+        hop 1: 从 seed 出发，只跳到 evergreen 邻居（"概念波"）
+        hop 2: 从概念波（evergreen seed + hop1 evergreen）出发，
+               只跳到 source markdown（deep_dive / raw / article ...）
+
+    返回 (expanded_ids, distance_map, used_edges)。used_edges 只包含
+    BFS 实际走过的边，避免把剔除掉的 evergreen↔evergreen 桥又画回到子图上。
+    """
+    adjacency: dict[str, list[dict]] = {}
+    for edge in edge_index.values():
+        adjacency.setdefault(edge["source"], []).append(edge)
+        adjacency.setdefault(edge["target"], []).append(edge)
+
+    expanded = set(seed_ids)
+    distance_map: dict[str, int] = {sid: 0 for sid in seed_ids}
+    used_edges: list[dict] = []
+    used_edge_ids: set[str] = set()
+
+    def _record(edge: dict) -> None:
+        eid = edge["edge_id"]
+        if eid not in used_edge_ids:
+            used_edges.append(edge)
+            used_edge_ids.add(eid)
+
+    # Hop 1: seeds → evergreen 邻居
+    hop1: set[str] = set()
+    for sid in seed_ids:
+        for edge in adjacency.get(sid, ()):
+            other = edge["target"] if edge["source"] == sid else edge["source"]
+            if other in expanded:
+                continue
+            if type_by_id.get(other) == "evergreen":
+                hop1.add(other)
+                _record(edge)
+    expanded |= hop1
+    for nid in hop1:
+        distance_map[nid] = 1
+
+    # Hop 2: 概念层（evergreen seed + hop1 evergreen）→ source markdown
+    concept_layer = {sid for sid in seed_ids if type_by_id.get(sid) == "evergreen"}
+    concept_layer |= hop1
+    hop2: set[str] = set()
+    for cid in concept_layer:
+        for edge in adjacency.get(cid, ()):
+            other = edge["target"] if edge["source"] == cid else edge["source"]
+            if other in expanded:
+                continue
+            if _is_source_markdown(type_by_id.get(other, "")):
+                hop2.add(other)
+                _record(edge)
+    expanded |= hop2
+    for nid in hop2:
+        distance_map[nid] = 2
+
+    return expanded, distance_map, used_edges
+
+
 def _scan_graph_from_filesystem(vault_dir: Path) -> tuple[list[dict], list[dict]]:
     """扫盘 fallback：当 knowledge.db 还没建立时使用。"""
     from ovp_pipeline.graph import GraphBuilder
@@ -159,48 +236,74 @@ def cmd_build(args):
             print(f"⚠️ --seed-match {seed_match!r} 没有匹配到任何节点")
             return 1
 
-        # --source-walk: 剔除 evergreen↔evergreen / evergreen↔moc 这种"概念内部"
-        # 的边，让 BFS 从概念种子直接跳到产生它的源文档（deep_dive / raw / article ...）
-        # 而不是在 evergreen 网里空转。
-        traversal_edges = all_edges
-        if getattr(args, "source_walk", False):
-            type_by_id = {n["note_id"]: n.get("note_type", "") for n in all_nodes}
-            bridge_types = {"evergreen", "moc"}
-            traversal_edges = [
-                e
-                for e in all_edges
-                if not (
-                    type_by_id.get(e["source"]) in bridge_types
-                    and type_by_id.get(e["target"]) in bridge_types
+        layered = getattr(args, "layered", False)
+        source_walk = getattr(args, "source_walk", False)
+        if layered and source_walk:
+            print("❌ --layered 和 --source-walk 互斥，请只选一个")
+            return 1
+
+        type_by_id = {n["note_id"]: n.get("note_type", "") for n in all_nodes}
+
+        if layered:
+            if expand_hops != 1:
+                print(
+                    f"ℹ️  --layered 固定为两层（hop1=evergreen, hop2=source-md），"
+                    f"忽略 --expand-hops {expand_hops}"
                 )
-            ]
-            print(
-                f"🚦 source-walk: 剔除 evergreen/moc 之间的桥接边"
-                f" ({len(all_edges) - len(traversal_edges)}/{len(all_edges)})"
+            edge_index = {edge["edge_id"]: edge for edge in all_edges}
+            expanded_ids, distance_map, used_edges = _expand_layered(
+                seed_ids, edge_index, type_by_id
+            )
+            all_nodes = [n for n in all_nodes if n["note_id"] in expanded_ids]
+            # 只画 BFS 实际走过的边，否则 hop1 的 evergreen 之间又会拉一堆桥
+            all_edges = used_edges
+            mode_label = "--layered (hop1=evergreen, hop2=source-md)"
+        else:
+            # --source-walk: 剔除 evergreen↔evergreen / evergreen↔moc 这种"概念内部"
+            # 的边，让 BFS 从概念种子直接跳到产生它的源文档（deep_dive / raw / article ...）
+            # 而不是在 evergreen 网里空转。
+            traversal_edges = all_edges
+            if source_walk:
+                bridge_types = {"evergreen", "moc"}
+                traversal_edges = [
+                    e
+                    for e in all_edges
+                    if not (
+                        type_by_id.get(e["source"]) in bridge_types
+                        and type_by_id.get(e["target"]) in bridge_types
+                    )
+                ]
+                print(
+                    f"🚦 source-walk: 剔除 evergreen/moc 之间的桥接边"
+                    f" ({len(all_edges) - len(traversal_edges)}/{len(all_edges)})"
+                )
+
+            edge_index = {edge["edge_id"]: edge for edge in traversal_edges}
+            delta_helper = DailyDelta(vault_dir)
+            expanded_ids, distance_map = delta_helper._expand_hops(
+                seed_ids, edge_index, expand_hops
             )
 
-        edge_index = {edge["edge_id"]: edge for edge in traversal_edges}
-        delta_helper = DailyDelta(vault_dir)
-        expanded_ids, distance_map = delta_helper._expand_hops(
-            seed_ids, edge_index, expand_hops
-        )
+            all_nodes = [n for n in all_nodes if n["note_id"] in expanded_ids]
+            # 渲染用的边集和 BFS 用的边集保持一致——source-walk 模式下不要把刚剔掉的
+            # evergreen↔evergreen 桥又画回到图上，否则视觉上还是一团 evergreen mesh
+            all_edges = [
+                e for e in traversal_edges
+                if e["source"] in expanded_ids and e["target"] in expanded_ids
+            ]
+            mode_label = f"--expand-hops {expand_hops}" + (
+                " --source-walk" if source_walk else ""
+            )
 
-        all_nodes = [n for n in all_nodes if n["note_id"] in expanded_ids]
-        # 渲染用的边集和 BFS 用的边集保持一致——source-walk 模式下不要把刚剔掉的
-        # evergreen↔evergreen 桥又画回到图上，否则视觉上还是一团 evergreen mesh
-        all_edges = [
-            e for e in traversal_edges
-            if e["source"] in expanded_ids and e["target"] in expanded_ids
-        ]
         for node in all_nodes:
-            distance = distance_map.get(node["note_id"], expand_hops + 1)
+            distance = distance_map.get(node["note_id"], 99)
             node["distance_from_seed"] = distance
             if distance == 0:
                 node["seed_role"] = "seed"
             else:
                 node["seed_role"] = f"neighbor_{min(distance, 3)}hop"
 
-        print(f"\n🎯 子图过滤 (--seed-match {seed_match!r}, --expand-hops {expand_hops}):")
+        print(f"\n🎯 子图过滤 (--seed-match {seed_match!r}, {mode_label}):")
         print(f"   Seeds: {len(seed_ids)}")
         print(f"   节点: {len(all_nodes)}")
         print(f"   边: {len(all_edges)}")
@@ -463,6 +566,13 @@ def main():
         action="store_true",
         help="BFS 时剔除 evergreen↔evergreen / evergreen↔moc 边，让 evergreen 种子"
              "直接跳到产生它的源文档（deep_dive / raw / article），而不是在概念网里空转",
+    )
+    build_parser.add_argument(
+        "--layered",
+        action="store_true",
+        help="两层 BFS：hop1 只扩 evergreen 邻居（概念波），"
+             "hop2 只从这些 evergreen 跳到 source markdown。--expand-hops 被忽略。"
+             "和 --source-walk 互斥",
     )
 
     # ovp-graph --daily

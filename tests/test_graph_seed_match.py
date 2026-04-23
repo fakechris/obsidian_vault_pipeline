@@ -47,7 +47,7 @@ def _make_vault(tmp_path: Path) -> Path:
 
 
 def _build_args(vault: Path, output: Path, *, seed_match=None, expand_hops=1,
-                open=False, no_index=True, source_walk=False):
+                open=False, no_index=True, source_walk=False, layered=False):
     # 默认 no_index=True：现有用例走扫盘路径，避免依赖 ovp-knowledge-index 的 fixture
     return argparse.Namespace(
         vault_dir=vault,
@@ -57,6 +57,7 @@ def _build_args(vault: Path, output: Path, *, seed_match=None, expand_hops=1,
         open=open,
         no_index=no_index,
         source_walk=source_walk,
+        layered=layered,
     )
 
 
@@ -122,31 +123,43 @@ def test_build_seed_match_no_match_returns_error(tmp_path):
 
 def test_build_html_escapes_script_tags_in_node_titles(tmp_path):
     """节点 title 字面包含 '</script>' 时必须转义，否则 <script> 块被提前关闭、
-    后续 JSON 当 HTML 渲染（用户实测：legend 后大段 JSON 文字泄露）。"""
+    后续 JSON 当 HTML 渲染（用户实测：legend 后大段 JSON 文字泄露）。
+
+    用 baseline diff 判断：渲染恶意 title 的 HTML 中 </script> 个数应等于
+    空 vault 渲染出的基线，否则就说明 title 注入了一个新的 </script>。
+    """
     from ovp_pipeline.graph.visualize import GraphVisualizer
 
-    payload = {
+    benign_payload = {
         "day_id": "test",
         "generated_at": "2026-04-23",
         "nodes": [
             {
-                "note_id": "evil",
-                "title": "Title with </script><img src=x> in it",
+                "note_id": "ok",
+                "title": "Plain title",
                 "note_type": "evergreen",
                 "seed_role": "seed",
             }
         ],
         "edges": [],
-        "seed_note_ids": ["evil"],
+        "seed_note_ids": ["ok"],
     }
-    out = tmp_path / "evil.html"
-    GraphVisualizer(payload).html(out)
-    html = out.read_text(encoding="utf-8")
+    evil_payload = dict(benign_payload, nodes=[
+        {
+            "note_id": "evil",
+            "title": "Title with </script><img src=x> in it",
+            "note_type": "evergreen",
+            "seed_role": "seed",
+        }
+    ], seed_note_ids=["evil"])
 
-    # vis.js bundle close + body script close = 2; any third means injection escaped
-    assert html.count("</script>") == 2
-    # And the title content survives (just escaped) so the node still renders
-    assert "<\\/script>" in html
+    benign_html = GraphVisualizer(benign_payload).html(tmp_path / "ok.html")
+    evil_html = GraphVisualizer(evil_payload).html(tmp_path / "evil.html")
+
+    # 注入的 </script> 必须被转义掉，所以两份 HTML 的 </script> 计数相等
+    assert evil_html.count("</script>") == benign_html.count("</script>")
+    # 转义后的字面串出现在 JSON payload 里
+    assert "<\\/script>" in evil_html
 
 
 def test_build_seed_match_writes_interactive_html(tmp_path):
@@ -158,8 +171,8 @@ def test_build_seed_match_writes_interactive_html(tmp_path):
     assert output.exists()
 
     html = output.read_text(encoding="utf-8")
-    # vis.js bundle + every kept node label rendered into the page
-    assert "vis-network" in html
+    # cytoscape bundle + every kept node label rendered into the page
+    assert "cytoscape" in html
     assert "Agent Memory Core" in html
     assert "Episodic Buffer" in html
     assert "Investing Notes" not in html
@@ -241,6 +254,86 @@ def test_build_source_walk_skips_evergreen_bridges_to_reach_deep_dive(tmp_path):
     # were stripped from the BFS adjacency)
     assert "Episodic Buffer" not in titles
     assert "Cache Policy" not in titles
+
+
+def test_build_layered_keeps_evergreen_hop1_and_source_hop2(tmp_path):
+    """--layered: hop1 只到 evergreen，hop2 只到这些 evergreen 的 source markdown。
+
+    场景设计：
+        seed (Agent Memory Core, evergreen)
+            ├─[evergreen→evergreen]─→ Episodic Buffer (evergreen)            # hop1 ✅
+            │                              └─[deep_dive→evergreen]─ Buffer Deep Dive (deep_dive)  # hop2 ✅
+            ├─[evergreen→moc]──────→ MOC AI Memory (moc)                     # hop1 ✗ (非 evergreen)
+            └─[deep_dive→evergreen]─ Direct Source (deep_dive)               # hop1 ✗ (非 evergreen)；
+                                                                              # hop2 ✅ (seed 是 evergreen)
+        Episodic Buffer
+            └─[evergreen→evergreen]─ Cache Policy (evergreen)
+                                       └─ Cache Deep Dive (deep_dive)        # 不应进入：超过 2 跳
+    """
+    vault = tmp_path / "vault"
+    evergreen = vault / "10-Knowledge" / "Evergreen"
+    atlas = vault / "10-Knowledge" / "Atlas"
+    areas = vault / "20-Areas" / "Topics" / "2026-04"
+    evergreen.mkdir(parents=True)
+    atlas.mkdir(parents=True)
+    areas.mkdir(parents=True)
+
+    _write_note(evergreen, "Agent-Memory-Core", "Agent Memory Core",
+                links=["Episodic Buffer"])
+    _write_note(evergreen, "Episodic-Buffer", "Episodic Buffer",
+                links=["Cache Policy"])
+    _write_note(evergreen, "Cache-Policy", "Cache Policy")
+
+    # MOC 引用 seed —— 不应在 hop1 出现（hop1 限定 evergreen）
+    _write_note(atlas, "MOC-AI-Memory", "MOC AI Memory",
+                links=["Agent Memory Core"], note_type="moc")
+
+    # Source markdown 直接引用 seed —— hop2 应包含
+    _write_note(areas, "direct-source", "Direct Source",
+                links=["Agent Memory Core"], note_type="deep_dive")
+    # Source markdown 引用 hop1 evergreen —— hop2 应包含
+    _write_note(areas, "buffer-deep-dive", "Buffer Deep Dive",
+                links=["Episodic Buffer"], note_type="deep_dive")
+    # Source markdown 引用超出层之外的 Cache Policy —— 不应包含
+    _write_note(areas, "cache-deep-dive", "Cache Deep Dive",
+                links=["Cache Policy"], note_type="deep_dive")
+
+    output = tmp_path / "layered.json"
+    rc = cmd_build(_build_args(vault, output, seed_match="agent memory",
+                               layered=True))
+    assert rc == 0
+
+    data = json.loads(output.read_text(encoding="utf-8"))
+    by_title = {n["title"]: n for n in data["nodes"]}
+
+    # Seed (hop 0)
+    assert by_title["Agent Memory Core"]["distance_from_seed"] == 0
+
+    # Hop 1: evergreen 邻居
+    assert "Episodic Buffer" in by_title
+    assert by_title["Episodic Buffer"]["distance_from_seed"] == 1
+    # MOC 不应在 hop 1（被 evergreen-only 过滤掉）
+    assert "MOC AI Memory" not in by_title
+
+    # Hop 2: source markdowns of seed + hop1 evergreens
+    assert "Direct Source" in by_title
+    assert by_title["Direct Source"]["distance_from_seed"] == 2
+    assert "Buffer Deep Dive" in by_title
+    assert by_title["Buffer Deep Dive"]["distance_from_seed"] == 2
+
+    # 超出 2 层的不能进来
+    assert "Cache Policy" not in by_title       # 是 evergreen 但只能从 hop1 evergreen 跳
+    assert "Cache Deep Dive" not in by_title    # 4 跳路径
+
+
+def test_build_layered_rejects_combo_with_source_walk(tmp_path):
+    vault = _make_vault(tmp_path)
+    output = tmp_path / "layered.json"
+
+    rc = cmd_build(_build_args(vault, output, seed_match="agent memory",
+                               layered=True, source_walk=True))
+    assert rc == 1
+    assert not output.exists()
 
 
 def test_build_without_seed_match_writes_full_graph(tmp_path):

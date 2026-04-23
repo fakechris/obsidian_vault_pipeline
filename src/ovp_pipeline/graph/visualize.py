@@ -10,7 +10,401 @@ Visualization - 图谱可视化
 from pathlib import Path
 from typing import Optional
 from dataclasses import asdict
+import html as _html
 import json
+import re
+
+
+def _safe_json(payload: object) -> str:
+    """JSON-in-HTML 安全序列化：把 </ 换成 <\\/，避免 "</script>" 字面值
+    提前关闭 <script> 块（JS 字符串里 \\/ 和 / 等价）。"""
+    return json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+
+
+def _html_escape(s: str) -> str:
+    return _html.escape(s or '', quote=True)
+
+
+_SAFE_CLASS_RE = re.compile(r'[^a-zA-Z0-9_-]')
+
+
+def _safe_class(s: str) -> str:
+    """把 note_type / edge_type 映射成 Cytoscape class 名（只保留字母数字/_/-）"""
+    return _SAFE_CLASS_RE.sub('-', s or 'unknown') or 'unknown'
+
+
+# note_type → (颜色, 形状)。颜色来自 Tailwind 调色板；形状有限区分概念 vs 源文档。
+_TYPE_STYLE: dict[str, tuple[str, str]] = {
+    'evergreen': ('#34d399', 'ellipse'),
+    'moc': ('#f472b6', 'diamond'),
+    'deep_dive': ('#818cf8', 'round-rectangle'),
+    'raw': ('#94a3b8', 'round-rectangle'),
+    'article': ('#fbbf24', 'round-rectangle'),
+    'technical-analysis': ('#06b6d4', 'round-rectangle'),
+    'github-project': ('#f97316', 'round-rectangle'),
+    'project': ('#a78bfa', 'round-rectangle'),
+    'ai': ('#22d3ee', 'round-rectangle'),
+    'daily_view': ('#fb923c', 'hexagon'),
+    'interpretation': ('#fde047', 'round-rectangle'),
+}
+
+
+def _render_type_filter(counts: list[tuple[str, int]]) -> str:
+    rows = []
+    for note_type, count in counts:
+        color, _shape = _TYPE_STYLE.get(note_type, ('#888', 'ellipse'))
+        rows.append(
+            f'<label class="type-row"><input type="checkbox" checked '
+            f'data-type="{_html_escape(note_type)}"> '
+            f'<span class="swatch" style="background:{color}"></span>'
+            f'{_html_escape(note_type)} '
+            f'<span class="count">{count}</span></label>'
+        )
+    return '\n'.join(rows)
+
+
+_CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>{page_title}</title>
+<script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+<script src="https://unpkg.com/layout-base@1.0.2/layout-base.js"></script>
+<script src="https://unpkg.com/cose-base@1.0.3/cose-base.js"></script>
+<script src="https://unpkg.com/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
+<style>
+  :root {{
+    --bg: #0b0e17;
+    --panel: #121826;
+    --panel-border: #1f2a3d;
+    --text: #e6edf3;
+    --muted: #8b96a6;
+    --accent: #00d4ff;
+    --seed: #00d4ff;
+    --hop1: #4ade80;
+    --hop2: #fbbf24;
+    --hop3: #f87171;
+  }}
+  * {{ box-sizing: border-box; }}
+  html, body {{ margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+  .app {{ display: grid; grid-template-columns: 260px 1fr 320px; height: 100vh; }}
+  .sidebar, .detail {{ background: var(--panel); border-right: 1px solid var(--panel-border);
+    overflow-y: auto; padding: 14px; }}
+  .detail {{ border-right: none; border-left: 1px solid var(--panel-border); }}
+  .sidebar h2, .detail h2 {{ margin: 0 0 4px 0; font-size: 14px; color: var(--accent); }}
+  .sidebar h3 {{ margin: 16px 0 6px 0; font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px; }}
+  .meta {{ color: var(--muted); font-size: 11px; margin-bottom: 6px; }}
+  .stats {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }}
+  .stat {{ background: #0f1524; border: 1px solid var(--panel-border);
+    padding: 6px 10px; border-radius: 6px; min-width: 70px; }}
+  .stat .v {{ font-size: 18px; font-weight: 600; color: var(--accent); }}
+  .stat .l {{ font-size: 10px; color: var(--muted); text-transform: uppercase; }}
+  input[type=text] {{ width: 100%; background: #0f1524; color: var(--text);
+    border: 1px solid var(--panel-border); border-radius: 6px; padding: 6px 8px; font: inherit; }}
+  .type-row {{ display: flex; align-items: center; gap: 6px; padding: 3px 2px; cursor: pointer;
+    font-size: 12px; }}
+  .type-row:hover {{ background: #0f1524; border-radius: 4px; }}
+  .swatch {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px; }}
+  .count {{ color: var(--muted); font-size: 11px; margin-left: auto; }}
+  .btn-row {{ display: flex; gap: 6px; flex-wrap: wrap; }}
+  button {{ background: #0f1524; color: var(--text); border: 1px solid var(--panel-border);
+    padding: 5px 10px; border-radius: 5px; cursor: pointer; font: inherit; }}
+  button:hover {{ border-color: var(--accent); color: var(--accent); }}
+  #cy {{ width: 100%; height: 100%; background: #070a12; }}
+  .detail .empty {{ color: var(--muted); font-size: 12px; margin-top: 20px; }}
+  .detail .field {{ margin: 8px 0; }}
+  .detail .field .k {{ color: var(--muted); font-size: 11px; text-transform: uppercase; }}
+  .detail .field .v {{ word-break: break-word; font-size: 12px; }}
+  .detail .neighbor {{ padding: 3px 4px; border-radius: 4px; cursor: pointer; font-size: 12px;
+    color: var(--text); display: block; text-decoration: none; }}
+  .detail .neighbor:hover {{ background: #0f1524; color: var(--accent); }}
+  .detail .neighbor .pill {{ display: inline-block; padding: 0 5px; margin-right: 5px;
+    border-radius: 9px; font-size: 10px; background: #1f2a3d; color: var(--muted); }}
+  .row-hop-label {{ font-size: 11px; color: var(--muted); margin-right: 6px; }}
+  .legend-hop {{ display: flex; gap: 10px; font-size: 11px; margin-top: 8px; color: var(--muted); }}
+  .legend-hop .dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 3px; vertical-align: middle; }}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <h2>{page_title}</h2>
+    <div class="meta">Generated: {generated_at}</div>
+    <div class="stats">
+      <div class="stat"><div class="v">{node_count}</div><div class="l">Nodes</div></div>
+      <div class="stat"><div class="v">{edge_count}</div><div class="l">Edges</div></div>
+      <div class="stat"><div class="v">{seed_count}</div><div class="l">Seeds</div></div>
+    </div>
+
+    <h3>Search</h3>
+    <input type="text" id="search" placeholder="filter by title…">
+
+    <h3>Filter by type</h3>
+    <div id="type-filter">
+{type_filter_html}
+    </div>
+
+    <h3>Filter by hop</h3>
+    <label class="type-row"><input type="checkbox" checked data-hop="0">
+      <span class="swatch" style="background:var(--seed)"></span>Seed (hop 0)</label>
+    <label class="type-row"><input type="checkbox" checked data-hop="1">
+      <span class="swatch" style="background:var(--hop1)"></span>Hop 1</label>
+    <label class="type-row"><input type="checkbox" checked data-hop="2">
+      <span class="swatch" style="background:var(--hop2)"></span>Hop 2</label>
+    <label class="type-row"><input type="checkbox" checked data-hop="3">
+      <span class="swatch" style="background:var(--hop3)"></span>Hop 3+</label>
+
+    <h3>View</h3>
+    <div class="btn-row">
+      <button id="btn-fit">Fit</button>
+      <button id="btn-seeds">Focus Seeds</button>
+      <button id="btn-layout">Re-layout</button>
+      <button id="btn-reset">Reset</button>
+    </div>
+  </aside>
+
+  <main id="cy"></main>
+
+  <aside class="detail">
+    <h2>Node</h2>
+    <div id="detail-body" class="empty">点击任意节点查看详情。</div>
+  </aside>
+</div>
+
+<script>
+(function() {{
+  var payload = {elements_json};
+
+  var TYPE_STYLE = {{
+    'evergreen':          ['#34d399','ellipse'],
+    'moc':                ['#f472b6','diamond'],
+    'deep_dive':          ['#818cf8','round-rectangle'],
+    'raw':                ['#94a3b8','round-rectangle'],
+    'article':            ['#fbbf24','round-rectangle'],
+    'technical-analysis': ['#06b6d4','round-rectangle'],
+    'github-project':     ['#f97316','round-rectangle'],
+    'project':            ['#a78bfa','round-rectangle'],
+    'ai':                 ['#22d3ee','round-rectangle'],
+    'daily_view':         ['#fb923c','hexagon'],
+    'interpretation':     ['#fde047','round-rectangle']
+  }};
+
+  function typeStyle(t) {{ return TYPE_STYLE[t] || ['#888','ellipse']; }}
+
+  var style = [
+    {{ selector: 'node', style: {{
+        'label': 'data(label)',
+        'color': '#e6edf3',
+        'font-size': 10,
+        'text-wrap': 'wrap',
+        'text-max-width': 140,
+        'text-valign': 'bottom',
+        'text-margin-y': 4,
+        'background-color': function(ele) {{ return typeStyle(ele.data('note_type'))[0]; }},
+        'shape': function(ele) {{ return typeStyle(ele.data('note_type'))[1]; }},
+        'border-color': '#1f2a3d',
+        'border-width': 1,
+        'width': 22, 'height': 22,
+        'transition-property': 'opacity, border-width, border-color',
+        'transition-duration': '120ms'
+    }}}},
+    {{ selector: 'node.role-seed',           style: {{ 'border-color':'#00d4ff','border-width':4,'width':40,'height':40,'font-size':12 }} }},
+    {{ selector: 'node.role-neighbor_1hop',  style: {{ 'border-color':'#4ade80','border-width':2,'width':28,'height':28 }} }},
+    {{ selector: 'node.role-neighbor_2hop',  style: {{ 'border-color':'#fbbf24','border-width':2,'width':22,'height':22 }} }},
+    {{ selector: 'node.role-neighbor_3hop',  style: {{ 'border-color':'#f87171','border-width':1,'width':18,'height':18 }} }},
+    {{ selector: 'edge', style: {{
+        'width': 1,
+        'line-color': '#263248',
+        'target-arrow-color': '#263248',
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        'arrow-scale': 0.8,
+        'opacity': 0.75,
+        'transition-property': 'opacity, line-color, width',
+        'transition-duration': '120ms'
+    }}}},
+    {{ selector: '.faded', style: {{ 'opacity': 0.08 }} }},
+    {{ selector: '.highlighted', style: {{
+        'border-color':'#00d4ff',
+        'border-width': 3
+    }}}},
+    {{ selector: 'edge.highlighted', style: {{
+        'line-color':'#00d4ff',
+        'target-arrow-color':'#00d4ff',
+        'width': 2,
+        'opacity': 1
+    }}}},
+    {{ selector: '.hidden', style: {{ 'display':'none' }} }}
+  ];
+
+  var cy = cytoscape({{
+    container: document.getElementById('cy'),
+    elements: payload,
+    style: style,
+    layout: {{
+      name: 'cose-bilkent',
+      animate: 'end',
+      idealEdgeLength: 100,
+      nodeRepulsion: 8000,
+      nodeOverlap: 20,
+      gravity: 0.25,
+      numIter: 2000,
+      tile: true,
+      padding: 30
+    }},
+    wheelSensitivity: 0.2,
+    minZoom: 0.1,
+    maxZoom: 3
+  }});
+
+  // ---------- Detail panel ----------
+  var detailEl = document.getElementById('detail-body');
+
+  function renderDetail(node) {{
+    if (!node) {{
+      detailEl.className = 'empty';
+      detailEl.textContent = '点击任意节点查看详情。';
+      return;
+    }}
+    var d = node.data();
+    var incoming = node.incomers('node');
+    var outgoing = node.outgoers('node');
+    var html = '';
+    html += '<div class="field"><div class="k">title</div><div class="v"><strong>' + esc(d.title) + '</strong></div></div>';
+    html += '<div class="field"><div class="k">type</div><div class="v">' + esc(d.note_type) + '</div></div>';
+    if (d.distance >= 0) {{
+      var label = d.distance === 0 ? 'seed' : 'hop ' + d.distance;
+      html += '<div class="field"><div class="k">distance</div><div class="v">' + label + '</div></div>';
+    }}
+    if (d.path) {{
+      html += '<div class="field"><div class="k">path</div><div class="v" style="font-family:ui-monospace,Menlo,monospace;font-size:11px;">' + esc(d.path) + '</div></div>';
+    }}
+    if (d.day_id) {{
+      html += '<div class="field"><div class="k">day</div><div class="v">' + esc(d.day_id) + '</div></div>';
+    }}
+    html += '<div class="field"><div class="k">incoming (' + incoming.length + ')</div><div class="v">' + neighborList(incoming) + '</div></div>';
+    html += '<div class="field"><div class="k">outgoing (' + outgoing.length + ')</div><div class="v">' + neighborList(outgoing) + '</div></div>';
+    detailEl.className = '';
+    detailEl.innerHTML = html;
+    detailEl.querySelectorAll('.neighbor').forEach(function(a) {{
+      a.addEventListener('click', function(e) {{
+        e.preventDefault();
+        var target = cy.getElementById(a.dataset.id);
+        if (target.nonempty()) {{
+          selectNode(target);
+          cy.center(target);
+        }}
+      }});
+    }});
+  }}
+
+  function neighborList(collection) {{
+    if (!collection.length) return '<span style="color:var(--muted)">(none)</span>';
+    var items = [];
+    collection.forEach(function(n) {{
+      var nd = n.data();
+      items.push('<a class="neighbor" href="#" data-id="' + esc(nd.id) + '">'
+        + '<span class="pill">' + esc(nd.note_type) + '</span>' + esc(nd.title) + '</a>');
+    }});
+    return items.join('');
+  }}
+
+  function esc(s) {{
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }}
+
+  // ---------- Selection / highlight ----------
+  var currentSelection = null;
+
+  function selectNode(node) {{
+    currentSelection = node;
+    cy.elements().removeClass('highlighted faded');
+    var nbrs = node.closedNeighborhood();
+    cy.elements().not(nbrs).addClass('faded');
+    nbrs.addClass('highlighted');
+    renderDetail(node);
+  }}
+
+  function clearSelection() {{
+    currentSelection = null;
+    cy.elements().removeClass('highlighted faded');
+    renderDetail(null);
+  }}
+
+  cy.on('tap', 'node', function(evt) {{ selectNode(evt.target); }});
+  cy.on('tap', function(evt) {{ if (evt.target === cy) clearSelection(); }});
+
+  // ---------- Filters ----------
+  var activeTypes = new Set();
+  document.querySelectorAll('#type-filter input[type=checkbox]').forEach(function(cb) {{
+    activeTypes.add(cb.dataset.type);
+    cb.addEventListener('change', function() {{
+      if (cb.checked) activeTypes.add(cb.dataset.type); else activeTypes.delete(cb.dataset.type);
+      applyFilters();
+    }});
+  }});
+
+  var activeHops = new Set([0,1,2,3]);
+  document.querySelectorAll('[data-hop]').forEach(function(cb) {{
+    cb.addEventListener('change', function() {{
+      var h = parseInt(cb.dataset.hop, 10);
+      if (cb.checked) activeHops.add(h); else activeHops.delete(h);
+      applyFilters();
+    }});
+  }});
+
+  var searchEl = document.getElementById('search');
+  searchEl.addEventListener('input', applyFilters);
+
+  function applyFilters() {{
+    var query = (searchEl.value || '').trim().toLowerCase();
+    cy.batch(function() {{
+      cy.nodes().forEach(function(n) {{
+        var d = n.data();
+        var hopBucket = d.distance >= 3 ? 3 : (d.distance < 0 ? 3 : d.distance);
+        var keep =
+          activeTypes.has(d.note_type) &&
+          activeHops.has(hopBucket) &&
+          (!query || (d.title || '').toLowerCase().indexOf(query) >= 0);
+        n.toggleClass('hidden', !keep);
+      }});
+      cy.edges().forEach(function(e) {{
+        var hidden = e.source().hasClass('hidden') || e.target().hasClass('hidden');
+        e.toggleClass('hidden', hidden);
+      }});
+    }});
+  }}
+
+  // ---------- Buttons ----------
+  document.getElementById('btn-fit').addEventListener('click', function() {{ cy.fit(null, 30); }});
+  document.getElementById('btn-seeds').addEventListener('click', function() {{
+    var seeds = cy.nodes('.role-seed');
+    if (seeds.nonempty()) cy.fit(seeds, 60);
+  }});
+  document.getElementById('btn-layout').addEventListener('click', function() {{
+    cy.layout({{ name:'cose-bilkent', animate:'end', numIter:1500, padding:30 }}).run();
+  }});
+  document.getElementById('btn-reset').addEventListener('click', function() {{
+    searchEl.value = '';
+    document.querySelectorAll('#type-filter input').forEach(function(cb) {{ cb.checked = true; activeTypes.add(cb.dataset.type); }});
+    document.querySelectorAll('[data-hop]').forEach(function(cb) {{ cb.checked = true; activeHops.add(parseInt(cb.dataset.hop,10)); }});
+    applyFilters();
+    clearSelection();
+    cy.fit(null, 30);
+  }});
+
+  // Initial focus on seeds if any
+  var seeds = cy.nodes('.role-seed');
+  if (seeds.nonempty()) cy.fit(seeds, 80);
+}})();
+</script>
+</body>
+</html>"""
 
 
 class GraphVisualizer:
@@ -107,204 +501,94 @@ class GraphVisualizer:
         return "\n".join(lines)
 
     def html(self, output_path: Optional[Path] = None) -> str:
-        """生成交互式HTML可视化 (使用vis.js)"""
-        html_template = """<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>OVP Graph - {day_id}</title>
-    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: #1a1a2e;
-            color: #eee;
-        }}
-        h1 {{ color: #00d4ff; margin-bottom: 10px; }}
-        .stats {{
-            display: flex;
-            gap: 20px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-        }}
-        .stat {{
-            background: #16213e;
-            padding: 10px 20px;
-            border-radius: 8px;
-            border: 1px solid #0f3460;
-        }}
-        .stat-value {{ font-size: 24px; font-weight: bold; color: #00d4ff; }}
-        .stat-label {{ font-size: 12px; color: #888; }}
-        #graph {{ width: 100%; height: 600px; border: 1px solid #0f3460; border-radius: 8px; }}
-        .legend {{
-            margin-top: 20px;
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-        }}
-        .legend-item {{
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            font-size: 12px;
-        }}
-        .legend-color {{
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-        }}
-        .seed {{ background: #00d4ff; }}
-        .1hop {{ background: #4ade80; }}
-        .2hop {{ background: #fbbf24; }}
-        .3hop {{ background: #f87171; }}
-        .note-raw {{ background: #94a3b8; }}
-        .note-deep_dive {{ background: #818cf8; }}
-        .note-evergreen {{ background: #34d399; }}
-        .note-moc {{ background: #f472b6; }}
-    </style>
-</head>
-<body>
-    <h1>📊 OVP Daily Delta Graph</h1>
-    <p>日期: {day_id} | 生成时间: {generated_at}</p>
+        """生成交互式 HTML 可视化（基于 Cytoscape.js）。
 
-    <div class="stats">
-        <div class="stat">
-            <div class="stat-value">{node_count}</div>
-            <div class="stat-label">节点</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{edge_count}</div>
-            <div class="stat-label">边</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{seed_count}</div>
-            <div class="stat-label">Seeds</div>
-        </div>
-    </div>
+        替代了原来的 vis.js 实现。原版在 ~6K 节点上互动僵硬、信息密度低、
+        靠 tooltip 表达；这里改成：
+            * 左侧 toolbar：搜索 + note_type 过滤 + hop 过滤 + 布局/聚焦按钮
+            * 主画布：cose-bilkent 布局；节点按 note_type 着色 + 形状区分；
+              seed/1hop/2hop 用边框宽度+尺寸表达
+            * 右侧 detail panel：点击节点显示 title / type / distance / path /
+              入出邻居列表（可点击跳转）
+            * 点击节点会高亮邻域（其余节点淡出）
 
-    <div id="graph"></div>
+        所有 JS/CSS 走 CDN unpkg；HTML 自包含，生成后直接双击即可打开。
+        """
+        nodes_data = self._cytoscape_nodes()
+        edges_data = self._cytoscape_edges()
+        type_counts = self._type_counts(nodes_data)
 
-    <div class="legend">
-        <div class="legend-item"><div class="legend-color seed"></div> Seed</div>
-        <div class="legend-item"><div class="legend-color 1hop"></div> 1-hop</div>
-        <div class="legend-item"><div class="legend-color 2hop"></div> 2-hop</div>
-        <div class="legend-item"><div class="legend-color 3hop"></div> 3-hop</div>
-        <div style="width:20px"></div>
-        <div class="legend-item"><div class="legend-color note-raw"></div> Raw</div>
-        <div class="legend-item"><div class="legend-color note-deep_dive"></div> Deep Dive</div>
-        <div class="legend-item"><div class="legend-color note-evergreen"></div> Evergreen</div>
-        <div class="legend-item"><div class="legend-color note-moc"></div> MOC</div>
-    </div>
+        title = self.delta.get('day_id', '') or 'OVP Graph'
+        seed_pattern = self.delta.get('seed_pattern', '')
+        if seed_pattern:
+            title = f"OVP Graph · seed={seed_pattern!r}"
 
-    <script>
-    var nodes = new vis.DataSet({nodes_json});
-    var edges = new vis.DataSet({edges_json});
-
-    var container = document.getElementById('graph');
-    var data = {{ nodes: nodes, edges: edges }};
-    var options = {{
-        nodes: {{
-            shape: 'dot',
-            size: 15,
-            font: {{ color: '#eee', size: 12 }},
-            borderWidth: 2,
-            shadow: true
-        }},
-        edges: {{
-            width: 1,
-            color: {{ color: '#555', highlight: '#00d4ff' }},
-            smooth: {{ type: 'continuous' }}
-        }},
-        physics: {{
-            stabilization: {{ iterations: 100 }},
-            barnesHut: {{
-                gravitationalConstant: -2000,
-                springLength: 150
-            }}
-        }},
-        interaction: {{
-            hover: true,
-            tooltipDelay: 200
-        }},
-        layout: {{
-            improvedLayout: true
-        }}
-    }};
-
-    var network = new vis.Network(container, data, options);
-    </script>
-</body>
-</html>"""
-
-        # 构建节点数据
-        nodes_data = []
-        for node in self.delta.get('nodes', []):
-            seed_role = node.get('seed_role', 'unknown')
-            note_type = node.get('note_type', 'unknown')
-
-            # 颜色映射
-            role_colors = {
-                'seed': '#00d4ff',
-                'neighbor_1hop': '#4ade80',
-                'neighbor_2hop': '#fbbf24',
-                'neighbor_3hop': '#f87171',
-            }
-            type_colors = {
-                'raw': '#94a3b8',
-                'deep_dive': '#818cf8',
-                'evergreen': '#34d399',
-                'moc': '#f472b6',
-                'daily_view': '#fb923c',
-            }
-
-            color = type_colors.get(note_type, '#888')
-
-            title = node.get('title', '') or node['note_id']
-            title_short = title[:40] + '...' if len(title) > 40 else title
-
-            nodes_data.append({
-                'id': node['note_id'],
-                'label': title_short,
-                'title': f"{title}\n类型: {note_type}\n角色: {seed_role}",
-                'color': {
-                    'background': color,
-                    'border': role_colors.get(seed_role, '#888')
-                },
-                'size': 25 if seed_role == 'seed' else 15
-            })
-
-        # 构建边数据
-        edges_data = []
-        for edge in self.delta.get('edges', []):
-            edges_data.append({
-                'from': edge['source'],
-                'to': edge['target'],
-                'label': edge.get('edge_type', ''),
-                'title': f"{edge.get('edge_type', '')}\n{edge['source']} → {edge['target']}"
-            })
-
-        # 渲染。把 </ 转成 <\/ 防止节点 title 里的 "</script>" 字面值
-        # 提前关闭 <script> 块（JS 字符串里 \/ 仍然合法）。
-        def _safe_json(payload: object) -> str:
-            return json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
-
-        html = html_template.format(
-            day_id=self.delta.get('day_id', ''),
-            generated_at=self.delta.get('generated_at', ''),
+        html = _CYTOSCAPE_TEMPLATE.format(
+            page_title=_html_escape(title),
+            generated_at=_html_escape(self.delta.get('generated_at', '')),
             node_count=len(nodes_data),
             edge_count=len(edges_data),
             seed_count=len(self.delta.get('seed_note_ids', [])),
-            nodes_json=_safe_json(nodes_data),
-            edges_json=_safe_json(edges_data),
+            type_filter_html=_render_type_filter(type_counts),
+            elements_json=_safe_json({'nodes': nodes_data, 'edges': edges_data}),
         )
 
         if output_path:
             output_path.write_text(html, encoding='utf-8')
-            print(f"✅ HTML已生成: {output_path}")
+            print(f"✅ HTML 已生成: {output_path}")
 
         return html
+
+    # ---------- Cytoscape data shaping ----------
+
+    def _cytoscape_nodes(self) -> list[dict]:
+        out = []
+        for node in self.delta.get('nodes', []):
+            note_type = (node.get('note_type') or 'unknown')
+            seed_role = node.get('seed_role') or 'unknown'
+            distance = node.get('distance_from_seed', None)
+            title = node.get('title') or node.get('note_id', '')
+            label = title if len(title) <= 32 else title[:30] + '…'
+            out.append({
+                'data': {
+                    'id': node['note_id'],
+                    'label': label,
+                    'title': title,
+                    'note_type': note_type,
+                    'seed_role': seed_role,
+                    'distance': distance if distance is not None else -1,
+                    'path': node.get('path', '') or '',
+                    'day_id': node.get('day_id', '') or '',
+                },
+                'classes': ' '.join([
+                    f"type-{_safe_class(note_type)}",
+                    f"role-{_safe_class(seed_role)}",
+                ]),
+            })
+        return out
+
+    def _cytoscape_edges(self) -> list[dict]:
+        out = []
+        for edge in self.delta.get('edges', []):
+            edge_type = edge.get('edge_type') or 'wikilink'
+            out.append({
+                'data': {
+                    'id': edge.get('edge_id') or f"{edge['source']}-{edge['target']}",
+                    'source': edge['source'],
+                    'target': edge['target'],
+                    'edge_type': edge_type,
+                    'anchor_text': edge.get('anchor_text', '') or '',
+                },
+                'classes': f"edgetype-{_safe_class(edge_type)}",
+            })
+        return out
+
+    @staticmethod
+    def _type_counts(nodes_data: list[dict]) -> list[tuple[str, int]]:
+        from collections import Counter
+        counter: Counter = Counter(n['data']['note_type'] for n in nodes_data)
+        # 稳定顺序：先按数量降序，再按名字升序
+        return sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
 
     def export_graphml(self, output_path: Path):
         """导出为GraphML格式 (兼容Gephi, yEd)"""
