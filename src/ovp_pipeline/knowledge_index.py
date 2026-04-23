@@ -9,6 +9,7 @@ import math
 import re
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from .concept_registry import ConceptRegistry, ResolutionAction
 from .graph.frontmatter import FrontmatterParser, NoteMetadata
@@ -123,6 +124,7 @@ TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "target_object_id",
         "relation_type",
         "evidence_source_slug",
+        "quote_text",
         "locator",
         "content_hash",
         "retrieval_context",
@@ -187,23 +189,34 @@ def _preserve_existing_truth_rows(
         return
     preserved_packs: set[str] = set()
     preserved_metadata_packs: set[str] = set()
+    metadata_rows: list[tuple[Any, ...]] = []
     try:
-        with sqlite3.connect(source_db_path) as source_conn:
-            for table_name, columns in TRUTH_PROJECTION_TABLE_COLUMNS.items():
-                column_sql = ", ".join(columns)
+        source_conn = sqlite3.connect(source_db_path)
+    except sqlite3.DatabaseError:
+        return
+    try:
+        for table_name, columns in TRUTH_PROJECTION_TABLE_COLUMNS.items():
+            column_sql = ", ".join(columns)
+            try:
                 rows = source_conn.execute(
                     f"SELECT {column_sql} FROM {table_name} WHERE pack != ? ORDER BY pack",
                     (exclude_pack,),
                 ).fetchall()
-                if not rows:
+            except sqlite3.OperationalError as exc:
+                error_text = str(exc).lower()
+                if "no such table" in error_text or "no such column" in error_text:
                     continue
-                placeholders = ", ".join("?" for _ in columns)
-                dest_conn.executemany(
-                    f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
-                    rows,
-                )
-                preserved_packs.update(str(row[0]) for row in rows if row and row[0])
+                raise
+            if not rows:
+                continue
+            placeholders = ", ".join("?" for _ in columns)
+            dest_conn.executemany(
+                f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+                rows,
+            )
+            preserved_packs.update(str(row[0]) for row in rows if row and row[0])
 
+        try:
             metadata_rows = source_conn.execute(
                 """
                 SELECT pack, owner_pack, builder_name, built_at
@@ -213,13 +226,13 @@ def _preserve_existing_truth_rows(
                 """,
                 (exclude_pack,),
             ).fetchall()
-    except sqlite3.OperationalError as exc:
-        error_text = str(exc).lower()
-        if "no such table" not in error_text and "no such column" not in error_text:
-            raise
-        metadata_rows = []
-    except sqlite3.DatabaseError:
-        return
+        except sqlite3.OperationalError as exc:
+            error_text = str(exc).lower()
+            if "no such table" not in error_text and "no such column" not in error_text:
+                raise
+            metadata_rows = []
+    finally:
+        source_conn.close()
 
     if metadata_rows:
         dest_conn.executemany(
@@ -333,12 +346,20 @@ def _collect_raw_rows(layout: VaultLayout) -> list[tuple[str, str, str, str]]:
 
 def _infer_audit_slug(payload: dict[str, object]) -> str:
     slug = payload.get("slug")
-    if isinstance(slug, str):
+    if isinstance(slug, str) and slug:
         return canonicalize_note_id(slug)
 
     targets = payload.get("targets")
     if isinstance(targets, list) and len(targets) == 1 and isinstance(targets[0], str):
         return canonicalize_note_id(targets[0])
+
+    # promotion / zone_violation events carry a `target_path`; index it as-is
+    # (vault-relative when the caller passed a relative path) so that lint
+    # check_zone_boundary can match by the same key without the lossy
+    # path.stem collision (e.g. 30-Projects/*/Plan.md).
+    target_path = payload.get("target_path")
+    if isinstance(target_path, str) and target_path:
+        return target_path
     return ""
 
 
@@ -498,7 +519,7 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
         "objects": {"pack"},
         "claims": {"pack"},
         "claim_evidence": {"pack", "locator", "content_hash", "status", "verified_at"},
-        "relations": {"pack", "locator", "content_hash", "status", "verified_at"},
+        "relations": {"pack", "quote_text", "locator", "content_hash", "status", "verified_at"},
         "compiled_summaries": {"pack"},
         "contradictions": {"pack"},
         "graph_edges": {"pack"},
@@ -719,9 +740,9 @@ def rebuild_knowledge_index(
                 """
                 INSERT INTO relations (
                     pack, source_object_id, target_object_id, relation_type, evidence_source_slug,
-                    locator, content_hash, retrieval_context, status, verified_at
+                    quote_text, locator, content_hash, retrieval_context, status, verified_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [row.to_row() for row in truth_projection.relations],
             )

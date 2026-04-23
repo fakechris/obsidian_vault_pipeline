@@ -24,6 +24,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .concept_registry import (
     ConceptRegistry,
@@ -34,6 +35,9 @@ from .concept_registry import (
 )
 from .identity import canonicalize_note_id
 from .runtime import resolve_vault_dir
+
+if TYPE_CHECKING:
+    from .packs.base import BaseDomainPack
 
 
 EVERGREEN_DIR = Path("10-Knowledge/Evergreen")

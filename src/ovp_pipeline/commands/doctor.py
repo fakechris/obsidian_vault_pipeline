@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -916,21 +917,19 @@ def _reuse_payload(vault_dir: Path | None, *, pack_name: str) -> dict[str, objec
                 "SELECT COUNT(*), COALESCE(SUM(trusted),0) FROM reuse_events WHERE pack = ?",
                 (pack_name,),
             ).fetchone()
-            never_row = conn.execute(
+            never_rows = conn.execute(
                 """
-                SELECT COUNT(*) FROM (
-                  SELECT objects.object_id
-                  FROM objects
-                  LEFT JOIN reuse_events
-                         ON reuse_events.pack = objects.pack
-                        AND reuse_events.object_id = objects.object_id
-                  WHERE objects.pack = ?
-                  GROUP BY objects.object_id
-                  HAVING COUNT(reuse_events.event_id) = 0
-                )
+                SELECT objects.canonical_path
+                FROM objects
+                LEFT JOIN reuse_events
+                       ON reuse_events.pack = objects.pack
+                      AND reuse_events.object_id = objects.object_id
+                WHERE objects.pack = ?
+                GROUP BY objects.object_id
+                HAVING COUNT(reuse_events.event_id) = 0
                 """,
                 (pack_name,),
-            ).fetchone()
+            ).fetchall()
     except sqlite3.OperationalError:
         return {
             "events_total": 0,
@@ -942,11 +941,24 @@ def _reuse_payload(vault_dir: Path | None, *, pack_name: str) -> dict[str, objec
         }
     events_total = int(row[0])
     trusted_events_total = int(row[1])
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    never_count = 0
+    for (canonical_path,) in never_rows:
+        if not canonical_path:
+            continue
+        raw = Path(str(canonical_path))
+        path = raw if raw.is_absolute() else vault_dir / raw
+        if not path.exists():
+            never_count += 1
+            continue
+        mtime_dt = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        if mtime_dt <= cutoff:
+            never_count += 1
     return {
         "events_total": events_total,
         "trusted_events_total": trusted_events_total,
         "trusted_share": (trusted_events_total / events_total) if events_total else 0.0,
-        "never_reused_count": int(never_row[0]),
+        "never_reused_count": never_count,
         "knowledge_db_exists": True,
     }
 

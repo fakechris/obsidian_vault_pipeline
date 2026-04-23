@@ -21,6 +21,11 @@ from .event_emitter import emit
 from .state_lifecycle import State
 
 
+_RESERVED_BOUNDARY_KEYS = frozenset(
+    {"from_state", "to_state", "target_path", "actor", "reason"}
+)
+
+
 def emit_promotion(
     vault_dir: Path | str,
     *,
@@ -39,17 +44,22 @@ def emit_promotion(
     ``promote_candidates.review``, autopilot worker id, or human approver
     handle). ``payload`` is folded into the JSON line and is the place to
     record extra context such as object_id, source_slug, or candidate_id.
+    Reserved boundary keys (``from_state``, ``to_state``, ``target_path``,
+    ``actor``, ``reason``) cannot be clobbered by ``payload``.
     """
     body: dict[str, Any] = {
         "from_state": _state_value(from_state),
         "to_state": _state_value(to_state),
-        "target_path": str(target_path),
+        "target_path": _vault_relative(vault_dir, target_path),
         "actor": actor,
     }
     if reason:
         body["reason"] = reason
     if payload:
-        body.update(payload)
+        for key, value in payload.items():
+            if key in _RESERVED_BOUNDARY_KEYS:
+                continue
+            body[key] = value
     return emit(
         vault_dir,
         "pipeline.jsonl",
@@ -58,6 +68,15 @@ def emit_promotion(
         session_id=session_id,
         pack=pack,
     )
+
+
+def _vault_relative(vault_dir: Path | str, target_path: Path | str) -> str:
+    raw = Path(target_path)
+    try:
+        base = Path(vault_dir).resolve()
+        return str(raw.resolve().relative_to(base))
+    except (OSError, ValueError):
+        return str(raw)
 
 
 def emit_zone_violation(

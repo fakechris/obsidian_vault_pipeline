@@ -106,6 +106,7 @@ def route_candidate_concepts(
 
     registry = ConceptRegistry(vault_dir).load()
     inserted = 0
+    touched = False
     for concept in concepts:
         existing = registry.find_by_slug(concept.to_slug())
         registry.upsert_candidate(
@@ -114,6 +115,7 @@ def route_candidate_concepts(
             definition=concept.definition,
             area=concept.area,
         )
+        touched = True
         if existing is None:
             inserted += 1
             _emit_yield(
@@ -126,7 +128,7 @@ def route_candidate_concepts(
                     "state": State.CANDIDATE.value,
                 },
             )
-    if inserted:
+    if touched:
         registry.save()
     return inserted
 
@@ -139,8 +141,8 @@ def route_open_questions(
 ) -> int:
     """Append each question to ``60-Logs/open-questions.jsonl``.
 
-    The ``60-Logs/**`` glob is in the ``append_only`` zone whitelist for both
-    packs, so this write does not require ``enforce_zone_write``.
+    ``60-Logs/**`` is in ``agent_owned`` (not ``accepted``), so the write
+    falls outside the ``enforce_zone_write`` gate by construction.
     """
     layout = VaultLayout.from_vault(vault_dir)
     target = layout.logs_dir / "open-questions.jsonl"
@@ -176,9 +178,9 @@ def route_writing_prompts(
     """
     target = vault_dir / "00-Polaris" / "Writing-Prompts.md"
     target.parent.mkdir(parents=True, exist_ok=True)
+    enforce_zone_write(target, pack=pack, vault_dir=vault_dir, mode=WRITE_MODE_APPEND)
     if not target.exists():
         target.write_text("# Writing Prompts\n\n", encoding="utf-8")
-    enforce_zone_write(target, pack=pack, vault_dir=vault_dir, mode=WRITE_MODE_APPEND)
 
     written = 0
     with target.open("a", encoding="utf-8") as handle:

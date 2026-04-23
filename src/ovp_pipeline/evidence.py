@@ -271,14 +271,18 @@ def _utc_now_text() -> str:
 
 
 def _resolve_source_path(source_path: Path | str, vault_dir: Path | str | None) -> Path:
+    """Resolve an evidence ``source_path`` against the vault root.
+
+    For relative paths, only the vault-rooted resolution is honored — falling
+    back to a CWD-relative path would silently hash a different file (or a
+    file outside the vault) when the verifier is invoked from a non-vault
+    working directory.
+    """
     candidate = Path(source_path)
     if candidate.is_absolute():
         return candidate
     if vault_dir is not None:
-        vault = Path(vault_dir)
-        joined = (vault / candidate).resolve()
-        if joined.exists():
-            return joined
+        return (Path(vault_dir) / candidate).resolve()
     return candidate
 
 

@@ -68,10 +68,12 @@ def emit(
     The returned dict includes the auto-stamped fields (``event_id``, ``ts``,
     ``session_id``, ``pack``, ``event_type``) so callers can reference them.
 
-    Atomicity: a single ``write()`` of one ``\\n``-terminated JSON line under
-    ``O_APPEND`` is POSIX-atomic up to PIPE_BUF (4096 bytes) on Linux/macOS.
-    Each event line stays well under that, so concurrent writers do not need
-    a lock.
+    Atomicity: ``O_APPEND`` guarantees the kernel positions the write at the
+    current end of file, so concurrent writers cannot interleave each other's
+    bytes within a single ``write()`` call. Each event is serialized into one
+    bytes buffer and emitted with a single ``os.write()``, which Linux/macOS
+    deliver as one atomic write for typical line sizes (well under the
+    page-aligned chunking threshold). Lock-free on the producer side.
     """
     layout = VaultLayout.from_vault(vault_dir)
     layout.logs_dir.mkdir(parents=True, exist_ok=True)

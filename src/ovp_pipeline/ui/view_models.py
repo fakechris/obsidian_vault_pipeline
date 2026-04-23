@@ -68,19 +68,26 @@ def _emit_briefing_reuse(
     pack: str,
     consumer_ref: str,
 ) -> None:
-    """Emit one ``briefing``-surface reuse event per canonical object in payload."""
+    """Emit one ``briefing``-surface reuse event per canonical object in payload.
+
+    Reuse-event emission is best-effort instrumentation — a JSONL append
+    failure must never block the view-builder from returning a payload.
+    """
     if not pack:
         return
-    object_ids = collect_object_ids(payload)
-    if not object_ids:
+    try:
+        object_ids = collect_object_ids(payload)
+        if not object_ids:
+            return
+        emit_reuse_events_for_object_ids(
+            vault_dir,
+            pack=pack,
+            object_ids=object_ids,
+            surface="briefing",
+            consumer_ref=consumer_ref,
+        )
+    except Exception:  # noqa: BLE001 — best-effort instrumentation
         return
-    emit_reuse_events_for_object_ids(
-        vault_dir,
-        pack=pack,
-        object_ids=object_ids,
-        surface="briefing",
-        consumer_ref=consumer_ref,
-    )
 
 
 def _supports_research_shell(pack_name: str | None = None) -> bool:

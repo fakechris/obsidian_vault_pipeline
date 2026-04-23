@@ -33,6 +33,5 @@ RESEARCH_TECH_WORKSPACE_ZONES = WorkspaceZonesSpec(
     ),
     append_only=(
         "00-Polaris/Writing-Prompts.md",
-        "60-Logs/**",
     ),
 )

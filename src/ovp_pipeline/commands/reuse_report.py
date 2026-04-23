@@ -72,7 +72,7 @@ def _weekly_aggregate(db_path: Path) -> list[dict[str, Any]]:
     ]
 
 
-def _never_reused(db_path: Path, *, pack: str) -> list[dict[str, Any]]:
+def _never_reused(db_path: Path, *, pack: str, vault_dir: Path) -> list[dict[str, Any]]:
     if not db_path.exists():
         return []
     cutoff = datetime.now(timezone.utc) - timedelta(days=_NEVER_REUSED_DAYS)
@@ -94,7 +94,8 @@ def _never_reused(db_path: Path, *, pack: str) -> list[dict[str, Any]]:
 
     stale: list[dict[str, Any]] = []
     for object_id, title, canonical_path in rows:
-        path = Path(str(canonical_path))
+        raw = Path(str(canonical_path))
+        path = raw if raw.is_absolute() else vault_dir / raw
         if path.exists():
             mtime_dt = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
             if mtime_dt > cutoff:
@@ -124,7 +125,7 @@ def build_reuse_report_payload(
         "vault_dir": str(vault_dir),
         "pack": pack,
         "weekly": _weekly_aggregate(db_path),
-        "never_reused_after_30_days": _never_reused(db_path, pack=pack),
+        "never_reused_after_30_days": _never_reused(db_path, pack=pack, vault_dir=vault_dir),
         "never_reused_window_days": _NEVER_REUSED_DAYS,
     }
 

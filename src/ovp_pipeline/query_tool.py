@@ -553,7 +553,7 @@ def main(argv: list[str] | None = None):
         consumer_ref=question,
     )
 
-    if args.feedback:
+    if args.feedback and args.engine == "knowledge":
         try:
             from .feedback_router import (
                 CandidateConcept,
@@ -583,6 +583,8 @@ def main(argv: list[str] | None = None):
                 )
         except Exception as exc:
             querier.log(f"feedback routing failed: {exc}")
+    elif args.feedback:
+        querier.log("feedback routing skipped: --engine qmd returns external sources")
 
     print(f"\n💡 回答:\n")
     print(answer['answer'])

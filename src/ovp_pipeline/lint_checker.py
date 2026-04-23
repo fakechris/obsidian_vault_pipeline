@@ -748,8 +748,9 @@ class KnowledgeLinter:
                 if cutoff_seconds and (now_ts - mtime) < cutoff_seconds:
                     continue
                 file_iso = datetime.fromtimestamp(mtime).strftime("%Y-%m-%dT%H:%M:%SZ")
-                # Match audit event by file basename slug (deterministic note_id).
-                slug_key = path.stem
+                # Match audit event by vault-relative target_path so files that
+                # share a basename (e.g. 30-Projects/*/Plan.md) don't collide.
+                slug_key = rel
                 last_promo = latest_promotion_ts.get(slug_key, "")
                 if last_promo and last_promo >= file_iso:
                     continue  # promotion covers this mtime

@@ -67,6 +67,7 @@ CREATE TABLE relations (
   target_object_id TEXT NOT NULL,
   relation_type TEXT NOT NULL,
   evidence_source_slug TEXT NOT NULL DEFAULT '',
+  quote_text TEXT NOT NULL DEFAULT '',
   locator TEXT NOT NULL DEFAULT '',
   content_hash TEXT NOT NULL DEFAULT '',
   retrieval_context TEXT NOT NULL DEFAULT '',
@@ -309,19 +310,21 @@ class RelationRow:
     target_object_id: str
     relation_type: str
     evidence_source_slug: str = ""
+    quote_text: str = ""
     locator: str = ""
     content_hash: str = ""
     retrieval_context: str = ""
     status: str = EVIDENCE_STATUS_UNVERIFIED
     verified_at: str = ""
 
-    def to_row(self) -> tuple[str, str, str, str, str, str, str, str, str, str]:
+    def to_row(self) -> tuple[str, str, str, str, str, str, str, str, str, str, str]:
         return (
             self.pack,
             self.source_object_id,
             self.target_object_id,
             self.relation_type,
             self.evidence_source_slug,
+            self.quote_text,
             self.locator,
             self.content_hash,
             self.retrieval_context,

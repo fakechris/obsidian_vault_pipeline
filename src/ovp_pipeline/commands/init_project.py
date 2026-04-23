@@ -10,6 +10,7 @@ mtime/audit pair.
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 from pathlib import Path
 
@@ -19,12 +20,19 @@ from ..state_lifecycle import State
 
 
 _SKELETON_REL = Path("90-Templates/Project-Skeleton")
+_VALID_PROJECT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SUBSTITUTE_FILES = {
     "README.md",
     "Plan.md",
     "Roadmap.md",
     "Decisions.md",
     "OVP-Suggestions.md",
+}
+_ACCEPTED_FILES = {
+    "README.md",
+    "Plan.md",
+    "Roadmap.md",
+    "Decisions.md",
 }
 
 
@@ -82,12 +90,26 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _cmd_project(args: argparse.Namespace) -> int:
+    name = args.name
+    if not _VALID_PROJECT_NAME.fullmatch(name):
+        raise SystemExit(
+            f"Invalid project name {name!r}. "
+            "Use only letters, digits, '.', '_', '-' and start with an alphanumeric."
+        )
     vault_dir = resolve_vault_dir(args.vault_dir)
     src = vault_dir / _SKELETON_REL
-    dst = vault_dir / "30-Projects" / args.name
-    touched = _copy_skeleton(src, dst, project_name=args.name)
+    projects_root = (vault_dir / "30-Projects").resolve()
+    dst = (projects_root / name).resolve()
+    try:
+        dst.relative_to(projects_root)
+    except ValueError as exc:
+        raise SystemExit(f"Project name {name!r} escapes 30-Projects/") from exc
+    if dst == projects_root:
+        raise SystemExit("Project name must not be empty or '.'")
+    touched = _copy_skeleton(src, dst, project_name=name)
     if not args.no_audit:
-        _emit_baseline_audit(vault_dir, project_name=args.name, files=touched)
+        accepted = [path for path in touched if path.name in _ACCEPTED_FILES]
+        _emit_baseline_audit(vault_dir, project_name=name, files=accepted)
     print(f"Created project: {dst}")
     return 0
 

@@ -134,9 +134,11 @@ def _split_frontmatter(text: str) -> tuple[dict[str, object], str]:
     try:
         meta = yaml.safe_load(raw) or {}
     except yaml.YAMLError:
-        return {}, text
+        # malformed frontmatter — drop the fences (we already located them) so
+        # the rewrite doesn't double-stamp a second `---` block above the file.
+        return {}, body
     if not isinstance(meta, dict):
-        return {}, text
+        return {}, body
     return meta, body
 
 

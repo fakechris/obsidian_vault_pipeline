@@ -22,7 +22,7 @@ from ..knowledge_index import (
     resolve_contradictions,
 )
 from ..pack_resolution import iter_compatible_packs
-from ..packs.loader import PRIMARY_PACK_NAME
+from ..packs.loader import DEFAULT_PACK_NAME, PRIMARY_PACK_NAME
 from ..runtime import VaultLayout, resolve_vault_dir
 from .reuse_report import build_reuse_report_payload
 from ..ui.view_models import (
@@ -3874,21 +3874,25 @@ def _build_open_questions_payload(vault_dir: Path) -> dict:
 
     Stays read-only; never mutates the log. Returns the most recent 100
     entries reverse-chronologically so the panel shows fresh items first.
+    Uses a bounded deque so the file is streamed line-by-line and only the
+    tail is retained in memory regardless of log size.
     """
     import json as _json
+    from collections import deque
+
     log = vault_dir / "60-Logs" / "open-questions.jsonl"
     if not log.exists():
         return {"questions": []}
-    rows: list[dict] = []
-    for line in log.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(_json.loads(line))
-        except _json.JSONDecodeError:
-            continue
-    rows.reverse()
-    return {"questions": rows[:100]}
+    tail: deque[dict] = deque(maxlen=100)
+    with log.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                tail.append(_json.loads(line))
+            except _json.JSONDecodeError:
+                continue
+    return {"questions": list(reversed(tail))}
 
 
 def _build_writing_prompts_payload(vault_dir: Path) -> dict:
@@ -4397,7 +4401,10 @@ def create_server(
                     self._write_html(_render_contradictions_page(payload))
                     return
                 if path in {"/reuse", "/reuse/fragment", "/api/reuse"}:
-                    pack_name = query.get("pack", [""])[0] or PRIMARY_PACK_NAME
+                    # Default to the compatibility pack so the panel matches the
+                    # emitter default in query_tool (which writes events with
+                    # pack=DEFAULT_PACK_NAME unless --pack overrides).
+                    pack_name = query.get("pack", [""])[0] or DEFAULT_PACK_NAME
                     payload = build_reuse_report_payload(resolved_vault, pack=pack_name)
                     if path == "/api/reuse":
                         self._write_json(payload)

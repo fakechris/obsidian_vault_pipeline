@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .extraction.semantic_relations import SemanticRelationCandidate, load_candidates
+from .knowledge_index import ensure_knowledge_db_current
 from .packs.base import BaseDomainPack
 from .promotion_audit import emit_promotion
 from .promotion_policy import LANE_AUTO, LANE_ESCALATE, LANE_REJECT, evaluate_relation
@@ -62,10 +63,10 @@ def _ensure_relation_row(
         """
         INSERT INTO relations (
           pack, source_object_id, target_object_id, relation_type,
-          evidence_source_slug, locator, content_hash, retrieval_context,
+          evidence_source_slug, quote_text, locator, content_hash, retrieval_context,
           status, verified_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             candidate.pack,
@@ -73,6 +74,7 @@ def _ensure_relation_row(
             candidate.target_object_id,
             candidate.relation_type,
             candidate.source_slug,
+            candidate.evidence_quote,
             candidate.locator,
             candidate.content_hash,
             candidate.retrieval_context,
@@ -136,18 +138,15 @@ def promote_candidates(
     deterministic edge id, so the same candidate stays one edge.
     """
     report = RelationPromotionReport()
-    db_path = layout.knowledge_db
-    conn: sqlite3.Connection | None = None
-    if db_path.exists():
-        conn = sqlite3.connect(db_path)
+    db_path = ensure_knowledge_db_current(layout.vault_dir)
+    conn = sqlite3.connect(db_path)
 
     try:
         for candidate in candidates:
             decision = evaluate_relation(candidate, pack=pack)
             if decision.lane == LANE_AUTO:
-                if conn is not None:
-                    _ensure_relation_row(conn, candidate)
-                    _ensure_graph_edge_row(conn, candidate)
+                _ensure_relation_row(conn, candidate)
+                _ensure_graph_edge_row(conn, candidate)
                 emit_promotion(
                     layout.vault_dir,
                     pack=pack.name,
@@ -169,11 +168,9 @@ def promote_candidates(
             elif decision.lane == LANE_REJECT:
                 _archive_candidate(layout, candidate, decision.blocking_facts)
                 report.rejected.append((candidate, decision.blocking_facts))
-        if conn is not None:
-            conn.commit()
+        conn.commit()
     finally:
-        if conn is not None:
-            conn.close()
+        conn.close()
 
     return report
 

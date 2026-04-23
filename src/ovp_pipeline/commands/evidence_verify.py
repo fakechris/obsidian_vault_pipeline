@@ -54,18 +54,33 @@ def _utc_now_text() -> str:
 
 
 def _row_dict(table: str, row: tuple[Any, ...]) -> dict[str, Any]:
-    columns = (
-        "pack",
-        "claim_id" if table == "claim_evidence" else "source_object_id",
-        "source_slug" if table == "claim_evidence" else "target_object_id",
-        "evidence_kind" if table == "claim_evidence" else "relation_type",
-        "quote_text" if table == "claim_evidence" else "evidence_source_slug",
-        "locator",
-        "content_hash",
-        "retrieval_context",
-        "status",
-        "verified_at",
-    )
+    if table == "claim_evidence":
+        columns = (
+            "pack",
+            "claim_id",
+            "source_slug",
+            "evidence_kind",
+            "quote_text",
+            "locator",
+            "content_hash",
+            "retrieval_context",
+            "status",
+            "verified_at",
+        )
+    else:
+        columns = (
+            "pack",
+            "source_object_id",
+            "target_object_id",
+            "relation_type",
+            "evidence_source_slug",
+            "quote_text",
+            "locator",
+            "content_hash",
+            "retrieval_context",
+            "status",
+            "verified_at",
+        )
     return dict(zip(columns, row))
 
 
@@ -90,7 +105,7 @@ def _select_rows(
         "locator, content_hash, retrieval_context, status, verified_at"
         if table == "claim_evidence"
         else "pack, source_object_id, target_object_id, relation_type, evidence_source_slug, "
-        "locator, content_hash, retrieval_context, status, verified_at"
+        "quote_text, locator, content_hash, retrieval_context, status, verified_at"
     )
     return list(conn.execute(f"SELECT {columns} FROM {table} {where_sql}", params).fetchall())
 
@@ -116,7 +131,7 @@ def _key_values(table: str, row_dict: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _quote_text_for(table: str, row_dict: dict[str, Any]) -> str:
-    return str(row_dict.get("quote_text") or row_dict.get("evidence_source_slug") or "")
+    return str(row_dict.get("quote_text") or "")
 
 
 def _source_path_for(table: str, row_dict: dict[str, Any]) -> str:
@@ -134,6 +149,36 @@ def _empty_summary() -> dict[str, int]:
     }
 
 
+def _load_slug_to_path(conn: sqlite3.Connection) -> dict[tuple[str, str], str]:
+    """Map ``(pack, object_id) → canonical_path`` for slug→path resolution."""
+    try:
+        rows = conn.execute(
+            "SELECT pack, object_id, canonical_path FROM objects"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {
+        (str(pack or ""), str(object_id or "")): str(canonical_path or "")
+        for pack, object_id, canonical_path in rows
+        if canonical_path
+    }
+
+
+def _resolve_evidence_path(
+    table: str,
+    row_dict: dict[str, Any],
+    raw_source: str,
+    slug_to_path: dict[tuple[str, str], str],
+) -> str:
+    """Resolve ``source_slug`` (claim_evidence) or ``evidence_source_slug``
+    (relations) to the owning object's ``canonical_path`` when known."""
+    if not raw_source:
+        return ""
+    pack = str(row_dict.get("pack") or "")
+    canonical = slug_to_path.get((pack, raw_source))
+    return canonical or raw_source
+
+
 def _process_table(
     conn: sqlite3.Connection,
     table: str,
@@ -142,6 +187,7 @@ def _process_table(
     pack: str | None,
     cutoff_text: str | None,
     backfill: bool,
+    slug_to_path: dict[tuple[str, str], str],
 ) -> dict[str, Any]:
     rows = _select_rows(conn, table, pack=pack, cutoff_text=cutoff_text)
     summary: dict[str, int] = _empty_summary()
@@ -151,7 +197,8 @@ def _process_table(
     for row in rows:
         row_dict = _row_dict(table, row)
         quote = _quote_text_for(table, row_dict)
-        source_path = _source_path_for(table, row_dict)
+        raw_source = _source_path_for(table, row_dict)
+        source_path = _resolve_evidence_path(table, row_dict, raw_source, slug_to_path)
 
         new_locator = row_dict.get("locator") or ""
         new_content_hash = row_dict.get("content_hash") or ""
@@ -173,9 +220,9 @@ def _process_table(
         verify_input = {
             **row_dict,
             "content_hash": new_content_hash,
+            "source_slug": source_path,
+            "quote_text": quote,
         }
-        # `relations` rows don't carry a quote — synthesize source_path key
-        verify_input["source_slug"] = source_path
         status, verified_at = verify_evidence_row(verify_input, vault_dir)
 
         examined += 1
@@ -239,6 +286,7 @@ def _run_verify(args: argparse.Namespace, *, backfill: bool = False) -> int:
 
     summaries: list[dict[str, Any]] = []
     with sqlite3.connect(db_path) as conn:
+        slug_to_path = _load_slug_to_path(conn)
         for table in _TARGET_TABLES:
             summary = _process_table(
                 conn,
@@ -247,6 +295,7 @@ def _run_verify(args: argparse.Namespace, *, backfill: bool = False) -> int:
                 pack=args.pack,
                 cutoff_text=cutoff_text,
                 backfill=backfill,
+                slug_to_path=slug_to_path,
             )
             summaries.append(summary)
         conn.commit()
