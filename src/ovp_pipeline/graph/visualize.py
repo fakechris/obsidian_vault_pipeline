@@ -164,6 +164,14 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
       <button id="btn-layout">Re-layout</button>
       <button id="btn-reset">Reset</button>
     </div>
+
+    <h3>Hop2 collapse</h3>
+    <div id="collapse-stat" class="meta">—</div>
+    <div class="btn-row">
+      <button id="btn-expand-all">Expand all hop2</button>
+      <button id="btn-collapse-all">Collapse all hop2</button>
+      <button id="btn-expand-selected">Expand connected to selected</button>
+    </div>
   </aside>
 
   <main id="cy"></main>
@@ -177,6 +185,8 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
 <script>
 (function() {{
   var payload = {elements_json};
+  var COLLAPSE_THRESHOLD = {collapse_threshold};
+  var INITIAL_AUTO_COLLAPSE = {initial_auto_collapse_js};
 
   var TYPE_STYLE = {{
     'evergreen':          ['#34d399','ellipse'],
@@ -243,7 +253,8 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
         'width': 2,
         'opacity': 1
     }}}},
-    {{ selector: '.hidden', style: {{ 'display':'none' }} }}
+    {{ selector: '.hidden', style: {{ 'display':'none' }} }},
+    {{ selector: '.collapsed-hop2', style: {{ 'display':'none' }} }}
   ];
 
   var cy = cytoscape({{
@@ -404,6 +415,88 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     cy.fit(null, 30);
   }});
 
+  // ---------- Hop2 lazy-collapse ----------
+  // 大图（>COLLAPSE_THRESHOLD 节点）默认折叠 hop2，点击 hop1 时按需展开。
+  // URL 参数可强制覆盖：?collapse_hop2=auto|always|never。
+  function getCollapseMode() {{
+    var m = (location.search || '').match(/[?&]collapse_hop2=(auto|always|never)/);
+    return m ? m[1] : 'auto';
+  }}
+  function shouldCollapseInitially() {{
+    var mode = getCollapseMode();
+    if (mode === 'always') return true;
+    if (mode === 'never')  return false;
+    return INITIAL_AUTO_COLLAPSE;  // auto: server-side default based on size
+  }}
+
+  var collapseStatEl = document.getElementById('collapse-stat');
+  function updateCollapseStat() {{
+    var total = cy.nodes().length;
+    var collapsed = cy.nodes('.collapsed-hop2').length;
+    var shown = total - collapsed;
+    if (collapsed > 0) {{
+      collapseStatEl.textContent =
+        'Showing ' + shown + ' of ' + total + ' nodes (' + collapsed + ' hop2 collapsed)';
+    }} else {{
+      collapseStatEl.textContent = 'Showing all ' + total + ' nodes';
+    }}
+  }}
+
+  function collapseHop2(nodes) {{
+    nodes.addClass('collapsed-hop2');
+    updateCollapseStat();
+  }}
+  function expandHop2(nodes) {{
+    nodes.removeClass('collapsed-hop2');
+    updateCollapseStat();
+  }}
+
+  // hop2 candidates = nodes flagged server-side, OR — if absent — fall back
+  // to seed_role-based detection so the JS still works without the marker.
+  function hop2Nodes() {{
+    var marked = cy.nodes('[?collapsed]').filter(function(n) {{
+      return n.data('collapsed') === 'hop2';
+    }});
+    if (marked.nonempty()) return marked;
+    return cy.nodes().filter(function(n) {{
+      return n.data('seed_role') === 'neighbor_2hop';
+    }});
+  }}
+
+  // Initial collapse — runs after layout so positions are computed with the
+  // full graph in place; subsequent expand simply un-hides at preserved coords.
+  if (shouldCollapseInitially()) {{
+    collapseHop2(hop2Nodes());
+  }} else {{
+    updateCollapseStat();
+  }}
+
+  // Click a hop1 node → toggle visibility of its hop2 neighbors only.
+  cy.on('tap', 'node.role-neighbor_1hop', function(evt) {{
+    var hop1 = evt.target;
+    var hop2Neighbors = hop1.neighborhood('node').filter(function(n) {{
+      return n.data('seed_role') === 'neighbor_2hop';
+    }});
+    if (hop2Neighbors.empty()) return;
+    var anyCollapsed = hop2Neighbors.some(function(n) {{ return n.hasClass('collapsed-hop2'); }});
+    if (anyCollapsed) expandHop2(hop2Neighbors);
+    else              collapseHop2(hop2Neighbors);
+  }});
+
+  document.getElementById('btn-expand-all').addEventListener('click', function() {{
+    expandHop2(cy.nodes('.collapsed-hop2'));
+  }});
+  document.getElementById('btn-collapse-all').addEventListener('click', function() {{
+    collapseHop2(hop2Nodes());
+  }});
+  document.getElementById('btn-expand-selected').addEventListener('click', function() {{
+    if (!currentSelection) return;
+    var nbrs = currentSelection.neighborhood('node').filter(function(n) {{
+      return n.data('seed_role') === 'neighbor_2hop';
+    }});
+    expandHop2(nbrs);
+  }});
+
   // Initial focus on seeds if any
   var seeds = cy.nodes('.role-seed');
   if (seeds.nonempty()) cy.fit(seeds, 80);
@@ -506,7 +599,12 @@ class GraphVisualizer:
         lines.append("\n" + "=" * 60)
         return "\n".join(lines)
 
-    def html(self, output_path: Optional[Path] = None) -> str:
+    def html(
+        self,
+        output_path: Optional[Path] = None,
+        *,
+        collapse_hop2_threshold: int = 300,
+    ) -> str:
         """生成交互式 HTML 可视化（基于 Cytoscape.js）。
 
         替代了原来的 vis.js 实现。原版在 ~6K 节点上互动僵硬、信息密度低、
@@ -524,6 +622,16 @@ class GraphVisualizer:
         edges_data = self._cytoscape_edges()
         type_counts = self._type_counts(nodes_data)
 
+        # Decide auto-collapse: when the graph is large, mark hop2 nodes so
+        # the page boots collapsed (JS can override via ?collapse_hop2=...).
+        # Threshold is server-side default; the URL param lets a reviewer flip
+        # the decision per-session without re-rendering.
+        auto_collapse = len(nodes_data) > collapse_hop2_threshold
+        if auto_collapse:
+            for node in nodes_data:
+                if node['data'].get('seed_role') == 'neighbor_2hop':
+                    node['data']['collapsed'] = 'hop2'
+
         title = self.delta.get('day_id', '') or 'OVP Graph'
         seed_pattern = self.delta.get('seed_pattern', '')
         if seed_pattern:
@@ -537,6 +645,8 @@ class GraphVisualizer:
             seed_count=len(self.delta.get('seed_note_ids', [])),
             type_filter_html=_render_type_filter(type_counts),
             elements_json=_safe_json({'nodes': nodes_data, 'edges': edges_data}),
+            collapse_threshold=collapse_hop2_threshold,
+            initial_auto_collapse_js='true' if auto_collapse else 'false',
         )
 
         if output_path:
