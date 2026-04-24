@@ -56,12 +56,41 @@ def test_cose_bilkent_kept_as_fallback():
     assert "'cose-bilkent'" in html
 
 
-def test_bubblesets_script_loaded():
-    """BubbleSets paints the cluster envelopes — without the script the
-    overlay system silently no-ops, which is hard to spot in QA."""
+def test_bubblesets_script_loaded_with_layers_peer():
+    """BubbleSets paints the cluster envelopes; cytoscape-layers is its peer
+    dep. Without either, the overlay silently no-ops — hard to spot in QA."""
     html = GraphVisualizer(_payload()).html()
 
-    assert "cytoscape-bubblesets@4.0.5" in html
+    assert "cytoscape-bubblesets@4.1.0" in html
+    assert "cytoscape-layers@" in html
+
+
+def test_bubblesets_register_uses_pascal_case_global():
+    """The UMD bundle exports as window.CytoscapeBubbleSets (PascalCase).
+    A lowercase guard would silently fail to register the plugin."""
+    html = GraphVisualizer(_payload()).html()
+
+    assert "CytoscapeBubbleSets" in html
+
+
+def test_redraw_clusters_includes_edges_in_components():
+    """components() on a node-only collection treats every node as its own
+    singleton, dropping all hulls. The fix unions the visible nodes with
+    their connecting edges before computing components."""
+    html = GraphVisualizer(_payload()).html()
+
+    assert "edgesWith(visibleNodes)" in html
+
+
+def test_expand_hop2_checks_both_endpoints_before_unhiding_edge():
+    """When a node fades in, edges to nodes that remain collapsed must
+    stay hidden — otherwise visible edges point to invisible endpoints."""
+    html = GraphVisualizer(_payload()).html()
+
+    assert "hasClass('collapsed-hop2')" in html
+    # Both source AND target endpoints must be checked.
+    assert "e.source().hasClass('collapsed-hop2')" in html
+    assert "e.target().hasClass('collapsed-hop2')" in html
 
 
 def test_hover_highlight_handlers_wired():

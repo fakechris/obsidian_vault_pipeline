@@ -73,8 +73,10 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
 <script src="https://unpkg.com/numeric@1.2.6/numeric-1.2.6.min.js"></script>
 <script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
 <script src="https://unpkg.com/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
-<!-- BubbleSets draws the soft cluster envelopes on a canvas overlay. -->
-<script src="https://unpkg.com/cytoscape-bubblesets@4.0.5/dist/index.umd.min.js"></script>
+<!-- BubbleSets draws the soft cluster envelopes on a canvas overlay.
+     Requires cytoscape-layers as a peer dep. -->
+<script src="https://unpkg.com/cytoscape-layers@3.1.0/build/index.umd.min.js"></script>
+<script src="https://unpkg.com/cytoscape-bubblesets@4.1.0/build/index.umd.min.js"></script>
 <style>
   :root {{
     --bg: #0b0e17;
@@ -570,8 +572,16 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
   }}
   function expandHop2(nodes) {{
     if (nodes.empty()) return;
-    var bundle = _withIncidentEdges(nodes);
-    cy.batch(function() {{ bundle.removeClass('collapsed-hop2'); }});
+    cy.batch(function() {{
+      nodes.removeClass('collapsed-hop2');
+      // Only un-hide an edge when BOTH endpoints are now visible.
+      // (display:none used to handle this for free; opacity:0 doesn't.)
+      nodes.connectedEdges().forEach(function(e) {{
+        if (!e.source().hasClass('collapsed-hop2') && !e.target().hasClass('collapsed-hop2')) {{
+          e.removeClass('collapsed-hop2');
+        }}
+      }});
+    }});
     setTimeout(updateCollapseStat, ANIM_MS);
     redrawClusters();
   }}
@@ -644,8 +654,11 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
   var legendEl = document.getElementById('cluster-legend');
 
   function _registerBubbleSets() {{
-    if (typeof window.cytoscapeBubbleSets === 'undefined') return false;
-    try {{ cytoscape.use(window.cytoscapeBubbleSets); return true; }}
+    // The UMD bundle exports as window.CytoscapeBubbleSets (PascalCase) and
+    // depends on window.CytoscapeLayers being loaded first.
+    var lib = window.CytoscapeBubbleSets || window.cytoscapeBubbleSets;
+    if (typeof lib === 'undefined') return false;
+    try {{ cytoscape.use(lib); return true; }}
     catch (e) {{ return false; }}
   }}
 
@@ -665,7 +678,10 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     bubblePaths = [];
   }}
 
-  function _dominantTypeColor(component, fallback) {{
+  var MIN_CLUSTER_SIZE_FOR_HULL = 3;
+  var MAX_LEGEND_ENTRIES = 8;
+
+  function _dominantTypeColor(component) {{
     var counts = {{}};
     component.nodes().forEach(function(n) {{
       var t = n.data('note_type') || 'unknown';
@@ -674,7 +690,7 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     var keys = Object.keys(counts).sort(function(a, b) {{ return counts[b] - counts[a]; }});
     var top = keys[0] || 'unknown';
     var i = Math.abs(_hash(top)) % BUBBLE_PALETTE.length;
-    return {{ type: top, color: BUBBLE_PALETTE[i], fallback: fallback }};
+    return {{ type: top, color: BUBBLE_PALETTE[i] }};
   }}
   function _hash(s) {{
     var h = 0;
@@ -686,11 +702,13 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     if (!legendEl) return;
     if (!clustersEnabled || !entries.length) {{ legendEl.innerHTML = ''; return; }}
     var html = '';
-    entries.slice(0, 8).forEach(function(e) {{
+    entries.slice(0, MAX_LEGEND_ENTRIES).forEach(function(e) {{
       html += '<div><span class="pill" style="background:' + e.color + '"></span>'
             + esc(e.type) + ' (' + e.size + ')</div>';
     }});
-    if (entries.length > 8) html += '<div>… +' + (entries.length - 8) + ' more</div>';
+    if (entries.length > MAX_LEGEND_ENTRIES) {{
+      html += '<div>… +' + (entries.length - MAX_LEGEND_ENTRIES) + ' more</div>';
+    }}
     legendEl.innerHTML = html;
   }}
 
@@ -699,13 +717,18 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     if (!adapter) {{ _renderLegend([]); return; }}
     _clearBubblePaths();
     if (!clustersEnabled) {{ _renderLegend([]); return; }}
-    var visible = cy.nodes().not('.hidden').not('.collapsed-hop2');
-    if (visible.empty()) {{ _renderLegend([]); return; }}
+    var visibleNodes = cy.nodes().not('.hidden').not('.collapsed-hop2');
+    if (visibleNodes.empty()) {{ _renderLegend([]); return; }}
+    // CRITICAL: components() needs both nodes AND edges in the collection,
+    // otherwise every node looks like its own singleton component and the
+    // MIN_CLUSTER_SIZE_FOR_HULL filter drops everything. Include the edges
+    // that connect visible nodes.
+    var visible = visibleNodes.union(visibleNodes.edgesWith(visibleNodes));
     var components = visible.components();
     var legendEntries = [];
     components.forEach(function(comp) {{
       // Skip trivial singletons — a hull around one node is just visual noise.
-      if (comp.length < 3) return;
+      if (comp.nodes().length < MIN_CLUSTER_SIZE_FOR_HULL) return;
       var nodes = comp.nodes();
       var edges = comp.edges();
       var meta = _dominantTypeColor(comp);
@@ -858,7 +881,8 @@ class GraphVisualizer:
         替代了原来的 vis.js 实现。原版在 ~6K 节点上互动僵硬、信息密度低、
         靠 tooltip 表达；这里改成：
             * 左侧 toolbar：搜索 + note_type 过滤 + hop 过滤 + 布局/聚焦按钮
-            * 主画布：cose-bilkent 布局；节点按 note_type 着色 + 形状区分；
+            * 主画布：fcose 布局（cose-bilkent 作为回退）；连通分量用
+              cytoscape-bubblesets 画软包络；节点按 note_type 着色 + 形状区分；
               seed/1hop/2hop 用边框宽度+尺寸表达
             * 右侧 detail panel：点击节点显示 title / type / distance / path /
               入出邻居列表（可点击跳转）
