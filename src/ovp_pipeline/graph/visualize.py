@@ -667,7 +667,12 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
 
   function _ensureBubbleAdapter() {{
     if (bubbleAdapter) return bubbleAdapter;
-    if (!_registerBubbleSets() || typeof cy.bubbleSets !== 'function') return null;
+    // _registerBubbleSets returns false when the UMD bundle has already
+    // auto-registered itself (cytoscape.use throws "already registered"),
+    // so we must ALSO check whether cy.bubbleSets is independently available.
+    // Only bail when both the explicit register failed AND no method exists.
+    _registerBubbleSets();
+    if (typeof cy.bubbleSets !== 'function') return null;
     try {{ bubbleAdapter = cy.bubbleSets(); }}
     catch (e) {{ bubbleAdapter = null; }}
     return bubbleAdapter;

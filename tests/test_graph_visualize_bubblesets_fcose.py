@@ -76,6 +76,20 @@ def test_bubblesets_register_uses_pascal_case_global():
     assert "CytoscapeBubbleSets" in html
 
 
+def test_ensure_bubble_adapter_does_not_short_circuit_on_register_failure():
+    """When the UMD bundle auto-registers, the second cytoscape.use(...)
+    throws 'already registered' and _registerBubbleSets returns false.
+    The adapter check must NOT bail on that — it has to inspect
+    cy.bubbleSets directly. Otherwise the entire feature silently no-ops."""
+    html = GraphVisualizer(_payload()).html()
+
+    # The bug pattern was `!_registerBubbleSets() || typeof cy.bubbleSets...`
+    # — a single || here is the regression to guard against.
+    assert "!_registerBubbleSets() || typeof cy.bubbleSets" not in html
+    # The fix calls register unconditionally and gates only on cy.bubbleSets.
+    assert "if (typeof cy.bubbleSets !== 'function') return null" in html
+
+
 def test_redraw_clusters_includes_edges_in_components():
     """components() on a node-only collection treats every node as its own
     singleton, dropping all hulls. The fix unions the visible nodes with
