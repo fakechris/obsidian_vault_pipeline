@@ -17,7 +17,6 @@ Usage:
     ovp-lint --wigs            # 启用 WIGS 5层架构检查
 """
 
-import os
 import re
 import json
 import argparse
@@ -25,7 +24,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, asdict
-from typing import List, Dict, Set, Tuple, Optional
+from typing import List, Dict, Set, Optional
 from collections import defaultdict
 
 try:
@@ -455,7 +454,7 @@ class KnowledgeLinter:
                         type=self.BROKEN_LINK,
                         file=file_path,
                         message=f"断裂链接: [[{link}]] 指向不存在的页面",
-                        suggestion=f"创建页面或修复链接",
+                        suggestion="创建页面或修复链接",
                         auto_fixable=False
                     )
                     self.issues.append(issue)
@@ -916,7 +915,7 @@ class KnowledgeLinter:
                 lines.append(f"   → {issue.message}")
                 lines.append(f"   💡 {issue.suggestion}")
                 if issue.auto_fixable:
-                    lines.append(f"   🔧 可自动修复")
+                    lines.append("   🔧 可自动修复")
                 lines.append("")
 
         # 信息

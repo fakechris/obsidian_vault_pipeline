@@ -330,7 +330,7 @@ def cmd_build(args):
         print("📊 扫盘构建全量图谱...")
         all_nodes, all_edges = _scan_graph_from_filesystem(vault_dir)
 
-    print(f"\n✅ 图谱构建完成:")
+    print("\n✅ 图谱构建完成:")
     print(f"   节点: {len(all_nodes)}")
     print(f"   边: {len(all_edges)}")
 
@@ -509,7 +509,7 @@ def cmd_daily(args):
 
     # --full 模式: 显示完整图谱
     if args.full:
-        print(f"📊 构建完整图谱...")
+        print("📊 构建完整图谱...")
 
         builder = GraphBuilder(vault_dir)
         directories = [
@@ -543,7 +543,6 @@ def cmd_daily(args):
             "edges": all_edges,
         }
 
-        output_file = vault_dir / "60-Logs" / "daily-deltas" / f"delta-{day_id}.json"
         delta_computer.save(delta)
     else:
         print(f"📅 生成每日增量图谱: {day_id}")
@@ -554,12 +553,11 @@ def cmd_daily(args):
             expand_hops=args.expand_hops
         )
 
-        # 保存JSON
-        output_file = delta_computer.save(delta)
+        delta_computer.save(delta)
 
     # 打印统计
     stats = delta.get('stats', {})
-    print(f"\n📊 统计:")
+    print("\n📊 统计:")
     print(f"   节点: {stats.get('expanded_node_count', 0)}")
     print(f"   边: {stats.get('expanded_edge_count', 0)}")
     if not args.full:
@@ -660,10 +658,10 @@ def cmd_stats(args):
 
     stats = builder.get_stats()
 
-    print(f"\n📈 全局统计:")
+    print("\n📈 全局统计:")
     print(f"   总节点: {stats['total_nodes']}")
     print(f"   总边: {stats['total_edges']}")
-    print(f"\n📚 按类型分布:")
+    print("\n📚 按类型分布:")
     for note_type, count in stats.get('note_types', {}).items():
         print(f"   {note_type}: {count}")
 

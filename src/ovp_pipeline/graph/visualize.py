@@ -9,7 +9,6 @@ Visualization - 图谱可视化
 
 from pathlib import Path
 from typing import Optional
-from dataclasses import asdict
 import html as _html
 import json
 import re
@@ -522,17 +521,17 @@ class GraphVisualizer:
 
         # 统计
         stats = self.delta.get('stats', {})
-        lines.append(f"\n📈 统计:")
+        lines.append("\n📈 统计:")
         lines.append(f"   Seeds: {len(self.delta.get('seed_note_ids', []))}")
         lines.append(f"   Nodes: {stats.get('expanded_node_count', 0)}")
         lines.append(f"   Edges: {stats.get('expanded_edge_count', 0)}")
 
         # 图例
-        lines.append(f"\n📝 图例:")
-        lines.append(f"   🌱 seed        - 今日新增/修改")
-        lines.append(f"   🔗 1-hop      - 直接关联")
-        lines.append(f"   🔄 2-hop      - 2跳关联")
-        lines.append(f"   📦 3-hop      - 3跳关联")
+        lines.append("\n📝 图例:")
+        lines.append("   🌱 seed        - 今日新增/修改")
+        lines.append("   🔗 1-hop      - 直接关联")
+        lines.append("   🔄 2-hop      - 2跳关联")
+        lines.append("   📦 3-hop      - 3跳关联")
 
         # 过滤模板文件
         def is_valid_node(node: dict) -> bool:
@@ -556,7 +555,7 @@ class GraphVisualizer:
                 t = node.get('note_type', 'unknown')
                 by_type.setdefault(t, []).append(node)
 
-        lines.append(f"\n📚 按类型:")
+        lines.append("\n📚 按类型:")
         type_icons = {
             'raw': '📄',
             'deep_dive': '📑',
