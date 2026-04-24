@@ -78,7 +78,7 @@ def test_backfill_dry_run_summary_counts(tmp_path: Path, capsys):
     rc = backfill_main(["--vault-dir", str(vault), "--dry-run"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "Would-write: 2" in out
+    assert "Candidates: 2" in out
     assert "missing-source: 1" in out
 
 
