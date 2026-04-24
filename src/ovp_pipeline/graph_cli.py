@@ -203,6 +203,84 @@ def _expand_layered(
     return expanded, distance_map, used_edges
 
 
+def _prune_hop1(
+    seed_ids: set[str],
+    expanded_ids: set[str],
+    distance_map: dict[str, int],
+    used_edges: list[dict],
+    *,
+    min_seed_degree: int = 1,
+    top_k_per_seed: int | None = None,
+) -> tuple[set[str], dict[str, int], list[dict], dict[str, int]]:
+    """Trim hop1 nodes by their seed-connection count.
+
+    Two filters compose. ``min_seed_degree=N`` drops hop1 nodes that bridge
+    fewer than N distinct seeds (suppresses concept-drift hop1 nodes that
+    each touch only one seed). ``top_k_per_seed=K`` then ranks each seed's
+    surviving hop1 neighbors by their seed-degree (descending) and keeps
+    only the K highest — a horizontal cap on per-seed fan-out.
+
+    Hop2 nodes that lose all their hop1/seed bridges as a result are also
+    dropped (otherwise the visualization shows orphaned source-markdown
+    nodes floating in space).
+
+    Returns ``(new_expanded_ids, new_distance_map, new_used_edges, drop_summary)``.
+    """
+    from collections import defaultdict
+
+    if min_seed_degree <= 1 and not top_k_per_seed:
+        return expanded_ids, distance_map, used_edges, {"hop1_dropped": 0, "hop2_dropped": 0}
+
+    hop1_ids = {nid for nid, d in distance_map.items() if d == 1}
+    hop2_ids = {nid for nid, d in distance_map.items() if d == 2}
+
+    # For each hop1 node, collect the set of seed_ids it directly bridges.
+    hop1_seed_links: dict[str, set[str]] = defaultdict(set)
+    for edge in used_edges:
+        for endpoint, other in (
+            (edge["source"], edge["target"]),
+            (edge["target"], edge["source"]),
+        ):
+            if endpoint in hop1_ids and other in seed_ids:
+                hop1_seed_links[endpoint].add(other)
+
+    kept_hop1 = {hid for hid, seeds in hop1_seed_links.items() if len(seeds) >= min_seed_degree}
+
+    if top_k_per_seed:
+        seed_to_hop1: dict[str, list[str]] = defaultdict(list)
+        for hid in kept_hop1:
+            for sid in hop1_seed_links[hid]:
+                seed_to_hop1[sid].append(hid)
+        kept_via_topk: set[str] = set()
+        for sid, hids in seed_to_hop1.items():
+            ranked = sorted(hids, key=lambda h: (-len(hop1_seed_links[h]), h))
+            kept_via_topk.update(ranked[:top_k_per_seed])
+        kept_hop1 = kept_hop1 & kept_via_topk
+
+    dropped_hop1 = hop1_ids - kept_hop1
+
+    # Re-assess hop2: keep only those still bridged by a kept hop1 or a seed.
+    kept_hop2: set[str] = set()
+    for edge in used_edges:
+        for endpoint, other in (
+            (edge["source"], edge["target"]),
+            (edge["target"], edge["source"]),
+        ):
+            if endpoint in hop2_ids and (other in seed_ids or other in kept_hop1):
+                kept_hop2.add(endpoint)
+    dropped_hop2 = hop2_ids - kept_hop2
+
+    new_expanded = expanded_ids - dropped_hop1 - dropped_hop2
+    new_distance_map = {nid: d for nid, d in distance_map.items() if nid in new_expanded}
+    new_edges = [
+        e for e in used_edges if e["source"] in new_expanded and e["target"] in new_expanded
+    ]
+    return new_expanded, new_distance_map, new_edges, {
+        "hop1_dropped": len(dropped_hop1),
+        "hop2_dropped": len(dropped_hop2),
+    }
+
+
 def _scan_graph_from_filesystem(vault_dir: Path) -> tuple[list[dict], list[dict]]:
     """扫盘 fallback：当 knowledge.db 还没建立时使用。"""
     from ovp_pipeline.graph import GraphBuilder
@@ -296,10 +374,32 @@ def cmd_build(args):
             expanded_ids, distance_map, used_edges = _expand_layered(
                 seed_ids, edge_index, type_by_id
             )
+
+            min_seed_degree = max(1, getattr(args, "min_seed_degree", 1) or 1)
+            top_k_per_seed = getattr(args, "top_k_per_seed", None)
+            if min_seed_degree > 1 or top_k_per_seed:
+                expanded_ids, distance_map, used_edges, drop_summary = _prune_hop1(
+                    seed_ids,
+                    expanded_ids,
+                    distance_map,
+                    used_edges,
+                    min_seed_degree=min_seed_degree,
+                    top_k_per_seed=top_k_per_seed,
+                )
+                print(
+                    f"✂️  hop1 prune: dropped {drop_summary['hop1_dropped']} hop1 / "
+                    f"{drop_summary['hop2_dropped']} hop2 nodes "
+                    f"(min_seed_degree={min_seed_degree}, top_k_per_seed={top_k_per_seed})"
+                )
+
             all_nodes = [n for n in all_nodes if n["note_id"] in expanded_ids]
             # 只画 BFS 实际走过的边，否则 hop1 的 evergreen 之间又会拉一堆桥
             all_edges = used_edges
             mode_label = "--layered (hop1=evergreen, hop2=source-md)"
+            if min_seed_degree > 1 or top_k_per_seed:
+                mode_label += (
+                    f" + prune(min_seed_degree={min_seed_degree}, top_k_per_seed={top_k_per_seed})"
+                )
         else:
             # --source-walk: 剔除 evergreen↔evergreen / evergreen↔moc 这种"概念内部"
             # 的边，让 BFS 从概念种子直接跳到产生它的源文档（deep_dive / raw / article ...）
@@ -615,6 +715,20 @@ def main():
         help="两层 BFS：hop1 只扩 evergreen 邻居（概念波），"
              "hop2 只从这些 evergreen 跳到 source markdown。--expand-hops 被忽略。"
              "和 --source-walk 互斥",
+    )
+    build_parser.add_argument(
+        "--min-seed-degree",
+        type=int,
+        default=1,
+        help="(仅 --layered) 丢弃只连接到 <N 个 seed 的 hop1 节点 — 抑制 concept drift。"
+             "默认 1 (关闭)，常用 2",
+    )
+    build_parser.add_argument(
+        "--top-k-per-seed",
+        type=int,
+        default=None,
+        help="(仅 --layered) 每个 seed 只保留 K 个 seed-degree 最高的 hop1 邻居。"
+             "用于横向裁剪极宽的 fan-out",
     )
 
     # ovp-graph --daily
