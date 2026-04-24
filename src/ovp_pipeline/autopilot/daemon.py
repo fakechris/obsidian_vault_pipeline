@@ -505,7 +505,12 @@ class AutoPilotDaemon:
             "--pack", self.pack.name,
             "--json",
         ]
-        subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
+        try:
+            subprocess.run(
+                cmd, capture_output=True, cwd=str(self.vault_dir), timeout=120
+            )
+        except subprocess.TimeoutExpired:
+            self.log("⚠️ build_crystals 超时 (120s)")
 
     def _run_working_memory(self):
         cmd = [
@@ -513,7 +518,12 @@ class AutoPilotDaemon:
             "--vault-dir", str(self.vault_dir),
             "--json",
         ]
-        subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
+        try:
+            subprocess.run(
+                cmd, capture_output=True, cwd=str(self.vault_dir), timeout=60
+            )
+        except subprocess.TimeoutExpired:
+            self.log("⚠️ working_memory 超时 (60s)")
 
     def _auto_commit(self, task: Task, result: dict):
         """自动 Git 提交"""

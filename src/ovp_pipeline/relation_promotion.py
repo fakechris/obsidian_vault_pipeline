@@ -335,7 +335,7 @@ def promote_candidates(
                     actor=actor,
                     reason="relation_promoted",
                     payload={
-                        "relation_type": candidate.relation_type,
+                        "relation_type": _effective_relation_type(candidate),
                         "source_object_id": candidate.source_object_id,
                         "target_object_id": candidate.target_object_id,
                         "source_slug": candidate.source_slug,

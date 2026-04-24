@@ -554,7 +554,7 @@ def main(argv: list[str] | None = None):
         consumer_ref=question,
     )
 
-    if args.feedback and args.engine == "knowledge":
+    if args.feedback and args.engine in {"knowledge", "fused"}:
         try:
             from .feedback_router import (
                 CandidateConcept,

@@ -952,8 +952,6 @@ def _iso_to_epoch(value: object) -> int:
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        from datetime import datetime
-
         return int(datetime.fromisoformat(text).timestamp())
     except ValueError:
         return 0
@@ -1136,7 +1134,15 @@ def search_fused(
     _, layout = _ensure_knowledge_db(vault_dir)
 
     fetch = max(limit * 3, limit)
-    bm25_results = search_knowledge_index(vault_dir, query, limit=fetch)
+    try:
+        bm25_results = search_knowledge_index(vault_dir, query, limit=fetch)
+    except sqlite3.OperationalError:
+        normalized_terms = re.findall(r"[\w\u4e00-\u9fff]+", query, flags=re.UNICODE)
+        if normalized_terms:
+            safe_query = " ".join(f'"{term}"' for term in normalized_terms)
+            bm25_results = search_knowledge_index(vault_dir, safe_query, limit=fetch)
+        else:
+            bm25_results = []
     vector_chunks = query_knowledge_index(vault_dir, query, limit=fetch)
 
     rrf_scores: dict[str, float] = {}
