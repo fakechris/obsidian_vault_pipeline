@@ -26,7 +26,17 @@ def test_tools_list_returns_three_descriptors(temp_vault: Path) -> None:
     assert reply["id"] == 1
     tools = reply["result"]["tools"]
     names = sorted(t["name"] for t in tools)
-    assert names == ["assemble_prompt", "evaluate_promotion", "route_feedback"]
+    # Phase 38 Stage C added 5 graph operators alongside the 3 compiler primitives.
+    assert names == [
+        "assemble_prompt",
+        "evaluate_promotion",
+        "graph_bridge_nodes",
+        "graph_communities",
+        "graph_neighborhood",
+        "graph_node_details",
+        "graph_shortest_path",
+        "route_feedback",
+    ]
     # Every descriptor must declare its side effects so MCP clients can gate
     # writes when running a dry-run preview.
     for tool in tools:
@@ -303,6 +313,11 @@ def test_list_tools_direct(temp_vault: Path) -> None:
         "evaluate_promotion",
         "assemble_prompt",
         "route_feedback",
+        "graph_node_details",
+        "graph_neighborhood",
+        "graph_shortest_path",
+        "graph_bridge_nodes",
+        "graph_communities",
     }
 
 
