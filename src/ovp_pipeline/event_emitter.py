@@ -30,6 +30,9 @@ Closed `event_type` vocabulary (forward-compat for Phase 37 Pulse feed):
                              promotion command.
   feedback_yield           — Phase 36. ovp-query produced a downstream
                              candidate / question / writing prompt.
+  concept_merged           — Phase 38.A. Duplicate Evergreen file(s) merged
+                             into a canonical concept (file archived,
+                             wikilinks rewritten, alias added).
 
 Adding a new event_type requires: (a) appending here, (b) updating any
 collector(s) in knowledge_index.py, (c) updating ingest tests.

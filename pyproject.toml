@@ -113,6 +113,7 @@ ovp-init = "ovp_pipeline.commands.init_project:main"
 ovp-ui = "ovp_pipeline.commands.ui_server:main"
 ovp-mcp = "ovp_pipeline.commands.mcp:main"
 ovp-note-type-normalize = "ovp_pipeline.commands.note_type_normalize:main"
+ovp-concept-dedup = "ovp_pipeline.commands.concept_dedup:main"
 
 [project.entry-points."ovp.packs"]
 default-knowledge = "ovp_pipeline.packs.default_knowledge:get_pack"
