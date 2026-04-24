@@ -365,7 +365,22 @@ interpretation
 | `ovp-knowledge-index --tools-json` | 输出工具发现 JSON |
 | `ovp-knowledge-index --serve` | 启动只读 stdio JSONL 服务 |
 | `ovp-graph daily today --vault-dir <vault>` | 生成 daily delta |
+| `ovp-graph build --layered --seed-match <pattern> --output <out.html>` | 子图浏览（HTML 交互式） |
 | `ovp-lint --check --vault-dir <vault>` | 运行链接/结构检查 |
+
+#### `ovp-graph build` 推荐组合
+
+`--layered` 走 hop1=evergreen / hop2=source-md 的两层 BFS，是浏览子图的默认形态。在它之上叠加 38.B / 38.E 引入的两层质量过滤：
+
+| 子图规模 | 推荐 flag 组合 | 说明 |
+|---|---|---|
+| <100 节点（聚焦查询，如 `agent memory`） | 默认即可 | cose-bilkent 一次能铺清楚，加 prune 反而会过度损失 |
+| 100–500 节点（中等主题，如 `MCP`） | `--min-seed-degree 2` | 丢掉只挂一个 seed 的弱 hop1 节点，抑制 concept drift |
+| >500 节点 / hop1 fan-out 极宽 | `--min-seed-degree 2 --top-k-per-seed 5` | 横向再裁剪每个 seed 的 hop1 邻居数 |
+| 任何规模 → HTML | 自动启用 | 节点 >300 时 hop2 默认折叠，点 hop1 按需展开；URL 加 `?collapse_hop2=always\|never` 可强制覆盖 |
+
+实测 `MCP` 子图（85 seed）：baseline 400 节点 / 656 边 → `--min-seed-degree 2` 砍到 204 节点 / 280 边（-49% / -57%）。
+
 
 ### AutoPilot
 
