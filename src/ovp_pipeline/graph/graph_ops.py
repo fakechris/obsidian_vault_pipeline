@@ -15,6 +15,7 @@ through the MCP envelope. Any operator that walks the graph respects the
 
 from __future__ import annotations
 
+import random
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -148,9 +149,9 @@ def neighborhood(
     nodes_payload = [_node_payload(graph, nid) for nid in visited]
     edges_payload: list[dict[str, Any]] = []
     seen_edge: set[tuple[str, str, str]] = set()
-    for src, tgt, data in graph.edges(data=True):
-        if src not in visited or tgt not in visited:
-            continue
+    # Iterating subgraph edges is O(E_visited) instead of O(E_total) — matters
+    # once the vault graph dwarfs the captured neighborhood.
+    for src, tgt, data in graph.subgraph(visited).edges(data=True):
         link_type = str(data.get("link_type") or "wikilink")
         key = (src, tgt, link_type)
         if key in seen_edge:
@@ -212,19 +213,23 @@ def bridge_nodes(
     *,
     limit: int = 20,
     sample_size: int = 200,
+    seed: int = 42,
 ) -> list[dict[str, Any]]:
     """Top-``limit`` nodes by approximate betweenness centrality.
 
     Betweenness on a vault-scale graph is O(V*E) — too slow for an
     interactive call. We compute on a sampled subgraph (``sample_size``
     nodes) which keeps it well under a second while still surfacing the
-    same kind of bridge nodes a full computation would.
+    same kind of bridge nodes a full computation would. The sample is drawn
+    with a seeded RNG so the result is deterministic across calls but not
+    biased toward whatever order ``pages_index`` happened to load (which
+    would otherwise return only bridges from the alphabetical prefix).
     """
     if graph.number_of_nodes() == 0:
         return []
     sample_nodes = list(graph.nodes)
     if len(sample_nodes) > sample_size:
-        sample_nodes = sample_nodes[:sample_size]
+        sample_nodes = random.Random(seed).sample(sample_nodes, sample_size)
     sub = nx.DiGraph(graph.subgraph(sample_nodes))
     try:
         bc = nx.betweenness_centrality(sub, normalized=True)

@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import asdict
+from html import escape
 from pathlib import Path
 from typing import Any, Callable, ClassVar, IO
 
@@ -540,11 +541,13 @@ def _error_envelope(request_id: Any, code: int, message: str) -> dict[str, Any]:
 def _neighborhood_svg_fragment(result: dict[str, Any]) -> str:
     """Render a self-contained SVG card for a ``neighborhood`` result.
 
-    Uses networkx ``spring_layout`` for static positions — small, no JS, and
-    safe to drop into an iframe. The center node is the queried ``object_id``
-    so reviewers can orient at a glance. This is the experimental MCP Apps
-    payload — Claude Desktop ignores ``_html_fragment`` today, but a client
-    that honors the convention can render the card inline.
+    Uses a deterministic circular layout — small, no JS, and safe to drop
+    into an iframe. The center node is the queried ``object_id`` so reviewers
+    can orient at a glance. This is the experimental MCP Apps payload —
+    Claude Desktop ignores ``_html_fragment`` today, but a client that honors
+    the convention can render the card inline. All user-supplied strings are
+    HTML-escaped before interpolation so titles like ``"A & B"`` round-trip
+    safely through XML.
     """
     import math
 
@@ -588,7 +591,7 @@ def _neighborhood_svg_fragment(result: dict[str, Any]) -> str:
         is_center = nid == center_id
         fill = "#2563eb" if is_center else "#e5e7eb"
         text_fill = "#ffffff" if is_center else "#111827"
-        title = str(node.get("title") or nid)[:20]
+        title = escape(str(node.get("title") or nid)[:20])
         node_svgs.append(
             f'<g><circle cx="{x:.1f}" cy="{y:.1f}" r="14" fill="{fill}" '
             f'stroke="#374151" stroke-width="1" />'
@@ -597,7 +600,7 @@ def _neighborhood_svg_fragment(result: dict[str, Any]) -> str:
         )
 
     return (
-        f'<div id="cy-neighborhood" data-object-id="{center_id}">'
+        f'<div id="cy-neighborhood" data-object-id="{escape(center_id, quote=True)}">'
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">'
         + "".join(edge_svgs)
