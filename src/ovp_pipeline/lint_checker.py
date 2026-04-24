@@ -80,6 +80,7 @@ class KnowledgeLinter:
     ARCHIVE_OLD = "archive-old"  # 需归档的旧文件
     EVIDENCE_INCOMPLETE = "evidence-incomplete"  # Phase 33: claim_evidence missing locator/content_hash
     ZONE_BOUNDARY_VIOLATION = "zone-boundary-violation"  # Phase 34: accepted-zone mutated outside promotion
+    NON_CANONICAL_NOTE_TYPE = "non-canonical-note-type"  # Phase 38.D: note_type outside canonical set
 
     def __init__(self, vault_dir: Path, wigs_mode: bool = True):
         self.vault_dir = Path(vault_dir)
@@ -780,6 +781,54 @@ class KnowledgeLinter:
         if violations:
             self.stats["zone_boundary_violations"] = violations
 
+    def check_note_types(self):
+        """Phase 38.D — flag any frontmatter `type:`/`note_type:` outside the
+        canonical 8-value set. Reports as warnings (not errors) so third-party
+        packs that opt into extra types via ``extras:`` aren't broken.
+        """
+        from .note_type_normalize import (
+            _FRONTMATTER_RE,
+            _NOTE_TYPE_LINE_RE,
+            _TYPE_LINE_RE,
+            _strip_yaml_quotes,
+            load_mapping,
+        )
+
+        mapping = load_mapping()
+        canonical = mapping.canonical_set()
+        flagged = 0
+        for rel in self.all_files:
+            full_path = self.vault_dir / rel
+            try:
+                text = full_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            fm = _FRONTMATTER_RE.match(text)
+            if not fm:
+                continue
+            body = fm.group(2)
+            type_match = _TYPE_LINE_RE.search(body) or _NOTE_TYPE_LINE_RE.search(body)
+            if not type_match:
+                continue
+            value = _strip_yaml_quotes(type_match.group(2))
+            if value in canonical:
+                continue
+            flagged += 1
+            self.issues.append(
+                LintIssue(
+                    layer="L2",
+                    level="warning",
+                    type=self.NON_CANONICAL_NOTE_TYPE,
+                    file=rel,
+                    message=f"note_type '{value}' is outside the canonical set",
+                    suggestion="Run `ovp-note-type-normalize --dry-run` to preview, "
+                    "then drop the --dry-run flag to rewrite.",
+                    auto_fixable=True,
+                )
+            )
+        if flagged:
+            self.stats["non_canonical_note_types"] = flagged
+
     def run_all_checks(self, stale_days: int = 90):
         """运行所有检查"""
         self.scan()
@@ -799,6 +848,7 @@ class KnowledgeLinter:
         self.check_broken_links()
         self.check_evidence_completeness()
         self.check_zone_boundary()
+        self.check_note_types()
 
     def report(self) -> str:
         """生成检查报告"""

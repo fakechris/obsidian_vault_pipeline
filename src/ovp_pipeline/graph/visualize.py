@@ -33,19 +33,18 @@ def _safe_class(s: str) -> str:
     return _SAFE_CLASS_RE.sub('-', s or 'unknown') or 'unknown'
 
 
-# note_type → (颜色, 形状)。颜色来自 Tailwind 调色板；形状有限区分概念 vs 源文档。
+# note_type → (颜色, 形状)。颜色来自 Tailwind 调色板；形状区分概念 vs 源文档。
+# Closed canonical set since Phase 38.D — anything not in this map renders with
+# the fallback gray ellipse and is flagged by `ovp-lint --check-note-types`.
 _TYPE_STYLE: dict[str, tuple[str, str]] = {
     'evergreen': ('#34d399', 'ellipse'),
     'moc': ('#f472b6', 'diamond'),
     'deep_dive': ('#818cf8', 'round-rectangle'),
     'raw': ('#94a3b8', 'round-rectangle'),
     'article': ('#fbbf24', 'round-rectangle'),
-    'technical-analysis': ('#06b6d4', 'round-rectangle'),
-    'github-project': ('#f97316', 'round-rectangle'),
-    'project': ('#a78bfa', 'round-rectangle'),
-    'ai': ('#22d3ee', 'round-rectangle'),
+    'project': ('#f97316', 'round-rectangle'),
+    'essay': ('#a78bfa', 'round-rectangle'),
     'daily_view': ('#fb923c', 'hexagon'),
-    'interpretation': ('#fde047', 'round-rectangle'),
 }
 
 
