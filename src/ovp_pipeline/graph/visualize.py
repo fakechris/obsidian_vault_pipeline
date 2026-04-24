@@ -67,9 +67,14 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <title>{page_title}</title>
 <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
-<script src="https://unpkg.com/layout-base@1.0.2/layout-base.js"></script>
-<script src="https://unpkg.com/cose-base@1.0.3/cose-base.js"></script>
+<!-- fcose (and its peers) is the primary layout; cose-bilkent is kept loaded as a graceful fallback. -->
+<script src="https://unpkg.com/layout-base@2.0.1/layout-base.js"></script>
+<script src="https://unpkg.com/cose-base@2.2.0/cose-base.js"></script>
+<script src="https://unpkg.com/numeric@1.2.6/numeric-1.2.6.min.js"></script>
+<script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
 <script src="https://unpkg.com/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
+<!-- BubbleSets draws the soft cluster envelopes on a canvas overlay. -->
+<script src="https://unpkg.com/cytoscape-bubblesets@4.0.5/dist/index.umd.min.js"></script>
 <style>
   :root {{
     --bg: #0b0e17;
@@ -124,6 +129,11 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
   .legend-hop {{ display: flex; gap: 10px; font-size: 11px; margin-top: 8px; color: var(--muted); }}
   .legend-hop .dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     margin-right: 3px; vertical-align: middle; }}
+  /* BubbleSets paints into a <canvas> overlay that shares the #cy stacking context. */
+  #cy {{ position: relative; }}
+  .cluster-legend {{ font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.6; }}
+  .cluster-legend .pill {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+    margin-right: 5px; vertical-align: middle; opacity: 0.7; border: 1px solid rgba(255,255,255,0.1); }}
 </style>
 </head>
 <body>
@@ -170,6 +180,11 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
       <button id="btn-collapse-all">Collapse all hop2</button>
       <button id="btn-expand-selected">Expand connected to selected</button>
     </div>
+
+    <h3>Clusters</h3>
+    <label class="type-row"><input type="checkbox" id="cluster-toggle" checked>
+      Show connected-component hulls</label>
+    <div id="cluster-legend" class="cluster-legend"></div>
   </aside>
 
   <main id="cy"></main>
@@ -228,7 +243,9 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
         'line-color': '#263248',
         'target-arrow-color': '#263248',
         'target-arrow-shape': 'triangle',
-        'curve-style': 'bezier',
+        'curve-style': 'unbundled-bezier',
+        'control-point-distances': [12],
+        'control-point-weights': [0.5],
         'arrow-scale': 0.8,
         'opacity': 0.75,
         'transition-property': 'opacity, line-color, width',
@@ -251,25 +268,104 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
         'width': 2,
         'opacity': 1
     }}}},
+    {{ selector: '.hover-hl', style: {{
+        'border-color':'#fde68a',
+        'border-width': 3
+    }}}},
+    {{ selector: 'edge.hover-hl', style: {{
+        'line-color':'#fde68a',
+        'target-arrow-color':'#fde68a',
+        'width': 2,
+        'opacity': 0.95
+    }}}},
     {{ selector: '.hidden', style: {{ 'display':'none' }} }},
-    {{ selector: '.collapsed-hop2', style: {{ 'display':'none' }} }}
+    /* Collapsed hop2: keep the node in the layout but invisible & non-interactive,
+       so animated collapse/expand can fade them in/out without re-running layout. */
+    {{ selector: '.collapsed-hop2', style: {{
+        'opacity': 0,
+        'events': 'no',
+        'text-opacity': 0
+    }}}},
+    {{ selector: 'edge.collapsed-hop2', style: {{
+        'opacity': 0,
+        'events': 'no'
+    }}}}
   ];
+
+  // Layout selection: fcose is the primary (faster, smoother edges, supports
+  // cluster constraints); fall back to cose-bilkent if fcose's CDN script
+  // failed to register so the page still renders. Some UMD builds don't
+  // auto-register, so we call cytoscape.use defensively.
+  (function _registerLayouts() {{
+    try {{
+      if (typeof window.cytoscapeFcose !== 'undefined' && cytoscape && typeof cytoscape.use === 'function') {{
+        cytoscape.use(window.cytoscapeFcose);
+      }}
+    }} catch (e) {{ /* already registered */ }}
+    try {{
+      if (typeof window.cytoscapeCoseBilkent !== 'undefined' && cytoscape && typeof cytoscape.use === 'function') {{
+        cytoscape.use(window.cytoscapeCoseBilkent);
+      }}
+    }} catch (e) {{ /* already registered */ }}
+  }})();
+
+  function preferredLayoutName() {{
+    if (typeof window.cytoscapeFcose !== 'undefined') return 'fcose';
+    if (typeof window.cytoscapeCoseBilkent !== 'undefined') return 'cose-bilkent';
+    return 'cose';
+  }}
+
+  function layoutOptions(name) {{
+    if (name === 'fcose') {{
+      // randomize:true is critical — without preset positions all nodes
+      // start at (0,0) and the layout collapses to a degenerate line.
+      return {{
+        name: 'fcose',
+        animate: 'end',
+        animationDuration: 600,
+        quality: 'proof',
+        randomize: true,
+        nodeDimensionsIncludeLabels: true,
+        uniformNodeDimensions: false,
+        idealEdgeLength: 110,
+        nodeRepulsion: 6500,
+        edgeElasticity: 0.45,
+        gravity: 0.3,
+        gravityRange: 3.8,
+        numIter: 2500,
+        tile: true,
+        tilingPaddingVertical: 12,
+        tilingPaddingHorizontal: 12,
+        packComponents: true,
+        padding: 40,
+        fit: true
+      }};
+    }}
+    if (name === 'cose-bilkent') {{
+      return {{
+        name: 'cose-bilkent',
+        animate: 'end',
+        randomize: true,
+        idealEdgeLength: 110,
+        nodeRepulsion: 7000,
+        nodeOverlap: 24,
+        gravity: 0.3,
+        numIter: 2000,
+        tile: true,
+        padding: 40
+      }};
+    }}
+    return {{ name: 'cose', animate: false, padding: 40, fit: true }};
+  }}
+
+  var LAYOUT_NAME = preferredLayoutName();
+  if (typeof console !== 'undefined') {{ console.log('OVP Graph layout:', LAYOUT_NAME); }}
 
   var cy = cytoscape({{
     container: document.getElementById('cy'),
     elements: payload,
     style: style,
-    layout: {{
-      name: 'cose-bilkent',
-      animate: 'end',
-      idealEdgeLength: 100,
-      nodeRepulsion: 8000,
-      nodeOverlap: 20,
-      gravity: 0.25,
-      numIter: 2000,
-      tile: true,
-      padding: 30
-    }},
+    layout: layoutOptions(LAYOUT_NAME),
     wheelSensitivity: 0.2,
     minZoom: 0.1,
     maxZoom: 3
@@ -354,6 +450,22 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
   cy.on('tap', 'node', function(evt) {{ selectNode(evt.target); }});
   cy.on('tap', function(evt) {{ if (evt.target === cy) clearSelection(); }});
 
+  // ---------- Hover-highlight (transient; doesn't stomp on click selection) ----------
+  // Mouseover paints a soft amber glow on the node + its incident edges.
+  // We never clear the persistent click-highlight from `selectNode`, so the
+  // two states layer cleanly: amber = ephemeral, cyan = sticky.
+  cy.on('mouseover', 'node', function(evt) {{
+    var n = evt.target;
+    if (n.hasClass('collapsed-hop2')) return;
+    n.addClass('hover-hl');
+    n.connectedEdges().not('.collapsed-hop2').addClass('hover-hl');
+  }});
+  cy.on('mouseout', 'node', function(evt) {{
+    var n = evt.target;
+    n.removeClass('hover-hl');
+    n.connectedEdges().removeClass('hover-hl');
+  }});
+
   // ---------- Filters ----------
   var activeTypes = new Set();
   document.querySelectorAll('#type-filter input[type=checkbox]').forEach(function(cb) {{
@@ -402,7 +514,7 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     if (seeds.nonempty()) cy.fit(seeds, 60);
   }});
   document.getElementById('btn-layout').addEventListener('click', function() {{
-    cy.layout({{ name:'cose-bilkent', animate:'end', numIter:1500, padding:30 }}).run();
+    cy.layout(layoutOptions(LAYOUT_NAME)).run();
   }});
   document.getElementById('btn-reset').addEventListener('click', function() {{
     searchEl.value = '';
@@ -440,13 +552,28 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     }}
   }}
 
+  // Animated collapse/expand: instead of toggling display:none we tween opacity.
+  // The CSS class .collapsed-hop2 sets opacity:0 + events:no, so toggling the
+  // class inside cy.batch() alongside Cytoscape's own transition gives a smooth
+  // 200ms fade without re-running layout. Edges incident to a collapsed node
+  // inherit the class so they fade together.
+  var ANIM_MS = 200;
+  function _withIncidentEdges(nodes) {{
+    return nodes.union(nodes.connectedEdges());
+  }}
   function collapseHop2(nodes) {{
-    nodes.addClass('collapsed-hop2');
-    updateCollapseStat();
+    if (nodes.empty()) return;
+    var bundle = _withIncidentEdges(nodes);
+    cy.batch(function() {{ bundle.addClass('collapsed-hop2'); }});
+    setTimeout(updateCollapseStat, ANIM_MS);
+    redrawClusters();
   }}
   function expandHop2(nodes) {{
-    nodes.removeClass('collapsed-hop2');
-    updateCollapseStat();
+    if (nodes.empty()) return;
+    var bundle = _withIncidentEdges(nodes);
+    cy.batch(function() {{ bundle.removeClass('collapsed-hop2'); }});
+    setTimeout(updateCollapseStat, ANIM_MS);
+    redrawClusters();
   }}
 
   // hop2 candidates = nodes flagged server-side, OR — if absent — fall back
@@ -495,7 +622,130 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     expandHop2(nbrs);
   }});
 
-  // Initial focus on seeds if any
+  // ---------- Cluster hulls (BubbleSets) ----------
+  // Draws a soft envelope around each connected component on a canvas overlay.
+  // Falls back gracefully (no-op) if the bubblesets script didn't load — the
+  // page still works with all the other affordances. Hulls are recomputed
+  // whenever layout shifts, hop2 visibility changes, or the user toggles them.
+  // Palette tints come from the dominant note_type per component.
+  var BUBBLE_PALETTE = [
+    'rgba(52,211,153,0.55)',  // teal — evergreen
+    'rgba(167,139,250,0.55)', // violet — essay/project
+    'rgba(244,114,182,0.55)', // pink — moc
+    'rgba(251,191,36,0.55)',  // amber — article
+    'rgba(34,211,238,0.55)',  // cyan — daily/source
+    'rgba(248,113,113,0.55)', // red — hop3+
+    'rgba(129,140,248,0.55)', // indigo — deep_dive
+    'rgba(148,163,184,0.55)'  // slate — raw
+  ];
+  var bubbleAdapter = null;     // BubbleSets adapter or null on failure / disabled
+  var bubblePaths = [];         // tracked so we can remove on redraw
+  var clustersEnabled = true;
+  var legendEl = document.getElementById('cluster-legend');
+
+  function _registerBubbleSets() {{
+    if (typeof window.cytoscapeBubbleSets === 'undefined') return false;
+    try {{ cytoscape.use(window.cytoscapeBubbleSets); return true; }}
+    catch (e) {{ return false; }}
+  }}
+
+  function _ensureBubbleAdapter() {{
+    if (bubbleAdapter) return bubbleAdapter;
+    if (!_registerBubbleSets() || typeof cy.bubbleSets !== 'function') return null;
+    try {{ bubbleAdapter = cy.bubbleSets(); }}
+    catch (e) {{ bubbleAdapter = null; }}
+    return bubbleAdapter;
+  }}
+
+  function _clearBubblePaths() {{
+    if (!bubbleAdapter) return;
+    bubblePaths.forEach(function(p) {{
+      try {{ bubbleAdapter.removePath(p); }} catch (e) {{ /* ignore */ }}
+    }});
+    bubblePaths = [];
+  }}
+
+  function _dominantTypeColor(component, fallback) {{
+    var counts = {{}};
+    component.nodes().forEach(function(n) {{
+      var t = n.data('note_type') || 'unknown';
+      counts[t] = (counts[t] || 0) + 1;
+    }});
+    var keys = Object.keys(counts).sort(function(a, b) {{ return counts[b] - counts[a]; }});
+    var top = keys[0] || 'unknown';
+    var i = Math.abs(_hash(top)) % BUBBLE_PALETTE.length;
+    return {{ type: top, color: BUBBLE_PALETTE[i], fallback: fallback }};
+  }}
+  function _hash(s) {{
+    var h = 0;
+    for (var i = 0; i < s.length; i++) {{ h = ((h << 5) - h) + s.charCodeAt(i); h |= 0; }}
+    return h;
+  }}
+
+  function _renderLegend(entries) {{
+    if (!legendEl) return;
+    if (!clustersEnabled || !entries.length) {{ legendEl.innerHTML = ''; return; }}
+    var html = '';
+    entries.slice(0, 8).forEach(function(e) {{
+      html += '<div><span class="pill" style="background:' + e.color + '"></span>'
+            + esc(e.type) + ' (' + e.size + ')</div>';
+    }});
+    if (entries.length > 8) html += '<div>… +' + (entries.length - 8) + ' more</div>';
+    legendEl.innerHTML = html;
+  }}
+
+  function redrawClusters() {{
+    var adapter = _ensureBubbleAdapter();
+    if (!adapter) {{ _renderLegend([]); return; }}
+    _clearBubblePaths();
+    if (!clustersEnabled) {{ _renderLegend([]); return; }}
+    var visible = cy.nodes().not('.hidden').not('.collapsed-hop2');
+    if (visible.empty()) {{ _renderLegend([]); return; }}
+    var components = visible.components();
+    var legendEntries = [];
+    components.forEach(function(comp) {{
+      // Skip trivial singletons — a hull around one node is just visual noise.
+      if (comp.length < 3) return;
+      var nodes = comp.nodes();
+      var edges = comp.edges();
+      var meta = _dominantTypeColor(comp);
+      try {{
+        var path = adapter.addPath(nodes, edges, null, {{
+          virtualEdges: false,
+          style: {{
+            fill: meta.color,
+            stroke: meta.color.replace(/0\.55\)$/, '0.85)'),
+            'stroke-width': 1.2
+          }}
+        }});
+        bubblePaths.push(path);
+        legendEntries.push({{ type: meta.type, color: meta.color, size: nodes.length }});
+      }} catch (e) {{ /* one bad hull shouldn't kill the rest */ }}
+    }});
+    legendEntries.sort(function(a, b) {{ return b.size - a.size; }});
+    _renderLegend(legendEntries);
+  }}
+
+  // Toggle in the sidebar — checked = render hulls; unchecked = clear.
+  var clusterToggleEl = document.getElementById('cluster-toggle');
+  if (clusterToggleEl) {{
+    clusterToggleEl.addEventListener('change', function() {{
+      clustersEnabled = clusterToggleEl.checked;
+      redrawClusters();
+    }});
+  }}
+
+  // Recompute hulls when layout settles. fcose dispatches layoutstop once at
+  // the end of its animation; cose-bilkent does the same.
+  cy.on('layoutstop', redrawClusters);
+  // Filters change the visible-node set — refresh hulls in lockstep.
+  var _origApplyFilters = applyFilters;
+  applyFilters = function() {{ _origApplyFilters(); redrawClusters(); }};
+  searchEl.removeEventListener('input', _origApplyFilters);
+  searchEl.addEventListener('input', applyFilters);
+
+  // Initial focus on seeds if any. The first redrawClusters() runs from
+  // layoutstop above once the layout finishes its initial pass.
   var seeds = cy.nodes('.role-seed');
   if (seeds.nonempty()) cy.fit(seeds, 80);
 }})();
