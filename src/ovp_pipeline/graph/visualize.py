@@ -67,12 +67,14 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <title>{page_title}</title>
 <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
-<!-- fcose (and its peers) is the primary layout; cose-bilkent is kept loaded as a graceful fallback. -->
+<!-- fcose is the primary layout; cytoscape's built-in `cose` is the fallback
+     (it ships with cytoscape core, so no version-conflict surface). We
+     deliberately do NOT load cose-bilkent: it pins cose-base@1.x while fcose
+     needs cose-base@2.x, and the two share globals. -->
 <script src="https://unpkg.com/layout-base@2.0.1/layout-base.js"></script>
 <script src="https://unpkg.com/cose-base@2.2.0/cose-base.js"></script>
 <script src="https://unpkg.com/numeric@1.2.6/numeric-1.2.6.min.js"></script>
 <script src="https://unpkg.com/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
-<script src="https://unpkg.com/cytoscape-cose-bilkent@4.1.0/cytoscape-cose-bilkent.js"></script>
 <!-- BubbleSets draws the soft cluster envelopes on a canvas overlay.
      Requires cytoscape-layers as a peer dep. -->
 <script src="https://unpkg.com/cytoscape-layers@3.1.0/build/index.umd.min.js"></script>
@@ -294,9 +296,9 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     }}}}
   ];
 
-  // Layout selection: fcose is the primary (faster, smoother edges, supports
-  // cluster constraints); fall back to cose-bilkent if fcose's CDN script
-  // failed to register so the page still renders. Some UMD builds don't
+  // Layout selection: fcose is the primary (faster, better packing, smoother
+  // edges); the fallback is cytoscape's built-in `cose`, which ships with
+  // core and has no version-conflict surface. Some UMD builds don't
   // auto-register, so we call cytoscape.use defensively.
   (function _registerLayouts() {{
     try {{
@@ -304,16 +306,17 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
         cytoscape.use(window.cytoscapeFcose);
       }}
     }} catch (e) {{ /* already registered */ }}
-    try {{
-      if (typeof window.cytoscapeCoseBilkent !== 'undefined' && cytoscape && typeof cytoscape.use === 'function') {{
-        cytoscape.use(window.cytoscapeCoseBilkent);
-      }}
-    }} catch (e) {{ /* already registered */ }}
   }})();
 
+  function _layoutIsRegistered(name) {{
+    // Probe the registry — checking only typeof window.cytoscape* tells us
+    // the script loaded, not that registration actually succeeded.
+    try {{ return typeof cytoscape('layout', name) === 'function'; }}
+    catch (e) {{ return false; }}
+  }}
+
   function preferredLayoutName() {{
-    if (typeof window.cytoscapeFcose !== 'undefined') return 'fcose';
-    if (typeof window.cytoscapeCoseBilkent !== 'undefined') return 'cose-bilkent';
+    if (_layoutIsRegistered('fcose')) return 'fcose';
     return 'cose';
   }}
 
@@ -343,21 +346,17 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
         fit: true
       }};
     }}
-    if (name === 'cose-bilkent') {{
-      return {{
-        name: 'cose-bilkent',
-        animate: 'end',
-        randomize: true,
-        idealEdgeLength: 110,
-        nodeRepulsion: 7000,
-        nodeOverlap: 24,
-        gravity: 0.3,
-        numIter: 2000,
-        tile: true,
-        padding: 40
-      }};
-    }}
-    return {{ name: 'cose', animate: false, padding: 40, fit: true }};
+    return {{
+      name: 'cose',
+      animate: 'end',
+      randomize: true,
+      idealEdgeLength: 110,
+      nodeRepulsion: function() {{ return 8000; }},
+      gravity: 0.3,
+      numIter: 1500,
+      padding: 40,
+      fit: true
+    }};
   }}
 
   var LAYOUT_NAME = preferredLayoutName();
@@ -507,6 +506,10 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
         e.toggleClass('hidden', hidden);
       }});
     }});
+    // Hulls follow the visible-node set. redrawClusters is a hoisted function
+    // declaration further down in this IIFE; the guard tolerates the case
+    // where the cluster module isn't initialized yet (very early calls).
+    if (typeof redrawClusters === 'function') redrawClusters();
   }}
 
   // ---------- Buttons ----------
@@ -758,14 +761,11 @@ _CYTOSCAPE_TEMPLATE = r"""<!DOCTYPE html>
     }});
   }}
 
-  // Recompute hulls when layout settles. fcose dispatches layoutstop once at
-  // the end of its animation; cose-bilkent does the same.
+  // Recompute hulls when layout settles. fcose dispatches layoutstop once
+  // at the end of its animation; the built-in `cose` fallback also fires it.
   cy.on('layoutstop', redrawClusters);
-  // Filters change the visible-node set — refresh hulls in lockstep.
-  var _origApplyFilters = applyFilters;
-  applyFilters = function() {{ _origApplyFilters(); redrawClusters(); }};
-  searchEl.removeEventListener('input', _origApplyFilters);
-  searchEl.addEventListener('input', applyFilters);
+  // applyFilters now calls redrawClusters() at its tail (see definition
+  // above), so we don't need to monkey-patch the function reference here.
 
   // Initial focus on seeds if any. The first redrawClusters() runs from
   // layoutstop above once the layout finishes its initial pass.
@@ -881,7 +881,7 @@ class GraphVisualizer:
         替代了原来的 vis.js 实现。原版在 ~6K 节点上互动僵硬、信息密度低、
         靠 tooltip 表达；这里改成：
             * 左侧 toolbar：搜索 + note_type 过滤 + hop 过滤 + 布局/聚焦按钮
-            * 主画布：fcose 布局（cose-bilkent 作为回退）；连通分量用
+            * 主画布：fcose 布局（cytoscape 自带 cose 作为回退）；连通分量用
               cytoscape-bubblesets 画软包络；节点按 note_type 着色 + 形状区分；
               seed/1hop/2hop 用边框宽度+尺寸表达
             * 右侧 detail panel：点击节点显示 title / type / distance / path /

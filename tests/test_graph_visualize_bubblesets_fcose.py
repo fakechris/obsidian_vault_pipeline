@@ -45,15 +45,18 @@ def test_fcose_layout_script_loaded_with_peers():
     assert "numeric-1.2.6" in html
 
 
-def test_cose_bilkent_kept_as_fallback():
-    """If the fcose CDN fails or the registration check misses, the page
-    should still lay out — cose-bilkent stays loaded as the fallback."""
+def test_built_in_cose_is_fallback_not_cose_bilkent():
+    """We deliberately do NOT load cose-bilkent: it pins cose-base@1.x while
+    fcose needs cose-base@2.x, and they share globals — a real version
+    conflict. The fallback is cytoscape's built-in `cose` (zero deps)."""
     html = GraphVisualizer(_payload()).html()
 
-    assert "cytoscape-cose-bilkent@4.1.0" in html
-    # And the runtime selector that prefers fcose, falls back to cose-bilkent.
+    # The layout selector probes the registry, not just script presence.
     assert "preferredLayoutName" in html
-    assert "'cose-bilkent'" in html
+    assert "_layoutIsRegistered" in html
+    # Fallback is the built-in `cose`, never cose-bilkent.
+    assert "cytoscape-cose-bilkent" not in html
+    assert "name: 'cose-bilkent'" not in html
 
 
 def test_bubblesets_script_loaded_with_layers_peer():
