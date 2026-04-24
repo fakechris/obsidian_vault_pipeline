@@ -525,11 +525,10 @@ def test_step_knowledge_index_invokes_rebuild_command(tmp_path, monkeypatch):
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
 
-    captured: dict[str, object] = {}
+    invocations: list[list[str]] = []
 
     def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
-        captured["cmd"] = cmd
-        captured["step_name"] = step_name
+        invocations.append(list(cmd))
         return {"success": True, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(pipeline, "run_command", fake_run_command)
@@ -537,11 +536,13 @@ def test_step_knowledge_index_invokes_rebuild_command(tmp_path, monkeypatch):
     result = pipeline.step_knowledge_index(dry_run=True)
 
     assert result["success"] is True
-    assert captured["step_name"] == "knowledge_index"
-    assert "ovp_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
-    assert "--vault-dir" in captured["cmd"]
-    assert "--pack" in captured["cmd"]
-    assert captured["cmd"][captured["cmd"].index("--pack") + 1] == pipeline.workflow_pack_name
+    rebuild = next(
+        cmd for cmd in invocations
+        if "ovp_pipeline.commands.knowledge_index" in " ".join(cmd)
+    )
+    assert "--vault-dir" in rebuild
+    assert "--pack" in rebuild
+    assert rebuild[rebuild.index("--pack") + 1] == pipeline.workflow_pack_name
 
 
 def test_step_absorb_invokes_absorb_command(tmp_path, monkeypatch):
@@ -1731,14 +1732,13 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
     pipeline = EnhancedPipeline(vault, logger, txn)
     pipeline.txn_id = txn.start("enhanced-pipeline", "Knowledge index progress")
 
-    captured: dict[str, object] = {}
+    invocations: list[dict] = []
 
     def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
-        captured["cmd"] = cmd
-        captured["step_name"] = step_name
-        captured["timeout"] = timeout
+        record = {"cmd": cmd, "step_name": step_name, "timeout": timeout}
         payload = json.loads((vault / "60-Logs" / "transactions" / f"{pipeline.txn_id}.json").read_text(encoding="utf-8"))
-        captured["current_step"] = payload["run_ledger"]["current_step"]
+        record["current_step"] = payload["run_ledger"]["current_step"]
+        invocations.append(record)
         return {"success": True, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(pipeline, "run_command", fake_run_command)
@@ -1746,10 +1746,15 @@ def test_step_knowledge_index_uses_dynamic_timeout(tmp_path, monkeypatch):
     result = pipeline.step_knowledge_index(dry_run=False)
 
     assert result["success"] is True
-    assert captured["step_name"] == "knowledge_index"
-    assert "ovp_pipeline.commands.knowledge_index" in " ".join(captured["cmd"])
-    assert captured["timeout"] > 120
-    current = captured["current_step"]
+    # Phase 38: step_knowledge_index now also fires build_crystals + working_memory
+    # piggyback subprocesses; the *first* invocation is still the rebuild itself.
+    rebuild = next(
+        inv for inv in invocations
+        if "ovp_pipeline.commands.knowledge_index" in " ".join(inv["cmd"])
+    )
+    assert rebuild["step_name"] == "knowledge_index"
+    assert rebuild["timeout"] > 120
+    current = rebuild["current_step"]
     assert current["progress_mode"] == "counted"
     assert current["work_units_total"] == 400
     assert current["work_units_done"] == 0

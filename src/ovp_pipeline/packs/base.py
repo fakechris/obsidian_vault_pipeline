@@ -348,6 +348,8 @@ class BaseDomainPack:
     _workspace_zones: WorkspaceZonesSpec | None = None
     _evidence_requirements: EvidenceRequirementsSpec | None = None
     _reuse_signals: ReuseSignalsSpec | None = None
+    # Phase 38 — EVOLVES subtype vocabulary; None falls back to v0.6 defaults.
+    _evolves_relation_types: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.role not in ALLOWED_PACK_ROLES:
@@ -525,3 +527,14 @@ class BaseDomainPack:
 
     def reuse_signals(self) -> ReuseSignalsSpec:
         return self._reuse_signals or ReuseSignalsSpec()
+
+    def evolves_relation_types(self) -> tuple[str, ...]:
+        """Subtype vocabulary for ``relation_type == "evolves"`` candidates.
+
+        The default mirrors Nowledge Mem v0.6's epistemic-evolution vocabulary
+        (replaces / enriches / confirms / challenges). Packs override by
+        setting ``_evolves_relation_types`` to a tuple of allowed subtypes.
+        """
+        if self._evolves_relation_types is None:
+            return ("replaces", "enriches", "confirms", "challenges")
+        return self._evolves_relation_types

@@ -89,6 +89,40 @@ def _discover_with_knowledge(vault_dir: Path, query: str, limit: int) -> list[di
     return results[:limit]
 
 
+def _discover_with_fused(vault_dir: Path, query: str, limit: int) -> list[dict[str, object]]:
+    """RRF + bi-temporal decay branch (Phase 38).
+
+    Wraps ``knowledge_index.search_fused`` and shapes its output into the
+    same envelope the other discovery branches emit so callers can swap
+    engines transparently.
+    """
+    from .knowledge_index import get_knowledge_page, search_fused
+
+    rows = search_fused(vault_dir, query, limit=limit)
+    out: list[dict[str, object]] = []
+    for row in rows:
+        slug = str(row.get("slug") or "")
+        if not slug:
+            continue
+        page = get_knowledge_page(vault_dir, slug)
+        out.append(
+            {
+                "engine": "knowledge",
+                "kind": "fused",
+                "slug": slug,
+                "title": str(row.get("title") or slug),
+                "score": float(row.get("score", 0.0)),
+                "snippet": _snippet_from_page(page),
+                "path": str(page["path"]) if page else "",
+                "rrf_score": float(row.get("rrf_score", 0.0)),
+                "recency": float(row.get("recency", 1.0)),
+                "frequency": float(row.get("frequency", 1.0)),
+                "importance": float(row.get("importance", 1.0)),
+            }
+        )
+    return out
+
+
 def _discover_with_qmd(vault_dir: Path, query: str, limit: int) -> list[dict[str, object]]:  # noqa: ARG001
     try:
         result = subprocess.run(
@@ -233,6 +267,12 @@ def discover_related(
         return _annotate_discovery_rows(
             resolved_vault,
             _discover_with_qmd(resolved_vault, query, limit),
+            resolved_pack,
+        )
+    if engine == "fused":
+        return _annotate_discovery_rows(
+            resolved_vault,
+            _discover_with_fused(resolved_vault, query, limit),
             resolved_pack,
         )
     raise ValueError(f"Unsupported discovery engine: {engine}")

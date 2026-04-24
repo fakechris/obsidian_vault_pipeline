@@ -57,12 +57,22 @@ class RelationPromotionReport:
         }
 
 
+def _effective_relation_type(candidate: SemanticRelationCandidate) -> str:
+    """Composite ``relation_type`` written to ``relations.relation_type`` and
+    ``graph_edges.edge_kind``. EVOLVES candidates collapse subtype into the
+    type string so the durable rows survive rebuild without a schema change.
+    """
+    if candidate.relation_type == "evolves" and candidate.relation_subtype:
+        return f"evolves:{candidate.relation_subtype}"
+    return candidate.relation_type
+
+
 def _edge_id(candidate: SemanticRelationCandidate) -> str:
-    """Stable id derived from the (source, type, target, source_slug) tuple."""
+    """Stable id derived from the (source, effective_type, target, source_slug)."""
     payload = "|".join(
         (
             candidate.source_object_id,
-            candidate.relation_type,
+            _effective_relation_type(candidate),
             candidate.target_object_id,
             candidate.source_slug,
         )
@@ -87,7 +97,7 @@ def _ensure_relation_row(
             candidate.pack,
             candidate.source_object_id,
             candidate.target_object_id,
-            candidate.relation_type,
+            _effective_relation_type(candidate),
             candidate.source_slug,
             candidate.evidence_quote,
             candidate.locator,
@@ -116,7 +126,7 @@ def _ensure_graph_edge_row(
             _edge_id(candidate),
             candidate.source_object_id,
             candidate.target_object_id,
-            candidate.relation_type,
+            _effective_relation_type(candidate),
             float(candidate.confidence or 1.0),
             candidate.source_slug,
         ),
@@ -137,7 +147,7 @@ def _emit_relation_promoted(
             "pack": candidate.pack,
             "source_object_id": candidate.source_object_id,
             "target_object_id": candidate.target_object_id,
-            "relation_type": candidate.relation_type,
+            "relation_type": _effective_relation_type(candidate),
             "evidence_source_slug": candidate.source_slug,
             "quote_text": candidate.evidence_quote,
             "locator": candidate.locator,
@@ -325,7 +335,7 @@ def promote_candidates(
                     actor=actor,
                     reason="relation_promoted",
                     payload={
-                        "relation_type": candidate.relation_type,
+                        "relation_type": _effective_relation_type(candidate),
                         "source_object_id": candidate.source_object_id,
                         "target_object_id": candidate.target_object_id,
                         "source_slug": candidate.source_slug,

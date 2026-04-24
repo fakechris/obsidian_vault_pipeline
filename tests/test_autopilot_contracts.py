@@ -188,18 +188,24 @@ def test_autopilot_knowledge_index_refresh_passes_pack(tmp_path, monkeypatch):
         pack="default-knowledge",
     )
 
-    captured: dict[str, object] = {}
+    captured: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
-        captured["cmd"] = list(cmd)
+        captured.append(list(cmd))
         return type("Completed", (), {"returncode": 0, "stderr": "", "stdout": ""})()
 
     monkeypatch.setattr(daemon_source.subprocess, "run", fake_run)
 
     daemon._run_knowledge_index_refresh()
 
-    assert "--pack" in captured["cmd"]
-    assert captured["cmd"][captured["cmd"].index("--pack") + 1] == "default-knowledge"
+    # Phase 38: refresh now also runs build_crystals + working_memory.
+    # The first invocation must still be the knowledge_index rebuild with
+    # the pack flag.
+    knowledge_cmd = next(
+        cmd for cmd in captured if "ovp_pipeline.commands.knowledge_index" in " ".join(cmd)
+    )
+    assert "--pack" in knowledge_cmd
+    assert knowledge_cmd[knowledge_cmd.index("--pack") + 1] == "default-knowledge"
 
 
 def test_autopilot_watcher_import_does_not_require_watchdog(tmp_path):

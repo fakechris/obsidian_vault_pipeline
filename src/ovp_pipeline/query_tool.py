@@ -168,10 +168,11 @@ class VaultQuerier:
 
         return text[:max_len] + "..." if len(text) > max_len else text
 
-    def search(self, query: str, top_k: int = 10, engine: str = "knowledge") -> List[SearchResult]:
+    def search(self, query: str, top_k: int = 10, engine: str = "fused") -> List[SearchResult]:
         """
         搜索知识库
-        默认使用 knowledge.db；QMD 仅作为显式引擎
+        默认走 RRF + 双时序衰减（Phase 38）；可显式指定 ``knowledge`` (BM25→向量串行)
+        或 ``qmd`` (外部检索器)。
         """
         results = []
         for row in discover_related(self.vault_dir, query, engine=engine, limit=top_k, pack=self.pack):
@@ -473,9 +474,9 @@ def main(argv: list[str] | None = None):
     )
     parser.add_argument(
         "--engine",
-        choices=["knowledge", "qmd"],
-        default="knowledge",
-        help="检索引擎: knowledge(默认) 或 qmd",
+        choices=["fused", "knowledge", "qmd"],
+        default="fused",
+        help="检索引擎: fused(默认, RRF + 双时序衰减), knowledge(BM25→向量串行), 或 qmd",
     )
     parser.add_argument(
         "--pack",
@@ -553,7 +554,7 @@ def main(argv: list[str] | None = None):
         consumer_ref=question,
     )
 
-    if args.feedback and args.engine == "knowledge":
+    if args.feedback and args.engine in {"knowledge", "fused"}:
         try:
             from .feedback_router import (
                 CandidateConcept,

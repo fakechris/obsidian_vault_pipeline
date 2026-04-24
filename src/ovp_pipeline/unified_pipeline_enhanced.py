@@ -2518,6 +2518,23 @@ class EnhancedPipeline:
 
         if result["success"]:
             print("✓ Knowledge index refresh completed")
+            # Phase 38: piggyback on the knowledge_index step to materialize
+            # Crystals + the daily Working Memory file. Both are idempotent
+            # (Crystal collapses on identical content; Working Memory
+            # overwrites today's file), so cycling them per refresh is safe.
+            crystals_cmd = [
+                sys.executable, "-m", "ovp_pipeline.commands.build_crystals",
+                "--vault-dir", str(self.vault_dir),
+                "--pack", self.workflow_pack_name,
+                "--json",
+            ]
+            self.run_command(crystals_cmd, "knowledge_index", timeout=120)
+            working_memory_cmd = [
+                sys.executable, "-m", "ovp_pipeline.commands.working_memory",
+                "--vault-dir", str(self.vault_dir),
+                "--json",
+            ]
+            self.run_command(working_memory_cmd, "knowledge_index", timeout=60)
         else:
             print(f"✗ Knowledge index refresh failed: {result.get('error', 'Unknown error')}")
 
