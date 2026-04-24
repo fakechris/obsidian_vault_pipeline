@@ -60,6 +60,28 @@ def test_backfill_dry_run_does_not_write(tmp_path: Path):
     assert list_promotions(src.read_text(encoding="utf-8")) == []
 
 
+def test_backfill_dry_run_summary_counts(tmp_path: Path, capsys):
+    vault = tmp_path / "vault"
+    src_a = vault / "20-Areas" / "a.md"
+    src_b = vault / "20-Areas" / "b.md"
+    _write(src_a, "body\n")
+    _write(src_b, "body\n")
+    _write_pipeline_log(
+        vault,
+        [
+            {"event_type": "evergreen_auto_promoted", "concept": "X", "source": "a.md"},
+            {"event_type": "evergreen_auto_promoted", "concept": "Y", "source": "b.md"},
+            {"event_type": "evergreen_auto_promoted", "concept": "Z", "source": "ghost.md"},
+        ],
+    )
+
+    rc = backfill_main(["--vault-dir", str(vault), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Would-write: 2" in out
+    assert "missing-source: 1" in out
+
+
 def test_backfill_groups_concepts_per_source(tmp_path: Path):
     vault = tmp_path / "vault"
     src = vault / "20-Areas" / "topic.md"
