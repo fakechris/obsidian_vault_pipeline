@@ -51,6 +51,17 @@ def build_semantic_relation_contracts(
                     source_object_kinds=object_kinds,
                     target_object_kinds=object_kinds,
                 ),
+                SemanticRelationTypeSpec(
+                    name="evolves",
+                    description=(
+                        "Epistemic-evolution relation: the source object changes the "
+                        "target's status in the knowledge base. Requires "
+                        "``relation_subtype`` ∈ pack.evolves_relation_types() "
+                        "(default: replaces / enriches / confirms / challenges)."
+                    ),
+                    source_object_kinds=object_kinds,
+                    target_object_kinds=object_kinds,
+                ),
             ],
         )
     ]

@@ -5,7 +5,9 @@ import json
 import pytest
 
 
-def test_vault_querier_search_defaults_to_knowledge_engine(temp_vault, monkeypatch):
+def test_vault_querier_search_defaults_to_fused_engine(temp_vault, monkeypatch):
+    """Phase 38: VaultQuerier.search defaults to the fused (RRF + decay) engine.
+    Callers can still pass ``engine="knowledge"`` for the legacy serial path."""
     from ovp_pipeline import query_tool
 
     queried = {}
@@ -19,7 +21,7 @@ def test_vault_querier_search_defaults_to_knowledge_engine(temp_vault, monkeypat
         return [
             {
                 "engine": "knowledge",
-                "kind": "lexical",
+                "kind": "fused",
                 "slug": "agent-harness",
                 "title": "Agent Harness",
                 "score": 12.3,
@@ -32,7 +34,7 @@ def test_vault_querier_search_defaults_to_knowledge_engine(temp_vault, monkeypat
     querier = query_tool.VaultQuerier(temp_vault)
     results = querier.search("architecture tools", top_k=5)
 
-    assert queried["engine"] == "knowledge"
+    assert queried["engine"] == "fused"
     assert queried["pack"] == "default-knowledge"
     assert len(results) == 1
     assert results[0].file == "10-Knowledge/Evergreen/Agent-Harness.md"

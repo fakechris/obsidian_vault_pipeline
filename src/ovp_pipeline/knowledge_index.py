@@ -113,6 +113,15 @@ CREATE TABLE page_embeddings (
 );
 
 CREATE INDEX idx_page_embeddings_slug ON page_embeddings(slug);
+
+CREATE TABLE page_metrics (
+  slug TEXT PRIMARY KEY,
+  last_seen_ts INTEGER NOT NULL DEFAULT 0,
+  reuse_count INTEGER NOT NULL DEFAULT 0,
+  citation_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX idx_page_metrics_last_seen ON page_metrics(last_seen_ts);
 """
 
 SCHEMA += "\n" + TRUTH_STORE_SCHEMA
@@ -542,6 +551,7 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
         "graph_clusters": {"pack"},
         "truth_projections": {"pack", "owner_pack", "builder_name", "built_at"},
         "reuse_events": {"event_id", "ts", "pack", "surface", "trusted"},
+        "page_metrics": {"slug", "last_seen_ts", "reuse_count", "citation_count"},
     }
     try:
         with sqlite3.connect(db_path) as conn:
@@ -889,6 +899,8 @@ def rebuild_knowledge_index(
                 conn, layout, pack_name=truth_pack
             )
 
+            page_metrics_indexed = _rebuild_page_metrics(conn)
+
             conn.commit()
         except Exception:
             if conn is not None:
@@ -916,11 +928,96 @@ def rebuild_knowledge_index(
                 "relations_indexed": len(truth_projection.relations),
                 "relations_replayed": relations_replayed,
                 "evidence_updates_replayed": evidence_updates,
+                "page_metrics_indexed": page_metrics_indexed,
                 "compiled_summaries_indexed": len(truth_projection.compiled_summaries),
                 "contradictions_indexed": len(truth_projection.contradictions),
                 "graph_edges_indexed": len(truth_projection.graph_edges),
                 "graph_clusters_indexed": len(truth_projection.graph_clusters),
             }
+
+
+def _iso_to_epoch(value: object) -> int:
+    """Best-effort ISO-8601 → unix epoch. Returns 0 for unparseable inputs.
+
+    Both ``audit_events.timestamp`` and ``reuse_events.ts`` are stored as
+    text; we want a single integer to drive the recency decay in
+    ``search_fused``. Stripping a trailing ``Z`` makes ``fromisoformat`` happy
+    on Python <3.11.
+    """
+    if not value:
+        return 0
+    text = str(value).strip()
+    if not text:
+        return 0
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        from datetime import datetime
+
+        return int(datetime.fromisoformat(text).timestamp())
+    except ValueError:
+        return 0
+
+
+def _rebuild_page_metrics(conn: sqlite3.Connection) -> int:
+    """Aggregate per-slug recency / reuse / citation signals into ``page_metrics``.
+
+    Called from ``rebuild_knowledge_index`` after ``audit_events``,
+    ``reuse_events``, and ``page_links`` have been populated. The table is
+    consumed by ``search_fused`` to apply bi-temporal decay on top of RRF.
+
+    ``last_seen_ts`` is the max of any audit-event timestamp on this slug and
+    any reuse-event timestamp where ``object_id == slug``. ``reuse_count``
+    counts reuse events; ``citation_count`` counts inbound wikilinks. Slugs
+    with no signal still get a row (zeros) so callers can left-join freely.
+    """
+    conn.execute("DELETE FROM page_metrics")
+
+    audit_max: dict[str, int] = {}
+    for slug, ts in conn.execute(
+        "SELECT slug, MAX(timestamp) FROM audit_events WHERE slug != '' GROUP BY slug"
+    ):
+        audit_max[str(slug)] = _iso_to_epoch(ts)
+
+    reuse_stats: dict[str, tuple[int, int]] = {}
+    for object_id, max_ts, count in conn.execute(
+        "SELECT object_id, MAX(ts), COUNT(*) FROM reuse_events "
+        "WHERE object_id != '' GROUP BY object_id"
+    ):
+        reuse_stats[str(object_id)] = (_iso_to_epoch(max_ts), int(count or 0))
+
+    citations: dict[str, int] = {}
+    for target_slug, count in conn.execute(
+        "SELECT target_slug, COUNT(*) FROM page_links "
+        "WHERE target_slug != '' GROUP BY target_slug"
+    ):
+        citations[str(target_slug)] = int(count or 0)
+
+    rows: list[tuple[str, int, int, int]] = []
+    seen: set[str] = set()
+    for (slug,) in conn.execute("SELECT slug FROM pages_index"):
+        slug = str(slug)
+        seen.add(slug)
+        audit_ts = audit_max.get(slug, 0)
+        reuse_ts, reuse_count = reuse_stats.get(slug, (0, 0))
+        last_seen = max(audit_ts, reuse_ts)
+        rows.append((slug, last_seen, reuse_count, citations.get(slug, 0)))
+
+    # Cover slugs that only appear via reuse / link tables (e.g. an object_id
+    # that doesn't map to a current page yet) so the metrics view is complete.
+    for slug in set(reuse_stats) | set(citations) | set(audit_max):
+        if slug in seen:
+            continue
+        audit_ts = audit_max.get(slug, 0)
+        reuse_ts, reuse_count = reuse_stats.get(slug, (0, 0))
+        rows.append((slug, max(audit_ts, reuse_ts), reuse_count, citations.get(slug, 0)))
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO page_metrics "
+        "(slug, last_seen_ts, reuse_count, citation_count) VALUES (?, ?, ?, ?)",
+        rows,
+    )
+    return len(rows)
 
 
 def query_knowledge_index(vault_dir: Path, query: str, limit: int = 5) -> list[dict[str, str | int | float]]:
@@ -1008,6 +1105,116 @@ def search_knowledge_index(vault_dir: Path, query: str, limit: int = 10) -> list
         for slug, title in fallback_rows
     )
     return results
+
+
+def search_fused(
+    vault_dir: Path,
+    query: str,
+    *,
+    limit: int = 10,
+    rrf_k: int = 60,
+    tau_days: float = 30.0,
+    now_ts: int | None = None,
+) -> list[dict[str, str | float]]:
+    """Hybrid retrieval: RRF over BM25 + vector, then bi-temporal decay.
+
+    The two existing retrievers (``search_knowledge_index`` BM25 and
+    ``query_knowledge_index`` vector) each emit a ranked list. We fuse them
+    with reciprocal rank fusion — robust to per-engine score scale
+    differences — then multiply by:
+
+    * **Recency**: ``exp(-(now - last_seen_ts) / (tau_days * 86400))``
+    * **Frequency**: ``1 + log(1 + reuse_count)``
+    * **Importance**: ``1 + log(1 + citation_count)``
+
+    Slugs missing from ``page_metrics`` get a 1.0 multiplier (no penalty), so
+    a cold vault still returns its BM25/vector top-N. We over-fetch each
+    branch by 3x ``limit`` so the fused ranking has room to reorder.
+    """
+    import math
+
+    _, layout = _ensure_knowledge_db(vault_dir)
+
+    fetch = max(limit * 3, limit)
+    bm25_results = search_knowledge_index(vault_dir, query, limit=fetch)
+    vector_chunks = query_knowledge_index(vault_dir, query, limit=fetch)
+
+    rrf_scores: dict[str, float] = {}
+    titles: dict[str, str] = {}
+
+    for rank, item in enumerate(bm25_results):
+        slug = str(item.get("slug") or "")
+        if not slug:
+            continue
+        rrf_scores[slug] = rrf_scores.get(slug, 0.0) + 1.0 / (rrf_k + rank + 1)
+        if item.get("title"):
+            titles.setdefault(slug, str(item["title"]))
+
+    seen_vector: set[str] = set()
+    vector_rank = 0
+    for chunk in vector_chunks:
+        slug = str(chunk.get("slug") or "")
+        if not slug or slug in seen_vector:
+            continue
+        seen_vector.add(slug)
+        rrf_scores[slug] = rrf_scores.get(slug, 0.0) + 1.0 / (rrf_k + vector_rank + 1)
+        vector_rank += 1
+
+    if not rrf_scores:
+        return []
+
+    if now_ts is None:
+        from datetime import datetime, timezone
+
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+    tau_seconds = max(tau_days * 86400.0, 1.0)
+
+    metrics: dict[str, tuple[int, int, int]] = {}
+    titles_db: dict[str, str] = {}
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        placeholders = ",".join("?" for _ in rrf_scores)
+        for slug, last_seen_ts, reuse_count, citation_count in conn.execute(
+            f"SELECT slug, last_seen_ts, reuse_count, citation_count "
+            f"FROM page_metrics WHERE slug IN ({placeholders})",
+            list(rrf_scores.keys()),
+        ):
+            metrics[str(slug)] = (
+                int(last_seen_ts or 0),
+                int(reuse_count or 0),
+                int(citation_count or 0),
+            )
+        missing_titles = [s for s in rrf_scores if s not in titles]
+        if missing_titles:
+            placeholders = ",".join("?" for _ in missing_titles)
+            for slug, title in conn.execute(
+                f"SELECT slug, title FROM pages_index WHERE slug IN ({placeholders})",
+                missing_titles,
+            ):
+                titles_db[str(slug)] = str(title or "")
+
+    fused: list[dict[str, str | float]] = []
+    for slug, base in rrf_scores.items():
+        last_seen_ts, reuse_count, citation_count = metrics.get(slug, (0, 0, 0))
+        if last_seen_ts > 0:
+            recency = math.exp(-max(now_ts - last_seen_ts, 0) / tau_seconds)
+        else:
+            recency = 1.0
+        frequency = 1.0 + math.log(1.0 + reuse_count)
+        importance = 1.0 + math.log(1.0 + citation_count)
+        fused.append(
+            {
+                "slug": slug,
+                "title": titles.get(slug) or titles_db.get(slug) or slug,
+                "score": base * recency * frequency * importance,
+                "rrf_score": base,
+                "recency": recency,
+                "frequency": frequency,
+                "importance": importance,
+            }
+        )
+
+    fused.sort(key=lambda item: item["score"], reverse=True)
+    return fused[:limit]
 
 
 def search_truth_store(

@@ -482,11 +482,35 @@ class AutoPilotDaemon:
         subprocess.run(breakdown_cmd, capture_output=True, cwd=str(self.vault_dir))
 
     def _run_knowledge_index_refresh(self):
-        """刷新派生 knowledge.db。"""
+        """刷新派生 knowledge.db，并落地 Phase 38 的 Crystal + Working Memory。
+
+        knowledge.db 重建后立即材化 Crystal 与每日 Working Memory 文件 ——
+        两者都是幂等的（Crystal 内容哈希相同则文件不变；Working Memory 覆盖
+        今日条目），所以挂到每次 refresh 上也不会产生噪音。
+        """
         cmd = [
             sys.executable, "-m", "ovp_pipeline.commands.knowledge_index",
             "--vault-dir", str(self.vault_dir),
             "--pack", self.pack.name,
+            "--json",
+        ]
+        subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
+        self._run_build_crystals()
+        self._run_working_memory()
+
+    def _run_build_crystals(self):
+        cmd = [
+            sys.executable, "-m", "ovp_pipeline.commands.build_crystals",
+            "--vault-dir", str(self.vault_dir),
+            "--pack", self.pack.name,
+            "--json",
+        ]
+        subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))
+
+    def _run_working_memory(self):
+        cmd = [
+            sys.executable, "-m", "ovp_pipeline.commands.working_memory",
+            "--vault-dir", str(self.vault_dir),
             "--json",
         ]
         subprocess.run(cmd, capture_output=True, cwd=str(self.vault_dir))

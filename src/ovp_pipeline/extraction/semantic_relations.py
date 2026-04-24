@@ -45,6 +45,7 @@ class SemanticRelationCandidate:
     content_hash: str = ""
     retrieval_context: str = ""
     pack: str = ""
+    relation_subtype: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -62,6 +63,7 @@ class SemanticRelationCandidate:
             content_hash=str(data.get("content_hash") or ""),
             retrieval_context=str(data.get("retrieval_context") or ""),
             pack=str(data.get("pack") or ""),
+            relation_subtype=str(data.get("relation_subtype") or ""),
         )
 
 
@@ -143,6 +145,8 @@ def extract_relations(
 
     report = ExtractionReport()
 
+    evolves_subtypes = set(pack.evolves_relation_types())
+
     for raw in proposer.propose(
         text,
         source_slug=source_slug,
@@ -161,6 +165,7 @@ def extract_relations(
             retrieval_context=raw.retrieval_context
             or compute_retrieval_context(deep_dive_path, raw.evidence_quote, vault_dir=vault_dir),
             pack=pack.name,
+            relation_subtype=raw.relation_subtype,
         )
 
         if candidate.relation_type not in vocabulary:
@@ -181,6 +186,14 @@ def extract_relations(
         if not _allowed_pairs(vocabulary[candidate.relation_type], object_kinds, candidate):
             report.rejected.append((candidate, "kind_constraint_violation"))
             continue
+        if candidate.relation_type == "evolves":
+            subtype = candidate.relation_subtype.strip()
+            if not subtype:
+                report.rejected.append((candidate, "missing_relation_subtype"))
+                continue
+            if subtype not in evolves_subtypes:
+                report.rejected.append((candidate, "unknown_relation_subtype"))
+                continue
         report.candidates.append(candidate)
 
     return report
