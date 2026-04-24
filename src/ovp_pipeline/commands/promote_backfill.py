@@ -97,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     written = 0
     skipped = 0
     missing = 0
+    candidates = 0
     for source_name, slugs in sorted(pairs.items()):
         path = _resolve_source_path(vault_dir, source_name)
         if not path:
@@ -107,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
 
         slugs_sorted = sorted(slugs)
         if args.dry_run:
+            candidates += 1
             print(f"  [DRY] {path.relative_to(vault_dir)} ← {len(slugs_sorted)} slug(s)")
             continue
 
@@ -123,7 +125,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             skipped += 1
 
-    print(f"\nWrote: {written}, already-current: {skipped}, missing-source: {missing}")
+    head = (
+        f"Candidates: {candidates}"
+        if args.dry_run
+        else f"Wrote: {written}, already-current: {skipped}"
+    )
+    print(f"\n{head}, missing-source: {missing}")
     return 0
 
 
