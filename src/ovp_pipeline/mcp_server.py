@@ -42,6 +42,7 @@ from .feedback_router import (
     route_writing_prompts,
 )
 from .extraction.semantic_relations import SemanticRelationCandidate
+from .graph import graph_ops
 from .pack_resolution import coerce_pack
 from .prompt_assembler import assemble as _assemble_prompt
 from .promotion_policy import (
@@ -49,7 +50,6 @@ from .promotion_policy import (
     evaluate_relation,
     evaluate_workspace,
 )
-
 
 # JSON-RPC 2.0 error codes (subset we actually emit).
 _PARSE_ERROR = -32700
@@ -140,6 +140,86 @@ _TOOLS_DESCRIPTORS: tuple[dict[str, Any], ...] = (
             },
         },
     },
+    {
+        "name": "graph_node_details",
+        "description": (
+            "Return metadata, in/out neighbors, degree, and approximate "
+            "betweenness for a node in the wikilink graph."
+        ),
+        "side_effects": "none (read-only over knowledge.db)",
+        "inputSchema": {
+            "type": "object",
+            "required": ["object_id"],
+            "properties": {"object_id": {"type": "string"}},
+        },
+    },
+    {
+        "name": "graph_neighborhood",
+        "description": (
+            "BFS the hop-neighborhood of a node, capped at max_nodes. "
+            "render='html' returns an SVG fragment in `_html_fragment` for "
+            "MCP Apps clients; render='json' (default) returns nodes/edges."
+        ),
+        "side_effects": "none (read-only over knowledge.db)",
+        "inputSchema": {
+            "type": "object",
+            "required": ["object_id"],
+            "properties": {
+                "object_id": {"type": "string"},
+                "hop": {"type": "integer", "minimum": 1, "maximum": 4},
+                "max_nodes": {"type": "integer", "minimum": 1, "maximum": 200},
+                "render": {"type": "string", "enum": ["json", "html"]},
+            },
+        },
+    },
+    {
+        "name": "graph_shortest_path",
+        "description": (
+            "Find the shortest undirected path between two nodes. Returns "
+            "{nodes, edges, length} or null when disconnected."
+        ),
+        "side_effects": "none (read-only over knowledge.db)",
+        "inputSchema": {
+            "type": "object",
+            "required": ["source", "target"],
+            "properties": {
+                "source": {"type": "string"},
+                "target": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "graph_bridge_nodes",
+        "description": (
+            "Top-N nodes by approximate betweenness centrality — surfaces "
+            "the high-leverage bridges between communities."
+        ),
+        "side_effects": "none (read-only over knowledge.db)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                "sample_size": {"type": "integer", "minimum": 10, "maximum": 1000},
+            },
+        },
+    },
+    {
+        "name": "graph_communities",
+        "description": (
+            "Cluster the wikilink graph. algorithm ∈ {label_prop, "
+            "greedy_modularity}. Returns {algorithm, clusters: {cid: [ids]}}."
+        ),
+        "side_effects": "none (read-only over knowledge.db)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "algorithm": {
+                    "type": "string",
+                    "enum": ["label_prop", "greedy_modularity"],
+                }
+            },
+        },
+    },
 )
 
 
@@ -164,6 +244,11 @@ class MCPServer:
             "evaluate_promotion": self._tool_evaluate_promotion,
             "assemble_prompt": self._tool_assemble_prompt,
             "route_feedback": self._tool_route_feedback,
+            "graph_node_details": self._tool_graph_node_details,
+            "graph_neighborhood": self._tool_graph_neighborhood,
+            "graph_shortest_path": self._tool_graph_shortest_path,
+            "graph_bridge_nodes": self._tool_graph_bridge_nodes,
+            "graph_communities": self._tool_graph_communities,
         }
 
     # -- Public surface -----------------------------------------------------
@@ -226,9 +311,7 @@ class MCPServer:
         if not isinstance(method, str) or not method:
             return _error_envelope(request_id, _INVALID_REQUEST, "Missing method")
         if not isinstance(params, dict):
-            return _error_envelope(
-                request_id, _INVALID_PARAMS, "params must be an object"
-            )
+            return _error_envelope(request_id, _INVALID_PARAMS, "params must be an object")
 
         try:
             result = self._dispatch(method, params)
@@ -284,9 +367,7 @@ class MCPServer:
             # dict is also exposed under "result" for callers that want to
             # skip the JSON round-trip.
             return {
-                "content": [
-                    {"type": "text", "text": json.dumps(result, ensure_ascii=False)}
-                ],
+                "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
                 "isError": False,
                 "result": result,
             }
@@ -323,12 +404,8 @@ class MCPServer:
             draft_str = str(payload.get("draft", ""))
             target_str = str(payload.get("target", ""))
             if not draft_str or not target_str:
-                raise _InvalidParams(
-                    "workspace payload requires non-empty 'draft' and 'target'"
-                )
-            decision = evaluate_workspace(
-                Path(draft_str), Path(target_str), pack=pack_obj
-            )
+                raise _InvalidParams("workspace payload requires non-empty 'draft' and 'target'")
+            decision = evaluate_workspace(Path(draft_str), Path(target_str), pack=pack_obj)
         else:
             raise _InvalidParams(f"Unknown candidate_kind: {candidate_kind}")
         result = asdict(decision)
@@ -373,9 +450,7 @@ class MCPServer:
                 )
                 for item in items
             ]
-            written = route_candidate_concepts(
-                decoded, vault_dir=self.vault_dir, pack=pack_obj
-            )
+            written = route_candidate_concepts(decoded, vault_dir=self.vault_dir, pack=pack_obj)
             return {"stream": stream, "written": written}
         if stream == "open_question":
             decoded_q = [
@@ -385,9 +460,7 @@ class MCPServer:
                 )
                 for item in items
             ]
-            written = route_open_questions(
-                decoded_q, vault_dir=self.vault_dir, pack=pack_obj
-            )
+            written = route_open_questions(decoded_q, vault_dir=self.vault_dir, pack=pack_obj)
             return {"stream": stream, "written": written}
         if stream == "writing_prompt":
             decoded_p = [
@@ -397,17 +470,50 @@ class MCPServer:
                 )
                 for item in items
             ]
-            written = route_writing_prompts(
-                decoded_p, vault_dir=self.vault_dir, pack=pack_obj
-            )
+            written = route_writing_prompts(decoded_p, vault_dir=self.vault_dir, pack=pack_obj)
             return {"stream": stream, "written": written}
         if stream == "proposed_relation":
             decoded_r = [SemanticRelationCandidate.from_dict(item) for item in items]
-            paths = route_proposed_relations(
-                decoded_r, vault_dir=self.vault_dir, pack=pack_obj
-            )
+            paths = route_proposed_relations(decoded_r, vault_dir=self.vault_dir, pack=pack_obj)
             return {"stream": stream, "written": len(paths), "paths": [str(p) for p in paths]}
         raise _InvalidParams(f"Unknown stream: {stream}")
+
+    # -- Graph operators (Phase 38 Stage C) --------------------------------
+
+    def _tool_graph_node_details(self, *, object_id: str) -> dict[str, Any]:
+        graph = graph_ops.load_graph(self.vault_dir)
+        return graph_ops.node_details(graph, object_id)
+
+    def _tool_graph_neighborhood(
+        self,
+        *,
+        object_id: str,
+        hop: int = 1,
+        max_nodes: int = 50,
+        render: str = "json",
+    ) -> dict[str, Any]:
+        graph = graph_ops.load_graph(self.vault_dir)
+        result = graph_ops.neighborhood(graph, object_id, hop=hop, max_nodes=max_nodes)
+        if render == "html":
+            result["_html_fragment"] = _neighborhood_svg_fragment(result)
+        return result
+
+    def _tool_graph_shortest_path(self, *, source: str, target: str) -> dict[str, Any]:
+        graph = graph_ops.load_graph(self.vault_dir)
+        result = graph_ops.shortest_path(graph, source, target)
+        return (
+            result if result is not None else {"source": source, "target": target, "found": False}
+        )
+
+    def _tool_graph_bridge_nodes(
+        self, *, limit: int = 20, sample_size: int = 200
+    ) -> dict[str, Any]:
+        graph = graph_ops.load_graph(self.vault_dir)
+        return {"bridges": graph_ops.bridge_nodes(graph, limit=limit, sample_size=sample_size)}
+
+    def _tool_graph_communities(self, *, algorithm: str = "label_prop") -> dict[str, Any]:
+        graph = graph_ops.load_graph(self.vault_dir)
+        return graph_ops.communities(graph, algorithm=algorithm)
 
 
 # ---------------------------------------------------------------------------
@@ -423,14 +529,81 @@ class _InvalidParams(Exception):
     """Sentinel for the JSON-RPC invalid_params envelope."""
 
 
-def _error_envelope(
-    request_id: Any, code: int, message: str
-) -> dict[str, Any]:
+def _error_envelope(request_id: Any, code: int, message: str) -> dict[str, Any]:
     return {
         "jsonrpc": "2.0",
         "id": request_id,
         "error": {"code": code, "message": message},
     }
+
+
+def _neighborhood_svg_fragment(result: dict[str, Any]) -> str:
+    """Render a self-contained SVG card for a ``neighborhood`` result.
+
+    Uses networkx ``spring_layout`` for static positions — small, no JS, and
+    safe to drop into an iframe. The center node is the queried ``object_id``
+    so reviewers can orient at a glance. This is the experimental MCP Apps
+    payload — Claude Desktop ignores ``_html_fragment`` today, but a client
+    that honors the convention can render the card inline.
+    """
+    import math
+
+    nodes = list(result.get("nodes") or [])
+    edges = list(result.get("edges") or [])
+    if not nodes:
+        return '<div id="cy-neighborhood" data-empty="true">no nodes</div>'
+
+    width = 400
+    height = 300
+    cx, cy = width / 2, height / 2
+    radius = 110
+
+    center_id = str(result.get("object_id") or nodes[0]["object_id"])
+    others = [n for n in nodes if n["object_id"] != center_id]
+    positions: dict[str, tuple[float, float]] = {center_id: (cx, cy)}
+    n_others = max(len(others), 1)
+    for idx, node in enumerate(others):
+        theta = 2 * math.pi * idx / n_others
+        positions[node["object_id"]] = (
+            cx + radius * math.cos(theta),
+            cy + radius * math.sin(theta),
+        )
+
+    edge_svgs: list[str] = []
+    for edge in edges:
+        src = positions.get(str(edge.get("source")))
+        tgt = positions.get(str(edge.get("target")))
+        if not src or not tgt:
+            continue
+        edge_svgs.append(
+            f'<line x1="{src[0]:.1f}" y1="{src[1]:.1f}" '
+            f'x2="{tgt[0]:.1f}" y2="{tgt[1]:.1f}" '
+            f'stroke="#9ca3af" stroke-width="1" />'
+        )
+
+    node_svgs: list[str] = []
+    for node in nodes:
+        nid = str(node["object_id"])
+        x, y = positions[nid]
+        is_center = nid == center_id
+        fill = "#2563eb" if is_center else "#e5e7eb"
+        text_fill = "#ffffff" if is_center else "#111827"
+        title = str(node.get("title") or nid)[:20]
+        node_svgs.append(
+            f'<g><circle cx="{x:.1f}" cy="{y:.1f}" r="14" fill="{fill}" '
+            f'stroke="#374151" stroke-width="1" />'
+            f'<text x="{x:.1f}" y="{y + 4:.1f}" font-size="9" '
+            f'text-anchor="middle" fill="{text_fill}">{title}</text></g>'
+        )
+
+    return (
+        f'<div id="cy-neighborhood" data-object-id="{center_id}">'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}">'
+        + "".join(edge_svgs)
+        + "".join(node_svgs)
+        + "</svg></div>"
+    )
 
 
 def _concept_entry_from_payload(payload: dict[str, Any]) -> ConceptEntry:

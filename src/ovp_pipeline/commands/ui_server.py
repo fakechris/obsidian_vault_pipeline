@@ -100,6 +100,7 @@ def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
         ("Actions", "/actions"),
         ("Production", "/production"),
         ("Workbench", "/workbench"),
+        ("Explore", "/explore"),
     ]
     if _shell_supports_research_nav(requested_pack):
         items.extend(
@@ -4223,6 +4224,124 @@ def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
     )
 
 
+def _render_explore_fragment(object_id: str) -> str:
+    """Phase 38 Stage C — agent-decisions SSE consumer.
+
+    Tails ``60-Logs/agent-decisions.jsonl`` (written by graph_ops calls
+    invoked through MCP) and renders one frame per decision. Mirrors the
+    Pulse fragment so the look-and-feel is consistent across SSE panes.
+    """
+    object_qs = quote(object_id, safe="")
+    return (
+        "<section class='agent-timeline'>"
+        "<style>"
+        ".agent-timeline{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;}"
+        ".agent-timeline ul{list-style:none;margin:0;padding:.4rem;height:100%;overflow:auto;"
+        "background:#0e1116;color:#d6deeb;border-radius:6px;}"
+        ".agent-timeline li{margin:.1rem 0;white-space:pre-wrap;}"
+        ".agent-timeline li .ts{color:#7c8593;margin-right:.4rem;}"
+        ".agent-timeline li .tool{color:#82aaff;margin-right:.4rem;}"
+        ".agent-timeline .empty{color:#7c8593;padding:.4rem;}"
+        "</style>"
+        "<ul id='agent-feed'><li class='empty'>Waiting for agent decisions…</li></ul>"
+        "<script>(function(){"
+        "var feed=document.getElementById('agent-feed');"
+        "var empty=feed.querySelector('.empty');"
+        f"var src=new EventSource('/explore/stream?object_id={object_qs}');"
+        "function render(ev){"
+        "if(empty){empty.remove();empty=null;}"
+        "try{var obj=JSON.parse(ev.data);"
+        "var li=document.createElement('li');"
+        "var ts=document.createElement('span');ts.className='ts';ts.textContent=obj.ts||'';"
+        "var tool=document.createElement('span');tool.className='tool';"
+        "tool.textContent=obj.tool||obj.event_type||'';"
+        "var body=document.createElement('span');"
+        "body.textContent=JSON.stringify(obj.arguments||obj.payload||{}).slice(0,140);"
+        "li.appendChild(ts);li.appendChild(tool);li.appendChild(body);"
+        "feed.appendChild(li);"
+        "while(feed.children.length>200){feed.removeChild(feed.firstChild);}"
+        "feed.scrollTop=feed.scrollHeight;"
+        "}catch(e){/* swallow */}}"
+        "src.onmessage=render;"
+        "src.addEventListener('agent_decision',render);"
+        "src.onerror=function(){src.close();};"
+        "})();</script>"
+        "</section>"
+    )
+
+
+def _render_explore_page(*, object_id: str) -> str:
+    """Phase 38 Stage C — graph-native exploration surface.
+
+    Layout (CSS grid):
+
+        ┌──────────────────┬──────────────────┐
+        │  Graph canvas    │  Agent timeline  │
+        │  (iframe of      │  (SSE stream of  │
+        │   /graph?id=...) │   graph_ops      │
+        │                  │   tool calls)    │
+        ├──────────────────┴──────────────────┤
+        │  Synthesis pane (Crystal preview)   │
+        └─────────────────────────────────────┘
+    """
+    canvas_src = (
+        f"/object/fragment?id={quote(object_id, safe='')}"
+        if object_id
+        else "/objects"
+    )
+    synth_src = (
+        f"/object/fragment?id={quote(object_id, safe='')}"
+        if object_id
+        else "/objects"
+    )
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1' />"
+        "<title>Explore</title>"
+        "<style>"
+        "*{box-sizing:border-box}"
+        "body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;background:#f7f6f2;color:#1f1a17}"
+        "header{padding:.6rem 1rem;border-bottom:1px solid #e7e1d8;display:flex;gap:1rem;align-items:center}"
+        "header h1{font-size:1rem;margin:0;color:#9f4f24}"
+        "header .meta{color:#71675d;font-size:.85rem}"
+        ".grid{display:grid;height:calc(100vh - 56px);"
+        "grid-template-columns:1fr 360px;"
+        "grid-template-rows:1fr 260px;"
+        "gap:1px;background:#e7e1d8;}"
+        ".pane{background:#fffdfa;overflow:auto}"
+        ".pane iframe{width:100%;height:100%;border:0;display:block}"
+        ".pane.canvas{grid-row:1/2;grid-column:1/2}"
+        ".pane.timeline{grid-row:1/2;grid-column:2/3;padding:.4rem}"
+        ".pane.synth{grid-column:1/3;grid-row:2/3}"
+        "</style></head><body>"
+        "<header>"
+        "<h1>Explore</h1>"
+        f"<span class='meta'>object: <code id='ex-object'>{escape(object_id) or '∅'}</code></span>"
+        "<a href='/' style='margin-left:auto;color:#9f4f24;text-decoration:none'>← Shell</a>"
+        "</header>"
+        "<div class='grid'>"
+        f"<section class='pane canvas'><iframe id='pane-canvas' src='{escape(canvas_src)}'></iframe></section>"
+        f"<section class='pane timeline'>{_render_explore_fragment(object_id)}</section>"
+        f"<section class='pane synth'><iframe id='pane-synth' src='{escape(synth_src)}'></iframe></section>"
+        "</div>"
+        "<script>(function(){"
+        "function selectObject(id){"
+        "document.getElementById('pane-canvas').src=id?'/object/fragment?id='+encodeURIComponent(id):'/objects';"
+        "document.getElementById('pane-synth').src=id?'/object/fragment?id='+encodeURIComponent(id):'/objects';"
+        "document.getElementById('ex-object').textContent=id||'∅';"
+        "var url=new URL(window.location.href);"
+        "if(id){url.searchParams.set('object_id',id);}else{url.searchParams.delete('object_id');}"
+        "history.replaceState({},'',url.toString());"
+        "}"
+        "window.addEventListener('message',function(ev){"
+        "var d=ev.data;if(!d||typeof d!=='object')return;"
+        "if(d.type==='select_object'&&typeof d.id==='string'){selectObject(d.id);}"
+        "});"
+        "})();</script>"
+        "</body></html>"
+    )
+
+
 def create_server(
     vault_dir: Path | str, *, host: str = "127.0.0.1", port: int = 8787
 ) -> ThreadingHTTPServer:
@@ -4758,6 +4877,25 @@ def create_server(
                         poll_interval=poll_interval, max_polls=max_polls
                     )
                     return
+                if path == "/explore":
+                    object_id = query.get("object_id", [""])[0]
+                    self._write_html(_render_explore_page(object_id=object_id))
+                    return
+                if path == "/explore/stream":
+                    raw_max = query.get("max_polls", [""])[0]
+                    raw_interval = query.get("poll_interval", [""])[0]
+                    max_polls = int(raw_max) if raw_max else None
+                    poll_interval = float(raw_interval) if raw_interval else 1.0
+                    if poll_interval <= 0:
+                        self.send_error(400, "poll_interval must be > 0")
+                        return
+                    if max_polls is not None and max_polls < 0:
+                        self.send_error(400, "max_polls must be >= 0")
+                        return
+                    self._stream_agent_decisions_sse(
+                        poll_interval=poll_interval, max_polls=max_polls
+                    )
+                    return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
                 self.send_error(400, str(exc))
@@ -5185,6 +5323,63 @@ def create_server(
                     frame = (
                         (f"id: {event_id}\n" if event_id else "")
                         + f"event: {event_type}\n"
+                        + f"data: {data}\n\n"
+                    ).encode("utf-8")
+                    try:
+                        self.wfile.write(frame)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                if not events:
+                    try:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                time.sleep(poll_interval)
+
+        def _stream_agent_decisions_sse(
+            self,
+            *,
+            poll_interval: float = 1.0,
+            max_polls: int | None = None,
+        ) -> None:
+            """Phase 38 Stage C — tail ``60-Logs/agent-decisions.jsonl``.
+
+            Same poll/SSE machinery as ``_stream_pulse_sse``, but scoped to a
+            single log written by graph_ops invocations through the MCP
+            server. Each frame uses the ``agent_decision`` event name so the
+            UI subscribes selectively.
+            """
+            layout = VaultLayout.from_vault(resolved_vault)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+
+            try:
+                self.wfile.write(b": ovp explore stream\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+            logs = ("agent-decisions.jsonl",)
+            positions = initial_positions(layout, logs=logs)
+            polls = 0
+            while True:
+                if max_polls is not None and polls >= max_polls:
+                    return
+                polls += 1
+                events, positions = tail_events(
+                    layout, since_position=positions, logs=logs
+                )
+                for event in events:
+                    event_id = str(event.get("event_id") or "")
+                    data = json.dumps(event, ensure_ascii=False)
+                    frame = (
+                        (f"id: {event_id}\n" if event_id else "")
+                        + "event: agent_decision\n"
                         + f"data: {data}\n\n"
                     ).encode("utf-8")
                     try:
