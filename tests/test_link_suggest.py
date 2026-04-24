@@ -17,6 +17,7 @@ import pytest
 from ovp_pipeline.commands.link_suggest import (
     BACKFILL_HEADING,
     BACKFILL_MARKER,
+    RRF_K,
     run_link_suggest,
 )
 from ovp_pipeline.knowledge_index import rebuild_knowledge_index
@@ -251,3 +252,50 @@ def test_no_pages_when_index_empty(temp_vault):
     log_path = temp_vault / "60-Logs" / "link-suggestions" / f"{summary['run_id']}.jsonl"
     assert log_path.exists()
     assert log_path.read_text(encoding="utf-8") == ""
+
+
+def test_bm25_branch_survives_hyphens_and_colons_in_query(temp_vault):
+    """Regression: prose like ``Retrieval-Augmented`` or ``AI: ...`` used to
+    crash FTS5 (`no such column: step`); the blind ``except`` then silently
+    collapsed BM25 to ``[]``. With both branches contributing, at least one
+    suggestion's ``rrf_score`` must exceed the single-branch ceiling of
+    ``1/(RRF_K+1)`` — that's the algebraic proof that BM25 didn't quietly
+    disappear."""
+    _seed_evergreens(temp_vault)
+    deep_dive_path = (
+        temp_vault
+        / "20-Areas"
+        / "AI-Research"
+        / "Topics"
+        / "2026-04"
+        / "2026-04-23_AI_Stack_深度解读.md"
+    )
+    # Overwrite with content packed with FTS5-hostile syntax in title and body.
+    deep_dive_path.write_text(
+        """---
+note_id: 2026-04-23-ai-stack
+title: "AI Stack: Retrieval-Augmented Multi-Step Agents"
+type: deep_dive
+date: 2026-04-23
+---
+
+# AI Stack: Retrieval-Augmented Multi-Step Agents
+
+Retrieval-Augmented Generation pairs with multi-step AI agents that use
+function-calling to invoke external tools. The pattern: agent + RAG +
+function-calling, all in one stack.
+""",
+        encoding="utf-8",
+    )
+
+    rebuild_knowledge_index(temp_vault)
+    summary = run_link_suggest(temp_vault, min_links=3, suggestions_per_page=5)
+
+    log_path = temp_vault / "60-Logs" / "link-suggestions" / f"{summary['run_id']}.jsonl"
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    deep_dive_rows = [r for r in rows if r["source_slug"] == "2026-04-23-ai-stack"]
+    assert deep_dive_rows, "deep_dive with FTS5-hostile prose must still get suggestions"
+    single_branch_ceiling = 1.0 / (RRF_K + 1)
+    assert any(
+        r["rrf_score"] > single_branch_ceiling for r in deep_dive_rows
+    ), "at least one row must score above the single-branch ceiling — proves BM25 fired"

@@ -205,36 +205,30 @@ Evergreen笔记标准：
         self.logger = logger
         self.vault_dir = vault_dir
 
-    @staticmethod
-    def _sanitize_fts_query(query_text: str) -> str:
-        """FTS5 MATCH treats `:`, `-`, `"`, etc. as syntax — `multi-step` parses
-        as `multi NOT step`, then `step` is read as a column qualifier and the
-        whole query throws `no such column: step`. Strip everything except
-        alphanumerics + CJK and collapse whitespace so the query stays a
-        plain bag of tokens."""
-        cleaned = re.sub(r"[^\w\u4e00-\u9fff]+", " ", query_text, flags=re.UNICODE)
-        return " ".join(cleaned.split())
-
     def _retrieve_related_for_extraction(
         self,
         query_text: str,
         k: int = 20,
+        *,
+        registry: Any = None,
     ) -> list[dict[str, str]]:
         """Pull top-k existing concepts (BM25 over the knowledge index) so the
         prompt can ground new evergreens in the real registry instead of
         inventing slugs in a vacuum. Returns [] if no vault_dir or the index
-        is unavailable."""
+        is unavailable. ``registry`` may be a pre-loaded ``ConceptRegistry`` —
+        callers in batch mode should pass their cached instance to avoid
+        re-parsing the registry file per article."""
         if self.vault_dir is None:
             return []
         try:
-            from .knowledge_index import search_knowledge_index
+            from .knowledge_index import sanitize_fts_query, search_knowledge_index
         except ImportError:
             try:
-                from knowledge_index import search_knowledge_index  # type: ignore
+                from knowledge_index import sanitize_fts_query, search_knowledge_index  # type: ignore
             except ImportError:
                 return []
 
-        sanitized = self._sanitize_fts_query(query_text)
+        sanitized = sanitize_fts_query(query_text)
         if not sanitized:
             return []
         try:
@@ -242,8 +236,7 @@ Evergreen笔记标准：
         except Exception:
             return []
 
-        registry = None
-        if HAS_REGISTRY:
+        if registry is None and HAS_REGISTRY:
             try:
                 registry = ConceptRegistry(self.vault_dir).load()
             except Exception:
@@ -285,10 +278,16 @@ Evergreen笔记标准：
                 lines.append(f"- `{slug}` — {title}")
         return "\n".join(lines)
 
-    def extract_concepts(self, file_path: Path, content: str) -> list[dict]:
-        """从内容中提取概念"""
+    def extract_concepts(
+        self,
+        file_path: Path,
+        content: str,
+        *,
+        registry: Any = None,
+    ) -> list[dict]:
+        """从内容中提取概念。``registry`` 由批量调用方注入以避免重复加载。"""
         retrieval_query = f"{file_path.stem}\n{content[:500]}".strip()
-        related = self._retrieve_related_for_extraction(retrieval_query)
+        related = self._retrieve_related_for_extraction(retrieval_query, registry=registry)
         related_block = self._format_related_block(related)
 
         user_prompt = f"""请从以下深度解读中提取3-5个核心概念：
@@ -449,12 +448,13 @@ class AutoEvergreenExtractor:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            # 提取概念
-            concepts = self.extractor.extract_concepts(file_path, content)
-            result["concepts_extracted"] = len(concepts)
-
             # 获取已加载的 registry（每文件一次，不是每概念一次）
+            # 注入到 extractor 以便检索阶段也复用同一个缓存。
             registry = self._get_registry()
+
+            # 提取概念
+            concepts = self.extractor.extract_concepts(file_path, content, registry=registry)
+            result["concepts_extracted"] = len(concepts)
 
             for concept in concepts:
                 concept_name = concept.get("concept_name")

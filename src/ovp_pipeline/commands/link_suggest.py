@@ -31,15 +31,15 @@ from typing import Any
 try:
     from ..runtime import VaultLayout, resolve_vault_dir
     from ..knowledge_index import (
-        _ensure_knowledge_db,
         query_knowledge_index,
+        sanitize_fts_query,
         search_knowledge_index,
     )
 except ImportError:
     from ovp_pipeline.runtime import VaultLayout, resolve_vault_dir  # type: ignore
     from ovp_pipeline.knowledge_index import (  # type: ignore
-        _ensure_knowledge_db,
         query_knowledge_index,
+        sanitize_fts_query,
         search_knowledge_index,
     )
 
@@ -56,25 +56,36 @@ def _new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
+_BODY_PREVIEW_CHARS = 800
+
+
 def _iter_under_linked_pages(
     layout: VaultLayout,
     *,
     min_links: int,
     note_types: tuple[str, ...] | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Return pages whose outbound wikilink count is below ``min_links``."""
-    _ensure_knowledge_db(layout.vault_dir)
+    """Return pages whose outbound wikilink count is below ``min_links``.
+    Body is truncated in SQL to ``_BODY_PREVIEW_CHARS`` (the suggester only
+    uses the first 800 chars) and ``limit`` is pushed into the query so we
+    never materialize the whole vault in memory."""
     type_clause = ""
     params: list[Any] = []
     if note_types:
         placeholders = ",".join("?" for _ in note_types)
-        type_clause = f"WHERE pi.note_type IN ({placeholders})"
+        type_clause = f"WHERE pi.note_type IN ({placeholders})"  # noqa: S608 — placeholders only, values bound via params
         params.extend(note_types)
     params.append(min_links)
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = "LIMIT ?"
+        params.append(limit)
     with sqlite3.connect(layout.knowledge_db) as conn:
         rows = conn.execute(
             f"""
-            SELECT pi.slug, pi.title, pi.note_type, pi.path, pi.body,
+            SELECT pi.slug, pi.title, pi.note_type, pi.path,
+                   SUBSTR(pi.body, 1, ?) AS body,
                    COUNT(pl.target_slug) AS link_out_count
             FROM pages_index pi
             LEFT JOIN page_links pl
@@ -83,8 +94,9 @@ def _iter_under_linked_pages(
             GROUP BY pi.slug
             HAVING link_out_count < ?
             ORDER BY pi.slug
-            """,
-            params,
+            {limit_clause}
+            """,  # noqa: S608 — clauses are placeholder-only, all values bound via params
+            (_BODY_PREVIEW_CHARS, *params),
         ).fetchall()
     return [
         {
@@ -152,13 +164,21 @@ def _suggest_for_page(
 ) -> list[dict[str, Any]]:
     title = page.get("title") or page["slug"]
     body = page.get("body") or ""
-    query_text = f"{title}\n{body[:800]}".strip()
+    query_text = f"{title}\n{body[:_BODY_PREVIEW_CHARS]}".strip()
     if not query_text:
         return []
-    try:
-        bm25 = search_knowledge_index(layout.vault_dir, query_text, limit=candidates_per_page)
-    except Exception:
-        bm25 = []
+    # FTS5 MATCH parses `-`/`:`/`"` as syntax (e.g. `multi-step` →
+    # `multi NOT step` → "no such column: step"); without sanitizing, the
+    # blind `except` below would silently collapse the BM25 branch and the
+    # command would quietly degrade to vector-only retrieval. See
+    # `knowledge_index.sanitize_fts_query`.
+    bm25_query = sanitize_fts_query(query_text)
+    bm25: list[dict[str, Any]] = []
+    if bm25_query:
+        try:
+            bm25 = search_knowledge_index(layout.vault_dir, bm25_query, limit=candidates_per_page)
+        except Exception:
+            bm25 = []
     try:
         vector = query_knowledge_index(layout.vault_dir, query_text, limit=candidates_per_page)
     except Exception:
@@ -239,9 +259,9 @@ def run_link_suggest(
     if apply and not confirm:
         raise ValueError("--apply requires --confirm")
 
-    pages = _iter_under_linked_pages(layout, min_links=min_links, note_types=note_types)
-    if limit is not None:
-        pages = pages[:limit]
+    pages = _iter_under_linked_pages(
+        layout, min_links=min_links, note_types=note_types, limit=limit
+    )
 
     run_id = _new_run_id()
     rows: list[dict[str, Any]] = []
