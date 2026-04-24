@@ -24,6 +24,18 @@ SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
 
 
+_FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
+
+
+def sanitize_fts_query(query_text: str) -> str:
+    """Strip FTS5 syntax characters (`-`, `:`, `"`, etc.) from free-text input
+    so prose like ``multi-step`` doesn't parse as ``multi NOT step`` and crash
+    with ``no such column: step``. Keeps alphanumerics + CJK and collapses
+    whitespace; returns ``""`` when nothing usable remains."""
+    cleaned = _FTS_QUERY_SCRUB.sub(" ", query_text or "")
+    return " ".join(cleaned.split())
+
+
 SCHEMA = """
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;

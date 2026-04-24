@@ -220,7 +220,7 @@ class TestCandidatePromotion:
         logger = EvergreenLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
         extractor = AutoEvergreenExtractor(temp_vault, logger)
         extractor.extractor = SimpleNamespace(
-            extract_concepts=lambda file_path, content: [{
+            extract_concepts=lambda file_path, content, **_: [{
                 "concept_name": "new-candidate",
                 "title": "New Candidate",
                 "one_sentence_def": "Candidate definition",
@@ -248,7 +248,7 @@ class TestCandidatePromotion:
         logger = EvergreenLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
         extractor = AutoEvergreenExtractor(temp_vault, logger)
         extractor.extractor = SimpleNamespace(
-            extract_concepts=lambda file_path, content: [{
+            extract_concepts=lambda file_path, content, **_: [{
                 "concept_name": "promoted-concept",
                 "title": "Promoted Concept",
                 "one_sentence_def": "Promoted definition",

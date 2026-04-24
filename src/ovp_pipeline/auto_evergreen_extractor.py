@@ -179,7 +179,7 @@ Evergreen笔记标准：
     "one_sentence_def": "一句话定义（中文，但保留技术术语英文）",
     "explanation": "详细解释（中文，技术术语不翻译）",
     "importance": "为什么重要",
-    "related_concepts": ["Related-Concept-1", "Related-Concept-2"]
+    "related_concepts": ["Related-Concept-1", "Related-Concept-2", "Related-Concept-3"]
   }
 ]
 
@@ -191,16 +191,105 @@ Evergreen笔记标准：
 - `one_sentence_def` 不能为空，必须是完整定义句
 - `concept_name` 必须是稳定的 kebab-case slug，不能包含文件扩展名或 URL 片段
 - `title` 应该是紧凑、可复用的知识标题，不要直接复述文件名/README 标题
-- `related_concepts` 至少给出 1-3 个真正相关的概念；如果没有合适项，返回空数组
+- `related_concepts` **必须给出至少 3 个真正相关的概念**。当用户提示中包含"已有概念目录"时，优先从该目录复用 slug（精确匹配，区分大小写）；目录之外的新概念也允许，但要确保是稳定、可命名的原子概念，不要凭空发明
 - 如果全文主要是项目包装、目录说明、营销文案、或信息不足以形成稳定知识，请返回空数组
 """
 
-    def __init__(self, llm_client: LiteLLMClient, logger: PipelineLogger):
+    def __init__(
+        self,
+        llm_client: LiteLLMClient,
+        logger: PipelineLogger,
+        vault_dir: Path | None = None,
+    ):
         self.llm = llm_client
         self.logger = logger
+        self.vault_dir = vault_dir
 
-    def extract_concepts(self, file_path: Path, content: str) -> list[dict]:
-        """从内容中提取概念"""
+    def _retrieve_related_for_extraction(
+        self,
+        query_text: str,
+        k: int = 20,
+        *,
+        registry: Any = None,
+    ) -> list[dict[str, str]]:
+        """Pull top-k existing concepts (BM25 over the knowledge index) so the
+        prompt can ground new evergreens in the real registry instead of
+        inventing slugs in a vacuum. Returns [] if no vault_dir or the index
+        is unavailable. ``registry`` may be a pre-loaded ``ConceptRegistry`` —
+        callers in batch mode should pass their cached instance to avoid
+        re-parsing the registry file per article."""
+        if self.vault_dir is None:
+            return []
+        try:
+            from .knowledge_index import sanitize_fts_query, search_knowledge_index
+        except ImportError:
+            try:
+                from knowledge_index import sanitize_fts_query, search_knowledge_index  # type: ignore
+            except ImportError:
+                return []
+
+        sanitized = sanitize_fts_query(query_text)
+        if not sanitized:
+            return []
+        try:
+            hits = search_knowledge_index(self.vault_dir, sanitized, limit=k)
+        except Exception:
+            return []
+
+        if registry is None and HAS_REGISTRY:
+            try:
+                registry = ConceptRegistry(self.vault_dir).load()
+            except Exception:
+                registry = None
+
+        results: list[dict[str, str]] = []
+        for hit in hits:
+            slug = str(hit.get("slug") or "")
+            title = str(hit.get("title") or "")
+            if not slug:
+                continue
+            definition = ""
+            if registry is not None:
+                try:
+                    entry = registry.find_by_slug(slug)
+                    if entry and entry.definition:
+                        definition = entry.definition
+                except Exception:
+                    pass
+            results.append({"slug": slug, "title": title, "definition": definition})
+        return results
+
+    @staticmethod
+    def _format_related_block(related: list[dict[str, str]]) -> str:
+        """Render retrieved candidates as a markdown checklist for the prompt.
+        Definitions are truncated to keep the prompt small."""
+        if not related:
+            return ""
+        lines = ["", "已有概念目录（请优先复用以下 slug，仅当确无对应项时再发明新 slug）:"]
+        for item in related:
+            slug = item.get("slug", "")
+            title = item.get("title", "") or slug
+            definition = (item.get("definition") or "").strip()
+            if definition:
+                if len(definition) > 80:
+                    definition = definition[:77] + "..."
+                lines.append(f"- `{slug}` — {title} — {definition}")
+            else:
+                lines.append(f"- `{slug}` — {title}")
+        return "\n".join(lines)
+
+    def extract_concepts(
+        self,
+        file_path: Path,
+        content: str,
+        *,
+        registry: Any = None,
+    ) -> list[dict]:
+        """从内容中提取概念。``registry`` 由批量调用方注入以避免重复加载。"""
+        retrieval_query = f"{file_path.stem}\n{content[:500]}".strip()
+        related = self._retrieve_related_for_extraction(retrieval_query, registry=registry)
+        related_block = self._format_related_block(related)
+
         user_prompt = f"""请从以下深度解读中提取3-5个核心概念：
 
 文件: {file_path}
@@ -209,6 +298,7 @@ Evergreen笔记标准：
 ```
 {content[:6000]}
 ```
+{related_block}
 
 请按JSON格式输出概念列表。"""
 
@@ -305,7 +395,7 @@ class AutoEvergreenExtractor:
             model=DEFAULT_MINIMAX_MODEL,
             api_type="anthropic"
         )
-        self.extractor = EvergreenExtractor(llm_client, self.logger)
+        self.extractor = EvergreenExtractor(llm_client, self.logger, vault_dir=self.vault_dir)
 
     def evergreen_exists(self, concept_name: str, registry=None) -> bool:
         """检查Evergreen笔记是否已存在（registry优先，文件系统备选）"""
@@ -358,12 +448,13 @@ class AutoEvergreenExtractor:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            # 提取概念
-            concepts = self.extractor.extract_concepts(file_path, content)
-            result["concepts_extracted"] = len(concepts)
-
             # 获取已加载的 registry（每文件一次，不是每概念一次）
+            # 注入到 extractor 以便检索阶段也复用同一个缓存。
             registry = self._get_registry()
+
+            # 提取概念
+            concepts = self.extractor.extract_concepts(file_path, content, registry=registry)
+            result["concepts_extracted"] = len(concepts)
 
             for concept in concepts:
                 concept_name = concept.get("concept_name")
@@ -374,6 +465,14 @@ class AutoEvergreenExtractor:
                     "name": concept_name,
                     "status": "pending"
                 }
+
+                related = concept.get("related_concepts") or []
+                if len(related) < 3:
+                    self.logger.log("evergreen_low_link", {
+                        "concept": concept_name,
+                        "source": str(file_path.name),
+                        "related_count": len(related),
+                    })
 
                 # 检查是否已存在（registry或文件系统）
                 if self.evergreen_exists(concept_name, registry=registry):
