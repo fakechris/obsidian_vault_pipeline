@@ -38,6 +38,11 @@ except ImportError:
     from identity import canonicalize_note_id  # type: ignore
 
 try:
+    from .promotion_backlinks import upsert_promotions_in_file
+except ImportError:
+    from promotion_backlinks import upsert_promotions_in_file  # type: ignore
+
+try:
     from .llm_defaults import (
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
         DEFAULT_MINIMAX_MODEL,
@@ -425,6 +430,13 @@ class AutoEvergreenExtractor:
                                 "path": str(output_path),
                                 "mutation": mutation.to_dict(),
                             })
+                            # Phase 38.C: write the promotion as a real
+                            # wikilink back into the source so the graph
+                            # picks it up via the standard scan.
+                            try:
+                                upsert_promotions_in_file(file_path, [concept_name])
+                            except Exception:
+                                pass
                         else:
                             from .promote_candidates import write_candidate_file
 
@@ -461,6 +473,11 @@ class AutoEvergreenExtractor:
                         "source": str(file_path.name),
                         "path": str(output_path)
                     })
+                    # Phase 38.C: write backlink into source MD.
+                    try:
+                        upsert_promotions_in_file(file_path, [concept_name])
+                    except Exception:
+                        pass
 
                 result["concepts"].append(concept_info)
 
