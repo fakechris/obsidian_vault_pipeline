@@ -39,7 +39,6 @@ from typing import Iterable
 
 from .event_emitter import emit
 
-
 CONCEPT_MERGES_LOG = "concept-merges.jsonl"
 DEDUP_PROPOSALS_DIR = "dedup-proposals"
 DEDUP_ARCHIVE_DIR = "dedup-merged"
@@ -245,7 +244,9 @@ def _cluster_by_similarity(
 
 def _pick_canonical(members: list[DedupCandidate]) -> DedupCandidate:
     """Canonical = largest body (most curated content), tiebreak shortest slug, tiebreak slug asc."""
-    return max(members, key=lambda c: (c.size_bytes, -len(c.slug), -ord(c.slug[0]) if c.slug else 0))
+    return max(
+        members, key=lambda c: (c.size_bytes, -len(c.slug), -ord(c.slug[0]) if c.slug else 0)
+    )
 
 
 def find_clusters(vault_dir: Path, *, threshold: float = DEFAULT_THRESHOLD) -> list[DedupCluster]:
@@ -428,6 +429,19 @@ def apply_cluster(
 
     dup_slugs = [d.slug for d in cluster.duplicates]
     slug_map = {dup: cluster.canonical.slug for dup in dup_slugs}
+
+    # Pre-validate every duplicate exists before touching the vault. Otherwise
+    # a missing duplicate surfaces only at step 3 (archive), after wikilinks
+    # and aliases have already been mutated — leaving the vault half-merged
+    # with no way to roll back. Fail-fast keeps apply atomic in the
+    # non-dry-run path.
+    if not dry_run:
+        missing = [d.slug for d in cluster.duplicates if not d.path.exists()]
+        if missing:
+            result.errors.append(
+                "refusing to apply: missing duplicate files: " + ", ".join(missing)
+            )
+            return result
 
     # 1. Rewrite wikilinks across vault (skip the duplicates themselves — about to archive).
     dup_paths = {d.path for d in cluster.duplicates}

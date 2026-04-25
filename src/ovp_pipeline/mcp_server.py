@@ -25,6 +25,7 @@ a Python traceback.
 
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 from dataclasses import asdict
@@ -167,8 +168,8 @@ _TOOLS_DESCRIPTORS: tuple[dict[str, Any], ...] = (
             "required": ["object_id"],
             "properties": {
                 "object_id": {"type": "string"},
-                "hop": {"type": "integer", "minimum": 1, "maximum": 4},
-                "max_nodes": {"type": "integer", "minimum": 1, "maximum": 200},
+                "hop": {"type": "integer", "minimum": 1, "maximum": 5},
+                "max_nodes": {"type": "integer", "minimum": 1, "maximum": 500},
                 "render": {"type": "string", "enum": ["json", "html"]},
             },
         },
@@ -200,7 +201,7 @@ _TOOLS_DESCRIPTORS: tuple[dict[str, Any], ...] = (
             "type": "object",
             "properties": {
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                "sample_size": {"type": "integer", "minimum": 10, "maximum": 1000},
+                "sample_size": {"type": "integer", "minimum": 1, "maximum": 1000},
             },
         },
     },
@@ -285,13 +286,20 @@ class MCPServer:
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Invoke a tool by name and return its result dict.
 
-        Raises ``KeyError`` for unknown tools and ``TypeError`` /
-        ``ValueError`` for malformed arguments — the JSON-RPC layer turns
-        those into the appropriate error envelope.
+        Raises ``KeyError`` for unknown tools and ``ValueError`` for
+        malformed arguments — the JSON-RPC layer turns those into the
+        appropriate error envelope. Kwargs are pre-validated via
+        ``inspect.signature(impl).bind`` so a ``TypeError`` raised from
+        deep inside the tool body still bubbles up as ``INTERNAL_ERROR``
+        instead of being silently reclassified as ``INVALID_PARAMS``.
         """
         impl = self._tools.get(name)
         if impl is None:
             raise KeyError(name)
+        try:
+            inspect.signature(impl).bind(**arguments)
+        except TypeError as exc:
+            raise ValueError(f"invalid arguments for {name}: {exc}") from exc
         return impl(**arguments)
 
     # -- JSON-RPC plumbing --------------------------------------------------
@@ -360,7 +368,12 @@ class MCPServer:
                 result = self.call_tool(name, arguments)
             except KeyError as exc:
                 raise _InvalidParams(f"Unknown tool: {name}") from exc
-            except TypeError as exc:
+            except ValueError as exc:
+                # call_tool pre-validates kwargs and turns binding errors
+                # into ValueError; tool bodies also raise ValueError for
+                # bad enum / out-of-range arguments. A TypeError escaping
+                # the tool body is a real bug, so we let it bubble up to
+                # INTERNAL_ERROR rather than masking it as INVALID_PARAMS.
                 raise _InvalidParams(str(exc)) from exc
             # MCP tools/call result shape: a content array of typed parts
             # plus an isError flag. We serialize the tool's dict as JSON text
@@ -493,6 +506,13 @@ class MCPServer:
         max_nodes: int = 50,
         render: str = "json",
     ) -> dict[str, Any]:
+        # Descriptors carry advisory ranges; the dispatcher does not validate
+        # them. Clamp here so a misbehaved client can't ask for hop=999 and
+        # blow up the BFS on a vault-scale graph.
+        hop = _clamp(hop, lo=1, hi=5, name="hop")
+        max_nodes = _clamp(max_nodes, lo=1, hi=500, name="max_nodes")
+        if render not in ("json", "html"):
+            raise ValueError(f"render must be 'json' or 'html', got {render!r}")
         graph = graph_ops.load_graph(self.vault_dir)
         result = graph_ops.neighborhood(graph, object_id, hop=hop, max_nodes=max_nodes)
         if render == "html":
@@ -509,6 +529,8 @@ class MCPServer:
     def _tool_graph_bridge_nodes(
         self, *, limit: int = 20, sample_size: int = 200
     ) -> dict[str, Any]:
+        limit = _clamp(limit, lo=1, hi=100, name="limit")
+        sample_size = _clamp(sample_size, lo=1, hi=1000, name="sample_size")
         graph = graph_ops.load_graph(self.vault_dir)
         return {"bridges": graph_ops.bridge_nodes(graph, limit=limit, sample_size=sample_size)}
 
@@ -536,6 +558,20 @@ def _error_envelope(request_id: Any, code: int, message: str) -> dict[str, Any]:
         "id": request_id,
         "error": {"code": code, "message": message},
     }
+
+
+def _clamp(value: Any, *, lo: int, hi: int, name: str) -> int:
+    """Coerce ``value`` to int and constrain it to ``[lo, hi]``.
+
+    Tool descriptors advertise integer bounds for graph args, but the JSON-RPC
+    dispatcher trusts whatever the client sends. Clamping at the call site
+    keeps a misconfigured client from melting the daemon.
+    """
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+    return max(lo, min(hi, coerced))
 
 
 def _neighborhood_svg_fragment(result: dict[str, Any]) -> str:

@@ -31,6 +31,7 @@ from typing import Any
 try:
     from ..runtime import VaultLayout, resolve_vault_dir
     from ..knowledge_index import (
+        ensure_knowledge_db_current,
         query_knowledge_index,
         sanitize_fts_query,
         search_knowledge_index,
@@ -38,6 +39,7 @@ try:
 except ImportError:
     from ovp_pipeline.runtime import VaultLayout, resolve_vault_dir  # type: ignore
     from ovp_pipeline.knowledge_index import (  # type: ignore
+        ensure_knowledge_db_current,
         query_knowledge_index,
         sanitize_fts_query,
         search_knowledge_index,
@@ -258,6 +260,10 @@ def run_link_suggest(
     layout = VaultLayout.from_vault(vault_dir)
     if apply and not confirm:
         raise ValueError("--apply requires --confirm")
+
+    # Materialize knowledge.db before the first SQLite read; otherwise a
+    # fresh-clone vault hits "unable to open database file" / "no such table".
+    ensure_knowledge_db_current(layout.vault_dir)
 
     pages = _iter_under_linked_pages(
         layout, min_links=min_links, note_types=note_types, limit=limit

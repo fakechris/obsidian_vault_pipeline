@@ -287,15 +287,21 @@ def _render_assembly_contract_card(payload: dict) -> str:
         item
         for item in (
             f"<li>Recipe kind: {escape(recipe_kind)}</li>" if recipe_kind else "",
-            f"<li>Source contract: {escape(source_contract_kind)} · {escape(source_contract_name)}</li>"
-            if source_contract_kind or source_contract_name
-            else "",
-            f"<li>Source provider: {escape(source_provider_pack)} · {escape(source_provider_name)}</li>"
-            if source_provider_pack or source_provider_name
-            else "",
-            f"<li>Output: {escape(output_mode)} → {escape(publish_target)}</li>"
-            if output_mode or publish_target
-            else "",
+            (
+                f"<li>Source contract: {escape(source_contract_kind)} · {escape(source_contract_name)}</li>"
+                if source_contract_kind or source_contract_name
+                else ""
+            ),
+            (
+                f"<li>Source provider: {escape(source_provider_pack)} · {escape(source_provider_name)}</li>"
+                if source_provider_pack or source_provider_name
+                else ""
+            ),
+            (
+                f"<li>Output: {escape(output_mode)} → {escape(publish_target)}</li>"
+                if output_mode or publish_target
+                else ""
+            ),
         )
     )
     description_html = f"<p class='muted'>{escape(description)}</p>" if description else ""
@@ -750,9 +756,10 @@ def _read_vault_asset(vault_dir: Path, relative_path: str) -> tuple[bytes, str]:
         raise ValueError("invalid asset path") from exc
     if not candidate.is_file():
         raise ValueError(f"asset not found: {relative_path}")
-    return candidate.read_bytes(), mimetypes.guess_type(candidate.name)[
-        0
-    ] or "application/octet-stream"
+    return (
+        candidate.read_bytes(),
+        mimetypes.guess_type(candidate.name)[0] or "application/octet-stream",
+    )
 
 
 def _lookup_wikilink_target(
@@ -3236,8 +3243,7 @@ def _render_briefing_page(payload: dict) -> str:
     skipped_signal_count = _safe_count(background_policy.get("skipped_signal_count"))
     failure_buckets = (
         "".join(
-            f"<li><span class='pill'>{escape(str(bucket))}</span> "
-            f"{_safe_count(count)}</li>"
+            f"<li><span class='pill'>{escape(str(bucket))}</span> " f"{_safe_count(count)}</li>"
             for bucket, count in failure_bucket_values.items()
         )
         or "<li class='muted'>No failed actions.</li>"
@@ -3957,7 +3963,9 @@ def _build_writing_prompts_payload(vault_dir: Path) -> dict:
 def _render_open_questions_fragment(payload: dict) -> str:
     rows = payload.get("questions") or []
     if not rows:
-        return "<section class='open-questions'><p class='empty'>No open questions yet.</p></section>"
+        return (
+            "<section class='open-questions'><p class='empty'>No open questions yet.</p></section>"
+        )
     items = "".join(
         f"<li><strong>{escape(str(row.get('question') or ''))}</strong>"
         f" <small>{escape(str(row.get('ts') or ''))}</small></li>"
@@ -4156,9 +4164,15 @@ def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
     # Fragment URLs. Candidate / Briefing / Actions are pack-aware but do not
     # care about the object id; Object pane needs the id and is hidden when
     # none is selected (the iframe falls back to the Objects index).
-    cand_src = "/candidates/fragment" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
-    actions_src = "/actions/fragment" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
-    briefing_src = "/briefing/fragment" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    cand_src = "/candidates/fragment" + (
+        f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
+    )
+    actions_src = "/actions/fragment" + (
+        f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
+    )
+    briefing_src = "/briefing/fragment" + (
+        f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
+    )
     object_src = (
         f"/object/fragment?id={quote(object_id, safe='')}"
         + (f"&pack={quote(requested_pack, safe='')}" if requested_pack else "")
@@ -4166,6 +4180,10 @@ def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
         else "/objects" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     )
     pulse_src = "/pulse/fragment"
+    # ``</`` would close the surrounding <script> block early — escape it the
+    # same way graph/visualize.py does for inline JSON-in-HTML. Precomputed
+    # because Python 3.10 disallows backslashes inside f-string expressions.
+    pack_json = json.dumps(requested_pack).replace("</", "<\\/")
 
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
@@ -4203,7 +4221,7 @@ def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
         f"<section class='pane pulse'><iframe id='pane-pulse' src='{escape(pulse_src)}'></iframe></section>"
         "</div>"
         "<script>(function(){"
-        f"var pack={json.dumps(requested_pack)};"
+        f"var pack={pack_json};"
         "function selectObject(id){"
         "var packQs=pack?'&pack='+encodeURIComponent(pack):'';"
         "var packQsLead=pack?'?pack='+encodeURIComponent(pack):'';"
@@ -4222,6 +4240,22 @@ def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
         "})();</script>"
         "</body></html>"
     )
+
+
+def _event_matches_object(event: dict, object_id: str) -> bool:
+    """Decide whether an agent-decision event belongs to ``object_id``.
+
+    Decisions land in the log with the queried id either at the top level
+    (``object_id``) or nested under ``arguments.object_id`` for graph_ops
+    tools. Both shapes count as a match; everything else is filtered out so
+    the timeline pane only shows decisions about the focused object.
+    """
+    if str(event.get("object_id") or "") == object_id:
+        return True
+    args = event.get("arguments") or {}
+    if isinstance(args, dict) and str(args.get("object_id") or "") == object_id:
+        return True
+    return False
 
 
 def _render_explore_fragment(object_id: str) -> str:
@@ -4284,16 +4318,8 @@ def _render_explore_page(*, object_id: str) -> str:
         │  Synthesis pane (Crystal preview)   │
         └─────────────────────────────────────┘
     """
-    canvas_src = (
-        f"/object/fragment?id={quote(object_id, safe='')}"
-        if object_id
-        else "/objects"
-    )
-    synth_src = (
-        f"/object/fragment?id={quote(object_id, safe='')}"
-        if object_id
-        else "/objects"
-    )
+    canvas_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/objects"
+    synth_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/objects"
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1' />"
@@ -4838,7 +4864,11 @@ def create_server(
                     else:
                         self._write_html(_render_open_questions_page(payload))
                     return
-                if path in {"/writing-prompts", "/writing-prompts/fragment", "/api/writing-prompts"}:
+                if path in {
+                    "/writing-prompts",
+                    "/writing-prompts/fragment",
+                    "/api/writing-prompts",
+                }:
                     payload = _build_writing_prompts_payload(resolved_vault)
                     if path == "/api/writing-prompts":
                         self._write_json(payload)
@@ -4851,9 +4881,7 @@ def create_server(
                     object_id = query.get("object_id", [""])[0]
                     pack_name = query.get("pack", [""])[0] or ""
                     self._write_html(
-                        _render_workbench_page(
-                            object_id=object_id, requested_pack=pack_name
-                        )
+                        _render_workbench_page(object_id=object_id, requested_pack=pack_name)
                     )
                     return
                 if path == "/pulse":
@@ -4873,9 +4901,7 @@ def create_server(
                     if max_polls is not None and max_polls < 0:
                         self.send_error(400, "max_polls must be >= 0")
                         return
-                    self._stream_pulse_sse(
-                        poll_interval=poll_interval, max_polls=max_polls
-                    )
+                    self._stream_pulse_sse(poll_interval=poll_interval, max_polls=max_polls)
                     return
                 if path == "/explore":
                     object_id = query.get("object_id", [""])[0]
@@ -4892,8 +4918,11 @@ def create_server(
                     if max_polls is not None and max_polls < 0:
                         self.send_error(400, "max_polls must be >= 0")
                         return
+                    object_id = query.get("object_id", [""])[0].strip()
                     self._stream_agent_decisions_sse(
-                        poll_interval=poll_interval, max_polls=max_polls
+                        poll_interval=poll_interval,
+                        max_polls=max_polls,
+                        object_id=object_id or None,
                     )
                     return
                 self.send_error(404, "Not Found")
@@ -5232,9 +5261,11 @@ def create_server(
                 "target_slug": str(audit_event.get("target_slug") or target_slug or ""),
                 "status": str(audit_event.get("status") or "applied_with_warning"),
                 "note": str(audit_event.get("note") or note),
-                "mutation": audit_event.get("mutation")
-                if isinstance(audit_event.get("mutation"), dict)
-                else {},
+                "mutation": (
+                    audit_event.get("mutation")
+                    if isinstance(audit_event.get("mutation"), dict)
+                    else {}
+                ),
                 "knowledge_index_rebuilt": bool(audit_event.get("knowledge_index_rebuilt")),
                 "knowledge_index_error": knowledge_index_error,
                 "warning": str(error),
@@ -5343,13 +5374,17 @@ def create_server(
             *,
             poll_interval: float = 1.0,
             max_polls: int | None = None,
+            object_id: str | None = None,
         ) -> None:
             """Phase 38 Stage C — tail ``60-Logs/agent-decisions.jsonl``.
 
             Same poll/SSE machinery as ``_stream_pulse_sse``, but scoped to a
             single log written by graph_ops invocations through the MCP
             server. Each frame uses the ``agent_decision`` event name so the
-            UI subscribes selectively.
+            UI subscribes selectively. When ``object_id`` is provided, only
+            events whose top-level or ``arguments.object_id`` matches are
+            forwarded — otherwise the consumer would see decisions for
+            unrelated objects in the timeline pane.
             """
             layout = VaultLayout.from_vault(resolved_vault)
             self.send_response(200)
@@ -5371,10 +5406,11 @@ def create_server(
                 if max_polls is not None and polls >= max_polls:
                     return
                 polls += 1
-                events, positions = tail_events(
-                    layout, since_position=positions, logs=logs
-                )
+                events, positions = tail_events(layout, since_position=positions, logs=logs)
+                emitted = False
                 for event in events:
+                    if object_id and not _event_matches_object(event, object_id):
+                        continue
                     event_id = str(event.get("event_id") or "")
                     data = json.dumps(event, ensure_ascii=False)
                     frame = (
@@ -5387,7 +5423,14 @@ def create_server(
                         self.wfile.flush()
                     except (BrokenPipeError, ConnectionResetError):
                         return
-                if not events:
+                    emitted = True
+                if not emitted:
+                    # Send a keepalive whenever no frame was written this poll
+                    # — including the case where every tailed event was
+                    # filtered out by ``object_id``. Without this, a client
+                    # watching an idle object behind a chatty log never
+                    # triggers a wfile.write and we can't detect disconnects,
+                    # leaking one thread + socket per stale viewer.
                     try:
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()

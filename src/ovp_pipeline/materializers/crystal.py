@@ -116,13 +116,19 @@ def _query_evolves_relations(
     return out
 
 
-def _hash_payload(snapshot: dict[str, Any], object_ids: list[str]) -> str:
+def _hash_payload(
+    snapshot: dict[str, Any],
+    object_ids: list[str],
+    relations: list[dict[str, str]] | None = None,
+) -> str:
     """Stable digest over content (not timestamps).
 
     ``generated_at`` and ``queue_summary.running_count`` are excluded from
     the hash so the same logical state at two different moments produces the
     same Crystal id. Anything that materially affects the briefing — signals,
-    issues, insights, object set — does flow into the hash.
+    issues, insights, object set, EVOLVES relations — flows into the hash so
+    a new ``replaces`` edge between two existing objects produces a new
+    Crystal id (and a new file) instead of silently overwriting yesterday's.
     """
     salient = {
         "object_ids": object_ids,
@@ -145,13 +151,25 @@ def _hash_payload(snapshot: dict[str, Any], object_ids: list[str]) -> str:
             if isinstance(item, dict)
         ],
         "priority_items_count": len(snapshot.get("priority_items") or []),
+        "evolves_relations": sorted(
+            (
+                (str(rel.get("source")), str(rel.get("target")), str(rel.get("subtype")))
+                for rel in (relations or [])
+            ),
+        ),
     }
     blob = json.dumps(salient, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
-def _crystal_id(snapshot: dict[str, Any], object_ids: list[str], *, when: _date_cls) -> str:
-    digest = _hash_payload(snapshot, object_ids)
+def _crystal_id(
+    snapshot: dict[str, Any],
+    object_ids: list[str],
+    *,
+    when: _date_cls,
+    relations: list[dict[str, str]] | None = None,
+) -> str:
+    digest = _hash_payload(snapshot, object_ids, relations)
     return f"crystal-{when.isoformat()}-{digest[:8]}"
 
 
@@ -260,7 +278,7 @@ def materialize_crystal(
     target_date = when or datetime.now(timezone.utc).date()
     object_ids = _collect_source_object_ids(snapshot)
     relations = _query_evolves_relations(vault_dir, object_ids, pack_name=pack_name)
-    crystal_id = _crystal_id(snapshot, object_ids, when=target_date)
+    crystal_id = _crystal_id(snapshot, object_ids, when=target_date, relations=relations)
 
     output_dir = vault_dir.joinpath(*CRYSTAL_DIR)
     output_dir.mkdir(parents=True, exist_ok=True)
