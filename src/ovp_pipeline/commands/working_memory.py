@@ -59,9 +59,14 @@ def _parse_ts(value: object) -> datetime | None:
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text)
+        dt = datetime.fromisoformat(text)
     except ValueError:
         return None
+    # Legacy "timestamp" fields were written without TZ info; coerce to UTC
+    # so the `<` comparison against the offset-aware `since` cutoff works.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

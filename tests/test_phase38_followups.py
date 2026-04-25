@@ -243,6 +243,32 @@ def test_pulse_highlights_falls_back_to_timestamp(temp_vault: Path) -> None:
     assert counts.get("modern_event") == 1
 
 
+def test_pulse_highlights_handles_naive_legacy_timestamp(temp_vault: Path) -> None:
+    """Real-world pipeline.jsonl carries naive ``timestamp`` fields like
+    "2026-04-03T04:16:12.625311" (no Z, no offset). The previous
+    ``_parse_ts`` returned a naive datetime, which then crashed the
+    ``ts < since`` comparison with TypeError. Coerce naive ts to UTC."""
+    from datetime import datetime, timezone
+
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.logs_dir.mkdir(parents=True, exist_ok=True)
+    layout.pipeline_log.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-04-03T04:16:12.625311",
+                "event_type": "naive_legacy_event",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    counts = working_memory._pulse_highlights(
+        layout, since=datetime(2026, 4, 1, tzinfo=timezone.utc)
+    )
+    assert counts.get("naive_legacy_event") == 1
+
+
 # ---------------------------------------------------------------------------
 # /explore SSE: scope events to the requested object_id
 # ---------------------------------------------------------------------------
