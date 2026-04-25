@@ -360,7 +360,9 @@ class MCPServer:
                 result = self.call_tool(name, arguments)
             except KeyError as exc:
                 raise _InvalidParams(f"Unknown tool: {name}") from exc
-            except TypeError as exc:
+            except (TypeError, ValueError) as exc:
+                # TypeError = bad kwargs; ValueError = bad enum value or
+                # range. Both are caller-supplied errors → INVALID_PARAMS.
                 raise _InvalidParams(str(exc)) from exc
             # MCP tools/call result shape: a content array of typed parts
             # plus an isError flag. We serialize the tool's dict as JSON text
@@ -493,6 +495,13 @@ class MCPServer:
         max_nodes: int = 50,
         render: str = "json",
     ) -> dict[str, Any]:
+        # Descriptors carry advisory ranges; the dispatcher does not validate
+        # them. Clamp here so a misbehaved client can't ask for hop=999 and
+        # blow up the BFS on a vault-scale graph.
+        hop = _clamp(hop, lo=1, hi=5, name="hop")
+        max_nodes = _clamp(max_nodes, lo=1, hi=500, name="max_nodes")
+        if render not in ("json", "html"):
+            raise ValueError(f"render must be 'json' or 'html', got {render!r}")
         graph = graph_ops.load_graph(self.vault_dir)
         result = graph_ops.neighborhood(graph, object_id, hop=hop, max_nodes=max_nodes)
         if render == "html":
@@ -509,6 +518,8 @@ class MCPServer:
     def _tool_graph_bridge_nodes(
         self, *, limit: int = 20, sample_size: int = 200
     ) -> dict[str, Any]:
+        limit = _clamp(limit, lo=1, hi=100, name="limit")
+        sample_size = _clamp(sample_size, lo=1, hi=1000, name="sample_size")
         graph = graph_ops.load_graph(self.vault_dir)
         return {"bridges": graph_ops.bridge_nodes(graph, limit=limit, sample_size=sample_size)}
 
@@ -536,6 +547,20 @@ def _error_envelope(request_id: Any, code: int, message: str) -> dict[str, Any]:
         "id": request_id,
         "error": {"code": code, "message": message},
     }
+
+
+def _clamp(value: Any, *, lo: int, hi: int, name: str) -> int:
+    """Coerce ``value`` to int and constrain it to ``[lo, hi]``.
+
+    Tool descriptors advertise integer bounds for graph args, but the JSON-RPC
+    dispatcher trusts whatever the client sends. Clamping at the call site
+    keeps a misconfigured client from melting the daemon.
+    """
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+    return max(lo, min(hi, coerced))
 
 
 def _neighborhood_svg_fragment(result: dict[str, Any]) -> str:

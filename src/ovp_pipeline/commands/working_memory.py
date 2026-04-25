@@ -181,7 +181,10 @@ def _evolves_today(layout: VaultLayout, *, since: datetime) -> dict[str, list[di
 def _pulse_highlights(layout: VaultLayout, *, since: datetime) -> Counter:
     counts: Counter = Counter()
     for event in _read_jsonl(layout.pipeline_log):
-        ts = _parse_ts(event.get("ts"))
+        # Pipeline writers split between "ts" (newer paths) and "timestamp"
+        # (older paths) — try both so highlights aren't silently empty when a
+        # vault is dominated by legacy events.
+        ts = _parse_ts(event.get("ts") or event.get("timestamp"))
         if ts is None or ts < since:
             continue
         event_type = str(event.get("event_type") or "(unknown)")
