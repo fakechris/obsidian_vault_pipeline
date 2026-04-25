@@ -5407,6 +5407,7 @@ def create_server(
                     return
                 polls += 1
                 events, positions = tail_events(layout, since_position=positions, logs=logs)
+                emitted = False
                 for event in events:
                     if object_id and not _event_matches_object(event, object_id):
                         continue
@@ -5422,7 +5423,14 @@ def create_server(
                         self.wfile.flush()
                     except (BrokenPipeError, ConnectionResetError):
                         return
-                if not events:
+                    emitted = True
+                if not emitted:
+                    # Send a keepalive whenever no frame was written this poll
+                    # — including the case where every tailed event was
+                    # filtered out by ``object_id``. Without this, a client
+                    # watching an idle object behind a chatty log never
+                    # triggers a wfile.write and we can't detect disconnects,
+                    # leaking one thread + socket per stale viewer.
                     try:
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()

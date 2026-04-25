@@ -109,6 +109,54 @@ def test_graph_neighborhood_rejects_unknown_render() -> None:
     assert reply["error"]["code"] == -32602
 
 
+def test_tool_descriptors_match_runtime_clamps() -> None:
+    """The advertised inputSchema bounds for graph_neighborhood and
+    graph_bridge_nodes must match the runtime ``_clamp`` ranges, otherwise
+    a schema-strict MCP client will reject inputs the server happily
+    accepts (and vice versa)."""
+    server = MCPServer(Path.cwd())
+    descriptors = {tool["name"]: tool for tool in server.list_tools()}
+
+    neighborhood = descriptors["graph_neighborhood"]["inputSchema"]["properties"]
+    assert neighborhood["hop"]["maximum"] == 5
+    assert neighborhood["max_nodes"]["maximum"] == 500
+
+    bridges = descriptors["graph_bridge_nodes"]["inputSchema"]["properties"]
+    assert bridges["sample_size"]["minimum"] == 1
+
+
+def test_call_tool_internal_typeerror_stays_internal_error() -> None:
+    """A TypeError raised from *inside* a tool body must surface as
+    INTERNAL_ERROR (-32603), not be silently reclassified as
+    INVALID_PARAMS. Only kwargs-binding errors should become -32602."""
+    server = MCPServer(Path.cwd())
+
+    def _boom() -> dict:
+        raise TypeError("internal bug: None.foo")
+
+    server._tools["__boom__"] = _boom  # type: ignore[attr-defined]
+    request = {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {"name": "__boom__", "arguments": {}},
+    }
+    reply = server.handle_line(json.dumps(request))
+    assert reply is not None
+    assert reply["error"]["code"] == -32603
+
+    # Sanity: bad kwargs still map to INVALID_PARAMS via inspect.bind.
+    bad_request = {
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "tools/call",
+        "params": {"name": "__boom__", "arguments": {"unexpected": 1}},
+    }
+    bad_reply = server.handle_line(json.dumps(bad_request))
+    assert bad_reply is not None
+    assert bad_reply["error"]["code"] == -32602
+
+
 # ---------------------------------------------------------------------------
 # link_suggest: must materialize knowledge.db before the first SQLite read
 # ---------------------------------------------------------------------------
@@ -263,6 +311,52 @@ def test_explore_stream_filters_to_object_id(temp_vault: Path, running_server) -
     # Both alpha events round-trip; beta is filtered out by the SSE handler.
     assert '"object_id": "alpha"' in body
     assert '"object_id": "beta"' not in body
+
+
+def test_explore_stream_keepalive_when_all_events_filtered(
+    temp_vault: Path, running_server
+) -> None:
+    """When every tailed event is filtered out by ``object_id``, the handler
+    must still emit a keepalive frame each poll. Without this the
+    ``self.wfile.write`` path never runs, BrokenPipeError is never raised,
+    and the server thread leaks per stale connection."""
+    host, port = running_server.server_address
+    url = f"http://{host}:{port}/explore/stream" "?object_id=alpha&max_polls=4&poll_interval=0.05"
+    body_holder: dict[str, str] = {}
+
+    def consume() -> None:
+        with _NO_PROXY_OPENER.open(url, timeout=10) as response:
+            body_holder["body"] = response.read().decode("utf-8")
+
+    consumer = threading.Thread(target=consume, daemon=True)
+    consumer.start()
+
+    # Write only beta events — every one of these should be filtered out.
+    time.sleep(0.05)
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.logs_dir.mkdir(parents=True, exist_ok=True)
+    log = layout.logs_dir / "agent-decisions.jsonl"
+    log.write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "ts": f"2026-04-24T12:00:0{i}Z",
+                    "tool": "graph_neighborhood",
+                    "arguments": {"object_id": "beta"},
+                }
+            )
+            for i in range(3)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    consumer.join(timeout=5)
+    body = body_holder.get("body", "")
+    assert '"object_id": "beta"' not in body
+    # At least one keepalive frame must reach the client even though the
+    # log was non-empty — that's how disconnects get detected.
+    assert body.count(": keepalive") >= 1
 
 
 # ---------------------------------------------------------------------------
