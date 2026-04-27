@@ -17,7 +17,10 @@ import pytest
 from ovp_pipeline.commands.link_suggest import (
     BACKFILL_HEADING,
     BACKFILL_MARKER,
+    GATE_CACHE_FILENAME,
+    LINK_SUGGEST_GATE_PROMPT,
     RRF_K,
+    _parse_gate_response,
     run_link_suggest,
 )
 from ovp_pipeline.knowledge_index import rebuild_knowledge_index
@@ -101,7 +104,7 @@ def test_dry_run_emits_jsonl_for_under_linked_page(temp_vault):
     _seed_evergreens(temp_vault)
     rebuild_knowledge_index(temp_vault)
 
-    summary = run_link_suggest(temp_vault, min_links=3, suggestions_per_page=5)
+    summary = run_link_suggest(temp_vault, min_links=3, suggestions_per_page=5, use_llm_gate=False)
 
     assert summary["applied"] is False
     assert summary["files_mutated"] == 0
@@ -140,6 +143,7 @@ def test_apply_appends_backfill_section_and_is_idempotent(temp_vault):
         suggestions_per_page=3,
         apply=True,
         confirm=True,
+        use_llm_gate=False,
     )
     assert summary["applied"] is True
     assert summary["files_mutated"] >= 1
@@ -164,6 +168,7 @@ def test_apply_appends_backfill_section_and_is_idempotent(temp_vault):
         suggestions_per_page=3,
         apply=True,
         confirm=True,
+        use_llm_gate=False,
     )
     assert second["files_mutated"] == 0
     body_after = deep_dive_path.read_text(encoding="utf-8")
@@ -188,7 +193,7 @@ def test_existing_link_targets_are_skipped(temp_vault):
     )
 
     rebuild_knowledge_index(temp_vault)
-    summary = run_link_suggest(temp_vault, min_links=3, suggestions_per_page=5)
+    summary = run_link_suggest(temp_vault, min_links=3, suggestions_per_page=5, use_llm_gate=False)
 
     log_path = temp_vault / "60-Logs" / "link-suggestions" / f"{summary['run_id']}.jsonl"
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
@@ -216,7 +221,7 @@ def test_min_links_threshold_excludes_well_linked_pages(temp_vault):
     )
 
     rebuild_knowledge_index(temp_vault)
-    summary = run_link_suggest(temp_vault, min_links=3)
+    summary = run_link_suggest(temp_vault, min_links=3, use_llm_gate=False)
 
     log_path = temp_vault / "60-Logs" / "link-suggestions" / f"{summary['run_id']}.jsonl"
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
@@ -229,7 +234,7 @@ def test_log_path_round_trips_through_summary(temp_vault):
     _seed_evergreens(temp_vault)
     rebuild_knowledge_index(temp_vault)
 
-    summary = run_link_suggest(temp_vault, min_links=3, limit=2)
+    summary = run_link_suggest(temp_vault, min_links=3, limit=2, use_llm_gate=False)
     log_path = summary["log_path"]
     assert log_path.endswith(".jsonl")
     # The summary's count must equal the number of rows written.
@@ -246,7 +251,7 @@ def test_log_path_round_trips_through_summary(temp_vault):
 def test_no_pages_when_index_empty(temp_vault):
     """Empty vault → rebuild creates the schema → run returns zero rows."""
     rebuild_knowledge_index(temp_vault)
-    summary = run_link_suggest(temp_vault, min_links=3)
+    summary = run_link_suggest(temp_vault, min_links=3, use_llm_gate=False)
     assert summary["pages_examined"] == 0
     assert summary["suggestions_emitted"] == 0
     log_path = temp_vault / "60-Logs" / "link-suggestions" / f"{summary['run_id']}.jsonl"
@@ -289,7 +294,7 @@ function-calling, all in one stack.
     )
 
     rebuild_knowledge_index(temp_vault)
-    summary = run_link_suggest(temp_vault, min_links=3, suggestions_per_page=5)
+    summary = run_link_suggest(temp_vault, min_links=3, suggestions_per_page=5, use_llm_gate=False)
 
     log_path = temp_vault / "60-Logs" / "link-suggestions" / f"{summary['run_id']}.jsonl"
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
@@ -299,3 +304,252 @@ function-calling, all in one stack.
     assert any(
         r["rrf_score"] > single_branch_ceiling for r in deep_dive_rows
     ), "at least one row must score above the single-branch ceiling — proves BM25 fired"
+
+
+# ---------------------------------------------------------------------------
+# Phase 38 Stage A.2 — LLM second-opinion gate
+# ---------------------------------------------------------------------------
+
+
+def _make_recording_gate(decisions_by_slug: dict[str, dict]) -> tuple[list, callable]:
+    """Build a fake gate client that returns canned decisions per candidate
+    slug. Returns ``(call_log, client)`` so tests can assert call counts."""
+    calls: list[tuple[str, str]] = []
+
+    def _client(system_prompt: str, user_prompt: str) -> str:
+        calls.append((system_prompt, user_prompt))
+        payload = json.loads(user_prompt)
+        decisions = []
+        for cand in payload["candidates"]:
+            slug = cand["slug"]
+            if slug in decisions_by_slug:
+                d = decisions_by_slug[slug]
+                decisions.append(
+                    {
+                        "slug": slug,
+                        "decision": d["decision"],
+                        "confidence": d["confidence"],
+                        "rationale": d.get("rationale", ""),
+                    }
+                )
+            else:
+                decisions.append(
+                    {"slug": slug, "decision": "skip", "confidence": 0.0, "rationale": "unknown"}
+                )
+        return json.dumps({"decisions": decisions})
+
+    return calls, _client
+
+
+def test_gate_filters_by_threshold_and_decision(temp_vault):
+    _seed_evergreens(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    canned = {
+        "ai-agent": {"decision": "link", "confidence": 0.9, "rationale": "core"},
+        "rag": {"decision": "link", "confidence": 0.5, "rationale": "weak"},  # below threshold
+        "function-calling": {"decision": "skip", "confidence": 0.95, "rationale": "off-topic"},
+    }
+    _, client = _make_recording_gate(canned)
+
+    summary = run_link_suggest(
+        temp_vault,
+        min_links=3,
+        suggestions_per_page=5,
+        gate_threshold=0.6,
+        gate_client=client,
+    )
+
+    assert summary["gate_enabled"] is True
+    log_path = temp_vault / "60-Logs" / "link-suggestions" / f"{summary['run_id']}.jsonl"
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    deep = [r for r in rows if r["source_slug"] == "2026-04-23-ai-stack"]
+    # Every candidate should be present with a decision/confidence/rationale.
+    assert deep
+    for row in deep:
+        assert "decision" in row and row["decision"] in {"link", "skip"}
+        assert "confidence" in row
+        assert "rationale" in row
+    # Only ai-agent (link, 0.9) should pass — rag is below threshold, function-calling skipped.
+    passed = [r for r in deep if r["decision"] == "link" and r["confidence"] >= 0.6]
+    passed_slugs = {r["target_slug"] for r in passed}
+    assert "ai-agent" in passed_slugs
+    assert "rag" not in passed_slugs
+    assert "function-calling" not in passed_slugs
+    assert summary["gate_passed"] >= 1
+
+
+def test_gate_apply_only_writes_link_decisions(temp_vault):
+    _seed_evergreens(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    canned = {
+        "ai-agent": {"decision": "link", "confidence": 0.9, "rationale": "core"},
+        "rag": {"decision": "skip", "confidence": 0.95, "rationale": "off-topic"},
+        "function-calling": {"decision": "skip", "confidence": 0.9, "rationale": "off-topic"},
+    }
+    _, client = _make_recording_gate(canned)
+
+    summary = run_link_suggest(
+        temp_vault,
+        min_links=3,
+        suggestions_per_page=5,
+        apply=True,
+        confirm=True,
+        gate_threshold=0.6,
+        gate_client=client,
+    )
+    assert summary["applied"] is True
+
+    deep_path = (
+        temp_vault
+        / "20-Areas"
+        / "AI-Research"
+        / "Topics"
+        / "2026-04"
+        / "2026-04-23_AI_Stack_深度解读.md"
+    )
+    body = deep_path.read_text(encoding="utf-8")
+    assert BACKFILL_MARKER in body
+    assert "[[ai-agent" in body
+    # Skipped candidates must NOT appear in the backfill section.
+    backfill_section = body[body.index(BACKFILL_MARKER) :]
+    assert "[[rag" not in backfill_section
+    assert "[[function-calling" not in backfill_section
+
+
+def test_gate_cache_skips_redundant_llm_calls(temp_vault):
+    _seed_evergreens(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    canned = {
+        "ai-agent": {"decision": "link", "confidence": 0.9, "rationale": "core"},
+        "rag": {"decision": "link", "confidence": 0.85, "rationale": "ground"},
+        "function-calling": {"decision": "skip", "confidence": 0.9, "rationale": "off"},
+    }
+    calls, client = _make_recording_gate(canned)
+
+    run_link_suggest(
+        temp_vault,
+        min_links=3,
+        suggestions_per_page=5,
+        gate_client=client,
+    )
+    first_calls = len(calls)
+    assert first_calls >= 1
+
+    cache_path = temp_vault / "60-Logs" / "link-suggestions" / GATE_CACHE_FILENAME
+    assert cache_path.exists()
+
+    # Re-run: cache should absorb every candidate, so no new gate calls fire.
+    run_link_suggest(
+        temp_vault,
+        min_links=3,
+        suggestions_per_page=5,
+        gate_client=client,
+    )
+    assert len(calls) == first_calls, "cache must short-circuit the gate on re-run"
+
+
+def test_no_llm_gate_falls_back_to_rrf_only(temp_vault):
+    _seed_evergreens(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    summary = run_link_suggest(temp_vault, min_links=3, suggestions_per_page=5, use_llm_gate=False)
+    assert summary["gate_enabled"] is False
+    log_path = temp_vault / "60-Logs" / "link-suggestions" / f"{summary['run_id']}.jsonl"
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    # Without the gate, rows must NOT carry decision/confidence/rationale.
+    for row in rows:
+        assert "decision" not in row
+        assert "confidence" not in row
+
+
+def test_llm_gate_requested_but_no_client_falls_back_cleanly(temp_vault, capsys, monkeypatch):
+    """Regression for the silent-rejection bug flagged on PR #66: when the
+    user passes --llm-gate but no API key is available, the previous fallback
+    returned confidence=rrf_score (~0.03) which then failed the 0.6 threshold
+    filter, silently dropping every candidate. The fix short-circuits to the
+    legacy RRF-only path with a stderr warning."""
+    _seed_evergreens(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    # Simulate "no API key / litellm" by forcing the default client factory
+    # to return None — the production code path the bug originally hit.
+    monkeypatch.setattr(
+        "ovp_pipeline.commands.link_suggest._make_default_gate_client",
+        lambda model=None: None,
+    )
+
+    summary = run_link_suggest(
+        temp_vault,
+        min_links=3,
+        suggestions_per_page=5,
+        apply=True,
+        confirm=True,
+        use_llm_gate=True,
+    )
+    assert summary["gate_enabled"] is False, "should report gate disabled after fallback"
+    assert summary["files_mutated"] >= 1, "RRF fallback must still produce applied suggestions"
+    captured = capsys.readouterr()
+    assert "falling back to RRF-only" in captured.err
+
+
+def test_gate_error_marks_candidates_as_skip(temp_vault):
+    _seed_evergreens(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    def _broken_client(system_prompt: str, user_prompt: str) -> str:
+        raise RuntimeError("simulated LLM outage")
+
+    summary = run_link_suggest(
+        temp_vault,
+        min_links=3,
+        suggestions_per_page=5,
+        apply=True,
+        confirm=True,
+        gate_client=_broken_client,
+    )
+    assert summary["files_mutated"] == 0  # everything skipped → nothing to write
+    log_path = temp_vault / "60-Logs" / "link-suggestions" / f"{summary['run_id']}.jsonl"
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    # All rows must be marked skip with the gate-error rationale.
+    skipped = [r for r in rows if r.get("decision") == "skip"]
+    assert skipped
+    assert any("gate error" in r["rationale"] for r in skipped)
+
+
+def test_parse_gate_response_handles_fenced_json():
+    fenced = """```json
+{"decisions": [{"slug": "x", "decision": "link", "confidence": 0.8, "rationale": "ok"}]}
+```"""
+    parsed = _parse_gate_response(fenced)
+    assert len(parsed) == 1
+    assert parsed[0]["slug"] == "x"
+    assert parsed[0]["decision"] == "link"
+    assert parsed[0]["confidence"] == 0.8
+
+
+def test_parse_gate_response_drops_invalid_decisions():
+    text = json.dumps(
+        {
+            "decisions": [
+                {"slug": "ok", "decision": "link", "confidence": 0.9},
+                {"slug": "", "decision": "link", "confidence": 0.9},  # empty slug → drop
+                {"slug": "bad", "decision": "maybe", "confidence": 0.9},  # bad decision → drop
+                {"slug": "clamp", "decision": "link", "confidence": 2.5},  # clamps to 1.0
+            ]
+        }
+    )
+    parsed = _parse_gate_response(text)
+    by_slug = {p["slug"]: p for p in parsed}
+    assert "ok" in by_slug
+    assert "" not in by_slug
+    assert "bad" not in by_slug
+    assert by_slug["clamp"]["confidence"] == 1.0
+
+
+def test_gate_prompt_is_chinese_with_strict_rubric():
+    # Sanity: the prompt that ships must enforce the conservative confidence rubric.
+    assert "0.6" in LINK_SUGGEST_GATE_PROMPT
+    assert "skip" in LINK_SUGGEST_GATE_PROMPT
