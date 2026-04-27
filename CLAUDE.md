@@ -80,14 +80,18 @@ my-vault/
 │   └── Programming/
 ├── 30-Projects/         # 项目：有截止日的具体项目
 ├── 40-Resources/        # 资源：参考资料库
+│   └── Crystals/        # ovp-build-crystals 物化的持久化 briefing (Phase 38 Stage B)
 ├── 50-Inbox/            # 收件箱：原始输入
 │   ├── 01-Raw/         # 原始文章（AutoPilot 监控目录）
 │   └── Processing-Queue.md
 ├── 60-Logs/             # 日志：审计与调试
 │   ├── scripts/         # 维护脚本
 │   ├── pipeline.jsonl   # 结构化日志
-│   └── transactions/    # 事务状态
+│   ├── transactions/    # 事务状态
+│   ├── link-suggestions/ # ovp-link-suggest JSONL 输出
+│   └── working-memory/  # ovp-working-memory 每日 distill (YYYY-MM-DD.md)
 ├── 70-Archive/          # 归档：已完成/过时内容
+│   └── dedup-merged/    # ovp-concept-dedup --apply 归档失败者
 ├── 80-Views/            # 视图：数据展示
 ├── 90-Templates/        # 模板：可复用模板
 └── CLAUDE.md           # 本文件：Schema 定义
