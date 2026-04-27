@@ -11,7 +11,6 @@ Coverage:
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -240,9 +239,34 @@ def test_workspace_promote_copies_draft_under_promotion_mode(temp_vault):
         pack=pack,
         vault_dir=temp_vault,
     )
-    assert target.read_text(encoding="utf-8") == "plan body"
-    assert record.bytes_written == len("plan body")
+    promoted = target.read_text(encoding="utf-8")
+    assert promoted.endswith("plan body")
+    assert "state: accepted" in promoted
+    assert record.bytes_written == target.stat().st_size
     assert record.pack == "research-tech"
+
+
+def test_workspace_promote_rewrites_draft_state_to_accepted(temp_vault):
+    pack = load_pack("research-tech")
+    draft = temp_vault / "30-Projects" / "demo" / "Drafts" / "plan-draft.md"
+    draft.parent.mkdir(parents=True, exist_ok=True)
+    draft.write_text(
+        "---\nstate: draft\ntitle: Plan\n---\n\nplan body\n",
+        encoding="utf-8",
+    )
+    target = temp_vault / "30-Projects" / "demo" / "Plan.md"
+
+    workspace_promote(
+        draft,
+        target,
+        approver="tester",
+        pack=pack,
+        vault_dir=temp_vault,
+    )
+
+    promoted = target.read_text(encoding="utf-8")
+    assert "state: accepted" in promoted
+    assert "state: draft" not in promoted
 
 
 # ---------------------------------------------------------------------------

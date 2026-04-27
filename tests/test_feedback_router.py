@@ -91,6 +91,9 @@ def test_route_open_questions_appends_jsonl(temp_vault):
     lines = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == 2
     assert lines[0]["question"] == "Why does X?"
+    assert lines[0]["event_type"] == "open_question"
+    assert lines[0]["pack"] == "research-tech"
+    assert lines[0]["event_id"]
 
 
 def test_route_open_questions_idempotent_appends(temp_vault):

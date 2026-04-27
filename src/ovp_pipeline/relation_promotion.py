@@ -295,6 +295,21 @@ def _queue_path_for(
     )
 
 
+def _legacy_queue_path_for(
+    layout: VaultLayout,
+    candidate: SemanticRelationCandidate,
+    queue_name: str,
+) -> Path:
+    # Backward compatibility for queue files created before candidate_subject()
+    # included source_slug. Remove after deployed vaults have drained old
+    # ai-agent__uses__rag-style relation candidate files from review queues.
+    legacy_subject = (
+        f"{candidate.source_object_id}__{candidate.relation_type}__"
+        f"{candidate.target_object_id}"
+    )
+    return review_queue_path(layout, queue_name=queue_name, subject=legacy_subject)
+
+
 def promote_candidates(
     candidates: Iterable[SemanticRelationCandidate],
     *,
@@ -354,13 +369,17 @@ def promote_candidates(
         conn.close()
 
     # Drop queue files only after the DB commit succeeds so a mid-run crash
-    # leaves the queue intact for retry.
+    # leaves the queue intact for retry. The legacy unlink is temporary until
+    # pre-source_slug queue filenames have been drained from deployed vaults.
     for candidate in auto_to_clean + reject_to_clean:
-        queue_file = _queue_path_for(layout, candidate, queue_name)
-        try:
-            queue_file.unlink()
-        except FileNotFoundError:
-            pass
+        for queue_file in {
+            _queue_path_for(layout, candidate, queue_name),
+            _legacy_queue_path_for(layout, candidate, queue_name),
+        }:
+            try:
+                queue_file.unlink()
+            except FileNotFoundError:
+                pass
 
     return report
 

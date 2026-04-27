@@ -205,7 +205,10 @@ def candidate_subject(candidate: SemanticRelationCandidate) -> str:
     Public so the promoter can locate (and delete) a candidate's queue file
     after promotion without re-globbing the directory.
     """
-    return f"{candidate.source_object_id}__{candidate.relation_type}__{candidate.target_object_id}"
+    return (
+        f"{candidate.source_slug}__{candidate.source_object_id}__"
+        f"{candidate.relation_type}__{candidate.target_object_id}"
+    )
 
 
 def write_candidates(
@@ -216,8 +219,8 @@ def write_candidates(
 ) -> list[Path]:
     """Serialize candidates to the spec-declared review-queue path.
 
-    One file per ``(source, relation_type, target)`` triple. Idempotent —
-    re-running with the same candidate overwrites with a fresh
+    One file per ``(evidence source, source, relation_type, target)`` tuple.
+    Idempotent — re-running with the same candidate overwrites with a fresh
     ``content_hash`` snapshot.
     """
     written: list[Path] = []

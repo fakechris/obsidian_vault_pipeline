@@ -194,6 +194,8 @@ def _process_table(
     summary: dict[str, int] = _empty_summary()
     examined = 0
     backfilled = 0
+    update_params: list[tuple[Any, ...]] = []
+    verification_events: list[dict[str, Any]] = []
 
     for row in rows:
         row_dict = _row_dict(table, row)
@@ -229,16 +231,7 @@ def _process_table(
         examined += 1
         summary[status] = summary.get(status, 0) + 1
 
-        conn.execute(
-            f"""
-            UPDATE {table}
-               SET locator = ?,
-                   content_hash = ?,
-                   retrieval_context = ?,
-                   status = ?,
-                   verified_at = ?
-             WHERE {_key_clause(table)}
-            """,
+        update_params.append(
             (
                 new_locator,
                 new_content_hash,
@@ -252,17 +245,35 @@ def _process_table(
         # Phase 33 durability: also emit a JSONL event so the next
         # rebuild_knowledge_index can re-apply this verification after the
         # projection re-inserts the row in its 'unverified' default state.
-        emit_evidence_verified(
-            vault_dir,
-            table=table,
-            key={col: row_dict.get(col) for col in _TABLE_KEY_COLUMNS[table]},
-            locator=new_locator,
-            content_hash=new_content_hash,
-            retrieval_context=new_context,
-            status=status,
-            verified_at=verified_at,
-            pack=str(row_dict.get("pack") or ""),
+        verification_events.append(
+            {
+                "table": table,
+                "key": {col: row_dict.get(col) for col in _TABLE_KEY_COLUMNS[table]},
+                "locator": new_locator,
+                "content_hash": new_content_hash,
+                "retrieval_context": new_context,
+                "status": status,
+                "verified_at": verified_at,
+                "pack": str(row_dict.get("pack") or ""),
+            }
         )
+
+    if update_params:
+        sql = f"""
+        UPDATE {table}
+           SET locator = ?,
+               content_hash = ?,
+               retrieval_context = ?,
+               status = ?,
+               verified_at = ?
+         WHERE {_key_clause(table)}
+        """  # noqa: S608 — table/key columns sourced from internal constants.
+        conn.executemany(
+            sql,
+            update_params,
+        )
+    for event in verification_events:
+        emit_evidence_verified(vault_dir, **event)
 
     return {
         "table": table,
