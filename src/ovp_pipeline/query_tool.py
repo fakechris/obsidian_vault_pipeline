@@ -49,6 +49,7 @@ try:
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
         DEFAULT_MINIMAX_API_BASE,
         DEFAULT_MINIMAX_MODEL,
+        completion_with_litellm_policy,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
@@ -58,6 +59,7 @@ except ImportError:
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
         DEFAULT_MINIMAX_API_BASE,
         DEFAULT_MINIMAX_MODEL,
+        completion_with_litellm_policy,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
@@ -231,14 +233,17 @@ class VaultQuerier:
 回答:"""
 
         try:
-            response = litellm.completion(
-                model=self.model,
-                api_key=self.api_key,
-                api_base=self.api_base,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=2000,
-                timeout=DEFAULT_LITELLM_TIMEOUT_SECONDS,
+            response = completion_with_litellm_policy(
+                litellm.completion,
+                {
+                    "model": self.model,
+                    "api_key": self.api_key,
+                    "api_base": self.api_base,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                    "max_tokens": 2000,
+                    "timeout": DEFAULT_LITELLM_TIMEOUT_SECONDS,
+                },
             )
 
             answer = response.choices[0].message.content

@@ -788,6 +788,46 @@ def test_evergreen_litellm_client_bypasses_proxy_env_during_completion(monkeypat
     assert os.environ["HTTP_PROXY"] == "http://external-proxy.example:41474"
 
 
+def test_litellm_proxy_policy_supports_unified_custom_proxy():
+    from ovp_pipeline.llm_defaults import env_for_litellm
+
+    env = env_for_litellm(
+        {
+            "HTTPS_PROXY": "http://ambient.example:1",
+            "http_proxy": "http://ambient.example:1",
+            "OVP_LLM_PROXY_MODE": "custom",
+            "OVP_LLM_PROXY_URL": "http://127.0.0.1:7897",
+            "LITELLM_PROXY_BYPASS": "1",
+        }
+    )
+
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        assert env[key] == "http://127.0.0.1:7897"
+    assert "LITELLM_PROXY_BYPASS" not in env
+
+
+def test_litellm_proxy_policy_can_use_ambient_proxy():
+    from ovp_pipeline.llm_defaults import env_for_litellm
+
+    env = env_for_litellm(
+        {
+            "HTTPS_PROXY": "http://ambient.example:1",
+            "OVP_LLM_PROXY_MODE": "ambient",
+            "LITELLM_PROXY_BYPASS": "1",
+        }
+    )
+
+    assert env["HTTPS_PROXY"] == "http://ambient.example:1"
+    assert "LITELLM_PROXY_BYPASS" not in env
+
+
+def test_litellm_proxy_policy_requires_url_for_custom_mode():
+    from ovp_pipeline.llm_defaults import env_for_litellm
+
+    with pytest.raises(ValueError, match="OVP_LLM_PROXY_URL"):
+        env_for_litellm({"OVP_LLM_PROXY_MODE": "custom"})
+
+
 def test_process_single_paper_downloads_remote_pdf_before_analysis(tmp_path, monkeypatch):
     class FakeResponse:
         def __init__(self, content: bytes):

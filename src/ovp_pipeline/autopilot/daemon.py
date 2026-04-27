@@ -28,6 +28,7 @@ from ..llm_defaults import (
     DEFAULT_LITELLM_TIMEOUT_SECONDS,
     DEFAULT_MINIMAX_API_BASE,
     DEFAULT_MINIMAX_MODEL,
+    completion_with_litellm_policy,
     normalize_model_for_api_base,
     resolve_api_base,
     resolve_api_key,
@@ -98,14 +99,17 @@ class LLMQualityChecker:
 """
 
         try:
-            response = self.litellm.completion(
-                model=self.model,
-                api_key=self.api_key,
-                api_base=self.api_base,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=500,
-                timeout=DEFAULT_LITELLM_TIMEOUT_SECONDS,
+            response = completion_with_litellm_policy(
+                self.litellm.completion,
+                {
+                    "model": self.model,
+                    "api_key": self.api_key,
+                    "api_base": self.api_base,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                    "max_tokens": 500,
+                    "timeout": DEFAULT_LITELLM_TIMEOUT_SECONDS,
+                },
             )
 
             result_text = response.choices[0].message.content

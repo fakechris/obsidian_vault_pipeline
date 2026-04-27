@@ -104,6 +104,72 @@ def test_rewrite_note_type_handles_note_type_alias():
     assert "original_note_type: ai-strategy" in new_text
 
 
+def test_rewrite_note_type_normalizes_note_type_even_when_type_is_canonical():
+    text = dedent(
+        """\
+        ---
+        title: X
+        type: article
+        note_type: technical-analysis
+        ---
+
+        body
+        """
+    )
+
+    new_text, original = rewrite_note_type(text, new_value="article")
+
+    assert original == "technical-analysis"
+    assert "type: article" in new_text
+    assert "note_type: article" in new_text
+    assert "original_note_type: technical-analysis" in new_text
+
+
+def test_rewrite_note_type_handles_fenced_yaml_frontmatter():
+    text = dedent(
+        """\
+        ```yaml
+        ---
+        title: X
+        type: technical-analysis
+        ---
+        ```
+
+        body
+        """
+    )
+
+    new_text, original = rewrite_note_type(text, new_value="article")
+
+    assert original == "technical-analysis"
+    assert new_text.startswith("```yaml\n---\n")
+    assert "type: article" in new_text
+    assert "original_note_type: technical-analysis" in new_text
+    assert "```\n\nbody" in new_text
+
+
+def test_rewrite_note_type_handles_unclosed_fenced_yaml_frontmatter():
+    text = dedent(
+        """\
+        ```yaml
+        ---
+        title: X
+        type: github-project
+        ---
+
+        # Body starts without closing fence
+        """
+    )
+
+    new_text, original = rewrite_note_type(text, new_value="project")
+
+    assert original == "github-project"
+    assert new_text.startswith("```yaml\n---\n")
+    assert "type: project" in new_text
+    assert "original_note_type: github-project" in new_text
+    assert "# Body starts without closing fence" in new_text
+
+
 def test_rewrite_note_type_no_change_when_already_canonical():
     text = dedent(
         """\
@@ -158,10 +224,21 @@ def test_plan_normalization_walks_vault(tmp_path: Path):
         ---
         """,
     )
+    _write(
+        tmp_path / "20-Areas/fenced.md",
+        """\
+        ```yaml
+        ---
+        title: Fenced
+        type: technical-analysis
+        ---
+        ```
+        """,
+    )
 
     report = plan_normalization(tmp_path, load_mapping())
     paths_changed = {c.path.name for c in report.changed}
-    assert paths_changed == {"topic.md"}
+    assert paths_changed == {"topic.md", "fenced.md"}
     assert any(c.path.name == "concept.md" for c in report.skipped)
     # Template (underscore prefix) is excluded entirely.
     assert not any("_template" in str(c.path) for c in report.changed)

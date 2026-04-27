@@ -307,3 +307,27 @@ def test_apply_proposal_only_filter(tmp_path: Path):
     assert results[0].canonical_slug == "MCP-Client"
     # Vector-Databases must NOT be archived.
     assert (tmp_path / "10-Knowledge" / "Evergreen" / "Vector-Databases.md").exists()
+
+
+def test_concept_dedup_apply_uses_vault_workflow_lock(tmp_path: Path, monkeypatch):
+    from ovp_pipeline.commands import concept_dedup as command
+
+    _evergreen(tmp_path, "MCP-Client", body="canonical body that is long " * 10)
+    _evergreen(tmp_path, "MCP-Clients", body="duplicate body")
+    clusters = find_clusters(tmp_path, threshold=0.6)
+    proposal_path, _ = write_proposal(tmp_path, clusters, threshold=DEFAULT_THRESHOLD)
+    calls: list[str] = []
+
+    class FakeLock:
+        def __enter__(self):
+            calls.append("enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append("exit")
+
+    monkeypatch.setattr(command, "vault_workflow_lock", lambda vault_dir: FakeLock())
+
+    exit_code = command.main(["apply", proposal_path.stem, "--vault-dir", str(tmp_path)])
+
+    assert exit_code == 0
+    assert calls == ["enter", "exit"]

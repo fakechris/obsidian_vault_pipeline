@@ -31,7 +31,7 @@ from ..concept_dedup import (
     load_proposal,
     write_proposal,
 )
-from ..runtime import resolve_vault_dir
+from ..runtime import resolve_vault_dir, vault_workflow_lock
 
 
 def _resolve_proposal_path(vault_dir: Path, ident: str) -> Path:
@@ -57,7 +57,8 @@ def _resolve_proposal_path(vault_dir: Path, ident: str) -> Path:
 
 def _cmd_propose(args: argparse.Namespace) -> int:
     vault_dir = resolve_vault_dir(args.vault_dir)
-    clusters = find_clusters(vault_dir, threshold=args.threshold)
+    with vault_workflow_lock(vault_dir):
+        clusters = find_clusters(vault_dir, threshold=args.threshold)
     if not clusters:
         print(f"No duplicate clusters found at threshold {args.threshold}.")
         return 0
@@ -76,7 +77,8 @@ def _cmd_propose(args: argparse.Namespace) -> int:
             print(f"      → {dup.slug} ({dup.size_bytes}B)")
 
     if args.write:
-        path, proposal = write_proposal(vault_dir, clusters, threshold=args.threshold)
+        with vault_workflow_lock(vault_dir):
+            path, proposal = write_proposal(vault_dir, clusters, threshold=args.threshold)
         print(f"\nProposal written: {path}")
         print(f"Apply with: ovp-concept-dedup apply {proposal.proposal_id} --dry-run")
     else:
@@ -111,13 +113,14 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     if args.only:
         only = {s.strip() for s in args.only.split(",") if s.strip()}
 
-    results = apply_proposal(
-        vault_dir,
-        proposal,
-        dry_run=args.dry_run,
-        pack=args.pack or "",
-        only_canonicals=only,
-    )
+    with vault_workflow_lock(vault_dir):
+        results = apply_proposal(
+            vault_dir,
+            proposal,
+            dry_run=args.dry_run,
+            pack=args.pack or "",
+            only_canonicals=only,
+        )
 
     if not results:
         print("No clusters matched filter.")

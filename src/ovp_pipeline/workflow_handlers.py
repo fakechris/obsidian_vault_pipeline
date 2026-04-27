@@ -83,6 +83,10 @@ def run_pipeline_registry_sync(*, pipeline: Any, dry_run: bool = False, **_: Any
     return pipeline.step_registry_sync(dry_run)
 
 
+def run_pipeline_note_type_normalize(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
+    return pipeline.step_note_type_normalize(dry_run)
+
+
 def run_pipeline_moc(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
     return pipeline.step_moc(dry_run)
 

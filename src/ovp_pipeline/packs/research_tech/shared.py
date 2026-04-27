@@ -54,6 +54,7 @@ def build_workflow_profiles() -> list[WorkflowProfile]:
                 "quality",
                 "fix_links",
                 "absorb",
+                "note_type_normalize",
                 "registry_sync",
                 "moc",
                 "knowledge_index",

@@ -81,7 +81,18 @@ def test_build_execution_plan_includes_pinboard_process_for_history():
 
     plan = build_execution_plan(args)
 
-    assert plan["steps"] == ["pinboard", "pinboard_process", "articles", "quality", "fix_links", "absorb", "registry_sync", "moc", "knowledge_index"]
+    assert plan["steps"] == [
+        "pinboard",
+        "pinboard_process",
+        "articles",
+        "quality",
+        "fix_links",
+        "absorb",
+        "note_type_normalize",
+        "registry_sync",
+        "moc",
+        "knowledge_index",
+    ]
 
 
 def test_build_execution_plan_includes_pinboard_process_for_recent_days():
@@ -1492,6 +1503,60 @@ def test_subprocess_env_strips_proxy_vars_by_default(tmp_path, monkeypatch):
 
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         assert key not in env
+
+
+def test_pipeline_runs_note_type_normalize_step(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    calls: list[list[str]] = []
+
+    def fake_run_command(cmd, step_name, **kwargs):
+        calls.append(cmd)
+        return {"success": True, "stdout": "changed:  2\nskipped:  3\n", "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = pipeline.step_note_type_normalize(dry_run=False)
+
+    assert result["success"] is True
+    assert result["note_type_changed"] == 2
+    assert result["note_type_skipped"] == 3
+    assert calls[0][:3] == [sys.executable, "-m", "ovp_pipeline.commands.note_type_normalize"]
+
+
+def test_pipeline_uses_vault_workflow_lock(tmp_path, monkeypatch):
+    import ovp_pipeline.unified_pipeline_enhanced as pipeline_source
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    calls: list[str] = []
+
+    class FakeLock:
+        def __enter__(self):
+            calls.append("enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append("exit")
+
+    monkeypatch.setattr(pipeline_source, "vault_workflow_lock", lambda vault_dir: FakeLock())
+    monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
+    monkeypatch.setattr(pipeline, "_count_output_files", lambda *args, **kwargs: {})
+    monkeypatch.setattr(pipeline, "step_pinboard", lambda **kwargs: {"success": True})
+
+    result = pipeline.run_pipeline(steps=["pinboard"], dry_run=True)
+
+    assert result["pinboard"]["success"] is True
+    assert calls == ["enter", "exit"]
 
 
 def test_step_pinboard_process_heartbeats_current_item_before_processor_runs(tmp_path, monkeypatch):

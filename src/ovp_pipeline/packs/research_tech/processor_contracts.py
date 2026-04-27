@@ -83,6 +83,17 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             description="Project qualified deep dives into evergreen truth artifacts.",
         ),
         ProcessorContractSpec(
+            name="note_type_normalize",
+            pack=pack_name,
+            stage="note_type_normalize",
+            mode="rule_based",
+            inputs=("vault_state",),
+            outputs=("metadata_normalization",),
+            quality_hooks=(),
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_note_type_normalize",
+            description="Normalize note_type frontmatter before rebuilding projections.",
+        ),
+        ProcessorContractSpec(
             name="registry_sync",
             pack=pack_name,
             stage="registry_sync",
