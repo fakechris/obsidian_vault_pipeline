@@ -33,6 +33,73 @@ Links to [[Another Concept]].
     assert links[0].target_raw == "Another Concept"
 
 
+def test_link_parser_tolerates_codefenced_frontmatter(temp_vault):
+    """Regression: ~387 production files have ```yaml-wrapped frontmatter.
+    FrontmatterParser tolerates the wrapper, so LinkParser must too — otherwise
+    pages_index.slug (from frontmatter) and page_links.source_slug (from
+    LinkParser) diverge and outbound-link queries silently return zero."""
+    note_path = (
+        temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04-02_Long_Name.md"
+    )
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        """```yaml
+---
+note_id: short-id
+title: Long Filename Note
+type: deep_dive
+date: 2026-04-02
+---
+```
+
+# Long Filename Note
+
+Refers to [[Some Target]].
+""",
+        encoding="utf-8",
+    )
+
+    meta = FrontmatterParser(temp_vault).parse_file(note_path)
+    links = LinkParser(temp_vault).parse_file(note_path)
+
+    # Both parsers must agree on the source slug — the bug was that LinkParser
+    # fell through to file_path.stem when it didn't see the leading "---".
+    assert meta.note_id == "short-id"
+    assert links, "expected at least one wikilink to be parsed"
+    assert links[0].source == "short-id"
+    assert links[0].target == "some-target"
+
+
+def test_link_parser_falls_back_to_truncated_path_slug(temp_vault):
+    """Regression: when a file lacks note_id in frontmatter, both parsers
+    must agree on the path-derived fallback slug. NoteMetadata._generate_note_id
+    truncates to 50 chars; LinkParser must mirror that or page_links.source_slug
+    won't join pages_index.slug for long-titled deep_dives."""
+    long_stem = "2026-04-09_Hyperagents a new way to auto-research_深度解读"
+    note_path = temp_vault / "20-Areas" / "AI-Research" / "Topics" / f"{long_stem}.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text(
+        """---
+title: "Hyperagents"
+type: deep_dive
+date: 2026-04-09
+---
+
+# Hyperagents
+
+Mentions [[AI Agent]].
+""",
+        encoding="utf-8",
+    )
+
+    meta = FrontmatterParser(temp_vault).parse_file(note_path)
+    links = LinkParser(temp_vault).parse_file(note_path)
+
+    # Both fall through to path-derived fallback; they MUST produce the same slug.
+    assert meta.note_id == links[0].source
+    assert len(meta.note_id) <= 50
+
+
 def test_graph_builder_resolves_registry_alias_without_unknown_placeholder(temp_vault):
     registry = ConceptRegistry(temp_vault)
     registry.add_entry(

@@ -128,7 +128,11 @@ class LinkParser:
             return self._note_id_cache[cache_key]
 
         text = content if content is not None else file_path.read_text(encoding="utf-8")
-        fm_match = re.match(r'^---\n(.*?)\n---', text, re.DOTALL)
+        # Tolerate frontmatter wrapped in a ```yaml code fence (~387 such files
+        # in production vaults). FrontmatterParser already handles this, so
+        # both parsers must agree to keep pages_index.slug == page_links.source_slug.
+        text_for_fm = re.sub(r"^```yaml\s*\n", "", text, count=1)
+        fm_match = re.match(r'^---\n(.*?)\n---', text_for_fm, re.DOTALL)
         if fm_match:
             note_id_match = re.search(r"^note_id:\s*['\"]?(.+?)['\"]?\s*$", fm_match.group(1), re.MULTILINE)
             if note_id_match:
@@ -136,7 +140,11 @@ class LinkParser:
                 self._note_id_cache[cache_key] = note_id
                 return note_id
 
-        note_id = self._slug_to_note_id(file_path.stem)
+        # Mirror NoteMetadata._generate_note_id: same canonicalization AND same
+        # 50-char truncation. Without alignment, page_links.source_slug derived
+        # from file_path.stem diverges from pages_index.slug for files lacking
+        # explicit note_id, leaving outbound links unjoinable.
+        note_id = self._slug_to_note_id(file_path.stem)[:50]
         self._note_id_cache[cache_key] = note_id
         return note_id
 

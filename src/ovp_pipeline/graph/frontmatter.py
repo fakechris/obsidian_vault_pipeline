@@ -99,8 +99,13 @@ class NoteMetadata:
         """从markdown内容解析frontmatter"""
         meta = cls()
 
-        # 提取frontmatter
-        fm_match = re.match(r'^---\n(.*?)\n---', markdown, re.DOTALL)
+        # Tolerate frontmatter wrapped in a ```yaml code fence (~387 such files
+        # in production vaults). LinkParser._get_note_id mirrors this so both
+        # parsers agree on the source slug — divergence here causes
+        # pages_index.slug ≠ page_links.source_slug and outbound-link queries
+        # silently return zero.
+        text_for_fm = re.sub(r"^```yaml\s*\n", "", markdown, count=1)
+        fm_match = re.match(r'^---\n(.*?)\n---', text_for_fm, re.DOTALL)
         if fm_match:
             fm_text = fm_match.group(1)
             meta._parse_fm_text(fm_text)

@@ -16,6 +16,16 @@ Each candidate gets a fused score = BM25_rank_score + vector_rank_score
 (reciprocal rank, k=60). Self-references and existing outbound targets are
 dropped before ranking. The naive fusion here will be replaced by the proper
 RRF + bi-temporal decay layer in Stage B.
+
+After RRF the top ``--gate-prefilter`` candidates per page are sent to an
+LLM second-opinion gate (Phase 38 plan §2.2 step 3). The gate classifies
+each candidate as ``link`` or ``skip`` with a confidence + 1-line rationale,
+and only ``link`` decisions with ``confidence >= --gate-threshold`` survive
+into ``--apply``. Decisions are cached in
+``60-Logs/link-suggestions/.gate-cache.jsonl`` so a second dry-run / apply
+pass doesn't re-bill the LLM. When no API key / litellm is available the
+gate degrades to the previous RRF-only behavior (every retrieved candidate
+treated as ``link`` with confidence ``rrf_score``).
 """
 
 from __future__ import annotations
@@ -26,7 +36,7 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     from ..runtime import VaultLayout, resolve_vault_dir
@@ -36,6 +46,13 @@ try:
         sanitize_fts_query,
         search_knowledge_index,
     )
+    from ..llm_defaults import (
+        DEFAULT_LITELLM_TIMEOUT_SECONDS,
+        DEFAULT_MINIMAX_MODEL,
+        normalize_model_for_api_base,
+        resolve_api_base,
+        resolve_api_key,
+    )
 except ImportError:
     from ovp_pipeline.runtime import VaultLayout, resolve_vault_dir  # type: ignore
     from ovp_pipeline.knowledge_index import (  # type: ignore
@@ -44,18 +61,272 @@ except ImportError:
         sanitize_fts_query,
         search_knowledge_index,
     )
+    from ovp_pipeline.llm_defaults import (  # type: ignore
+        DEFAULT_LITELLM_TIMEOUT_SECONDS,
+        DEFAULT_MINIMAX_MODEL,
+        normalize_model_for_api_base,
+        resolve_api_base,
+        resolve_api_key,
+    )
+
+try:
+    import litellm  # type: ignore
+
+    _LITELLM_AVAILABLE = True
+except ImportError:
+    _LITELLM_AVAILABLE = False
 
 
 DEFAULT_MIN_LINKS = 3
 DEFAULT_CANDIDATES_PER_PAGE = 20
 DEFAULT_SUGGESTIONS_PER_PAGE = 5
+DEFAULT_GATE_PREFILTER = 8
+DEFAULT_GATE_THRESHOLD = 0.6
 RRF_K = 60
+GATE_CACHE_FILENAME = ".gate-cache.jsonl"
 BACKFILL_HEADING = "## 🔗 自动建议链接 (link-suggest)"
 BACKFILL_MARKER = "<!-- link-suggest:backfill -->"
+
+LINK_SUGGEST_GATE_PROMPT = """你是一个 wikilink 质量过滤器。给定一篇源文章和若干候选目标 evergreen 概念，判断每个候选是否值得在源文章里 backfill 一个 wikilink。
+
+判定原则：
+1. 候选概念应是源文章的 prose 真正讨论 / 例证 / 反例引用的对象，不是泛泛同领域。
+2. 不要因为同领域就 link；关注是否有 substantive 的概念关联（同一现象、相同机制、互为前置 / 反例）。
+3. confidence 要保守：0.8+ 强相关；0.6-0.79 合理；<0.6 一律 skip。
+4. rationale 用 ≤30 字中文，说明为什么 link 或 skip。
+5. 只输出 JSON，不要解释。
+
+输入：
+{"source": {"slug": "...", "title": "...", "preview": "..."}, "candidates": [{"slug": "...", "title": "..."}]}
+
+输出：
+{"decisions": [{"slug": "...", "decision": "link"|"skip", "confidence": 0.0, "rationale": "..."}]}
+"""
+
+
+GateClient = Callable[[str, str], str]
 
 
 def _new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def _make_default_gate_client(model: str | None = None) -> GateClient | None:
+    """Return a callable wrapping LiteLLM, or ``None`` if litellm/API key are
+    unavailable. Tests monkey-patch by passing their own callable directly to
+    ``run_link_suggest``."""
+    if not _LITELLM_AVAILABLE:
+        return None
+    api_key = resolve_api_key(None)
+    if not api_key:
+        return None
+    api_base = resolve_api_base(None)
+    resolved_model = normalize_model_for_api_base(
+        model or DEFAULT_MINIMAX_MODEL,
+        api_type="anthropic",
+        api_base=api_base,
+        default_model=DEFAULT_MINIMAX_MODEL,
+    )
+
+    def _call(system_prompt: str, user_prompt: str) -> str:
+        kwargs: dict[str, Any] = {
+            "model": resolved_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 1500,
+            "timeout": DEFAULT_LITELLM_TIMEOUT_SECONDS,
+        }
+        if api_key:
+            kwargs["api_key"] = api_key
+        if api_base:
+            kwargs["api_base"] = api_base
+        response = litellm.completion(**kwargs)
+        return response.choices[0].message.content or ""
+
+    return _call
+
+
+def _load_gate_cache(log_dir: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    """Read prior gate decisions; last-write-wins per ``(source, target)`` key
+    so re-running on the same vault doesn't re-bill the LLM."""
+    cache_path = log_dir / GATE_CACHE_FILENAME
+    cache: dict[tuple[str, str], dict[str, Any]] = {}
+    if not cache_path.exists():
+        return cache
+    for line in cache_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        source = row.get("source_slug")
+        target = row.get("target_slug")
+        if not source or not target:
+            continue
+        cache[(source, target)] = row
+    return cache
+
+
+def _append_gate_cache(log_dir: Path, source_slug: str, decisions: list[dict[str, Any]]) -> None:
+    if not decisions:
+        return
+    log_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = log_dir / GATE_CACHE_FILENAME
+    ts = datetime.now(timezone.utc).isoformat()
+    with cache_path.open("a", encoding="utf-8") as fh:
+        for decision in decisions:
+            row = {
+                "source_slug": source_slug,
+                "target_slug": decision["slug"],
+                "decision": decision["decision"],
+                "confidence": decision["confidence"],
+                "rationale": decision.get("rationale", ""),
+                "ts": ts,
+            }
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _build_gate_user_prompt(page: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
+    body = (page.get("body") or "")[:_BODY_PREVIEW_CHARS]
+    payload = {
+        "source": {
+            "slug": page["slug"],
+            "title": page.get("title") or page["slug"],
+            "preview": body,
+        },
+        "candidates": [
+            {"slug": c["slug"], "title": c.get("title") or c["slug"]} for c in candidates
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _parse_gate_response(text: str) -> list[dict[str, Any]]:
+    """Tolerant JSON parser. The model occasionally wraps output in a
+    ```json fence or trailing prose; pull out the first balanced object and
+    keep going."""
+    if not text:
+        return []
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        # strip code fence
+        cleaned = cleaned.lstrip("`").lstrip("json").strip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3].strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start < 0 or end <= start:
+        return []
+    try:
+        obj = json.loads(cleaned[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    decisions = obj.get("decisions") if isinstance(obj, dict) else None
+    if not isinstance(decisions, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in decisions:
+        if not isinstance(item, dict):
+            continue
+        slug = item.get("slug")
+        decision = item.get("decision")
+        if not slug or decision not in {"link", "skip"}:
+            continue
+        try:
+            confidence = float(item.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        out.append(
+            {
+                "slug": str(slug),
+                "decision": decision,
+                "confidence": max(0.0, min(1.0, confidence)),
+                "rationale": str(item.get("rationale", "") or ""),
+            }
+        )
+    return out
+
+
+def _llm_gate_for_page(
+    page: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    *,
+    gate_client: GateClient | None,
+    cache: dict[tuple[str, str], dict[str, Any]],
+    log_dir: Path,
+) -> dict[str, dict[str, Any]]:
+    """Return ``{target_slug: {"decision","confidence","rationale"}}`` for every
+    candidate. When the gate is unavailable / disabled, every candidate is
+    accepted with ``rrf-only`` rationale and confidence taken from the RRF
+    score so the rest of the pipeline can stay uniform."""
+    decisions_by_slug: dict[str, dict[str, Any]] = {}
+    cache_misses: list[dict[str, Any]] = []
+    for candidate in candidates:
+        slug = candidate["slug"]
+        cached = cache.get((page["slug"], slug))
+        if cached:
+            decisions_by_slug[slug] = {
+                "decision": cached["decision"],
+                "confidence": float(cached.get("confidence", 0.0)),
+                "rationale": cached.get("rationale", ""),
+            }
+        else:
+            cache_misses.append(candidate)
+
+    if not cache_misses:
+        return decisions_by_slug
+
+    if gate_client is None:
+        # Graceful degradation: accept all, confidence = rrf_score (capped 1.0).
+        for candidate in cache_misses:
+            decisions_by_slug[candidate["slug"]] = {
+                "decision": "link",
+                "confidence": min(1.0, float(candidate.get("rrf_score", 0.0))),
+                "rationale": "rrf-only (no LLM gate)",
+            }
+        return decisions_by_slug
+
+    user_prompt = _build_gate_user_prompt(page, cache_misses)
+    try:
+        raw = gate_client(LINK_SUGGEST_GATE_PROMPT, user_prompt)
+    except Exception as exc:  # noqa: BLE001 — gate is best-effort
+        for candidate in cache_misses:
+            decisions_by_slug[candidate["slug"]] = {
+                "decision": "skip",
+                "confidence": 0.0,
+                "rationale": f"gate error: {type(exc).__name__}",
+            }
+        return decisions_by_slug
+
+    parsed = _parse_gate_response(raw)
+    parsed_by_slug = {item["slug"]: item for item in parsed}
+    new_cache_rows: list[dict[str, Any]] = []
+    miss_slugs = {c["slug"] for c in cache_misses}
+    for candidate in cache_misses:
+        slug = candidate["slug"]
+        decision = parsed_by_slug.get(slug)
+        if decision is None:
+            decision = {
+                "slug": slug,
+                "decision": "skip",
+                "confidence": 0.0,
+                "rationale": "gate omitted candidate",
+            }
+        decisions_by_slug[slug] = {
+            "decision": decision["decision"],
+            "confidence": decision["confidence"],
+            "rationale": decision["rationale"],
+        }
+        new_cache_rows.append(decision)
+    # Persist whatever the gate returned for the misses so re-runs are cheap.
+    new_cache_rows = [r for r in new_cache_rows if r["slug"] in miss_slugs]
+    _append_gate_cache(log_dir, page["slug"], new_cache_rows)
+    return decisions_by_slug
 
 
 _BODY_PREVIEW_CHARS = 800
@@ -195,8 +466,9 @@ def _suggestion_row(
     suggestion: dict[str, Any],
     *,
     run_id: str,
+    gated: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    row = {
         "run_id": run_id,
         "source_slug": page["slug"],
         "source_title": page.get("title", ""),
@@ -206,6 +478,11 @@ def _suggestion_row(
         "target_title": suggestion.get("title", ""),
         "rrf_score": round(suggestion.get("rrf_score", 0.0), 6),
     }
+    if gated is not None:
+        row["decision"] = gated["decision"]
+        row["confidence"] = round(float(gated["confidence"]), 4)
+        row["rationale"] = gated.get("rationale", "")
+    return row
 
 
 def _emit_jsonl(rows: list[dict[str, Any]], log_path: Path) -> None:
@@ -254,9 +531,20 @@ def run_link_suggest(
     confirm: bool = False,
     limit: int | None = None,
     log_dir: Path | None = None,
+    use_llm_gate: bool = True,
+    gate_threshold: float = DEFAULT_GATE_THRESHOLD,
+    gate_prefilter: int = DEFAULT_GATE_PREFILTER,
+    gate_model: str | None = None,
+    gate_client: GateClient | None = None,
 ) -> dict[str, Any]:
     """Top-level entry. Emits the JSONL log unconditionally; only mutates
-    markdown when ``apply`` *and* ``confirm`` are both True."""
+    markdown when ``apply`` *and* ``confirm`` are both True.
+
+    Gate flow: top-``gate_prefilter`` RRF candidates → LLM gate → keep only
+    ``decision == 'link'`` AND ``confidence >= gate_threshold`` → cap at
+    ``suggestions_per_page`` for the apply step. When ``use_llm_gate=False`` or
+    no API key / litellm is available, the gate degrades to RRF-only (every
+    retrieved candidate accepted, confidence = rrf_score)."""
     layout = VaultLayout.from_vault(vault_dir)
     if apply and not confirm:
         raise ValueError("--apply requires --confirm")
@@ -269,24 +557,65 @@ def run_link_suggest(
         layout, min_links=min_links, note_types=note_types, limit=limit
     )
 
+    log_root = log_dir or (layout.vault_dir / "60-Logs" / "link-suggestions")
+    log_root.mkdir(parents=True, exist_ok=True)
+
+    # Gate setup: prefer caller-supplied client (tests) over env-resolved one.
+    effective_client: GateClient | None = None
+    if use_llm_gate:
+        effective_client = gate_client or _make_default_gate_client(gate_model)
+    cache = _load_gate_cache(log_root) if use_llm_gate else {}
+
+    # Retrieve top-N where N covers both the gate budget and the apply budget;
+    # the gate decides on the larger pool, apply takes the top suggestions.
+    retrieve_n = max(suggestions_per_page, gate_prefilter if use_llm_gate else suggestions_per_page)
+
     run_id = _new_run_id()
     rows: list[dict[str, Any]] = []
     files_mutated = 0
     suggestions_total = 0
+    gate_passed_total = 0
     for page in pages:
-        suggestions = _suggest_for_page(
+        candidates = _suggest_for_page(
             layout,
             page,
             candidates_per_page=candidates_per_page,
-            suggestions_per_page=suggestions_per_page,
+            suggestions_per_page=retrieve_n,
         )
-        for suggestion in suggestions:
-            rows.append(_suggestion_row(page, suggestion, run_id=run_id))
-        suggestions_total += len(suggestions)
-        if apply and confirm and _apply_to_markdown(layout, page, suggestions):
+        if use_llm_gate:
+            decisions = _llm_gate_for_page(
+                page,
+                candidates,
+                gate_client=effective_client,
+                cache=cache,
+                log_dir=log_root,
+            )
+            # Emit one row per retrieved candidate (link AND skip), preserving RRF
+            # order so reviewers can diff what the gate filtered out.
+            page_passed: list[dict[str, Any]] = []
+            for candidate in candidates:
+                gated = decisions.get(candidate["slug"])
+                rows.append(_suggestion_row(page, candidate, run_id=run_id, gated=gated))
+                if (
+                    gated is not None
+                    and gated["decision"] == "link"
+                    and float(gated["confidence"]) >= gate_threshold
+                ):
+                    page_passed.append(candidate)
+            suggestions_total += len(candidates)
+            gate_passed_total += len(page_passed)
+            to_apply = page_passed[:suggestions_per_page]
+        else:
+            # Legacy RRF-only path: skip the gate entirely, omit gate metadata
+            # from rows, and apply the top-suggestions_per_page directly.
+            for candidate in candidates:
+                rows.append(_suggestion_row(page, candidate, run_id=run_id))
+            suggestions_total += len(candidates)
+            gate_passed_total += len(candidates)
+            to_apply = candidates[:suggestions_per_page]
+        if apply and confirm and _apply_to_markdown(layout, page, to_apply):
             files_mutated += 1
 
-    log_root = log_dir or (layout.vault_dir / "60-Logs" / "link-suggestions")
     log_path = log_root / f"{run_id}.jsonl"
     _emit_jsonl(rows, log_path)
 
@@ -295,8 +624,10 @@ def run_link_suggest(
         "log_path": str(log_path),
         "pages_examined": len(pages),
         "suggestions_emitted": suggestions_total,
+        "gate_passed": gate_passed_total,
         "files_mutated": files_mutated,
         "applied": apply and confirm,
+        "gate_enabled": use_llm_gate and effective_client is not None,
     }
 
 
@@ -338,6 +669,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--confirm", action="store_true", help="Required with --apply to actually mutate files."
     )
+    gate_group = parser.add_mutually_exclusive_group()
+    gate_group.add_argument(
+        "--llm-gate",
+        dest="use_llm_gate",
+        action="store_true",
+        default=True,
+        help="Filter RRF candidates through an LLM second-opinion gate (default).",
+    )
+    gate_group.add_argument(
+        "--no-llm-gate",
+        dest="use_llm_gate",
+        action="store_false",
+        help="Disable the LLM gate; emit RRF results directly (legacy behavior).",
+    )
+    parser.add_argument(
+        "--gate-threshold",
+        type=float,
+        default=DEFAULT_GATE_THRESHOLD,
+        help=(
+            f"Min confidence for a 'link' decision to survive into --apply "
+            f"(default: {DEFAULT_GATE_THRESHOLD})"
+        ),
+    )
+    parser.add_argument(
+        "--gate-prefilter",
+        type=int,
+        default=DEFAULT_GATE_PREFILTER,
+        help=f"Top-N RRF candidates per page sent to the gate (default: {DEFAULT_GATE_PREFILTER})",
+    )
+    parser.add_argument(
+        "--gate-model",
+        type=str,
+        default=None,
+        help="Override the LLM model for the gate (default: env-resolved MiniMax).",
+    )
     parser.add_argument("--json", action="store_true", help="Print structured summary to stdout.")
     args = parser.parse_args(argv)
 
@@ -353,6 +719,10 @@ def main(argv: list[str] | None = None) -> int:
             apply=args.apply,
             confirm=args.confirm,
             limit=args.limit,
+            use_llm_gate=args.use_llm_gate,
+            gate_threshold=args.gate_threshold,
+            gate_prefilter=args.gate_prefilter,
+            gate_model=args.gate_model,
         )
     except ValueError as exc:
         print(f"✗ {exc}", file=sys.stderr)
@@ -368,6 +738,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Run ID:              {summary['run_id']}")
     print(f"Pages examined:      {summary['pages_examined']}")
     print(f"Suggestions emitted: {summary['suggestions_emitted']}")
+    print(
+        f"Gate passed:         {summary['gate_passed']}  (gate={'on' if summary['gate_enabled'] else 'off'})"
+    )
     print(f"Files mutated:       {summary['files_mutated']}")
     print(f"Mode:                {'APPLY' if summary['applied'] else 'dry-run'}")
     print(f"Log:                 {summary['log_path']}")
