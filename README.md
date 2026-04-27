@@ -367,6 +367,22 @@ interpretation
 | `ovp-graph daily today --vault-dir <vault>` | 生成 daily delta |
 | `ovp-graph build --layered --seed-match <pattern> --output <out.html>` | 子图浏览（HTML 交互式） |
 | `ovp-lint --check --vault-dir <vault>` | 运行链接/结构检查 |
+| `ovp-query "..." --engine fused` | 默认即 fused（BM25 + 向量 RRF + Recency/Frequency/Importance 衰减），`--engine bm25 \| vector` 显式回退 |
+
+### 链接密度 / 语义层 / Crystal / Exploration
+
+Phase 38 把链接密度和语义层补齐，并给 reviewer 一个图原生的探索面。
+
+| 命令 | 说明 |
+|---|---|
+| `ovp-link-suggest --vault-dir <vault> --dry-run` | 为 `link_out_count < 3` 的 evergreen / deep_dive 跑 BM25+向量混合检索，输出 JSONL 候选到 `60-Logs/link-suggestions/<run_id>.jsonl` |
+| `ovp-link-suggest --apply --confirm` | 把候选写回原 markdown body（默认 `--dry-run`，必须 `--confirm` 才能落盘） |
+| `ovp-link-suggest --llm-gate` | 增加 LLM 二次裁判，按 `link \| skip` 分类；客户端不可用时打印 stderr 警告并回退到 RRF-only |
+| `ovp-build-crystals --vault-dir <vault>` | 物化 briefing 快照到 `40-Resources/Crystals/<crystal_id>.md`，frontmatter 记录 `source_object_ids` 与 `evolves_relations` |
+| `ovp-working-memory --vault-dir <vault>` | 写入今日 `60-Logs/working-memory/YYYY-MM-DD.md`：Top of Mind / Fresh Crystals / Pending Decisions / EVOLVES Today / Pulse Highlights；幂等覆盖 |
+| `ovp-concept-dedup --propose` / `--apply --confirm` | 基于 cosine 相似度合并近义 evergreen，`--apply` 写回链接并归档失败者到 `70-Archive/dedup-merged/` |
+| `ovp-mcp --vault-dir <vault>` | stdio JSON-RPC 服务，暴露 `graph_node_details / graph_neighborhood / graph_shortest_path / graph_bridge_nodes / graph_communities` 等 MCP 工具；`graph_neighborhood` 接受 `render: "json" \| "html"` |
+| `ovp-ui` 路由 `/explore?object_id=<id>` | 三栏 reviewer UI：图谱 canvas + agent timeline (SSE) + Crystal 合成面板 |
 
 #### `ovp-graph build` 推荐组合
 
@@ -407,14 +423,19 @@ vault/
 │       └── alias-index.json
 ├── 20-Areas/
 │   └── {AI-Research, Investing, Programming, Tools}/Topics/YYYY-MM/
+├── 40-Resources/
+│   └── Crystals/                    # ovp-build-crystals 物化的持久化 briefing
 ├── 60-Logs/
 │   ├── pipeline.jsonl
 │   ├── refine-mutations.jsonl
 │   ├── transactions/
 │   ├── quality-reports/
 │   ├── daily-deltas/
+│   ├── link-suggestions/            # ovp-link-suggest 输出 JSONL
+│   ├── working-memory/              # ovp-working-memory 每日 distill
 │   └── knowledge.db
 └── 70-Archive/
+    └── dedup-merged/                # ovp-concept-dedup --apply 归档
 ```
 
 ## `knowledge.db` 提供什么
@@ -428,6 +449,7 @@ vault/
 - `timeline_events`
 - `audit_events`
 - `page_embeddings`
+- `page_metrics`（last_seen_ts / reuse_count / citation_count，供 `search_fused` 衰减排序）
 
 它由 `ovp-knowledge-index` 重建，供以下读取场景使用：
 
@@ -439,9 +461,8 @@ vault/
 
 默认 discovery 也已经统一到这里：
 
-- `ovp-query` 默认走 `knowledge.db`
-- 关键词检索使用 FTS5 BM25
-- 语义检索使用本地 deterministic embeddings
+- `ovp-query` 默认走 `knowledge.db` 的 `search_fused`：BM25 + 向量 RRF (k=60)，再叠 Recency / Frequency / Importance 衰减
+- `--engine bm25` / `--engine vector` 可显式回退到单引擎
 - QMD 不再是默认检索依赖，只能通过显式 `--engine qmd` 启用
 
 ## 快速开始
