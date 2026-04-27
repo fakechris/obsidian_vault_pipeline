@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -46,6 +47,7 @@ try:
     from .llm_defaults import (
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
         DEFAULT_MINIMAX_MODEL,
+        litellm_proxy_bypass,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
@@ -54,6 +56,7 @@ except ImportError:
     from llm_defaults import (  # type: ignore
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
         DEFAULT_MINIMAX_MODEL,
+        litellm_proxy_bypass,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
@@ -155,7 +158,19 @@ class LiteLLMClient:
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
-        response = litellm.completion(**kwargs)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                with litellm_proxy_bypass():
+                    response = litellm.completion(**kwargs)
+                break
+            except Exception as exc:  # pragma: no cover - exercised via tests
+                last_error = exc
+                if attempt == 2:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
+        else:  # pragma: no cover - defensive fallback
+            raise last_error or RuntimeError("litellm completion failed")
         return response.choices[0].message.content or ""
 
 

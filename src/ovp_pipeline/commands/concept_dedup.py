@@ -25,6 +25,7 @@ from pathlib import Path
 from ..concept_dedup import (
     DEFAULT_THRESHOLD,
     apply_proposal,
+    archive_applied_proposal,
     find_clusters,
     list_proposals,
     load_proposal,
@@ -132,6 +133,9 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         if r.errors:
             line += f" errors={r.errors}"
         print(line)
+    if not args.dry_run and errors == 0:
+        archived_path = archive_applied_proposal(vault_dir, path)
+        print(f"Proposal archived: {archived_path}")
     return 0 if errors == 0 else 1
 
 

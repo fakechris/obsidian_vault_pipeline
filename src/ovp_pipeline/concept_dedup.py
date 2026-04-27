@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -303,6 +305,17 @@ def list_proposals(vault_dir: Path) -> list[Path]:
     return sorted(out_dir.glob("dedup-*.json"))
 
 
+def archive_applied_proposal(vault_dir: Path, path: Path) -> Path:
+    applied_dir = _proposals_dir(vault_dir) / "applied"
+    applied_dir.mkdir(parents=True, exist_ok=True)
+    dest = applied_dir / path.name
+    if dest.exists():
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest = applied_dir / f"{path.stem}.{stamp}{path.suffix}"
+    path.replace(dest)
+    return dest
+
+
 def load_proposal(path: Path) -> DedupProposal:
     return DedupProposal.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
@@ -364,6 +377,30 @@ def _archive_dest(vault_dir: Path, slug: str) -> Path:
         return base
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return archive_dir / f"{slug}.{stamp}.md"
+
+
+def _archive_markdown_file(vault_dir: Path, source: Path, dest: Path) -> None:
+    """Archive a Markdown file, preferring Obsidian CLI so wikilinks stay coherent."""
+    obsidian = shutil.which("obsidian")
+    if obsidian and (vault_dir / ".obsidian").exists():
+        source_arg = source.relative_to(vault_dir).as_posix()
+        dest_arg = dest.relative_to(vault_dir).as_posix()
+        try:
+            completed = subprocess.run(
+                [obsidian, "move", f"file={source_arg}", f"to={dest_arg}"],
+                cwd=vault_dir,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.SubprocessError as exc:
+            raise OSError(f"obsidian move failed for {source_arg}: {exc}") from exc
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise OSError(f"obsidian move failed for {source_arg}: {detail}")
+        return
+
+    source.rename(dest)
 
 
 def _iter_vault_md(vault_dir: Path) -> Iterable[Path]:
@@ -485,7 +522,7 @@ def apply_cluster(
             result.archived.append(dest)
             continue
         try:
-            dup.path.rename(dest)
+            _archive_markdown_file(vault_dir, dup.path, dest)
         except OSError as exc:
             result.errors.append(f"archive {dup.slug}: {exc}")
             continue

@@ -1476,6 +1476,24 @@ def test_run_command_timeout_is_failure(tmp_path):
     assert result["timeout"] is True
 
 
+def test_subprocess_env_strips_proxy_vars_by_default(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(key, "http://external-proxy.example:41474")
+
+    env = pipeline._subprocess_env()
+
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        assert key not in env
+
+
 def test_step_pinboard_process_heartbeats_current_item_before_processor_runs(tmp_path, monkeypatch):
     import ovp_pipeline.unified_pipeline_enhanced as pipeline_module
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager

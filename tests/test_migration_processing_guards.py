@@ -18,6 +18,7 @@ from ovp_pipeline.auto_article_processor import (
     PipelineLogger as ArticleLogger,
     TransactionManager as ArticleTxn,
 )
+from ovp_pipeline.auto_evergreen_extractor import LiteLLMClient as EvergreenLiteLLMClient
 from ovp_pipeline.auto_github_processor import LiteLLMClient as GithubLiteLLMClient
 from ovp_pipeline.auto_github_processor import parse_github_url
 from ovp_pipeline.auto_paper_processor import LiteLLMClient as PaperLiteLLMClient, process_single_paper
@@ -725,6 +726,66 @@ def test_litellm_clients_pass_explicit_completion_timeout(monkeypatch, client_cl
     assert content == "ok"
     assert metadata["tokens"] == 7
     assert captured["timeout"] == 180
+
+
+def test_evergreen_litellm_client_retries_transient_failures(monkeypatch):
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
+    monkeypatch.setenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.7-highspeed")
+
+    attempts = {"count": 0}
+
+    class FakeMessage:
+        content = "ok"
+
+    class FakeChoice:
+        message = FakeMessage()
+
+    class FakeResponse:
+        choices = [FakeChoice()]
+
+    def fake_completion(**kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("transient server disconnected")
+        return FakeResponse()
+
+    monkeypatch.setattr("ovp_pipeline.auto_evergreen_extractor.litellm.completion", fake_completion)
+
+    client = EvergreenLiteLLMClient()
+
+    assert client.generate("system", "user") == "ok"
+    assert attempts["count"] == 2
+
+
+def test_evergreen_litellm_client_bypasses_proxy_env_during_completion(monkeypatch):
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
+    monkeypatch.setenv("HTTPS_PROXY", "http://external-proxy.example:41474")
+    monkeypatch.setenv("HTTP_PROXY", "http://external-proxy.example:41474")
+
+    observed: dict[str, str | None] = {}
+
+    class FakeMessage:
+        content = "ok"
+
+    class FakeChoice:
+        message = FakeMessage()
+
+    class FakeResponse:
+        choices = [FakeChoice()]
+
+    def fake_completion(**kwargs):
+        observed["HTTPS_PROXY"] = os.environ.get("HTTPS_PROXY")
+        observed["HTTP_PROXY"] = os.environ.get("HTTP_PROXY")
+        return FakeResponse()
+
+    monkeypatch.setattr("ovp_pipeline.auto_evergreen_extractor.litellm.completion", fake_completion)
+
+    client = EvergreenLiteLLMClient()
+
+    assert client.generate("system", "user") == "ok"
+    assert observed == {"HTTPS_PROXY": None, "HTTP_PROXY": None}
+    assert os.environ["HTTPS_PROXY"] == "http://external-proxy.example:41474"
+    assert os.environ["HTTP_PROXY"] == "http://external-proxy.example:41474"
 
 
 def test_process_single_paper_downloads_remote_pdf_before_analysis(tmp_path, monkeypatch):

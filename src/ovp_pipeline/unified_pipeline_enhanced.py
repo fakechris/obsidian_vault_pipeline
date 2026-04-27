@@ -48,6 +48,7 @@ try:
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
+    from .llm_defaults import env_without_litellm_proxy
     from .stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from .txn import (
         build_transaction_payload,
@@ -62,6 +63,7 @@ except ImportError:  # pragma: no cover - script mode fallback
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
+    from llm_defaults import env_without_litellm_proxy
     from stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from txn import (
         build_transaction_payload,
@@ -1416,7 +1418,7 @@ class EnhancedPipeline:
         return {}
 
     def _subprocess_env(self) -> dict[str, str]:
-        env = os.environ.copy()
+        env = env_without_litellm_proxy(os.environ)
         project_src = str(PROJECT_SRC)
         current_pythonpath = env.get("PYTHONPATH", "")
         segments = [segment for segment in current_pythonpath.split(os.pathsep) if segment]

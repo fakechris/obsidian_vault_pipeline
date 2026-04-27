@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 import os
 from urllib.parse import urlparse
 
@@ -22,6 +24,15 @@ API_BASE_FALLBACKS = (
     "SPEC_ORCH_LLM_API_BASE",
     "MINIMAX_ANTHROPIC_BASE_URL",
     "ANTHROPIC_BASE_URL",
+)
+
+PROXY_ENV_VARS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
 )
 
 
@@ -62,6 +73,38 @@ def resolve_api_base(explicit: str | None = None, default: str = DEFAULT_MINIMAX
         if value:
             return value
     return default
+
+
+def env_without_litellm_proxy(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return an environment for LiteLLM subprocesses without ambient proxy vars."""
+    source = os.environ if env is None else env
+    cleaned = dict(source)
+    for key in PROXY_ENV_VARS:
+        cleaned.pop(key, None)
+    cleaned["LITELLM_PROXY_BYPASS"] = "1"
+    return cleaned
+
+
+@contextmanager
+def litellm_proxy_bypass() -> Iterator[None]:
+    """Temporarily remove proxy vars so LiteLLM is not forced through shell proxy."""
+    previous = {key: os.environ.get(key) for key in PROXY_ENV_VARS}
+    previous_bypass = os.environ.get("LITELLM_PROXY_BYPASS")
+    try:
+        for key in PROXY_ENV_VARS:
+            os.environ.pop(key, None)
+        os.environ["LITELLM_PROXY_BYPASS"] = "1"
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        if previous_bypass is None:
+            os.environ.pop("LITELLM_PROXY_BYPASS", None)
+        else:
+            os.environ["LITELLM_PROXY_BYPASS"] = previous_bypass
 
 
 def _uses_anthropic_minimax_base(api_base: str | None) -> bool:
