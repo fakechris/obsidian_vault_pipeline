@@ -4,6 +4,9 @@ import json
 import sqlite3
 from pathlib import Path
 
+from ovp_pipeline import knowledge_index
+from ovp_pipeline.runtime import VaultLayout
+
 
 def _write_evergreen(vault: Path, slug: str, title: str) -> Path:
     path = vault / "10-Knowledge" / "Evergreen" / f"{title.replace(' ', '-')}.md"
@@ -47,6 +50,33 @@ def _write_reuse_event(vault: Path, **fields: object) -> dict[str, object]:
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
     return event
+
+
+def test_collect_reuse_rows_uses_shared_event_iterator(temp_vault, monkeypatch):
+    event = {
+        "event_id": "evt-shared",
+        "ts": "2026-04-22T12:00:00Z",
+        "session_id": "session",
+        "pack": "research-tech",
+        "event_type": "trusted_reuse_event",
+        "object_id": "alpha",
+        "object_kind": "evergreen",
+        "surface": "query",
+        "consumer_ref": "report.md",
+        "evidence_present": 1,
+        "provenance_clean": 1,
+        "trusted": 1,
+    }
+    monkeypatch.setattr(
+        knowledge_index,
+        "iter_for_index",
+        lambda layout, log_name: iter([event]) if log_name == "reuse-events.jsonl" else iter(()),
+    )
+
+    rows = knowledge_index._collect_reuse_rows(VaultLayout.from_vault(temp_vault))
+
+    assert len(rows) == 1
+    assert rows[0][0] == "evt-shared"
 
 
 def test_event_emitter_appends_jsonl_with_metadata(temp_vault):

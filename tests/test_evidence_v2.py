@@ -38,6 +38,55 @@ from ovp_pipeline.truth_store import (
 # ---------------------------------------------------------------------------
 
 
+def test_evidence_verify_batches_table_updates(temp_vault, monkeypatch):
+    from ovp_pipeline.commands import evidence_verify
+
+    class FakeConn:
+        def __init__(self) -> None:
+            self.executemany_calls = []
+
+        def execute(self, *_args, **_kwargs):
+            raise AssertionError("verification updates should be batched with executemany")
+
+        def executemany(self, sql, params):
+            self.executemany_calls.append((sql, list(params)))
+
+    row = (
+        "research-tech",
+        "claim-1",
+        "10-Knowledge/Evergreen/Source.md",
+        "definition",
+        "quote",
+        "",
+        "",
+        "",
+        EVIDENCE_STATUS_UNVERIFIED,
+        "",
+    )
+    fake = FakeConn()
+    monkeypatch.setattr(evidence_verify, "_select_rows", lambda *_args, **_kwargs: [row])
+    monkeypatch.setattr(
+        evidence_verify,
+        "verify_evidence_row",
+        lambda *_args, **_kwargs: (EVIDENCE_STATUS_VERIFIED, "2026-04-27T00:00:00Z"),
+    )
+    monkeypatch.setattr(evidence_verify, "emit_evidence_verified", lambda *_args, **_kwargs: None)
+
+    summary = evidence_verify._process_table(
+        fake,
+        "claim_evidence",
+        vault_dir=temp_vault,
+        pack="research-tech",
+        cutoff_text=None,
+        backfill=False,
+        slug_to_path={},
+    )
+
+    assert summary["examined"] == 1
+    assert len(fake.executemany_calls) == 1
+    assert len(fake.executemany_calls[0][1]) == 1
+
+
 def _write_source(temp_vault: Path, name: str, body: str) -> Path:
     """Write a markdown source file under Evergreen/ and return its absolute path."""
     path = temp_vault / "10-Knowledge" / "Evergreen" / name
@@ -288,7 +337,7 @@ def test_verify_evidence_row_broken_when_source_deleted(tmp_path):
 def test_evidence_backfill_unverified_for_seeded_row_without_hash(temp_vault, capsys):
     """A row with quote_text but no content_hash backfills to a real hash and
     verifies to ``verified`` — not silent-pass."""
-    src = _write_source(
+    _write_source(
         temp_vault,
         "Anchor.md",
         """---
@@ -489,7 +538,7 @@ date: 2026-04-22
 
 
 def test_lint_flags_research_tech_claim_missing_locator(temp_vault):
-    src = _write_source(
+    _write_source(
         temp_vault,
         "Tracked.md",
         """---

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .concept_registry import ConceptRegistry, ResolutionAction
+from .event_emitter import iter_for_index
 from .graph.frontmatter import FrontmatterParser, NoteMetadata
 from .graph.link_parser import LinkParser
 from .identity import canonicalize_note_id
@@ -390,20 +391,8 @@ def _infer_audit_slug(payload: dict[str, object]) -> str:
 
 def _collect_reuse_rows(layout: VaultLayout) -> list[tuple[str, str, str, str, str, str, str, int, int, int, str]]:
     rows: list[tuple[str, str, str, str, str, str, str, int, int, int, str]] = []
-    log_path = layout.logs_dir / "reuse-events.jsonl"
-    if not log_path.exists():
-        return rows
     seen_event_ids: set[str] = set()
-    for line in log_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            payload = json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(payload, dict):
-            continue
+    for payload in iter_for_index(layout, "reuse-events.jsonl"):
         event_id = str(payload.get("event_id") or "")
         if not event_id or event_id in seen_event_ids:
             continue

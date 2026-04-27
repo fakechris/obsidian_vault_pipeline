@@ -144,21 +144,22 @@ def route_open_questions(
     ``60-Logs/**`` is in ``agent_owned`` (not ``accepted``), so the write
     falls outside the ``enforce_zone_write`` gate by construction.
     """
-    layout = VaultLayout.from_vault(vault_dir)
-    target = layout.logs_dir / "open-questions.jsonl"
-    target.parent.mkdir(parents=True, exist_ok=True)
     written = 0
-    with target.open("a", encoding="utf-8") as handle:
-        for question in questions:
-            line = emit_line({"question": question.question, "consumer_ref": question.consumer_ref})
-            handle.write(line)
-            written += 1
-            _emit_yield(
-                vault_dir,
-                pack=pack.name,
-                stream="open_question",
-                payload={"question": question.question},
-            )
+    for question in questions:
+        emit(
+            vault_dir,
+            "open-questions.jsonl",
+            "open_question",
+            {"question": question.question, "consumer_ref": question.consumer_ref},
+            pack=pack.name,
+        )
+        written += 1
+        _emit_yield(
+            vault_dir,
+            pack=pack.name,
+            stream="open_question",
+            payload={"question": question.question},
+        )
     return written
 
 
@@ -225,21 +226,3 @@ def route_proposed_relations(
             },
         )
     return paths
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def emit_line(payload: dict[str, object]) -> str:
-    """Serialize an open-questions line.
-
-    Kept small and dependency-free so the same shape can be replayed by the
-    UI panel. Newline-terminated, JSON-encoded.
-    """
-    import json
-    from datetime import datetime, timezone
-
-    body = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **payload}
-    return json.dumps(body, ensure_ascii=False) + "\n"

@@ -27,6 +27,7 @@ from typing import Iterable
 
 from .packs.base import BaseDomainPack
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME, load_pack
+from .state_lifecycle import State, write_state
 
 
 WRITE_MODE_NORMAL = "write"
@@ -142,14 +143,23 @@ def promote(
         raise FileNotFoundError(f"Draft not found: {draft_path}")
 
     body = draft_path.read_bytes()
+    bytes_written = len(body)
     if not dry_run:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(body)
+        write_state(
+            target_path,
+            State.ACCEPTED,
+            generated_by="ovp-promote workspace",
+            sources=[_relative_to_vault(draft_path, vault_dir)],
+            promotion_target=_relative_to_vault(target_path, vault_dir),
+        )
+        bytes_written = target_path.stat().st_size
 
     return PromotionRecord(
         draft=draft_path,
         target=target_path,
         approver=approver,
         pack=resolved_pack.name,
-        bytes_written=len(body),
+        bytes_written=bytes_written,
     )

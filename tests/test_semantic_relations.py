@@ -11,11 +11,13 @@ Coverage:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
 from ovp_pipeline.extraction.semantic_relations import (
     SemanticRelationCandidate,
+    candidate_subject,
     extract_relations,
     load_candidates,
     write_candidates,
@@ -189,6 +191,39 @@ def test_write_and_load_candidates_roundtrip(temp_vault):
     assert loaded[0] == candidate
 
 
+def test_write_candidates_keeps_same_relation_from_distinct_sources(temp_vault):
+    pack = load_pack("research-tech")
+    layout = VaultLayout.from_vault(temp_vault)
+    first = SemanticRelationCandidate(
+        relation_type="uses",
+        source_object_id="ai-agent",
+        target_object_id="rag",
+        source_slug="agent-memory-a",
+        evidence_quote="AI Agent uses RAG in source A",
+        confidence=0.7,
+        pack=pack.name,
+    )
+    second = SemanticRelationCandidate(
+        relation_type="uses",
+        source_object_id="ai-agent",
+        target_object_id="rag",
+        source_slug="agent-memory-b",
+        evidence_quote="AI Agent uses RAG in source B",
+        confidence=0.7,
+        pack=pack.name,
+    )
+
+    assert candidate_subject(first) != candidate_subject(second)
+    paths = write_candidates([first, second], layout=layout)
+
+    assert len(set(paths)) == 2
+    loaded = load_candidates(layout)
+    assert {candidate.source_slug for candidate in loaded} == {
+        "agent-memory-a",
+        "agent-memory-b",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Policy: evaluate_relation
 # ---------------------------------------------------------------------------
@@ -314,6 +349,36 @@ def test_promote_review_queue_removes_promoted_files(temp_vault):
             (pack.name,),
         ).fetchone()[0]
     assert rel_count == 1  # not duplicated by the second run
+
+
+def test_promote_review_queue_removes_legacy_relation_queue_file(temp_vault):
+    """Queue files written before source_slug joined the subject still get consumed."""
+    pack = load_pack("research-tech")
+    layout = VaultLayout.from_vault(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    cand = SemanticRelationCandidate(
+        relation_type="uses",
+        source_object_id="ai-agent",
+        target_object_id="rag",
+        source_slug="agent-memory",
+        evidence_quote="AI Agent uses RAG",
+        confidence=0.9,
+        locator="section#background@0",
+        content_hash="abc123",
+        retrieval_context="…",
+        pack=pack.name,
+    )
+    queue_dir = layout.review_queue_dir / "semantic-relations"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    legacy_path = queue_dir / "ai-agent__uses__rag.json"
+    legacy_path.write_text(json.dumps(cand.to_dict(), ensure_ascii=False), encoding="utf-8")
+
+    report = promote_review_queue(layout, pack=pack)
+
+    assert report.lane_counts()["auto"] == 1
+    assert not legacy_path.exists()
+    assert list(queue_dir.glob("*.json")) == []
 
 
 def test_promote_review_queue_archives_rejected(temp_vault):
