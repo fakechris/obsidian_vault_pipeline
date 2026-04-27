@@ -465,6 +465,36 @@ def test_no_llm_gate_falls_back_to_rrf_only(temp_vault):
         assert "confidence" not in row
 
 
+def test_llm_gate_requested_but_no_client_falls_back_cleanly(temp_vault, capsys, monkeypatch):
+    """Regression for the silent-rejection bug flagged on PR #66: when the
+    user passes --llm-gate but no API key is available, the previous fallback
+    returned confidence=rrf_score (~0.03) which then failed the 0.6 threshold
+    filter, silently dropping every candidate. The fix short-circuits to the
+    legacy RRF-only path with a stderr warning."""
+    _seed_evergreens(temp_vault)
+    rebuild_knowledge_index(temp_vault)
+
+    # Simulate "no API key / litellm" by forcing the default client factory
+    # to return None — the production code path the bug originally hit.
+    monkeypatch.setattr(
+        "ovp_pipeline.commands.link_suggest._make_default_gate_client",
+        lambda model=None: None,
+    )
+
+    summary = run_link_suggest(
+        temp_vault,
+        min_links=3,
+        suggestions_per_page=5,
+        apply=True,
+        confirm=True,
+        use_llm_gate=True,
+    )
+    assert summary["gate_enabled"] is False, "should report gate disabled after fallback"
+    assert summary["files_mutated"] >= 1, "RRF fallback must still produce applied suggestions"
+    captured = capsys.readouterr()
+    assert "falling back to RRF-only" in captured.err
+
+
 def test_gate_error_marks_candidates_as_skip(temp_vault):
     _seed_evergreens(temp_vault)
     rebuild_knowledge_index(temp_vault)

@@ -261,9 +261,11 @@ def _llm_gate_for_page(
     log_dir: Path,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{target_slug: {"decision","confidence","rationale"}}`` for every
-    candidate. When the gate is unavailable / disabled, every candidate is
-    accepted with ``rrf-only`` rationale and confidence taken from the RRF
-    score so the rest of the pipeline can stay uniform."""
+    candidate. ``run_link_suggest`` no longer calls this with ``gate_client=None``
+    (that path is short-circuited to the legacy RRF-only branch upstream), but
+    the defensive fallback below sets ``confidence=1.0`` so any direct caller
+    still gets the documented ``accept all`` semantics instead of having every
+    candidate silently fail the threshold filter."""
     decisions_by_slug: dict[str, dict[str, Any]] = {}
     cache_misses: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -282,11 +284,10 @@ def _llm_gate_for_page(
         return decisions_by_slug
 
     if gate_client is None:
-        # Graceful degradation: accept all, confidence = rrf_score (capped 1.0).
         for candidate in cache_misses:
             decisions_by_slug[candidate["slug"]] = {
                 "decision": "link",
-                "confidence": min(1.0, float(candidate.get("rrf_score", 0.0))),
+                "confidence": 1.0,
                 "rationale": "rrf-only (no LLM gate)",
             }
         return decisions_by_slug
@@ -543,8 +544,11 @@ def run_link_suggest(
     Gate flow: top-``gate_prefilter`` RRF candidates → LLM gate → keep only
     ``decision == 'link'`` AND ``confidence >= gate_threshold`` → cap at
     ``suggestions_per_page`` for the apply step. When ``use_llm_gate=False`` or
-    no API key / litellm is available, the gate degrades to RRF-only (every
-    retrieved candidate accepted, confidence = rrf_score)."""
+    no API key / litellm is available, the gate degrades cleanly to the
+    legacy RRF-only path (every retrieved candidate accepted, no gate
+    metadata in rows). The previous fallback returned ``confidence=rrf_score``
+    inside the gate path, which then failed the threshold filter and silently
+    rejected everything — the explicit fall-through avoids that trap."""
     layout = VaultLayout.from_vault(vault_dir)
     if apply and not confirm:
         raise ValueError("--apply requires --confirm")
@@ -564,11 +568,23 @@ def run_link_suggest(
     effective_client: GateClient | None = None
     if use_llm_gate:
         effective_client = gate_client or _make_default_gate_client(gate_model)
+        if effective_client is None:
+            # No API key / litellm → the gate would reject everything via the
+            # threshold filter. Disable cleanly so reviewers see RRF rows
+            # (no decision/confidence) instead of an empty apply.
+            print(
+                "ovp-link-suggest: --llm-gate requested but no LLM client available; "
+                "falling back to RRF-only (no gate metadata in rows).",
+                file=sys.stderr,
+            )
+            use_llm_gate = False
     cache = _load_gate_cache(log_root) if use_llm_gate else {}
 
-    # Retrieve top-N where N covers both the gate budget and the apply budget;
-    # the gate decides on the larger pool, apply takes the top suggestions.
-    retrieve_n = max(suggestions_per_page, gate_prefilter if use_llm_gate else suggestions_per_page)
+    # gate_prefilter is the HARD cap on what the LLM sees; apply takes the
+    # top-suggestions_per_page from gate-passed. If suggestions_per_page >
+    # gate_prefilter, the gate becomes the bottleneck (correctly) — we don't
+    # quietly send more to the LLM than --gate-prefilter requests.
+    retrieve_n = gate_prefilter if use_llm_gate else suggestions_per_page
 
     run_id = _new_run_id()
     rows: list[dict[str, Any]] = []
