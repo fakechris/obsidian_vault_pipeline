@@ -378,6 +378,97 @@ def test_doctor_command_reports_vault_health(temp_vault, capsys):
     assert payload["vault"]["knowledge_db_exists"] is False
 
 
+def test_doctor_reports_candidate_consistency_gaps(temp_vault, capsys):
+    from ovp_pipeline.commands.doctor import main
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry, STATUS_CANDIDATE
+
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="missing-file",
+            title="Missing File",
+            aliases=[],
+            definition="candidate without markdown",
+            area="testing",
+            status=STATUS_CANDIDATE,
+            source_count=1,
+            evidence_count=1,
+        )
+    )
+    registry.add_entry(
+        ConceptEntry(
+            slug="queued-candidate",
+            title="Queued Candidate",
+            aliases=[],
+            definition="candidate with markdown but no queue file",
+            area="testing",
+            status=STATUS_CANDIDATE,
+            source_count=1,
+            evidence_count=1,
+        )
+    )
+    registry.save()
+
+    candidate_dir = temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates"
+    (candidate_dir / "queued-candidate.md").write_text("# Queued Candidate\n", encoding="utf-8")
+    (candidate_dir / "orphan-file.md").write_text("# Orphan\n", encoding="utf-8")
+    queue_dir = temp_vault / "60-Logs" / "derived" / "review-queue" / "concepts"
+    queue_dir.mkdir(parents=True)
+    (queue_dir / "orphan-queue.json").write_text("{}", encoding="utf-8")
+
+    exit_code = main(["--vault-dir", str(temp_vault), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    consistency = payload["candidate_consistency"]
+    assert consistency["ok"] is False
+    assert consistency["missing_candidate_files"] == ["missing-file"]
+    assert consistency["orphan_candidate_files"] == ["orphan-file"]
+    assert set(consistency["missing_review_queue_files"]) == {"missing-file", "queued-candidate"}
+    assert consistency["orphan_review_queue_files"] == ["orphan-queue"]
+    assert consistency["misplaced_review_queue_files"] == []
+    assert consistency["evaluation_error"] == ""
+
+
+def test_doctor_reports_misplaced_candidate_review_queue_file(temp_vault, capsys):
+    from ovp_pipeline.commands.doctor import main
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry, STATUS_CANDIDATE
+
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="queued-candidate",
+            title="Queued Candidate",
+            aliases=[],
+            definition="candidate in the wrong review queue",
+            area="testing",
+            status=STATUS_CANDIDATE,
+            source_count=1,
+            evidence_count=1,
+        )
+    )
+    registry.save()
+
+    candidate_dir = temp_vault / "10-Knowledge" / "Evergreen" / "_Candidates"
+    (candidate_dir / "queued-candidate.md").write_text("# Queued Candidate\n", encoding="utf-8")
+    rejected_queue_dir = temp_vault / "60-Logs" / "derived" / "review-queue" / "rejected-concepts"
+    rejected_queue_dir.mkdir(parents=True)
+    (rejected_queue_dir / "queued-candidate.json").write_text("{}", encoding="utf-8")
+
+    exit_code = main(["--vault-dir", str(temp_vault), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    consistency = payload["candidate_consistency"]
+    assert consistency["ok"] is False
+    assert consistency["missing_candidate_files"] == []
+    assert consistency["orphan_candidate_files"] == []
+    assert consistency["missing_review_queue_files"] == []
+    assert consistency["orphan_review_queue_files"] == []
+    assert consistency["misplaced_review_queue_files"] == ["queued-candidate:rejected-concepts->concepts"]
+    assert consistency["evaluation_error"] == ""
+
+
 def test_doctor_command_text_output_includes_processing_count(temp_vault, capsys):
     from ovp_pipeline.commands.doctor import main
 

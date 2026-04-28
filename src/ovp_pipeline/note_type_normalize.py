@@ -117,6 +117,8 @@ class NormalizationReport:
 
 
 _FRONTMATTER_RE = re.compile(r"^(---\n)(.*?)(\n---\n?)", re.DOTALL)
+_FENCED_FRONTMATTER_RE = re.compile(r"^(```yaml\n)(---\n)(.*?)(\n---\n?)(```\n?)", re.DOTALL)
+_UNCLOSED_FENCED_FRONTMATTER_RE = re.compile(r"^(```yaml\n)(---\n)(.*?)(\n---\n?)", re.DOTALL)
 _TYPE_LINE_RE = re.compile(r"^(\s*type\s*:\s*)(.+?)(\s*)$", re.MULTILINE)
 _NOTE_TYPE_LINE_RE = re.compile(r"^(\s*note_type\s*:\s*)(.+?)(\s*)$", re.MULTILINE)
 _ORIGINAL_LINE_RE = re.compile(r"^\s*original_note_type\s*:", re.MULTILINE)
@@ -148,6 +150,28 @@ def _replace_or_insert(frontmatter_body: str, key: str, value: str) -> str:
     return f"{frontmatter_body}{suffix}{key}: {quoted}"
 
 
+def _frontmatter_parts(text: str) -> tuple[str, str, str, int] | None:
+    fm_match = _FRONTMATTER_RE.match(text)
+    if fm_match:
+        return fm_match.group(1), fm_match.group(2), fm_match.group(3), fm_match.end()
+
+    fenced_match = _FENCED_FRONTMATTER_RE.match(text)
+    if fenced_match:
+        prefix = fenced_match.group(1) + fenced_match.group(2)
+        suffix = fenced_match.group(4) + fenced_match.group(5)
+        return prefix, fenced_match.group(3), suffix, fenced_match.end()
+    unclosed_fenced_match = _UNCLOSED_FENCED_FRONTMATTER_RE.match(text)
+    if unclosed_fenced_match:
+        prefix = unclosed_fenced_match.group(1) + unclosed_fenced_match.group(2)
+        return (
+            prefix,
+            unclosed_fenced_match.group(3),
+            unclosed_fenced_match.group(4),
+            unclosed_fenced_match.end(),
+        )
+    return None
+
+
 def rewrite_note_type(
     text: str, *, new_value: str, preserve_original: bool = True
 ) -> tuple[str, str | None]:
@@ -161,29 +185,31 @@ def rewrite_note_type(
     ``original_note_type:`` field is added/refreshed so the migration is
     invertible.
     """
-    fm_match = _FRONTMATTER_RE.match(text)
-    if not fm_match:
+    parts = _frontmatter_parts(text)
+    if not parts:
         return text, None
 
-    fm_open, fm_body, fm_close = fm_match.group(1), fm_match.group(2), fm_match.group(3)
+    fm_open, fm_body, fm_close, fm_end = parts
 
     type_match = _TYPE_LINE_RE.search(fm_body)
     note_type_match = _NOTE_TYPE_LINE_RE.search(fm_body)
-    primary_match = type_match or note_type_match
-    if primary_match is None:
+    if type_match is None and note_type_match is None:
         return text, None
 
-    original_value = _strip_yaml_quotes(primary_match.group(2))
-    if original_value == new_value:
+    type_value = _strip_yaml_quotes(type_match.group(2)) if type_match else None
+    note_type_value = _strip_yaml_quotes(note_type_match.group(2)) if note_type_match else None
+    values = [value for value in (type_value, note_type_value) if value is not None]
+    original_value = next((value for value in values if value != new_value), values[0])
+    if all(value == new_value for value in values):
         return text, original_value
 
     quoted_new = _quote_yaml_value(new_value)
     new_body = fm_body
-    if type_match:
+    if type_match and type_value != new_value:
         new_body = _TYPE_LINE_RE.sub(
             lambda m: f"{m.group(1)}{quoted_new}", new_body, count=1
         )
-    if note_type_match:
+    if note_type_match and note_type_value != new_value:
         new_body = _NOTE_TYPE_LINE_RE.sub(
             lambda m: f"{m.group(1)}{quoted_new}", new_body, count=1
         )
@@ -191,7 +217,7 @@ def rewrite_note_type(
     if preserve_original and original_value and not _ORIGINAL_LINE_RE.search(new_body):
         new_body = _replace_or_insert(new_body, "original_note_type", original_value)
 
-    rebuilt = f"{fm_open}{new_body}{fm_close}{text[fm_match.end():]}"
+    rebuilt = f"{fm_open}{new_body}{fm_close}{text[fm_end:]}"
     return rebuilt, original_value
 
 
@@ -220,19 +246,24 @@ def plan_normalization(
         except OSError as exc:
             report.errors.append((md, f"read failed: {exc}"))
             continue
-        fm_match = _FRONTMATTER_RE.match(text)
-        if not fm_match:
+        parts = _frontmatter_parts(text)
+        if not parts:
             continue
-        fm_body = fm_match.group(2)
-        type_match = _TYPE_LINE_RE.search(fm_body) or _NOTE_TYPE_LINE_RE.search(fm_body)
-        if not type_match:
+        fm_body = parts[1]
+        type_match = _TYPE_LINE_RE.search(fm_body)
+        note_type_match = _NOTE_TYPE_LINE_RE.search(fm_body)
+        values = [
+            _strip_yaml_quotes(match.group(2))
+            for match in (type_match, note_type_match)
+            if match is not None
+        ]
+        if not values:
             continue
-        old = _strip_yaml_quotes(type_match.group(2))
+        legacy_values = [value for value in values if value not in canonical]
+        old = legacy_values[0] if legacy_values else values[0]
         new = mapping.normalize(old)
         change = NoteTypeChange(path=md, old_value=old, new_value=new)
-        if old == new or new in canonical and old == new:
-            report.skipped.append(change)
-        elif old in canonical:
+        if all(value == new for value in values):
             report.skipped.append(change)
         else:
             report.changed.append(change)

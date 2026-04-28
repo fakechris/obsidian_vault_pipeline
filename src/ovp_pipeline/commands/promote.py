@@ -21,12 +21,15 @@ records the same shape downstream tooling will consume.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 from pathlib import Path
 from typing import Any
 
 from ..concept_registry import ConceptRegistry
 from ..derived.paths import review_queue_path
+from ..knowledge_index import rebuild_knowledge_index
 from ..packs.loader import DEFAULT_WORKFLOW_PACK_NAME, load_pack
 from ..promote_candidates import promote_candidate
 from ..promotion_audit import emit_promotion
@@ -95,6 +98,9 @@ def _run_concept(args: argparse.Namespace) -> int:
         "rejected_files": [],
         "errors": [],
     }
+    knowledge_index_rebuilt = False
+    knowledge_index_result: dict[str, Any] = {}
+    knowledge_index_error = ""
     candidates = list(registry.candidates)
     for entry in candidates:
         decision = evaluate_concept(
@@ -111,7 +117,11 @@ def _run_concept(args: argparse.Namespace) -> int:
 
         if decision.lane == LANE_AUTO:
             try:
-                mutation = promote_candidate(vault_dir, entry.slug, dry_run=False)
+                if args.json:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        mutation = promote_candidate(vault_dir, entry.slug, dry_run=False)
+                else:
+                    mutation = promote_candidate(vault_dir, entry.slug, dry_run=False)
             except Exception as exc:  # pragma: no cover - defensive
                 actions["errors"].append({"slug": entry.slug, "error": str(exc)})
                 continue
@@ -151,6 +161,18 @@ def _run_concept(args: argparse.Namespace) -> int:
             )
             actions["rejected_files"].append(str(path))
 
+    if args.apply and actions["promoted"]:
+        try:
+            if args.json:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    knowledge_index_result = rebuild_knowledge_index(vault_dir, pack_name=pack.name)
+            else:
+                knowledge_index_result = rebuild_knowledge_index(vault_dir, pack_name=pack.name)
+            knowledge_index_rebuilt = True
+        except Exception as exc:  # pragma: no cover - defensive
+            knowledge_index_error = str(exc)
+            actions["errors"].append({"slug": "__knowledge_index__", "error": knowledge_index_error})
+
     payload = {
         "vault_dir": str(vault_dir),
         "pack": pack.name,
@@ -158,6 +180,9 @@ def _run_concept(args: argparse.Namespace) -> int:
         "lanes": {lane: rows for lane, rows in by_lane.items()},
         "totals": {lane: len(rows) for lane, rows in by_lane.items()},
         "actions": actions,
+        "knowledge_index_rebuilt": knowledge_index_rebuilt,
+        "knowledge_index_result": knowledge_index_result,
+        "knowledge_index_error": knowledge_index_error,
     }
 
     if args.json:
@@ -176,6 +201,11 @@ def _run_concept(args: argparse.Namespace) -> int:
                 f"rejected={len(actions['rejected_files'])} "
                 f"errors={len(actions['errors'])}"
             )
+            if actions["promoted"]:
+                if knowledge_index_rebuilt:
+                    print("knowledge_index: rebuilt")
+                else:
+                    print(f"knowledge_index: failed ({knowledge_index_error})")
     return 0
 
 

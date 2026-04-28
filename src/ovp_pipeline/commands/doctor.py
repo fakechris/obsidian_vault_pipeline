@@ -1035,6 +1035,114 @@ def _promotion_health_payload(vault_dir: Path | None, *, pack_name: str) -> dict
     }
 
 
+def _candidate_consistency_payload(vault_dir: Path | None, *, pack_name: str) -> dict[str, object]:
+    """Read-only consistency check for registry candidates and review queues."""
+    if vault_dir is None:
+        return {
+            "ok": True,
+            "registry_candidates": 0,
+            "candidate_files": 0,
+            "review_queue_files": 0,
+            "missing_candidate_files": [],
+            "orphan_candidate_files": [],
+            "missing_review_queue_files": [],
+            "orphan_review_queue_files": [],
+            "misplaced_review_queue_files": [],
+            "evaluation_error": "",
+        }
+
+    from ..concept_registry import ConceptRegistry
+    from ..promotion_policy import (
+        LANE_ESCALATE,
+        LANE_REJECT,
+        collect_pack_signals,
+        evaluate_concept,
+    )
+
+    layout = VaultLayout.from_vault(vault_dir)
+    candidate_dir = layout.evergreen_dir / "_Candidates"
+    concepts_queue_dir = layout.review_queue_dir / "concepts"
+    rejected_queue_dir = layout.review_queue_dir / "rejected-concepts"
+
+    registry = ConceptRegistry(vault_dir).load()
+    candidates = list(registry.candidates)
+    registry_slugs = {entry.slug for entry in candidates}
+    candidate_file_slugs = {
+        path.stem for path in candidate_dir.glob("*.md")
+    } if candidate_dir.exists() else set()
+    concepts_queue_slugs = {
+        path.stem for path in concepts_queue_dir.glob("*.json")
+    } if concepts_queue_dir.exists() else set()
+    rejected_queue_slugs = {
+        path.stem for path in rejected_queue_dir.glob("*.json")
+    } if rejected_queue_dir.exists() else set()
+
+    expected_concepts_queue: set[str] = set()
+    expected_rejected_queue: set[str] = set()
+    evaluation_error = ""
+    try:
+        pack = load_pack(pack_name)
+        kinds_by_id, disputed_ids = collect_pack_signals(
+            layout.knowledge_db,
+            pack_name=pack.name,
+            candidates_dir=candidate_dir,
+        )
+        for entry in candidates:
+            decision = evaluate_concept(
+                entry,
+                pack=pack,
+                registry=registry,
+                evidence_kinds=kinds_by_id.get(entry.slug, frozenset()),
+                has_open_contradiction=entry.slug in disputed_ids,
+            )
+            if decision.lane == LANE_ESCALATE:
+                expected_concepts_queue.add(entry.slug)
+            elif decision.lane == LANE_REJECT:
+                expected_rejected_queue.add(entry.slug)
+    except (sqlite3.OperationalError, ValueError, KeyError, OSError) as exc:
+        evaluation_error = f"{type(exc).__name__}: {exc}"
+        expected_concepts_queue = set()
+        expected_rejected_queue = set()
+
+    misplaced_in_rejected = expected_rejected_queue & concepts_queue_slugs
+    misplaced_in_concepts = expected_concepts_queue & rejected_queue_slugs
+    misplaced_review_queue_files = sorted(
+        [
+            *(f"{slug}:concepts->rejected-concepts" for slug in misplaced_in_rejected),
+            *(f"{slug}:rejected-concepts->concepts" for slug in misplaced_in_concepts),
+        ]
+    )
+    missing_candidate_files = sorted(registry_slugs - candidate_file_slugs)
+    orphan_candidate_files = sorted(candidate_file_slugs - registry_slugs)
+    missing_review_queue_files = sorted(
+        ((expected_concepts_queue - concepts_queue_slugs) - misplaced_in_concepts)
+        | ((expected_rejected_queue - rejected_queue_slugs) - misplaced_in_rejected)
+    )
+    orphan_review_queue_files = sorted(
+        (concepts_queue_slugs | rejected_queue_slugs) - registry_slugs
+    )
+    ok = not (
+        missing_candidate_files
+        or orphan_candidate_files
+        or missing_review_queue_files
+        or orphan_review_queue_files
+        or misplaced_review_queue_files
+        or evaluation_error
+    )
+    return {
+        "ok": ok,
+        "registry_candidates": len(registry_slugs),
+        "candidate_files": len(candidate_file_slugs),
+        "review_queue_files": len(concepts_queue_slugs) + len(rejected_queue_slugs),
+        "missing_candidate_files": missing_candidate_files,
+        "orphan_candidate_files": orphan_candidate_files,
+        "missing_review_queue_files": missing_review_queue_files,
+        "orphan_review_queue_files": orphan_review_queue_files,
+        "misplaced_review_queue_files": misplaced_review_queue_files,
+        "evaluation_error": evaluation_error,
+    }
+
+
 def _feedback_payload(vault_dir: Path | None, *, pack_name: str) -> dict[str, object]:
     """Phase 36 — query→candidate yield + query→reuse ratio.
 
@@ -1246,6 +1354,7 @@ def _payload(pack_name: str, vault_dir: Path | None) -> dict[str, object]:
         "reuse": _reuse_payload(vault_dir, pack_name=pack_name),
         "evidence_health": _evidence_health_payload(vault_dir, pack_name=pack_name),
         "promotion_health": _promotion_health_payload(vault_dir, pack_name=pack_name),
+        "candidate_consistency": _candidate_consistency_payload(vault_dir, pack_name=pack_name),
         "relations_health": _relations_health_payload(vault_dir, pack_name=pack_name),
         "feedback": _feedback_payload(vault_dir, pack_name=pack_name),
     }
@@ -1323,6 +1432,15 @@ def main(argv: list[str] | None = None) -> int:
         ) or "(no candidates)"
         print(f"Promotion lanes: {lane_summary}")
         print(f"Unreviewed canonical mutations: {unreviewed}")
+    candidate_consistency = payload.get("candidate_consistency") or {}
+    if candidate_consistency:
+        print(
+            "Candidate consistency: "
+            f"ok={candidate_consistency.get('ok')} "
+            f"registry={candidate_consistency.get('registry_candidates', 0)} "
+            f"files={candidate_consistency.get('candidate_files', 0)} "
+            f"queue={candidate_consistency.get('review_queue_files', 0)}"
+        )
     relations_health = payload.get("relations_health") or {}
     if relations_health:
         queued = int(relations_health.get("candidates_in_queue", 0))

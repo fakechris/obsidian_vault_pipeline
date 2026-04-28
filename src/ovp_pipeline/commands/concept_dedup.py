@@ -25,12 +25,13 @@ from pathlib import Path
 from ..concept_dedup import (
     DEFAULT_THRESHOLD,
     apply_proposal,
+    archive_applied_proposal,
     find_clusters,
     list_proposals,
     load_proposal,
     write_proposal,
 )
-from ..runtime import resolve_vault_dir
+from ..runtime import resolve_vault_dir, vault_workflow_lock
 
 
 def _resolve_proposal_path(vault_dir: Path, ident: str) -> Path:
@@ -56,30 +57,32 @@ def _resolve_proposal_path(vault_dir: Path, ident: str) -> Path:
 
 def _cmd_propose(args: argparse.Namespace) -> int:
     vault_dir = resolve_vault_dir(args.vault_dir)
-    clusters = find_clusters(vault_dir, threshold=args.threshold)
-    if not clusters:
-        print(f"No duplicate clusters found at threshold {args.threshold}.")
-        return 0
+    with vault_workflow_lock(vault_dir):
+        clusters = find_clusters(vault_dir, threshold=args.threshold)
+        if not clusters:
+            print(f"No duplicate clusters found at threshold {args.threshold}.")
+            return 0
 
-    total_dups = sum(len(c.duplicates) for c in clusters)
-    print(
-        f"Found {len(clusters)} cluster(s) covering {total_dups} duplicate file(s) "
-        f"(threshold={args.threshold})."
-    )
-    for i, cluster in enumerate(clusters, 1):
+        total_dups = sum(len(c.duplicates) for c in clusters)
         print(
-            f"\n[{i}] canonical={cluster.canonical.slug} "
-            f"({cluster.canonical.size_bytes}B, similarity≥{cluster.min_similarity:.2f})"
+            f"Found {len(clusters)} cluster(s) covering {total_dups} duplicate file(s) "
+            f"(threshold={args.threshold})."
         )
-        for dup in cluster.duplicates:
-            print(f"      → {dup.slug} ({dup.size_bytes}B)")
+        for i, cluster in enumerate(clusters, 1):
+            print(
+                f"\n[{i}] canonical={cluster.canonical.slug} "
+                f"({cluster.canonical.size_bytes}B, similarity≥{cluster.min_similarity:.2f})"
+            )
+            for dup in cluster.duplicates:
+                print(f"      → {dup.slug} ({dup.size_bytes}B)")
 
-    if args.write:
+        if not args.write:
+            print("\n(dry run — re-run with --write to save a proposal file)")
+            return 0
+
         path, proposal = write_proposal(vault_dir, clusters, threshold=args.threshold)
         print(f"\nProposal written: {path}")
         print(f"Apply with: ovp-concept-dedup apply {proposal.proposal_id} --dry-run")
-    else:
-        print("\n(dry run — re-run with --write to save a proposal file)")
     return 0
 
 
@@ -110,13 +113,19 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     if args.only:
         only = {s.strip() for s in args.only.split(",") if s.strip()}
 
-    results = apply_proposal(
-        vault_dir,
-        proposal,
-        dry_run=args.dry_run,
-        pack=args.pack or "",
-        only_canonicals=only,
-    )
+    archived_path = None
+    with vault_workflow_lock(vault_dir):
+        results = apply_proposal(
+            vault_dir,
+            proposal,
+            dry_run=args.dry_run,
+            pack=args.pack or "",
+            only_canonicals=only,
+        )
+        if results:
+            errors = sum(len(r.errors) for r in results)
+            if not args.dry_run and errors == 0:
+                archived_path = archive_applied_proposal(vault_dir, path)
 
     if not results:
         print("No clusters matched filter.")
@@ -132,6 +141,8 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         if r.errors:
             line += f" errors={r.errors}"
         print(line)
+    if archived_path is not None:
+        print(f"Proposal archived: {archived_path}")
     return 0 if errors == 0 else 1
 
 

@@ -44,7 +44,7 @@ from typing import Any
 
 try:
     from .handler_registry import execute_profile_stage_handler
-    from .runtime import VaultLayout
+    from .runtime import VaultLayout, vault_workflow_lock
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
@@ -58,7 +58,7 @@ try:
     )
 except ImportError:  # pragma: no cover - script mode fallback
     from handler_registry import execute_profile_stage_handler
-    from runtime import VaultLayout
+    from runtime import VaultLayout, vault_workflow_lock
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
@@ -406,9 +406,10 @@ BASE_PIPELINE_STEPS = [
     "quality",        # 5. 质量检查
     "fix_links",      # 6. 修复断裂链接
     "absorb",         # 7. 吸收 Evergreen 生命周期动作（quality >= 3.0 才能执行）
-    "registry_sync",  # 8. 同步Registry与文件系统
-    "moc",            # 9. 更新MOC
-    "knowledge_index",  # 10. 刷新派生 knowledge.db
+    "note_type_normalize",  # 8. 规范化 note_type 元数据
+    "registry_sync",  # 9. 同步Registry与文件系统
+    "moc",            # 10. 更新MOC
+    "knowledge_index",  # 11. 刷新派生 knowledge.db
 ]
 
 OPTIONAL_PIPELINE_STEPS = ["refine"]  # cleanup + breakdown 的批处理重构
@@ -428,6 +429,7 @@ STAGE_CACHE_POLICIES = {
     "quality": STAGE_CACHE_CHECKOUT,
     "fix_links": STAGE_CACHE_CHECKOUT,
     "absorb": STAGE_CACHE_CHECKOUT,
+    "note_type_normalize": STAGE_CACHE_RECORD_ONLY,
     "registry_sync": STAGE_CACHE_CHECKOUT,
     "moc": STAGE_CACHE_CHECKOUT,
     "knowledge_index": STAGE_CACHE_CHECKOUT,
@@ -437,6 +439,7 @@ STAGE_ALGORITHM_VERSIONS = {
     "quality": QUALITY_STAGE_ALGORITHM_VERSION,
     "fix_links": "fix_links:exact-only:v1",
     "absorb": "absorb:qualified-files:item-ledger:v2",
+    "note_type_normalize": "note_type_normalize:canonical-note-types:v1",
     "registry_sync": "registry_sync:rebuild-registry:v1",
     "moc": "moc:auto-moc-scan:v1",
     "knowledge_index": "knowledge_index:truth-projection:v1",
@@ -787,6 +790,8 @@ class EnhancedPipeline:
             files.extend(self._markdown_files_under(self.layout.processing_dir))
             files.extend(self._markdown_files_under(self.layout.raw_dir))
             return self._existing_files(files)
+        if stage == "note_type_normalize":
+            return self._knowledge_index_source_files()
         if stage == "registry_sync":
             return self._evergreen_source_files()
         if stage == "moc":
@@ -1209,6 +1214,11 @@ class EnhancedPipeline:
             results["qualified"] = cmd_result.get("quality_qualified", 0)
             results["failed"] = cmd_result.get("quality_failed", 0)
 
+        elif step == "note_type_normalize":
+            results["produced"] = int(cmd_result.get("note_type_changed", 0) or 0)
+            results["changed"] = results["produced"]
+            results["skipped"] = int(cmd_result.get("note_type_skipped", 0) or 0)
+
         elif step == "knowledge_index":
             current_mtime = self.layout.knowledge_db.stat().st_mtime if self.layout.knowledge_db.exists() else 0.0
             before_mtime = before_counts.get("knowledge_db_mtime", 0.0)
@@ -1282,6 +1292,9 @@ class EnhancedPipeline:
             if file_count <= 0:
                 return 300
             return min(10800, max(300, file_count * 40))
+
+        elif step == "note_type_normalize":
+            return 300
 
         elif step == "moc":
             return 120  # 2分钟
@@ -2475,6 +2488,36 @@ class EnhancedPipeline:
             "breakdown": breakdown_result,
         }
 
+    def step_note_type_normalize(self, dry_run: bool = False) -> dict:
+        """Normalize note_type frontmatter before derived indexes are rebuilt."""
+        print("\n" + "="*60)
+        print("Normalizing note_type Metadata")
+        print("="*60)
+
+        cmd = [
+            sys.executable, "-m", "ovp_pipeline.commands.note_type_normalize",
+            "--vault-dir", str(self.vault_dir),
+        ]
+        if dry_run:
+            cmd.append("--dry-run")
+
+        result = self.run_command(
+            cmd,
+            "note_type_normalize",
+            timeout=self._calculate_timeout("note_type_normalize"),
+        )
+        stdout = str(result.get("stdout") or "")
+        changed_match = re.search(r"changed:\s+(\d+)", stdout)
+        skipped_match = re.search(r"skipped:\s+(\d+)", stdout)
+        result["note_type_changed"] = int(changed_match.group(1)) if changed_match else 0
+        result["note_type_skipped"] = int(skipped_match.group(1)) if skipped_match else 0
+        if result.get("success"):
+            result["output"] = (
+                f"Normalized {result['note_type_changed']} note_type values; "
+                f"skipped {result['note_type_skipped']}"
+            )
+        return result
+
     def step_knowledge_index(self, dry_run: bool = False) -> dict:
         """刷新派生 knowledge.db。"""
         print("\n" + "="*60)
@@ -2541,6 +2584,32 @@ class EnhancedPipeline:
         return result
 
     def run_pipeline(
+        self,
+        steps: list[str] | None = None,
+        pinboard_days: int | None = None,
+        pinboard_start: str | None = None,
+        pinboard_end: str | None = None,
+        batch_size: int | None = None,
+        dry_run: bool = False,
+        from_step: str | None = None,
+        pack_name: str | None = None,
+        profile_name: str | None = None,
+    ) -> dict:
+        """Run the pipeline under the vault-wide workflow lock."""
+        with vault_workflow_lock(self.vault_dir):
+            return self._run_pipeline_locked(
+                steps=steps,
+                pinboard_days=pinboard_days,
+                pinboard_start=pinboard_start,
+                pinboard_end=pinboard_end,
+                batch_size=batch_size,
+                dry_run=dry_run,
+                from_step=from_step,
+                pack_name=pack_name,
+                profile_name=profile_name,
+            )
+
+    def _run_pipeline_locked(
         self,
         steps: list[str] | None = None,
         pinboard_days: int | None = None,

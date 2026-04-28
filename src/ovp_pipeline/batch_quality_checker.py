@@ -37,6 +37,7 @@ try:
     from .llm_defaults import (
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
         DEFAULT_MINIMAX_MODEL,
+        completion_with_litellm_policy,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
@@ -45,6 +46,7 @@ except ImportError:
     from llm_defaults import (  # type: ignore
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
         DEFAULT_MINIMAX_MODEL,
+        completion_with_litellm_policy,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
@@ -149,7 +151,7 @@ class LiteLLMClient:
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
-        response = litellm.completion(**kwargs)
+        response = completion_with_litellm_policy(litellm.completion, kwargs)
         return response.choices[0].message.content or ""
 
 

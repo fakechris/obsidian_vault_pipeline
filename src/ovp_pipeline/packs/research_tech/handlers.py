@@ -76,6 +76,16 @@ def build_stage_handlers(pack_name: str = "research-tech") -> list[StageHandlerS
             target_mode="batch",
         ),
         StageHandlerSpec(
+            name="note_type_normalize",
+            pack=pack_name,
+            handler_kind="profile_stage",
+            runtime_adapter="pipeline_step",
+            stage="note_type_normalize",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_note_type_normalize",
+            description="Normalize note_type frontmatter before indexing",
+            target_mode="batch",
+        ),
+        StageHandlerSpec(
             name="registry_sync",
             pack=pack_name,
             handler_kind="profile_stage",

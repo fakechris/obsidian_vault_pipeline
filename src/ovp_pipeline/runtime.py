@@ -98,6 +98,10 @@ class VaultLayout:
         return self.logs_dir / "action-worker.json"
 
     @property
+    def workflow_lock(self) -> Path:
+        return self.logs_dir / "workflow.lock"
+
+    @property
     def transactions_dir(self) -> Path:
         return self.logs_dir / "transactions"
 
@@ -250,4 +254,15 @@ def action_queue_write_lock(
 ) -> Iterator[None]:
     layout = VaultLayout.from_vault(vault_dir)
     with advisory_file_lock(layout.actions_log_lock, timeout_seconds=timeout_seconds):
+        yield
+
+
+@contextmanager
+def vault_workflow_lock(
+    vault_dir: Path | str | None = None,
+    *,
+    timeout_seconds: float | None = 300.0,
+) -> Iterator[None]:
+    layout = VaultLayout.from_vault(vault_dir)
+    with advisory_file_lock(layout.workflow_lock, timeout_seconds=timeout_seconds):
         yield

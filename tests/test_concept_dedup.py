@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 
 from ovp_pipeline.concept_dedup import (
     DEFAULT_THRESHOLD,
     apply_cluster,
     apply_proposal,
+    archive_applied_proposal,
     find_clusters,
     list_proposals,
     load_proposal,
@@ -138,6 +141,20 @@ def test_write_and_load_proposal_roundtrip(tmp_path: Path):
     assert loaded.clusters[0].canonical.slug == "MCP-Client"
 
 
+def test_archive_applied_proposal_removes_it_from_pending_list(tmp_path: Path):
+    _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
+    _evergreen(tmp_path, "MCP-Clients")
+    clusters = find_clusters(tmp_path, threshold=0.6)
+    path, proposal = write_proposal(tmp_path, clusters, threshold=0.6)
+
+    archived = archive_applied_proposal(tmp_path, path)
+
+    assert archived.parent == tmp_path / "60-Logs" / "dedup-proposals" / "applied"
+    assert archived.name == f"{proposal.proposal_id}.json"
+    assert archived.exists()
+    assert path not in list_proposals(tmp_path)
+
+
 def test_apply_cluster_dry_run_makes_no_writes(tmp_path: Path):
     canonical = _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
     dup = _evergreen(tmp_path, "MCP-Clients", body="dup")
@@ -207,6 +224,39 @@ def test_apply_cluster_writes_archive_aliases_audit(tmp_path: Path):
     assert ev["proposal_id"] == "test-prop"
 
 
+def test_apply_cluster_archives_with_obsidian_move_when_available(tmp_path: Path, monkeypatch):
+    (tmp_path / ".obsidian").mkdir()
+    canonical = _evergreen(tmp_path, "MCP-Client", body="canonical body that is long " * 10)
+    dup = _evergreen(tmp_path, "MCP-Clients", body="dup body")
+    _other(tmp_path, "20-Areas/Topic.md", "see [[MCP-Clients]]")
+
+    clusters = find_clusters(tmp_path, threshold=0.6)
+    assert clusters
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr("ovp_pipeline.concept_dedup.shutil.which", lambda name: "/usr/local/bin/obsidian")
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        dest_arg = next(arg for arg in cmd if arg.startswith("to="))
+        dest = tmp_path / dest_arg.removeprefix("to=")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dup.rename(dest)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr("ovp_pipeline.concept_dedup.subprocess.run", fake_run)
+
+    result = apply_cluster(tmp_path, clusters[0], dry_run=False, proposal_id="test-prop")
+
+    assert result.errors == []
+    assert calls
+    assert calls[0][:2] == ["/usr/local/bin/obsidian", "move"]
+    assert any(arg == "file=10-Knowledge/Evergreen/MCP-Clients.md" for arg in calls[0])
+    assert any(arg.startswith("to=70-Archive/dedup-merged/MCP-Clients") for arg in calls[0])
+    assert not dup.exists()
+    assert canonical.exists()
+
+
 def test_apply_cluster_skips_archive_dir_during_rewrite(tmp_path: Path):
     """A second pass after merge must not rewrite anything in the archive."""
     _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
@@ -258,3 +308,47 @@ def test_apply_proposal_only_filter(tmp_path: Path):
     assert results[0].canonical_slug == "MCP-Client"
     # Vector-Databases must NOT be archived.
     assert (tmp_path / "10-Knowledge" / "Evergreen" / "Vector-Databases.md").exists()
+
+
+def test_concept_dedup_apply_uses_vault_workflow_lock(tmp_path: Path, monkeypatch):
+    from ovp_pipeline.commands import concept_dedup as command
+
+    _evergreen(tmp_path, "MCP-Client", body="canonical body that is long " * 10)
+    _evergreen(tmp_path, "MCP-Clients", body="duplicate body")
+    clusters = find_clusters(tmp_path, threshold=0.6)
+    proposal_path, _ = write_proposal(tmp_path, clusters, threshold=DEFAULT_THRESHOLD)
+    calls: list[str] = []
+
+    class FakeLock:
+        def __enter__(self):
+            calls.append("enter")
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append("exit")
+
+    monkeypatch.setattr(command, "vault_workflow_lock", lambda vault_dir: FakeLock())
+
+    def fake_apply_proposal(*args, **kwargs):
+        calls.append("apply")
+        return [
+            SimpleNamespace(
+                archived=[],
+                wikilink_rewrites=0,
+                errors=[],
+                canonical_slug="MCP-Client",
+                aliases_added=[],
+                registry_updated=True,
+            )
+        ]
+
+    monkeypatch.setattr(command, "apply_proposal", fake_apply_proposal)
+    monkeypatch.setattr(
+        command,
+        "archive_applied_proposal",
+        lambda *args, **kwargs: calls.append("archive") or (tmp_path / "applied.json"),
+    )
+
+    exit_code = command.main(["apply", proposal_path.stem, "--vault-dir", str(tmp_path)])
+
+    assert exit_code == 0
+    assert calls == ["enter", "apply", "archive", "exit"]

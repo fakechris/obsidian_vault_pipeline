@@ -46,16 +46,18 @@ except ImportError:  # pragma: no cover - script mode fallback
 
 try:
     from .llm_defaults import (
-        DEFAULT_MINIMAX_MODEL,
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
+        DEFAULT_MINIMAX_MODEL,
+        completion_with_litellm_policy,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
     )
 except ImportError:  # pragma: no cover - script mode fallback
     from llm_defaults import (
-        DEFAULT_MINIMAX_MODEL,
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
+        DEFAULT_MINIMAX_MODEL,
+        completion_with_litellm_policy,
         normalize_model_for_api_base,
         resolve_api_base,
         resolve_api_key,
@@ -288,18 +290,7 @@ class LiteLLMClient:
         if self.api_base:
             kwargs["api_base"] = self.api_base
 
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                response = litellm.completion(**kwargs)
-                break
-            except Exception as exc:  # pragma: no cover - exercised via tests
-                last_error = exc
-                if attempt == 2:
-                    raise
-                time.sleep(1.5 * (attempt + 1))
-        else:  # pragma: no cover - defensive fallback
-            raise last_error or RuntimeError("litellm completion failed")
+        response = completion_with_litellm_policy(litellm.completion, kwargs)
         self._total_calls += 1
 
         content = response.choices[0].message.content or ""

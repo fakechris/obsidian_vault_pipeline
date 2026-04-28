@@ -18,6 +18,7 @@ from ovp_pipeline.auto_article_processor import (
     PipelineLogger as ArticleLogger,
     TransactionManager as ArticleTxn,
 )
+from ovp_pipeline.auto_evergreen_extractor import LiteLLMClient as EvergreenLiteLLMClient
 from ovp_pipeline.auto_github_processor import LiteLLMClient as GithubLiteLLMClient
 from ovp_pipeline.auto_github_processor import parse_github_url
 from ovp_pipeline.auto_paper_processor import LiteLLMClient as PaperLiteLLMClient, process_single_paper
@@ -725,6 +726,109 @@ def test_litellm_clients_pass_explicit_completion_timeout(monkeypatch, client_cl
     assert content == "ok"
     assert metadata["tokens"] == 7
     assert captured["timeout"] == 180
+
+
+def test_evergreen_litellm_client_retries_transient_failures(monkeypatch):
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
+    monkeypatch.setenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.7-highspeed")
+
+    attempts = {"count": 0}
+
+    class FakeMessage:
+        content = "ok"
+
+    class FakeChoice:
+        message = FakeMessage()
+
+    class FakeResponse:
+        def __init__(self):
+            self.choices = [FakeChoice()]
+
+    def fake_completion(**kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("transient server disconnected")
+        return FakeResponse()
+
+    monkeypatch.setattr("ovp_pipeline.auto_evergreen_extractor.litellm.completion", fake_completion)
+
+    client = EvergreenLiteLLMClient()
+
+    assert client.generate("system", "user") == "ok"
+    assert attempts["count"] == 2
+
+
+def test_evergreen_litellm_client_bypasses_proxy_env_during_completion(monkeypatch):
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
+    proxy_vars = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy")
+    for key in proxy_vars:
+        monkeypatch.setenv(key, f"http://external-proxy.example/{key}")
+
+    observed: dict[str, str | None] = {}
+
+    class FakeMessage:
+        content = "ok"
+
+    class FakeChoice:
+        message = FakeMessage()
+
+    class FakeResponse:
+        def __init__(self):
+            self.choices = [FakeChoice()]
+
+    def fake_completion(**kwargs):
+        for key in proxy_vars:
+            observed[key] = os.environ.get(key)
+        return FakeResponse()
+
+    monkeypatch.setattr("ovp_pipeline.auto_evergreen_extractor.litellm.completion", fake_completion)
+
+    client = EvergreenLiteLLMClient()
+
+    assert client.generate("system", "user") == "ok"
+    assert observed == {key: None for key in proxy_vars}
+    for key in proxy_vars:
+        assert os.environ[key] == f"http://external-proxy.example/{key}"
+
+
+def test_litellm_proxy_policy_supports_unified_custom_proxy():
+    from ovp_pipeline.llm_defaults import env_for_litellm
+
+    env = env_for_litellm(
+        {
+            "HTTPS_PROXY": "http://ambient.example:1",
+            "http_proxy": "http://ambient.example:1",
+            "OVP_LLM_PROXY_MODE": "custom",
+            "OVP_LLM_PROXY_URL": "http://127.0.0.1:7897",
+            "LITELLM_PROXY_BYPASS": "1",
+        }
+    )
+
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        assert env[key] == "http://127.0.0.1:7897"
+    assert "LITELLM_PROXY_BYPASS" not in env
+
+
+def test_litellm_proxy_policy_can_use_ambient_proxy():
+    from ovp_pipeline.llm_defaults import env_for_litellm
+
+    env = env_for_litellm(
+        {
+            "HTTPS_PROXY": "http://ambient.example:1",
+            "OVP_LLM_PROXY_MODE": "ambient",
+            "LITELLM_PROXY_BYPASS": "1",
+        }
+    )
+
+    assert env["HTTPS_PROXY"] == "http://ambient.example:1"
+    assert "LITELLM_PROXY_BYPASS" not in env
+
+
+def test_litellm_proxy_policy_requires_url_for_custom_mode():
+    from ovp_pipeline.llm_defaults import env_for_litellm
+
+    with pytest.raises(ValueError, match="OVP_LLM_PROXY_URL"):
+        env_for_litellm({"OVP_LLM_PROXY_MODE": "custom"})
 
 
 def test_process_single_paper_downloads_remote_pdf_before_analysis(tmp_path, monkeypatch):

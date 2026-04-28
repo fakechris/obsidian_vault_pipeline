@@ -3,6 +3,8 @@ Tests for promote_candidates module.
 """
 
 import pytest
+import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from ovp_pipeline.concept_registry import (
@@ -342,3 +344,51 @@ class TestCandidatePromotion:
         assert captured["vault_dir"] == temp_vault.resolve()
         assert captured["auto_promote"] is True
         assert captured["promote_threshold"] == 5
+
+
+def test_ovp_promote_run_rebuilds_knowledge_index_after_auto_promotion(temp_vault, monkeypatch, capsys):
+    from ovp_pipeline.commands import promote as promote_command
+
+    registry = ConceptRegistry(temp_vault)
+    entry = registry.upsert_candidate(
+        slug="new-concept",
+        title="New Concept",
+        definition="A new concept.",
+        area="testing",
+    )
+    entry.source_count = 2
+    registry.save()
+    write_candidate_file(temp_vault, entry, dry_run=False)
+    capsys.readouterr()
+
+    calls: list[tuple[Path, str]] = []
+
+    def fake_rebuild(vault_dir, *, pack_name=None):
+        calls.append((Path(vault_dir), pack_name))
+        print("knowledge index stdout noise")
+        print("knowledge index stderr noise", file=sys.stderr)
+        return {"objects": 1}
+
+    monkeypatch.setattr(promote_command, "rebuild_knowledge_index", fake_rebuild)
+
+    exit_code = promote_command.main(
+        [
+            "run",
+            "--vault-dir",
+            str(temp_vault),
+            "--pack",
+            "default-knowledge",
+            "--apply",
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert "knowledge index stdout noise" not in captured.out
+    assert "knowledge index stderr noise" not in captured.err
+    assert len(payload["actions"]["promoted"]) == 1
+    assert payload["knowledge_index_rebuilt"] is True
+    assert payload["knowledge_index_error"] == ""
+    assert calls == [(temp_vault.resolve(), "default-knowledge")]
