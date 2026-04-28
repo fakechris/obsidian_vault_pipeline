@@ -48,7 +48,6 @@ try:
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
-    from .llm_defaults import env_for_litellm
     from .stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from .txn import (
         build_transaction_payload,
@@ -63,7 +62,6 @@ except ImportError:  # pragma: no cover - script mode fallback
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
-    from llm_defaults import env_for_litellm
     from stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from txn import (
         build_transaction_payload,
@@ -1431,7 +1429,7 @@ class EnhancedPipeline:
         return {}
 
     def _subprocess_env(self) -> dict[str, str]:
-        env = env_for_litellm(os.environ)
+        env = os.environ.copy()
         project_src = str(PROJECT_SRC)
         current_pythonpath = env.get("PYTHONPATH", "")
         segments = [segment for segment in current_pythonpath.split(os.pathsep) if segment]
@@ -2493,7 +2491,7 @@ class EnhancedPipeline:
     def step_note_type_normalize(self, dry_run: bool = False) -> dict:
         """Normalize note_type frontmatter before derived indexes are rebuilt."""
         print("\n" + "="*60)
-        print("STEP 8: Normalizing note_type Metadata")
+        print("Normalizing note_type Metadata")
         print("="*60)
 
         cmd = [
@@ -2503,7 +2501,11 @@ class EnhancedPipeline:
         if dry_run:
             cmd.append("--dry-run")
 
-        result = self.run_command(cmd, "note_type_normalize", timeout=300)
+        result = self.run_command(
+            cmd,
+            "note_type_normalize",
+            timeout=self._calculate_timeout("note_type_normalize"),
+        )
         stdout = str(result.get("stdout") or "")
         changed_match = re.search(r"changed:\s+(\d+)", stdout)
         skipped_match = re.search(r"skipped:\s+(\d+)", stdout)

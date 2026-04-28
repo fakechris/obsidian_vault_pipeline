@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 
 from ovp_pipeline.concept_dedup import (
     DEFAULT_THRESHOLD,
@@ -327,7 +328,27 @@ def test_concept_dedup_apply_uses_vault_workflow_lock(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr(command, "vault_workflow_lock", lambda vault_dir: FakeLock())
 
+    def fake_apply_proposal(*args, **kwargs):
+        calls.append("apply")
+        return [
+            SimpleNamespace(
+                archived=[],
+                wikilink_rewrites=0,
+                errors=[],
+                canonical_slug="MCP-Client",
+                aliases_added=[],
+                registry_updated=True,
+            )
+        ]
+
+    monkeypatch.setattr(command, "apply_proposal", fake_apply_proposal)
+    monkeypatch.setattr(
+        command,
+        "archive_applied_proposal",
+        lambda *args, **kwargs: calls.append("archive") or (tmp_path / "applied.json"),
+    )
+
     exit_code = command.main(["apply", proposal_path.stem, "--vault-dir", str(tmp_path)])
 
     assert exit_code == 0
-    assert calls == ["enter", "exit"]
+    assert calls == ["enter", "apply", "archive", "exit"]

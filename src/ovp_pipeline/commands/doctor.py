@@ -1047,6 +1047,8 @@ def _candidate_consistency_payload(vault_dir: Path | None, *, pack_name: str) ->
             "orphan_candidate_files": [],
             "missing_review_queue_files": [],
             "orphan_review_queue_files": [],
+            "misplaced_review_queue_files": [],
+            "evaluation_error": "",
         }
 
     from ..concept_registry import ConceptRegistry
@@ -1077,6 +1079,7 @@ def _candidate_consistency_payload(vault_dir: Path | None, *, pack_name: str) ->
 
     expected_concepts_queue: set[str] = set()
     expected_rejected_queue: set[str] = set()
+    evaluation_error = ""
     try:
         pack = load_pack(pack_name)
         kinds_by_id, disputed_ids = collect_pack_signals(
@@ -1096,15 +1099,24 @@ def _candidate_consistency_payload(vault_dir: Path | None, *, pack_name: str) ->
                 expected_concepts_queue.add(entry.slug)
             elif decision.lane == LANE_REJECT:
                 expected_rejected_queue.add(entry.slug)
-    except Exception:
-        expected_concepts_queue = set(registry_slugs)
+    except (sqlite3.OperationalError, ValueError, KeyError, OSError) as exc:
+        evaluation_error = f"{type(exc).__name__}: {exc}"
+        expected_concepts_queue = set()
         expected_rejected_queue = set()
 
+    misplaced_in_rejected = expected_rejected_queue & concepts_queue_slugs
+    misplaced_in_concepts = expected_concepts_queue & rejected_queue_slugs
+    misplaced_review_queue_files = sorted(
+        [
+            *(f"{slug}:concepts->rejected-concepts" for slug in misplaced_in_rejected),
+            *(f"{slug}:rejected-concepts->concepts" for slug in misplaced_in_concepts),
+        ]
+    )
     missing_candidate_files = sorted(registry_slugs - candidate_file_slugs)
     orphan_candidate_files = sorted(candidate_file_slugs - registry_slugs)
     missing_review_queue_files = sorted(
-        (expected_concepts_queue - concepts_queue_slugs)
-        | (expected_rejected_queue - rejected_queue_slugs)
+        ((expected_concepts_queue - concepts_queue_slugs) - misplaced_in_concepts)
+        | ((expected_rejected_queue - rejected_queue_slugs) - misplaced_in_rejected)
     )
     orphan_review_queue_files = sorted(
         (concepts_queue_slugs | rejected_queue_slugs) - registry_slugs
@@ -1114,6 +1126,8 @@ def _candidate_consistency_payload(vault_dir: Path | None, *, pack_name: str) ->
         or orphan_candidate_files
         or missing_review_queue_files
         or orphan_review_queue_files
+        or misplaced_review_queue_files
+        or evaluation_error
     )
     return {
         "ok": ok,
@@ -1124,6 +1138,8 @@ def _candidate_consistency_payload(vault_dir: Path | None, *, pack_name: str) ->
         "orphan_candidate_files": orphan_candidate_files,
         "missing_review_queue_files": missing_review_queue_files,
         "orphan_review_queue_files": orphan_review_queue_files,
+        "misplaced_review_queue_files": misplaced_review_queue_files,
+        "evaluation_error": evaluation_error,
     }
 
 

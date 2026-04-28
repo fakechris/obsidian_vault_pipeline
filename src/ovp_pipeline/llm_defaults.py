@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 import os
+import threading
 import time
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -42,6 +43,7 @@ LITELLM_PROXY_BYPASS_ENV = "LITELLM_PROXY_BYPASS"
 _BYPASS_MODES = {"", "bypass", "none", "off", "disabled", "direct"}
 _AMBIENT_MODES = {"ambient", "system", "shell"}
 _CUSTOM_MODES = {"custom", "proxy"}
+_LITELLM_PROXY_ENV_LOCK = threading.RLock()
 
 
 def normalize_model_for_api_base(
@@ -135,25 +137,26 @@ def env_without_litellm_proxy(env: Mapping[str, str] | None = None) -> dict[str,
 @contextmanager
 def litellm_proxy_policy() -> Iterator[None]:
     """Temporarily apply the configured proxy policy around a LiteLLM call."""
-    managed = (*PROXY_ENV_VARS, LITELLM_PROXY_BYPASS_ENV)
-    previous = {key: os.environ.get(key) for key in managed}
-    try:
-        configured = env_for_litellm(os.environ)
-        for key in managed:
-            if key in configured:
-                os.environ[key] = configured[key]
-            else:
-                os.environ.pop(key, None)
-        yield
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+    with _LITELLM_PROXY_ENV_LOCK:
+        managed = (*PROXY_ENV_VARS, LITELLM_PROXY_BYPASS_ENV)
+        previous = {key: os.environ.get(key) for key in managed}
+        try:
+            configured = env_for_litellm(os.environ)
+            for key in managed:
+                if key in configured:
+                    os.environ[key] = configured[key]
+                else:
+                    os.environ.pop(key, None)
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
-def litellm_proxy_bypass() -> Iterator[None]:
+def litellm_proxy_bypass() -> AbstractContextManager[None]:
     """Backward-compatible name for the configured LiteLLM proxy policy."""
     return litellm_proxy_policy()
 
@@ -173,9 +176,8 @@ def completion_with_litellm_policy(
                 return completion_fn(**dict(kwargs))
         except Exception as exc:
             last_error = exc
-            if attempt == attempts - 1:
-                raise
-            time.sleep(retry_sleep_seconds * (attempt + 1))
+            if attempt < attempts - 1:
+                time.sleep(retry_sleep_seconds * (attempt + 1))
     raise last_error or RuntimeError("litellm completion failed")
 
 

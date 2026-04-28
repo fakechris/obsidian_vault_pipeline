@@ -741,7 +741,8 @@ def test_evergreen_litellm_client_retries_transient_failures(monkeypatch):
         message = FakeMessage()
 
     class FakeResponse:
-        choices = [FakeChoice()]
+        def __init__(self):
+            self.choices = [FakeChoice()]
 
     def fake_completion(**kwargs):
         attempts["count"] += 1
@@ -759,8 +760,9 @@ def test_evergreen_litellm_client_retries_transient_failures(monkeypatch):
 
 def test_evergreen_litellm_client_bypasses_proxy_env_during_completion(monkeypatch):
     monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
-    monkeypatch.setenv("HTTPS_PROXY", "http://external-proxy.example:41474")
-    monkeypatch.setenv("HTTP_PROXY", "http://external-proxy.example:41474")
+    proxy_vars = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy")
+    for key in proxy_vars:
+        monkeypatch.setenv(key, f"http://external-proxy.example/{key}")
 
     observed: dict[str, str | None] = {}
 
@@ -771,11 +773,12 @@ def test_evergreen_litellm_client_bypasses_proxy_env_during_completion(monkeypat
         message = FakeMessage()
 
     class FakeResponse:
-        choices = [FakeChoice()]
+        def __init__(self):
+            self.choices = [FakeChoice()]
 
     def fake_completion(**kwargs):
-        observed["HTTPS_PROXY"] = os.environ.get("HTTPS_PROXY")
-        observed["HTTP_PROXY"] = os.environ.get("HTTP_PROXY")
+        for key in proxy_vars:
+            observed[key] = os.environ.get(key)
         return FakeResponse()
 
     monkeypatch.setattr("ovp_pipeline.auto_evergreen_extractor.litellm.completion", fake_completion)
@@ -783,9 +786,9 @@ def test_evergreen_litellm_client_bypasses_proxy_env_during_completion(monkeypat
     client = EvergreenLiteLLMClient()
 
     assert client.generate("system", "user") == "ok"
-    assert observed == {"HTTPS_PROXY": None, "HTTP_PROXY": None}
-    assert os.environ["HTTPS_PROXY"] == "http://external-proxy.example:41474"
-    assert os.environ["HTTP_PROXY"] == "http://external-proxy.example:41474"
+    assert observed == {key: None for key in proxy_vars}
+    for key in proxy_vars:
+        assert os.environ[key] == f"http://external-proxy.example/{key}"
 
 
 def test_litellm_proxy_policy_supports_unified_custom_proxy():

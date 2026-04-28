@@ -4,6 +4,7 @@ Tests for promote_candidates module.
 
 import pytest
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from ovp_pipeline.concept_registry import (
@@ -364,9 +365,11 @@ def test_ovp_promote_run_rebuilds_knowledge_index_after_auto_promotion(temp_vaul
 
     def fake_rebuild(vault_dir, *, pack_name=None):
         calls.append((Path(vault_dir), pack_name))
+        print("knowledge index stdout noise")
+        print("knowledge index stderr noise", file=sys.stderr)
         return {"objects": 1}
 
-    monkeypatch.setattr(promote_command, "rebuild_knowledge_index", fake_rebuild, raising=False)
+    monkeypatch.setattr(promote_command, "rebuild_knowledge_index", fake_rebuild)
 
     exit_code = promote_command.main(
         [
@@ -379,9 +382,12 @@ def test_ovp_promote_run_rebuilds_knowledge_index_after_auto_promotion(temp_vaul
             "--json",
         ]
     )
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
 
     assert exit_code == 0
+    assert "knowledge index stdout noise" not in captured.out
+    assert "knowledge index stderr noise" not in captured.err
     assert len(payload["actions"]["promoted"]) == 1
     assert payload["knowledge_index_rebuilt"] is True
     assert payload["knowledge_index_error"] == ""

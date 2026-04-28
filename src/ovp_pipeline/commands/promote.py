@@ -163,7 +163,11 @@ def _run_concept(args: argparse.Namespace) -> int:
 
     if args.apply and actions["promoted"]:
         try:
-            knowledge_index_result = rebuild_knowledge_index(vault_dir, pack_name=pack.name)
+            if args.json:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    knowledge_index_result = rebuild_knowledge_index(vault_dir, pack_name=pack.name)
+            else:
+                knowledge_index_result = rebuild_knowledge_index(vault_dir, pack_name=pack.name)
             knowledge_index_rebuilt = True
         except Exception as exc:  # pragma: no cover - defensive
             knowledge_index_error = str(exc)

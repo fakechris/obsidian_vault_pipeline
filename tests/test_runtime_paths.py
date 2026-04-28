@@ -1487,7 +1487,7 @@ def test_run_command_timeout_is_failure(tmp_path):
     assert result["timeout"] is True
 
 
-def test_subprocess_env_strips_proxy_vars_by_default(tmp_path, monkeypatch):
+def test_subprocess_env_preserves_fetcher_proxy_vars_by_default(tmp_path, monkeypatch):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
@@ -1502,7 +1502,7 @@ def test_subprocess_env_strips_proxy_vars_by_default(tmp_path, monkeypatch):
     env = pipeline._subprocess_env()
 
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
-        assert key not in env
+        assert env[key] == "http://external-proxy.example:41474"
 
 
 def test_pipeline_runs_note_type_normalize_step(tmp_path, monkeypatch):
@@ -1551,12 +1551,16 @@ def test_pipeline_uses_vault_workflow_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_source, "vault_workflow_lock", lambda vault_dir: FakeLock())
     monkeypatch.setattr(pipeline, "_get_before_counts", lambda: {})
     monkeypatch.setattr(pipeline, "_count_output_files", lambda *args, **kwargs: {})
-    monkeypatch.setattr(pipeline, "step_pinboard", lambda **kwargs: {"success": True})
+    def fake_step(**kwargs):
+        calls.append("step")
+        return {"success": True}
+
+    monkeypatch.setattr(pipeline, "step_pinboard", fake_step)
 
     result = pipeline.run_pipeline(steps=["pinboard"], dry_run=True)
 
     assert result["pinboard"]["success"] is True
-    assert calls == ["enter", "exit"]
+    assert calls == ["enter", "step", "exit"]
 
 
 def test_step_pinboard_process_heartbeats_current_item_before_processor_runs(tmp_path, monkeypatch):
