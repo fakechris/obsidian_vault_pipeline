@@ -252,10 +252,17 @@ def test_absorb_file_under_clippings_runs_source_lifecycle_before_absorb(temp_va
     clipping.write_text("# Raw Clip\n", encoding="utf-8")
     deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Raw Clip_深度解读.md"
 
-    def fake_run_source_lifecycle_for_absorb_targets(vault_dir: Path, targets: list[Path], *, dry_run: bool) -> list[Path]:
+    def fake_run_source_lifecycle_for_absorb_targets(
+        vault_dir: Path,
+        targets: list[Path],
+        *,
+        dry_run: bool,
+        failures: list[dict[str, str]] | None = None,
+    ) -> list[Path]:
         assert vault_dir == temp_vault
         assert targets == [clipping]
         assert dry_run is False
+        assert failures == []
         return [deep_dive]
 
     def fake_run_absorb_workflow(
@@ -349,3 +356,207 @@ def test_absorb_dry_run_under_clippings_reports_source_lifecycle_plan(temp_vault
     payload = json.loads(captured.out)
     assert payload["source_lifecycle"]["required"] is True
     assert payload["source_lifecycle"]["source_targets"] == [str(clipping)]
+
+
+def test_run_source_lifecycle_dry_run_does_not_move_clippings(temp_vault):
+    from ovp_pipeline.commands.absorb import run_source_lifecycle_for_absorb_targets
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.clippings_dir.mkdir(parents=True, exist_ok=True)
+    clipping = layout.clippings_dir / "Dry Run Clip.md"
+    clipping.write_text("# Dry Run Clip\n", encoding="utf-8")
+
+    targets = run_source_lifecycle_for_absorb_targets(temp_vault, [clipping], dry_run=True)
+
+    assert targets == []
+    assert clipping.exists()
+    assert not any(layout.raw_dir.glob("*.md"))
+
+
+def test_absorb_mixed_lifecycle_failure_keeps_direct_targets(temp_vault, capsys, monkeypatch):
+    from ovp_pipeline.commands import absorb
+
+    clipping = temp_vault / "Clippings" / "Raw Clip.md"
+    clipping.parent.mkdir(parents=True, exist_ok=True)
+    clipping.write_text("# Raw Clip\n", encoding="utf-8")
+    topic_dir = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    deep_dive = topic_dir / "Direct_深度解读.md"
+    deep_dive.write_text("# Direct\n", encoding="utf-8")
+
+    def fake_run_source_lifecycle_for_absorb_targets(
+        vault_dir: Path,
+        targets: list[Path],
+        *,
+        dry_run: bool,
+        failures: list[dict[str, str]] | None = None,
+    ) -> list[Path]:
+        assert vault_dir == temp_vault
+        assert targets == [clipping]
+        assert dry_run is False
+        if failures is not None:
+            failures.append({"source": str(clipping), "stage": "process", "error": "failed"})
+        return []
+
+    def fake_run_absorb_workflow(
+        vault_dir: Path,
+        *,
+        file_path: Path | None = None,
+        directory: Path | None = None,
+        recent: int | None = None,
+        dry_run: bool = False,
+        auto_promote: bool = False,
+        promote_threshold: int = 3,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        assert vault_dir == temp_vault
+        assert file_path == deep_dive
+        assert directory is None
+        assert recent is None
+        assert dry_run is False
+        assert api_key is None
+        assert api_base is None
+        return {
+            "mode": "absorb",
+            "dry_run": False,
+            "summary": {
+                "files_processed": 1,
+                "concepts_extracted": 1,
+                "candidates_added": 0,
+                "concepts_promoted": 0,
+                "concepts_created": 0,
+                "concepts_skipped": 0,
+                "errors": 0,
+            },
+            "results": [],
+        }
+
+    monkeypatch.setattr(absorb, "run_source_lifecycle_for_absorb_targets", fake_run_source_lifecycle_for_absorb_targets)
+    monkeypatch.setattr(absorb, "run_absorb_workflow", fake_run_absorb_workflow)
+
+    result = absorb.main(
+        [
+            "--vault-dir",
+            str(temp_vault),
+            "--file",
+            str(clipping),
+            "--dir",
+            str(topic_dir),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert result == 0
+    payload = json.loads(captured.out)
+    assert payload["source_lifecycle"]["absorb_targets"] == []
+    assert payload["source_lifecycle"]["failures"][0]["stage"] == "process"
+
+
+def test_absorb_file_and_dir_filters_direct_dir_to_deduped_deep_dives(temp_vault, monkeypatch):
+    from ovp_pipeline.commands import absorb
+
+    topic_dir = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04"
+    topic_dir.mkdir(parents=True, exist_ok=True)
+    deep_dive = topic_dir / "Direct_深度解读.md"
+    ordinary_note = topic_dir / "ordinary.md"
+    nested_deep_dive = topic_dir / "nested" / "Nested_深度解读.md"
+    nested_deep_dive.parent.mkdir(parents=True, exist_ok=True)
+    deep_dive.write_text("# Direct\n", encoding="utf-8")
+    ordinary_note.write_text("# Ordinary\n", encoding="utf-8")
+    nested_deep_dive.write_text("# Nested\n", encoding="utf-8")
+    calls: list[Path] = []
+
+    def fake_run_absorb_workflow(
+        vault_dir: Path,
+        *,
+        file_path: Path | None = None,
+        directory: Path | None = None,
+        recent: int | None = None,
+        dry_run: bool = False,
+        auto_promote: bool = False,
+        promote_threshold: int = 3,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        assert vault_dir == temp_vault
+        assert file_path is not None
+        assert directory is None
+        assert recent is None
+        assert dry_run is False
+        assert api_key is None
+        assert api_base is None
+        calls.append(file_path)
+        return {
+            "mode": "absorb",
+            "dry_run": False,
+            "summary": {
+                "files_processed": 1,
+                "concepts_extracted": 1,
+                "candidates_added": 0,
+                "concepts_promoted": 0,
+                "concepts_created": 0,
+                "concepts_skipped": 0,
+                "errors": 0,
+            },
+            "results": [],
+        }
+
+    monkeypatch.setattr(absorb, "run_absorb_workflow", fake_run_absorb_workflow)
+
+    result = absorb.main(["--vault-dir", str(temp_vault), "--file", str(deep_dive), "--dir", str(topic_dir)])
+
+    assert result == 0
+    assert calls == [deep_dive]
+
+
+def test_source_lifecycle_archive_failure_is_reported_without_dropping_deep_dive(temp_vault, monkeypatch):
+    from ovp_pipeline.commands import absorb
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.processing_dir.mkdir(parents=True, exist_ok=True)
+    source = layout.processing_dir / "Article.md"
+    source.write_text("# Article\n", encoding="utf-8")
+    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Article_深度解读.md"
+
+    class FakeAutoArticleProcessor:
+        def __init__(self, vault_dir: Path, logger, txn):
+            self.layout = VaultLayout.from_vault(vault_dir)
+            self.logger = logger
+
+        def init_llm(self) -> None:
+            pass
+
+        def process_single_file(self, file_path: Path, *, dry_run: bool) -> dict:
+            assert file_path == source
+            assert dry_run is False
+            return {"status": "completed", "output_path": str(deep_dive)}
+
+        def _archive_source_to_processed(self, file_path: Path) -> Path:
+            assert file_path == source
+            raise OSError("archive denied")
+
+        def _restore_source_to_raw(self, file_path: Path) -> Path:
+            raise AssertionError("completed sources should not be restored")
+
+    monkeypatch.setattr(absorb, "AutoArticleProcessor", FakeAutoArticleProcessor)
+    failures: list[dict[str, str]] = []
+
+    targets = absorb.run_source_lifecycle_for_absorb_targets(
+        temp_vault,
+        [source],
+        dry_run=False,
+        failures=failures,
+    )
+
+    assert targets == [deep_dive]
+    assert failures == [
+        {
+            "source": str(source),
+            "stage": "archive_to_processed",
+            "error": "archive denied",
+        }
+    ]

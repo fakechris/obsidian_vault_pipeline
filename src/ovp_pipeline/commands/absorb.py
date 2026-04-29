@@ -34,10 +34,28 @@ def _path_needs_source_lifecycle(layout: VaultLayout, path: Path) -> bool:
     )
 
 
-def _expand_cli_target(path: Path) -> list[Path]:
+def _expand_markdown_sources(path: Path) -> list[Path]:
     if path.is_dir():
         return sorted(candidate for candidate in path.rglob("*.md") if candidate.is_file())
     return [path]
+
+
+def _expand_deep_dive_targets(path: Path) -> list[Path]:
+    if path.is_dir():
+        return sorted(candidate for candidate in path.glob("*_深度解读.md") if candidate.is_file())
+    return [path]
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        key = path.resolve(strict=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
 
 
 def _unique_child(directory: Path, name: str) -> Path:
@@ -80,7 +98,67 @@ def _move_clipping_to_raw(
     return destination
 
 
-def run_source_lifecycle_for_absorb_targets(vault_dir: Path, targets: list[Path], *, dry_run: bool) -> list[Path]:
+def _record_source_lifecycle_failure(
+    logger: PipelineLogger,
+    failures: list[dict[str, str]] | None,
+    *,
+    source: Path,
+    stage: str,
+    exc: Exception,
+) -> None:
+    failure = {
+        "source": str(source),
+        "stage": stage,
+        "error": str(exc),
+    }
+    if failures is not None:
+        failures.append(failure)
+    logger.log("source_lifecycle_finalize_error", failure)
+
+
+def _safe_archive_source_to_processed(
+    processor: AutoArticleProcessor,
+    logger: PipelineLogger,
+    failures: list[dict[str, str]] | None,
+    source: Path,
+) -> None:
+    try:
+        processor._archive_source_to_processed(source)
+    except Exception as exc:
+        _record_source_lifecycle_failure(
+            logger,
+            failures,
+            source=source,
+            stage="archive_to_processed",
+            exc=exc,
+        )
+
+
+def _safe_restore_source_to_raw(
+    processor: AutoArticleProcessor,
+    logger: PipelineLogger,
+    failures: list[dict[str, str]] | None,
+    source: Path,
+) -> None:
+    try:
+        processor._restore_source_to_raw(source)
+    except Exception as exc:
+        _record_source_lifecycle_failure(
+            logger,
+            failures,
+            source=source,
+            stage="restore_to_raw",
+            exc=exc,
+        )
+
+
+def run_source_lifecycle_for_absorb_targets(
+    vault_dir: Path,
+    targets: list[Path],
+    *,
+    dry_run: bool,
+    failures: list[dict[str, str]] | None = None,
+) -> list[Path]:
     layout = VaultLayout.from_vault(vault_dir)
     logger = PipelineLogger(layout.pipeline_log)
     txn = TransactionManager(layout.transactions_dir)
@@ -91,9 +169,11 @@ def run_source_lifecycle_for_absorb_targets(vault_dir: Path, targets: list[Path]
 
     deep_dive_targets: list[Path] = []
     for target in targets:
-        for source in _expand_cli_target(target):
+        for source in _expand_markdown_sources(target):
             working_source = source
             if _is_under(source, layout.clippings_dir):
+                if dry_run:
+                    continue
                 working_source = _move_clipping_to_raw(layout, clippings, source)
 
             if dry_run:
@@ -106,9 +186,9 @@ def run_source_lifecycle_for_absorb_targets(vault_dir: Path, targets: list[Path]
             if result.get("status") == "completed" and result.get("output_path"):
                 deep_dive_targets.append(Path(str(result["output_path"])))
                 if _is_under(working_source, layout.processing_dir):
-                    processor._archive_source_to_processed(working_source)
+                    _safe_archive_source_to_processed(processor, logger, failures, working_source)
             elif _is_under(working_source, layout.processing_dir) and working_source.exists():
-                processor._restore_source_to_raw(working_source)
+                _safe_restore_source_to_raw(processor, logger, failures, working_source)
 
     return deep_dive_targets
 
@@ -181,17 +261,20 @@ def main(argv: list[str] | None = None) -> int:
 
     vault_dir = resolve_vault_dir(args.vault_dir)
     layout = VaultLayout.from_vault(vault_dir)
-    cli_targets = []
+    source_lifecycle_targets = []
+    direct_absorb_targets = []
     if args.file:
-        cli_targets.extend(_expand_cli_target(args.file))
+        if _path_needs_source_lifecycle(layout, args.file):
+            source_lifecycle_targets.extend(_expand_markdown_sources(args.file))
+        else:
+            direct_absorb_targets.append(args.file)
     if args.dir:
-        cli_targets.extend(_expand_cli_target(args.dir))
-    source_lifecycle_targets = [
-        target for target in cli_targets if _path_needs_source_lifecycle(layout, target)
-    ]
-    direct_absorb_targets = [
-        target for target in cli_targets if not _path_needs_source_lifecycle(layout, target)
-    ]
+        if _path_needs_source_lifecycle(layout, args.dir):
+            source_lifecycle_targets.extend(_expand_markdown_sources(args.dir))
+        else:
+            direct_absorb_targets.extend(_expand_deep_dive_targets(args.dir))
+    source_lifecycle_targets = _dedupe_paths(source_lifecycle_targets)
+    direct_absorb_targets = _dedupe_paths(direct_absorb_targets)
     payload = {
         "mode": "absorb",
         "vault_dir": str(vault_dir),
@@ -205,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
             "required": bool(source_lifecycle_targets),
             "source_targets": [str(target) for target in source_lifecycle_targets],
             "absorb_targets": [],
+            "failures": [],
         },
     }
 
@@ -217,14 +301,18 @@ def main(argv: list[str] | None = None) -> int:
 
     absorb_targets = list(direct_absorb_targets)
     if source_lifecycle_targets:
+        lifecycle_failures: list[dict[str, str]] = []
         lifecycle_targets = run_source_lifecycle_for_absorb_targets(
             vault_dir,
             source_lifecycle_targets,
             dry_run=False,
+            failures=lifecycle_failures,
         )
         payload["source_lifecycle"]["absorb_targets"] = [str(target) for target in lifecycle_targets]
+        payload["source_lifecycle"]["failures"] = lifecycle_failures
         absorb_targets.extend(lifecycle_targets)
-        if not lifecycle_targets:
+        absorb_targets = _dedupe_paths(absorb_targets)
+        if not absorb_targets:
             workflow_payload = {
                 "mode": "absorb",
                 "dry_run": False,
