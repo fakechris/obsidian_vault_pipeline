@@ -14,9 +14,12 @@ def _fresh_timestamp(*, seconds_ago: int = 0) -> str:
 def test_default_dashboard_browser_limits_stay_responsive():
     from ovp_pipeline.ui import view_models
 
+    assert view_models.DEFAULT_CANDIDATE_BROWSER_LIMIT >= 1
+    assert view_models.DEFAULT_EVENT_DOSSIER_LIMIT >= 1
+    assert view_models.DEFAULT_TRACEABILITY_BROWSER_LIMIT >= 1
     assert view_models.DEFAULT_CANDIDATE_BROWSER_LIMIT <= 25
     assert view_models.DEFAULT_EVENT_DOSSIER_LIMIT <= 25
-    assert view_models.DEFAULT_TRACEABILITY_BROWSER_LIMIT <= 20
+    assert view_models.DEFAULT_TRACEABILITY_BROWSER_LIMIT <= 15
 
 
 def _seed_truth_store(temp_vault):

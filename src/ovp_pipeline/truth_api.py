@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from collections import Counter
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -44,6 +45,7 @@ from .run_history import list_run_history
 from .txn import classify_run_ledgers
 
 MAX_PAGE_SIZE = 500
+LOGGER = logging.getLogger(__name__)
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _REVIEW_AUDIT_LOG_NAME = "review-actions"
 _SIGNAL_LOG_NAME = "signals"
@@ -730,6 +732,7 @@ def _candidate_review_suggestion(
 ) -> tuple[str, list[tuple[Any, float]]]:
     similar: list[tuple[Any, float]] = []
     seen_slugs: set[str] = set()
+    found_ambiguous_active = False
     resolution = registry.resolve_mention(
         entry.title,
         area=entry.area or None,
@@ -753,8 +756,9 @@ def _candidate_review_suggestion(
                 and candidate.status == STATUS_ACTIVE
                 and candidate.slug not in seen_slugs
             ):
-                similar.append((candidate, 0.0))
+                similar.append((candidate, resolution.confidence))
                 seen_slugs.add(candidate.slug)
+                found_ambiguous_active = True
 
     if not similar:
         for near in registry._safe_near_candidates(entry.title, area=entry.area or None, topk=10):
@@ -772,7 +776,9 @@ def _candidate_review_suggestion(
 
     similar = sorted(similar, key=lambda item: item[1], reverse=True)[:5]
     action = "keep_as_candidate"
-    if entry.source_count >= 2 or entry.evidence_count >= 3:
+    if found_ambiguous_active:
+        action = "keep_as_candidate"
+    elif entry.source_count >= 2 or entry.evidence_count >= 3:
         if similar and similar[0][1] >= 0.7:
             action = "merge_as_alias"
         else:
@@ -3487,14 +3493,7 @@ def _attach_action_queue_state(
             if isinstance(path, str) and path.strip()
         )
     )
-    try:
-        capture_summaries = (
-            _collect_note_capture_summaries(vault_dir, capture_note_paths)
-            if capture_note_paths
-            else {}
-        )
-    except Exception:
-        capture_summaries = {}
+    capture_summaries = _collect_capture_summaries_resilient(vault_dir, capture_note_paths)
     annotated: list[dict[str, Any]] = []
     for item in items:
         enriched = dict(item)
@@ -3562,6 +3561,32 @@ def _attach_action_queue_state(
         )
         annotated.append(enriched)
     return annotated
+
+
+_CAPTURE_SUMMARY_RECOVERABLE_ERRORS = (OSError, ValueError, sqlite3.Error)
+
+
+def _collect_capture_summaries_resilient(
+    vault_dir: Path | str,
+    note_paths: list[str],
+) -> dict[str, dict[str, Any]]:
+    if not note_paths:
+        return {}
+    try:
+        return _collect_note_capture_summaries(vault_dir, note_paths)
+    except _CAPTURE_SUMMARY_RECOVERABLE_ERRORS:
+        LOGGER.exception(
+            "Failed to collect capture summaries for %d notes; falling back per note.",
+            len(note_paths),
+        )
+
+    summaries: dict[str, dict[str, Any]] = {}
+    for note_path in note_paths:
+        try:
+            summaries.update(_collect_note_capture_summaries(vault_dir, [note_path]))
+        except _CAPTURE_SUMMARY_RECOVERABLE_ERRORS:
+            LOGGER.exception("Failed to collect capture summary for %s.", note_path)
+    return summaries
 
 
 def list_production_gaps(
@@ -4002,8 +4027,9 @@ def _match_note_capture_event(
     if event_type in {"evergreen_auto_promoted", "evergreen_created"}:
         relative_path_field = _vault_relative_path(vault_dir, str(payload.get("path") or ""))
         source_name = Path(str(payload.get("source") or "")).name
+        mutation = payload.get("mutation") if isinstance(payload.get("mutation"), dict) else {}
         target_slug = canonicalize_note_id(
-            str(payload.get("concept") or payload.get("mutation", {}).get("target_slug") or "")
+            str(payload.get("concept") or mutation.get("target_slug") or "")
         )
         if not (
             relative_path_field == note_path
@@ -4013,7 +4039,7 @@ def _match_note_capture_event(
         ):
             return None
         object_id = str(
-            payload.get("mutation", {}).get("target_slug") or payload.get("concept") or ""
+            mutation.get("target_slug") or payload.get("concept") or ""
         ).strip()
         label = (
             "Evergreen promoted" if event_type == "evergreen_auto_promoted" else "Evergreen created"
@@ -4200,9 +4226,10 @@ def _candidate_capture_states(
     }:
         add_name(str(payload.get("file") or ""))
     elif event_type in {"evergreen_auto_promoted", "evergreen_created"}:
+        mutation = payload.get("mutation") if isinstance(payload.get("mutation"), dict) else {}
         add_path(str(payload.get("path") or ""))
         add_name(str(payload.get("source") or ""))
-        add_slug(str(payload.get("concept") or payload.get("mutation", {}).get("target_slug") or ""))
+        add_slug(str(payload.get("concept") or mutation.get("target_slug") or ""))
     elif event_type == "refine_mutation_applied":
         for target in _canonicalized_payload_targets(payload):
             add_states(states_by_slug.get(target))

@@ -258,6 +258,65 @@ def test_truth_api_batches_capture_summary_lookup_for_signal_listing(temp_vault,
     ]
 
 
+def test_truth_api_signal_capture_summary_falls_back_per_note_when_batch_collection_fails(
+    temp_vault, monkeypatch
+):
+    from ovp_pipeline import truth_api
+
+    calls = []
+
+    def fake_collect_note_capture_summaries(vault_dir, requested_note_paths):
+        calls.append(tuple(requested_note_paths))
+        if len(requested_note_paths) > 1:
+            raise OSError("batch read failed")
+        return {
+            requested_note_paths[0]: {
+                "status": "observed",
+                "captured_event_count": 1,
+                "produced_artifact_count": 0,
+                "candidate_count": 0,
+                "error_count": 0,
+                "skipped_count": 0,
+                "latest_timestamp": "2026-04-15T00:00:00Z",
+                "summary": f"Observed capture for {requested_note_paths[0]}.",
+                "items": [],
+            }
+        }
+
+    monkeypatch.setattr(
+        truth_api,
+        "_collect_note_capture_summaries",
+        fake_collect_note_capture_summaries,
+    )
+
+    signals = truth_api._attach_action_queue_state(
+        temp_vault,
+        [
+            {
+                "signal_id": "signal::one",
+                "signal_type": "source_needs_deep_dive",
+                "title": "One",
+                "detail": "One",
+                "note_paths": ["50-Inbox/03-Processed/One.md"],
+            },
+            {
+                "signal_id": "signal::two",
+                "signal_type": "source_needs_deep_dive",
+                "title": "Two",
+                "detail": "Two",
+                "note_paths": ["50-Inbox/03-Processed/Two.md"],
+            },
+        ],
+    )
+
+    assert calls == [
+        ("50-Inbox/03-Processed/One.md", "50-Inbox/03-Processed/Two.md"),
+        ("50-Inbox/03-Processed/One.md",),
+        ("50-Inbox/03-Processed/Two.md",),
+    ]
+    assert [item["capture_summary"]["status"] for item in signals] == ["observed", "observed"]
+
+
 def test_truth_api_capture_summary_collection_routes_events_to_relevant_targets(
     temp_vault, monkeypatch
 ):
@@ -317,6 +376,39 @@ def test_truth_api_capture_summary_collection_routes_events_to_relevant_targets(
 
     assert calls == [("article_abstained", "Demo-1.md", "50-Inbox/03-Processed/Demo-1.md")]
     assert summaries["50-Inbox/03-Processed/Demo-1.md"]["status"] == "skipped"
+
+
+def test_truth_api_capture_summary_handles_null_mutation_payload(temp_vault):
+    from ovp_pipeline import truth_api
+
+    note_path = "10-Knowledge/Evergreen/Alpha.md"
+    target = temp_vault / note_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "---\nnote_id: alpha\ntitle: Alpha\n---\n\n# Alpha\n",
+        encoding="utf-8",
+    )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        json.dumps(
+            {
+                "event_type": "evergreen_created",
+                "timestamp": "2026-04-15T00:00:00Z",
+                "concept": "alpha",
+                "mutation": None,
+                "path": note_path,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = truth_api.get_note_inbound_capture_summary(temp_vault, note_path=note_path)
+
+    assert summary["status"] == "productive"
+    assert summary["produced_artifact_count"] == 1
 
 
 def test_truth_api_marks_old_running_action_as_stale():
@@ -5118,6 +5210,50 @@ def test_truth_api_candidate_listing_skips_related_context_discovery(temp_vault,
 
     assert payload["count"] == 1
     assert payload["items"][0]["slug"] == "beta-candidate"
+
+
+def test_truth_api_ambiguous_candidate_suggestion_does_not_promote_duplicate_risk(temp_vault):
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+    from ovp_pipeline.promote_candidates import write_candidate_file
+    from ovp_pipeline.truth_api import list_candidate_concepts
+
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="alpha-existing",
+            title="Alpha Existing",
+            aliases=["Ambiguous Candidate"],
+            definition="Existing canonical concept.",
+            area="testing",
+        )
+    )
+    registry.add_entry(
+        ConceptEntry(
+            slug="beta-existing",
+            title="Beta Existing",
+            aliases=["Ambiguous Candidate"],
+            definition="Another canonical concept.",
+            area="testing",
+        )
+    )
+    candidate = registry.upsert_candidate(
+        slug="ambiguous-candidate",
+        title="Ambiguous Candidate",
+        definition="High-evidence candidate with ambiguous active matches.",
+        area="testing",
+    )
+    candidate.evidence_count = 3
+    registry.save()
+    write_candidate_file(temp_vault, candidate, dry_run=False)
+
+    payload = list_candidate_concepts(temp_vault)
+
+    assert payload["items"][0]["slug"] == "ambiguous-candidate"
+    assert payload["items"][0]["suggested_action"] == "keep_as_candidate"
+    assert {item["slug"] for item in payload["items"][0]["similar_existing"]} == {
+        "alpha-existing",
+        "beta-existing",
+    }
 
 
 def test_truth_api_review_candidate_concept_promotes_and_records_audit(temp_vault):

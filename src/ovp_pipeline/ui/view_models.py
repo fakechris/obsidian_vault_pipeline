@@ -52,7 +52,7 @@ from ..truth_api import (
 
 DEFAULT_CANDIDATE_BROWSER_LIMIT = 25
 DEFAULT_EVENT_DOSSIER_LIMIT = 25
-DEFAULT_TRACEABILITY_BROWSER_LIMIT = 20
+DEFAULT_TRACEABILITY_BROWSER_LIMIT = 15
 
 
 def _scoped_path(path: str, *, pack_name: str | None = None) -> str:

@@ -3440,6 +3440,47 @@ def test_ui_server_main_can_spawn_detached_action_worker_when_enabled(
     assert calls["worker_process"]["kwargs"]["start_new_session"] is True
 
 
+def test_ui_server_main_reuses_existing_signal_ledger_during_preflight(
+    temp_vault, capsys, monkeypatch
+):
+    from ovp_pipeline.commands.ui_server import main
+
+    calls = {}
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "signals.jsonl").write_text("", encoding="utf-8")
+
+    class FakeServer:
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            calls["closed"] = True
+
+    monkeypatch.setattr(
+        "ovp_pipeline.commands.ui_server.create_server",
+        lambda vault_dir, *, host, port: FakeServer(),
+    )
+    monkeypatch.setattr(
+        "ovp_pipeline.commands.ui_server.build_objects_index_payload",
+        lambda vault_dir, *, limit, offset: {"items": []},
+    )
+    monkeypatch.setattr(
+        "ovp_pipeline.commands.ui_server.ensure_signal_ledger_synced",
+        lambda vault_dir: (_ for _ in ()).throw(
+            AssertionError("existing signal ledger should not be rebuilt during startup")
+        ),
+    )
+    monkeypatch.setattr("ovp_pipeline.commands.ui_server._start_ui_prewarm", lambda vault_dir: None)
+
+    exit_code = main(["--vault-dir", str(temp_vault)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["vault_dir"] == str(temp_vault)
+    assert calls == {"closed": True}
+
+
 def test_ui_server_main_exits_nonzero_when_preflight_fails(temp_vault, capsys, monkeypatch):
     from ovp_pipeline.commands.ui_server import main
 
@@ -3530,6 +3571,55 @@ def test_ui_server_candidates_endpoint_returns_payload(temp_vault):
     assert payload["items"][0]["slug"] == "alpha-candidate"
 
 
+def test_ui_server_candidates_endpoint_forwards_pagination_params(temp_vault, monkeypatch):
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
+
+    calls = []
+
+    def fake_build_candidate_browser_payload(
+        vault_dir,
+        *,
+        pack_name=None,
+        query=None,
+        limit=25,
+        offset=0,
+    ):
+        calls.append((pack_name, query, limit, offset))
+        return {
+            "screen": "candidates/browser",
+            "requested_pack": pack_name or "",
+            "query": query or "",
+            "limit": limit,
+            "offset": offset,
+            "count": 100,
+            "status_counts": {"candidate": 100},
+            "items": [],
+            "operator_rail": [],
+        }
+
+    monkeypatch.setattr(ui_server, "build_candidate_browser_payload", fake_build_candidate_browser_payload)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/candidates?q=alpha&limit=7&offset=14&pack=default-knowledge")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["limit"] == 7
+    assert payload["offset"] == 14
+    assert calls == [("default-knowledge", "alpha", 7, 14)]
+
+
 def test_ui_server_candidates_page_renders_review_controls(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
 
@@ -3554,6 +3644,26 @@ def test_ui_server_candidates_page_renders_review_controls(temp_vault):
     assert "Promote" in body
     assert "Merge" in body
     assert "Reject" in body
+
+
+def test_ui_server_candidates_page_renders_pagination_links():
+    from ovp_pipeline.commands.ui_server import _render_candidates_page
+
+    html = _render_candidates_page(
+        {
+            "query": "alpha",
+            "requested_pack": "default-knowledge",
+            "limit": 25,
+            "offset": 25,
+            "count": 80,
+            "status_counts": {"candidate": 80},
+            "items": [],
+            "operator_rail": [],
+        }
+    )
+
+    assert 'href="/candidates?q=alpha&amp;limit=25&amp;offset=0&amp;pack=default-knowledge"' in html
+    assert 'href="/candidates?q=alpha&amp;limit=25&amp;offset=50&amp;pack=default-knowledge"' in html
 
 
 def test_ui_server_candidate_item_keeps_zero_score_and_requires_low_score_merge_target():
