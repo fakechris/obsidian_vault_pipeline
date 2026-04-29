@@ -251,7 +251,7 @@ def _check_api_key() -> tuple[bool, str]:
 
 
 def init_env_file(vault_dir: Path | str | None = None) -> int:
-    """初始化 .env 文件（交互式）"""
+    """初始化 .env 文件(交互式)"""
     resolved_vault = resolve_vault_dir(vault_dir)
     env_file = resolved_vault / ".env"
     env_example = resolved_vault / ".env.example"
@@ -265,9 +265,9 @@ def init_env_file(vault_dir: Path | str | None = None) -> int:
         print(f"\n✓ 发现已有配置文件: {env_file}")
         content = env_file.read_text(encoding="utf-8")
         if "AUTO_VAULT_API_KEY=" in content and "your_key" not in content:
-            print("  看起来已经配置好了。如需重新配置，请先删除该文件。")
+            print("  看起来已经配置好了。如需重新配置, 请先删除该文件。")
             return 0
-        print("  但可能未正确配置，继续引导设置...\n")
+        print("  但可能未正确配置, 继续引导设置...\n")
 
     # 创建 .env.example 如果不存在
     if not env_example.exists():
@@ -2909,10 +2909,10 @@ def main():
             print(f"  API Key: {key}...")
             print(f"  API Base: {os.environ.get('AUTO_VAULT_API_BASE', 'N/A')}")
         else:
-            print("\n✗ 环境未就绪，请确认 --vault-dir/VAULT_DIR 指向 vault，并检查 .env")
+            print("\n✗ 环境未就绪, 请确认 --vault-dir/OVP_VAULT_DIR/VAULT_DIR 指向 vault, 并检查 .env")
         return 0 if ok else 1
 
-    # 检查环境（运行前）
+    # 检查环境(运行前)
     ok, issues = check_environment(vault_dir)
     if not ok:
         print("\n" + "="*60)
@@ -2920,7 +2920,7 @@ def main():
         print("="*60)
         for issue in issues:
             print(f"  ✗ {issue}")
-        print("\n请确认 --vault-dir/VAULT_DIR 指向 vault，并检查 .env")
+        print("\n请确认 --vault-dir/OVP_VAULT_DIR/VAULT_DIR 指向 vault, 并检查 .env")
         return 1
 
     execution_plan = build_execution_plan(args)

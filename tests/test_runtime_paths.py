@@ -45,11 +45,25 @@ def test_resolve_vault_dir_prefers_environment_when_not_explicit(tmp_path, monke
     workspace.mkdir()
     vault.mkdir()
     monkeypatch.chdir(workspace)
+    monkeypatch.delenv("OVP_VAULT_DIR", raising=False)
     monkeypatch.setenv("VAULT_DIR", str(vault))
 
     resolved = resolve_vault_dir()
 
     assert resolved == vault.resolve()
+
+
+def test_resolve_vault_dir_prefers_ovp_vault_dir_over_vault_dir(tmp_path, monkeypatch):
+    ovp_vault = tmp_path / "ovp-vault"
+    legacy_vault = tmp_path / "legacy-vault"
+    ovp_vault.mkdir()
+    legacy_vault.mkdir()
+    monkeypatch.setenv("OVP_VAULT_DIR", str(ovp_vault))
+    monkeypatch.setenv("VAULT_DIR", str(legacy_vault))
+
+    resolved = resolve_vault_dir()
+
+    assert resolved == ovp_vault.resolve()
 
 
 def test_resolve_vault_dir_explicit_argument_overrides_environment(tmp_path, monkeypatch):
