@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import sys
 
+import pytest
+
 from ovp_pipeline.auto_github_processor import build_default_output_dir as github_output_dir
 from ovp_pipeline.auto_paper_processor import build_default_output_dir as paper_output_dir
 from ovp_pipeline.runtime import (
@@ -110,7 +112,7 @@ def test_check_environment_rejects_non_vault_directory(tmp_path, monkeypatch):
 
 
 def test_check_environment_rejects_package_checkout_with_vault_scaffold(tmp_path, monkeypatch):
-    package_checkout = tmp_path / "openclaw-template"
+    package_checkout = tmp_path / "obsidian-vault-pipeline"
     for rel in (
         "10-Knowledge",
         "20-Areas",
@@ -1767,6 +1769,45 @@ def test_collect_absorb_targets_recent_filters_by_file_mtime(tmp_path):
     targets = _collect_absorb_targets(layout, recent=7)
 
     assert targets == [recent_file]
+
+
+def test_collect_absorb_targets_rejects_intake_source_files(tmp_path):
+    from ovp_pipeline.auto_evergreen_extractor import _collect_absorb_targets
+
+    vault = tmp_path / "vault"
+    layout = VaultLayout.from_vault(vault)
+    clipping = layout.clippings_dir / "Raw Clip.md"
+    clipping.parent.mkdir(parents=True, exist_ok=True)
+    clipping.write_text("# raw\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="source lifecycle"):
+        _collect_absorb_targets(layout, file_path=clipping)
+
+
+def test_run_absorb_workflow_rejects_intake_source_directories(tmp_path, monkeypatch):
+    from ovp_pipeline import auto_evergreen_extractor as extractor_module
+    from ovp_pipeline.auto_evergreen_extractor import run_absorb_workflow
+
+    vault = tmp_path / "vault"
+    layout = VaultLayout.from_vault(vault)
+    clipping = layout.clippings_dir / "Raw Clip_深度解读.md"
+    clipping.parent.mkdir(parents=True, exist_ok=True)
+    clipping.write_text("# raw\n", encoding="utf-8")
+
+    class FakeExtractor:
+        def __init__(self, vault_dir, logger):
+            self.vault_dir = vault_dir
+
+        def init_llm(self, *args, **kwargs):
+            return None
+
+        def process_directory(self, *args, **kwargs):
+            raise AssertionError("intake directory must be rejected before process_directory")
+
+    monkeypatch.setattr(extractor_module, "AutoEvergreenExtractor", FakeExtractor)
+
+    with pytest.raises(ValueError, match="source lifecycle"):
+        run_absorb_workflow(vault, directory=layout.clippings_dir)
 
 
 def test_before_counts_include_monthly_processed_files(tmp_path):
