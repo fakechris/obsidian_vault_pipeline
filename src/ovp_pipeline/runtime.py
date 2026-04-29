@@ -27,7 +27,6 @@ def looks_like_vault_dir(vault_dir: Path | str) -> bool:
         (base / "10-Knowledge").is_dir()
         and (base / "20-Areas").is_dir()
         and (base / "50-Inbox").is_dir()
-        and (base / "60-Logs").is_dir()
     )
     has_vault_marker = (
         (base / ".obsidian").is_dir()

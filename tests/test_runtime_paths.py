@@ -12,6 +12,7 @@ from ovp_pipeline.auto_paper_processor import build_default_output_dir as paper_
 from ovp_pipeline.runtime import (
     VaultLayout,
     iter_markdown_files,
+    looks_like_vault_dir,
     markdown_title,
     read_markdown_frontmatter,
     resolve_vault_dir,
@@ -21,6 +22,7 @@ from ovp_pipeline.unified_pipeline_enhanced import (
     build_execution_plan,
     check_environment,
     detect_pinboard_processor,
+    init_env_file,
 )
 
 
@@ -127,6 +129,28 @@ def test_check_environment_accepts_obsidian_vault_layout(tmp_path, monkeypatch):
 
     assert ok is True
     assert any("Vault root: OK" in issue for issue in issues)
+
+
+def test_fresh_obsidian_vault_does_not_require_logs_dir(tmp_path):
+    vault = tmp_path / "fresh-vault"
+    for rel in ("10-Knowledge", "20-Areas", "50-Inbox", ".obsidian"):
+        (vault / rel).mkdir(parents=True)
+
+    assert looks_like_vault_dir(vault) is True
+
+
+def test_init_env_file_writes_to_resolved_vault_dir(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    inputs = iter(["sk-test-valid-key", "1"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
+
+    exit_code = init_env_file(vault)
+
+    env_file = vault / ".env"
+    assert exit_code == 0
+    assert env_file.exists()
+    assert "AUTO_VAULT_API_KEY=sk-test-valid-key" in env_file.read_text(encoding="utf-8")
 
 
 def test_specialized_processors_derive_default_outputs_from_vault(tmp_path):

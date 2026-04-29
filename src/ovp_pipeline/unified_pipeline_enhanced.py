@@ -250,23 +250,27 @@ def _check_api_key() -> tuple[bool, str]:
     return True, "OK"
 
 
-def init_env_file() -> int:
+def init_env_file(vault_dir: Path | str | None = None) -> int:
     """初始化 .env 文件（交互式）"""
+    resolved_vault = resolve_vault_dir(vault_dir)
+    env_file = resolved_vault / ".env"
+    env_example = resolved_vault / ".env.example"
+
     print("="*60)
     print("Obsidian Vault Pipeline - 环境初始化")
     print("="*60)
 
     # 检查是否已有 .env
-    if ENV_FILE.exists():
-        print(f"\n✓ 发现已有配置文件: {ENV_FILE}")
-        content = ENV_FILE.read_text(encoding="utf-8")
+    if env_file.exists():
+        print(f"\n✓ 发现已有配置文件: {env_file}")
+        content = env_file.read_text(encoding="utf-8")
         if "AUTO_VAULT_API_KEY=" in content and "your_key" not in content:
             print("  看起来已经配置好了。如需重新配置，请先删除该文件。")
             return 0
         print("  但可能未正确配置，继续引导设置...\n")
 
     # 创建 .env.example 如果不存在
-    if not ENV_EXAMPLE.exists():
+    if not env_example.exists():
         example_content = '''# Obsidian Vault Pipeline 环境配置
 # ══════════════════════════════════════════════════════════
 # 配置说明:
@@ -296,8 +300,8 @@ PINBOARD_TOKEN=your_username:your_token
 # ── 代理配置 (可选) ─────────────────────────────────────
 # HTTP_PROXY=http://127.0.0.1:7897
 '''
-        ENV_EXAMPLE.write_text(example_content, encoding="utf-8")
-        print(f"✓ 创建模板文件: {ENV_EXAMPLE}")
+        env_example.write_text(example_content, encoding="utf-8")
+        print(f"✓ 创建模板文件: {env_example}")
 
     # 提示用户获取 API Key
     print("\n📋 你需要一个 LLM API Key 才能运行 Pipeline")
@@ -311,8 +315,8 @@ PINBOARD_TOKEN=your_username:your_token
     api_key = input("\n🔑 你的 API Key (sk-...): ").strip()
     if not api_key:
         print("\n❌ 未提供 API Key，初始化取消")
-        print(f"\n你可以稍后手动创建 {ENV_FILE}:")
-        print(f"  cp {ENV_EXAMPLE} {ENV_FILE}")
+        print(f"\n你可以稍后手动创建 {env_file}:")
+        print(f"  cp {env_example} {env_file}")
         print("  然后编辑填入你的 Key")
         return 1
 
@@ -341,10 +345,10 @@ AUTO_VAULT_API_BASE={base_url}
 AUTO_VAULT_MODEL={model}
 '''
 
-    ENV_FILE.write_text(env_content, encoding="utf-8")
-    os.chmod(ENV_FILE, 0o600)  # 设置权限为仅用户可读
+    env_file.write_text(env_content, encoding="utf-8")
+    os.chmod(env_file, 0o600)  # 设置权限为仅用户可读
 
-    print(f"\n✓ 配置文件已创建: {ENV_FILE}")
+    print(f"\n✓ 配置文件已创建: {env_file}")
     print(f"  Provider: {base_url}")
     print(f"  Model: {model}")
     print("\n现在可以运行: ovp --full")
@@ -399,7 +403,7 @@ def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
     else:
         issues.append(
             "Vault root: not a vault "
-            f"({resolved_vault}; expected core vault dirs plus .obsidian or root Index.md/Log.md)"
+            f"({resolved_vault}; expected 10-Knowledge, 20-Areas, 50-Inbox plus .obsidian or root Index.md/Log.md)"
         )
 
     return key_ok and vault_ok, issues
@@ -2877,14 +2881,19 @@ def main():
         ),
     )
     parser.add_argument("--profile", default=None, help="Workflow profile 名称（默认: full）")
-    parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
+    parser.add_argument(
+        "--vault-dir",
+        type=Path,
+        default=None,
+        help="Vault根目录 (默认: OVP_VAULT_DIR, VAULT_DIR, 或当前目录)",
+    )
 
     args = parser.parse_args()
     vault_dir = resolve_vault_dir(args.vault_dir)
 
     # 处理 init 命令
     if args.init:
-        return init_env_file()
+        return init_env_file(vault_dir)
 
     # 处理 check 命令
     if args.check:
