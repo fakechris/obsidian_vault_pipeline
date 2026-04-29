@@ -1,8 +1,8 @@
 ---
 schema_version: "1.0.0"
-note_id: readme-dc2a69e8
+note_id: readme_en-5d661efc
 title: "Obsidian Vault Pipeline"
-description: "面向 Obsidian 的可审计知识状态运行时"
+description: "An auditable knowledge state runtime for Obsidian"
 date: 2026-04-07
 type: meta
 ---
@@ -15,102 +15,101 @@ type: meta
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/obsidian-vault-pipeline.svg)](https://pypi.org/project/obsidian-vault-pipeline/)
 
-面向 Obsidian Vault 的可审计知识状态运行时<br>
+Auditable knowledge state runtime for Obsidian Vaults<br>
 Capture → Compile → Reuse
 
-[🇬🇧 English](README_EN.md)
+[🇨🇳 简体中文](README.zh-CN.md)
 
 </div>
 
-## 这是什么
+Current document version: `v0.9.2`
 
-Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只是 RAG over Markdown。它是一套围绕 Obsidian Vault 构建的本地知识状态运行时：
+Primary docs:
 
-- **Capture**：接收 Pinboard、Clippings、Raw Markdown、论文、GitHub、网页等资料，并保持 source lifecycle 可追踪。
-- **Compile**：把资料编译成 deep dive、candidate、claim、evidence、relation、contradiction、registry 和 graph。
-- **Reuse**：把已编译知识投影成 reader atlas、object page、graph、briefing、search、context pack、writing prompt 和 operator workbench。
+- [Architecture](ARCHITECTURE.md) ([简体中文](ARCHITECTURE.zh-CN.md))
+- [Milestone](MILESTONE.md) ([简体中文](MILESTONE.zh-CN.md))
+- [Active Backlog](BACKLOG.md)
 
-内部仍保留六层工程模型（Ingest → Interpret → Absorb → Refine → Canonical → Derived），但产品叙事收敛为 Capture → Compile → Reuse。
+## What This Is
 
-当前版本已经把主要运行链路接入到日常工作流：
+Obsidian Vault Pipeline is not a loose collection of scripts, and it is not only RAG over Markdown. It is a local knowledge state runtime built around an Obsidian vault:
 
-- `ovp --full` 默认跑到 `knowledge_index`
-- `ovp --incremental` 是日常增量入口，包含近期 Pinboard + Clippings + 后续步骤
-- `ovp --full --with-refine` 会在 `moc` 后追加 `refine`
-- `ovp-autopilot` 默认实时跑 `absorb -> moc -> knowledge_index`
-- `ovp-autopilot --with-refine` 会在实时链路里追加 `refine`
-- `ovp-ui` 提供本地 UI，目前偏 operator workbench；下一阶段会把默认入口改成 reader-first Knowledge Atlas
+- **Capture** receives Pinboard, Clippings, raw Markdown, papers, GitHub repos, and web pages while keeping source lifecycle traceable.
+- **Compile** turns material into deep dives, candidates, claims, evidence, relations, contradictions, registry rows, and graph rows.
+- **Reuse** projects compiled knowledge into reader atlas pages, object pages, graph views, briefings, search, context packs, writing prompts, and the operator workbench.
 
-## 为什么会变成现在这套架构
+Internally the engineering model still uses six layers: Ingest -> Interpret -> Absorb -> Refine -> Canonical -> Derived. The product narrative is Capture -> Compile -> Reuse.
 
-这个项目最早是围绕 Obsidian Vault 的自动化整理脚本发展起来的，但随着能力增加，出现了三个典型问题：
+The current release wires those layers into the actual runtime:
 
-- 运行时主流程和单个脚本各自演化，难以保证契约一致
-- 概念、链接、Atlas、graph、检索索引彼此耦合，但真相边界不清楚
-- 一旦要支持媒体、医疗、工程研究这类不同领域，原来的 concept-only 模型会失真
+- `ovp --full` runs through `knowledge_index` by default
+- `ovp --incremental` is the daily incremental entry point, including recent Pinboard + Clippings and downstream stages
+- `ovp --full --with-refine` inserts `refine` before the final derived refresh
+- `ovp-autopilot` runs real-time `absorb -> moc -> knowledge_index`
+- `ovp-autopilot --with-refine` adds `refine` to that path
+- `ovp-ui` provides a local UI. It is currently operator-oriented; the next product wave moves the default entry toward a reader-first Knowledge Atlas.
 
-现在这套设计的目标就是把这些问题拆开：
+## Why The Architecture Looks Like This
 
-- 用 Capture → Compile → Reuse 解释产品价值
-- 用 source → observation → claim → evidence → validity → projection → permission 解释长期知识状态
-- 用六层运行模型明确“什么是编排层、什么是真相层、什么是派生层”
-- 用 `research-tech` 把当前技术研究语义正式化
-- 用 `default-knowledge` 保留默认兼容层
-- 用 Pack API 让不同领域通过 pack 接入，而不是继续往 core 里硬编码特例
+This repository started as a set of Obsidian automation scripts, but that model stopped scaling once the system grew:
 
-这意味着当前仓库已经不只是一个 Vault 自动化项目，而是一个：
+- the main runtime and individual scripts drifted apart
+- concepts, links, Atlas, graph, and retrieval indexes were tightly coupled without a clean truth boundary
+- new domains like media, medical, or engineering research could not be modeled safely with a concept-only core
 
-> reader-first, evidence-backed knowledge atlas over an auditable knowledge state runtime
+The current architecture is the direct answer to those failures:
 
-其中：
+- Capture -> Compile -> Reuse explains the product value
+- source -> observation -> claim -> evidence -> validity -> projection -> permission explains the long-term knowledge state
+- the six-layer runtime makes orchestration, canonical state, and derived state explicit
+- `research-tech` makes the current engineering research semantics explicit
+- `default-knowledge` is being reduced to a default compatibility layer instead of carrying every domain semantic
+- Pack API turns future domains into installable packs rather than more hardcoded branches inside the runtime
 
-- `research-tech` 是第一套显式内置标准 pack
-- `default-knowledge` 当前仍保留为默认兼容 pack
-- `knowledge.db` 是 derived store，不是 source of truth
-- vault markdown + registry + evidence chain 才是长期可信边界
+So the project is no longer just a Vault automation repo. It is now:
 
-## 当前路线图
+> a reader-first, evidence-backed knowledge atlas over an auditable knowledge state runtime
 
-当前路线图正在合并 repo 历史 milestone、4 月 22 compiler roadmap、vault 内近期 KSR backlog，以及 reader-first 产品形态研究。这里的 KSR 页是近期任务抽取输入，不是完整 backlog 事实源：
+with:
 
-- 当前 active backlog：`BACKLOG.md`
-- 近期 KSR backlog 输入：`/Users/chris/Documents/ovp-vault/30-Projects/Active/OVP-Knowledge-State-Runtime.md`
-- 当前合并路线图：`docs/plans/2026-04-29-consolidated-product-roadmap.md`
-- reader 产品形态记录：`docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md`
+- `research-tech` as the first explicit built-in standard pack
+- `default-knowledge` retained as the default compatibility pack
+- `knowledge.db` as a derived store, never Authority
+- vault markdown + registry + evidence chains as the long-term trust boundary
 
-当前 milestone 顺序：
+## Current Roadmap
 
-| Milestone | 状态 | 说明 |
+The current roadmap is consolidating repo milestone history, the April 22 compiler roadmap, the recent KSR backlog in the dogfooding vault, and reader-first product-shape research. The KSR page is a recent task-extraction input, not the complete backlog authority:
+
+- active backlog: `BACKLOG.md`
+- recent KSR backlog input: `/Users/chris/Documents/ovp-vault/30-Projects/Active/OVP-Knowledge-State-Runtime.md`
+- current milestone: `MILESTONE.md`
+- current merged roadmap rationale: `docs/plans/2026-04-29-consolidated-product-roadmap.md`
+- reader product-shape note: `docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md`
+
+Current milestone sequence:
+
+| Milestone | Status | Meaning |
 | --- | --- | --- |
-| M0 Pipeline And Pack Foundation | Complete | CLI、source lifecycle、pack/profile、`knowledge.db`、KSR-013 第一版 |
-| M1 Operator Workbench And Review Runtime | Complete enough | truth UI、candidates、signals/actions、contradictions、action worker |
-| M2 Roadmap And README Consolidation | Active now | 合并历史 milestone、compiler roadmap、近期 KSR 输入与 reader-product 研究，重整 README |
-| M3 Reader-First Knowledge Atlas | Next | `/` 变成 reader home，当前 dashboard 移到 `/ops`，对象页/图谱更像知识产品 |
-| M4 KSR Safety And Hot-Path Hardening | Next | evidence span、projection 标注、candidate 风险分层、routing preview、wiring eval |
-| M5 Context Pack And Operational Runtime | Later | session snapshot、context budget、claim lease、provider facade、observability |
-| M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
-| M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、skill/routine extraction、notebook/raw-source mode |
-
-当前 P0 候选 backlog（合并草案）：
-
-- `KSR-002` Projection 标注
-- `KSR-015` Dashboard/search hot-path audit
-- `KSR-026` Workflow wiring eval suite
-- `KSR-014` Article routing preview
-- `KSR-001` Evidence span 化
-- `KSR-003` Candidate 风险分层
-- Reader-first Knowledge Atlas（产品 P0，作为 projection layer 实现，不另建状态系统）
+| M0 Pipeline And Pack Foundation | Complete | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first KSR-013 slice |
+| M1 Operator Workbench And Review Runtime | Complete enough | truth UI, candidates, signals/actions, contradictions, action worker |
+| M2 Roadmap And README Consolidation | Active now | merge historical milestones, compiler roadmap, recent KSR input, and reader-product research |
+| M3 Reader-First Knowledge Atlas | Next | `/` becomes reader home, current dashboard moves to `/ops`, objects/graph become knowledge products |
+| M4 KSR Safety And Hot-Path Hardening | Next | evidence spans, projection labels, candidate risk tiers, routing preview, wiring evals |
+| M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facades, observability |
+| M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
+| M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, skill/routine extraction, notebook/raw-source mode |
 
 ## Domain Packs
 
-当前 core 已经开始 pack 化。
+The core runtime is now being formalized as a pack-aware platform.
 
-- 内置标准 pack：`research-tech`
-- 默认兼容 pack：`default-knowledge`
-- 运行时可通过 `--pack` 和 `--profile` 选择 workflow
-- 第三方 pack 可以通过 `ovp.packs` entry point 或 `OVP_PACK_MANIFESTS` manifest 列表接入
+- Built-in standard pack: `research-tech`
+- Default compatibility pack: `default-knowledge`
+- Runtime selection is exposed through `--pack` and `--profile`
+- Third-party packs can be discovered through the `ovp.packs` entry point group or the `OVP_PACK_MANIFESTS` manifest list
 
-示例：
+Examples:
 
 ```bash
 ovp-packs
@@ -120,15 +119,15 @@ ovp-autopilot --pack research-tech --profile autopilot --yes
 ovp --pack default-knowledge --profile full
 ```
 
-面向第三方 pack 作者的 API 文档在：
+Pack API documentation for third-party developers lives in:
 
 - `docs/pack-api/README.md`
 - `docs/pack-api/manifest-and-hooks.md`
 - `docs/pack-api/dogfooding-with-media-pack.md`
 
-## 平台架构
+## Platform Architecture
 
-从平台视角看，当前系统分成三层：
+From a platform perspective, the system now has three layers:
 
 1. **Core Platform**
 2. **Domain Pack**
@@ -136,67 +135,66 @@ ovp --pack default-knowledge --profile full
 
 ### 1. Core Platform
 
-core 负责通用且必须稳定的部分：
+Core owns the cross-domain pieces that must remain stable:
 
 - runtime / vault layout
 - CLI orchestration
 - autopilot / queue / watcher
-- canonical identity helper
+- canonical identity helpers
 - registry framework
 - derived `knowledge.db`
-- graph / lint / audit 基础设施
-- plugin / pack loader
-- evidence schema 基础契约
+- graph / lint / audit infrastructure
+- plugin / pack loading
+- base evidence schema contracts
 
 ### 2. Domain Pack
 
-pack 负责领域语义，而不是只放几段 prompt。它定义：
+A pack is not just a prompt bundle. It defines domain semantics:
 
 - object kinds
-- workflow profile
-- discovery boundary
-- absorb / refine / lint 规则
-- schema / template / prompt 资源
+- workflow profiles
+- discovery boundaries
+- absorb / refine / lint rules
+- schemas / templates / prompt resources
 
-当前内置的是：
+The built-in packs are:
 
-- `research-tech`：当前技术研究知识流的显式 pack，也是默认 workflow pack
-- `default-knowledge`：兼容层
+- `research-tech`: the explicit technical research pack and the default workflow pack
+- `default-knowledge`: the compatibility layer
 
-未来媒体、医疗这类领域，应该各自作为外部 pack 工程接入。
+Future domains such as media or medical should arrive as external pack projects.
 
 ### 3. Workflow Profile
 
-profile 是某个 pack 下的一条可执行 DAG。
+A workflow profile is an executable DAG under a pack.
 
-当前已经实现的标准 profile：
+The built-in profiles currently shipped are:
 
 - `research-tech/full`
 - `research-tech/autopilot`
 - `default-knowledge/full`
-- `default-knowledge/autopilot`
 
-## 研究技术 Pack 的运营面
+## Research-Tech Operational Surface
 
-`research-tech` 现在不只是一个内部 pack，也已经有最小运营面：
+`research-tech` is no longer only an internal pack. It now has a minimal operational surface:
 
 - `ovp-doctor`
-  检查默认 workflow pack、pack 角色、operator docs、recipes，以及可选的 vault 健康状态
+  reports default workflow pack, pack roles, operator docs, recipes, and optional vault health
 - `ovp-export`
-  导出最小 compiled artifacts：
+  exports minimal compiled artifacts:
   - `object-page`
   - `topic-overview`
   - `event-dossier`
   - `contradictions`
 - `ovp-truth`
-  直接读取 `knowledge.db` 中的 object / contradiction / neighborhood truth rows
+  reads object / contradiction / neighborhood truth rows directly from `knowledge.db`
 - `ovp-ui`
-  启动一个本地 UI。当前默认页偏 operator dashboard；路线图会把 reader-facing atlas 设为首页，并把现有 dashboard 移到 `/ops`
+  launches a local UI. The current default page is operator-oriented; the roadmap moves the reader-facing atlas to the homepage and keeps the current dashboard under `/ops`.
 - `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
 - `docs/research-tech/RESEARCH_TECH_VERIFY.md`
 - `docs/recipes/research-tech/*.md`
 
-示例：
+Examples:
 
 ```bash
 ovp-doctor --pack research-tech --json
@@ -204,82 +202,83 @@ ovp-truth objects --vault-dir /path/to/vault
 ovp-ui --vault-dir /path/to/vault --port 8787
 ovp-export --pack research-tech --target topic-overview --output-path /tmp/topic.md
 ```
+- `default-knowledge/autopilot`
 
-这也是为什么现在默认就会跑：
+That is why the default workflow path now runs:
 
 ```bash
 ovp --full
 ovp-autopilot --yes
 ```
 
-也可以显式指定：
+You can still select packs explicitly:
 
 ```bash
 ovp --pack research-tech --profile full
 ovp-autopilot --pack research-tech --profile autopilot --yes
-# 兼容路径
+# compatibility path
 ovp --pack default-knowledge --profile full
 ```
 
-## 插件设计
+## Plugin Design
 
-当前插件/pack 接入面已经有最小闭环，不再只是设计稿。
+The plugin / pack surface is no longer only a design memo. There is now a minimal working integration path.
 
-支持两种发现方式：
+Two discovery modes are supported:
 
-1. Python entry point 组：`ovp.packs`
-2. 显式 manifest 列表：`OVP_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
+1. Python entry point group: `ovp.packs`
+2. Explicit manifest list: `OVP_PACK_MANIFESTS=/path/a.yaml:/path/b.yaml`
 
-最小接入链路是：
+The minimum third-party loading chain is:
 
-1. 第三方 pack 提供 manifest
-2. manifest 声明 `entrypoints.pack`
-3. entrypoint 返回 `BaseDomainPack`
-4. core 校验 `api_version`
-5. 用户通过 `--pack/--profile` 运行
+1. provide a manifest
+2. declare `entrypoints.pack`
+3. return a `BaseDomainPack`
+4. pass `api_version` validation
+5. select it through `--pack/--profile`
 
-当前已经实现的硬边界：
+Hard boundaries currently enforced by core:
 
-- pack 不能把 semantic retrieval 直接升级成 canonical identity
-- pack 不能把 `knowledge.db` 当 source of truth
-- pack 不能绕过 audit/logging
-- 所有 derived state 都必须可重建
+- a pack cannot turn semantic retrieval into canonical identity
+- a pack cannot treat `knowledge.db` as Authority
+- a pack cannot bypass audit/logging
+- all derived state must remain rebuildable
 
-## 真实运行模型
+## Runtime Model
 
-### Source of Truth
+### Authority Boundary
 
-这套系统当前坚持以下边界：
+The system keeps a hard boundary:
 
-- **canonical truth**：Vault Markdown + concept registry
-- **derived views**：Atlas、MOC、graph、`knowledge.db`、lint、daily delta
-- **不是 source of truth**：`knowledge.db`
+- **Authority**: vault markdown + concept registry
+- **derived views**: Atlas, MOC, graph, `knowledge.db`, lint, daily delta
+- **not Authority**: `knowledge.db`
 
-`knowledge.db` 是借鉴 GBrain 思路加入的派生索引层，用来承载：
+`knowledge.db` is the GBrain-inspired derived index layer. It stores:
 
-- FTS 页面索引
-- 结构化链接
-- raw sidecar 镜像
-- timeline / audit 事件
+- page FTS
+- structured links
+- mirrored raw sidecars
+- timeline / audit events
 - deterministic section embeddings
-- 只读 query / serve 接口
+- read-only query / serve surfaces
 
-它可以被重建，不参与 canonical 身份决策。
+It is rebuildable and does not own canonical identity resolution.
 
-### 六层职责
+### The Six Layers
 
-| 层 | 职责 | 代表命令 | 是否允许 LLM 直接做重大判断 |
+| Layer | Responsibility | Representative commands | Can the LLM make major decisions here? |
 |---|---|---|---|
-| Ingest | 采集并规范化输入 | `ovp --step pinboard` `ovp --step clippings` `ovp-article` | 否 |
-| Interpret | 把输入变成深度解读 | `ovp-article` `ovp-github` `ovp-paper` | 是，但输出受格式约束 |
-| Absorb | 把解读编入概念生命周期 | `ovp-absorb` `ovp-evergreen` | 是，但要输出结构化结果 |
-| Refine | 对现有知识页做 cleanup / breakdown | `ovp-cleanup` `ovp-breakdown` | 是，但执行受控 |
-| Canonical | 维护 registry / alias / Atlas / MOC | `ovp-rebuild-registry` `ovp-moc` `ovp-promote-candidates` | 否 |
-| Derived | 派生检索、图谱和检查 | `ovp-knowledge-index` `ovp-graph` `ovp-lint` | 否 |
+| Ingest | Normalize incoming material | `ovp --step pinboard` `ovp --step clippings` `ovp-article` | No |
+| Interpret | Produce deep interpretations | `ovp-article` `ovp-github` `ovp-paper` | Yes, with constrained output |
+| Absorb | Compile interpretations into lifecycle actions | `ovp-absorb` `ovp-evergreen` | Yes, but only through structured results |
+| Refine | Cleanup and breakdown existing notes | `ovp-cleanup` `ovp-breakdown` | Yes, but execution is controlled |
+| Canonical | Maintain registry / aliases / Atlas / MOC | `ovp-rebuild-registry` `ovp-moc` `ovp-promote-candidates` | No |
+| Derived | Build retrieval / graph / lint views | `ovp-knowledge-index` `ovp-graph` `ovp-lint` | No |
 
-## `ovp --full` 现在到底跑什么
+## What `ovp --full` Actually Runs
 
-默认完整流程：
+Default full pipeline:
 
 ```text
 pinboard
@@ -294,7 +293,7 @@ pinboard
 → knowledge_index
 ```
 
-带整形批处理：
+With refine enabled:
 
 ```text
 pinboard
@@ -310,16 +309,16 @@ pinboard
 → knowledge_index
 ```
 
-关键点：
+Important details:
 
-- `absorb` 现在走的是 `ovp_pipeline.commands.absorb`
-- `refine` 是 `cleanup + breakdown` 的批处理包装
-- `knowledge_index` 永远放最后，保证 `knowledge.db` 反映最终 canonical 状态
-- `--step evergreen` / `--from-step evergreen` 仍然接受，内部会映射到 `absorb`
+- `absorb` now shells to `ovp_pipeline.commands.absorb`
+- `refine` is a batch wrapper over `cleanup + breakdown`
+- `knowledge_index` always runs last so `knowledge.db` reflects final canonical state
+- `--step evergreen` and `--from-step evergreen` are still accepted and map to `absorb`
 
-## `ovp-autopilot` 现在到底跑什么
+## What `ovp-autopilot` Actually Runs
 
-默认实时链路：
+Default real-time path:
 
 ```text
 interpretation
@@ -330,13 +329,13 @@ interpretation
 → auto_commit(optional)
 ```
 
-启用整形：
+Enable refine explicitly:
 
 ```bash
 ovp-autopilot --watch=inbox --with-refine --yes
 ```
 
-这会把链路变成：
+That changes the path to:
 
 ```text
 interpretation
@@ -348,103 +347,68 @@ interpretation
 → auto_commit(optional)
 ```
 
-默认不打开 `refine` 的原因不是“还没接上”，而是为了避免每来一篇新内容就自动重写全库结构；现在它已经接进编排，但需要显式 opt-in。
+Refine is not hidden or missing. It is wired in, but opt-in by default to avoid silent real-time structural rewrites of the whole knowledge base.
 
-## 命令速览
+## Command Overview
 
-### 日常主入口
+### Daily entry points
 
-| 命令 | 说明 |
+| Command | Purpose |
 |---|---|
-| `ovp --check` | 检查运行环境 |
-| `ovp --full` | 完整日常流水线 |
-| `ovp --incremental` | 日常增量流水线（包含近期 Pinboard + Clippings + 后续步骤） |
-| `ovp --full --with-refine` | 完整流水线 + cleanup/breakdown |
-| `ovp --step absorb` | 单独跑吸收层 |
-| `ovp --step refine` | 单独跑批处理整形 |
-| `ovp --from-step absorb` | 从吸收层之后继续跑 |
+| `ovp --check` | Validate runtime configuration |
+| `ovp --full` | Run the full daily pipeline |
+| `ovp --full --with-refine` | Run full pipeline plus cleanup/breakdown |
+| `ovp --step absorb` | Run only the absorb layer |
+| `ovp --step refine` | Run only the batch refine layer |
+| `ovp --from-step absorb` | Resume from absorb onward |
 
-`ovp --incremental` 是推荐的日常入口。
-它和 `ovp --from-step clippings` 不同：前者会先跑 `pinboard -> pinboard_process`，后者会显式跳过 Pinboard。
+### Content processors
 
-### 内容处理
-
-| 命令 | 说明 |
+| Command | Purpose |
 |---|---|
-| `ovp-article --process-inbox --vault-dir <vault>` | 处理 Raw 文档 |
-| `ovp-github --process-single <file> --vault-dir <vault>` | 处理 GitHub 类型输入 |
-| `ovp-paper --process-single <file> --vault-dir <vault>` | 处理论文类型输入 |
+| `ovp-article --process-inbox --vault-dir <vault>` | Process raw documents |
+| `ovp-github --process-single <file> --vault-dir <vault>` | Process GitHub inputs |
+| `ovp-paper --process-single <file> --vault-dir <vault>` | Process paper inputs |
 
 ### Absorb / Refine / Canonical
 
-| 命令 | 说明 |
+| Command | Purpose |
 |---|---|
-| `ovp-absorb --recent 7 --json` | 吸收最近解读 |
-| `ovp-evergreen --recent 7 --json` | `ovp-absorb` 的兼容别名 |
-| `ovp-cleanup --all --json` | 生成 cleanup proposal |
-| `ovp-cleanup --all --write --json` | 执行确定性 cleanup |
-| `ovp-breakdown --all --json` | 生成 breakdown proposal |
-| `ovp-breakdown --all --write --json` | 执行增量 breakdown |
-| `ovp-rebuild-registry --json` | 对账 Evergreen 与 registry |
-| `ovp-promote-candidates review` | 审核 candidate 生命周期 |
-| `ovp-moc --scan --vault-dir <vault>` | 更新 MOC / Atlas |
+| `ovp-absorb --recent 7 --json` | Absorb recent deep dives |
+| `ovp-evergreen --recent 7 --json` | Compatibility alias for `ovp-absorb` |
+| `ovp-cleanup --all --json` | Generate cleanup proposals |
+| `ovp-cleanup --all --write --json` | Apply deterministic cleanup |
+| `ovp-breakdown --all --json` | Generate breakdown proposals |
+| `ovp-breakdown --all --write --json` | Apply incremental breakdown |
+| `ovp-rebuild-registry --json` | Reconcile evergreen notes and registry |
+| `ovp-promote-candidates review` | Review candidate lifecycle |
+| `ovp-moc --scan --vault-dir <vault>` | Refresh MOC / Atlas |
 
-### Derived 层
+### Derived layer
 
-| 命令 | 说明 |
+| Command | Purpose |
 |---|---|
-| `ovp-knowledge-index --json` | 重建 `knowledge.db` |
-| `ovp-knowledge-index --search "query" --json` | FTS 搜索 |
-| `ovp-knowledge-index --query "question" --json` | embedding chunk query |
-| `ovp-knowledge-index --get slug --json` | 读取 canonical 页面 |
-| `ovp-knowledge-index --stats --json` | 查看索引统计 |
-| `ovp-knowledge-index --audit-recent --json` | 查看最近审计事件 |
-| `ovp-knowledge-index --tools-json` | 输出工具发现 JSON |
-| `ovp-knowledge-index --serve` | 启动只读 stdio JSONL 服务 |
-| `ovp-graph daily today --vault-dir <vault>` | 生成 daily delta |
-| `ovp-graph build --layered --seed-match <pattern> --output <out.html>` | 子图浏览（HTML 交互式） |
-| `ovp-lint --check --vault-dir <vault>` | 运行链接/结构检查 |
-| `ovp-query "..." --engine fused` | 默认即 fused（BM25 + 向量 RRF + Recency/Frequency/Importance 衰减），`--engine bm25 \| vector` 显式回退 |
-
-### 链接密度 / 语义层 / Crystal / Exploration
-
-Phase 38 把链接密度和语义层补齐，并给 reviewer 一个图原生的探索面。
-
-| 命令 | 说明 |
-|---|---|
-| `ovp-link-suggest --vault-dir <vault> --dry-run` | 为 `link_out_count < 3` 的 evergreen / deep_dive 跑 BM25+向量混合检索，输出 JSONL 候选到 `60-Logs/link-suggestions/<run_id>.jsonl` |
-| `ovp-link-suggest --apply --confirm` | 把候选写回原 markdown body（默认 `--dry-run`，必须 `--confirm` 才能落盘） |
-| `ovp-link-suggest --llm-gate` | 增加 LLM 二次裁判，按 `link \| skip` 分类；客户端不可用时打印 stderr 警告并回退到 RRF-only |
-| `ovp-build-crystals --vault-dir <vault>` | 物化 briefing 快照到 `40-Resources/Crystals/<crystal_id>.md`，frontmatter 记录 `source_object_ids` 与 `evolves_relations` |
-| `ovp-working-memory --vault-dir <vault>` | 写入今日 `60-Logs/working-memory/YYYY-MM-DD.md`：Top of Mind / Fresh Crystals / Pending Decisions / EVOLVES Today / Pulse Highlights；幂等覆盖 |
-| `ovp-concept-dedup --propose` / `--apply --confirm` | 基于 cosine 相似度合并近义 evergreen，`--apply` 写回链接并归档失败者到 `70-Archive/dedup-merged/` |
-| `ovp-mcp --vault-dir <vault>` | stdio JSON-RPC 服务，暴露 `graph_node_details / graph_neighborhood / graph_shortest_path / graph_bridge_nodes / graph_communities` 等 MCP 工具；`graph_neighborhood` 接受 `render: "json" \| "html"` |
-| `ovp-ui` 路由 `/explore?object_id=<id>` | 三栏 reviewer UI：图谱 canvas + agent timeline (SSE) + Crystal 合成面板 |
-
-#### `ovp-graph build` 推荐组合
-
-`--layered` 走 hop1=evergreen / hop2=source-md 的两层 BFS，是浏览子图的默认形态。在它之上叠加两层质量过滤：hop1 节点度过滤（按 seed-degree 筛选）+ HTML 视图的 hop2 自动折叠。
-
-| 子图规模 | 推荐 flag 组合 | 说明 |
-|---|---|---|
-| <100 节点（聚焦查询，如 `agent memory`） | 默认即可 | cose-bilkent 一次能铺清楚，加 prune 反而会过度损失 |
-| 100–500 节点（中等主题，如 `MCP`） | `--min-seed-degree 2` | 丢掉只挂一个 seed 的弱 hop1 节点，抑制 concept drift |
-| >500 节点 / hop1 fan-out 极宽 | `--min-seed-degree 2 --top-k-per-seed 5` | 横向再裁剪每个 seed 的 hop1 邻居数 |
-| 任何规模 → HTML | 自动启用 | 节点 >300 时 hop2 默认折叠，点 hop1 按需展开；URL 加 `?collapse_hop2=always` 或 `?collapse_hop2=never` 可强制覆盖 |
-
-实测 `MCP` 子图（85 seed）：baseline 400 节点 / 656 边 → `--min-seed-degree 2` 砍到 204 节点 / 280 边（-49% / -57%）。
-
+| `ovp-knowledge-index --json` | Rebuild `knowledge.db` |
+| `ovp-knowledge-index --search "query" --json` | Run FTS search |
+| `ovp-knowledge-index --query "question" --json` | Run embedding chunk query |
+| `ovp-knowledge-index --get slug --json` | Read a canonical page |
+| `ovp-knowledge-index --stats --json` | Read index stats |
+| `ovp-knowledge-index --audit-recent --json` | Read recent audit events |
+| `ovp-knowledge-index --tools-json` | Emit tool discovery JSON |
+| `ovp-knowledge-index --serve` | Start read-only stdio JSONL service |
+| `ovp-graph daily today --vault-dir <vault>` | Build daily graph delta |
+| `ovp-lint --check --vault-dir <vault>` | Run structure/link checks |
 
 ### AutoPilot
 
-| 命令 | 说明 |
+| Command | Purpose |
 |---|---|
-| `ovp-autopilot --watch=inbox --parallel=1 --yes` | 默认实时链路 |
-| `ovp-autopilot --watch=inbox,pinboard --yes` | 同时监听多个来源 |
-| `ovp-autopilot --with-refine --yes` | 在实时链路追加 refine |
-| `ovp-autopilot --no-commit --yes` | 禁用自动提交 |
+| `ovp-autopilot --watch=inbox --parallel=1 --yes` | Default real-time pipeline |
+| `ovp-autopilot --watch=inbox,pinboard --yes` | Watch multiple sources |
+| `ovp-autopilot --with-refine --yes` | Add refine to the real-time path |
+| `ovp-autopilot --no-commit --yes` | Disable auto-commit |
 
-## 目录结构
+## Directory Layout
 
 ```text
 vault/
@@ -460,24 +424,19 @@ vault/
 │       └── alias-index.json
 ├── 20-Areas/
 │   └── {AI-Research, Investing, Programming, Tools}/Topics/YYYY-MM/
-├── 40-Resources/
-│   └── Crystals/                    # ovp-build-crystals 物化的持久化 briefing
 ├── 60-Logs/
 │   ├── pipeline.jsonl
 │   ├── refine-mutations.jsonl
 │   ├── transactions/
 │   ├── quality-reports/
 │   ├── daily-deltas/
-│   ├── link-suggestions/            # ovp-link-suggest 输出 JSONL
-│   ├── working-memory/              # ovp-working-memory 每日 distill
 │   └── knowledge.db
 └── 70-Archive/
-    └── dedup-merged/                # ovp-concept-dedup --apply 归档
 ```
 
-## `knowledge.db` 提供什么
+## What `knowledge.db` Provides
 
-`knowledge.db` 是可重建的本地派生索引，当前包含：
+`knowledge.db` is a rebuildable local derived index. It currently includes:
 
 - `pages_index`
 - `page_fts`
@@ -486,23 +445,23 @@ vault/
 - `timeline_events`
 - `audit_events`
 - `page_embeddings`
-- `page_metrics`（last_seen_ts / reuse_count / citation_count，供 `search_fused` 衰减排序）
 
-它由 `ovp-knowledge-index` 重建，供以下读取场景使用：
+It exists to power:
 
-- 关键词搜索
-- embedding 检索
-- canonical slug 读取
-- 审计事件浏览
-- 工具发现与只读服务
+- keyword retrieval
+- embedding retrieval
+- canonical page reads
+- audit browsing
+- tool discovery and read-only serving
 
-默认 discovery 也已经统一到这里：
+Default discovery now routes through this layer:
 
-- `ovp-query` 默认走 `knowledge.db` 的 `search_fused`：BM25 + 向量 RRF (k=60)，再叠 Recency / Frequency / Importance 衰减
-- `--engine bm25` / `--engine vector` 可显式回退到单引擎
-- QMD 不再是默认检索依赖，只能通过显式 `--engine qmd` 启用
+- `ovp-query` uses `knowledge.db` by default
+- keyword retrieval uses FTS5 BM25
+- semantic retrieval uses local deterministic embeddings
+- QMD is no longer the default runtime dependency; it is opt-in via `--engine qmd`
 
-## 快速开始
+## Quick Start
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/fakechris/obsidian_vault_pipeline/main/scripts/install-user.sh
@@ -516,36 +475,36 @@ ovp --check
 ovp --full
 ```
 
-如果你更偏好显式的 PyPI 两步安装：
+If you prefer the explicit PyPI two-step flow:
 
 ```bash
 python3 -m pip install --user obsidian-vault-pipeline
 python3 -m ovp_pipeline.installer
 ```
 
-如果你的 Python 环境启用了 PEP 668，优先使用：
+If your Python installation enforces PEP 668, prefer:
 
 ```bash
 pipx install obsidian-vault-pipeline
 ```
 
-安装器会优先把 `ovp*` 命令写入当前 `PATH` 里可写的安全 bin 目录；如果找不到，则退回 `~/.local/bin`，不会修改你的 shell 配置。
+The installer prefers a writable, safe bin directory that is already on `PATH`; if none is available, it falls back to `~/.local/bin`. It does not edit your shell configuration.
 
-如果你要显式看到整形层：
+If you want to see the refine layer explicitly:
 
 ```bash
 ovp --full --with-refine
 ```
 
-如果你要开守护进程：
+If you want a daemon:
 
 ```bash
 ovp-autopilot --watch=inbox --parallel=1 --yes
 ```
 
-## 配置
+## Configuration
 
-在 vault 根目录放 `.env`：
+Put `.env` in the vault root:
 
 ```bash
 AUTO_VAULT_API_KEY=your_key_here
@@ -557,17 +516,17 @@ PINBOARD_TOKEN=username:token
 HTTP_PROXY=http://127.0.0.1:7897
 ```
 
-## 设计原则
+## Design Principles
 
-- 先保证身份系统一致，再增加功能
-- `registry` 与文件系统共同定义 canonical 状态
-- `knowledge.db` 只做 derived retrieval，不做第二真相源
-- 吸收是日常自动化的一部分；整形是强能力，但默认 opt-in
-- Wiki、MOC、Dashboard、Briefing、Context Pack 都是 projection，必须能追回 source/evidence
-- Reader-facing UI 应先让用户理解知识，再暴露 operator/debug 细节
-- 文档必须描述“现在真实能跑的东西”，不是未来路线图
+- identity consistency before feature growth
+- vault files + registry define canonical state
+- `knowledge.db` is derived retrieval, never a second Authority
+- absorb is part of daily automation; refine is powerful and opt-in by default
+- Wiki, MOC, dashboard, briefing, and context packs are projections that must trace back to source/evidence
+- reader-facing UI should explain knowledge first, then expose operator/debug detail
+- docs must describe what actually ships, not a future architecture sketch
 
-## 相关资源
+## Related Resources
 
 - [Showcase Vault](https://github.com/fakechris/obsidian_vault_showcase)
 - [PyPI](https://pypi.org/project/obsidian-vault-pipeline/)
@@ -575,4 +534,4 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-当前文档对应版本：`v0.9.2`
+This document targets: `v0.9.2`

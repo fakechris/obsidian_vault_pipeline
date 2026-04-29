@@ -540,7 +540,7 @@ AUTO_DOWNLOAD_IMAGES=true
 - `handler_registry.py`, `workflow_handlers.py` — step handler 注册与分派
 - `pack_resolution.py`, `packs/` — pack/profile 解析；`packs/base.py` 定义 `BaseDomainPack`，`packs/{default_knowledge,research_tech}/` 是内置 pack
 - `plugins.py` — entry-point + `OVP_PACK_MANIFESTS` 两种发现路径
-- `identity.py`, `concept_registry.py`, `concept_resolver.py` — canonical identity；**source of truth，LLM 不能绕过**
+- `identity.py`, `concept_registry.py`, `concept_resolver.py` — canonical identity helper；Authority identity discipline 的一部分，LLM 不能绕过
 - `*_registry.py` — artifact / assembly_recipe / execution_contract / governance / object / observation_surface / processor_contract / semantic_relation / truth_projection / run_history
 - `txn.py` — 事务系统（见 Section 5.4）
 
@@ -556,7 +556,7 @@ AUTO_DOWNLOAD_IMAGES=true
 
 ### 硬边界（改动时守住）
 
-1. `knowledge.db` 是派生索引，**不是** source of truth；canonical 判断只能走 registry + vault markdown
+1. `knowledge.db` 是派生索引，**不是** Authority；canonical 判断只能走 registry + vault markdown
 2. Pack 代码不能把 semantic retrieval 直接升格成 canonical identity
 3. 所有 derived state 必须可由 `ovp-knowledge-index`、`ovp-moc`、`ovp-rebuild-registry` 重建
 4. 审计事件走 `60-Logs/pipeline.jsonl` 和 `audit_events` 表；不要绕开

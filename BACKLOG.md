@@ -20,7 +20,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | --- | --- | --- |
 | M0 Pipeline And Pack Foundation | Done | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first source-lifecycle idempotency slice |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
-| M2 Roadmap And README Consolidation | Active | merge historical milestones, compiler roadmap, recent KSR input, and reader-product research |
+| M2 Roadmap And README Consolidation | Active | merge historical milestones, compiler roadmap, recent KSR input, reader-product research, and English-primary docs |
 | M3 Reader-First Knowledge Atlas | Next | `/` becomes reader home; current dashboard moves to `/ops`; objects and graph become knowledge products |
 | M4 KSR Safety And Hot-Path Hardening | Next | projection labels, hot-path audit, wiring evals, routing preview, evidence spans, candidate risk |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
@@ -31,7 +31,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 | ID | Priority | Status | Work item | Source links |
 | --- | --- | --- | --- | --- |
-| BL-000 | P0 | Active | Commit current roadmap/README/backlog consolidation | M2 |
+| BL-000 | P0 | Active | Commit current roadmap/README/backlog consolidation, including English-primary README/Architecture/Milestone docs with Chinese alternates | M2 |
 | BL-001 | P0 | Next | Reader shell route split: make `/` a Knowledge Atlas home and move current dashboard to `/ops` | M3, reader-product note |
 | BL-002 | P0 | Next | Projection marking: label dashboard, MOC, wiki, briefing, reader pages, graph, and context packs as projections | M4, KSR-002 |
 | BL-003 | P0 | Next | Dashboard/search hot-path audit: default UI/search paths must not scan raw/PDF/Office sources | M4, KSR-015 |
@@ -51,6 +51,8 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-017 | P2 | Later | Schema-on-demand guard for new claim/candidate profiles | M6, KSR-028 |
 | BL-018 | P2 | Later | Reviewed semantic relation extractor and query feedback loop | M7, April 22 roadmap |
 | BL-019 | P2 | Later | Skill/routine extraction profile, notebook/raw-source mode, ingest ROI, hybrid retrieval, multimodal caption-first ingest, follow-up object model | M7, KSR-010, KSR-011, KSR-012, KSR-016, KSR-019, KSR-029 |
+| BL-020 | P1 | Later | Projection repair lifecycle: structured marker kind/scope/reason, supersession, claim lease, and repair audit events | M4/M5, Architecture |
+| BL-021 | P1 | Later | Authority/projection schema versioning and migration-triggered full rebuild markers | M4/M5, Architecture |
 
 ## KSR Task Coverage
 
