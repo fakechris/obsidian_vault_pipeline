@@ -63,7 +63,7 @@ except ImportError:
 
 # Try to import concept registry
 try:
-    from .concept_registry import ConceptRegistry, STATUS_ACTIVE, STATUS_CANDIDATE
+    from .concept_registry import ConceptRegistry
     HAS_REGISTRY = True
 except ImportError:
     HAS_REGISTRY = False
@@ -655,6 +655,27 @@ def build_extraction_summary(
     }
 
 
+def _is_under_path(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(parent.resolve(strict=False))
+        return True
+    except ValueError:
+        return False
+
+
+def _reject_intake_source_target(layout: VaultLayout, path: Path) -> None:
+    for source_root in (
+        layout.clippings_dir,
+        layout.raw_dir,
+        layout.processing_dir,
+        layout.processed_dir,
+    ):
+        if _is_under_path(path, source_root):
+            raise ValueError(
+                f"absorb target is an intake source and must go through source lifecycle first: {path}"
+            )
+
+
 def _collect_absorb_targets(
     layout: VaultLayout,
     *,
@@ -663,11 +684,16 @@ def _collect_absorb_targets(
     recent: int | None = None,
 ) -> list[Path]:
     if file_path:
+        _reject_intake_source_target(layout, file_path)
         return [file_path]
     if directory:
+        _reject_intake_source_target(layout, directory)
         if not directory.exists():
             return []
-        return sorted(directory.glob("*_深度解读.md"))
+        targets = sorted(directory.glob("*_深度解读.md"))
+        for target in targets:
+            _reject_intake_source_target(layout, target)
+        return targets
     if recent:
         areas_root = layout.vault_dir / "20-Areas"
         area_dirs = (
@@ -727,6 +753,13 @@ def run_absorb_workflow(
     if verbose:
         print("✓ LLM Client initialized")
 
+    targets = _collect_absorb_targets(
+        layout,
+        file_path=file_path,
+        directory=directory,
+        recent=recent,
+    )
+
     if directory and progress_callback is None and hasattr(extractor, "process_directory"):
         results = extractor.process_directory(
             directory,
@@ -755,13 +788,6 @@ def run_absorb_workflow(
             },
         )
         return payload
-
-    targets = _collect_absorb_targets(
-        layout,
-        file_path=file_path,
-        directory=directory,
-        recent=recent,
-    )
 
     if verbose and directory:
         print(f"\nProcessing directory: {directory}")
@@ -872,7 +898,7 @@ def main(argv: list[str] | None = None):
         return 0
 
     print(f"\n{'='*60}")
-    print(f"EVERGREEN EXTRACTION COMPLETE")
+    print("EVERGREEN EXTRACTION COMPLETE")
     print(f"{'='*60}")
     print(f"Files processed: {payload['summary']['files_processed']}")
     print(f"Concepts extracted: {payload['summary']['concepts_extracted']}")

@@ -11,7 +11,7 @@ tools:
 projects:
   - OVP
   - research-tech
-  - OpenClaw
+  - Obsidian Vault Pipeline
 ---
 # Vision & Roadmap: The Auditable Knowledge Compiler
 

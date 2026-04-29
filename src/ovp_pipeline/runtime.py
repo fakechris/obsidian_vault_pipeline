@@ -21,7 +21,7 @@ def resolve_vault_dir(vault_dir: Path | str | None = None) -> Path:
 
 
 def looks_like_vault_dir(vault_dir: Path | str) -> bool:
-    """Return True when the path has the core OpenClaw/Obsidian vault layout."""
+    """Return True when the path has the core OVP/Obsidian vault layout."""
     base = resolve_vault_dir(vault_dir)
     has_core_dirs = (
         (base / "10-Knowledge").is_dir()
