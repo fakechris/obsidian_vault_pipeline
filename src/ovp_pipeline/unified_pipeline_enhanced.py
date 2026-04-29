@@ -44,7 +44,7 @@ from typing import Any
 
 try:
     from .handler_registry import execute_profile_stage_handler
-    from .runtime import VaultLayout, vault_workflow_lock
+    from .runtime import VaultLayout, looks_like_vault_dir, resolve_vault_dir, vault_workflow_lock
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
@@ -58,7 +58,7 @@ try:
     )
 except ImportError:  # pragma: no cover - script mode fallback
     from handler_registry import execute_profile_stage_handler
-    from runtime import VaultLayout, vault_workflow_lock
+    from runtime import VaultLayout, looks_like_vault_dir, resolve_vault_dir, vault_workflow_lock
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
@@ -354,9 +354,10 @@ AUTO_VAULT_MODEL={model}
 def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
     """检查环境配置，返回(是否就绪, 问题列表)"""
     issues = []
+    resolved_vault = resolve_vault_dir(vault_dir)
 
     # 加载环境变量（尝试多个位置）
-    _load_env(vault_dir)
+    _load_env(resolved_vault)
 
     # 检查 API Key
     key_ok, key_msg = _check_api_key()
@@ -376,8 +377,7 @@ def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
 
     # 检查 .env 文件（多个位置）
     env_paths = []
-    if vault_dir:
-        env_paths.append(vault_dir / ".env")
+    env_paths.append(resolved_vault / ".env")
     env_paths.append(Path.cwd() / ".env")
     env_paths.append(ENV_FILE)
     env_paths.append(ENV_FILE_ALT)
@@ -393,7 +393,16 @@ def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
     else:
         issues.append(".env file: NOT FOUND")
 
-    return key_ok, issues
+    vault_ok = looks_like_vault_dir(resolved_vault)
+    if vault_ok:
+        issues.append(f"Vault root: OK ({resolved_vault})")
+    else:
+        issues.append(
+            "Vault root: not a vault "
+            f"({resolved_vault}; expected core vault dirs plus .obsidian or root Index.md/Log.md)"
+        )
+
+    return key_ok and vault_ok, issues
 
 
 # ========== 配置 ==========
@@ -2868,9 +2877,10 @@ def main():
         ),
     )
     parser.add_argument("--profile", default=None, help="Workflow profile 名称（默认: full）")
-    parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
+    parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
 
     args = parser.parse_args()
+    vault_dir = resolve_vault_dir(args.vault_dir)
 
     # 处理 init 命令
     if args.init:
@@ -2881,7 +2891,7 @@ def main():
         print("\n" + "="*60)
         print("环境检查")
         print("="*60)
-        ok, issues = check_environment(args.vault_dir)
+        ok, issues = check_environment(vault_dir)
         for issue in issues:
             print(f"  {'✓' if 'OK' in issue or 'Found' in issue else '✗'} {issue}")
         if ok:
@@ -2890,18 +2900,18 @@ def main():
             print(f"  API Key: {key}...")
             print(f"  API Base: {os.environ.get('AUTO_VAULT_API_BASE', 'N/A')}")
         else:
-            print("\n✗ 环境未就绪，请运行: ovp --init")
+            print("\n✗ 环境未就绪，请确认 --vault-dir/VAULT_DIR 指向 vault，并检查 .env")
         return 0 if ok else 1
 
     # 检查环境（运行前）
-    ok, issues = check_environment(args.vault_dir)
+    ok, issues = check_environment(vault_dir)
     if not ok:
         print("\n" + "="*60)
         print("环境错误")
         print("="*60)
         for issue in issues:
             print(f"  ✗ {issue}")
-        print("\n请先运行: ovp --init")
+        print("\n请确认 --vault-dir/VAULT_DIR 指向 vault，并检查 .env")
         return 1
 
     execution_plan = build_execution_plan(args)
@@ -2909,7 +2919,7 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
+    layout = VaultLayout.from_vault(vault_dir)
 
     # 初始化
     logger = PipelineLogger(layout.pipeline_log)
