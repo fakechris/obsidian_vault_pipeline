@@ -28,6 +28,7 @@ from ..pulse import initial_positions, tail_events
 from ..runtime import VaultLayout, resolve_vault_dir
 from .reuse_report import build_reuse_report_payload
 from ..ui.view_models import (
+    DEFAULT_CANDIDATE_BROWSER_LIMIT,
     build_action_queue_payload,
     build_atlas_browser_payload,
     build_briefing_payload,
@@ -67,6 +68,21 @@ _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?",
 _GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
 _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
 _CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
+_INLINE_MEMBER_LINK_LIMIT = 8
+
+
+def _render_limited_inline_links(
+    items,
+    render_link,
+    *,
+    limit: int = _INLINE_MEMBER_LINK_LIMIT,
+) -> str:
+    visible = items[:limit]
+    hidden_count = max(0, len(items) - len(visible))
+    links = ", ".join(render_link(item) for item in visible)
+    if hidden_count:
+        links += f" <span class='muted'>+{hidden_count} more</span>"
+    return links
 
 
 def _shell_href(path: str, requested_pack: str = "") -> str:
@@ -2239,6 +2255,14 @@ def _render_atlas_page(payload: dict) -> str:
         if payload.get("is_limited")
         else ""
     )
+    def render_member_link(member: dict[str, object]) -> str:
+        href = _object_href(
+            str(member["object_id"]),
+            str(member.get("object_path", "")),
+            requested_pack=requested_pack,
+        )
+        return f'<a href="{escape(href)}">{escape(str(member["title"]))}</a>'
+
     items = (
         "".join(
             "<li>"
@@ -2246,14 +2270,7 @@ def _render_atlas_page(payload: dict) -> str:
             + f" <span class='pill'>{item['member_count']} objects</span>"
             + f" <span class='pill'>{len(item['deep_dives'])} deep dives</span>"
             + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
-            + (
-                " <span class='muted'>"
-                + ", ".join(
-                    f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
-                    for member in item["members"]
-                )
-                + "</span>"
-            )
+            + f" <span class='muted'>{_render_limited_inline_links(item['members'], render_member_link)}</span>"
             + (
                 f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
                 if item["preview_titles"]
@@ -2445,6 +2462,9 @@ def _render_clusters_page(payload: dict) -> str:
         )
         or "<span class='muted'>None</span>"
     )
+    def render_member_link(member: dict[str, object]) -> str:
+        return f'<a href="{escape(str(member["path"]))}">{escape(str(member["title"]))}</a>'
+
     items = (
         "".join(
             "<li>"
@@ -2452,14 +2472,7 @@ def _render_clusters_page(payload: dict) -> str:
             + f" <span class='pill'>{escape(item['cluster_kind'])}</span>"
             + f" <span class='pill'>{escape(item['priority_band'])}</span>"
             + f" <span class='pill'>{item['member_count']} objects</span>"
-            + (
-                " <span class='muted'>"
-                + ", ".join(
-                    f'<a href="{escape(member["path"])}">{escape(member["title"])}</a>'
-                    for member in item["member_links"]
-                )
-                + "</span>"
-            )
+            + f" <span class='muted'>{_render_limited_inline_links(item['member_links'], render_member_link)}</span>"
             + f"<div class='muted'>Canonical cluster: {escape(item['label'])}</div>"
             + f"<div class='muted'>Center: <a href='{escape(item['center_object_path'])}'>{escape(item['center_title'])}</a></div>"
             + f"<div class='muted'>Priority: {escape(item['priority_reason'])}</div>"
@@ -2856,6 +2869,43 @@ def _render_candidate_items(payload: dict) -> str:
     return f"<ul class='list-tight'>{''.join(rendered)}</ul>"
 
 
+def _render_candidates_pagination(payload: dict) -> str:
+    count = int(payload.get("count") or 0)
+    limit = int(payload.get("limit") or DEFAULT_CANDIDATE_BROWSER_LIMIT)
+    offset = int(payload.get("offset") or 0)
+    if limit <= 0 or count <= limit:
+        return ""
+
+    query = str(payload.get("query") or "")
+    requested_pack = str(payload.get("requested_pack") or "")
+
+    def href(next_offset: int) -> str:
+        parts = []
+        if query:
+            parts.append(f"q={quote(query, safe='')}")
+        parts.append(f"limit={limit}")
+        parts.append(f"offset={max(0, next_offset)}")
+        if requested_pack:
+            parts.append(f"pack={quote(requested_pack, safe='')}")
+        return "/candidates?" + "&".join(parts)
+
+    links = []
+    if offset > 0:
+        links.append(f'<a href="{escape(href(max(0, offset - limit)))}">Previous</a>')
+    if offset + limit < count:
+        links.append(f'<a href="{escape(href(offset + limit))}">Next</a>')
+    if not links:
+        return ""
+    current_start = offset + 1 if count else 0
+    current_end = min(count, offset + limit)
+    return (
+        "<div class='link-row'>"
+        f"<span class='muted'>Showing {current_start}-{current_end} of {count}</span>"
+        + "".join(links)
+        + "</div>"
+    )
+
+
 def _render_candidates_page(payload: dict) -> str:
     query = str(payload.get("query") or "")
     requested_pack = str(payload.get("requested_pack") or "")
@@ -2870,6 +2920,7 @@ def _render_candidates_page(payload: dict) -> str:
         if candidate_warning
         else ""
     )
+    pagination = _render_candidates_pagination(payload)
     return _layout(
         "Candidate Workbench",
         "".join(
@@ -2885,9 +2936,11 @@ def _render_candidates_page(payload: dict) -> str:
                     else ""
                 ),
                 f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter candidates' />",
+                f"<input type='hidden' name='limit' value='{escape(str(payload.get('limit') or DEFAULT_CANDIDATE_BROWSER_LIMIT))}' />",
                 "<button type='submit'>Search</button>",
                 "</form>",
                 f"<p class='muted'>{escape(str(payload.get('count') or 0))} candidate(s) in view.</p>",
+                pagination,
                 f"<section class='card'><h2>Status</h2><div class='link-row'>{status_counts}</div></section>",
                 operator_rail,
                 warning_card,
@@ -4500,6 +4553,8 @@ def create_server(
                 if path == "/api/candidates":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    limit = int(query.get("limit", [str(DEFAULT_CANDIDATE_BROWSER_LIMIT)])[0])
+                    offset = int(query.get("offset", ["0"])[0])
                     if self._guard_research_route(
                         pack_name=pack_name, route_path="/candidates", api=True
                     ):
@@ -4509,12 +4564,16 @@ def create_server(
                             resolved_vault,
                             pack_name=pack_name,
                             query=q,
+                            limit=limit,
+                            offset=offset,
                         )
                     )
                     return
                 if path in {"/candidates", "/candidates/fragment"}:
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    limit = int(query.get("limit", [str(DEFAULT_CANDIDATE_BROWSER_LIMIT)])[0])
+                    offset = int(query.get("offset", ["0"])[0])
                     candidate_warning = query.get("candidate_warning", [""])[0]
                     if self._guard_research_route(
                         pack_name=pack_name, route_path="/candidates", api=False
@@ -4524,6 +4583,8 @@ def create_server(
                         resolved_vault,
                         pack_name=pack_name,
                         query=q,
+                        limit=limit,
+                        offset=offset,
                     )
                     payload["candidate_warning"] = candidate_warning
                     page = _render_candidates_page(payload)
@@ -5504,7 +5565,8 @@ def main(argv: list[str] | None = None) -> int:
     server = create_server(resolved_vault, host=args.host, port=args.port)
     try:
         build_objects_index_payload(resolved_vault, limit=1, offset=0)
-        ensure_signal_ledger_synced(resolved_vault)
+        if not VaultLayout.from_vault(resolved_vault).signals_log.exists():
+            ensure_signal_ledger_synced(resolved_vault)
         _start_ui_prewarm(resolved_vault)
         if args.with_action_worker:
             _spawn_action_worker_process(

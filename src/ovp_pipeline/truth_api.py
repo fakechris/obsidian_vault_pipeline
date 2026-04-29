@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from collections import Counter
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -25,7 +26,7 @@ from .knowledge_index import ensure_knowledge_db_current, rebuild_knowledge_inde
 from .observation_surface_registry import execute_observation_surface_builder
 from .pack_resolution import iter_compatible_packs
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
-from .concept_registry import ConceptRegistry
+from .concept_registry import ConceptRegistry, ResolutionAction, STATUS_ACTIVE
 from .promote_candidates import (
     candidate_file_path,
     merge_candidate,
@@ -44,6 +45,7 @@ from .run_history import list_run_history
 from .txn import classify_run_ledgers
 
 MAX_PAGE_SIZE = 500
+LOGGER = logging.getLogger(__name__)
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _REVIEW_AUDIT_LOG_NAME = "review-actions"
 _SIGNAL_LOG_NAME = "signals"
@@ -728,14 +730,55 @@ def record_review_action(
 def _candidate_review_suggestion(
     registry: ConceptRegistry, entry: Any
 ) -> tuple[str, list[tuple[Any, float]]]:
-    similar = registry.search(entry.title, topk=5)
-    similar = [
-        (candidate, score)
-        for candidate, score in similar
-        if candidate.slug != entry.slug and candidate.status == "active"
-    ]
+    similar: list[tuple[Any, float]] = []
+    seen_slugs: set[str] = set()
+    found_ambiguous_active = False
+    resolution = registry.resolve_mention(
+        entry.title,
+        area=entry.area or None,
+        include_related_context=False,
+    )
+    if resolution.action == ResolutionAction.LINK_EXISTING and resolution.entry:
+        candidate = registry.find_by_slug(resolution.entry.slug)
+        if (
+            candidate
+            and candidate.slug != entry.slug
+            and candidate.status == STATUS_ACTIVE
+        ):
+            similar.append((candidate, resolution.confidence))
+            seen_slugs.add(candidate.slug)
+    elif resolution.action == ResolutionAction.REVIEW_AMBIGUOUS:
+        for ambiguous in resolution.ambiguous_entries:
+            candidate = registry.find_by_slug(ambiguous.slug)
+            if (
+                candidate
+                and candidate.slug != entry.slug
+                and candidate.status == STATUS_ACTIVE
+                and candidate.slug not in seen_slugs
+            ):
+                similar.append((candidate, resolution.confidence))
+                seen_slugs.add(candidate.slug)
+                found_ambiguous_active = True
+
+    if not similar:
+        for near in registry._safe_near_candidates(entry.title, area=entry.area or None, topk=10):
+            candidate = registry.find_by_slug(near.record.entry.slug)
+            if (
+                candidate
+                and candidate.slug != entry.slug
+                and candidate.status == STATUS_ACTIVE
+                and candidate.slug not in seen_slugs
+            ):
+                similar.append((candidate, near.score))
+                seen_slugs.add(candidate.slug)
+                if len(similar) >= 5:
+                    break
+
+    similar = sorted(similar, key=lambda item: item[1], reverse=True)[:5]
     action = "keep_as_candidate"
-    if entry.source_count >= 2 or entry.evidence_count >= 3:
+    if found_ambiguous_active:
+        action = "keep_as_candidate"
+    elif entry.source_count >= 2 or entry.evidence_count >= 3:
         if similar and similar[0][1] >= 0.7:
             action = "merge_as_alias"
         else:
@@ -3442,6 +3485,15 @@ def _attach_action_queue_state(
 ) -> list[dict[str, Any]]:
     queue_state = _action_queue_state_map(vault_dir)
     normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+    capture_note_paths = list(
+        dict.fromkeys(
+            str(path)
+            for item in items
+            for path in item.get("note_paths", [])
+            if isinstance(path, str) and path.strip()
+        )
+    )
+    capture_summaries = _collect_capture_summaries_resilient(vault_dir, capture_note_paths)
     annotated: list[dict[str, Any]] = []
     for item in items:
         enriched = dict(item)
@@ -3490,21 +3542,7 @@ def _attach_action_queue_state(
             for path in enriched.get("note_paths", [])
             if isinstance(path, str) and path.strip()
         ]
-        try:
-            enriched["capture_summary"] = _aggregate_note_capture_summaries(vault_dir, note_paths)
-        except Exception:
-            enriched["capture_summary"] = {
-                "status": "missing",
-                "captured_event_count": 0,
-                "produced_artifact_count": 0,
-                "candidate_count": 0,
-                "error_count": 0,
-                "skipped_count": 0,
-                "latest_timestamp": "",
-                "summary": "No inbound capture audit was found for this note yet.",
-                "items": [],
-                "note_paths": note_paths,
-            }
+        enriched["capture_summary"] = _capture_summary_from_map(note_paths, capture_summaries)
         enriched["impact_summary"] = _build_signal_impact_summary(enriched, action=matched_action)
         enriched["action_lifecycle"] = (
             {
@@ -3523,6 +3561,32 @@ def _attach_action_queue_state(
         )
         annotated.append(enriched)
     return annotated
+
+
+_CAPTURE_SUMMARY_RECOVERABLE_ERRORS = (OSError, ValueError, sqlite3.Error)
+
+
+def _collect_capture_summaries_resilient(
+    vault_dir: Path | str,
+    note_paths: list[str],
+) -> dict[str, dict[str, Any]]:
+    if not note_paths:
+        return {}
+    try:
+        return _collect_note_capture_summaries(vault_dir, note_paths)
+    except _CAPTURE_SUMMARY_RECOVERABLE_ERRORS:
+        LOGGER.exception(
+            "Failed to collect capture summaries for %d notes; falling back per note.",
+            len(note_paths),
+        )
+
+    summaries: dict[str, dict[str, Any]] = {}
+    for note_path in note_paths:
+        try:
+            summaries.update(_collect_note_capture_summaries(vault_dir, [note_path]))
+        except _CAPTURE_SUMMARY_RECOVERABLE_ERRORS:
+            LOGGER.exception("Failed to collect capture summary for %s.", note_path)
+    return summaries
 
 
 def list_production_gaps(
@@ -3706,10 +3770,12 @@ def get_briefing_snapshot(
     limit: int = 8,
 ) -> dict[str, Any]:
     normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
-    ensure_signal_ledger_synced(vault_dir, pack_name=normalized_pack)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    if not _signal_ledger_path(resolved_vault, pack_name=normalized_pack).exists():
+        ensure_signal_ledger_synced(resolved_vault, pack_name=normalized_pack)
     _, payload = execute_observation_surface_builder(
         surface_kind="briefing",
-        vault_dir=resolve_vault_dir(vault_dir),
+        vault_dir=resolved_vault,
         pack_name=normalized_pack,
         limit=limit,
     )
@@ -3961,8 +4027,9 @@ def _match_note_capture_event(
     if event_type in {"evergreen_auto_promoted", "evergreen_created"}:
         relative_path_field = _vault_relative_path(vault_dir, str(payload.get("path") or ""))
         source_name = Path(str(payload.get("source") or "")).name
+        mutation = payload.get("mutation") if isinstance(payload.get("mutation"), dict) else {}
         target_slug = canonicalize_note_id(
-            str(payload.get("concept") or payload.get("mutation", {}).get("target_slug") or "")
+            str(payload.get("concept") or mutation.get("target_slug") or "")
         )
         if not (
             relative_path_field == note_path
@@ -3972,7 +4039,7 @@ def _match_note_capture_event(
         ):
             return None
         object_id = str(
-            payload.get("mutation", {}).get("target_slug") or payload.get("concept") or ""
+            mutation.get("target_slug") or payload.get("concept") or ""
         ).strip()
         label = (
             "Evergreen promoted" if event_type == "evergreen_auto_promoted" else "Evergreen created"
@@ -4051,21 +4118,45 @@ def _collect_note_capture_summaries(
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
     target_state: dict[str, dict[str, Any]] = {}
+    states_by_path: dict[str, list[dict[str, Any]]] = {}
+    states_by_name: dict[str, list[dict[str, Any]]] = {}
+    states_by_slug: dict[str, list[dict[str, Any]]] = {}
+
+    def add_index(index: dict[str, list[dict[str, Any]]], key: str, state: dict[str, Any]) -> None:
+        normalized_key = str(key or "").strip()
+        if not normalized_key:
+            return
+        bucket = index.setdefault(normalized_key, [])
+        if not any(item["note_path"] == state["note_path"] for item in bucket):
+            bucket.append(state)
+
     for note_path in note_paths:
         normalized_path = str(note_path)
         if not normalized_path.strip() or normalized_path in target_state:
             continue
         targets = _note_capture_targets(resolved_vault, normalized_path)
-        target_state[normalized_path] = {
+        state = {
+            "note_path": normalized_path,
             "targets": targets,
             "derived_note_names": {str(targets["note_name"])},
             "items": [],
         }
+        target_state[normalized_path] = state
+        add_index(states_by_path, normalized_path, state)
+        add_index(states_by_name, str(targets["note_name"]), state)
+        add_index(states_by_slug, str(targets["note_slug"]), state)
     for log_path in (layout.pipeline_log, layout.logs_dir / "refine-mutations.jsonl"):
         if not log_path.exists():
             continue
         for payload in _read_jsonl_items(log_path):
-            for state in target_state.values():
+            for state in _candidate_capture_states(
+                resolved_vault,
+                payload,
+                states_by_path=states_by_path,
+                states_by_name=states_by_name,
+                states_by_slug=states_by_slug,
+            ):
+                previous_derived_names = set(state["derived_note_names"])
                 item = _match_note_capture_event(
                     resolved_vault,
                     payload=payload,
@@ -4074,10 +4165,75 @@ def _collect_note_capture_summaries(
                 )
                 if item is not None:
                     state["items"].append(item)
+                    for derived_name in state["derived_note_names"] - previous_derived_names:
+                        add_index(states_by_name, str(derived_name), state)
     return {
         note_path: _capture_summary_payload(note_path, list(state["items"]))
         for note_path, state in target_state.items()
     }
+
+
+def _candidate_capture_states(
+    vault_dir: Path | str,
+    payload: dict[str, Any],
+    *,
+    states_by_path: dict[str, list[dict[str, Any]]],
+    states_by_name: dict[str, list[dict[str, Any]]],
+    states_by_slug: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    event_type = str(payload.get("event_type") or "").strip()
+    if event_type not in _NOTE_CAPTURE_EVENT_TYPES:
+        return []
+    candidates: dict[str, dict[str, Any]] = {}
+
+    def add_states(states: list[dict[str, Any]] | None) -> None:
+        for state in states or []:
+            candidates[str(state["note_path"])] = state
+
+    def add_path(value: str) -> None:
+        relative_path = _vault_relative_path(vault_dir, str(value or ""))
+        add_states(states_by_path.get(relative_path))
+
+    def add_name(value: str) -> None:
+        name = Path(str(value or "")).name
+        add_states(states_by_name.get(name))
+
+    def add_slug(value: str) -> None:
+        slug = canonicalize_note_id(str(value or ""))
+        add_states(states_by_slug.get(slug))
+
+    if event_type == "source_staged_for_processing":
+        for key in ("source", "staged"):
+            add_path(str(payload.get(key) or ""))
+            add_name(str(payload.get(key) or ""))
+    elif event_type == "source_archived_to_processed":
+        for key in ("source", "archived"):
+            add_path(str(payload.get(key) or ""))
+            add_name(str(payload.get(key) or ""))
+    elif event_type == "source_restored_to_raw":
+        for key in ("source", "restored"):
+            add_path(str(payload.get(key) or ""))
+            add_name(str(payload.get(key) or ""))
+    elif event_type == "article_processed":
+        add_path(str(payload.get("output") or ""))
+        add_name(str(payload.get("file") or ""))
+    elif event_type in {
+        "article_abstained",
+        "article_error",
+        "candidate_upsert_error",
+        "evergreen_error",
+        "candidates_upserted",
+    }:
+        add_name(str(payload.get("file") or ""))
+    elif event_type in {"evergreen_auto_promoted", "evergreen_created"}:
+        mutation = payload.get("mutation") if isinstance(payload.get("mutation"), dict) else {}
+        add_path(str(payload.get("path") or ""))
+        add_name(str(payload.get("source") or ""))
+        add_slug(str(payload.get("concept") or mutation.get("target_slug") or ""))
+    elif event_type == "refine_mutation_applied":
+        for target in _canonicalized_payload_targets(payload):
+            add_states(states_by_slug.get(target))
+    return list(candidates.values())
 
 
 def get_note_inbound_capture_summary(vault_dir: Path | str, *, note_path: str) -> dict[str, Any]:
@@ -4092,26 +4248,29 @@ def _aggregate_note_capture_summaries(
     note_paths: list[str],
 ) -> dict[str, Any]:
     normalized_paths = [str(item) for item in note_paths if str(item).strip()]
+    summary_map = _collect_note_capture_summaries(vault_dir, normalized_paths)
+    return _capture_summary_from_map(normalized_paths, summary_map)
+
+
+def _capture_summary_from_map(
+    normalized_paths: list[str],
+    summary_map: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    normalized_paths = [str(item) for item in normalized_paths if str(item).strip()]
     if not normalized_paths:
-        return {
-            "status": "missing",
-            "captured_event_count": 0,
-            "produced_artifact_count": 0,
-            "candidate_count": 0,
-            "error_count": 0,
-            "skipped_count": 0,
-            "latest_timestamp": "",
-            "summary": "No inbound capture audit was found for this note yet.",
-            "items": [],
-            "note_paths": [],
-        }
+        return _missing_capture_summary([])
     if len(normalized_paths) == 1:
-        payload = get_note_inbound_capture_summary(vault_dir, note_path=normalized_paths[0])
+        payload = dict(
+            summary_map.get(normalized_paths[0])
+            or _capture_summary_payload(normalized_paths[0], [])
+        )
         payload["note_paths"] = normalized_paths
         return payload
 
-    summary_map = _collect_note_capture_summaries(vault_dir, normalized_paths)
-    summaries = [summary_map[item] for item in normalized_paths]
+    summaries = [
+        summary_map.get(item) or _capture_summary_payload(item, [])
+        for item in normalized_paths
+    ]
     captured_event_count = sum(item["captured_event_count"] for item in summaries)
     produced_artifact_count = sum(item["produced_artifact_count"] for item in summaries)
     candidate_count = sum(item["candidate_count"] for item in summaries)
@@ -4152,6 +4311,21 @@ def _aggregate_note_capture_summaries(
             for item in summaries
         ][:8],
         "note_paths": normalized_paths,
+    }
+
+
+def _missing_capture_summary(note_paths: list[str]) -> dict[str, Any]:
+    return {
+        "status": "missing",
+        "captured_event_count": 0,
+        "produced_artifact_count": 0,
+        "candidate_count": 0,
+        "error_count": 0,
+        "skipped_count": 0,
+        "latest_timestamp": "",
+        "summary": "No inbound capture audit was found for this note yet.",
+        "items": [],
+        "note_paths": list(note_paths),
     }
 
 

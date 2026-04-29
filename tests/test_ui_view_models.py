@@ -11,6 +11,17 @@ def _fresh_timestamp(*, seconds_ago: int = 0) -> str:
     return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def test_default_dashboard_browser_limits_stay_responsive():
+    from ovp_pipeline.ui import view_models
+
+    assert view_models.DEFAULT_CANDIDATE_BROWSER_LIMIT >= 1
+    assert view_models.DEFAULT_EVENT_DOSSIER_LIMIT >= 1
+    assert view_models.DEFAULT_TRACEABILITY_BROWSER_LIMIT >= 1
+    assert view_models.DEFAULT_CANDIDATE_BROWSER_LIMIT <= 25
+    assert view_models.DEFAULT_EVENT_DOSSIER_LIMIT <= 25
+    assert view_models.DEFAULT_TRACEABILITY_BROWSER_LIMIT <= 15
+
+
 def _seed_truth_store(temp_vault):
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     beta = temp_vault / "10-Knowledge" / "Evergreen" / "Beta.md"
@@ -432,7 +443,7 @@ date: 2026-04-13
 
 
 def test_build_event_dossier_payload(temp_vault):
-    from ovp_pipeline.ui.view_models import build_event_dossier_payload
+    from ovp_pipeline.ui.view_models import DEFAULT_EVENT_DOSSIER_LIMIT, build_event_dossier_payload
 
     _seed_truth_store(temp_vault)
 
@@ -467,7 +478,7 @@ def test_build_event_dossier_payload(temp_vault):
     assert payload["events"][0]["semantic_role"] == "note_date_projection"
     assert payload["cluster_sections"][0]["date"] == "2026-04-13"
     assert payload["event_type_counts"] == {"dated_note": 3}
-    assert payload["limit"] == 50
+    assert payload["limit"] == DEFAULT_EVENT_DOSSIER_LIMIT
     assert payload["is_limited"] is True
     assert payload["timeline_contract"]["timeline_kind"] == "dated_note_projection"
     assert payload["timeline_contract"]["grouping_kind"] == "object_date_rollup"
@@ -1980,7 +1991,7 @@ Shipped the local-first harness update.
 
 
 def test_build_atlas_browser_payload(temp_vault):
-    from ovp_pipeline.ui.view_models import build_atlas_browser_payload
+    from ovp_pipeline.ui.view_models import DEFAULT_TRACEABILITY_BROWSER_LIMIT, build_atlas_browser_payload
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(
@@ -2022,12 +2033,12 @@ date: 2026-04-13
     assert payload["items"][0]["members"][0]["object_id"] == "alpha"
     assert payload["items"][0]["member_count"] == 1
     assert payload["items"][0]["preview_titles"] == ["Alpha"]
-    assert payload["limit"] == 50
+    assert payload["limit"] == DEFAULT_TRACEABILITY_BROWSER_LIMIT
     assert payload["is_limited"] is True
 
 
 def test_build_derivation_browser_payload(temp_vault):
-    from ovp_pipeline.ui.view_models import build_derivation_browser_payload
+    from ovp_pipeline.ui.view_models import DEFAULT_TRACEABILITY_BROWSER_LIMIT, build_derivation_browser_payload
 
     alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
     alpha.write_text(
@@ -2077,7 +2088,7 @@ Mentions [[alpha]].
     assert payload["items"][0]["derived_object_count"] == 1
     assert payload["items"][0]["preview_titles"] == ["Alpha"]
     assert payload["items"][0]["source_notes"] == []
-    assert payload["limit"] == 50
+    assert payload["limit"] == DEFAULT_TRACEABILITY_BROWSER_LIMIT
     assert payload["is_limited"] is True
 
 
@@ -2230,7 +2241,7 @@ date: 2026-04-13
 
 
 def test_build_production_browser_payload(temp_vault):
-    from ovp_pipeline.ui.view_models import build_production_browser_payload
+    from ovp_pipeline.ui.view_models import DEFAULT_TRACEABILITY_BROWSER_LIMIT, build_production_browser_payload
 
     processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
     processed.parent.mkdir(parents=True, exist_ok=True)
@@ -2324,7 +2335,7 @@ Mentions [[alpha]].
     ]
     assert any(item["stage_label"] == "source_note" for item in payload["items"])
     assert any(item["stage_label"] == "deep_dive" for item in payload["items"])
-    assert payload["limit"] == 50
+    assert payload["limit"] == DEFAULT_TRACEABILITY_BROWSER_LIMIT
     assert payload["is_limited"] is True
 
 

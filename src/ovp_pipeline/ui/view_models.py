@@ -50,8 +50,9 @@ from ..truth_api import (
     search_vault_surface,
 )
 
-DEFAULT_EVENT_DOSSIER_LIMIT = 50
-DEFAULT_TRACEABILITY_BROWSER_LIMIT = 50
+DEFAULT_CANDIDATE_BROWSER_LIMIT = 25
+DEFAULT_EVENT_DOSSIER_LIMIT = 25
+DEFAULT_TRACEABILITY_BROWSER_LIMIT = 15
 
 
 def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
@@ -1202,7 +1203,7 @@ def build_candidate_browser_payload(
     *,
     pack_name: str | None = None,
     query: str | None = None,
-    limit: int = 100,
+    limit: int = DEFAULT_CANDIDATE_BROWSER_LIMIT,
     offset: int = 0,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""

@@ -527,7 +527,7 @@ class ConceptRegistry:
         the deterministic resolver abstains. Keep exact-resolution semantics first,
         then fall back to a lexical surface search over registry-managed identifiers.
         """
-        result = self.resolve_mention(query, area=area)
+        result = self.resolve_mention(query, area=area, include_related_context=False)
         if result.action == ResolutionAction.LINK_EXISTING and result.entry:
             # Find legacy ConceptEntry
             entry = self.find_by_slug(result.entry.slug)
