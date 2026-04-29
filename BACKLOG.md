@@ -31,8 +31,8 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 | ID | Priority | Status | Work item | Source links |
 | --- | --- | --- | --- | --- |
-| BL-000 | P0 | Active | Commit current roadmap/README/backlog consolidation, including English-primary README/Architecture/Milestone docs with Chinese alternates | M2 |
-| BL-001 | P0 | Next | Reader shell route split: make `/` a Knowledge Atlas home and move current dashboard to `/ops` | M3, reader-product note |
+| BL-000 | P0 | Done | Commit current roadmap/README/backlog consolidation, including English-primary README/Architecture/Milestone docs with Chinese alternates | M2, PR #74 |
+| BL-001 | P0 | Active | Reader shell route split: make `/` a Knowledge Atlas home and move current dashboard to `/ops` | M3, reader-product note |
 | BL-002 | P0 | Next | Projection marking: label dashboard, MOC, wiki, briefing, reader pages, graph, and context packs as projections | M4, KSR-002 |
 | BL-003 | P0 | Next | Dashboard/search hot-path audit: default UI/search paths must not scan raw/PDF/Office sources | M4, KSR-015 |
 | BL-004 | P0 | Next | Workflow wiring eval suite for lifecycle routing, promote gates, projection labels, hot paths, and read/write boundaries | M4, KSR-026 |

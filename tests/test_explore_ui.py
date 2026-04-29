@@ -93,7 +93,7 @@ def test_explore_route_returns_three_pane_html(running_server) -> None:
 
 def test_explore_navbar_link_present(running_server) -> None:
     home = _fetch(running_server, "/")
-    assert 'href="/explore"' in home
+    assert 'href="/map"' in home
 
 
 def test_explore_stream_round_trips_one_synthetic_event(temp_vault: Path, running_server) -> None:

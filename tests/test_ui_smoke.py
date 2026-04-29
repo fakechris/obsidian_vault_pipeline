@@ -7,6 +7,10 @@ from urllib.parse import quote, urlencode
 
 from ovp_pipeline.knowledge_index import rebuild_knowledge_index
 from ovp_pipeline.runtime import VaultLayout
+from ovp_pipeline.ui.view_models import (
+    DEFAULT_EVENT_DOSSIER_LIMIT,
+    DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+)
 
 
 def _seed_truth_store(temp_vault):
@@ -202,7 +206,7 @@ date: 2026-04-13
     assert "Event Clusters" in events_body
     assert "Review Context" in events_body
     assert "Production Contribution" in events_body
-    assert "Showing the most recent 50 timeline rows" in events_body
+    assert f"Showing the most recent {DEFAULT_EVENT_DOSSIER_LIMIT} timeline rows" in events_body
     assert "Top Source Notes" in events_body
     assert "/summaries?q=alpha" in events_body
     assert "Quick Maintenance" in events_body
@@ -216,7 +220,7 @@ date: 2026-04-13
     assert atlas_status == 200
     assert "Atlas / MOC Browser" in atlas_body
     assert "Contribution Summary" in atlas_body
-    assert "Showing the most recent 50 atlas pages" in atlas_body
+    assert f"Showing the most recent {DEFAULT_TRACEABILITY_BROWSER_LIMIT} atlas pages" in atlas_body
 
     assert deep_dives_status == 200
     assert "Deep Dive Derivations" in deep_dives_body
@@ -226,13 +230,16 @@ date: 2026-04-13
     assert "Evolution Browser" in evolution_body
     assert "Candidate Links" in evolution_body
     assert "/evolution/review" in evolution_body
-    assert "Showing the most recent 50 deep dives" in deep_dives_body
+    assert f"Showing the most recent {DEFAULT_TRACEABILITY_BROWSER_LIMIT} deep dives" in deep_dives_body
     assert "Source Deep Dive" in deep_dives_body
 
     assert production_status == 200
     assert "Production Browser" in production_body
     assert "Chain Model" in production_body
-    assert "Showing the most recent 50 production-chain entries" in production_body
+    assert (
+        f"Showing the most recent {DEFAULT_TRACEABILITY_BROWSER_LIMIT} production-chain entries"
+        in production_body
+    )
     assert "Weak Points" in production_body
     assert "Source Deep Dive" in production_body
     assert "deep dive" in production_body
@@ -945,7 +952,7 @@ Mentions [[alpha]].
     assert f'/note?path={quote("20-Areas/AI-Research/Topics/2026-04/Agent Harness_深度解读.md", safe="")}' in body
 
 
-def test_ui_root_dashboard_renders_db_summary(temp_vault):
+def test_ui_root_library_and_ops_dashboard_render_db_summary(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
@@ -983,24 +990,38 @@ Thin note.
     thread.start()
     try:
         root_status, root_body = _get(port, "/")
+        ops_status, ops_body = _get(port, "/ops")
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
     assert root_status == 200
-    assert "Objects Indexed" in root_body
-    assert "Contradictions Open" in root_body
-    assert "Recent Events" in root_body
-    assert "Stale Summaries" in root_body
-    assert "Evolution Candidates" in root_body
-    assert "Needs Attention Now" in root_body
+    assert "Knowledge Library" in root_body
+    assert 'href="/">Library</a>' in root_body
+    assert 'href="/map">Map</a>' in root_body
+    assert 'href="/ops">Workbench</a>' in root_body
+    assert "Recent Knowledge" in root_body
+    assert "Knowledge Map" in root_body
     assert "Alpha" in root_body
     assert "Thin Note" in root_body
-    assert "/summaries" in root_body
-    assert "/evolution" in root_body
-    assert "Production Weak Points" in root_body
-    assert "Signals" in root_body
+    assert "OVP Truth UI" not in root_body
+    assert "Workflow Map" not in root_body
+
+    assert ops_status == 200
+    assert "OVP Truth UI" in ops_body
+    assert "Objects Indexed" in ops_body
+    assert "Contradictions Open" in ops_body
+    assert "Recent Events" in ops_body
+    assert "Stale Summaries" in ops_body
+    assert "Evolution Candidates" in ops_body
+    assert "Needs Attention Now" in ops_body
+    assert "Alpha" in ops_body
+    assert "Thin Note" in ops_body
+    assert "/summaries" in ops_body
+    assert "/evolution" in ops_body
+    assert "Production Weak Points" in ops_body
+    assert "Signals" in ops_body
 
 
 def test_ui_signals_page_renders_active_signal_ledger(temp_vault):

@@ -107,31 +107,12 @@ def _shell_supports_research_nav(requested_pack: str = "") -> bool:
 
 
 def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
-    items = [
-        ("Home", "/"),
-        ("Objects", "/objects"),
+    return [
+        ("Library", "/"),
+        ("Map", "/map"),
         ("Search", "/search"),
-        ("Signals", "/signals"),
-        ("Briefing", "/briefing"),
-        ("Actions", "/actions"),
-        ("Production", "/production"),
-        ("Workbench", "/workbench"),
-        ("Explore", "/explore"),
+        ("Workbench", "/ops"),
     ]
-    if _shell_supports_research_nav(requested_pack):
-        items.extend(
-            [
-                ("Candidates", "/candidates"),
-                ("Evolution", "/evolution"),
-                ("Clusters", "/clusters"),
-                ("Atlas", "/atlas"),
-                ("Deep Dives", "/deep-dives"),
-                ("Event Dossier", "/events"),
-                ("Contradictions", "/contradictions"),
-                ("Stale Summaries", "/summaries"),
-            ]
-        )
-    return items
 
 
 def _layout(
@@ -1718,6 +1699,44 @@ def _render_dashboard(payload: dict) -> str:
         requested_pack=requested_pack,
         auto_refresh_seconds=10,
     )
+
+
+def _render_library_home(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    object_items = (
+        "".join(
+            f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">{escape(item["title"])}</a></li>'
+            for item in payload.get("objects", {}).get("items", [])
+        )
+        or "<li class='muted'>No library items yet.</li>"
+    )
+    object_count = int(payload.get("objects", {}).get("count") or 0)
+    map_path = _shell_href("/map", requested_pack)
+    workbench_path = _shell_href("/ops", requested_pack)
+    search_path = _shell_href("/search", requested_pack)
+    body = "".join(
+        [
+            "<section class='hero'>",
+            "<h1>Knowledge Library</h1>",
+            "<p class='muted'>Browse the people, concepts, sources, and ideas in this vault.</p>",
+            "</section>",
+            "<section class='grid stats'>",
+            f"<div class='card'><h2>Library Items</h2><p>{object_count}</p></div>",
+            f"<div class='card'><h2>Search Library</h2><p><a href='{escape(search_path)}'>Search by title, topic, or source</a></p></div>",
+            f"<div class='card'><h2>Knowledge Map</h2><p><a href='{escape(map_path)}'>See how ideas connect</a></p></div>",
+            "</section>",
+            "<section class='grid two-col'>",
+            "<section class='card'><h2>Recent Knowledge</h2>",
+            f"<ul class='list-tight'>{object_items}</ul>",
+            "</section>",
+            "<section class='card'><h2>Open Workbench</h2>",
+            "<p class='muted'>Use the workbench when you need to fix items or check recent activity.</p>",
+            f"<p><a href='{escape(workbench_path)}'>Open Workbench</a></p>",
+            "</section>",
+            "</section>",
+        ]
+    )
+    return _layout("Knowledge Library", body, requested_pack=requested_pack)
 
 
 def _render_objects_index(payload: dict) -> str:
@@ -4439,6 +4458,11 @@ def create_server(
                 if path == "/":
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_runtime_home_payload(resolved_vault, pack_name=pack_name)
+                    self._write_html(_render_library_home(payload))
+                    return
+                if path == "/ops":
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_runtime_home_payload(resolved_vault, pack_name=pack_name)
                     self._write_html(_render_dashboard(payload))
                     return
                 if path == "/api/objects":
@@ -4768,6 +4792,18 @@ def create_server(
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
                         pack_name=pack_name, route_path="/clusters", api=False
+                    ):
+                        return
+                    payload = build_cluster_browser_payload(
+                        resolved_vault, pack_name=pack_name, query=q
+                    )
+                    self._write_html(_render_clusters_page(payload))
+                    return
+                if path == "/map":
+                    q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/map", api=False
                     ):
                         return
                     payload = build_cluster_browser_payload(
