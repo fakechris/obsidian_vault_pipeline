@@ -1,5 +1,34 @@
 # Progress Log
 
+## Session: 2026-04-29
+
+### Reader-First Product Shape And Backlog Reconciliation
+- **Status:** documented
+- Corrected the backlog-source assumption:
+  - the vault KSR project page is a recent task extraction from 2026-04-29 research, not the complete backlog source of truth
+  - roadmap sequencing must merge repo milestone history, the April 22 compiler roadmap, recent KSR tasks, and reader-first product-shape research
+- Reviewed LearnBuffett as a product-shape reference:
+  - person page: <https://learnbuffett.com/people/%E6%A0%BC%E9%9B%B7%E5%8E%84%E5%A7%86>
+  - graph page: <https://learnbuffett.com/graph>
+- Compared the reference against the current local `ovp-ui` surfaces:
+  - `/` currently leads with runtime/workflow/operator state
+  - `/objects` is database-like rather than reader-oriented
+  - `/clusters` exposes analytical graph internals rather than a spatial corpus map
+- Added `docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md`.
+- Added `docs/plans/2026-04-29-consolidated-product-roadmap.md`.
+- Added `BACKLOG.md` as the single active implementation backlog entry point.
+- Updated `task_plan.md` with the current reader-product backlog.
+- Updated `findings.md` with LearnBuffett as Round 16 external/product reference.
+- Current backlog recommendation:
+  - P0: reader home / Knowledge Atlas
+  - P0: move current dashboard to `/ops`
+  - P0: kind-aware object pages
+  - P1: mention/backlink rail
+  - P1: visual `/graph` map
+- Decision:
+  - OVP remains an auditable knowledge compiler internally.
+  - The default user-facing product should become a reader-first, evidence-backed knowledge atlas rather than an operator dashboard.
+
 ## Session: 2026-04-22
 
 ### Phase 30/31: Release Hygiene And Semantic Relation Contract

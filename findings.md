@@ -112,7 +112,7 @@
   - a warning against assuming that better embeddings alone will solve memory-system failure modes
 - The most relevant lesson from No Escape for OVP is to avoid overcommitting to pure semantic retrieval and instead lean harder on explicit structure, provenance, canonical objects, review loops, and resolver-guided narrowing.
 - Round 15 added `campfirein/byterover-cli`. The key conclusion is that ByteRover CLI is best understood not as a simple memory backend, but as a file-canonical, review-governed, dream-maintained, versioned context-curation platform.
-- ByteRover CLI’s strongest ideas are:
+- ByteRover CLI's strongest ideas are:
   - a writable `.brv/context-tree/` as the main working surface, with snapshot/sync logic treating files as canonical state
   - a clean split between deterministic search, synthesized query, and curation/write-back
   - a real review queue for pending high-impact curation operations
@@ -149,6 +149,14 @@
   - a benchmark worldview that treats memory quality and agent evolution as first-class evaluation targets
   - an integration pattern that connects memory at the context-engine layer rather than treating it as a loose memory tool
 - The most relevant lesson from EverOS for OVP is to strengthen construction schemas, typed artifact thinking, and benchmark rigor, while avoiding a drift into heavy service/database-native architecture at the expense of file-native inspectability and user-owned artifacts.
+- Round 20 added LearnBuffett as a product-shape reference rather than an architecture reference.
+- LearnBuffett's strongest lesson is reader-first presentation:
+  - person / concept / company pages are readable knowledge objects first, with backlinks and evidence as supporting context
+  - the graph is a spatial map with type-colored nodes, counts, legend, zoom controls, and a corpus-shape first impression
+  - operational or source mechanics are secondary to comprehension
+- The most relevant lesson for OVP is that the current truth/runtime shell should not be the default product face. OVP can keep its auditable compiler architecture while adding a reader-first knowledge atlas over it.
+- Recorded the reconciliation in `docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md`: the next product layer should prioritize reader home, kind-aware object pages, backlink/mention rail, and visual `/graph`, while moving operator surfaces behind `/ops`.
+- Follow-up roadmap correction: the KSR project page in the dogfooding vault is a recent task-extraction input, not a complete backlog source of truth. Implementation sequencing should merge it with repo milestone history, the April 22 compiler roadmap, and the LearnBuffett product-shape note.
 - Current actionable synthesis across all rounds:
   - OVP should not become a generic memory backend or a hosted coding-agent runtime
   - OVP should lean into user-owned, file-native, reviewable canonical knowledge artifacts

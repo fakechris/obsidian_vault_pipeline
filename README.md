@@ -2,7 +2,7 @@
 schema_version: "1.0.0"
 note_id: readme-dc2a69e8
 title: "Obsidian Vault Pipeline"
-description: "六层 Obsidian 知识流水线"
+description: "面向 Obsidian 的可审计知识状态运行时"
 date: 2026-04-07
 type: meta
 ---
@@ -15,8 +15,8 @@ type: meta
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/obsidian-vault-pipeline.svg)](https://pypi.org/project/obsidian-vault-pipeline/)
 
-面向 Obsidian Vault 的生产级知识流水线  
-Ingest → Interpret → Absorb → Refine → Canonical → Derived
+面向 Obsidian Vault 的可审计知识状态运行时<br>
+Capture → Compile → Reuse
 
 [🇬🇧 English](README_EN.md)
 
@@ -24,21 +24,22 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 
 ## 这是什么
 
-这不是一个“多脚本拼装包”，而是一套围绕 Obsidian Vault 构建的知识编排系统：
+Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只是 RAG over Markdown。它是一套围绕 Obsidian Vault 构建的本地知识状态运行时：
 
-- 输入层负责接收 Pinboard、Clippings、Raw Markdown
-- 解释层负责生成深度解读
-- 吸收层负责把解读编入 Evergreen 生命周期
-- 整形层负责 cleanup / breakdown
-- 规范层负责 registry / alias / Atlas / MOC
-- 派生层负责 `knowledge.db`、graph、lint、daily delta
+- **Capture**：接收 Pinboard、Clippings、Raw Markdown、论文、GitHub、网页等资料，并保持 source lifecycle 可追踪。
+- **Compile**：把资料编译成 deep dive、candidate、claim、evidence、relation、contradiction、registry 和 graph。
+- **Reuse**：把已编译知识投影成 reader atlas、object page、graph、briefing、search、context pack、writing prompt 和 operator workbench。
 
-当前版本已经把这 6 层真正接入到了日常运行链路里：
+内部仍保留六层工程模型（Ingest → Interpret → Absorb → Refine → Canonical → Derived），但产品叙事收敛为 Capture → Compile → Reuse。
+
+当前版本已经把主要运行链路接入到日常工作流：
 
 - `ovp --full` 默认跑到 `knowledge_index`
+- `ovp --incremental` 是日常增量入口，包含近期 Pinboard + Clippings + 后续步骤
 - `ovp --full --with-refine` 会在 `moc` 后追加 `refine`
 - `ovp-autopilot` 默认实时跑 `absorb -> moc -> knowledge_index`
 - `ovp-autopilot --with-refine` 会在实时链路里追加 `refine`
+- `ovp-ui` 提供本地 UI，目前偏 operator workbench；下一阶段会把默认入口改成 reader-first Knowledge Atlas
 
 ## 为什么会变成现在这套架构
 
@@ -50,19 +51,55 @@ Ingest → Interpret → Absorb → Refine → Canonical → Derived
 
 现在这套设计的目标就是把这些问题拆开：
 
+- 用 Capture → Compile → Reuse 解释产品价值
+- 用 source → observation → claim → evidence → validity → projection → permission 解释长期知识状态
 - 用六层运行模型明确“什么是编排层、什么是真相层、什么是派生层”
-- 先把当前技术研究语义正式化为 `research-tech`
-- 再把 `default-knowledge` 收敛成默认兼容层，而不是继续承担所有领域语义
+- 用 `research-tech` 把当前技术研究语义正式化
+- 用 `default-knowledge` 保留默认兼容层
 - 用 Pack API 让不同领域通过 pack 接入，而不是继续往 core 里硬编码特例
 
 这意味着当前仓库已经不只是一个 Vault 自动化项目，而是一个：
 
-> 面向 Obsidian/Vault 工作流的可扩展知识编排平台
+> reader-first, evidence-backed knowledge atlas over an auditable knowledge state runtime
 
 其中：
 
 - `research-tech` 是第一套显式内置标准 pack
 - `default-knowledge` 当前仍保留为默认兼容 pack
+- `knowledge.db` 是 derived store，不是 source of truth
+- vault markdown + registry + evidence chain 才是长期可信边界
+
+## 当前路线图
+
+当前路线图正在合并 repo 历史 milestone、4 月 22 compiler roadmap、vault 内近期 KSR backlog，以及 reader-first 产品形态研究。这里的 KSR 页是近期任务抽取输入，不是完整 backlog 事实源：
+
+- 当前 active backlog：`BACKLOG.md`
+- 近期 KSR backlog 输入：`/Users/chris/Documents/ovp-vault/30-Projects/Active/OVP-Knowledge-State-Runtime.md`
+- 当前合并路线图：`docs/plans/2026-04-29-consolidated-product-roadmap.md`
+- reader 产品形态记录：`docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md`
+
+当前 milestone 顺序：
+
+| Milestone | 状态 | 说明 |
+| --- | --- | --- |
+| M0 Pipeline And Pack Foundation | Complete | CLI、source lifecycle、pack/profile、`knowledge.db`、KSR-013 第一版 |
+| M1 Operator Workbench And Review Runtime | Complete enough | truth UI、candidates、signals/actions、contradictions、action worker |
+| M2 Roadmap And README Consolidation | Active now | 合并历史 milestone、compiler roadmap、近期 KSR 输入与 reader-product 研究，重整 README |
+| M3 Reader-First Knowledge Atlas | Next | `/` 变成 reader home，当前 dashboard 移到 `/ops`，对象页/图谱更像知识产品 |
+| M4 KSR Safety And Hot-Path Hardening | Next | evidence span、projection 标注、candidate 风险分层、routing preview、wiring eval |
+| M5 Context Pack And Operational Runtime | Later | session snapshot、context budget、claim lease、provider facade、observability |
+| M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
+| M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、skill/routine extraction、notebook/raw-source mode |
+
+当前 P0 候选 backlog（合并草案）：
+
+- `KSR-002` Projection 标注
+- `KSR-015` Dashboard/search hot-path audit
+- `KSR-026` Workflow wiring eval suite
+- `KSR-014` Article routing preview
+- `KSR-001` Evidence span 化
+- `KSR-003` Candidate 风险分层
+- Reader-first Knowledge Atlas（产品 P0，作为 projection layer 实现，不另建状态系统）
 
 ## Domain Packs
 
@@ -154,7 +191,7 @@ profile 是某个 pack 下的一条可执行 DAG。
 - `ovp-truth`
   直接读取 `knowledge.db` 中的 object / contradiction / neighborhood truth rows
 - `ovp-ui`
-  启动一个本地只读 DB 浏览面，直接查看 object / topic / event / contradiction
+  启动一个本地 UI。当前默认页偏 operator dashboard；路线图会把 reader-facing atlas 设为首页，并把现有 dashboard 移到 `/ops`
 - `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
 - `docs/research-tech/RESEARCH_TECH_VERIFY.md`
 - `docs/recipes/research-tech/*.md`
@@ -526,6 +563,8 @@ HTTP_PROXY=http://127.0.0.1:7897
 - `registry` 与文件系统共同定义 canonical 状态
 - `knowledge.db` 只做 derived retrieval，不做第二真相源
 - 吸收是日常自动化的一部分；整形是强能力，但默认 opt-in
+- Wiki、MOC、Dashboard、Briefing、Context Pack 都是 projection，必须能追回 source/evidence
+- Reader-facing UI 应先让用户理解知识，再暴露 operator/debug 细节
 - 文档必须描述“现在真实能跑的东西”，不是未来路线图
 
 ## 相关资源
@@ -536,4 +575,4 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-当前文档对应版本：`v0.8.6`
+当前文档对应版本：`v0.9.2`

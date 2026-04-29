@@ -2,7 +2,7 @@
 schema_version: "1.0.0"
 note_id: readme_en-5d661efc
 title: "Obsidian Vault Pipeline"
-description: "A six-layer Obsidian knowledge pipeline"
+description: "An auditable knowledge state runtime for Obsidian"
 date: 2026-04-07
 type: meta
 ---
@@ -15,32 +15,33 @@ type: meta
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/obsidian-vault-pipeline.svg)](https://pypi.org/project/obsidian-vault-pipeline/)
 
-Production-grade knowledge orchestration for Obsidian Vaults  
-Ingest → Interpret → Absorb → Refine → Canonical → Derived
+Auditable knowledge state runtime for Obsidian Vaults<br>
+Capture → Compile → Reuse
 
 [🇨🇳 中文](README.md)
 
 </div>
 
-Current document version: `v0.8.4`
+Current document version: `v0.9.2`
 
 ## What This Is
 
-This project is not a loose collection of scripts. It is a layered knowledge system built around an Obsidian vault:
+Obsidian Vault Pipeline is not a loose collection of scripts, and it is not only RAG over Markdown. It is a local knowledge state runtime built around an Obsidian vault:
 
-- Ingest normalizes incoming raw material
-- Interpret turns raw material into deep-dive notes
-- Absorb compiles those notes into evergreen lifecycle actions
-- Refine performs cleanup and breakdown on existing notes
-- Canonical maintains registry, aliases, Atlas, and MOC
-- Derived builds `knowledge.db`, graph views, lint, and daily deltas
+- **Capture** receives Pinboard, Clippings, raw Markdown, papers, GitHub repos, and web pages while keeping source lifecycle traceable.
+- **Compile** turns material into deep dives, candidates, claims, evidence, relations, contradictions, registry rows, and graph rows.
+- **Reuse** projects compiled knowledge into reader atlas pages, object pages, graph views, briefings, search, context packs, writing prompts, and the operator workbench.
+
+Internally the engineering model still uses six layers: Ingest -> Interpret -> Absorb -> Refine -> Canonical -> Derived. The product narrative is Capture -> Compile -> Reuse.
 
 The current release wires those layers into the actual runtime:
 
 - `ovp --full` runs through `knowledge_index` by default
+- `ovp --incremental` is the daily incremental entry point, including recent Pinboard + Clippings and downstream stages
 - `ovp --full --with-refine` inserts `refine` before the final derived refresh
 - `ovp-autopilot` runs real-time `absorb -> moc -> knowledge_index`
 - `ovp-autopilot --with-refine` adds `refine` to that path
+- `ovp-ui` provides a local UI. It is currently operator-oriented; the next product wave moves the default entry toward a reader-first Knowledge Atlas.
 
 ## Why The Architecture Looks Like This
 
@@ -52,6 +53,8 @@ This repository started as a set of Obsidian automation scripts, but that model 
 
 The current architecture is the direct answer to those failures:
 
+- Capture -> Compile -> Reuse explains the product value
+- source -> observation -> claim -> evidence -> validity -> projection -> permission explains the long-term knowledge state
 - the six-layer runtime makes orchestration, canonical state, and derived state explicit
 - `research-tech` makes the current engineering research semantics explicit
 - `default-knowledge` is being reduced to a default compatibility layer instead of carrying every domain semantic
@@ -59,12 +62,36 @@ The current architecture is the direct answer to those failures:
 
 So the project is no longer just a Vault automation repo. It is now:
 
-> an extensible knowledge orchestration platform for Obsidian-style vault workflows
+> a reader-first, evidence-backed knowledge atlas over an auditable knowledge state runtime
 
 with:
 
 - `research-tech` as the first explicit built-in standard pack
 - `default-knowledge` retained as the default compatibility pack
+- `knowledge.db` as a derived store, never the source of truth
+- vault markdown + registry + evidence chains as the long-term trust boundary
+
+## Current Roadmap
+
+The current roadmap is consolidating repo milestone history, the April 22 compiler roadmap, the recent KSR backlog in the dogfooding vault, and reader-first product-shape research. The KSR page is a recent task-extraction input, not the complete backlog source of truth:
+
+- active backlog: `BACKLOG.md`
+- recent KSR backlog input: `/Users/chris/Documents/ovp-vault/30-Projects/Active/OVP-Knowledge-State-Runtime.md`
+- current merged roadmap: `docs/plans/2026-04-29-consolidated-product-roadmap.md`
+- reader product-shape note: `docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md`
+
+Current milestone sequence:
+
+| Milestone | Status | Meaning |
+| --- | --- | --- |
+| M0 Pipeline And Pack Foundation | Complete | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first KSR-013 slice |
+| M1 Operator Workbench And Review Runtime | Complete enough | truth UI, candidates, signals/actions, contradictions, action worker |
+| M2 Roadmap And README Consolidation | Active now | merge historical milestones, compiler roadmap, recent KSR input, and reader-product research |
+| M3 Reader-First Knowledge Atlas | Next | `/` becomes reader home, current dashboard moves to `/ops`, objects/graph become knowledge products |
+| M4 KSR Safety And Hot-Path Hardening | Next | evidence spans, projection labels, candidate risk tiers, routing preview, wiring evals |
+| M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facades, observability |
+| M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
+| M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, skill/routine extraction, notebook/raw-source mode |
 
 ## Domain Packs
 
@@ -155,7 +182,7 @@ The built-in profiles currently shipped are:
 - `ovp-truth`
   reads object / contradiction / neighborhood truth rows directly from `knowledge.db`
 - `ovp-ui`
-  launches a local read-only DB browser for object / topic / event / contradiction views
+  launches a local UI. The current default page is operator-oriented; the roadmap moves the reader-facing atlas to the homepage and keeps the current dashboard under `/ops`.
 - `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
 - `docs/research-tech/RESEARCH_TECH_VERIFY.md`
 - `docs/recipes/research-tech/*.md`
@@ -488,6 +515,8 @@ HTTP_PROXY=http://127.0.0.1:7897
 - vault files + registry define canonical state
 - `knowledge.db` is derived retrieval, never a second truth source
 - absorb is part of daily automation; refine is powerful and opt-in by default
+- Wiki, MOC, dashboard, briefing, and context packs are projections that must trace back to source/evidence
+- reader-facing UI should explain knowledge first, then expose operator/debug detail
 - docs must describe what actually ships, not a future architecture sketch
 
 ## Related Resources
@@ -498,4 +527,4 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-This document targets: `v0.8.4`
+This document targets: `v0.9.2`
