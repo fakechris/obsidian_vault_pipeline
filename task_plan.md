@@ -24,6 +24,52 @@ OVP is now a usable local knowledge workbench with:
 - active signal loop
 - action queue and focused action worker execution surface
 
+## Product Shape Addendum: 2026-04-29
+
+Reference: `docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md`
+
+Active implementation backlog: `BACKLOG.md`
+
+The current UI is too operator-first. It exposes real system power, but its first impression is runtime state, actions, signals, candidates, clusters, and run history. That makes the product feel more like an engineering console than a readable knowledge base.
+
+LearnBuffett is now recorded as a product-shape reference:
+
+- person / concept / company objects should feel like readable topic pages first
+- graph should be a spatial map of the corpus, not primarily a cluster/debug report
+- backlinks and evidence should support the reading flow instead of leading with raw operational tables
+- operator surfaces should remain available, but behind an `/ops` framing
+
+Reconciled product thesis:
+
+> OVP remains an auditable knowledge compiler internally, but its default user-facing surface should be a reader-first, evidence-backed knowledge atlas.
+
+## Backlog Reconciliation Addendum: 2026-04-29
+
+The KSR project page in `/Users/chris/Documents/ovp-vault/` should not be treated as the backlog source of truth. It appears to be a recent task extraction from the latest research notes, so it is high-signal for KSR gaps but incomplete for prior roadmap history.
+
+Use a four-input merge when deciding roadmap sequence:
+
+- repo milestone history for what has shipped and what older product bets existed
+- `docs/plans/2026-04-22-vision-and-roadmap-trusted-reuse-compiler.md` for the trusted-reuse/compiler direction
+- vault KSR page for recent Knowledge State Runtime task extraction
+- `docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md` for reader-first product shape
+
+## Current Reader-Product Backlog
+
+| Priority | Item | Status | Notes |
+| --- | --- | --- | --- |
+| P0 | Reader home / Knowledge Atlas | Proposed next | Make `/` answer what the corpus knows, what matters, what changed, and what to read next |
+| P0 | Move current dashboard to `/ops` | Proposed next | Preserve runtime/action/operator value without making it first impression |
+| P0 | Kind-aware object pages | Next | Person, concept, company/tool/project, event, claim templates |
+| P1 | Mention/backlink rail | Next | LearnBuffett-style "linked to this page" context with excerpts and source jumps |
+| P1 | Visual `/graph` map | Next | Spatial type-colored graph; keep analytical clusters as ops/debug surface |
+| P1 | Reader-oriented search | Later | Group by kind and reading intent, show summary/evidence/reason |
+| P1 | Trusted reuse loop | Keep | Still the north-star measurement layer |
+| P1 | Evidence v2 | Keep | Needed for long-term trust |
+| P2 | Policy promotion | Keep | Important, but after product entry is understandable |
+| P2 | Reviewed semantic extractor | Later | Do not add more graph complexity before graph is readable |
+| P2 | Query feedback loop | Later | Strong compounding loop, after reader surfaces are clearer |
+
 The previous missing product claims are now closed by Phase 28/29:
 
 > OVP has a single focused execution surface, but broader background intelligence still needs a clearer value proof: why a briefing item is useful, what evidence supports it, and what background policy allowed or skipped it.

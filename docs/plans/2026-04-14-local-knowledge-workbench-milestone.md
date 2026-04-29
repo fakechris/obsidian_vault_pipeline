@@ -1,5 +1,9 @@
 # Local Knowledge Workbench Milestone Plan
 
+> **Roadmap status, 2026-04-29:** This file is now a historical milestone record for the workbench buildout. The current consolidated roadmap draft is `docs/plans/2026-04-29-consolidated-product-roadmap.md`. Recent KSR backlog rows live in `/Users/chris/Documents/ovp-vault/30-Projects/Active/OVP-Knowledge-State-Runtime.md`, but that page is a new input, not a replacement for this historical record.
+>
+> Use the current roadmap for new implementation sequencing. Use this document only to understand how earlier workbench milestones mapped to shipped phases.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Define the remaining product and engineering milestones from the current OVP state to a real local knowledge workbench.
