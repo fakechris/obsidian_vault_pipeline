@@ -25,7 +25,7 @@ from .knowledge_index import ensure_knowledge_db_current, rebuild_knowledge_inde
 from .observation_surface_registry import execute_observation_surface_builder
 from .pack_resolution import iter_compatible_packs
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
-from .concept_registry import ConceptRegistry
+from .concept_registry import ConceptRegistry, ResolutionAction, STATUS_ACTIVE
 from .promote_candidates import (
     candidate_file_path,
     merge_candidate,
@@ -728,12 +728,49 @@ def record_review_action(
 def _candidate_review_suggestion(
     registry: ConceptRegistry, entry: Any
 ) -> tuple[str, list[tuple[Any, float]]]:
-    similar = registry.search(entry.title, topk=5)
-    similar = [
-        (candidate, score)
-        for candidate, score in similar
-        if candidate.slug != entry.slug and candidate.status == "active"
-    ]
+    similar: list[tuple[Any, float]] = []
+    seen_slugs: set[str] = set()
+    resolution = registry.resolve_mention(
+        entry.title,
+        area=entry.area or None,
+        include_related_context=False,
+    )
+    if resolution.action == ResolutionAction.LINK_EXISTING and resolution.entry:
+        candidate = registry.find_by_slug(resolution.entry.slug)
+        if (
+            candidate
+            and candidate.slug != entry.slug
+            and candidate.status == STATUS_ACTIVE
+        ):
+            similar.append((candidate, resolution.confidence))
+            seen_slugs.add(candidate.slug)
+    elif resolution.action == ResolutionAction.REVIEW_AMBIGUOUS:
+        for ambiguous in resolution.ambiguous_entries:
+            candidate = registry.find_by_slug(ambiguous.slug)
+            if (
+                candidate
+                and candidate.slug != entry.slug
+                and candidate.status == STATUS_ACTIVE
+                and candidate.slug not in seen_slugs
+            ):
+                similar.append((candidate, 0.0))
+                seen_slugs.add(candidate.slug)
+
+    if not similar:
+        for near in registry._safe_near_candidates(entry.title, area=entry.area or None, topk=10):
+            candidate = registry.find_by_slug(near.record.entry.slug)
+            if (
+                candidate
+                and candidate.slug != entry.slug
+                and candidate.status == STATUS_ACTIVE
+                and candidate.slug not in seen_slugs
+            ):
+                similar.append((candidate, near.score))
+                seen_slugs.add(candidate.slug)
+                if len(similar) >= 5:
+                    break
+
+    similar = sorted(similar, key=lambda item: item[1], reverse=True)[:5]
     action = "keep_as_candidate"
     if entry.source_count >= 2 or entry.evidence_count >= 3:
         if similar and similar[0][1] >= 0.7:

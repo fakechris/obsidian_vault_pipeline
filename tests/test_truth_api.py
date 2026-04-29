@@ -4919,6 +4919,45 @@ def test_truth_api_candidate_listing_filters_before_expensive_suggestions(temp_v
     assert payload["items"] == []
 
 
+def test_truth_api_candidate_listing_skips_related_context_discovery(temp_vault, monkeypatch):
+    from ovp_pipeline.concept_registry import ConceptEntry, ConceptRegistry
+    from ovp_pipeline import concept_registry, truth_api
+    from ovp_pipeline.promote_candidates import write_candidate_file
+
+    registry = ConceptRegistry(temp_vault)
+    registry.add_entry(
+        ConceptEntry(
+            slug="alpha-existing",
+            title="Alpha Existing",
+            aliases=[],
+            definition="Existing canonical concept.",
+            area="testing",
+        )
+    )
+    candidate = registry.upsert_candidate(
+        slug="beta-candidate",
+        title="Beta Candidate",
+        definition="Candidate concept awaiting review.",
+        area="testing",
+    )
+    registry.save()
+    write_candidate_file(temp_vault, candidate, dry_run=False)
+
+    def fail_related_context(self, mention, topk=5):
+        raise AssertionError("candidate similarity search should not discover related context")
+
+    def fail_legacy_surface_search(self, query, area=None, topk=10):
+        raise AssertionError("candidate listing should not run full legacy surface search")
+
+    monkeypatch.setattr(concept_registry.ConceptRegistry, "_discover_related_context", fail_related_context)
+    monkeypatch.setattr(concept_registry.ConceptRegistry, "_legacy_surface_search", fail_legacy_surface_search)
+
+    payload = truth_api.list_candidate_concepts(temp_vault)
+
+    assert payload["count"] == 1
+    assert payload["items"][0]["slug"] == "beta-candidate"
+
+
 def test_truth_api_review_candidate_concept_promotes_and_records_audit(temp_vault):
     from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE
     from ovp_pipeline.truth_api import list_review_actions, review_candidate_concept
