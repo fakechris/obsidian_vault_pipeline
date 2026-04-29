@@ -188,6 +188,137 @@ def test_truth_api_reads_signal_and_action_ledgers_without_knowledge_db(temp_vau
     assert actions[0]["impact_summary"]["lifecycle_stage"] == "queued"
 
 
+def test_truth_api_batches_capture_summary_lookup_for_signal_listing(temp_vault, monkeypatch):
+    from ovp_pipeline import truth_api
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    note_paths = [f"50-Inbox/03-Processed/Demo-{index}.md" for index in range(3)]
+    (logs_dir / "signals.jsonl").write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "signal_id": f"source_needs_deep_dive::demo-{index}",
+                    "signal_type": "source_needs_deep_dive",
+                    "detected_at": "2026-04-15T00:00:00Z",
+                    "status": "active",
+                    "title": f"Create deep dive for Demo {index}",
+                    "detail": "Demo source is missing a deep dive.",
+                    "source_path": f"/note?path=50-Inbox%2F03-Processed%2FDemo-{index}.md",
+                    "object_ids": [],
+                    "note_paths": [note_path],
+                    "recommended_action": {
+                        "kind": "deep_dive_workflow",
+                        "label": "Create deep dive",
+                        "path": f"/note?path=50-Inbox%2F03-Processed%2FDemo-{index}.md",
+                        "executable": False,
+                    },
+                },
+                ensure_ascii=False,
+            )
+            for index, note_path in enumerate(note_paths)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    def fake_collect_note_capture_summaries(vault_dir, requested_note_paths):
+        calls.append(tuple(requested_note_paths))
+        return {
+            note_path: {
+                "status": "observed",
+                "captured_event_count": 1,
+                "produced_artifact_count": 0,
+                "candidate_count": 0,
+                "error_count": 0,
+                "skipped_count": 0,
+                "latest_timestamp": "2026-04-15T00:00:00Z",
+                "summary": f"Observed capture for {note_path}.",
+                "items": [],
+            }
+            for note_path in requested_note_paths
+        }
+
+    monkeypatch.setattr(
+        truth_api,
+        "_collect_note_capture_summaries",
+        fake_collect_note_capture_summaries,
+    )
+
+    signals = truth_api.list_signals(temp_vault, limit=3)
+
+    assert len(signals) == 3
+    assert calls == [tuple(note_paths)]
+    assert [item["capture_summary"]["status"] for item in signals] == [
+        "observed",
+        "observed",
+        "observed",
+    ]
+
+
+def test_truth_api_capture_summary_collection_routes_events_to_relevant_targets(
+    temp_vault, monkeypatch
+):
+    from ovp_pipeline import truth_api
+
+    note_paths = [f"50-Inbox/03-Processed/Demo-{index}.md" for index in range(3)]
+    for note_path in note_paths:
+        target = temp_vault / note_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            f"---\nnote_id: {target.stem}\ntitle: {target.stem}\n---\n\n# {target.stem}\n",
+            encoding="utf-8",
+        )
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "pipeline.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event_type": "article_abstained",
+                        "timestamp": "2026-04-15T00:00:00Z",
+                        "file": "Unrelated.md",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event_type": "article_abstained",
+                        "timestamp": "2026-04-15T00:01:00Z",
+                        "file": "Demo-1.md",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    def fake_match_note_capture_event(vault_dir, *, payload, targets, derived_note_names):
+        calls.append((payload["event_type"], payload.get("file", ""), targets["note_path"]))
+        if payload.get("file") != targets["note_name"]:
+            return None
+        return truth_api._note_capture_item(
+            kind="capture_abstained",
+            label="Capture abstained",
+            timestamp=str(payload["timestamp"]),
+            detail="Interpretation abstained.",
+            skipped_count=1,
+        )
+
+    monkeypatch.setattr(truth_api, "_match_note_capture_event", fake_match_note_capture_event)
+
+    summaries = truth_api._collect_note_capture_summaries(temp_vault, note_paths)
+
+    assert calls == [("article_abstained", "Demo-1.md", "50-Inbox/03-Processed/Demo-1.md")]
+    assert summaries["50-Inbox/03-Processed/Demo-1.md"]["status"] == "skipped"
+
+
 def test_truth_api_marks_old_running_action_as_stale():
     from ovp_pipeline.truth_api import _build_action_impact_summary
 
@@ -4534,6 +4665,37 @@ def test_truth_api_get_briefing_snapshot_dispatches_via_observation_surface_regi
     )
 
     assert payload["priority_item_count"] == 1
+
+
+def test_truth_api_get_briefing_snapshot_reuses_existing_signal_ledger(temp_vault, monkeypatch):
+    import ovp_pipeline.truth_api as truth_api_source
+
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "signals.jsonl").write_text("", encoding="utf-8")
+
+    def fake_sync_signal_ledger(*args, **kwargs):
+        raise AssertionError("existing signal ledger should be reused for UI briefing reads")
+
+    def fake_execute(*, surface_kind, vault_dir, pack_name=None, **kwargs):
+        assert surface_kind == "briefing"
+        return object(), {
+            "generated_at": "2026-04-15T00:00:00Z",
+            "priority_item_count": 0,
+            "recent_signals": [],
+        }
+
+    monkeypatch.setattr(truth_api_source, "sync_signal_ledger", fake_sync_signal_ledger)
+    monkeypatch.setattr(
+        truth_api_source,
+        "execute_observation_surface_builder",
+        fake_execute,
+        raising=False,
+    )
+
+    payload = truth_api_source.get_briefing_snapshot(temp_vault)
+
+    assert payload["priority_item_count"] == 0
 
 
 def test_research_tech_observation_surface_build_briefing_delegates_to_surface_module(

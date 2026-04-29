@@ -3604,6 +3604,83 @@ def test_ui_server_candidates_page_renders_review_warning():
     assert "rebuild failed" in html
 
 
+def test_ui_server_atlas_and_cluster_pages_truncate_large_member_lists():
+    from ovp_pipeline.commands.ui_server import _render_atlas_page, _render_clusters_page
+
+    members = [
+        {
+            "object_id": f"obj-{index}",
+            "title": f"Object {index}",
+            "object_path": f"/object?id=obj-{index}",
+        }
+        for index in range(20)
+    ]
+    atlas = _render_atlas_page(
+        {
+            "requested_pack": "",
+            "query": "",
+            "limit": 20,
+            "is_limited": True,
+            "count": 1,
+            "items": [
+                {
+                    "path": "00-Atlas/Demo.md",
+                    "title": "Demo Atlas",
+                    "member_count": 20,
+                    "members": members,
+                    "deep_dives": [],
+                    "source_notes": [],
+                    "preview_titles": [],
+                }
+            ],
+        }
+    )
+    clusters = _render_clusters_page(
+        {
+            "requested_pack": "",
+            "query": "",
+            "limit": 20,
+            "is_limited": True,
+            "cluster_kind_counts": {"component": 1},
+            "largest_cluster_size": 20,
+            "model_notes": [],
+            "count": 1,
+            "items": [
+                {
+                    "detail_path": "/cluster?id=demo",
+                    "display_title": "Demo Cluster",
+                    "label": "Demo Cluster",
+                    "cluster_kind": "component",
+                    "priority_band": "active",
+                    "member_count": 20,
+                    "member_links": [
+                        {"title": f"Object {index}", "path": f"/object?id=obj-{index}"}
+                        for index in range(20)
+                    ],
+                    "center_object_path": "/object?id=obj-0",
+                    "center_title": "Object 0",
+                    "priority_reason": "demo",
+                    "relation_pattern_preview": "",
+                    "related_cluster_count": 0,
+                    "related_cluster_preview": "",
+                    "neighborhood_score": 0,
+                    "next_read_title": "",
+                    "top_reading_route_kind": "",
+                    "reading_intent_count": 0,
+                    "top_summary_bullet": "",
+                }
+            ],
+        }
+    )
+
+    assert "Object 7" in atlas
+    assert "Object 8" not in atlas
+    assert "12 more" in atlas
+    assert "Object 7" in clusters
+    assert "Object 8" not in clusters
+    assert "12 more" in clusters
+
+
 def test_ui_server_can_promote_candidate_via_api(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
     from ovp_pipeline.concept_registry import ConceptRegistry, STATUS_ACTIVE

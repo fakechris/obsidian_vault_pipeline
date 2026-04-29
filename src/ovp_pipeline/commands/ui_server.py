@@ -67,6 +67,7 @@ _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?",
 _GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
 _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
 _CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
+_INLINE_MEMBER_LINK_LIMIT = 8
 
 
 def _shell_href(path: str, requested_pack: str = "") -> str:
@@ -2239,6 +2240,17 @@ def _render_atlas_page(payload: dict) -> str:
         if payload.get("is_limited")
         else ""
     )
+    def render_member_links(members: list[dict[str, object]]) -> str:
+        visible = members[:_INLINE_MEMBER_LINK_LIMIT]
+        hidden_count = max(0, len(members) - len(visible))
+        links = ", ".join(
+            f'<a href="{escape(_object_href(str(member["object_id"]), str(member.get("object_path", "")), requested_pack=requested_pack))}">{escape(str(member["title"]))}</a>'
+            for member in visible
+        )
+        if hidden_count:
+            links += f" <span class='muted'>+{hidden_count} more</span>"
+        return links
+
     items = (
         "".join(
             "<li>"
@@ -2246,14 +2258,7 @@ def _render_atlas_page(payload: dict) -> str:
             + f" <span class='pill'>{item['member_count']} objects</span>"
             + f" <span class='pill'>{len(item['deep_dives'])} deep dives</span>"
             + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
-            + (
-                " <span class='muted'>"
-                + ", ".join(
-                    f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
-                    for member in item["members"]
-                )
-                + "</span>"
-            )
+            + f" <span class='muted'>{render_member_links(item['members'])}</span>"
             + (
                 f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
                 if item["preview_titles"]
@@ -2445,6 +2450,17 @@ def _render_clusters_page(payload: dict) -> str:
         )
         or "<span class='muted'>None</span>"
     )
+    def render_member_links(members: list[dict[str, object]]) -> str:
+        visible = members[:_INLINE_MEMBER_LINK_LIMIT]
+        hidden_count = max(0, len(members) - len(visible))
+        links = ", ".join(
+            f'<a href="{escape(str(member["path"]))}">{escape(str(member["title"]))}</a>'
+            for member in visible
+        )
+        if hidden_count:
+            links += f" <span class='muted'>+{hidden_count} more</span>"
+        return links
+
     items = (
         "".join(
             "<li>"
@@ -2452,14 +2468,7 @@ def _render_clusters_page(payload: dict) -> str:
             + f" <span class='pill'>{escape(item['cluster_kind'])}</span>"
             + f" <span class='pill'>{escape(item['priority_band'])}</span>"
             + f" <span class='pill'>{item['member_count']} objects</span>"
-            + (
-                " <span class='muted'>"
-                + ", ".join(
-                    f'<a href="{escape(member["path"])}">{escape(member["title"])}</a>'
-                    for member in item["member_links"]
-                )
-                + "</span>"
-            )
+            + f" <span class='muted'>{render_member_links(item['member_links'])}</span>"
             + f"<div class='muted'>Canonical cluster: {escape(item['label'])}</div>"
             + f"<div class='muted'>Center: <a href='{escape(item['center_object_path'])}'>{escape(item['center_title'])}</a></div>"
             + f"<div class='muted'>Priority: {escape(item['priority_reason'])}</div>"
