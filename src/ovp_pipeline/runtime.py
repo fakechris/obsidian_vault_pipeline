@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
 import fcntl
+import os
 import time
 from typing import Iterator
 
@@ -13,8 +14,29 @@ import yaml
 
 def resolve_vault_dir(vault_dir: Path | str | None = None) -> Path:
     """Resolve the vault directory once and use the absolute path everywhere."""
+    if vault_dir is None:
+        vault_dir = os.environ.get("OVP_VAULT_DIR") or os.environ.get("VAULT_DIR")
     base = Path.cwd() if vault_dir is None else Path(vault_dir)
     return base.expanduser().resolve()
+
+
+def looks_like_vault_dir(vault_dir: Path | str) -> bool:
+    """Return True when the path has the core OpenClaw/Obsidian vault layout."""
+    base = resolve_vault_dir(vault_dir)
+    has_core_dirs = (
+        (base / "10-Knowledge").is_dir()
+        and (base / "20-Areas").is_dir()
+        and (base / "50-Inbox").is_dir()
+    )
+    has_vault_marker = (
+        (base / ".obsidian").is_dir()
+        or ((base / "Index.md").is_file() and (base / "Log.md").is_file())
+    )
+    is_package_checkout = (
+        (base / "pyproject.toml").is_file()
+        and (base / "src" / "ovp_pipeline").is_dir()
+    )
+    return has_core_dirs and has_vault_marker and not is_package_checkout
 
 
 def is_hidden_path(path: Path) -> bool:

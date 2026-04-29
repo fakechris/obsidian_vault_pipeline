@@ -44,7 +44,7 @@ from typing import Any
 
 try:
     from .handler_registry import execute_profile_stage_handler
-    from .runtime import VaultLayout, vault_workflow_lock
+    from .runtime import VaultLayout, looks_like_vault_dir, resolve_vault_dir, vault_workflow_lock
     from .packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
@@ -58,7 +58,7 @@ try:
     )
 except ImportError:  # pragma: no cover - script mode fallback
     from handler_registry import execute_profile_stage_handler
-    from runtime import VaultLayout, vault_workflow_lock
+    from runtime import VaultLayout, looks_like_vault_dir, resolve_vault_dir, vault_workflow_lock
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
@@ -250,23 +250,27 @@ def _check_api_key() -> tuple[bool, str]:
     return True, "OK"
 
 
-def init_env_file() -> int:
-    """初始化 .env 文件（交互式）"""
+def init_env_file(vault_dir: Path | str | None = None) -> int:
+    """初始化 .env 文件(交互式)"""
+    resolved_vault = resolve_vault_dir(vault_dir)
+    env_file = resolved_vault / ".env"
+    env_example = resolved_vault / ".env.example"
+
     print("="*60)
     print("Obsidian Vault Pipeline - 环境初始化")
     print("="*60)
 
     # 检查是否已有 .env
-    if ENV_FILE.exists():
-        print(f"\n✓ 发现已有配置文件: {ENV_FILE}")
-        content = ENV_FILE.read_text(encoding="utf-8")
+    if env_file.exists():
+        print(f"\n✓ 发现已有配置文件: {env_file}")
+        content = env_file.read_text(encoding="utf-8")
         if "AUTO_VAULT_API_KEY=" in content and "your_key" not in content:
-            print("  看起来已经配置好了。如需重新配置，请先删除该文件。")
+            print("  看起来已经配置好了。如需重新配置, 请先删除该文件。")
             return 0
-        print("  但可能未正确配置，继续引导设置...\n")
+        print("  但可能未正确配置, 继续引导设置...\n")
 
     # 创建 .env.example 如果不存在
-    if not ENV_EXAMPLE.exists():
+    if not env_example.exists():
         example_content = '''# Obsidian Vault Pipeline 环境配置
 # ══════════════════════════════════════════════════════════
 # 配置说明:
@@ -296,8 +300,8 @@ PINBOARD_TOKEN=your_username:your_token
 # ── 代理配置 (可选) ─────────────────────────────────────
 # HTTP_PROXY=http://127.0.0.1:7897
 '''
-        ENV_EXAMPLE.write_text(example_content, encoding="utf-8")
-        print(f"✓ 创建模板文件: {ENV_EXAMPLE}")
+        env_example.write_text(example_content, encoding="utf-8")
+        print(f"✓ 创建模板文件: {env_example}")
 
     # 提示用户获取 API Key
     print("\n📋 你需要一个 LLM API Key 才能运行 Pipeline")
@@ -311,8 +315,8 @@ PINBOARD_TOKEN=your_username:your_token
     api_key = input("\n🔑 你的 API Key (sk-...): ").strip()
     if not api_key:
         print("\n❌ 未提供 API Key，初始化取消")
-        print(f"\n你可以稍后手动创建 {ENV_FILE}:")
-        print(f"  cp {ENV_EXAMPLE} {ENV_FILE}")
+        print(f"\n你可以稍后手动创建 {env_file}:")
+        print(f"  cp {env_example} {env_file}")
         print("  然后编辑填入你的 Key")
         return 1
 
@@ -341,10 +345,10 @@ AUTO_VAULT_API_BASE={base_url}
 AUTO_VAULT_MODEL={model}
 '''
 
-    ENV_FILE.write_text(env_content, encoding="utf-8")
-    os.chmod(ENV_FILE, 0o600)  # 设置权限为仅用户可读
+    env_file.write_text(env_content, encoding="utf-8")
+    os.chmod(env_file, 0o600)  # 设置权限为仅用户可读
 
-    print(f"\n✓ 配置文件已创建: {ENV_FILE}")
+    print(f"\n✓ 配置文件已创建: {env_file}")
     print(f"  Provider: {base_url}")
     print(f"  Model: {model}")
     print("\n现在可以运行: ovp --full")
@@ -354,9 +358,10 @@ AUTO_VAULT_MODEL={model}
 def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
     """检查环境配置，返回(是否就绪, 问题列表)"""
     issues = []
+    resolved_vault = resolve_vault_dir(vault_dir)
 
     # 加载环境变量（尝试多个位置）
-    _load_env(vault_dir)
+    _load_env(resolved_vault)
 
     # 检查 API Key
     key_ok, key_msg = _check_api_key()
@@ -376,8 +381,7 @@ def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
 
     # 检查 .env 文件（多个位置）
     env_paths = []
-    if vault_dir:
-        env_paths.append(vault_dir / ".env")
+    env_paths.append(resolved_vault / ".env")
     env_paths.append(Path.cwd() / ".env")
     env_paths.append(ENV_FILE)
     env_paths.append(ENV_FILE_ALT)
@@ -393,7 +397,16 @@ def check_environment(vault_dir: Path | None = None) -> tuple[bool, list[str]]:
     else:
         issues.append(".env file: NOT FOUND")
 
-    return key_ok, issues
+    vault_ok = looks_like_vault_dir(resolved_vault)
+    if vault_ok:
+        issues.append(f"Vault root: OK ({resolved_vault})")
+    else:
+        issues.append(
+            "Vault root: not a vault "
+            f"({resolved_vault}; expected 10-Knowledge, 20-Areas, 50-Inbox plus .obsidian or root Index.md/Log.md)"
+        )
+
+    return key_ok and vault_ok, issues
 
 
 # ========== 配置 ==========
@@ -2868,20 +2881,26 @@ def main():
         ),
     )
     parser.add_argument("--profile", default=None, help="Workflow profile 名称（默认: full）")
-    parser.add_argument("--vault-dir", type=Path, default=VAULT_DIR, help="Vault根目录")
+    parser.add_argument(
+        "--vault-dir",
+        type=Path,
+        default=None,
+        help="Vault根目录 (默认: OVP_VAULT_DIR, VAULT_DIR, 或当前目录)",
+    )
 
     args = parser.parse_args()
+    vault_dir = resolve_vault_dir(args.vault_dir)
 
     # 处理 init 命令
     if args.init:
-        return init_env_file()
+        return init_env_file(vault_dir)
 
     # 处理 check 命令
     if args.check:
         print("\n" + "="*60)
         print("环境检查")
         print("="*60)
-        ok, issues = check_environment(args.vault_dir)
+        ok, issues = check_environment(vault_dir)
         for issue in issues:
             print(f"  {'✓' if 'OK' in issue or 'Found' in issue else '✗'} {issue}")
         if ok:
@@ -2890,18 +2909,18 @@ def main():
             print(f"  API Key: {key}...")
             print(f"  API Base: {os.environ.get('AUTO_VAULT_API_BASE', 'N/A')}")
         else:
-            print("\n✗ 环境未就绪，请运行: ovp --init")
+            print("\n✗ 环境未就绪, 请确认 --vault-dir/OVP_VAULT_DIR/VAULT_DIR 指向 vault, 并检查 .env")
         return 0 if ok else 1
 
-    # 检查环境（运行前）
-    ok, issues = check_environment(args.vault_dir)
+    # 检查环境(运行前)
+    ok, issues = check_environment(vault_dir)
     if not ok:
         print("\n" + "="*60)
         print("环境错误")
         print("="*60)
         for issue in issues:
             print(f"  ✗ {issue}")
-        print("\n请先运行: ovp --init")
+        print("\n请确认 --vault-dir/OVP_VAULT_DIR/VAULT_DIR 指向 vault, 并检查 .env")
         return 1
 
     execution_plan = build_execution_plan(args)
@@ -2909,7 +2928,7 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
+    layout = VaultLayout.from_vault(vault_dir)
 
     # 初始化
     logger = PipelineLogger(layout.pipeline_log)
