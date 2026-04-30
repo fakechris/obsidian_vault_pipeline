@@ -52,7 +52,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-018 | P2 | Later | Reviewed semantic relation extractor and query feedback loop | M7, April 22 roadmap |
 | BL-019 | P2 | Later | Skill/routine extraction profile, notebook/raw-source mode, ingest ROI, hybrid retrieval, multimodal caption-first ingest, follow-up object model | M7, KSR-010, KSR-011, KSR-012, KSR-016, KSR-019, KSR-029 |
 | BL-020 | P1 | Done | Projection repair lifecycle: structured marker kind/scope/reason, supersession, claim lease, and repair audit events | M4/M5, Architecture, PR #87 |
-| BL-021 | P1 | Partial | Authority/projection schema versioning and migration-triggered full rebuild markers | M4/M5, Architecture, PR #87 |
+| BL-021 | P1 | Done | Authority/projection schema versioning and migration-triggered full rebuild markers | M4/M5, Architecture, PR #87 + PR #88 |
 | BL-022 | P1 | Later | Decision context memory: first-class rationale, rejected alternatives, dissent, owner, participants, and validity windows for high-value decisions | M6/M7, KSR-030, Company Brain research |
 | BL-023 | P1 | Later | Agent workspace substrate and information-health loop: expose AGENTS/MEMORY/Skills/Heartbeat/autonomy policy as runtime state and run approval-based stale/conflict/term-drift reviews | M6/M7, KSR-031, KSR-032, Moxt research |
 | BL-024 | P1 | Later | Machine-facing memory substrate: typed scored memory records with freshness, evidence count, supersession, last-used telemetry, and token-budgeted selective injection | M6/M7, KSR-033, Mercury research |
@@ -97,12 +97,12 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 ## Next Decision
 
-`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, `BL-010` is shipped in PR #80, `BL-005` is shipped in PR #81, `BL-006 + BL-007` are implemented in PR #82, `BL-008` is completed in PR #83, `BL-011` is completed in PR #84, and the first `BL-020 / BL-021` slice is in PR #87. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails and kind-specific reader lenses, `/graph` renders a reader-facing spatial map over graph projections, `/search` groups reader results by kind with summaries, evidence counts, and match reasons, `ovp-absorb --dry-run --json` explains source lifecycle routing before mutation, evidence rows carry line/char spans, candidate review payloads expose risk tiers, and `knowledge.db` rebuilds now leave structured projection repair markers.
+`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, `BL-010` is shipped in PR #80, `BL-005` is shipped in PR #81, `BL-006 + BL-007` are implemented in PR #82, `BL-008` is completed in PR #83, `BL-011` is completed in PR #84, the first `BL-020 / BL-021` slice is in PR #87, and BL-021 schema metadata is in PR #88. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails and kind-specific reader lenses, `/graph` renders a reader-facing spatial map over graph projections, `/search` groups reader results by kind with summaries, evidence counts, and match reasons, `ovp-absorb --dry-run --json` explains source lifecycle routing before mutation, evidence rows carry line/char spans, candidate review payloads expose risk tiers, and `knowledge.db` rebuilds now leave structured projection repair markers tied to persisted Authority/projection schema metadata.
 
-The next implementation PR should finish the remaining **BL-021** schema/version metadata contract and then move into trusted reuse and context-pack loops.
+The next implementation PR should move into trusted reuse and context-pack loops.
 
 Recommended order:
 
-1. BL-021 completion: persist Authority/projection schema versions and migration metadata beyond the current marker trigger
-2. BL-012 / BL-013 trusted reuse events and context-pack loops
-3. BL-014 when operational runtime observability becomes the next bottleneck
+1. BL-012 / BL-013 trusted reuse events and context-pack loops
+2. BL-014 when operational runtime observability becomes the next bottleneck
+3. BL-015 when permission and claim lifecycle become the active blocker

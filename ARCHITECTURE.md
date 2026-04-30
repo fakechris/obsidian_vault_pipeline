@@ -438,7 +438,9 @@ Current implementation:
 - `projection_lifecycle.py` records projection repair marker events in `60-Logs/projection-repair.jsonl`.
 - The marker event log is append-oriented and reconstructs current marker state from `written`, `superseded`, `claimed`, and `closed` events.
 - `ensure_knowledge_db_current()` writes and closes a `full_rebuild` marker when `knowledge.db` is missing or has an incompatible legacy schema.
-- The broader Authority/projection schema metadata contract is still partial: current code has a schema constant and rebuild triggers, but does not yet persist `.ovp/schema_version` or projection metadata inside `knowledge.db`.
+- `.ovp/schema_version` persists the Authority schema version for the vault.
+- `knowledge.db.projection_metadata` records the Authority schema version and projection schema version used to build the derived store.
+- `ensure_knowledge_db_current()` compares those versions and writes a `full_rebuild` marker when Authority or projection schema metadata is newer than the current derived store.
 
 ## 12. Canonical Scenarios
 
@@ -609,9 +611,9 @@ Authority and derived projection schemas evolve separately.
 
 Rules:
 
-- Authority schema version should live at vault root, for example `.ovp/schema_version`.
-- Derived stores must record which Authority schema version they were built from.
-- Derived projection schemas must record their own version.
+- Authority schema version lives at vault root in `.ovp/schema_version`.
+- Derived stores record which Authority schema version they were built from.
+- Derived projection schemas record their own version; `knowledge.db` stores this in `projection_metadata`.
 - Startup checks compare current Authority version, projection schema version, and marker versions.
 - If current Authority schema version is newer than the marker or projection version, write or promote to `ProjectionRepairMarker(kind="full_rebuild")`.
 - Avoid silent version jumps; migrations should be explicit and monotonic.
@@ -674,7 +676,7 @@ Main gaps:
 - Layer 2 / Layer 3 projection labels now exist on core access payloads and materialized reader artifacts; doctor/export enforcement and future surfaces still need to consume them consistently.
 - Layer 4 fitness checks now cover the first hot-path, workflow-wiring, source routing preview, evidence span backfill, and candidate risk cases; deeper evidence completeness, projection replay, and import-boundary checks are still open.
 - Projection lifecycle markers now have structured schema, scope, lease, supersession, and `knowledge.db` rebuild integration.
-- Schema versioning is partially wired into projection lifecycle for rebuild markers; persistent Authority/projection version metadata is still open.
+- Schema versioning is wired into projection lifecycle for `knowledge.db`: Authority and projection versions are persisted and stale metadata triggers a full rebuild marker.
 - The reader-first home is now the default entry; object pages have reader profiles, source rails, and kind-specific reader lenses; `/graph` has a first spatial map projection; `/search` groups reader results by kind, summary, evidence count, and match reason.
 
 ## 18. Near-Term Architecture Actions
@@ -682,10 +684,10 @@ Main gaps:
 Recommended order:
 
 1. Keep projection metadata attached to new access surfaces and add doctor/export checks that verify the labels are present.
-2. Finish the remaining schema-version metadata contract now that the first rebuild-marker trigger is wired.
-3. Add stricter factual evidence completeness checks before expanding automatic promotion.
-4. Add schema version fields to Authority and derived projection state.
-5. Expand doctor/export checks to verify projection marker replay and projection labels together.
+2. Add stricter factual evidence completeness checks before expanding automatic promotion.
+3. Expand doctor/export checks to verify projection marker replay and projection labels together.
+4. Move trusted reuse events into the reader/context-pack loop.
+5. Keep future projection backends on the same metadata contract before adding semantic reindex workers.
 
 ## Appendix: Backlog Mapping
 
@@ -702,4 +704,4 @@ The architecture should not depend on backlog IDs to be valid. The table below i
 | Reader-first access surfaces | `BL-001`; `BL-008` and `BL-009` done through PR #79 and PR #83; `BL-010` done in PR #80 |
 | Reader-oriented search | `BL-011` done in PR #84 |
 | Projection repair lifecycle | `BL-020` done in PR #87 |
-| Schema versioning and migration trigger | `BL-021` partial in PR #87 |
+| Schema versioning and migration trigger | `BL-021` done in PR #87 plus PR #88 |

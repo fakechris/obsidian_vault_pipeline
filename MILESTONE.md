@@ -54,15 +54,15 @@ That means the user-facing product should make compiled knowledge easy to read f
 | Visual graph MVP | `BL-010` done in PR #80 |
 | Reader-oriented search | `BL-011` done in PR #84 |
 | Projection repair lifecycle | `BL-020` done in PR #87 |
-| Schema versioning and migration trigger | `BL-021` partial in PR #87 |
+| Schema versioning and migration trigger | `BL-021` done in PR #87 plus PR #88 |
 
 ## Near-Term Sequence
 
 Recommended order:
 
-1. Finish the remaining `BL-021` schema/version metadata contract beyond the current rebuild marker trigger.
-2. Move into `BL-012 + BL-013` once the reader surfaces need stronger reuse and context-pack loops.
-3. Pick up `BL-014` when operational runtime observability becomes the next bottleneck.
+1. Move into `BL-012 + BL-013` once the reader surfaces need stronger reuse and context-pack loops.
+2. Pick up `BL-014` when operational runtime observability becomes the next bottleneck.
+3. Pick up `BL-015` when permission and claim lifecycle become the active blocker.
 
 ## Documentation Rules
 

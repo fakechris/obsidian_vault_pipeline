@@ -25,6 +25,8 @@ from .truth_store import TRUTH_STORE_SCHEMA
 SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
 AUTHORITY_SCHEMA_VERSION = 1
+KNOWLEDGE_DB_PROJECTION_KIND = "knowledge_db"
+KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 1
 
 
 _FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
@@ -125,6 +127,13 @@ CREATE TABLE page_metrics (
 );
 
 CREATE INDEX idx_page_metrics_last_seen ON page_metrics(last_seen_ts);
+
+CREATE TABLE projection_metadata (
+  projection_kind TEXT PRIMARY KEY,
+  authority_schema_version INTEGER NOT NULL,
+  projection_schema_version INTEGER NOT NULL,
+  built_at TEXT NOT NULL
+);
 """
 
 SCHEMA += "\n" + TRUTH_STORE_SCHEMA
@@ -205,6 +214,43 @@ def _truth_pack_name(pack_name: str | None = None) -> str:
 
 def _utc_now_text() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _authority_schema_version_path(vault_dir: Path | str) -> Path:
+    return resolve_vault_dir(vault_dir) / ".ovp" / "schema_version"
+
+
+def _ensure_authority_schema_version(vault_dir: Path | str) -> int:
+    path = _authority_schema_version_path(vault_dir)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{AUTHORITY_SCHEMA_VERSION}\n", encoding="utf-8")
+        return AUTHORITY_SCHEMA_VERSION
+    try:
+        return int(path.read_text(encoding="utf-8").strip() or "0")
+    except ValueError:
+        path.write_text(f"{AUTHORITY_SCHEMA_VERSION}\n", encoding="utf-8")
+        return AUTHORITY_SCHEMA_VERSION
+
+
+def _read_knowledge_db_projection_metadata(db_path: Path) -> tuple[int, int] | None:
+    if not db_path.exists():
+        return None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT authority_schema_version, projection_schema_version
+                FROM projection_metadata
+                WHERE projection_kind = ?
+                """,
+                (KNOWLEDGE_DB_PROJECTION_KIND,),
+            ).fetchone()
+    except sqlite3.DatabaseError:
+        return None
+    if row is None:
+        return None
+    return int(row[0] or 0), int(row[1] or 0)
 
 
 def _projection_metadata(pack_name: str) -> tuple[str, str]:
@@ -530,21 +576,33 @@ def _initialize_database(db_path: Path) -> sqlite3.Connection:
 def _ensure_knowledge_db(vault_dir: Path) -> tuple[Path, VaultLayout]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
+    authority_schema_version = _ensure_authority_schema_version(resolved_vault)
     rebuild_reason = ""
+    projection_schema_version = 0
     if not layout.knowledge_db.exists():
         rebuild_reason = "knowledge_db_missing"
     elif not _knowledge_db_supports_pack_schema(layout.knowledge_db):
         rebuild_reason = "knowledge_db_schema_incompatible"
+    else:
+        projection_metadata = _read_knowledge_db_projection_metadata(layout.knowledge_db)
+        if projection_metadata is None:
+            rebuild_reason = "knowledge_db_projection_metadata_missing"
+        else:
+            built_authority_schema_version, projection_schema_version = projection_metadata
+            if authority_schema_version > built_authority_schema_version:
+                rebuild_reason = "authority_schema_version_newer_than_projection"
+            elif KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION > projection_schema_version:
+                rebuild_reason = "projection_schema_version_newer_than_metadata"
 
     if rebuild_reason:
         marker = write_projection_repair_marker(
             resolved_vault,
             kind="full_rebuild",
-            scope={"projection_kind": "knowledge_db"},
+            scope={"projection_kind": KNOWLEDGE_DB_PROJECTION_KIND},
             reason=rebuild_reason,
             caused_by="ensure_knowledge_db_current",
-            authority_schema_version=AUTHORITY_SCHEMA_VERSION,
-            projection_schema_version=0,
+            authority_schema_version=authority_schema_version,
+            projection_schema_version=projection_schema_version,
         )
         rebuild_knowledge_index(resolved_vault)
         close_projection_repair_marker(resolved_vault, marker.marker_id)
@@ -588,6 +646,12 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
         "truth_projections": {"pack", "owner_pack", "builder_name", "built_at"},
         "reuse_events": {"event_id", "ts", "pack", "surface", "trusted"},
         "page_metrics": {"slug", "last_seen_ts", "reuse_count", "citation_count"},
+        "projection_metadata": {
+            "projection_kind",
+            "authority_schema_version",
+            "projection_schema_version",
+            "built_at",
+        },
     }
     try:
         with sqlite3.connect(db_path) as conn:
@@ -658,6 +722,7 @@ def rebuild_knowledge_index(
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
     truth_pack = _truth_pack_name(pack_name)
+    authority_schema_version = _ensure_authority_schema_version(resolved_vault)
     with knowledge_db_write_lock(resolved_vault):
         evergreen_dir = layout.evergreen_dir
         atlas_dir = layout.atlas_dir
@@ -874,6 +939,23 @@ def rebuild_knowledge_index(
                     truth_pack,
                     projection_spec.pack,
                     getattr(projection_spec, "name", ""),
+                    _utc_now_text(),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO projection_metadata (
+                    projection_kind,
+                    authority_schema_version,
+                    projection_schema_version,
+                    built_at
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    KNOWLEDGE_DB_PROJECTION_KIND,
+                    authority_schema_version,
+                    KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION,
                     _utc_now_text(),
                 ),
             )

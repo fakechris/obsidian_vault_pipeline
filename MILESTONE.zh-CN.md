@@ -54,15 +54,15 @@ OVP 正在从 document-processing pipeline 变成：
 | Visual graph MVP | `BL-010` 已在 PR #80 交付 |
 | Reader-oriented search | `BL-011` 已在 PR #84 交付 |
 | Projection repair lifecycle | `BL-020` 已在 PR #87 落地 |
-| Schema versioning and migration trigger | `BL-021` 已在 PR #87 落地第一片 |
+| Schema versioning and migration trigger | `BL-021` 已在 PR #87 和 PR #88 中补完 |
 
 ## 近期顺序
 
 建议顺序：
 
-1. 补完 `BL-021` 剩余的 schema/version metadata contract，不只停留在当前 rebuild marker trigger。
-2. 当 reader surface 需要更强的复用和 context-pack 闭环时，再进入 `BL-012 + BL-013`。
-3. 当 operational runtime observability 成为下一个瓶颈时，再进入 `BL-014`。
+1. 当 reader surface 需要更强的复用和 context-pack 闭环时，进入 `BL-012 + BL-013`。
+2. 当 operational runtime observability 成为下一个瓶颈时，再进入 `BL-014`。
+3. 当 permission 和 claim lifecycle 成为主动瓶颈时，再进入 `BL-015`。
 
 ## 文档规则
 
