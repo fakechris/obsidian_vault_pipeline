@@ -75,6 +75,7 @@ try:
         is_under as lifecycle_is_under,
         unique_child as lifecycle_unique_child,
     )
+    from .processing_backups import cleanup_processing_backup_for_archived_source
 except ImportError:  # pragma: no cover - script mode fallback
     from source_lifecycle import (  # type: ignore
         archive_pinboard_source,
@@ -82,6 +83,7 @@ except ImportError:  # pragma: no cover - script mode fallback
         is_under as lifecycle_is_under,
         unique_child as lifecycle_unique_child,
     )
+    from processing_backups import cleanup_processing_backup_for_archived_source  # type: ignore
 
 try:
     from .txn import (
@@ -570,9 +572,15 @@ class AutoArticleProcessor:
     def _archive_source_to_processed(self, file_path: Path) -> Path:
         destination = self.layout.processed_month_dir(self._extract_source_date(file_path)) / file_path.name
         archived = self._move_source_file(file_path, destination)
+        backup_cleanup = cleanup_processing_backup_for_archived_source(file_path, archived)
         self.logger.log("source_archived_to_processed", {
             "source": str(file_path),
             "archived": str(archived),
+            "backup_cleanup": {
+                "backup": str(backup_cleanup.backup_path),
+                "ok": backup_cleanup.ok,
+                "reason": backup_cleanup.reason,
+            },
         })
         return archived
 
