@@ -70,10 +70,26 @@ Alpha does not support local-first execution.
     rebuild_knowledge_index(temp_vault)
 
 
-def test_ui_server_root_serves_html_shell(temp_vault):
+def _fetch_ui_html(temp_vault, path: str) -> tuple[int, str]:
     from ovp_pipeline.commands.ui_server import create_server
 
-    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", path)
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    return response.status, body
+
+
+def _seed_running_transaction(temp_vault) -> None:
     transactions_dir = temp_vault / "60-Logs" / "transactions"
     transactions_dir.mkdir(parents=True, exist_ok=True)
     (transactions_dir / "txn-1.json").write_text(
@@ -116,21 +132,34 @@ def test_ui_server_root_serves_html_shell(temp_vault):
         ),
         encoding="utf-8",
     )
-    server = create_server(temp_vault, host="127.0.0.1", port=0)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/")
-        response = conn.getresponse()
-        body = response.read().decode("utf-8")
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
-    assert response.status == 200
+
+def test_ui_server_root_serves_reader_library_home(temp_vault):
+    _seed_truth_store(temp_vault)
+    _seed_running_transaction(temp_vault)
+
+    status, body = _fetch_ui_html(temp_vault, "/")
+
+    assert status == 200
+    assert "Knowledge Library" in body
+    assert 'href="/">Library</a>' in body
+    assert 'href="/map">Map</a>' in body
+    assert 'href="/search">Search</a>' in body
+    assert 'href="/ops">Workbench</a>' in body
+    assert "Recent Knowledge" in body
+    assert "Knowledge Map" in body
+    assert "Open Workbench" in body
+    assert "Workflow Map" not in body
+    assert "OVP Truth UI" not in body
+
+
+def test_ui_server_ops_route_serves_operator_dashboard(temp_vault):
+    _seed_truth_store(temp_vault)
+    _seed_running_transaction(temp_vault)
+
+    status, body = _fetch_ui_html(temp_vault, "/ops")
+
+    assert status == 200
     assert "OVP Truth UI" in body
     assert "Workflow Map" in body
     assert "Orient" in body
@@ -155,6 +184,38 @@ def test_ui_server_root_serves_html_shell(temp_vault):
     assert "<h2>Surface Contract</h2>" not in body
     assert "Orientation Brief" in body
     assert "/api/objects" in body
+
+
+def test_ui_server_map_route_serves_readable_map_entry(temp_vault):
+    _seed_truth_store(temp_vault)
+
+    status, body = _fetch_ui_html(temp_vault, "/map")
+
+    assert status == 200
+    assert "Graph Clusters" in body
+    assert "action='/map'" in body
+    assert "action='/clusters'" not in body
+    assert 'href="/">Library</a>' in body
+    assert 'href="/map">Map</a>' in body
+    assert 'href="/search">Search</a>' in body
+    assert 'href="/ops">Workbench</a>' in body
+
+
+def test_render_library_home_hides_unavailable_map_for_non_research_pack():
+    from ovp_pipeline.commands.ui_server import _render_library_home
+
+    body = _render_library_home(
+        {
+            "requested_pack": "media-editorial",
+            "objects": {"count": 0, "items": []},
+        }
+    )
+
+    assert "Knowledge Library" in body
+    assert "Search Library" in body
+    assert "Open Workbench" in body
+    assert "Knowledge Map" not in body
+    assert 'href="/map?pack=media-editorial"' not in body
 
 
 def test_render_runtime_card_shows_pipeline_process_identity():
@@ -463,11 +524,11 @@ def test_ui_server_root_accepts_pack_scope(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert "Pack scope: default-knowledge" in body
-    assert 'href="/briefing?pack=default-knowledge"' in body
-    assert "/signals?pack=default-knowledge" in body
-    assert "inherited from research-tech-signals" in body
-    assert "inherited from research-tech-production-chains" in body
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/map?pack=default-knowledge"' in body
+    assert 'href="/search?pack=default-knowledge"' in body
+    assert 'href="/ops?pack=default-knowledge"' in body
+    assert "Knowledge Library" in body
 
 
 def test_ui_server_objects_endpoint_returns_json(temp_vault):
@@ -672,9 +733,9 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
 
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
-    assert 'href="/objects?pack=default-knowledge"' in body
-    assert 'href="/signals?pack=default-knowledge"' in body
-    assert 'href="/atlas?pack=default-knowledge"' in body
+    assert 'href="/map?pack=default-knowledge"' in body
+    assert 'href="/search?pack=default-knowledge"' in body
+    assert 'href="/ops?pack=default-knowledge"' in body
     assert (
         'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
     )
@@ -803,7 +864,8 @@ date: 2026-04-13
 
     assert response.status == 200
     assert 'href="/search?pack=default-knowledge"' in body
-    assert 'href="/signals?pack=default-knowledge"' in body
+    assert 'href="/map?pack=default-knowledge"' in body
+    assert 'href="/ops?pack=default-knowledge"' in body
     assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
     assert (
         'href="/note?path=20-Areas%2FAI-Research%2FTopics%2F2026-04%2FHarness_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md&amp;pack=default-knowledge"'
@@ -970,8 +1032,9 @@ def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/events?pack=default-knowledge"' in body
-    assert 'href="/summaries?pack=default-knowledge"' in body
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/map?pack=default-knowledge"' in body
+    assert 'href="/ops?pack=default-knowledge"' in body
     assert "inherited from research-tech-signals" in body
     assert body.index("Next Actions") < body.index("Signal Types")
 
@@ -1064,8 +1127,9 @@ def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vau
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/signals?pack=media-editorial"' in body
-    assert 'href="/production?pack=media-editorial"' in body
+    assert 'href="/?pack=media-editorial"' in body
+    assert 'href="/map?pack=media-editorial"' not in body
+    assert 'href="/ops?pack=media-editorial"' in body
     assert 'href="/clusters?pack=media-editorial"' not in body
     assert 'href="/contradictions?pack=media-editorial"' not in body
     assert 'href="/events?pack=media-editorial"' not in body
@@ -1133,6 +1197,40 @@ def test_ui_server_research_html_route_rejects_non_research_pack(temp_vault, mon
     assert "Route Unavailable" in body
     assert "research-specific observation shell" in body
     assert "media-editorial" in body
+
+
+def test_ui_server_map_route_rejects_non_research_pack_without_nav_link(
+    temp_vault, monkeypatch
+):
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_cluster_browser_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cluster builder should not run")
+        ),
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/map?pack=media-editorial")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Route Unavailable" in body
+    assert "research-specific observation shell" in body
+    assert 'href="/map?pack=media-editorial"' not in body
 
 
 def test_ui_server_summaries_endpoint_accepts_pack_scope(temp_vault):
@@ -1213,8 +1311,9 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/signals?pack=default-knowledge"' in body
-    assert 'href="/atlas?pack=default-knowledge"' in body
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/map?pack=default-knowledge"' in body
+    assert 'href="/ops?pack=default-knowledge"' in body
     assert (
         'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
     )
@@ -1426,8 +1525,9 @@ def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/briefing?pack=default-knowledge"' in body
-    assert 'href="/atlas?pack=default-knowledge"' in body
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/map?pack=default-knowledge"' in body
+    assert 'href="/ops?pack=default-knowledge"' in body
 
 
 def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
@@ -1847,8 +1947,9 @@ Processed source note without downstream chain.
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/signals?pack=default-knowledge"' in body
-    assert 'href="/clusters?pack=default-knowledge"' in body
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/map?pack=default-knowledge"' in body
+    assert 'href="/ops?pack=default-knowledge"' in body
     assert "inherited from research-tech-briefing" in body
     assert "inherited from orientation_brief in research-tech" in body
     assert "Source contract: observation_surface · briefing" in body
@@ -3262,8 +3363,9 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/signals?pack=default-knowledge"' in body
-    assert 'href="/summaries?pack=default-knowledge"' in body
+    assert 'href="/?pack=default-knowledge"' in body
+    assert 'href="/map?pack=default-knowledge"' in body
+    assert 'href="/ops?pack=default-knowledge"' in body
     assert "Assembly Contract" in body
     assert "inherited from topic_overview in research-tech" in body
     assert "Source contract: wiki_view · overview/topic" in body
