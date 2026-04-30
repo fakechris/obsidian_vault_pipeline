@@ -25,7 +25,7 @@ def run_deep_dive_workflow_action(
     txn = TransactionManager(layout.transactions_dir)
     processor = AutoArticleProcessor(resolved_vault, logger, txn)
     processor.init_llm()
-    result = processor.process_single_file(source_path, dry_run=False)
+    result = processor.process_single_source(source_path, dry_run=False)
     if result.get("status") != "completed":
         raise RuntimeError(str(result.get("error") or "deep_dive_workflow_failed"))
     return result

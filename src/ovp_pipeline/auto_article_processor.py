@@ -69,6 +69,19 @@ except ImportError:  # pragma: no cover - script mode fallback
     from markdown_generation import sanitize_generated_markdown
 
 try:
+    from .source_lifecycle import (
+        archive_pinboard_source,
+        is_under as lifecycle_is_under,
+        unique_child as lifecycle_unique_child,
+    )
+except ImportError:  # pragma: no cover - script mode fallback
+    from source_lifecycle import (  # type: ignore
+        archive_pinboard_source,
+        is_under as lifecycle_is_under,
+        unique_child as lifecycle_unique_child,
+    )
+
+try:
     from .txn import (
         build_transaction_payload,
         heartbeat_transaction,
@@ -560,6 +573,124 @@ class AutoArticleProcessor:
             "archived": str(archived),
         })
         return archived
+
+    @staticmethod
+    def _is_under(path: Path, parent: Path) -> bool:
+        return lifecycle_is_under(path, parent)
+
+    @staticmethod
+    def _unique_child(directory: Path, name: str) -> Path:
+        return lifecycle_unique_child(directory, name)
+
+    def _source_lifecycle_zone(self, source: Path) -> str:
+        if self._is_under(source, self.layout.clippings_dir):
+            return "clippings"
+        if self._is_under(source, self.layout.pinboard_dir):
+            return "pinboard"
+        if self._is_under(source, self.raw_dir):
+            return "raw"
+        if self._is_under(source, self.processing_dir):
+            return "processing"
+        if self._is_under(source, self.processed_dir):
+            return "processed"
+        return "outside_source_lifecycle"
+
+    def _move_clipping_to_raw(self, source: Path) -> Path:
+        try:
+            from .clippings_processor import ClippingsProcessor
+        except ImportError:  # pragma: no cover - script mode fallback
+            from clippings_processor import ClippingsProcessor
+
+        clippings = ClippingsProcessor(self.vault_dir, self.logger, self.txn)
+        clean_name = clippings.sanitize_filename(source.stem) + ".md"
+        new_name = f"{datetime.now().strftime('%Y-%m-%d')}_{clean_name}"
+        destination = self._unique_child(self.raw_dir, new_name)
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
+
+        if not clippings.obsidian_move(source, self.raw_dir, destination.name):
+            raise RuntimeError(f"failed to move clipping into raw intake: {source}")
+        if not destination.exists():
+            if source.exists():
+                source.rename(destination)
+            else:
+                raise FileNotFoundError(
+                    f"obsidian move reported success but destination did not appear: {destination}"
+                )
+        return destination
+
+    def _finalize_lifecycle_source(self, working_path: Path, result: dict, dry_run: bool = False) -> Path | None:
+        if dry_run:
+            return None
+        if self._is_under(working_path, self.layout.pinboard_dir):
+            if result["status"] == "completed" and working_path.exists():
+                archived = archive_pinboard_source(self.layout, working_path)
+                result["source_path"] = str(archived)
+                return archived
+            return None
+        if not self._is_under(working_path, self.processing_dir):
+            return None
+        if result["status"] == "completed":
+            archived = self._archive_source_to_processed(working_path)
+            result["source_path"] = str(archived)
+            return archived
+        if working_path.exists():
+            restored = self._restore_source_to_raw(working_path)
+            result["source_path"] = str(restored)
+            return restored
+        return None
+
+    def process_single_source(self, file_path: Path, dry_run: bool = False) -> dict:
+        """Process one source while honoring the same lifecycle as inbox runs."""
+        source = Path(file_path)
+        zone = self._source_lifecycle_zone(source)
+
+        if dry_run:
+            result = {
+                "file": str(source),
+                "status": "dry_run",
+                "output_path": None,
+                "tokens_used": 0,
+                "images_downloaded": 0,
+                "error": None,
+                "source_lifecycle": {
+                    "zone": zone,
+                    "would_move": zone in {"clippings", "raw", "processing", "pinboard"},
+                },
+            }
+            return result
+
+        working_path = source
+        try:
+            if zone == "clippings":
+                working_path = self._move_clipping_to_raw(source)
+
+            if self._is_under(working_path, self.raw_dir):
+                working_path = self._stage_source_for_processing(working_path)
+
+            result = self.process_single_file(working_path, dry_run=False)
+            result["source_lifecycle"] = {
+                "zone": zone,
+                "working_path": str(working_path),
+            }
+            self._finalize_lifecycle_source(working_path, result, dry_run=False)
+            return result
+        except Exception as e:
+            result = {
+                "file": str(source),
+                "status": "error",
+                "output_path": None,
+                "tokens_used": 0,
+                "images_downloaded": 0,
+                "error": str(e),
+                "source_lifecycle": {
+                    "zone": zone,
+                    "working_path": str(working_path),
+                },
+            }
+            if self._is_under(working_path, self.processing_dir) and working_path.exists():
+                self._finalize_lifecycle_source(working_path, result, dry_run=False)
+            self.logger.log("article_error", {"file": str(source), "error": str(e)})
+            return result
 
     @staticmethod
     def _clean_body_text(body: str, title: str = "") -> str:
@@ -1064,16 +1195,13 @@ class AutoArticleProcessor:
             if result["status"] == "completed":
                 results["completed"] += 1
                 results["total_tokens"] += result.get("tokens_used", 0)
-                if not dry_run:
-                    self._archive_source_to_processed(working_path)
+                self._finalize_lifecycle_source(working_path, result, dry_run=dry_run)
             elif result["status"] == "error":
                 results["failed"] += 1
-                if not dry_run and working_path.exists():
-                    self._restore_source_to_raw(working_path)
+                self._finalize_lifecycle_source(working_path, result, dry_run=dry_run)
             else:
                 results["skipped"] += 1
-                if not dry_run and working_path.exists():
-                    self._restore_source_to_raw(working_path)
+                self._finalize_lifecycle_source(working_path, result, dry_run=dry_run)
 
             if txn_id:
                 self.txn.heartbeat(
@@ -1130,7 +1258,7 @@ def main():
     if args.process_inbox:
         results = processor.process_inbox(dry_run=args.dry_run, batch_size=args.batch_size, txn_id=txn_id)
     elif args.process_single:
-        result = processor.process_single_file(args.process_single, dry_run=args.dry_run)
+        result = processor.process_single_source(args.process_single, dry_run=args.dry_run)
         results = {
             "total": 1,
             "completed": 1 if result["status"] == "completed" else 0,
