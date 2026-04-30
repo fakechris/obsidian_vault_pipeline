@@ -379,6 +379,35 @@ date: 2026-04-13
     assert payload["source_backlink_rail"]["related_objects"][0]["relation_type"] == "wikilink"
 
 
+def test_build_object_page_payload_adds_kind_specific_reader_lens(temp_vault):
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE objects SET object_kind = 'person' WHERE object_id = 'alpha'")
+        conn.commit()
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    assert payload["kind_profile"]["layout"] == "person_profile"
+    assert payload["kind_profile"]["title"] == "Person Profile"
+    assert payload["kind_profile"]["primary_question"] == (
+        "Who is this person, what are they known for, and how do they connect to this library?"
+    )
+    assert [item["label"] for item in payload["kind_profile"]["reading_prompts"]] == [
+        "Role",
+        "Ideas",
+        "Connections",
+    ]
+    assert payload["kind_profile"]["section_labels"] == {
+        "current_state": "Profile",
+        "why_it_matters": "Why They Matter",
+        "evidence_traceability": "Sources About This Person",
+    }
+
+
 def test_build_object_page_payload_degrades_when_source_excerpt_is_not_utf8(temp_vault):
     from ovp_pipeline.ui.view_models import build_object_page_payload
 

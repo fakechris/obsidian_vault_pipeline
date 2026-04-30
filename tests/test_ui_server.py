@@ -3461,6 +3461,26 @@ Mentions [[alpha]] as a local-first execution pattern.
     assert "Beta" in body
 
 
+def test_render_object_page_surfaces_kind_specific_reader_lens(temp_vault):
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE objects SET object_kind = 'person' WHERE object_id = 'alpha'")
+        conn.commit()
+
+    body = ui_server._render_object_page(build_object_page_payload(temp_vault, "alpha"))
+
+    assert "<h2>Person Profile</h2>" in body
+    assert "Who is this person, what are they known for" in body
+    assert "<strong>Role</strong>" in body
+    assert "<h2>Profile</h2>" in body
+    assert "<h2>Why They Matter</h2>" in body
+
+
 def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_semantics(
     temp_vault, monkeypatch
 ):

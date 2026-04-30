@@ -146,6 +146,115 @@ _OBJECT_KIND_LABELS = {
     "claim": "Claim",
     "evergreen": "Concept",
 }
+_OBJECT_KIND_READER_PROFILES = {
+    "person": {
+        "layout": "person_profile",
+        "title": "Person Profile",
+        "primary_question": (
+            "Who is this person, what are they known for, and how do they connect to this library?"
+        ),
+        "prompts": (
+            ("Role", "Use the summary and claims to understand this person's role in the library."),
+            ("Ideas", "Look for repeated concepts, claims, and source notes tied to this person."),
+            ("Connections", "Follow relations and backlinks to nearby people, projects, and concepts."),
+        ),
+        "section_labels": {
+            "current_state": "Profile",
+            "why_it_matters": "Why They Matter",
+            "evidence_traceability": "Sources About This Person",
+        },
+    },
+    "concept": {
+        "layout": "concept_brief",
+        "title": "Concept Brief",
+        "primary_question": "What does this idea mean, where is it used, and what supports it?",
+        "prompts": (
+            ("Definition", "Start with the compiled summary and strongest claims."),
+            ("Use", "Follow relations to see where the idea appears in the library."),
+            ("Evidence", "Check source notes and quoted evidence before reusing the concept."),
+        ),
+        "section_labels": {
+            "current_state": "Definition",
+            "why_it_matters": "Where It Matters",
+            "evidence_traceability": "Evidence For This Concept",
+        },
+    },
+    "company": {
+        "layout": "entity_brief",
+        "title": "Company Brief",
+        "primary_question": "What is this organization, why is it relevant, and what is it connected to?",
+        "prompts": (
+            ("Identity", "Start with what the company is and how it is described."),
+            ("Relevance", "Look for why it appears in this library."),
+            ("Connections", "Follow related tools, people, projects, and claims."),
+        ),
+        "section_labels": {
+            "current_state": "Company Snapshot",
+            "why_it_matters": "Why It Matters",
+            "evidence_traceability": "Sources About This Company",
+        },
+    },
+    "tool": {
+        "layout": "entity_brief",
+        "title": "Tool Brief",
+        "primary_question": "What does this tool do, when is it useful, and what is the evidence?",
+        "prompts": (
+            ("Use", "Start with the job this tool is used for."),
+            ("Fit", "Look for projects, workflows, or claims that explain when it matters."),
+            ("Evidence", "Check source notes before treating capabilities as facts."),
+        ),
+        "section_labels": {
+            "current_state": "Tool Snapshot",
+            "why_it_matters": "When It Matters",
+            "evidence_traceability": "Sources About This Tool",
+        },
+    },
+    "project": {
+        "layout": "entity_brief",
+        "title": "Project Brief",
+        "primary_question": "What is this project trying to do, what changed, and what evidence supports it?",
+        "prompts": (
+            ("Goal", "Start with the compiled goal or current state."),
+            ("Progress", "Look for events, claims, and production traces."),
+            ("Connections", "Follow related people, tools, and concepts."),
+        ),
+        "section_labels": {
+            "current_state": "Project Snapshot",
+            "why_it_matters": "Why It Matters",
+            "evidence_traceability": "Project Sources",
+        },
+    },
+    "event": {
+        "layout": "event_dossier",
+        "title": "Event Dossier",
+        "primary_question": "What happened, why does it matter, and what changed afterward?",
+        "prompts": (
+            ("What Happened", "Start with the compiled event summary."),
+            ("Impact", "Look for claims and relations that changed because of this event."),
+            ("Evidence", "Use source notes to verify timing and attribution."),
+        ),
+        "section_labels": {
+            "current_state": "What Happened",
+            "why_it_matters": "Impact",
+            "evidence_traceability": "Event Sources",
+        },
+    },
+    "claim": {
+        "layout": "claim_review",
+        "title": "Claim Review",
+        "primary_question": "What assertion is being made, how strong is the evidence, and can it be reused?",
+        "prompts": (
+            ("Assertion", "Read the claim in plain language first."),
+            ("Support", "Check evidence rows and source spans before trusting it."),
+            ("Risk", "Look for contradictions or stale summaries before reuse."),
+        ),
+        "section_labels": {
+            "current_state": "Claim",
+            "why_it_matters": "Confidence And Risk",
+            "evidence_traceability": "Evidence For This Claim",
+        },
+    },
+}
 _LIST_MARKER_RE = re.compile(r"^([-*•]|\d+\.)\s+")
 OBJECT_SOURCE_RAIL_RELATED_LIMIT = 8
 
@@ -170,6 +279,45 @@ def _object_reader_profile(detail: dict[str, Any], *, relation_count: int) -> di
             f"{source_note_count} source notes · {atlas_count} atlas pages"
         ),
         "empty_summary": not bool(summary_text),
+    }
+
+
+def _object_kind_profile(detail: dict[str, Any], *, relation_count: int) -> dict[str, object]:
+    object_row = detail["object"]
+    object_kind = str(object_row.get("object_kind") or "").strip().lower()
+    spec = _OBJECT_KIND_READER_PROFILES.get(object_kind)
+    if spec is None:
+        return {
+            "kind": object_kind or "object",
+            "layout": "object_brief",
+            "title": f"{_object_kind_label(object_kind)} Brief",
+            "primary_question": "What is this object, what supports it, and where should I read next?",
+            "reading_prompts": [
+                {
+                    "label": "Summary",
+                    "detail": "Start with the compiled summary and claims.",
+                },
+                {
+                    "label": "Evidence",
+                    "detail": "Check source notes and evidence rows before reuse.",
+                },
+                {
+                    "label": "Connections",
+                    "detail": f"Follow {relation_count} relation(s) and backlinks for surrounding context.",
+                },
+            ],
+            "section_labels": {},
+        }
+    return {
+        "kind": object_kind,
+        "layout": spec["layout"],
+        "title": spec["title"],
+        "primary_question": spec["primary_question"],
+        "reading_prompts": [
+            {"label": label, "detail": detail_text}
+            for label, detail_text in spec["prompts"]
+        ],
+        "section_labels": dict(spec["section_labels"]),
     }
 
 
@@ -1795,6 +1943,8 @@ def build_object_page_payload(
     )
     summary_text = detail["summary"]["summary_text"] if detail["summary"] else ""
     reader_profile = _object_reader_profile(detail, relation_count=len(relations))
+    kind_profile = _object_kind_profile(detail, relation_count=len(relations))
+    section_labels = kind_profile["section_labels"]
     source_backlink_rail = _build_source_backlink_rail(
         vault_dir,
         detail=detail,
@@ -1815,7 +1965,7 @@ def build_object_page_payload(
     compiled_sections = [
         _compiled_section(
             "current_state",
-            "Current State",
+            str(section_labels.get("current_state") or "Current State"),
             summary=summary_text or "No compiled summary yet.",
             items=[
                 {
@@ -1830,7 +1980,7 @@ def build_object_page_payload(
         ),
         _compiled_section(
             "why_it_matters",
-            "Why It Matters",
+            str(section_labels.get("why_it_matters") or "Why It Matters"),
             summary=f"{len(detail['contradictions']) if research_shell_enabled else 0} contradictions and {review_context.get('stale_summary_count', 0)} stale summaries shape current maintenance urgency.",
             items=[
                 {
@@ -1855,7 +2005,7 @@ def build_object_page_payload(
         ),
         _compiled_section(
             "evidence_traceability",
-            "Evidence Traceability",
+            str(section_labels.get("evidence_traceability") or "Evidence Traceability"),
             summary=f"{len(detail['evidence'])} evidence rows, {len(detail['provenance']['source_notes'])} source notes, {len(detail['provenance']['mocs'])} atlas pages.",
             items=[
                 {
@@ -2027,6 +2177,7 @@ def build_object_page_payload(
         "research_shell_enabled": research_shell_enabled,
         **detail,
         "reader_profile": reader_profile,
+        "kind_profile": kind_profile,
         "source_backlink_rail": source_backlink_rail,
         "production_chain": production_chain,
         "relations": relations,

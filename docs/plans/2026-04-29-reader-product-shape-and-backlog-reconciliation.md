@@ -209,7 +209,7 @@ Recommended ordering:
 2. **Object Pages v2**
    - Replace database-like object pages with kind-aware reader templates.
    - Use existing object detail, evidence, relations, backlinks, capture summaries, and compiled sections.
-   - Person/concept/company pages should be the first three templates.
+   - Person, concept, company/tool/project, event, and claim pages now have a first reader-lens slice.
 
 3. **Visual Graph MVP**
    - Add `/graph` as a reader-facing visual map.
@@ -255,7 +255,7 @@ Suggested second PR:
 Scope:
 
 - update object page view model with page kind contract
-- add Person / Concept / Company / generic templates
+- add Person / Concept / Company / Tool / Project / Event / Claim reader lenses
 - render evidence and backlinks as reading context
 - keep raw audit/provenance collapsible
 
@@ -275,12 +275,12 @@ Scope:
 
 | Item | Priority | Status | Notes |
 | --- | --- | --- | --- |
-| Reader home / Knowledge Atlas | P0 | proposed next | Highest leverage product-shape correction |
-| Move current dashboard to `/ops` | P0 | proposed next | Preserves operator value while changing first impression |
-| Kind-aware object pages | P0 | next | Turns extraction objects into user-readable pages |
-| Mention/backlink rail | P1 | next | Direct LearnBuffett lesson; evidence-backed reading context |
-| Visual `/graph` map | P1 | next | Use current graph data; no new backend |
-| Reader-oriented search | P1 | later | Depends on object summaries and evidence counts |
+| Reader home / Knowledge Atlas | P0 | shipped | Highest leverage product-shape correction |
+| Move current dashboard to `/ops` | P0 | shipped | Preserves operator value while changing first impression |
+| Kind-aware object pages | P0 | shipped first reader-lens slice | Turns extraction objects into user-readable pages |
+| Mention/backlink rail | P1 | shipped | Direct LearnBuffett lesson; evidence-backed reading context |
+| Visual `/graph` map | P1 | shipped first MVP | Use current graph data; no new backend |
+| Reader-oriented search | P1 | next | Depends on object summaries and evidence counts |
 | Trusted reuse loop | P1 | keep | Still core north-star measurement |
 | Evidence v2 | P1 | keep | Still needed for long-term trust |
 | Policy promotion | P2 | keep | Important, but after product entry is understandable |
