@@ -538,7 +538,9 @@ Operational rules:
 - `projection_lifecycle.py` 将 projection repair marker events 记录在 `60-Logs/projection-repair.jsonl`。
 - marker event log 通过 `written`、`superseded`、`claimed`、`closed` events replay 出当前 marker state。
 - `ensure_knowledge_db_current()` 在 `knowledge.db` 缺失或 legacy schema 不兼容时，会写入并关闭一个 `full_rebuild` marker。
-- 更完整的 Authority/projection schema metadata contract 仍是 partial：当前代码有 schema constant 和 rebuild trigger，但还没有持久化 `.ovp/schema_version` 或 `knowledge.db` 内部 projection metadata。
+- `.ovp/schema_version` 持久化当前 vault 的 Authority schema version。
+- `knowledge.db.projection_metadata` 记录 derived store 是由哪个 Authority schema version 和 projection schema version 构建出来的。
+- `ensure_knowledge_db_current()` 会比较这些 version；当 Authority 或 projection schema metadata 新于当前 derived store 时，写入 `full_rebuild` marker 并重建。
 
 ## 11. Canonical Scenarios
 
@@ -708,8 +710,8 @@ Layer 1 schema and Layer 2 projection schema will evolve. This must be explicit.
 
 Suggested rules:
 
-- Authority schema version should be recorded near the vault root, for example `.ovp/schema_version`.
-- Projection schema version should be recorded inside `knowledge.db` metadata.
+- Authority schema version 记录在 vault root 的 `.ovp/schema_version`。
+- Projection schema version 记录在 `knowledge.db` 的 `projection_metadata`。
 - Every derived projection should record which Authority schema version and projection schema version it was built from.
 - Startup/doctor checks compare current versions against projection versions.
 - If current Authority schema version is newer than the marker or projection version, write or promote to `ProjectionRepairMarker(kind="full_rebuild")`.
@@ -781,7 +783,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 - dashboard/search hot path、workflow wiring、source routing preview、evidence span backfill 和 candidate risk 已经有第一批 fitness checks；更深的 evidence completeness、projection replay、import-boundary checks 仍未完成。
 - context assembly recipes 还需要收束。
 - governance / resolver contracts 还需要显式化。
-- schema versioning 已经有第一版 rebuild marker trigger；Authority/projection version metadata 持久化仍需工程化。
+- schema versioning 已接入 `knowledge.db` projection lifecycle：Authority/projection version metadata 已持久化，stale metadata 会触发 full rebuild marker。
 - fitness functions 只落地了第一批，仍需扩展到 CI/doctor/pre-commit 的完整契约。
 - reader-first home 已经成为默认入口；object page 已有 reader profile、source rail 和按 kind 区分的 reader lens；`/graph` 已有第一版 spatial map projection；`/search` 已按 kind、summary、evidence count、match reason 组织 reader results。
 
@@ -792,10 +794,10 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 优先顺序：
 
 1. 新增 access surface 时必须继续带 projection metadata，并补 doctor/export checks 验证标注存在。
-2. 第一版 rebuild-marker trigger 已接上，下一步补完 schema-version metadata contract。
-3. 在扩大自动 promotion 前，补更严格的 factual evidence completeness checks。
-4. 给 Authority 和 derived projection state 增加 schema version 字段。
-5. 扩展 doctor/export checks，同时验证 projection marker replay 和 projection labels。
+2. 在扩大自动 promotion 前，补更严格的 factual evidence completeness checks。
+3. 扩展 doctor/export checks，同时验证 projection marker replay 和 projection labels。
+4. 把 trusted reuse events 接进 reader/context-pack loop。
+5. 未来新增 projection backend 前，先沿用同一套 metadata contract，再加 semantic reindex worker。
 6. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
 7. 预留 semantic_reindex lifecycle kind，但不提前锁定 LanceDB 或其它 backend。
 
@@ -814,7 +816,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 | Reader-first access surfaces | `BL-001`；`BL-008`、`BL-009` 已通过 PR #79 和 PR #83 交付；`BL-010` 已在 PR #80 交付 |
 | Reader-oriented search | `BL-011` 已在 PR #84 交付 |
 | Projection repair lifecycle | `BL-020` 已在 PR #87 落地 |
-| Schema versioning and migration trigger | `BL-021` 已在 PR #87 落地第一片 |
+| Schema versioning and migration trigger | `BL-021` 已在 PR #87 和 PR #88 中补完 |
 
 ## Bottom Line
 
