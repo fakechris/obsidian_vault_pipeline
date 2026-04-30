@@ -93,16 +93,16 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 | M1 Operator Workbench And Review Runtime | Complete enough | truth UI、candidates、signals/actions、contradictions、action worker |
 | M2 Roadmap And README Consolidation | Complete | 已合并历史 milestone、compiler roadmap、近期 KSR 输入与 reader-product 研究，重整 README |
 | M3 Reader-First Knowledge Atlas | Active | reader home、`/ops` 拆分、第一版 object source/backlink rail、visual graph map 已交付；更深的 per-kind object layout 仍需产品化 |
-| M4 KSR Safety And Hot-Path Hardening | Active | projection 标注、hot-path audit、wiring eval、article routing preview 已交付；下一步推进 evidence span 和 candidate 风险分层 |
+| M4 KSR Safety And Hot-Path Hardening | Active | projection 标注、hot-path audit、wiring eval、article routing preview、evidence span、candidate 风险分层已交付；更深的 enforcement 仍待推进 |
 | M5 Context Pack And Operational Runtime | Later | session snapshot、context budget、claim lease、provider facade、observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、skill/routine extraction、notebook/raw-source mode |
 
 当前 active backlog 重点：
 
-- 已交付：`KSR-002` Projection 标注、`KSR-014` Article routing preview、`KSR-015` Dashboard/search hot-path audit、`KSR-026` Workflow wiring eval suite。
+- 已交付：`KSR-001` Evidence span 化、`KSR-002` Projection 标注、`KSR-003` Candidate 风险分层、`KSR-014` Article routing preview、`KSR-015` Dashboard/search hot-path audit、`KSR-018` Markdown-aware evidence span backfill、`KSR-026` Workflow wiring eval suite。
 - 产品侧已交付：第一版 readable object page profile、source/backlink rail 和 visual `/graph` map。
-- 下一步：`KSR-001` Evidence span 化、`KSR-003` Candidate 风险分层，然后继续更深的 per-kind object layout。
+- 下一步：继续更深的 per-kind object layout，然后做按 kind、evidence、reason 组织的 reader-oriented search。
 - 产品线：Reader-first Knowledge Atlas 作为 projection layer 实现，不另建状态系统。
 
 ## Domain Packs

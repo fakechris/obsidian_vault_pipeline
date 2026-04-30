@@ -54,6 +54,10 @@ CREATE TABLE claim_evidence (
   locator TEXT NOT NULL DEFAULT '',
   content_hash TEXT NOT NULL DEFAULT '',
   retrieval_context TEXT NOT NULL DEFAULT '',
+  quote_start_line INTEGER NOT NULL DEFAULT 0,
+  quote_end_line INTEGER NOT NULL DEFAULT 0,
+  quote_start_char INTEGER NOT NULL DEFAULT 0,
+  quote_end_char INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'unverified',
   verified_at TEXT NOT NULL DEFAULT ''
 );
@@ -71,6 +75,10 @@ CREATE TABLE relations (
   locator TEXT NOT NULL DEFAULT '',
   content_hash TEXT NOT NULL DEFAULT '',
   retrieval_context TEXT NOT NULL DEFAULT '',
+  quote_start_line INTEGER NOT NULL DEFAULT 0,
+  quote_end_line INTEGER NOT NULL DEFAULT 0,
+  quote_start_char INTEGER NOT NULL DEFAULT 0,
+  quote_end_char INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'unverified',
   verified_at TEXT NOT NULL DEFAULT ''
 );
@@ -278,10 +286,14 @@ class ClaimEvidenceRow:
     locator: str = ""
     content_hash: str = ""
     retrieval_context: str = ""
+    quote_start_line: int = 0
+    quote_end_line: int = 0
+    quote_start_char: int = 0
+    quote_end_char: int = 0
     status: str = EVIDENCE_STATUS_UNVERIFIED
     verified_at: str = ""
 
-    def to_row(self) -> tuple[str, str, str, str, str, str, str, str, str, str]:
+    def to_row(self) -> tuple[str, str, str, str, str, str, str, str, int, int, int, int, str, str]:
         return (
             self.pack,
             self.claim_id,
@@ -291,6 +303,10 @@ class ClaimEvidenceRow:
             self.locator,
             self.content_hash,
             self.retrieval_context,
+            int(self.quote_start_line),
+            int(self.quote_end_line),
+            int(self.quote_start_char),
+            int(self.quote_end_char),
             self.status,
             self.verified_at,
         )
@@ -314,10 +330,14 @@ class RelationRow:
     locator: str = ""
     content_hash: str = ""
     retrieval_context: str = ""
+    quote_start_line: int = 0
+    quote_end_line: int = 0
+    quote_start_char: int = 0
+    quote_end_char: int = 0
     status: str = EVIDENCE_STATUS_UNVERIFIED
     verified_at: str = ""
 
-    def to_row(self) -> tuple[str, str, str, str, str, str, str, str, str, str, str]:
+    def to_row(self) -> tuple[str, str, str, str, str, str, str, str, int, int, int, int, str, str, str]:
         return (
             self.pack,
             self.source_object_id,
@@ -328,6 +348,10 @@ class RelationRow:
             self.locator,
             self.content_hash,
             self.retrieval_context,
+            int(self.quote_start_line),
+            int(self.quote_end_line),
+            int(self.quote_start_char),
+            int(self.quote_end_char),
             self.status,
             self.verified_at,
         )
@@ -430,6 +454,12 @@ def _coerce_rows(values: Iterable[Any], row_type: type) -> list[Any]:
         if isinstance(item, row_type):
             coerced.append(item)
         elif isinstance(item, tuple):
+            if row_type is ClaimEvidenceRow and len(item) == 10:
+                coerced.append(row_type(*item[:8], 0, 0, 0, 0, *item[8:]))
+                continue
+            if row_type is RelationRow and len(item) == 11:
+                coerced.append(row_type(*item[:9], 0, 0, 0, 0, *item[9:]))
+                continue
             coerced.append(row_type(*item))
         elif isinstance(item, dict):
             coerced.append(row_type(**item))

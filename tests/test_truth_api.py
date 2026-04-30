@@ -1254,6 +1254,12 @@ def test_truth_api_returns_object_detail_with_claims_relations_and_summary(temp_
     assert detail["claims"][0]["claim_kind"] == "page_summary"
     assert detail["relations"][0]["target_object_id"] == "target-note"
     assert detail["evidence"][0]["evidence_kind"] == "page_summary"
+    assert {
+        "quote_start_line",
+        "quote_end_line",
+        "quote_start_char",
+        "quote_end_char",
+    }.issubset(detail["evidence"][0])
     assert detail["contradictions"][0]["subject_key"] == "agent harness"
 
 
@@ -5151,6 +5157,10 @@ def test_truth_api_lists_candidate_concepts(temp_vault):
     )
     assert item["suggested_action"] == "merge_as_alias"
     assert item["similar_existing"][0]["slug"] == "alpha-existing"
+    assert item["risk"]["tier"] == "medium"
+    assert item["risk"]["factors"]["evidence_strength"] == "strong"
+    assert "possible_duplicate" in item["risk"]["reasons"]
+    assert payload["risk_counts"]["medium"] == 1
 
     empty_page = list_candidate_concepts(temp_vault, limit=0)
     assert empty_page["count"] == 1
@@ -5250,6 +5260,9 @@ def test_truth_api_ambiguous_candidate_suggestion_does_not_promote_duplicate_ris
 
     assert payload["items"][0]["slug"] == "ambiguous-candidate"
     assert payload["items"][0]["suggested_action"] == "keep_as_candidate"
+    assert payload["items"][0]["risk"]["tier"] == "high"
+    assert payload["items"][0]["risk"]["factors"]["identity_ambiguity"] == "ambiguous"
+    assert "identity_ambiguous" in payload["items"][0]["risk"]["reasons"]
     assert {item["slug"] for item in payload["items"][0]["similar_existing"]} == {
         "alpha-existing",
         "beta-existing",
