@@ -667,14 +667,14 @@ Main gaps:
 - Layer 4 fitness checks now cover the first hot-path, workflow-wiring, source routing preview, evidence span backfill, and candidate risk cases; deeper evidence completeness, projection replay, and import-boundary checks are still open.
 - Projection lifecycle markers need structured schema, scope, lease, and supersession.
 - Schema versioning is not yet wired into projection lifecycle.
-- The reader-first home is now the default entry; object pages have reader profiles, source rails, and kind-specific reader lenses; `/graph` has a first spatial map projection; search still needs product shape.
+- The reader-first home is now the default entry; object pages have reader profiles, source rails, and kind-specific reader lenses; `/graph` has a first spatial map projection; `/search` groups reader results by kind, summary, evidence count, and match reason.
 
 ## 18. Near-Term Architecture Actions
 
 Recommended order:
 
 1. Keep projection metadata attached to new access surfaces and add doctor/export checks that verify the labels are present.
-2. Continue reader-first Layer 3 product work on search using the new kind lenses, evidence spans, and risk tiers.
+2. Move to projection repair lifecycle and schema-version rebuild triggers now that the first reader-facing product loop is coherent.
 3. Add stricter factual evidence completeness checks before expanding automatic promotion.
 4. Introduce structured `ProjectionRepairMarker` schema.
 5. Add schema version fields to Authority and derived projection state.
@@ -692,5 +692,6 @@ The architecture should not depend on backlog IDs to be valid. The table below i
 | Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` done in PR #82 |
 | Candidate risk layering | `BL-007`, `KSR-003` done in PR #82 |
 | Reader-first access surfaces | `BL-001`; `BL-008` and `BL-009` done through PR #79 and PR #83; `BL-010` done in PR #80 |
+| Reader-oriented search | `BL-011` done in PR #84 |
 | Projection repair lifecycle | `BL-020` |
 | Schema versioning and migration trigger | `BL-021` |

@@ -280,7 +280,7 @@ Scope:
 | Kind-aware object pages | P0 | shipped first reader-lens slice | Turns extraction objects into user-readable pages |
 | Mention/backlink rail | P1 | shipped | Direct LearnBuffett lesson; evidence-backed reading context |
 | Visual `/graph` map | P1 | shipped first MVP | Use current graph data; no new backend |
-| Reader-oriented search | P1 | next | Depends on object summaries and evidence counts |
+| Reader-oriented search | P1 | shipped | Results group by object kind and source kind with summaries, evidence counts, and match reasons |
 | Trusted reuse loop | P1 | keep | Still core north-star measurement |
 | Evidence v2 | P1 | keep | Still needed for long-term trust |
 | Policy promotion | P2 | keep | Important, but after product entry is understandable |

@@ -316,3 +316,4 @@ The better sequence is likely:
 2. hot-path/wiring evals
 3. kind-aware object pages, reader lenses, and backlink rail
 4. visual graph MVP
+5. reader-oriented search grouped by kind, summary, evidence, and reason

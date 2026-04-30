@@ -21,7 +21,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M0 Pipeline And Pack Foundation | Done | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first source-lifecycle idempotency slice |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and English-primary docs |
-| M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, object source/backlink rail, visual graph map, and kind-specific object reader lenses shipped; reader search remains |
+| M3 Reader-First Knowledge Atlas | Done / iterate | reader home, `/ops` split, object source/backlink rail, visual graph map, kind-specific object reader lenses, and reader-oriented search shipped |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk shipped; deeper enforcement remains |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
@@ -42,7 +42,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-008 | P1 | Done | Kind-aware object pages for people, concepts, companies/tools/projects, events, and claims, with reader profiles, source/backlink rails, kind-specific lenses, and section labels | M3, PR #79, PR #83 |
 | BL-009 | P1 | Done | Mention/backlink rail with excerpts, source jumps, and relation context | M3, reader-product note, PR #79 |
 | BL-010 | P1 | Done | Visual `/graph` MVP as a spatial corpus map; analytical clusters remain under `/clusters` for ops/debug | M3, PR #80 |
-| BL-011 | P1 | Later | Reader-oriented search grouped by kind, summary, evidence, and reason | M3/M4 |
+| BL-011 | P1 | Done | Reader-oriented search grouped by kind, summary, evidence, and reason | M3/M4, PR #84 |
 | BL-012 | P1 | Later | Trusted reuse event instrumentation for downstream use of accepted/cited knowledge | April 22 roadmap |
 | BL-013 | P1 | Later | Session snapshot / OVP context pack / explicit context budget | M5, KSR-004, KSR-017, KSR-022 |
 | BL-014 | P1 | Later | Operational runtime graph, claim lease, observability metrics, provider facade | M5, KSR-020, KSR-021, KSR-023, KSR-025 |
@@ -90,12 +90,12 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 ## Next Decision
 
-`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, `BL-010` is shipped in PR #80, `BL-005` is shipped in PR #81, and `BL-006 + BL-007` are implemented in PR #82. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails and kind-specific reader lenses, `/graph` renders a reader-facing spatial map over graph projections, `ovp-absorb --dry-run --json` explains source lifecycle routing before mutation, evidence rows carry line/char spans, and candidate review payloads expose risk tiers.
+`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, `BL-010` is shipped in PR #80, `BL-005` is shipped in PR #81, `BL-006 + BL-007` are implemented in PR #82, `BL-008` is completed in PR #83, and `BL-011` is completed in PR #84. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails and kind-specific reader lenses, `/graph` renders a reader-facing spatial map over graph projections, `/search` groups reader results by kind with summaries, evidence counts, and match reasons, `ovp-absorb --dry-run --json` explains source lifecycle routing before mutation, evidence rows carry line/char spans, and candidate review payloads expose risk tiers.
 
-The next implementation PR should continue the reader product lane with **BL-011** reader-oriented search grouped by kind, summary, evidence, and reason. M4 still has deeper enforcement work, but the P0 risk reducers needed before richer reader surfaces are now in place.
+The next implementation PR should move from reader product shape back into operational hardening: **BL-020 / BL-021** projection repair lifecycle and schema-version rebuild triggers. The first reader-facing product loop is now coherent enough to support that reliability work.
 
 Recommended order:
 
-1. BL-011 reader-oriented search
-2. BL-020 / BL-021 when projection repair and schema migration become the next operational bottleneck
-3. BL-012 / BL-013 once the reader surfaces need stronger reuse/context-pack loops
+1. BL-020 / BL-021 projection repair lifecycle and schema migration triggers
+2. BL-012 / BL-013 trusted reuse events and context-pack loops
+3. BL-014 when operational runtime observability becomes the next bottleneck
