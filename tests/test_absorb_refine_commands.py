@@ -356,6 +356,101 @@ def test_absorb_dry_run_under_clippings_reports_source_lifecycle_plan(temp_vault
     payload = json.loads(captured.out)
     assert payload["source_lifecycle"]["required"] is True
     assert payload["source_lifecycle"]["source_targets"] == [str(clipping)]
+    preview = payload["source_lifecycle"]["routing_preview"]
+    assert preview["preview_schema_version"] == 1
+    assert len(preview["items"]) == 1
+    route = preview["items"][0]
+    assert route["source"] == str(clipping)
+    assert route["source_zone"] == "clippings"
+    assert route["route"] == "clippings_to_raw_to_processing_to_deep_dive_absorb"
+    assert route["processor"] == "auto_article_processor"
+    assert route["will_mutate_on_execute"] is True
+    assert [step["action"] for step in route["planned_actions"]] == [
+        "move_to_raw",
+        "stage_for_processing",
+        "process_article",
+        "archive_source_to_processed",
+        "absorb_generated_deep_dive",
+    ]
+    assert route["planned_actions"][0]["target"].endswith("_Raw_Clip.md")
+    assert route["planned_actions"][1]["target"].endswith("_Raw_Clip.md")
+    assert route["planned_actions"][2]["target"] == "generated_deep_dive"
+    assert clipping.exists()
+
+
+def test_source_lifecycle_routing_preview_explains_raw_and_processing_routes(temp_vault):
+    from ovp_pipeline.commands.absorb import build_source_lifecycle_routing_preview
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.raw_dir.mkdir(parents=True, exist_ok=True)
+    layout.processing_dir.mkdir(parents=True, exist_ok=True)
+    raw_source = layout.raw_dir / "2026-04-30_Raw_Article.md"
+    processing_source = layout.processing_dir / "2026-04-29_Working_Article.md"
+    raw_source.write_text("# Raw Article\n", encoding="utf-8")
+    processing_source.write_text("# Working Article\n", encoding="utf-8")
+
+    preview = build_source_lifecycle_routing_preview(layout, [raw_source, processing_source])
+
+    routes = {item["source_zone"]: item for item in preview["items"]}
+    assert routes["raw"]["route"] == "raw_to_processing_to_deep_dive_absorb"
+    assert [step["action"] for step in routes["raw"]["planned_actions"]] == [
+        "stage_for_processing",
+        "process_article",
+        "archive_source_to_processed",
+        "absorb_generated_deep_dive",
+    ]
+    assert routes["raw"]["planned_actions"][0]["target"] == str(layout.processing_dir / raw_source.name)
+    assert routes["processing"]["route"] == "processing_to_deep_dive_absorb"
+    assert [step["action"] for step in routes["processing"]["planned_actions"]] == [
+        "process_article",
+        "archive_source_to_processed",
+        "absorb_generated_deep_dive",
+    ]
+    assert raw_source.exists()
+    assert processing_source.exists()
+
+
+def test_source_lifecycle_routing_preview_reserves_duplicate_clipping_destinations(temp_vault):
+    from ovp_pipeline.commands.absorb import build_source_lifecycle_routing_preview
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    clipping_a = layout.clippings_dir / "a" / "Same Clip.md"
+    clipping_b = layout.clippings_dir / "b" / "Same Clip.md"
+    clipping_a.parent.mkdir(parents=True, exist_ok=True)
+    clipping_b.parent.mkdir(parents=True, exist_ok=True)
+    clipping_a.write_text("# Same Clip A\n", encoding="utf-8")
+    clipping_b.write_text("# Same Clip B\n", encoding="utf-8")
+
+    preview = build_source_lifecycle_routing_preview(layout, [layout.clippings_dir])
+
+    raw_targets = [
+        item["planned_actions"][0]["target"]
+        for item in preview["items"]
+        if item["source_zone"] == "clippings"
+    ]
+    assert len(raw_targets) == 2
+    assert len(set(raw_targets)) == 2
+    assert raw_targets[0].endswith("_Same_Clip.md")
+    assert raw_targets[1].endswith("_Same_Clip-2.md")
+    assert clipping_a.exists()
+    assert clipping_b.exists()
+
+
+def test_source_lifecycle_routing_preview_dedupes_overlapping_targets(temp_vault):
+    from ovp_pipeline.commands.absorb import build_source_lifecycle_routing_preview
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    clipping = layout.clippings_dir / "Overlap Clip.md"
+    clipping.parent.mkdir(parents=True, exist_ok=True)
+    clipping.write_text("# Overlap Clip\n", encoding="utf-8")
+
+    preview = build_source_lifecycle_routing_preview(layout, [layout.clippings_dir, clipping])
+
+    assert [item["source"] for item in preview["items"]] == [str(clipping)]
+    assert clipping.exists()
 
 
 def test_run_source_lifecycle_dry_run_does_not_move_clippings(temp_vault):

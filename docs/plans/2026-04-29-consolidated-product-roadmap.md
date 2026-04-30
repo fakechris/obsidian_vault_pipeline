@@ -172,13 +172,13 @@ Third PR slice:
 
 ### M4. KSR Safety And Hot-Path Hardening
 
-**Status:** Near-term engineering wave
+**Status:** Active engineering wave; hot-path audit, wiring evals, and first article routing preview are shipped
 
 Related KSR tasks:
 
 - `KSR-001 Evidence span 化`
 - `KSR-003 Candidate 风险分层`
-- `KSR-014 Article routing preview`
+- `KSR-014 Article routing preview` (first JSON preview shipped)
 - `KSR-015 Dashboard/search hot-path audit`
 - `KSR-018 Markdown-aware evidence chunking`
 - `KSR-026 Workflow wiring eval suite`
@@ -188,7 +188,7 @@ Goal:
 - every important claim/candidate can point to source path, content hash, heading/paragraph anchor, quote hash, line span, and relation/evidence type
 - dashboard/search never trigger heavy raw/PDF/Office scans on default paths
 - candidate review is grouped by risk and evidence strength
-- routing decisions are previewed/explained before changing lifecycle behavior
+- routing decisions are previewed/explained before changing lifecycle behavior; first source lifecycle JSON preview is available from `ovp-absorb --dry-run --json`
 - no-LLM wiring evals lock critical invariants
 
 First likely implementation order:
@@ -198,6 +198,8 @@ First likely implementation order:
 3. article routing preview payload
 4. evidence span schema and markdown-aware locator backfill
 5. candidate risk grouping
+
+Items 1-3 are shipped in the repo. The next P0 safety work is items 4-5.
 
 ### M5. Context Pack And Operational Runtime
 
@@ -276,7 +278,7 @@ The current P0 set is:
 | KSR-002 | Projection marking | M3/M4 | Must apply to dashboard, MOC, wiki, briefing, reader atlas |
 | KSR-015 | Dashboard/search hot-path audit | M3/M4 | Needed before making UI the default product surface |
 | KSR-026 | Workflow wiring eval suite | M4 | Prevents regressions in lifecycle, promote gate, projection marking, hot paths, write boundaries |
-| KSR-014 | Article routing preview | M4 | Preview/evaluate only at first; do not route sources invisibly |
+| KSR-014 | Article routing preview | M4 | First `ovp-absorb --dry-run --json` preview shipped; do not route sources invisibly |
 | KSR-001 | Evidence span | M4 | Foundation for reader trust and future policy promotion |
 | KSR-003 | Candidate risk layering | M4 | Needed to keep review workload small |
 

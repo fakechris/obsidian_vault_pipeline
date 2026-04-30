@@ -95,16 +95,16 @@ Current milestone sequence:
 | M1 Operator Workbench And Review Runtime | Complete enough | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Complete | merged historical milestones, compiler roadmap, recent KSR input, and reader-product research |
 | M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, first object source/backlink rail, and visual graph map shipped; deeper per-kind object layouts still need product shape |
-| M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, and wiring evals have shipped; routing preview, evidence spans, and candidate risk tiers are next |
+| M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, and article routing preview have shipped; evidence spans and candidate risk tiers are next |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facades, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, skill/routine extraction, notebook/raw-source mode |
 
 Current active backlog focus:
 
-- Shipped: `KSR-002` projection labels, `KSR-015` dashboard/search hot-path audit, `KSR-026` workflow wiring eval suite.
+- Shipped: `KSR-002` projection labels, `KSR-014` article routing preview, `KSR-015` dashboard/search hot-path audit, `KSR-026` workflow wiring eval suite.
 - Product shipped: first readable object page profile, source/backlink rail, and visual `/graph` map.
-- Next: `KSR-014` article routing preview, `KSR-001` evidence spans, `KSR-003` candidate risk tiers, then deeper per-kind object layouts.
+- Next: `KSR-001` evidence spans, `KSR-003` candidate risk tiers, then deeper per-kind object layouts.
 - Product track: reader-first Knowledge Atlas stays a projection layer, not a new state system.
 
 ## Domain Packs
@@ -382,6 +382,7 @@ Refine is not hidden or missing. It is wired in, but opt-in by default to avoid 
 | Command | Purpose |
 |---|---|
 | `ovp-absorb --recent 7 --json` | Absorb recent deep dives |
+| `ovp-absorb --file <source.md> --dry-run --json` | Preview source lifecycle routing before moving or processing source material |
 | `ovp-evergreen --recent 7 --json` | Compatibility alias for `ovp-absorb` |
 | `ovp-cleanup --all --json` | Generate cleanup proposals |
 | `ovp-cleanup --all --write --json` | Apply deterministic cleanup |

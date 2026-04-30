@@ -13,6 +13,8 @@ from ..clippings_processor import ClippingsProcessor
 from ..evidence import build_evidence_payload
 from ..runtime import VaultLayout, resolve_vault_dir
 
+ISO_DATE_PREFIX_LEN = 10
+
 
 def _is_under(path: Path, parent: Path) -> bool:
     try:
@@ -72,6 +74,33 @@ def _unique_child(directory: Path, name: str) -> Path:
         counter += 1
 
 
+def _unique_child_with_reservations(directory: Path, name: str, reserved: set[Path]) -> Path:
+    candidate = directory / name
+    if not candidate.exists() and candidate.resolve(strict=False) not in reserved:
+        reserved.add(candidate.resolve(strict=False))
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    counter = 2
+    while True:
+        next_candidate = directory / f"{stem}-{counter}{suffix}"
+        if not next_candidate.exists() and next_candidate.resolve(strict=False) not in reserved:
+            reserved.add(next_candidate.resolve(strict=False))
+            return next_candidate
+        counter += 1
+
+
+def _clipping_raw_name(
+    processor: ClippingsProcessor,
+    source: Path,
+    *,
+    when: datetime | None = None,
+) -> str:
+    clean_name = processor.sanitize_filename(source.stem) + ".md"
+    timestamp = (when or datetime.now()).strftime("%Y-%m-%d")
+    return f"{timestamp}_{clean_name}"
+
+
 def _move_clipping_to_raw(
     layout: VaultLayout,
     processor: ClippingsProcessor,
@@ -79,8 +108,7 @@ def _move_clipping_to_raw(
     *,
     settle_timeout_s: float = 5.0,
 ) -> Path:
-    clean_name = processor.sanitize_filename(source.stem) + ".md"
-    new_name = f"{datetime.now().strftime('%Y-%m-%d')}_{clean_name}"
+    new_name = _clipping_raw_name(processor, source)
     destination = _unique_child(layout.raw_dir, new_name)
     if not processor.obsidian_move(source, layout.raw_dir, destination.name):
         raise RuntimeError(f"failed to move clipping into raw intake: {source}")
@@ -96,6 +124,119 @@ def _move_clipping_to_raw(
                 f"obsidian move reported success but destination did not appear: {destination}"
             )
     return destination
+
+
+def _source_lifecycle_zone(layout: VaultLayout, source: Path) -> str:
+    if _is_under(source, layout.clippings_dir):
+        return "clippings"
+    if _is_under(source, layout.raw_dir):
+        return "raw"
+    if _is_under(source, layout.processing_dir):
+        return "processing"
+    if _is_under(source, layout.processed_dir):
+        return "processed"
+    return "outside_source_lifecycle"
+
+
+def _preview_clipping_raw_destination(
+    layout: VaultLayout,
+    processor: ClippingsProcessor,
+    source: Path,
+    reserved: set[Path],
+    *,
+    when: datetime,
+) -> Path:
+    new_name = _clipping_raw_name(processor, source, when=when)
+    return _unique_child_with_reservations(layout.raw_dir, new_name, reserved)
+
+
+def _archive_preview_path(layout: VaultLayout, source: Path) -> Path:
+    match = source.name[:ISO_DATE_PREFIX_LEN]
+    try:
+        source_date = datetime.strptime(match, "%Y-%m-%d")
+    except ValueError:
+        source_date = datetime.now()
+    return layout.processed_month_dir(source_date) / source.name
+
+
+def build_source_lifecycle_routing_preview(layout: VaultLayout, targets: list[Path]) -> dict:
+    """Build a non-mutating preview of source lifecycle routing for absorb."""
+    logger = PipelineLogger(layout.pipeline_log)
+    txn = TransactionManager(layout.transactions_dir)
+    clippings = ClippingsProcessor(layout.vault_dir, logger, txn)
+    preview_time = datetime.now()
+    items: list[dict] = []
+    reserved_raw_destinations: set[Path] = set()
+    sources = _dedupe_paths(
+        [source for target in targets for source in _expand_markdown_sources(target)]
+    )
+    for source in sources:
+        zone = _source_lifecycle_zone(layout, source)
+        planned_actions: list[dict[str, str]] = []
+        route = "unsupported_source_lifecycle_route"
+        reason = "source is outside the supported source lifecycle directories"
+        working_source = source
+
+        if zone == "clippings":
+            raw_target = _preview_clipping_raw_destination(
+                layout,
+                clippings,
+                source,
+                reserved_raw_destinations,
+                when=preview_time,
+            )
+            staged_target = layout.processing_dir / raw_target.name
+            route = "clippings_to_raw_to_processing_to_deep_dive_absorb"
+            reason = "clipping must be finalized into Raw before article interpretation and absorb"
+            planned_actions.extend(
+                [
+                    {"action": "move_to_raw", "target": str(raw_target)},
+                    {"action": "stage_for_processing", "target": str(staged_target)},
+                ]
+            )
+            working_source = staged_target
+        elif zone == "raw":
+            staged_target = layout.processing_dir / source.name
+            route = "raw_to_processing_to_deep_dive_absorb"
+            reason = "raw source must be staged before article interpretation and absorb"
+            planned_actions.append({"action": "stage_for_processing", "target": str(staged_target)})
+            working_source = staged_target
+        elif zone == "processing":
+            route = "processing_to_deep_dive_absorb"
+            reason = "processing source can be interpreted directly before absorb"
+        elif zone == "processed":
+            route = "processed_to_deep_dive_absorb"
+            reason = "processed source can be re-interpreted directly before absorb"
+
+        if zone in {"clippings", "raw", "processing", "processed"}:
+            planned_actions.append({"action": "process_article", "target": "generated_deep_dive"})
+            if zone in {"clippings", "raw", "processing"}:
+                planned_actions.append(
+                    {
+                        "action": "archive_source_to_processed",
+                        "target": str(_archive_preview_path(layout, working_source)),
+                    }
+                )
+            planned_actions.append(
+                {"action": "absorb_generated_deep_dive", "target": "generated_deep_dive"}
+            )
+
+        items.append(
+            {
+                "source": str(source),
+                "source_zone": zone,
+                "route": route,
+                "processor": "auto_article_processor",
+                "will_mutate_on_execute": zone in {"clippings", "raw", "processing", "processed"},
+                "planned_actions": planned_actions,
+                "reason": reason,
+            }
+        )
+
+    return {
+        "preview_schema_version": 1,
+        "items": items,
+    }
 
 
 def _record_source_lifecycle_failure(
@@ -275,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
             direct_absorb_targets.extend(_expand_deep_dive_targets(args.dir))
     source_lifecycle_targets = _dedupe_paths(source_lifecycle_targets)
     direct_absorb_targets = _dedupe_paths(direct_absorb_targets)
+    routing_preview = build_source_lifecycle_routing_preview(layout, source_lifecycle_targets)
     payload = {
         "mode": "absorb",
         "vault_dir": str(vault_dir),
@@ -287,6 +429,7 @@ def main(argv: list[str] | None = None) -> int:
         "source_lifecycle": {
             "required": bool(source_lifecycle_targets),
             "source_targets": [str(target) for target in source_lifecycle_targets],
+            "routing_preview": routing_preview,
             "absorb_targets": [],
             "failures": [],
         },

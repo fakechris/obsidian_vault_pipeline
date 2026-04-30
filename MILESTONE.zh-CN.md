@@ -34,7 +34,7 @@ OVP 正在从 document-processing pipeline 变成：
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI、candidates、signals/actions、contradictions、action worker |
 | M2 Roadmap And README Consolidation | Done | 已合并历史 milestones、compiler roadmap、近期 KSR 输入、reader-product 研究，以及英文主文档结构 |
 | M3 Reader-First Knowledge Atlas | Active | reader home、`/ops` 拆分、第一版 object source/backlink rail、visual graph map 已交付；更深的 kind-specific object layout 仍待推进 |
-| M4 KSR Safety And Hot-Path Hardening | Active | projection labels、hot-path audit、wiring evals 已交付；routing preview、evidence spans、candidate risk 仍待推进 |
+| M4 KSR Safety And Hot-Path Hardening | Active | projection labels、hot-path audit、wiring evals、article routing preview 已交付；evidence spans、candidate risk 仍待推进 |
 | M5 Context Pack And Operational Runtime | Later | session snapshots、context budget、claim leases、provider facade、observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、routines、notebook/raw-source mode |
@@ -47,7 +47,7 @@ OVP 正在从 document-processing pipeline 变成：
 | Projection marking | `BL-002`, `KSR-002` 已在 PR #78 交付 |
 | Dashboard/search hot-path audit | `BL-003`, `KSR-015` 已在 PR #77 交付 |
 | Workflow wiring eval suite | `BL-004`, `KSR-026` 已在 PR #77 交付 |
-| Article routing preview | `BL-005`, `KSR-014` |
+| Article routing preview | `BL-005`, `KSR-014` 已在 PR #81 交付 |
 | Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` |
 | Candidate risk layering | `BL-007`, `KSR-003` |
 | Kind-aware object pages and backlink rail | `BL-008` partial，`BL-009` 已在 PR #79 交付 |
@@ -59,10 +59,9 @@ OVP 正在从 document-processing pipeline 变成：
 
 建议顺序：
 
-1. 实施 `BL-005`：在 source lifecycle 继续变化前补 article routing preview。
-2. 实施 `BL-006 + BL-007`：推进 evidence span 和 candidate risk layering。
-3. 继续 `BL-008`：在第一版 reader profile 之后补更深的 per-kind object layout。
-4. 实施 `BL-011`：按 kind、summary、evidence、reason 重做 reader-oriented search。
+1. 实施 `BL-006 + BL-007`：推进 evidence span 和 candidate risk layering。
+2. 继续 `BL-008`：在第一版 reader profile 之后补更深的 per-kind object layout。
+3. 实施 `BL-011`：按 kind、summary、evidence、reason 重做 reader-oriented search。
 
 ## 文档规则
 
