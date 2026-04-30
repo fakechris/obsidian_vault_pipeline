@@ -12,6 +12,7 @@ from ..governance_registry import describe_governance_contract
 from ..observation_surface_registry import describe_observation_surface_contract
 from ..pack_resolution import iter_compatible_packs
 from ..packs.loader import PRIMARY_PACK_NAME
+from ..projection_labels import projection_label
 from ..reuse_emitter import collect_object_ids, emit_reuse_events_for_object_ids
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_store import CONTRADICTION_HEURISTIC_NOTE
@@ -100,6 +101,25 @@ def _supports_research_shell(pack_name: str | None = None) -> bool:
 
 def _assembly_contract(recipe_name: str, *, pack_name: str | None = None) -> dict[str, str]:
     return describe_assembly_recipe_contract(pack_name=pack_name, recipe_name=recipe_name)
+
+
+def _access_projection_label(
+    *,
+    surface: str,
+    pack_name: str | None,
+    generated_by: str,
+    derived_from: tuple[str, ...] = ("knowledge.db",),
+    rebuild_policy: str = "read_time",
+) -> dict[str, object]:
+    return projection_label(
+        surface=surface,
+        projection_kind="access_surface",
+        layer="Layer 3",
+        owner_pack=pack_name or PRIMARY_PACK_NAME,
+        generated_by=generated_by,
+        derived_from=derived_from,
+        rebuild_policy=rebuild_policy,
+    )
 
 
 def _compiled_section(
@@ -1247,6 +1267,12 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         return {
             "screen": "briefing/intelligence",
             "requested_pack": requested_pack,
+            "projection_label": _access_projection_label(
+                surface="briefing",
+                pack_name=pack_name,
+                generated_by="build_briefing_payload",
+                derived_from=("knowledge.db", "signals ledger", "actions ledger"),
+            ),
             "surface_contract": surface_contract,
             "assembly_contract": assembly_contract,
             "governance_contract": governance_contract,
@@ -1511,6 +1537,12 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
     payload: dict[str, Any] = {
         "screen": "briefing/intelligence",
         "requested_pack": requested_pack,
+        "projection_label": _access_projection_label(
+            surface="briefing",
+            pack_name=pack_name,
+            generated_by="build_briefing_payload",
+            derived_from=("knowledge.db", "signals ledger", "actions ledger"),
+        ),
         "surface_contract": surface_contract,
         "assembly_contract": assembly_contract,
         "governance_contract": governance_contract,
@@ -1812,6 +1844,12 @@ def build_object_page_payload(
     payload: dict[str, Any] = {
         "screen": "object/page",
         "requested_pack": requested_pack,
+        "projection_label": _access_projection_label(
+            surface="object_page",
+            pack_name=pack_name,
+            generated_by="build_object_page_payload",
+            derived_from=("knowledge.db", "review audit"),
+        ),
         "assembly_contract": _assembly_contract("object_brief", pack_name=pack_name),
         "research_shell_enabled": research_shell_enabled,
         **detail,
@@ -2620,6 +2658,12 @@ def build_cluster_browser_payload(
     return {
         "screen": "graph/clusters",
         "requested_pack": pack_name or "",
+        "projection_label": _access_projection_label(
+            surface="graph_clusters",
+            pack_name=pack_name,
+            generated_by="build_cluster_browser_payload",
+            derived_from=("knowledge.db.graph_clusters", "knowledge.db.graph_edges"),
+        ),
         "query": query or "",
         "limit": limit,
         "is_limited": True,
@@ -2702,6 +2746,12 @@ def build_cluster_detail_payload(
     return {
         "screen": "graph/cluster-detail",
         "requested_pack": requested_pack,
+        "projection_label": _access_projection_label(
+            surface="graph_cluster_detail",
+            pack_name=pack_name,
+            generated_by="build_cluster_detail_payload",
+            derived_from=("knowledge.db.graph_clusters", "knowledge.db.graph_edges"),
+        ),
         "cluster": enriched_cluster,
         "browser_path": f"/clusters?pack={quote(requested_pack, safe='')}",
         "edges": enriched_edges,
@@ -3195,6 +3245,12 @@ def build_truth_dashboard_payload(
     return {
         "screen": "truth/dashboard",
         "requested_pack": requested_pack,
+        "projection_label": _access_projection_label(
+            surface="ops_dashboard",
+            pack_name=pack_name,
+            generated_by="build_truth_dashboard_payload",
+            derived_from=("knowledge.db", "runtime ledgers", "review audit"),
+        ),
         "research_overview": {
             "status": "supported" if research_overview_supported else "shared_shell_only",
             "reason": (
@@ -3268,6 +3324,12 @@ def build_runtime_home_payload(
     return {
         "screen": "truth/runtime-home",
         "requested_pack": requested_pack,
+        "projection_label": _access_projection_label(
+            surface="reader_home",
+            pack_name=pack_name,
+            generated_by="build_runtime_home_payload",
+            derived_from=("knowledge.db", "runtime ledgers"),
+        ),
         "runtime": runtime,
         "research_overview": {
             "status": "supported" if research_overview_supported else "shared_shell_only",
@@ -3358,6 +3420,11 @@ def build_objects_index_payload(
     return {
         "screen": "objects/index",
         "requested_pack": requested_pack,
+        "projection_label": _access_projection_label(
+            surface="objects_index",
+            pack_name=pack_name,
+            generated_by="build_objects_index_payload",
+        ),
         "items": items,
         "count": len(items),
         "total_count": total_count,
@@ -3728,6 +3795,12 @@ def build_search_payload(
     return {
         "screen": "search/results",
         "requested_pack": requested_pack,
+        "projection_label": _access_projection_label(
+            surface="search_results",
+            pack_name=pack_name,
+            generated_by="build_search_payload",
+            derived_from=("knowledge.db.objects", "knowledge.db.pages_index"),
+        ),
         **results,
         "objects": [
             {

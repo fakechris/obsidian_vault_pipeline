@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from ..derived.paths import compiled_view_path
+from ..projection_labels import markdown_projection_lines
 from ..runtime import VaultLayout, resolve_vault_dir
 
 
@@ -29,6 +30,14 @@ def materialize_event_dossier(vault_dir: Path, *, pack_name: str, view_name: str
         "",
         f"- pack: {pack_name}",
         "- builder: event_dossier",
+        *markdown_projection_lines(
+            surface="event_dossier",
+            projection_kind="compiled_wiki_projection",
+            owner_pack=pack_name,
+            generated_by="materialize_event_dossier",
+            derived_from=("knowledge.db.timeline_events",),
+            rebuild_policy="on_derived_refresh",
+        ),
         "",
         "## Timeline",
         "",

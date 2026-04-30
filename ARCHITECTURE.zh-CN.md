@@ -766,13 +766,13 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 
 - canonical artifact contract 还不够一等公民化。
 - Layer 4 子轴还没有完全反映到代码结构。
-- projection labels 没有贯穿 dashboard、MOC、wiki、briefing、graph、reader page、context pack。
+- projection labels 已经贯穿核心 access payload 和 materialized reader artifacts；doctor/export enforcement 以及未来新增 surface 还需要持续消费这些标注。
 - projection lifecycle marker 还没有明确区分 metadata_only / full_rebuild / semantic_reindex。
-- dashboard/search hot path 还需要显式保证不触发重 raw scan / LLM / embedding。
+- dashboard/search hot path 和 workflow wiring 已经有第一批 fitness checks；evidence completeness、projection replay、import-boundary checks 仍未完成。
 - context assembly recipes 还需要收束。
 - governance / resolver contracts 还需要显式化。
 - schema versioning 和 projection compatibility 还需要工程化。
-- fitness functions 还没有落地到 CI/doctor/pre-commit。
+- fitness functions 只落地了第一批，仍需扩展到 CI/doctor/pre-commit 的完整契约。
 - reader-first home 已经成为默认入口；object page、graph、backlink、search 还需要继续产品化。
 
 ## 17. 近期架构动作
@@ -781,16 +781,14 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 
 优先顺序：
 
-1. 明确并文档化 Layer 4 子轴：Policy / Review / Verification / Routing / Repair / Audit。
-2. 给关键路径补 canonical scenarios，并以 scenarios 推导 invariants。
-3. 建立最小 architectural fitness functions。
-4. 明确哪些文件、registry、audit event 是 Authority。
-5. 给 `knowledge.db` 内部 projection 分类。
-6. 先把 dashboard/search hot-path eval、workflow wiring eval、read/write boundary、naming discipline 做成第一批 fitness functions。
-7. 给 dashboard、MOC、wiki、briefing、graph、reader page、context pack 加 projection label。
-8. 引入结构化 ProjectionRepairMarker。
-9. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
-10. 预留 semantic_reindex lifecycle kind，但不提前锁定 LanceDB 或其它 backend。
+1. 新增 access surface 时必须继续带 projection metadata，并补 doctor/export checks 验证标注存在。
+2. 继续做 reader-first Layer 3：object page、graph、backlink、search 的产品化。
+3. 补 evidence span 和 factual evidence completeness checks。
+4. 补 candidate risk tiers 和 routing preview，再扩大自动 promotion。
+5. 引入结构化 ProjectionRepairMarker。
+6. 给 Authority 和 derived projection state 增加 schema version 字段。
+7. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
+8. 预留 semantic_reindex lifecycle kind，但不提前锁定 LanceDB 或其它 backend。
 
 ## Appendix: Backlog Mapping
 
@@ -798,9 +796,9 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 
 | 架构工作 | 当前 backlog/task 对应 |
 | --- | --- |
-| Projection marking | `BL-002`, `KSR-002` |
-| Dashboard/search hot-path audit | `BL-003`, `KSR-015` |
-| Workflow wiring eval suite | `BL-004`, `KSR-026` |
+| Projection marking | `BL-002`, `KSR-002` PR #78 已交付 |
+| Dashboard/search hot-path audit | `BL-003`, `KSR-015` PR #77 已交付 |
+| Workflow wiring eval suite | `BL-004`, `KSR-026` PR #77 已交付 |
 | Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` |
 | Candidate risk layering | `BL-007`, `KSR-003` |
 | Reader-first access surfaces | `BL-001`, `BL-008`, `BL-009`, `BL-010` |

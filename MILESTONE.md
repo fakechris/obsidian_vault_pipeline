@@ -34,7 +34,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and the English-primary docs structure |
 | M3 Reader-First Knowledge Atlas | Active | reader home and `/ops` split shipped; objects, backlinks, and graph remain the next product surfaces |
-| M4 KSR Safety And Hot-Path Hardening | Active | next implementation wave for projection labels, hot-path audit, wiring evals, routing preview, evidence spans, candidate risk |
+| M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, and wiring evals shipped; routing preview, evidence spans, and candidate risk remain |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
@@ -44,9 +44,9 @@ That means the user-facing product should make compiled knowledge easy to read f
 | Architecture / product work | Active backlog mapping |
 | --- | --- |
 | Reader shell route split | `BL-001` done in PR #75 |
-| Projection marking | `BL-002`, `KSR-002` |
-| Dashboard/search hot-path audit | `BL-003`, `KSR-015` |
-| Workflow wiring eval suite | `BL-004`, `KSR-026` |
+| Projection marking | `BL-002`, `KSR-002` done in PR #78 |
+| Dashboard/search hot-path audit | `BL-003`, `KSR-015` done in PR #77 |
+| Workflow wiring eval suite | `BL-004`, `KSR-026` done in PR #77 |
 | Article routing preview | `BL-005`, `KSR-014` |
 | Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` |
 | Candidate risk layering | `BL-007`, `KSR-003` |
@@ -59,10 +59,10 @@ That means the user-facing product should make compiled knowledge easy to read f
 
 Recommended order:
 
-1. Implement `BL-003 + BL-004`: lock the hot paths and wiring boundaries now that the reader surface is the default entry.
-2. Implement `BL-002`: label reader, dashboard, graph, briefing, and context-pack surfaces as projections.
-3. Implement `BL-008 + BL-009`: make object pages readable and add source/backlink rails.
-4. Implement `BL-010`: ship the visual `/graph` MVP as a spatial corpus map.
+1. Implement `BL-008 + BL-009`: make object pages readable and add source/backlink rails.
+2. Implement `BL-010`: ship the visual `/graph` MVP as a spatial corpus map.
+3. Implement `BL-005`: add article routing preview before source lifecycle changes.
+4. Implement `BL-006 + BL-007`: evidence spans and candidate risk layering.
 
 ## Documentation Rules
 

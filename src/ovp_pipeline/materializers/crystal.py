@@ -32,6 +32,8 @@ from datetime import date as _date_cls
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..projection_labels import frontmatter_projection_fields
+
 CRYSTAL_DIR = ("40-Resources", "Crystals")
 ASSEMBLY_RECIPE = "operator_briefing"
 
@@ -290,7 +292,18 @@ def materialize_crystal(
         f"type: crystal\n"
         f"date: {target_date.isoformat()}\n"
         f"pack: {pack_name}\n"
-        f"assembly_recipe: {ASSEMBLY_RECIPE}\n"
+        + "\n".join(
+            frontmatter_projection_fields(
+                surface="crystal",
+                projection_kind="context_pack_projection",
+                owner_pack=pack_name,
+                generated_by="materialize_crystal",
+                derived_from=("briefing snapshot", "knowledge.db.graph_edges"),
+                rebuild_policy="on_demand_or_refresh",
+            )
+        )
+        + "\n"
+        + f"assembly_recipe: {ASSEMBLY_RECIPE}\n"
         f"source_object_ids: {_yaml_list(object_ids)}\n"
         f"evolves_relations:{_evolves_yaml(relations)}\n"
         "---\n\n"

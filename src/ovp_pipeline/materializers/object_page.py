@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..projection_labels import markdown_projection_lines
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..truth_api import get_object_detail
 
@@ -25,6 +26,14 @@ def materialize_object_page(vault_dir: Path, *, pack_name: str, object_id: str) 
         f"- object_id: {object_id}",
         f"- object_kind: {object_kind}",
         f"- pack: {pack_name}",
+        *markdown_projection_lines(
+            surface="object_page",
+            projection_kind="compiled_wiki_projection",
+            owner_pack=pack_name,
+            generated_by="materialize_object_page",
+            derived_from=("knowledge.db",),
+            rebuild_policy="on_demand_or_refresh",
+        ),
         f"- canonical_path: {canonical_path}",
         "",
         "## Compiled Summary",

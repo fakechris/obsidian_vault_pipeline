@@ -10,6 +10,7 @@ from ..materializers.contradiction_view import materialize_contradiction_view
 from ..materializers.event_dossier import materialize_event_dossier
 from ..materializers.object_page import materialize_object_page
 from ..materializers.topic_view import materialize_topic_view
+from ..projection_labels import markdown_projection_lines
 from ..runtime import VaultLayout, iter_markdown_files, markdown_title, resolve_vault_dir
 from .specs import WikiViewSpec
 
@@ -87,6 +88,14 @@ def build_view(
             "",
             f"- pack: {spec.pack}",
             f"- publish_target: {spec.publish_target}",
+            *markdown_projection_lines(
+                surface=spec.name,
+                projection_kind="compiled_wiki_projection",
+                owner_pack=spec.pack,
+                generated_by=f"wiki_view:{spec.builder}",
+                derived_from=("extraction artifacts",),
+                rebuild_policy="on_derived_refresh",
+            ),
             "",
             "## Extraction Runs",
             "",
@@ -105,11 +114,19 @@ def build_view(
 
     lines = [
         f"# {spec.name}",
-        "",
-        f"- pack: {spec.pack}",
-        f"- publish_target: {spec.publish_target}",
-        "",
-        "## Included Notes",
+            "",
+            f"- pack: {spec.pack}",
+            f"- publish_target: {spec.publish_target}",
+            *markdown_projection_lines(
+                surface=spec.name,
+                projection_kind="compiled_wiki_projection",
+                owner_pack=spec.pack,
+                generated_by=f"wiki_view:{spec.builder}",
+                derived_from=("vault markdown",),
+                rebuild_policy="on_derived_refresh",
+            ),
+            "",
+            "## Included Notes",
         "",
     ]
     if titles:

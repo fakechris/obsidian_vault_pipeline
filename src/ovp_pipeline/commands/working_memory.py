@@ -39,8 +39,10 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from ..projection_labels import frontmatter_projection_fields
     from ..runtime import VaultLayout, resolve_vault_dir
 except ImportError:
+    from ovp_pipeline.projection_labels import frontmatter_projection_fields  # type: ignore
     from ovp_pipeline.runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
 
@@ -291,7 +293,23 @@ def build_working_memory(
         evolves_today=_evolves_today(layout, since=since),
         pulse_highlights=_pulse_highlights(layout, since=since),
     )
-    output_path.write_text(body, encoding="utf-8")
+    frontmatter = (
+        "---\n"
+        "type: working_memory\n"
+        f"date: {target_date.isoformat()}\n"
+        + "\n".join(
+            frontmatter_projection_fields(
+                surface="working_memory",
+                projection_kind="context_pack_projection",
+                owner_pack="research-tech",
+                generated_by="build_working_memory",
+                derived_from=("knowledge.db", "crystals", "audit ledgers"),
+                rebuild_policy="on_derived_refresh",
+            )
+        )
+        + "\n---\n\n"
+    )
+    output_path.write_text(frontmatter + body, encoding="utf-8")
     return output_path
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import quote
 
+from ..projection_labels import markdown_projection_lines
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import build_cluster_detail_payload
 
@@ -25,6 +26,14 @@ def materialize_cluster_crystal(vault_dir: Path, *, pack_name: str, cluster_id: 
         "",
         f"- pack: {pack_name}",
         "- builder: cluster_crystal",
+        *markdown_projection_lines(
+            surface="cluster_crystal",
+            projection_kind="compiled_wiki_projection",
+            owner_pack=pack_name,
+            generated_by="materialize_cluster_crystal",
+            derived_from=("knowledge.db.graph_clusters", "knowledge.db.graph_edges"),
+            rebuild_policy="on_demand_or_refresh",
+        ),
         f"- cluster_kind: {cluster['cluster_kind']}",
         f"- center: [[{cluster['center_object_id']}]]",
         f"- member_count: {cluster['member_count']}",

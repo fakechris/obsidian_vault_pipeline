@@ -35,7 +35,11 @@ def test_empty_vault_renders_all_section_headers(temp_vault):
 
     assert output.parent == temp_vault.joinpath(*WORKING_MEMORY_DIR)
     assert output.name == "2026-04-24.md"
-    assert text.startswith("# Working Memory — 2026-04-24")
+    assert text.startswith("---\n")
+    assert "projection_kind: context_pack_projection" in text
+    assert "projection_surface: working_memory" in text
+    assert "projection_layer: Layer 3" in text
+    assert "# Working Memory — 2026-04-24" in text
     for section in (
         "## Top of Mind",
         "## Fresh Crystals",
