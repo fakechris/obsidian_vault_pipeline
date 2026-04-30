@@ -1783,6 +1783,73 @@ def _render_objects_index(payload: dict) -> str:
     )
 
 
+def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
+    rail = payload.get("source_backlink_rail") or {}
+    evergreen = rail.get("evergreen") or {}
+    evergreen_path = str(evergreen.get("path") or "")
+    evergreen_html = (
+        f'<a href="{escape(str(evergreen.get("jump_path") or _note_href(evergreen_path, requested_pack)))}">{escape(evergreen_path)}</a>'
+        if evergreen_path
+        else "<span class='muted'>None</span>"
+    )
+
+    def render_source_note(item: dict) -> str:
+        href = str(item.get("jump_path") or _note_href(str(item.get("path") or ""), requested_pack))
+        title = str(item.get("title") or item.get("slug") or "Source")
+        note_type = str(item.get("note_type") or "source")
+        excerpt = str(item.get("excerpt") or "")
+        return (
+            "<li>"
+            f'<a href="{escape(href)}">{escape(title)}</a>'
+            f" <span class='muted'>({escape(note_type)})</span>"
+            + (f"<p class='muted'>{escape(excerpt)}</p>" if excerpt else "")
+            + "</li>"
+        )
+
+    def render_atlas_page(item: dict) -> str:
+        href = str(item.get("jump_path") or _note_href(str(item.get("path") or ""), requested_pack))
+        title = str(item.get("title") or item.get("slug") or "Atlas page")
+        return f'<li><a href="{escape(href)}">{escape(title)}</a></li>'
+
+    def render_related_object(item: dict) -> str:
+        object_id = str(item.get("object_id") or "")
+        href = _object_href(object_id, str(item.get("path") or ""), requested_pack=requested_pack)
+        title = str(item.get("title") or object_id or "Object")
+        relation_type = str(item.get("relation_type") or "related")
+        return (
+            "<li>"
+            f'<a href="{escape(href)}">{escape(title)}</a>'
+            f" <span class='muted'>({escape(relation_type)})</span>"
+            "</li>"
+        )
+
+    source_notes = rail.get("source_notes") or []
+    source_html = (
+        "".join(render_source_note(item) for item in source_notes)
+        or "<li class='muted'>No source notes linked yet.</li>"
+    )
+    atlas_pages = rail.get("atlas_pages") or []
+    atlas_html = (
+        "".join(render_atlas_page(item) for item in atlas_pages)
+        or "<li class='muted'>No atlas pages link here yet.</li>"
+    )
+    related_objects = rail.get("related_objects") or []
+    related_html = (
+        "".join(render_related_object(item) for item in related_objects)
+        or "<li class='muted'>No related objects yet.</li>"
+    )
+    return (
+        "<section id='sources' class='card'><h2>Sources &amp; Backlinks</h2>"
+        f"<p class='muted'>{escape(str(rail.get('summary') or 'No source links yet.'))}</p>"
+        "<dl class='meta-list'>"
+        f"<div><dt>Evergreen</dt><dd>{evergreen_html}</dd></div>"
+        f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_html}</ul></dd></div>"
+        f"<div><dt>Atlas Pages</dt><dd><ul class='list-tight'>{atlas_html}</ul></dd></div>"
+        f"<div><dt>Related Objects</dt><dd><ul class='list-tight'>{related_html}</ul></dd></div>"
+        "</dl></section>"
+    )
+
+
 def _render_object_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     research_shell_enabled = bool(
@@ -1848,6 +1915,7 @@ def _render_object_page(payload: dict) -> str:
         or "<li>None</li>"
     )
     summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
+    reader_profile = payload.get("reader_profile") or {}
     evolution = payload.get(
         "evolution",
         {
@@ -1947,6 +2015,7 @@ def _render_object_page(payload: dict) -> str:
         right_sections.append(_render_research_scope_notice(requested_pack))
     right_sections.extend(
         [
+            _render_source_backlink_rail(payload, requested_pack=requested_pack),
             "<section class='card'><h2>Context</h2><dl class='meta-list'>"
             f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
             f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
@@ -1979,8 +2048,10 @@ def _render_object_page(payload: dict) -> str:
     return _layout(
         f"Object: {payload['object']['title']}",
         (
-            f"<section class='hero'><h1>Object: {escape(payload['object']['title'])}</h1>"
-            f"<p class='muted'>{escape(payload['object']['object_id'])}"
+            f"<section class='hero'><span class=\"pill\">{escape(str(reader_profile.get('kind_label') or payload['context']['object_kind']))}</span>"
+            f"<h1>{escape(str(reader_profile.get('headline') or payload['object']['title']))}</h1>"
+            f"<p>{escape(str(reader_profile.get('dek') or summary_text or 'No compiled summary yet.'))}</p>"
+            f"<p class='muted'>{escape(str(reader_profile.get('supporting_line') or payload['object']['object_id']))}"
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
             + f"<div class='link-row'>{''.join(hero_links)}</div></section>"

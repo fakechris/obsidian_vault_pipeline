@@ -175,6 +175,7 @@ def test_build_object_page_payload_hides_research_affordances_when_research_shel
     assert payload["open_contradiction_ids"] == []
     assert [item["label"] for item in payload["section_nav"]] == [
         "Summary",
+        "Sources",
         "Current State",
         "Why It Matters",
         "Evidence Traceability",
@@ -260,7 +261,7 @@ def test_build_object_page_payload_includes_provenance(temp_vault):
     source.write_text(
         """---
 note_id: source-deep-dive
-title: Source Deep Dive
+title: Alpha Source Deep Dive
 type: deep_dive
 date: 2026-04-13
 ---
@@ -308,6 +309,102 @@ Alpha supports local-first execution.
     assert payload["provenance"]["evergreen_path"].endswith("10-Knowledge/Evergreen/Alpha.md")
     assert payload["provenance"]["source_notes"][0]["slug"] == "source-deep-dive"
     assert payload["provenance"]["mocs"][0]["slug"] == "atlas-index"
+
+
+def test_build_object_page_payload_adds_reader_profile_and_source_backlink_rail(temp_vault):
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_object_page_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Alpha Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Opening context.
+
+2026 Alpha adoption stayed local-first.
+
+Mentions [[alpha]] as a local-first execution pattern.
+""",
+        encoding="utf-8",
+    )
+    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas-Index.md"
+    atlas.write_text(
+        """---
+note_id: atlas-index
+title: Atlas Index
+type: moc
+date: 2026-04-13
+---
+
+# Atlas Index
+
+- [[alpha]]
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE objects SET object_kind = 'concept' WHERE object_id = 'alpha'")
+        conn.commit()
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    assert payload["reader_profile"] == {
+        "kind_label": "Concept",
+        "headline": "Alpha",
+        "dek": "Alpha supports local-first execution.",
+        "supporting_line": "1 claims · 1 relations · 1 source notes · 1 atlas pages",
+        "empty_summary": False,
+    }
+    assert payload["source_backlink_rail"]["summary"] == "1 source notes, 1 atlas pages, 1 related objects"
+    assert payload["source_backlink_rail"]["evergreen"]["path"].endswith("10-Knowledge/Evergreen/Alpha.md")
+    assert payload["source_backlink_rail"]["source_notes"][0]["title"] == "Alpha Source Deep Dive"
+    assert payload["source_backlink_rail"]["source_notes"][0]["excerpt"] == (
+        "2026 Alpha adoption stayed local-first."
+    )
+    assert payload["source_backlink_rail"]["source_notes"][0]["jump_path"] == (
+        "/note?path=20-Areas%2FTools%2FTopics%2F2026-04%2FSource%20Deep%20Dive_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md"
+    )
+    assert payload["source_backlink_rail"]["atlas_pages"][0]["title"] == "Atlas Index"
+    assert payload["source_backlink_rail"]["related_objects"][0]["title"] == "Beta"
+    assert payload["source_backlink_rail"]["related_objects"][0]["relation_type"] == "wikilink"
+
+
+def test_build_object_page_payload_degrades_when_source_excerpt_is_not_utf8(temp_vault):
+    from ovp_pipeline.ui.view_models import build_object_page_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]].
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+    source.write_bytes(b"\xff\xfe\xfa")
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    assert payload["source_backlink_rail"]["source_notes"][0]["title"] == "Source Deep Dive"
+    assert payload["source_backlink_rail"]["source_notes"][0]["excerpt"] == ""
 
 
 def test_build_topic_overview_payload(temp_vault):

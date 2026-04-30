@@ -3396,6 +3396,44 @@ def test_render_object_page_hides_research_affordances_when_pack_lacks_research_
     assert "<h2>Contradictions</h2>" not in body
 
 
+def test_render_object_page_surfaces_reader_profile_and_source_rail(temp_vault):
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_object_page_payload
+
+    source = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Source Deep Dive_深度解读.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(
+        """---
+note_id: source-deep-dive
+title: Source Deep Dive
+type: deep_dive
+date: 2026-04-13
+---
+
+# Source Deep Dive
+
+Mentions [[alpha]] as a local-first execution pattern.
+""",
+        encoding="utf-8",
+    )
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE objects SET object_kind = 'concept' WHERE object_id = 'alpha'")
+        conn.commit()
+
+    body = ui_server._render_object_page(build_object_page_payload(temp_vault, "alpha"))
+
+    assert '<span class="pill">Concept</span>' in body
+    assert "Alpha supports local-first execution." in body
+    assert "<h2>Sources &amp; Backlinks</h2>" in body
+    assert "Source Deep Dive" in body
+    assert "Mentions [[alpha]] as a local-first execution pattern." in body
+    assert "Related Objects" in body
+    assert "Beta" in body
+
+
 def test_render_topic_page_hides_research_affordances_when_pack_lacks_research_semantics(
     temp_vault, monkeypatch
 ):
