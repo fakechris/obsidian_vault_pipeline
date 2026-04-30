@@ -22,7 +22,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and English-primary docs |
 | M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, first object source/backlink rail, and visual graph map shipped; deeper kind-specific object layouts still need product shape |
-| M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, and wiring evals shipped; routing preview, evidence spans, and candidate risk remain |
+| M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, and article routing preview shipped; evidence spans and candidate risk remain |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
@@ -36,7 +36,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-002 | P0 | Done | Projection marking: label dashboard, MOC, wiki, briefing, reader pages, graph, and context packs as projections | M4, KSR-002, PR #78 |
 | BL-003 | P0 | Done | Dashboard/search hot-path audit: default UI/search paths must not scan raw/PDF/Office sources | M4, KSR-015, `docs/plans/2026-04-30-bl-003-004-hot-path-wiring-safety.md`, PR #77 |
 | BL-004 | P0 | Done | Workflow wiring eval suite for lifecycle routing, promote gates, projection labels, hot paths, and read/write boundaries | M4, KSR-026, `docs/plans/2026-04-30-bl-003-004-hot-path-wiring-safety.md`, PR #77 |
-| BL-005 | P0 | Next | Article routing preview before source lifecycle changes | M4, KSR-014 |
+| BL-005 | P0 | Done | Article routing preview before source lifecycle changes | M4, KSR-014 |
 | BL-006 | P0 | Next | Evidence span schema and markdown-aware locator backfill | M4, KSR-001, KSR-018 |
 | BL-007 | P0 | Next | Candidate risk layering by evidence strength, identity ambiguity, sensitivity, and impact | M4, KSR-003 |
 | BL-008 | P1 | Partial | Kind-aware object pages for people, concepts, companies/tools/projects, events, and claims; first slice adds reader profile/kind labels | M3, PR #79 |
@@ -66,12 +66,12 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | KSR-006 Claim lifecycle 字段 | BL-015 | Later |
 | KSR-007 Conflict detection 常规化 | BL-016 | Later |
 | KSR-008 High-risk user profile gate | BL-016 | Later |
-| KSR-009 Cost-aware workflow routing | BL-003/BL-005 | Partial: hot-path guard done; article routing preview remains |
+| KSR-009 Cost-aware workflow routing | BL-003/BL-005 | Partial: hot-path guard and article routing preview done; broader routing policy remains |
 | KSR-010 Skill/routine extraction profile | BL-019 | Later |
 | KSR-011 Notebook/raw-source mode | BL-019 | Later |
 | KSR-012 Ingest ROI metrics | BL-019 | Later |
 | KSR-013 Source lifecycle idempotency | M0/M4 | Repo first slice done; verify and mirror vault status |
-| KSR-014 Article routing preview | BL-005 | Next |
+| KSR-014 Article routing preview | BL-005 | Done |
 | KSR-015 Dashboard/search hot-path audit | BL-003 | Done |
 | KSR-016 Hybrid retrieval experiment | BL-019 | Later |
 | KSR-017 Explicit context budget | BL-013 | Later |
@@ -90,13 +90,12 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 ## Next Decision
 
-`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, and `BL-010` is shipped in PR #80. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails, and `/graph` renders a reader-facing spatial map over graph projections.
+`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, `BL-010` is shipped in PR #80, and `BL-005` is implemented in PR #81. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails, `/graph` renders a reader-facing spatial map over graph projections, and `ovp-absorb --dry-run --json` explains source lifecycle routing before mutation.
 
-The next implementation PR should move back to the KSR safety lane with **BL-005**. The reader shell now has a first-pass library, object page, and visual graph map; deeper per-kind object layouts remain, but routing preview is the next P0 risk reducer before more source lifecycle work.
+The next implementation PR should continue the KSR safety lane with **BL-006 + BL-007**. Evidence spans and candidate risk tiers are the next P0 risk reducers before expanding automatic promotion or richer reader search.
 
 Recommended order:
 
-1. BL-005
-2. BL-006 + BL-007
-3. Continue BL-008 with deeper per-kind layouts
-4. BL-011
+1. BL-006 + BL-007
+2. Continue BL-008 with deeper per-kind layouts
+3. BL-011

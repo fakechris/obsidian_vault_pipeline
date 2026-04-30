@@ -90,7 +90,7 @@ Layer 4 不能变成“什么都往里塞”的 junk drawer。它内部至少拆
 | Promotion | Policy + Review 的交集，把 candidate / derived proposal 变成 accepted state | `promote_candidates.py`, `promotion_policy.py`, `promotion_audit.py`, `relation_promotion.py`, `workspace_promotion.py` |
 | Review | 人工审阅和队列生命周期 | candidate review, contradiction review, stale summary review |
 | Verification | evidence、hash、freshness、replay 的验证 | evidence status, content hash check, review state replay |
-| Routing / Dispatch | workflow 走向、任务派发和歧义分流 | workflow profile routing, ambiguity dispatch, source routing preview |
+| Routing / Dispatch | workflow 走向、任务派发和歧义分流 | workflow profile routing, ambiguity dispatch, source routing preview JSON |
 | Repair | projection lifecycle 和 rebuild 控制 | metadata repair marker, full rebuild marker, semantic reindex marker |
 | Audit | 责任链和不可变事件记录 | audit JSONL, promotion event, review event |
 
@@ -547,6 +547,10 @@ Operational rules:
    - 架构层: Layer 1 input
    - Layer 4: Routing 决定进入哪条 workflow
 
+1a. `ovp-absorb --dry-run --json` 可以输出 `source_lifecycle.routing_preview`
+   - Layer 4: Routing / Dispatch 在 mutation 前解释计划路由
+   - preview 不移动文件、不初始化 LLM、不创建 derived state
+
 2. Ingest stage normalize 文件和 source metadata
    - 写入 source note / raw material
    - 不直接产生 accepted factual claim
@@ -768,7 +772,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 - Layer 4 子轴还没有完全反映到代码结构。
 - projection labels 已经贯穿核心 access payload 和 materialized reader artifacts；doctor/export enforcement 以及未来新增 surface 还需要持续消费这些标注。
 - projection lifecycle marker 还没有明确区分 metadata_only / full_rebuild / semantic_reindex。
-- dashboard/search hot path 和 workflow wiring 已经有第一批 fitness checks；evidence completeness、projection replay、import-boundary checks 仍未完成。
+- dashboard/search hot path、workflow wiring 和 source routing preview 已经有第一批 fitness checks；evidence completeness、projection replay、import-boundary checks 仍未完成。
 - context assembly recipes 还需要收束。
 - governance / resolver contracts 还需要显式化。
 - schema versioning 和 projection compatibility 还需要工程化。
@@ -784,7 +788,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 1. 新增 access surface 时必须继续带 projection metadata，并补 doctor/export checks 验证标注存在。
 2. 继续做 reader-first Layer 3：search 和更深的 per-kind object layout。
 3. 补 evidence span 和 factual evidence completeness checks。
-4. 补 candidate risk tiers 和 routing preview，再扩大自动 promotion。
+4. 补 candidate risk tiers，再扩大自动 promotion。
 5. 引入结构化 ProjectionRepairMarker。
 6. 给 Authority 和 derived projection state 增加 schema version 字段。
 7. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
@@ -799,6 +803,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 | Projection marking | `BL-002`, `KSR-002` PR #78 已交付 |
 | Dashboard/search hot-path audit | `BL-003`, `KSR-015` PR #77 已交付 |
 | Workflow wiring eval suite | `BL-004`, `KSR-026` PR #77 已交付 |
+| Article routing preview | `BL-005`, `KSR-014` 已在 PR #81 交付 |
 | Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` |
 | Candidate risk layering | `BL-007`, `KSR-003` |
 | Reader-first access surfaces | `BL-001`；`BL-008` partial、`BL-009` 已在 PR #79 交付；`BL-010` 已在 PR #80 交付 |

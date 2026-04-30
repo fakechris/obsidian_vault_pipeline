@@ -172,7 +172,7 @@ The recent vault KSR backlog makes the same direction more concrete. The reader-
 | KSR-026 Workflow wiring eval suite | Tests should lock projection labels, source lifecycle routing, dashboard hot paths, and read/write boundaries |
 | KSR-001 Evidence span 化 | Object pages and backlink rails need precise source/evidence spans |
 | KSR-003 Candidate 风险分层 | Reader pages should show unresolved/risky knowledge without implying it is canonical |
-| KSR-014 Article routing preview | Reader-product ingestion should explain where a source will go before changing lifecycle behavior |
+| KSR-014 Article routing preview | Shipped first JSON preview in `ovp-absorb --dry-run --json`; richer UI presentation can build on this |
 
 ### Keep From Existing Roadmap
 
