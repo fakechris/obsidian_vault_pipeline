@@ -773,7 +773,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 - governance / resolver contracts 还需要显式化。
 - schema versioning 和 projection compatibility 还需要工程化。
 - fitness functions 只落地了第一批，仍需扩展到 CI/doctor/pre-commit 的完整契约。
-- reader-first home 已经成为默认入口；object page 已有第一版 reader profile/source rail，graph、search 和更深的 per-kind object layout 还需要继续产品化。
+- reader-first home 已经成为默认入口；object page 已有第一版 reader profile/source rail；`/graph` 已有第一版 spatial map projection；search 和更深的 per-kind object layout 还需要继续产品化。
 
 ## 17. 近期架构动作
 
@@ -782,7 +782,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 优先顺序：
 
 1. 新增 access surface 时必须继续带 projection metadata，并补 doctor/export checks 验证标注存在。
-2. 继续做 reader-first Layer 3：graph、search 和更深的 per-kind object layout。
+2. 继续做 reader-first Layer 3：search 和更深的 per-kind object layout。
 3. 补 evidence span 和 factual evidence completeness checks。
 4. 补 candidate risk tiers 和 routing preview，再扩大自动 promotion。
 5. 引入结构化 ProjectionRepairMarker。
@@ -801,7 +801,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 | Workflow wiring eval suite | `BL-004`, `KSR-026` PR #77 已交付 |
 | Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` |
 | Candidate risk layering | `BL-007`, `KSR-003` |
-| Reader-first access surfaces | `BL-001`；`BL-008` partial、`BL-009` 已在 PR #79 交付；`BL-010` next |
+| Reader-first access surfaces | `BL-001`；`BL-008` partial、`BL-009` 已在 PR #79 交付；`BL-010` 已在 PR #80 交付 |
 | Projection repair lifecycle | `BL-020` |
 | Schema versioning and migration trigger | `BL-021` |
 

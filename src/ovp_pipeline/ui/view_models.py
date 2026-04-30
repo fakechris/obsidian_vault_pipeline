@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 from collections import Counter
@@ -55,6 +56,18 @@ from ..truth_api import (
 DEFAULT_CANDIDATE_BROWSER_LIMIT = 25
 DEFAULT_EVENT_DOSSIER_LIMIT = 25
 DEFAULT_TRACEABILITY_BROWSER_LIMIT = 15
+DEFAULT_GRAPH_MAP_LIMIT = 24
+GRAPH_MAP_WIDTH = 960
+GRAPH_MAP_HEIGHT = 640
+GRAPH_MAP_CLUSTER_ORBIT_X_FACTOR = 0.26
+GRAPH_MAP_CLUSTER_ORBIT_Y_FACTOR = 0.22
+GRAPH_MAP_MARGIN = 42.0
+GRAPH_MAP_LOCAL_RADIUS_BASE = 42.0
+GRAPH_MAP_LOCAL_RADIUS_PER_MEMBER = 12.0
+GRAPH_MAP_LOCAL_RADIUS_MAX = 128.0
+GRAPH_MAP_NODE_BASE_RADIUS = 7
+GRAPH_MAP_NODE_RADIUS_PER_DEGREE = 2
+GRAPH_MAP_NODE_RADIUS_BONUS_MAX = 10
 
 
 def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
@@ -2837,6 +2850,165 @@ def build_cluster_browser_payload(
         "model_notes": [
             "Graph clusters currently come from pack-owned graph seed projections, not from a final semantic clustering model.",
             "Current research-tech clusters are relation/contradiction connected components over pack-scoped truth rows.",
+        ],
+    }
+
+
+def _clamp_graph_coordinate(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def build_graph_map_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+    limit: int = DEFAULT_GRAPH_MAP_LIMIT,
+) -> dict[str, Any]:
+    cluster_payload = build_cluster_browser_payload(
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=limit,
+    )
+    clusters = cluster_payload["items"]
+    requested_pack = pack_name or cluster_payload.get("requested_pack", "")
+    center_x = GRAPH_MAP_WIDTH / 2
+    center_y = GRAPH_MAP_HEIGHT / 2
+    cluster_orbit_x = GRAPH_MAP_WIDTH * GRAPH_MAP_CLUSTER_ORBIT_X_FACTOR
+    cluster_orbit_y = GRAPH_MAP_HEIGHT * GRAPH_MAP_CLUSTER_ORBIT_Y_FACTOR
+    nodes: dict[str, dict[str, Any]] = {}
+    edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    for cluster_index, cluster in enumerate(clusters):
+        cluster_pack = str(cluster.get("pack") or requested_pack)
+        cluster_count = max(1, len(clusters))
+        cluster_angle = (2 * math.pi * cluster_index / cluster_count) if cluster_count > 1 else 0
+        cluster_x = center_x + (math.cos(cluster_angle) * cluster_orbit_x if cluster_count > 1 else 0)
+        cluster_y = center_y + (math.sin(cluster_angle) * cluster_orbit_y if cluster_count > 1 else 0)
+        members = cluster.get("members", [])
+        member_count = max(1, len(members))
+        local_radius = min(
+            GRAPH_MAP_LOCAL_RADIUS_MAX,
+            GRAPH_MAP_LOCAL_RADIUS_BASE + member_count * GRAPH_MAP_LOCAL_RADIUS_PER_MEMBER,
+        )
+        for member_index, member in enumerate(members):
+            object_id = str(member["object_id"])
+            member_angle = (2 * math.pi * member_index / member_count) - (math.pi / 2)
+            x = _clamp_graph_coordinate(
+                cluster_x + math.cos(member_angle) * local_radius,
+                GRAPH_MAP_MARGIN,
+                GRAPH_MAP_WIDTH - GRAPH_MAP_MARGIN,
+            )
+            y = _clamp_graph_coordinate(
+                cluster_y + math.sin(member_angle) * local_radius,
+                GRAPH_MAP_MARGIN,
+                GRAPH_MAP_HEIGHT - GRAPH_MAP_MARGIN,
+            )
+            node = nodes.setdefault(
+                object_id,
+                {
+                    "object_id": object_id,
+                    "title": str(member.get("title") or object_id),
+                    "object_kind": str(member.get("object_kind") or "object"),
+                    "kind_label": _object_kind_label(str(member.get("object_kind") or "")),
+                    "path": _scoped_path(
+                        f"/object?id={quote(object_id, safe='')}",
+                        pack_name=cluster_pack,
+                    ),
+                    "x": round(x, 1),
+                    "y": round(y, 1),
+                    "degree": 0,
+                    "cluster_ids": [],
+                    "cluster_titles": [],
+                },
+            )
+            if cluster["cluster_id"] not in node["cluster_ids"]:
+                node["cluster_ids"].append(cluster["cluster_id"])
+                node["cluster_titles"].append(cluster.get("display_title") or cluster["label"])
+
+        try:
+            detail = get_graph_cluster_detail(
+                vault_dir,
+                str(cluster["cluster_id"]),
+                pack_name=cluster_pack or None,
+            )
+        except (OSError, sqlite3.Error, ValueError):
+            detail = {"edges": []}
+        for edge in detail["edges"]:
+            source_id = str(edge["source_object_id"])
+            target_id = str(edge["target_object_id"])
+            if source_id not in nodes or target_id not in nodes:
+                continue
+            key = (source_id, target_id, str(edge["edge_kind"]))
+            edge_weight = float(edge.get("weight") or 0.0)
+            if key in edges:
+                edges[key]["weight"] += edge_weight
+            else:
+                edges[key] = {
+                    "source_object_id": source_id,
+                    "target_object_id": target_id,
+                    "edge_kind": str(edge["edge_kind"]),
+                    "weight": edge_weight,
+                    "source_title": nodes[source_id]["title"],
+                    "target_title": nodes[target_id]["title"],
+                }
+
+    for edge in edges.values():
+        nodes[edge["source_object_id"]]["degree"] += 1
+        nodes[edge["target_object_id"]]["degree"] += 1
+
+    node_items = sorted(nodes.values(), key=lambda item: (-int(item["degree"]), str(item["title"]).lower()))
+    for node in node_items:
+        node["radius"] = GRAPH_MAP_NODE_BASE_RADIUS + min(
+            GRAPH_MAP_NODE_RADIUS_BONUS_MAX,
+            int(node["degree"]) * GRAPH_MAP_NODE_RADIUS_PER_DEGREE,
+        )
+    edge_items = sorted(
+        edges.values(),
+        key=lambda item: (
+            str(item["source_title"]).lower(),
+            str(item["target_title"]).lower(),
+            str(item["edge_kind"]),
+        ),
+    )
+    return {
+        "screen": "graph/map",
+        "requested_pack": requested_pack,
+        "projection_label": _access_projection_label(
+            surface="graph_map",
+            pack_name=pack_name,
+            generated_by="build_graph_map_payload",
+            derived_from=("knowledge.db.graph_clusters", "knowledge.db.graph_edges"),
+        ),
+        "query": query or "",
+        "limit": limit,
+        "is_limited": cluster_payload["is_limited"],
+        "layout": {"width": GRAPH_MAP_WIDTH, "height": GRAPH_MAP_HEIGHT},
+        "nodes": node_items,
+        "edges": edge_items,
+        "clusters": [
+            {
+                "cluster_id": str(cluster["cluster_id"]),
+                "title": str(cluster.get("display_title") or cluster["label"]),
+                "detail_path": str(cluster["detail_path"]),
+                "member_count": int(cluster["member_count"]),
+                "priority_band": str(cluster["priority_band"]),
+                "summary": str(cluster.get("top_summary_bullet") or cluster["priority_reason"]),
+            }
+            for cluster in clusters
+        ],
+        "map_summary": {
+            "node_count": len(node_items),
+            "edge_count": len(edge_items),
+            "cluster_count": len(clusters),
+            "largest_cluster_size": cluster_payload["largest_cluster_size"],
+            "is_limited": cluster_payload["is_limited"],
+            "limit": limit,
+        },
+        "model_notes": [
+            "This spatial map is a reader projection over graph clusters and edges.",
+            "Use it to see nearby ideas first; use the cluster browser for analytical/debug detail.",
         ],
     }
 

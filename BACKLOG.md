@@ -21,7 +21,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M0 Pipeline And Pack Foundation | Done | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first source-lifecycle idempotency slice |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and English-primary docs |
-| M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, and first object source/backlink rail shipped; graph and deeper kind-specific object layouts still need product shape |
+| M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, first object source/backlink rail, and visual graph map shipped; deeper kind-specific object layouts still need product shape |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, and wiring evals shipped; routing preview, evidence spans, and candidate risk remain |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
@@ -41,7 +41,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-007 | P0 | Next | Candidate risk layering by evidence strength, identity ambiguity, sensitivity, and impact | M4, KSR-003 |
 | BL-008 | P1 | Partial | Kind-aware object pages for people, concepts, companies/tools/projects, events, and claims; first slice adds reader profile/kind labels | M3, PR #79 |
 | BL-009 | P1 | Done | Mention/backlink rail with excerpts, source jumps, and relation context | M3, reader-product note, PR #79 |
-| BL-010 | P1 | Next | Visual `/graph` MVP as a spatial corpus map; keep analytical clusters under ops/debug | M3 |
+| BL-010 | P1 | Done | Visual `/graph` MVP as a spatial corpus map; analytical clusters remain under `/clusters` for ops/debug | M3, PR #80 |
 | BL-011 | P1 | Later | Reader-oriented search grouped by kind, summary, evidence, and reason | M3/M4 |
 | BL-012 | P1 | Later | Trusted reuse event instrumentation for downstream use of accepted/cited knowledge | April 22 roadmap |
 | BL-013 | P1 | Later | Session snapshot / OVP context pack / explicit context budget | M5, KSR-004, KSR-017, KSR-022 |
@@ -90,13 +90,13 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 ## Next Decision
 
-`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, and `BL-009` plus the first `BL-008` slice are shipped in PR #79. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, and object pages expose readable source/backlink rails.
+`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, and `BL-010` is shipped in PR #80. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails, and `/graph` renders a reader-facing spatial map over graph projections.
 
-The next implementation PR should continue the reader product shape with **BL-010**. Object pages now have first-pass readable context, so the remaining obvious product gap is the visual graph MVP.
+The next implementation PR should move back to the KSR safety lane with **BL-005**. The reader shell now has a first-pass library, object page, and visual graph map; deeper per-kind object layouts remain, but routing preview is the next P0 risk reducer before more source lifecycle work.
 
 Recommended order:
 
-1. BL-010
-2. BL-005
-3. BL-006 + BL-007
-4. Continue BL-008 with deeper per-kind layouts
+1. BL-005
+2. BL-006 + BL-007
+3. Continue BL-008 with deeper per-kind layouts
+4. BL-011

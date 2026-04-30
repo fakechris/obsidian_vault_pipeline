@@ -61,6 +61,7 @@ def test_core_reader_payloads_carry_projection_labels(temp_vault):
     from ovp_pipeline.ui.view_models import (
         build_briefing_payload,
         build_cluster_browser_payload,
+        build_graph_map_payload,
         build_object_page_payload,
         build_runtime_home_payload,
         build_search_payload,
@@ -75,6 +76,7 @@ def test_core_reader_payloads_carry_projection_labels(temp_vault):
         (build_search_payload(temp_vault, query="alpha"), "search_results"),
         (build_object_page_payload(temp_vault, "alpha"), "object_page"),
         (build_briefing_payload(temp_vault), "briefing"),
+        (build_graph_map_payload(temp_vault), "graph_map"),
         (build_cluster_browser_payload(temp_vault), "graph_clusters"),
     ]
     for payload, surface in cases:

@@ -700,6 +700,78 @@ date: 2026-04-10
     assert all(item["pack"] == "default-knowledge" for item in payload["items"])
 
 
+def test_build_graph_map_payload_projects_clusters_into_reader_map(temp_vault):
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.ui.view_models import build_graph_map_payload
+
+    source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
+    target = temp_vault / "10-Knowledge" / "Evergreen" / "Target.md"
+    third = temp_vault / "10-Knowledge" / "Evergreen" / "Third.md"
+    source.write_text(
+        """---
+note_id: source-note
+title: Source Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Source Note
+
+Links to [[target-note]] and [[third-note]].
+""",
+        encoding="utf-8",
+    )
+    target.write_text(
+        """---
+note_id: target-note
+title: Target Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Target Note
+
+Links back to [[source-note]].
+""",
+        encoding="utf-8",
+    )
+    third.write_text(
+        """---
+note_id: third-note
+title: Third Note
+type: evergreen
+date: 2026-04-10
+---
+
+# Third Note
+""",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    payload = build_graph_map_payload(temp_vault, pack_name="default-knowledge")
+
+    assert payload["screen"] == "graph/map"
+    assert payload["requested_pack"] == "default-knowledge"
+    assert payload["map_summary"]["node_count"] >= 3
+    assert payload["map_summary"]["edge_count"] >= 2
+    assert payload["map_summary"]["cluster_count"] >= 1
+    assert payload["projection_label"]["projection_surface"] == "graph_map"
+    assert payload["layout"]["width"] > 0
+    assert payload["layout"]["height"] > 0
+    assert {node["object_id"] for node in payload["nodes"]} >= {
+        "source-note",
+        "target-note",
+        "third-note",
+    }
+    assert all(0 <= node["x"] <= payload["layout"]["width"] for node in payload["nodes"])
+    assert all(0 <= node["y"] <= payload["layout"]["height"] for node in payload["nodes"])
+    assert any(edge["source_object_id"] == "source-note" for edge in payload["edges"])
+    assert payload["clusters"][0]["detail_path"].startswith("/cluster?id=")
+    assert "pack=default-knowledge" in payload["clusters"][0]["detail_path"]
+    assert "spatial" in payload["model_notes"][0].lower()
+
+
 def test_build_atlas_browser_payload_preserves_requested_pack(temp_vault):
     from ovp_pipeline.ui.view_models import build_atlas_browser_payload
 
