@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections import Counter
 from pathlib import Path
@@ -120,6 +121,158 @@ def _access_projection_label(
         derived_from=derived_from,
         rebuild_policy=rebuild_policy,
     )
+
+
+_OBJECT_KIND_LABELS = {
+    "person": "Person",
+    "concept": "Concept",
+    "company": "Company",
+    "tool": "Tool",
+    "project": "Project",
+    "event": "Event",
+    "claim": "Claim",
+    "evergreen": "Concept",
+}
+_LIST_MARKER_RE = re.compile(r"^([-*•]|\d+\.)\s+")
+OBJECT_SOURCE_RAIL_RELATED_LIMIT = 8
+
+
+def _object_kind_label(object_kind: str) -> str:
+    normalized = (object_kind or "").strip().lower()
+    if not normalized:
+        return "Object"
+    return _OBJECT_KIND_LABELS.get(normalized, normalized.replace("_", " ").title())
+
+
+def _object_reader_profile(detail: dict[str, Any], *, relation_count: int) -> dict[str, object]:
+    summary_text = str((detail.get("summary") or {}).get("summary_text") or "").strip()
+    source_note_count = len(detail["provenance"]["source_notes"])
+    atlas_count = len(detail["provenance"]["mocs"])
+    return {
+        "kind_label": _object_kind_label(str(detail["object"].get("object_kind") or "")),
+        "headline": detail["object"]["title"],
+        "dek": summary_text or "No compiled summary yet.",
+        "supporting_line": (
+            f"{len(detail['claims'])} claims · {relation_count} relations · "
+            f"{source_note_count} source notes · {atlas_count} atlas pages"
+        ),
+        "empty_summary": not bool(summary_text),
+    }
+
+
+def _clean_excerpt_line(line: str) -> str:
+    return _LIST_MARKER_RE.sub("", line.strip()).strip()
+
+
+def _source_excerpt_for_object(
+    vault_dir: Path | str,
+    *,
+    note_path: str,
+    object_id: str,
+    title: str,
+) -> str:
+    if not note_path:
+        return ""
+    path = resolve_vault_dir(vault_dir) / note_path
+    if not path.exists() or not path.is_file():
+        return ""
+    needles = [
+        f"[[{object_id}]]",
+        f"[[{title}]]",
+        object_id,
+        title,
+    ]
+    try:
+        in_frontmatter = False
+        with path.open(encoding="utf-8") as handle:
+            for index, raw_line in enumerate(handle):
+                raw_line = raw_line.rstrip("\n")
+                if raw_line.strip() == "---":
+                    if index == 0:
+                        in_frontmatter = True
+                        continue
+                    if in_frontmatter:
+                        in_frontmatter = False
+                        continue
+                if in_frontmatter:
+                    continue
+                line = _clean_excerpt_line(raw_line)
+                if not line or line.startswith("---") or line.startswith("#"):
+                    continue
+                lowered = line.lower()
+                if any(needle and needle.lower() in lowered for needle in needles):
+                    return line[:240]
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return ""
+
+
+def _build_source_backlink_rail(
+    vault_dir: Path | str,
+    *,
+    detail: dict[str, Any],
+    relations: list[dict[str, Any]],
+    requested_pack: str,
+) -> dict[str, object]:
+    object_id = str(detail["object"]["object_id"])
+    title = str(detail["object"]["title"])
+    evergreen_path = str(detail["provenance"].get("evergreen_path") or "")
+    source_notes = [
+        {
+            **item,
+            "excerpt": _source_excerpt_for_object(
+                vault_dir,
+                note_path=str(item.get("path") or ""),
+                object_id=object_id,
+                title=title,
+            ),
+            "jump_path": _scoped_path(
+                f"/note?path={quote(str(item.get('path') or ''), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in detail["provenance"]["source_notes"]
+    ]
+    atlas_pages = [
+        {
+            **item,
+            "jump_path": _scoped_path(
+                f"/note?path={quote(str(item.get('path') or ''), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in detail["provenance"]["mocs"]
+    ]
+    related_objects = []
+    for item in relations:
+        if len(related_objects) >= OBJECT_SOURCE_RAIL_RELATED_LIMIT:
+            break
+        related_objects.append(
+            {
+                "object_id": item["target_object_id"],
+                "title": item.get("target_title", item["target_object_id"]),
+                "relation_type": item["relation_type"],
+                "path": item.get("target_path", ""),
+            }
+        )
+    return {
+        "summary": (
+            f"{len(source_notes)} source notes, {len(atlas_pages)} atlas pages, "
+            f"{len(related_objects)} related objects"
+        ),
+        "evergreen": {
+            "title": title,
+            "path": evergreen_path,
+            "jump_path": (
+                _scoped_path(f"/note?path={quote(evergreen_path, safe='')}", pack_name=requested_pack)
+                if evergreen_path
+                else ""
+            ),
+        },
+        "source_notes": source_notes,
+        "atlas_pages": atlas_pages,
+        "related_objects": related_objects,
+    }
 
 
 def _compiled_section(
@@ -1628,6 +1781,13 @@ def build_object_page_payload(
         }
     )
     summary_text = detail["summary"]["summary_text"] if detail["summary"] else ""
+    reader_profile = _object_reader_profile(detail, relation_count=len(relations))
+    source_backlink_rail = _build_source_backlink_rail(
+        vault_dir,
+        detail=detail,
+        relations=relations,
+        requested_pack=requested_pack,
+    )
     stale_summary_details = (
         list_stale_summaries(
             vault_dir,
@@ -1853,6 +2013,8 @@ def build_object_page_payload(
         "assembly_contract": _assembly_contract("object_brief", pack_name=pack_name),
         "research_shell_enabled": research_shell_enabled,
         **detail,
+        "reader_profile": reader_profile,
+        "source_backlink_rail": source_backlink_rail,
         "production_chain": production_chain,
         "relations": relations,
         "claim_count": len(detail["claims"]),
@@ -1882,6 +2044,7 @@ def build_object_page_payload(
         "compiled_sections": compiled_sections,
         "section_nav": [
             {"href": "#summary", "label": "Summary"},
+            {"href": "#sources", "label": "Sources"},
             *_section_nav_from_compiled_sections(compiled_sections),
             {"href": "#claims", "label": "Claims"},
             {"href": "#relations", "label": "Relations"},

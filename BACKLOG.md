@@ -21,7 +21,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M0 Pipeline And Pack Foundation | Done | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first source-lifecycle idempotency slice |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and English-primary docs |
-| M3 Reader-First Knowledge Atlas | Active | reader home and `/ops` split shipped; object pages, backlinks, and graph still need product shape |
+| M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, and first object source/backlink rail shipped; graph and deeper kind-specific object layouts still need product shape |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, and wiring evals shipped; routing preview, evidence spans, and candidate risk remain |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
@@ -39,8 +39,8 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-005 | P0 | Next | Article routing preview before source lifecycle changes | M4, KSR-014 |
 | BL-006 | P0 | Next | Evidence span schema and markdown-aware locator backfill | M4, KSR-001, KSR-018 |
 | BL-007 | P0 | Next | Candidate risk layering by evidence strength, identity ambiguity, sensitivity, and impact | M4, KSR-003 |
-| BL-008 | P1 | Next | Kind-aware object pages for people, concepts, companies/tools/projects, events, and claims | M3 |
-| BL-009 | P1 | Next | Mention/backlink rail with excerpts, source jumps, and relation context | M3, reader-product note |
+| BL-008 | P1 | Partial | Kind-aware object pages for people, concepts, companies/tools/projects, events, and claims; first slice adds reader profile/kind labels | M3, PR #79 |
+| BL-009 | P1 | Done | Mention/backlink rail with excerpts, source jumps, and relation context | M3, reader-product note, PR #79 |
 | BL-010 | P1 | Next | Visual `/graph` MVP as a spatial corpus map; keep analytical clusters under ops/debug | M3 |
 | BL-011 | P1 | Later | Reader-oriented search grouped by kind, summary, evidence, and reason | M3/M4 |
 | BL-012 | P1 | Later | Trusted reuse event instrumentation for downstream use of accepted/cited knowledge | April 22 roadmap |
@@ -90,13 +90,13 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 ## Next Decision
 
-`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, and `BL-002` is shipped in PR #78. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, and core access/materialized surfaces carry explicit projection labels.
+`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, and `BL-009` plus the first `BL-008` slice are shipped in PR #79. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, and object pages expose readable source/backlink rails.
 
-The next implementation PR should move back to the reader product shape: **BL-008 + BL-009**. The projection boundary is now explicit enough to improve object pages and backlink/source rails without making those surfaces look like canonical truth.
+The next implementation PR should continue the reader product shape with **BL-010**. Object pages now have first-pass readable context, so the remaining obvious product gap is the visual graph MVP.
 
 Recommended order:
 
-1. BL-008 + BL-009
-2. BL-010
-3. BL-005
-4. BL-006 + BL-007
+1. BL-010
+2. BL-005
+3. BL-006 + BL-007
+4. Continue BL-008 with deeper per-kind layouts

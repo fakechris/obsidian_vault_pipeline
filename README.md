@@ -94,7 +94,7 @@ Current milestone sequence:
 | M0 Pipeline And Pack Foundation | Complete | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first KSR-013 slice |
 | M1 Operator Workbench And Review Runtime | Complete enough | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Complete | merged historical milestones, compiler roadmap, recent KSR input, and reader-product research |
-| M3 Reader-First Knowledge Atlas | Active | reader home and `/ops` split shipped; object and graph pages still need product shape |
+| M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, and first object source/backlink rail shipped; graph pages and deeper per-kind object layouts still need product shape |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, and wiring evals have shipped; evidence spans, candidate risk tiers, routing preview, and product-facing object/graph polish are next |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facades, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
@@ -103,7 +103,8 @@ Current milestone sequence:
 Current active backlog focus:
 
 - Shipped: `KSR-002` projection labels, `KSR-015` dashboard/search hot-path audit, `KSR-026` workflow wiring eval suite.
-- Next: `KSR-014` article routing preview, `KSR-001` evidence spans, `KSR-003` candidate risk tiers.
+- Product shipped: first readable object page profile and source/backlink rail.
+- Next: visual `/graph` MVP, `KSR-014` article routing preview, `KSR-001` evidence spans, `KSR-003` candidate risk tiers.
 - Product track: reader-first Knowledge Atlas stays a projection layer, not a new state system.
 
 ## Domain Packs
