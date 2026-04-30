@@ -5,7 +5,9 @@ Pytest fixtures for ovp_pipeline tests.
 import pytest
 import tempfile
 import json
+import threading
 from pathlib import Path
+from http.client import HTTPConnection
 from datetime import datetime
 
 
@@ -24,6 +26,87 @@ def temp_vault(tmp_path):
     (vault / "60-Logs" / "migration-reports").mkdir(parents=True)
 
     return vault
+
+
+@pytest.fixture
+def fetch_ui():
+    def _fetch(temp_vault, path: str) -> tuple[int, str, str]:
+        from ovp_pipeline.commands.ui_server import create_server
+
+        server = create_server(temp_vault, host="127.0.0.1", port=0)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", path)
+            response = conn.getresponse()
+            body = response.read().decode("utf-8")
+            content_type = response.getheader("Content-Type") or ""
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+        return response.status, body, content_type
+
+    return _fetch
+
+
+@pytest.fixture
+def post_ui():
+    def _post(temp_vault, path: str, body: str) -> tuple[int, str]:
+        from ovp_pipeline.commands.ui_server import create_server
+
+        server = create_server(temp_vault, host="127.0.0.1", port=0)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request(
+                "POST",
+                path,
+                body=body,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            response = conn.getresponse()
+            payload = response.read().decode("utf-8")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+        return response.status, payload
+
+    return _post
+
+
+@pytest.fixture
+def seed_hot_path_vault():
+    def _seed(temp_vault) -> None:
+        from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+
+        note = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+        note.write_text(
+            """---
+note_id: alpha
+title: Alpha
+type: evergreen
+date: 2026-04-30
+---
+
+# Alpha
+
+Alpha supports reader-first local knowledge reuse.
+""",
+            encoding="utf-8",
+        )
+        raw_dir = temp_vault / "00-Capture" / "Raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        (raw_dir / "heavy.pdf").write_bytes(b"%PDF-1.4 sentinel")
+        (raw_dir / "heavy.docx").write_bytes(b"PK sentinel")
+        rebuild_knowledge_index(temp_vault)
+
+    return _seed
 
 
 @pytest.fixture
