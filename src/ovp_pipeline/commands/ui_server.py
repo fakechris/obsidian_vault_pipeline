@@ -2480,7 +2480,7 @@ def _render_production_browser_page(payload: dict) -> str:
     )
 
 
-def _render_clusters_page(payload: dict) -> str:
+def _render_clusters_page(payload: dict, *, action_path: str = "/clusters") -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
     limit_note = (
@@ -2555,7 +2555,7 @@ def _render_clusters_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Graph Clusters</h1>",
-                "<form method='get' action='/clusters'>",
+                f"<form method='get' action='{escape(action_path)}'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4821,7 +4821,7 @@ def create_server(
                     payload = build_cluster_browser_payload(
                         resolved_vault, pack_name=pack_name, query=q
                     )
-                    self._write_html(_render_clusters_page(payload))
+                    self._write_html(_render_clusters_page(payload, action_path="/map"))
                     return
                 if path == "/api/cluster":
                     cluster_id = self._required(query, "id")

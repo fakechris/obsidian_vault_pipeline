@@ -192,6 +192,8 @@ def test_ui_server_map_route_serves_readable_map_entry(temp_vault):
 
     assert status == 200
     assert "Graph Clusters" in body
+    assert "action='/map'" in body
+    assert "action='/clusters'" not in body
     assert 'href="/">Library</a>' in body
     assert 'href="/map">Map</a>' in body
     assert 'href="/ops">Workbench</a>' in body

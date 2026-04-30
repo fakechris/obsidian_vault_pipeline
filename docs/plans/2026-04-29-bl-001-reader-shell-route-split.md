@@ -79,7 +79,7 @@ Expected: pass.
 Run:
 
 ```bash
-python -m pytest tests/test_ui_server.py tests/test_workbench.py tests/test_explore_ui.py -q
+python -m pytest tests/test_ui_server.py tests/test_workbench.py tests/test_explore_ui.py tests/test_ui_smoke.py -q
 ```
 
 Expected: pass.
@@ -97,7 +97,7 @@ Run:
 
 ```bash
 git diff --check
-python -m pytest tests/test_ui_server.py tests/test_workbench.py tests/test_explore_ui.py -q
+python -m pytest tests/test_ui_server.py tests/test_workbench.py tests/test_explore_ui.py tests/test_ui_smoke.py -q
 ```
 
 Then commit and open a PR for `BL-001`.
