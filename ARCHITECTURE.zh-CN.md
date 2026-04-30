@@ -786,6 +786,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 - schema versioning 已接入 `knowledge.db` projection lifecycle：Authority/projection version metadata 已持久化，stale metadata 会触发 full rebuild marker。
 - fitness functions 只落地了第一批，仍需扩展到 CI/doctor/pre-commit 的完整契约。
 - working memory 是第一版带 budget 的 context-pack projection：会记录 context budget metadata，并为选入的 canonical objects 写入 `working_memory` reuse events。
+- OVP Prime 会把带 budget 的 context pack 物化成 `60-Logs/session-snapshots/<session_id>.md` 和 `latest.md`，并为注入会话的 selected objects 写入 `ovp_prime` reuse events。
 - reader-first home 已经成为默认入口；object page 已有 reader profile、source rail 和按 kind 区分的 reader lens；`/graph` 已有第一版 spatial map projection；`/search` 已按 kind、summary、evidence count、match reason 组织 reader results。
 
 ## 17. 近期架构动作
@@ -797,7 +798,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 1. 新增 access surface 时必须继续带 projection metadata，并补 doctor/export checks 验证标注存在。
 2. 在扩大自动 promotion 前，补更严格的 factual evidence completeness checks。
 3. 扩展 doctor/export checks，同时验证 projection marker replay 和 projection labels。
-4. 继续 trusted reuse/context-pack loop，补 session snapshot 和 OVP prime input。
+4. 进入 BL-014 operational runtime graph：把 claim lease、provider facade、observability 暴露成可见 runtime state。
 5. 未来新增 projection backend 前，先沿用同一套 metadata contract，再加 semantic reindex worker。
 6. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
 7. 预留 semantic_reindex lifecycle kind，但不提前锁定 LanceDB 或其它 backend。
@@ -816,7 +817,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 | Candidate risk layering | `BL-007`, `KSR-003` 已在 PR #82 交付 |
 | Reader-first access surfaces | `BL-001`；`BL-008`、`BL-009` 已通过 PR #79 和 PR #83 交付；`BL-010` 已在 PR #80 交付 |
 | Reader-oriented search | `BL-011` 已在 PR #84 交付 |
-| Trusted reuse / context-pack loop | `BL-012`、`BL-013` 已在 PR #89 落地第一片 |
+| Trusted reuse / context-pack loop | `BL-012`、`BL-013` 第一版已在 PR #89 和 PR #90 交付 |
 | Projection repair lifecycle | `BL-020` 已在 PR #87 落地 |
 | Schema versioning and migration trigger | `BL-021` 已在 PR #87 和 PR #88 中补完 |
 

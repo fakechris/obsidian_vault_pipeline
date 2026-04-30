@@ -102,9 +102,9 @@ Current milestone sequence:
 
 Current active backlog focus:
 
-- Shipped: `KSR-001` evidence spans, `KSR-002` projection labels, `KSR-003` candidate risk tiers, `KSR-014` article routing preview, `KSR-015` dashboard/search hot-path audit, `KSR-018` markdown-aware evidence span backfill, `KSR-026` workflow wiring eval suite, and the first structured projection repair marker lifecycle.
+- Shipped: `KSR-001` evidence spans, `KSR-002` projection labels, `KSR-003` candidate risk tiers, `KSR-004` session snapshots/context packs, `KSR-014` article routing preview, `KSR-015` dashboard/search hot-path audit, `KSR-017` explicit context budgets, `KSR-018` markdown-aware evidence span backfill, `KSR-022` OVP prime context packs, `KSR-026` workflow wiring eval suite, and the first structured projection repair marker lifecycle.
 - Product shipped: readable object page profiles, source/backlink rail, kind-specific reader lenses, visual `/graph` map, and reader-oriented search grouped by kind, evidence, and reason.
-- Next: continue the trusted reuse/context-pack loop with session snapshots and an OVP prime input.
+- Next: move into `BL-014` operational runtime graph, claim leases, provider facade, and observability.
 - Product track: reader-first Knowledge Atlas stays a projection layer, not a new state system.
 
 ## Domain Packs
@@ -407,6 +407,13 @@ Refine is not hidden or missing. It is wired in, but opt-in by default to avoid 
 | `ovp-graph daily today --vault-dir <vault>` | Build daily graph delta |
 | `ovp-lint --check --vault-dir <vault>` | Run structure/link checks |
 
+### Context packs
+
+| Command | Purpose |
+|---|---|
+| `ovp-working-memory --vault-dir <vault>` | Write the daily budgeted context pack to `60-Logs/working-memory/YYYY-MM-DD.md` and emit trusted reuse events for selected objects |
+| `ovp-prime --vault-dir <vault> --session-id <id>` | Write an OVP Prime session snapshot to `60-Logs/session-snapshots/<id>.md`, refresh `latest.md`, and emit `ovp_prime` reuse events |
+
 ### AutoPilot
 
 | Command | Purpose |
@@ -438,6 +445,8 @@ vault/
 │   ├── transactions/
 │   ├── quality-reports/
 │   ├── daily-deltas/
+│   ├── working-memory/
+│   ├── session-snapshots/
 │   └── knowledge.db
 └── 70-Archive/
 ```

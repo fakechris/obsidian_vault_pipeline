@@ -53,6 +53,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 | Kind-aware object pages and backlink rail | `BL-008` and `BL-009` done through PR #79 and PR #83 |
 | Visual graph MVP | `BL-010` done in PR #80 |
 | Reader-oriented search | `BL-011` done in PR #84 |
+| Trusted reuse context pack / OVP prime | `BL-012` and `BL-013` first implementation done in PR #89 plus PR #90 |
 | Projection repair lifecycle | `BL-020` done in PR #87 |
 | Schema versioning and migration trigger | `BL-021` done in PR #87 plus PR #88 |
 
@@ -60,9 +61,9 @@ That means the user-facing product should make compiled knowledge easy to read f
 
 Recommended order:
 
-1. Continue `BL-012 + BL-013`: session snapshot / OVP prime input over the budgeted working-memory context pack.
-2. Pick up `BL-014` when operational runtime observability becomes the next bottleneck.
-3. Pick up `BL-015` when permission and claim lifecycle become the active blocker.
+1. Pick up `BL-014`: operational runtime graph, claim leases, provider facade, and observability.
+2. Pick up `BL-015` when permission and claim lifecycle become the active blocker.
+3. Revisit `BL-012 + BL-013` only when a new reuse surface needs the same context-pack contract.
 
 ## Documentation Rules
 
