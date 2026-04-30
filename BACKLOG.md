@@ -22,7 +22,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and English-primary docs |
 | M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, first object source/backlink rail, and visual graph map shipped; deeper kind-specific object layouts still need product shape |
-| M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, and article routing preview shipped; evidence spans and candidate risk remain |
+| M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk shipped; deeper enforcement remains |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
@@ -37,8 +37,8 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-003 | P0 | Done | Dashboard/search hot-path audit: default UI/search paths must not scan raw/PDF/Office sources | M4, KSR-015, `docs/plans/2026-04-30-bl-003-004-hot-path-wiring-safety.md`, PR #77 |
 | BL-004 | P0 | Done | Workflow wiring eval suite for lifecycle routing, promote gates, projection labels, hot paths, and read/write boundaries | M4, KSR-026, `docs/plans/2026-04-30-bl-003-004-hot-path-wiring-safety.md`, PR #77 |
 | BL-005 | P0 | Done | Article routing preview before source lifecycle changes | M4, KSR-014 |
-| BL-006 | P0 | Next | Evidence span schema and markdown-aware locator backfill | M4, KSR-001, KSR-018 |
-| BL-007 | P0 | Next | Candidate risk layering by evidence strength, identity ambiguity, sensitivity, and impact | M4, KSR-003 |
+| BL-006 | P0 | Done | Evidence span schema and markdown-aware locator backfill | M4, KSR-001, KSR-018 |
+| BL-007 | P0 | Done | Candidate risk layering by evidence strength, identity ambiguity, sensitivity, and impact | M4, KSR-003 |
 | BL-008 | P1 | Partial | Kind-aware object pages for people, concepts, companies/tools/projects, events, and claims; first slice adds reader profile/kind labels | M3, PR #79 |
 | BL-009 | P1 | Done | Mention/backlink rail with excerpts, source jumps, and relation context | M3, reader-product note, PR #79 |
 | BL-010 | P1 | Done | Visual `/graph` MVP as a spatial corpus map; analytical clusters remain under `/clusters` for ops/debug | M3, PR #80 |
@@ -58,9 +58,9 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 | KSR ID | Backlog mapping | Current status in this backlog |
 | --- | --- | --- |
-| KSR-001 Evidence span 化 | BL-006 | Next |
+| KSR-001 Evidence span 化 | BL-006 | Done |
 | KSR-002 Projection 标注 | BL-002 | Done |
-| KSR-003 Candidate 风险分层 | BL-007 | Next |
+| KSR-003 Candidate 风险分层 | BL-007 | Done |
 | KSR-004 Session snapshot/context pack | BL-013 | Later |
 | KSR-005 Permission layer 分离 | BL-015 | Later |
 | KSR-006 Claim lifecycle 字段 | BL-015 | Later |
@@ -75,7 +75,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | KSR-015 Dashboard/search hot-path audit | BL-003 | Done |
 | KSR-016 Hybrid retrieval experiment | BL-019 | Later |
 | KSR-017 Explicit context budget | BL-013 | Later |
-| KSR-018 Markdown-aware evidence chunking | BL-006 | Next |
+| KSR-018 Markdown-aware evidence chunking | BL-006 | Done |
 | KSR-019 Multimodal caption-first ingest | BL-019 | Later |
 | KSR-020 Operational runtime graph | BL-014 | Later |
 | KSR-021 Claim lease for workflow items | BL-014 | Later |
@@ -90,12 +90,12 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 ## Next Decision
 
-`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, `BL-010` is shipped in PR #80, and `BL-005` is implemented in PR #81. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails, `/graph` renders a reader-facing spatial map over graph projections, and `ovp-absorb --dry-run --json` explains source lifecycle routing before mutation.
+`BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, `BL-010` is shipped in PR #80, `BL-005` is shipped in PR #81, and `BL-006 + BL-007` are implemented in PR #82. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails, `/graph` renders a reader-facing spatial map over graph projections, `ovp-absorb --dry-run --json` explains source lifecycle routing before mutation, evidence rows carry line/char spans, and candidate review payloads expose risk tiers.
 
-The next implementation PR should continue the KSR safety lane with **BL-006 + BL-007**. Evidence spans and candidate risk tiers are the next P0 risk reducers before expanding automatic promotion or richer reader search.
+The next implementation PR should return to the reader product lane with **BL-008** deeper per-kind object layouts, then **BL-011** reader-oriented search. M4 still has deeper enforcement work, but the P0 risk reducers needed before richer reader surfaces are now in place.
 
 Recommended order:
 
-1. BL-006 + BL-007
-2. Continue BL-008 with deeper per-kind layouts
-3. BL-011
+1. Continue BL-008 with deeper per-kind layouts
+2. BL-011
+3. BL-020 / BL-021 when projection repair and schema migration become the next operational bottleneck

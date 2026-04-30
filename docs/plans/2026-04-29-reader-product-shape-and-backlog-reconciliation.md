@@ -170,8 +170,8 @@ The recent vault KSR backlog makes the same direction more concrete. The reader-
 | KSR-002 Projection 标注 | Reader pages, dashboard, graph, MOC, briefing must show they are derived projections, not source of truth |
 | KSR-015 Dashboard/search hot-path audit | The default home page and reader search must not trigger heavy raw/PDF/Office scans |
 | KSR-026 Workflow wiring eval suite | Tests should lock projection labels, source lifecycle routing, dashboard hot paths, and read/write boundaries |
-| KSR-001 Evidence span 化 | Object pages and backlink rails need precise source/evidence spans |
-| KSR-003 Candidate 风险分层 | Reader pages should show unresolved/risky knowledge without implying it is canonical |
+| KSR-001 Evidence span 化 | First line/char span schema is shipped in derived evidence rows and exposed through object detail payloads |
+| KSR-003 Candidate 风险分层 | First candidate risk payload is shipped for review surfaces; reader pages can show unresolved/risky knowledge without implying it is canonical |
 | KSR-014 Article routing preview | Shipped first JSON preview in `ovp-absorb --dry-run --json`; richer UI presentation can build on this |
 
 ### Keep From Existing Roadmap

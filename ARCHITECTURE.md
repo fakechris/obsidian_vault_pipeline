@@ -662,9 +662,9 @@ Current implementation roughly maps as follows:
 
 Main gaps:
 
-- Layer 1 claim/evidence contracts are not explicit enough yet.
+- Layer 1 claim/evidence contracts now carry a first line/char span schema in derived evidence rows; factual evidence_kind enforcement and richer claim lifecycle fields still need hardening.
 - Layer 2 / Layer 3 projection labels now exist on core access payloads and materialized reader artifacts; doctor/export enforcement and future surfaces still need to consume them consistently.
-- Layer 4 fitness checks now cover the first hot-path, workflow-wiring, and source routing preview cases; evidence completeness, projection replay, and import-boundary checks are still open.
+- Layer 4 fitness checks now cover the first hot-path, workflow-wiring, source routing preview, evidence span backfill, and candidate risk cases; deeper evidence completeness, projection replay, and import-boundary checks are still open.
 - Projection lifecycle markers need structured schema, scope, lease, and supersession.
 - Schema versioning is not yet wired into projection lifecycle.
 - The reader-first home is now the default entry; object pages have a first reader profile/source rail; `/graph` has a first spatial map projection; search and deeper per-kind object layouts still need product shape.
@@ -674,11 +674,10 @@ Main gaps:
 Recommended order:
 
 1. Keep projection metadata attached to new access surfaces and add doctor/export checks that verify the labels are present.
-2. Continue reader-first Layer 3 product work on search and deeper per-kind object layouts.
-3. Add evidence spans and factual evidence completeness checks.
-4. Add candidate risk tiers before expanding automatic promotion.
-5. Introduce structured `ProjectionRepairMarker` schema.
-6. Add schema version fields to Authority and derived projection state.
+2. Continue reader-first Layer 3 product work on deeper per-kind object layouts and search using the new evidence spans/risk tiers.
+3. Add stricter factual evidence completeness checks before expanding automatic promotion.
+4. Introduce structured `ProjectionRepairMarker` schema.
+5. Add schema version fields to Authority and derived projection state.
 
 ## Appendix: Backlog Mapping
 
@@ -690,8 +689,8 @@ The architecture should not depend on backlog IDs to be valid. The table below i
 | Dashboard/search hot-path audit | `BL-003`, `KSR-015` shipped in PR #77 |
 | Workflow wiring eval suite | `BL-004`, `KSR-026` shipped in PR #77 |
 | Article routing preview | `BL-005`, `KSR-014` done in PR #81 |
-| Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` |
-| Candidate risk layering | `BL-007`, `KSR-003` |
+| Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` done in PR #82 |
+| Candidate risk layering | `BL-007`, `KSR-003` done in PR #82 |
 | Reader-first access surfaces | `BL-001`; `BL-008` partial and `BL-009` done in PR #79; `BL-010` done in PR #80 |
 | Projection repair lifecycle | `BL-020` |
 | Schema versioning and migration trigger | `BL-021` |

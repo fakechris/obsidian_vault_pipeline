@@ -26,6 +26,7 @@ from typing import Any, Iterable
 
 from ..evidence import (
     compute_content_hash,
+    compute_evidence_span,
     compute_locator,
     compute_retrieval_context,
     verify_evidence_row,
@@ -77,6 +78,10 @@ def _row_dict(table: str, row: tuple[Any, ...]) -> dict[str, Any]:
             "locator",
             "content_hash",
             "retrieval_context",
+            "quote_start_line",
+            "quote_end_line",
+            "quote_start_char",
+            "quote_end_char",
             "status",
             "verified_at",
         )
@@ -91,6 +96,10 @@ def _row_dict(table: str, row: tuple[Any, ...]) -> dict[str, Any]:
             "locator",
             "content_hash",
             "retrieval_context",
+            "quote_start_line",
+            "quote_end_line",
+            "quote_start_char",
+            "quote_end_char",
             "status",
             "verified_at",
         )
@@ -115,10 +124,12 @@ def _select_rows(
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     columns = (
         "pack, claim_id, source_slug, evidence_kind, quote_text, "
-        "locator, content_hash, retrieval_context, status, verified_at"
+        "locator, content_hash, retrieval_context, "
+        "quote_start_line, quote_end_line, quote_start_char, quote_end_char, status, verified_at"
         if table == "claim_evidence"
         else "pack, source_object_id, target_object_id, relation_type, evidence_source_slug, "
-        "quote_text, locator, content_hash, retrieval_context, status, verified_at"
+        "quote_text, locator, content_hash, retrieval_context, "
+        "quote_start_line, quote_end_line, quote_start_char, quote_end_char, status, verified_at"
     )
     return list(conn.execute(f"SELECT {columns} FROM {table} {where_sql}", params).fetchall())
 
@@ -206,6 +217,10 @@ def _process_table(
         new_locator = row_dict.get("locator") or ""
         new_content_hash = row_dict.get("content_hash") or ""
         new_context = row_dict.get("retrieval_context") or ""
+        new_start_line = int(row_dict.get("quote_start_line") or 0)
+        new_end_line = int(row_dict.get("quote_end_line") or 0)
+        new_start_char = int(row_dict.get("quote_start_char") or 0)
+        new_end_char = int(row_dict.get("quote_end_char") or 0)
         if backfill:
             if not new_content_hash and source_path:
                 new_content_hash = compute_content_hash(source_path, vault_dir=vault_dir)
@@ -213,10 +228,22 @@ def _process_table(
                 new_locator = compute_locator(source_path, quote, vault_dir=vault_dir)
             if not new_context and quote and source_path:
                 new_context = compute_retrieval_context(source_path, quote, vault_dir=vault_dir)
+            if quote and source_path and not all(
+                (new_start_line, new_end_line, new_end_char)
+            ):
+                span = compute_evidence_span(source_path, quote, vault_dir=vault_dir)
+                new_start_line = span["quote_start_line"]
+                new_end_line = span["quote_end_line"]
+                new_start_char = span["quote_start_char"]
+                new_end_char = span["quote_end_char"]
             if (
                 new_locator != (row_dict.get("locator") or "")
                 or new_content_hash != (row_dict.get("content_hash") or "")
                 or new_context != (row_dict.get("retrieval_context") or "")
+                or new_start_line != int(row_dict.get("quote_start_line") or 0)
+                or new_end_line != int(row_dict.get("quote_end_line") or 0)
+                or new_start_char != int(row_dict.get("quote_start_char") or 0)
+                or new_end_char != int(row_dict.get("quote_end_char") or 0)
             ):
                 backfilled += 1
 
@@ -236,6 +263,10 @@ def _process_table(
                 new_locator,
                 new_content_hash,
                 new_context,
+                new_start_line,
+                new_end_line,
+                new_start_char,
+                new_end_char,
                 status,
                 verified_at,
                 *_key_values(table, row_dict),
@@ -252,6 +283,10 @@ def _process_table(
                 "locator": new_locator,
                 "content_hash": new_content_hash,
                 "retrieval_context": new_context,
+                "quote_start_line": new_start_line,
+                "quote_end_line": new_end_line,
+                "quote_start_char": new_start_char,
+                "quote_end_char": new_end_char,
                 "status": status,
                 "verified_at": verified_at,
                 "pack": str(row_dict.get("pack") or ""),
@@ -264,6 +299,10 @@ def _process_table(
            SET locator = ?,
                content_hash = ?,
                retrieval_context = ?,
+               quote_start_line = ?,
+               quote_end_line = ?,
+               quote_start_char = ?,
+               quote_end_char = ?,
                status = ?,
                verified_at = ?
          WHERE {_key_clause(table)}

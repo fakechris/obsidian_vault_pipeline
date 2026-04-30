@@ -19,6 +19,7 @@ import pytest
 
 from ovp_pipeline.evidence import (
     compute_content_hash,
+    compute_evidence_span,
     compute_locator,
     compute_retrieval_context,
     verify_evidence_row,
@@ -60,6 +61,10 @@ def test_evidence_verify_batches_table_updates(temp_vault, monkeypatch):
         "",
         "",
         "",
+        0,
+        0,
+        0,
+        0,
         EVIDENCE_STATUS_UNVERIFIED,
         "",
     )
@@ -104,6 +109,10 @@ def _seed_claim_evidence_row(
     locator: str = "",
     content_hash: str = "",
     retrieval_context: str = "",
+    quote_start_line: int = 0,
+    quote_end_line: int = 0,
+    quote_start_char: int = 0,
+    quote_end_char: int = 0,
     status: str = EVIDENCE_STATUS_UNVERIFIED,
     verified_at: str = "",
 ) -> None:
@@ -113,8 +122,10 @@ def _seed_claim_evidence_row(
             """
             INSERT INTO claim_evidence
               (pack, claim_id, source_slug, evidence_kind, quote_text,
-               locator, content_hash, retrieval_context, status, verified_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               locator, content_hash, retrieval_context,
+               quote_start_line, quote_end_line, quote_start_char, quote_end_char,
+               status, verified_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pack,
@@ -125,6 +136,10 @@ def _seed_claim_evidence_row(
                 locator,
                 content_hash,
                 retrieval_context,
+                quote_start_line,
+                quote_end_line,
+                quote_start_char,
+                quote_end_char,
                 status,
                 verified_at,
             ),
@@ -169,6 +184,10 @@ date: 2026-04-22
         "locator",
         "content_hash",
         "retrieval_context",
+        "quote_start_line",
+        "quote_end_line",
+        "quote_start_char",
+        "quote_end_char",
         "status",
         "verified_at",
     }.issubset(columns)
@@ -198,6 +217,10 @@ date: 2026-04-22
         "locator",
         "content_hash",
         "retrieval_context",
+        "quote_start_line",
+        "quote_end_line",
+        "quote_start_char",
+        "quote_end_char",
         "status",
         "verified_at",
     }.issubset(columns)
@@ -249,6 +272,20 @@ def test_compute_retrieval_context_centers_on_quote(tmp_path):
     context = compute_retrieval_context(src, "ANCHOR", radius=20)
     assert "ANCHOR" in context
     assert len(context) <= len("ANCHOR") + 40 + 5  # radius padding tolerance
+
+
+def test_compute_evidence_span_returns_markdown_line_and_char_offsets(tmp_path):
+    src = tmp_path / "doc.md"
+    src.write_text(
+        "# Top\n\nintro paragraph\n\n## Evidence\n\nfirst line\nsecond unique line\nthird line\n",
+        encoding="utf-8",
+    )
+
+    span = compute_evidence_span(src, "second unique line")
+
+    assert span["quote_start_line"] == 8
+    assert span["quote_end_line"] == 8
+    assert span["quote_start_char"] < span["quote_end_char"]
 
 
 # ---------------------------------------------------------------------------
@@ -380,12 +417,16 @@ The signal phrase to locate.
 
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
-            "SELECT locator, content_hash, status, verified_at FROM claim_evidence "
+            "SELECT locator, content_hash, quote_start_line, quote_end_line, "
+            "quote_start_char, quote_end_char, status, verified_at FROM claim_evidence "
             "WHERE pack='research-tech' AND claim_id='claim-1'"
         ).fetchone()
-    locator, content_hash, status, verified_at = row
+    locator, content_hash, start_line, end_line, start_char, end_char, status, verified_at = row
     assert content_hash  # backfilled
     assert locator.startswith("section#")  # quote was locatable
+    assert start_line > 0
+    assert end_line >= start_line
+    assert start_char < end_char
     assert status == EVIDENCE_STATUS_VERIFIED
     assert verified_at
 

@@ -2,8 +2,8 @@
 
 ``rebuild_knowledge_index`` recreates ``claim_evidence`` and ``relations`` from
 the pack projection, which would clobber the per-row verification fields
-(``locator``, ``content_hash``, ``retrieval_context``, ``status``,
-``verified_at``) that :mod:`commands.evidence_verify` writes. Each verify pass
+(``locator``, ``content_hash``, ``retrieval_context``, span offsets,
+``status``, ``verified_at``) that :mod:`commands.evidence_verify` writes. Each verify pass
 appends one ``evidence_verified`` event per row to
 ``60-Logs/evidence-verifications.jsonl``; this module replays them after the
 projection inserts so verification survives rebuild.
@@ -47,6 +47,10 @@ def emit_evidence_verified(
     status: str,
     verified_at: str,
     pack: str,
+    quote_start_line: int = 0,
+    quote_end_line: int = 0,
+    quote_start_char: int = 0,
+    quote_end_char: int = 0,
 ) -> None:
     """Append one ``evidence_verified`` event for replay on next rebuild."""
     if table not in _TABLE_KEY_COLUMNS:
@@ -61,6 +65,10 @@ def emit_evidence_verified(
             "locator": locator,
             "content_hash": content_hash,
             "retrieval_context": retrieval_context,
+            "quote_start_line": int(quote_start_line or 0),
+            "quote_end_line": int(quote_end_line or 0),
+            "quote_start_char": int(quote_start_char or 0),
+            "quote_end_char": int(quote_end_char or 0),
             "status": status,
             "verified_at": verified_at,
         },
@@ -128,6 +136,10 @@ def replay_evidence_verifications(
                SET locator = ?,
                    content_hash = ?,
                    retrieval_context = ?,
+                   quote_start_line = ?,
+                   quote_end_line = ?,
+                   quote_start_char = ?,
+                   quote_end_char = ?,
                    status = ?,
                    verified_at = ?
              WHERE {where_sql}
@@ -136,6 +148,10 @@ def replay_evidence_verifications(
                 str(event.get("locator") or ""),
                 str(event.get("content_hash") or ""),
                 str(event.get("retrieval_context") or ""),
+                int(event.get("quote_start_line") or 0),
+                int(event.get("quote_end_line") or 0),
+                int(event.get("quote_start_char") or 0),
+                int(event.get("quote_end_char") or 0),
                 str(event.get("status") or ""),
                 str(event.get("verified_at") or ""),
                 *key_values,

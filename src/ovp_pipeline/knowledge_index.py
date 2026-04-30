@@ -141,6 +141,10 @@ TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "locator",
         "content_hash",
         "retrieval_context",
+        "quote_start_line",
+        "quote_end_line",
+        "quote_start_char",
+        "quote_end_char",
         "status",
         "verified_at",
     ),
@@ -154,6 +158,10 @@ TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "locator",
         "content_hash",
         "retrieval_context",
+        "quote_start_line",
+        "quote_end_line",
+        "quote_start_char",
+        "quote_end_char",
         "status",
         "verified_at",
     ),
@@ -532,8 +540,29 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
         "timeline_events": {"slug", "event_date", "event_type", "heading", "payload_json"},
         "objects": {"pack"},
         "claims": {"pack"},
-        "claim_evidence": {"pack", "locator", "content_hash", "status", "verified_at"},
-        "relations": {"pack", "quote_text", "locator", "content_hash", "status", "verified_at"},
+        "claim_evidence": {
+            "pack",
+            "locator",
+            "content_hash",
+            "quote_start_line",
+            "quote_end_line",
+            "quote_start_char",
+            "quote_end_char",
+            "status",
+            "verified_at",
+        },
+        "relations": {
+            "pack",
+            "quote_text",
+            "locator",
+            "content_hash",
+            "quote_start_line",
+            "quote_end_line",
+            "quote_start_char",
+            "quote_end_char",
+            "status",
+            "verified_at",
+        },
         "compiled_summaries": {"pack"},
         "contradictions": {"pack"},
         "graph_edges": {"pack"},
@@ -745,9 +774,11 @@ def rebuild_knowledge_index(
                 """
                 INSERT INTO claim_evidence (
                     pack, claim_id, source_slug, evidence_kind, quote_text,
-                    locator, content_hash, retrieval_context, status, verified_at
+                    locator, content_hash, retrieval_context,
+                    quote_start_line, quote_end_line, quote_start_char, quote_end_char,
+                    status, verified_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [row.to_row() for row in truth_projection.claim_evidence],
             )
@@ -755,9 +786,11 @@ def rebuild_knowledge_index(
                 """
                 INSERT INTO relations (
                     pack, source_object_id, target_object_id, relation_type, evidence_source_slug,
-                    quote_text, locator, content_hash, retrieval_context, status, verified_at
+                    quote_text, locator, content_hash, retrieval_context,
+                    quote_start_line, quote_end_line, quote_start_char, quote_end_char,
+                    status, verified_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [row.to_row() for row in truth_projection.relations],
             )

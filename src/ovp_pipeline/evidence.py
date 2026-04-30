@@ -408,6 +408,43 @@ def compute_retrieval_context(
     return text[start:end]
 
 
+def compute_evidence_span(
+    source_path: Path | str,
+    quote_text: str,
+    *,
+    vault_dir: Path | str | None = None,
+) -> dict[str, int]:
+    """Return 1-based line span and 0-based char offsets for a verbatim quote."""
+    empty = {
+        "quote_start_line": 0,
+        "quote_end_line": 0,
+        "quote_start_char": 0,
+        "quote_end_char": 0,
+    }
+    if not quote_text:
+        return empty
+    path = _resolve_source_path(source_path, vault_dir)
+    if not path.exists() or not path.is_file():
+        return empty
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return empty
+    needle = quote_text.strip()
+    if not needle:
+        return empty
+    start = text.find(needle)
+    if start == -1:
+        return empty
+    end = start + len(needle)
+    return {
+        "quote_start_line": text.count("\n", 0, start) + 1,
+        "quote_end_line": text.count("\n", 0, max(start, end - 1)) + 1,
+        "quote_start_char": start,
+        "quote_end_char": end,
+    }
+
+
 def verify_evidence_row(
     row: dict[str, Any],
     vault_dir: Path | str,

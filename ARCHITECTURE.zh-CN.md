@@ -768,11 +768,11 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 
 仍然太隐式的部分：
 
-- canonical artifact contract 还不够一等公民化。
+- canonical artifact contract 仍需继续一等公民化；derived evidence rows 已有第一版 line/char span schema，但 factual evidence_kind enforcement 和 claim lifecycle 字段仍需加强。
 - Layer 4 子轴还没有完全反映到代码结构。
 - projection labels 已经贯穿核心 access payload 和 materialized reader artifacts；doctor/export enforcement 以及未来新增 surface 还需要持续消费这些标注。
 - projection lifecycle marker 还没有明确区分 metadata_only / full_rebuild / semantic_reindex。
-- dashboard/search hot path、workflow wiring 和 source routing preview 已经有第一批 fitness checks；evidence completeness、projection replay、import-boundary checks 仍未完成。
+- dashboard/search hot path、workflow wiring、source routing preview、evidence span backfill 和 candidate risk 已经有第一批 fitness checks；更深的 evidence completeness、projection replay、import-boundary checks 仍未完成。
 - context assembly recipes 还需要收束。
 - governance / resolver contracts 还需要显式化。
 - schema versioning 和 projection compatibility 还需要工程化。
@@ -786,13 +786,12 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 优先顺序：
 
 1. 新增 access surface 时必须继续带 projection metadata，并补 doctor/export checks 验证标注存在。
-2. 继续做 reader-first Layer 3：search 和更深的 per-kind object layout。
-3. 补 evidence span 和 factual evidence completeness checks。
-4. 补 candidate risk tiers，再扩大自动 promotion。
-5. 引入结构化 ProjectionRepairMarker。
-6. 给 Authority 和 derived projection state 增加 schema version 字段。
-7. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
-8. 预留 semantic_reindex lifecycle kind，但不提前锁定 LanceDB 或其它 backend。
+2. 继续做 reader-first Layer 3：用新的 evidence span / risk tier 推进更深的 per-kind object layout 和 search。
+3. 在扩大自动 promotion 前，补更严格的 factual evidence completeness checks。
+4. 引入结构化 ProjectionRepairMarker。
+5. 给 Authority 和 derived projection state 增加 schema version 字段。
+6. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
+7. 预留 semantic_reindex lifecycle kind，但不提前锁定 LanceDB 或其它 backend。
 
 ## Appendix: Backlog Mapping
 
@@ -804,8 +803,8 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 | Dashboard/search hot-path audit | `BL-003`, `KSR-015` PR #77 已交付 |
 | Workflow wiring eval suite | `BL-004`, `KSR-026` PR #77 已交付 |
 | Article routing preview | `BL-005`, `KSR-014` 已在 PR #81 交付 |
-| Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` |
-| Candidate risk layering | `BL-007`, `KSR-003` |
+| Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` 已在 PR #82 交付 |
+| Candidate risk layering | `BL-007`, `KSR-003` 已在 PR #82 交付 |
 | Reader-first access surfaces | `BL-001`；`BL-008` partial、`BL-009` 已在 PR #79 交付；`BL-010` 已在 PR #80 交付 |
 | Projection repair lifecycle | `BL-020` |
 | Schema versioning and migration trigger | `BL-021` |

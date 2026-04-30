@@ -104,6 +104,19 @@ _BRIEFING_EVOLUTION_PRIORITY = {
     "confirms": 70,
     "enriches": 60,
 }
+_CANDIDATE_STRONG_EVIDENCE_COUNT = 3
+_CANDIDATE_STRONG_SOURCE_COUNT = 2
+_CANDIDATE_SENSITIVE_TERMS = (
+    "credential",
+    "medical",
+    "health",
+    "legal",
+    "finance",
+    "permission",
+    "personal",
+    "private",
+    "user profile",
+)
 _NOTE_CAPTURE_EVENT_TYPES = frozenset(
     {
         "source_staged_for_processing",
@@ -778,7 +791,10 @@ def _candidate_review_suggestion(
     action = "keep_as_candidate"
     if found_ambiguous_active:
         action = "keep_as_candidate"
-    elif entry.source_count >= 2 or entry.evidence_count >= 3:
+    elif (
+        entry.source_count >= _CANDIDATE_STRONG_SOURCE_COUNT
+        or entry.evidence_count >= _CANDIDATE_STRONG_EVIDENCE_COUNT
+    ):
         if similar and similar[0][1] >= 0.7:
             action = "merge_as_alias"
         else:
@@ -786,6 +802,80 @@ def _candidate_review_suggestion(
     elif similar and similar[0][1] >= 0.8:
         action = "merge_as_alias"
     return action, similar
+
+
+def _candidate_risk_layer(
+    entry: Any,
+    *,
+    suggested_action: str,
+    similar_existing: list[tuple[Any, float]],
+) -> dict[str, Any]:
+    source_count = int(getattr(entry, "source_count", 0) or 0)
+    evidence_count = int(getattr(entry, "evidence_count", 0) or 0)
+    if (
+        evidence_count >= _CANDIDATE_STRONG_EVIDENCE_COUNT
+        or source_count >= _CANDIDATE_STRONG_SOURCE_COUNT
+    ):
+        evidence_strength = "strong"
+    elif evidence_count > 0 or source_count > 0:
+        evidence_strength = "partial"
+    else:
+        evidence_strength = "weak"
+
+    identity_ambiguity = "clear"
+    if len(similar_existing) >= 2 and suggested_action == "keep_as_candidate":
+        identity_ambiguity = "ambiguous"
+    elif similar_existing:
+        identity_ambiguity = "possible_duplicate"
+
+    sensitivity_text = " ".join(
+        [
+            str(getattr(entry, "title", "") or ""),
+            str(getattr(entry, "definition", "") or ""),
+            str(getattr(entry, "area", "") or ""),
+        ]
+    ).lower()
+    sensitivity = "sensitive" if any(term in sensitivity_text for term in _CANDIDATE_SENSITIVE_TERMS) else "normal"
+    impact = {
+        "promote_to_active": "canonical_write",
+        "merge_as_alias": "identity_merge",
+        "keep_as_candidate": "review_only",
+    }.get(suggested_action, "review_only")
+
+    reasons: list[str] = []
+    if evidence_strength == "weak":
+        reasons.append("weak_evidence")
+    elif evidence_strength == "partial":
+        reasons.append("partial_evidence")
+    if identity_ambiguity == "ambiguous":
+        reasons.append("identity_ambiguous")
+    elif identity_ambiguity == "possible_duplicate":
+        reasons.append("possible_duplicate")
+    if sensitivity == "sensitive":
+        reasons.append("sensitive_subject")
+    if impact in {"canonical_write", "identity_merge"}:
+        reasons.append("canonical_impact")
+
+    tier = "low"
+    if identity_ambiguity == "ambiguous" or (sensitivity == "sensitive" and impact != "review_only"):
+        tier = "high"
+    elif (
+        evidence_strength in {"weak", "partial"}
+        or identity_ambiguity == "possible_duplicate"
+        or impact in {"canonical_write", "identity_merge"}
+    ):
+        tier = "medium"
+
+    return {
+        "tier": tier,
+        "reasons": reasons,
+        "factors": {
+            "evidence_strength": evidence_strength,
+            "identity_ambiguity": identity_ambiguity,
+            "sensitivity": sensitivity,
+            "impact": impact,
+        },
+    }
 
 
 def list_candidate_concepts(
@@ -823,6 +913,11 @@ def list_candidate_concepts(
 
     for entry in page_candidates:
         suggested_action, similar_existing = _candidate_review_suggestion(registry, entry)
+        risk = _candidate_risk_layer(
+            entry,
+            suggested_action=suggested_action,
+            similar_existing=similar_existing,
+        )
         candidate_path = candidate_file_path(resolved_vault, entry.slug)
         candidate_rel = ""
         candidate_note_path = ""
@@ -845,6 +940,7 @@ def list_candidate_concepts(
                 "candidate_path": candidate_rel,
                 "candidate_note_path": candidate_note_path,
                 "suggested_action": suggested_action,
+                "risk": risk,
                 "similar_existing": [
                     {
                         "slug": similar.slug,
@@ -857,6 +953,13 @@ def list_candidate_concepts(
             }
         )
 
+    risk_counts = {"low": 0, "medium": 0, "high": 0}
+    for item in items:
+        tier = str(item.get("risk", {}).get("tier") or "low")
+        if tier not in risk_counts:
+            continue
+        risk_counts[tier] += 1
+
     return {
         "screen": "candidates/browser",
         "query": query or "",
@@ -864,6 +967,7 @@ def list_candidate_concepts(
         "offset": offset,
         "count": len(filtered_candidates),
         "status_counts": {"candidate": len(filtered_candidates)},
+        "risk_counts": risk_counts,
         "items": items,
     }
 
@@ -1239,7 +1343,8 @@ def _claim_evidence_map(
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
             f"""
-            SELECT claim_id, source_slug, evidence_kind, quote_text
+            SELECT claim_id, source_slug, evidence_kind, quote_text,
+                   quote_start_line, quote_end_line, quote_start_char, quote_end_char
             FROM claim_evidence
             WHERE claim_id IN ({placeholders})
             ORDER BY claim_id, source_slug, evidence_kind
@@ -1247,12 +1352,17 @@ def _claim_evidence_map(
             tuple(normalized_claim_ids),
         ).fetchall()
     evidence_map: dict[str, list[dict[str, Any]]] = {}
-    for claim_id, source_slug, evidence_kind, quote_text in rows:
+    for row in rows:
+        claim_id, source_slug, evidence_kind, quote_text = row[:4]
         evidence_map.setdefault(claim_id, []).append(
             {
                 "source_slug": source_slug,
                 "evidence_kind": evidence_kind,
                 "quote_text": quote_text or "",
+                "quote_start_line": int(row[4] or 0),
+                "quote_end_line": int(row[5] or 0),
+                "quote_start_char": int(row[6] or 0),
+                "quote_end_char": int(row[7] or 0),
             }
         )
     return evidence_map
@@ -1898,7 +2008,8 @@ def get_object_detail(
         ).fetchall()
         evidence_rows = conn.execute(
             """
-            SELECT claim_id, source_slug, evidence_kind, quote_text
+            SELECT claim_id, source_slug, evidence_kind, quote_text,
+                   quote_start_line, quote_end_line, quote_start_char, quote_end_char
             FROM claim_evidence
             WHERE claim_id IN (
                 SELECT claim_id FROM claims WHERE pack = ? AND object_id = ?
@@ -2009,6 +2120,10 @@ def get_object_detail(
                 "source_slug": row[1],
                 "evidence_kind": row[2],
                 "quote_text": row[3],
+                "quote_start_line": int(row[4] or 0),
+                "quote_end_line": int(row[5] or 0),
+                "quote_start_char": int(row[6] or 0),
+                "quote_end_char": int(row[7] or 0),
             }
             for row in evidence_rows
         ],

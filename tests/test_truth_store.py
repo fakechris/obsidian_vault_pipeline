@@ -3,6 +3,49 @@ from __future__ import annotations
 import sqlite3
 
 
+def test_truth_store_projection_accepts_legacy_evidence_tuples():
+    from ovp_pipeline.truth_store import TruthStoreProjection
+
+    projection = TruthStoreProjection(
+        claim_evidence=[
+            (
+                "research-tech",
+                "claim-1",
+                "source",
+                "page_summary",
+                "quote",
+                "locator",
+                "hash",
+                "context",
+                "verified",
+                "2026-04-30T00:00:00Z",
+            )
+        ],
+        relations=[
+            (
+                "research-tech",
+                "source",
+                "target",
+                "uses",
+                "source",
+                "quote",
+                "locator",
+                "hash",
+                "context",
+                "verified",
+                "2026-04-30T00:00:00Z",
+            )
+        ],
+    )
+
+    claim = projection.claim_evidence[0]
+    relation = projection.relations[0]
+    assert claim.status == "verified"
+    assert claim.quote_start_line == 0
+    assert relation.status == "verified"
+    assert relation.quote_start_line == 0
+
+
 def test_rebuild_knowledge_index_populates_truth_store_tables(temp_vault):
     from ovp_pipeline.knowledge_index import rebuild_knowledge_index
     from ovp_pipeline.runtime import VaultLayout
