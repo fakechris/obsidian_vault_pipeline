@@ -33,7 +33,7 @@ OVP 正在从 document-processing pipeline 变成：
 | M0 Pipeline And Pack Foundation | Done | CLI、source lifecycle、pack/profile runtime、`knowledge.db`、第一段 source-lifecycle idempotency |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI、candidates、signals/actions、contradictions、action worker |
 | M2 Roadmap And README Consolidation | Done | 已合并历史 milestones、compiler roadmap、近期 KSR 输入、reader-product 研究，以及英文主文档结构 |
-| M3 Reader-First Knowledge Atlas | Active | reader home、`/ops` 拆分、object source/backlink rail、visual graph map、按 kind 区分的 object reader lens 已交付；reader search 仍待推进 |
+| M3 Reader-First Knowledge Atlas | Done / iterate | reader home、`/ops` 拆分、object source/backlink rail、visual graph map、按 kind 区分的 object reader lens、reader-oriented search 已交付 |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels、hot-path audit、wiring evals、article routing preview、evidence spans、candidate risk 已交付；更深的 enforcement 仍待推进 |
 | M5 Context Pack And Operational Runtime | Later | session snapshots、context budget、claim leases、provider facade、observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
@@ -52,6 +52,7 @@ OVP 正在从 document-processing pipeline 变成：
 | Candidate risk layering | `BL-007`, `KSR-003` 已在 PR #82 交付 |
 | Kind-aware object pages and backlink rail | `BL-008`、`BL-009` 已通过 PR #79 和 PR #83 交付 |
 | Visual graph MVP | `BL-010` 已在 PR #80 交付 |
+| Reader-oriented search | `BL-011` 已在 PR #84 交付 |
 | Projection repair lifecycle | `BL-020` |
 | Schema versioning and migration trigger | `BL-021` |
 
@@ -59,9 +60,9 @@ OVP 正在从 document-processing pipeline 变成：
 
 建议顺序：
 
-1. 实施 `BL-011`：按 kind、summary、evidence、reason 重做 reader-oriented search。
-2. 当 projection repair 和 schema migration 成为运营瓶颈时，回到 `BL-020 + BL-021`。
-3. 当 reader surface 需要更强的复用和 context-pack 闭环时，再进入 `BL-012 + BL-013`。
+1. 回到 `BL-020 + BL-021`：projection repair lifecycle 和 schema migration rebuild trigger。
+2. 当 reader surface 需要更强的复用和 context-pack 闭环时，再进入 `BL-012 + BL-013`。
+3. 当 operational runtime observability 成为下一个瓶颈时，再进入 `BL-014`。
 
 ## 文档规则
 

@@ -1222,21 +1222,58 @@ def _render_search_page(payload: dict) -> str:
             f"&middot; {prev_link} &middot; {next_link}</p>"
         )
 
-    object_items = (
-        "".join(
-            f'<li><a href="{escape(item.get("object_path") or _object_href(item["object_id"], requested_pack=requested_pack))}">{escape(item["title"])}</a> '
-            f'<span class="muted">({escape(item["object_id"])})</span></li>'
-            for item in payload["objects"]
+    def _render_reader_group(group: dict) -> str:
+        items = group.get("items") or []
+        item_html = (
+            "".join(
+                "<li>"
+                f'<a href="{escape(item.get("object_path") or _object_href(item["object_id"], requested_pack=requested_pack))}">{escape(str(item["title"]))}</a>'
+                f"<p>{escape(str(item.get('summary') or 'No compiled summary yet.'))}</p>"
+                f"<p class='muted'>{escape(str(item.get('reason') or 'Matched object text.'))} "
+                f"Evidence: {int(item.get('evidence_count') or 0)}</p>"
+                "</li>"
+                for item in items
+            )
+            or "<li class='muted'>No object hits.</li>"
         )
-        or "<li class='muted'>No object hits.</li>"
+        return (
+            "<section class='card'>"
+            f"<h2>{escape(str(group.get('label') or 'Objects'))}</h2>"
+            f"<p class='muted'>{int(group.get('result_count') or 0)} result(s)</p>"
+            f"<ul class='list-tight'>{item_html}</ul>"
+            "</section>"
+        )
+
+    def _render_source_group(group: dict) -> str:
+        items = group.get("items") or []
+        item_html = (
+            "".join(
+                "<li>"
+                f'<a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(str(item["title"]))}</a> '
+                f'<span class="pill">{escape(str(item["note_type"]))}</span>'
+                f"<p class='muted'>{escape(str(item.get('reason') or 'Matched note title or body.'))}</p>"
+                "</li>"
+                for item in items
+            )
+            or "<li class='muted'>No note hits.</li>"
+        )
+        return (
+            "<section class='card'>"
+            f"<h2>{escape(str(group.get('label') or 'Notes'))}</h2>"
+            f"<p class='muted'>{int(group.get('result_count') or 0)} result(s)</p>"
+            f"<ul class='list-tight'>{item_html}</ul>"
+            "</section>"
+        )
+
+    reader_groups = payload.get("reader_groups") or []
+    source_groups = payload.get("source_groups") or []
+    reader_group_html = (
+        "".join(_render_reader_group(group) for group in reader_groups)
+        or "<section class='card'><h2>Objects</h2><p class='muted'>No object hits.</p></section>"
     )
-    note_items = (
-        "".join(
-            f'<li><a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
-            f'<span class="pill">{escape(item["note_type"])}</span></li>'
-            for item in payload["notes"]
-        )
-        or "<li class='muted'>No note hits.</li>"
+    source_group_html = (
+        "".join(_render_source_group(group) for group in source_groups)
+        or "<section class='card'><h2>Notes</h2><p class='muted'>No note hits.</p></section>"
     )
     showing = (
         f"Showing {payload['object_count']} of {object_total} object hits, "
@@ -1246,7 +1283,7 @@ def _render_search_page(payload: dict) -> str:
         f"Search: {query}",
         "".join(
             [
-                "<h1>Search</h1>",
+                "<h1>Reader Search</h1>",
                 "<form method='get' action='/search'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' /> "
@@ -1256,18 +1293,11 @@ def _render_search_page(payload: dict) -> str:
                 f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> ",
                 "<button type='submit'>Search</button>",
                 "</form>",
-                f"<p class='muted'>{escape(showing)}</p>",
+                f"<p class='muted'>{escape(str(payload.get('reader_summary') or showing))}</p>",
+                "<p class='muted'>Objects are grouped by kind. Notes are grouped by source type.</p>",
                 "<section class='grid two-col'>",
-                "<section class='card'>"
-                f"<h2>Objects</h2>"
-                f"<ul class='list-tight'>{object_items}</ul>"
-                f"{_pager(object_total, 'Objects')}"
-                "</section>",
-                "<section class='card'>"
-                f"<h2>Notes</h2>"
-                f"<ul class='list-tight'>{note_items}</ul>"
-                f"{_pager(note_total, 'Notes')}"
-                "</section>",
+                f"<div class='section-stack'>{reader_group_html}{_pager(object_total, 'Objects')}</div>",
+                f"<div class='section-stack'>{source_group_html}{_pager(note_total, 'Notes')}</div>",
                 "</section>",
             ]
         ),

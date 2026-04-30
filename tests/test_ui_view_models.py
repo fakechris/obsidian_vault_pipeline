@@ -408,6 +408,34 @@ def test_build_object_page_payload_adds_kind_specific_reader_lens(temp_vault):
     }
 
 
+def test_build_search_payload_groups_results_for_readers(temp_vault):
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_search_payload
+
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE objects SET object_kind = 'concept' WHERE object_id = 'alpha'")
+        conn.commit()
+
+    payload = build_search_payload(temp_vault, query="alpha")
+
+    assert payload["screen"] == "search/results"
+    assert payload["reader_summary"] == "1 concept, 2 evergreens, 3 notes"
+    assert payload["reader_groups"][0]["kind"] == "concept"
+    assert payload["reader_groups"][0]["label"] == "Concepts"
+    assert payload["reader_groups"][0]["items"][0]["title"] == "Alpha"
+    assert payload["reader_groups"][0]["items"][0]["summary"] == (
+        "Alpha supports local-first execution."
+    )
+    assert payload["reader_groups"][0]["items"][0]["evidence_count"] == 1
+    assert payload["reader_groups"][0]["items"][0]["reason"] == (
+        "Matched title, summary, and evidence-backed claims."
+    )
+    assert {group["label"] for group in payload["source_groups"]} >= {"Evergreen Notes"}
+    assert payload["source_groups"][0]["items"][0]["reason"] == "Matched note title or body."
+
+
 def test_build_object_page_payload_degrades_when_source_excerpt_is_not_utf8(temp_vault):
     from ovp_pipeline.ui.view_models import build_object_page_payload
 

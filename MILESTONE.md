@@ -33,7 +33,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 | M0 Pipeline And Pack Foundation | Done | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first source-lifecycle idempotency slice |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and the English-primary docs structure |
-| M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, object source/backlink rail, visual graph map, and kind-specific object reader lenses shipped; reader search remains |
+| M3 Reader-First Knowledge Atlas | Done / iterate | reader home, `/ops` split, object source/backlink rail, visual graph map, kind-specific object reader lenses, and reader-oriented search shipped |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk shipped; deeper enforcement remains |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
@@ -52,6 +52,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 | Candidate risk layering | `BL-007`, `KSR-003` done in PR #82 |
 | Kind-aware object pages and backlink rail | `BL-008` and `BL-009` done through PR #79 and PR #83 |
 | Visual graph MVP | `BL-010` done in PR #80 |
+| Reader-oriented search | `BL-011` done in PR #84 |
 | Projection repair lifecycle | `BL-020` |
 | Schema versioning and migration trigger | `BL-021` |
 
@@ -59,9 +60,9 @@ That means the user-facing product should make compiled knowledge easy to read f
 
 Recommended order:
 
-1. Implement `BL-011`: reader-oriented search grouped by kind, summary, evidence, and reason.
-2. Return to `BL-020 + BL-021` when projection repair and schema migration need operational hardening.
-3. Move into `BL-012 + BL-013` once the reader surfaces need stronger reuse and context-pack loops.
+1. Return to `BL-020 + BL-021` for projection repair and schema-migration rebuild triggers.
+2. Move into `BL-012 + BL-013` once the reader surfaces need stronger reuse and context-pack loops.
+3. Pick up `BL-014` when operational runtime observability becomes the next bottleneck.
 
 ## Documentation Rules
 

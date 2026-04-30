@@ -94,7 +94,7 @@ Current milestone sequence:
 | M0 Pipeline And Pack Foundation | Complete | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first KSR-013 slice |
 | M1 Operator Workbench And Review Runtime | Complete enough | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Complete | merged historical milestones, compiler roadmap, recent KSR input, and reader-product research |
-| M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, object source/backlink rail, visual graph map, and kind-specific object reader lenses shipped; reader search remains |
+| M3 Reader-First Knowledge Atlas | Done / iterate | reader home, `/ops` split, object source/backlink rail, visual graph map, kind-specific object reader lenses, and reader-oriented search shipped |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk tiers have shipped; deeper enforcement remains |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facades, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
@@ -103,8 +103,8 @@ Current milestone sequence:
 Current active backlog focus:
 
 - Shipped: `KSR-001` evidence spans, `KSR-002` projection labels, `KSR-003` candidate risk tiers, `KSR-014` article routing preview, `KSR-015` dashboard/search hot-path audit, `KSR-018` markdown-aware evidence span backfill, `KSR-026` workflow wiring eval suite.
-- Product shipped: readable object page profiles, source/backlink rail, kind-specific reader lenses, and visual `/graph` map.
-- Next: reader-oriented search grouped by kind, evidence, and reason.
+- Product shipped: readable object page profiles, source/backlink rail, kind-specific reader lenses, visual `/graph` map, and reader-oriented search grouped by kind, evidence, and reason.
+- Next: projection repair lifecycle and schema-version rebuild triggers.
 - Product track: reader-first Knowledge Atlas stays a projection layer, not a new state system.
 
 ## Domain Packs

@@ -964,6 +964,168 @@ def _build_related_cluster_groups(related_clusters: list[dict[str, Any]]) -> lis
     )
 
 
+def _plural_reader_label(label: str) -> str:
+    if label.endswith("y"):
+        return f"{label[:-1]}ies"
+    if label.endswith("s"):
+        return label
+    return f"{label}s"
+
+
+def _search_match_reason(
+    *,
+    query: str,
+    title: str,
+    summary: str,
+    evidence_count: int,
+) -> str:
+    normalized_query = query.strip().lower()
+    title_match = bool(normalized_query and normalized_query in title.lower())
+    summary_match = bool(normalized_query and normalized_query in summary.lower())
+    if title_match and summary_match and evidence_count > 0:
+        return "Matched title, summary, and evidence-backed claims."
+    if title_match and evidence_count > 0:
+        return "Matched title and evidence-backed claims."
+    if summary_match and evidence_count > 0:
+        return "Matched summary and evidence-backed claims."
+    if title_match:
+        return "Matched title."
+    if summary_match:
+        return "Matched summary."
+    if evidence_count > 0:
+        return "Matched evidence-backed claims."
+    return "Matched object text."
+
+
+def _search_note_type_label(note_type: str) -> str:
+    normalized = (note_type or "note").replace("_", " ").strip().title()
+    if not normalized:
+        normalized = "Note"
+    if normalized.endswith("Note") or normalized.endswith("Notes"):
+        return _plural_reader_label(normalized)
+    return f"{normalized} Notes"
+
+
+def _reader_summary(
+    reader_groups: list[dict[str, Any]],
+    source_groups: list[dict[str, Any]],
+) -> str:
+    object_parts = [
+        f"{group['result_count']} {str(group['kind']).replace('_', ' ')}"
+        + ("" if int(group["result_count"]) == 1 else "s")
+        for group in reader_groups
+    ]
+    note_count = sum(int(group["result_count"]) for group in source_groups)
+    if note_count:
+        object_parts.append(f"{note_count} note" + ("" if note_count == 1 else "s"))
+    return ", ".join(object_parts) if object_parts else "No reader results"
+
+
+def _build_reader_search_projection(
+    vault_dir: Path | str,
+    *,
+    query: str,
+    objects: list[dict[str, Any]],
+    notes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    object_ids = [str(item["object_id"]) for item in objects]
+    row_packs = sorted({str(item.get("row_pack") or item.get("pack") or "") for item in objects})
+    summary_by_object: dict[tuple[str, str], str] = {}
+    evidence_count_by_object: dict[tuple[str, str], int] = {}
+    if object_ids:
+        db_path = _db_path(vault_dir)
+        object_placeholders = ",".join("?" for _ in object_ids)
+        pack_placeholders = ",".join("?" for _ in row_packs)
+        with sqlite3.connect(db_path) as conn:
+            summary_by_object = {
+                (str(object_id), str(pack)): str(summary_text or "")
+                for object_id, pack, summary_text in conn.execute(
+                    f"""
+                    SELECT object_id, pack, summary_text
+                    FROM compiled_summaries
+                    WHERE object_id IN ({object_placeholders})
+                      AND pack IN ({pack_placeholders})
+                    """,
+                    (*object_ids, *row_packs),
+                ).fetchall()
+            }
+            evidence_count_by_object = {
+                (str(object_id), str(pack)): int(count)
+                for object_id, pack, count in conn.execute(
+                    f"""
+                    SELECT claims.object_id, claims.pack, COUNT(claim_evidence.claim_id)
+                    FROM claims
+                    LEFT JOIN claim_evidence
+                      ON claim_evidence.pack = claims.pack
+                     AND claim_evidence.claim_id = claims.claim_id
+                    WHERE claims.object_id IN ({object_placeholders})
+                      AND claims.pack IN ({pack_placeholders})
+                    GROUP BY claims.object_id, claims.pack
+                    """,
+                    (*object_ids, *row_packs),
+                ).fetchall()
+            }
+
+    grouped_objects: dict[str, dict[str, Any]] = {}
+    for item in objects:
+        object_kind = str(item.get("object_kind") or "object").strip().lower() or "object"
+        group = grouped_objects.setdefault(
+            object_kind,
+            {
+                "kind": object_kind,
+                "label": _plural_reader_label(_object_kind_label(object_kind)),
+                "items": [],
+                "result_count": 0,
+            },
+        )
+        object_id = str(item["object_id"])
+        row_pack = str(item.get("row_pack") or item.get("pack") or "")
+        summary = summary_by_object.get((object_id, row_pack), "")
+        evidence_count = evidence_count_by_object.get((object_id, row_pack), 0)
+        group["items"].append(
+            {
+                **item,
+                "summary": summary or "No compiled summary yet.",
+                "evidence_count": evidence_count,
+                "reason": _search_match_reason(
+                    query=query,
+                    title=str(item.get("title") or ""),
+                    summary=summary,
+                    evidence_count=evidence_count,
+                ),
+            }
+        )
+        group["result_count"] += 1
+
+    source_groups_by_type: dict[str, dict[str, Any]] = {}
+    for item in notes:
+        note_type = str(item.get("note_type") or "note").strip().lower() or "note"
+        group = source_groups_by_type.setdefault(
+            note_type,
+            {
+                "kind": note_type,
+                "label": _search_note_type_label(note_type),
+                "items": [],
+                "result_count": 0,
+            },
+        )
+        group["items"].append(
+            {
+                **item,
+                "reason": "Matched note title or body.",
+            }
+        )
+        group["result_count"] += 1
+
+    reader_groups = list(grouped_objects.values())
+    source_groups = list(source_groups_by_type.values())
+    return {
+        "reader_groups": reader_groups,
+        "source_groups": source_groups,
+        "reader_summary": _reader_summary(reader_groups, source_groups),
+    }
+
+
 def _build_reading_routes(related_clusters: list[dict[str, Any]]) -> list[dict[str, Any]]:
     route_specs = [
         (
@@ -4278,6 +4440,32 @@ def build_search_payload(
         object_offset=offset,
         note_offset=offset,
     )
+    objects = [
+        {
+            **item,
+            "object_path": _scoped_path(
+                f"/object?id={quote(str(item['object_id']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in results["objects"]
+    ]
+    notes = [
+        {
+            **item,
+            "note_path": _scoped_path(
+                f"/note?path={quote(str(item['path']), safe='')}",
+                pack_name=requested_pack,
+            ),
+        }
+        for item in results["notes"]
+    ]
+    reader_projection = _build_reader_search_projection(
+        vault_dir,
+        query=query,
+        objects=objects,
+        notes=notes,
+    )
     return {
         "screen": "search/results",
         "requested_pack": requested_pack,
@@ -4288,26 +4476,9 @@ def build_search_payload(
             derived_from=("knowledge.db.objects", "knowledge.db.pages_index"),
         ),
         **results,
-        "objects": [
-            {
-                **item,
-                "object_path": _scoped_path(
-                    f"/object?id={quote(str(item['object_id']), safe='')}",
-                    pack_name=requested_pack,
-                ),
-            }
-            for item in results["objects"]
-        ],
-        "notes": [
-            {
-                **item,
-                "note_path": _scoped_path(
-                    f"/note?path={quote(str(item['path']), safe='')}",
-                    pack_name=requested_pack,
-                ),
-            }
-            for item in results["notes"]
-        ],
+        "objects": objects,
+        "notes": notes,
+        **reader_projection,
         "object_count": len(results["objects"]),
         "note_count": len(results["notes"]),
         "page": page,

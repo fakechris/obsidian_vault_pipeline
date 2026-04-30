@@ -694,6 +694,38 @@ def test_ui_server_search_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
 
 
+def test_ui_server_search_page_renders_reader_grouped_results(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.runtime import VaultLayout
+
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE objects SET object_kind = 'concept' WHERE object_id = 'alpha'")
+        conn.commit()
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/search?q=alpha")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "<h1>Reader Search</h1>" in body
+    assert "<h2>Concepts</h2>" in body
+    assert "Alpha supports local-first execution." in body
+    assert "Matched title, summary, and evidence-backed claims." in body
+    assert "Evidence: 1" in body
+    assert "<h2>Evergreen Notes</h2>" in body
+
+
 def test_ui_server_object_endpoint_returns_detail_payload(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
 
