@@ -677,6 +677,7 @@ Main gaps:
 - Layer 4 fitness checks now cover the first hot-path, workflow-wiring, source routing preview, evidence span backfill, and candidate risk cases; deeper evidence completeness, projection replay, and import-boundary checks are still open.
 - Projection lifecycle markers now have structured schema, scope, lease, supersession, and `knowledge.db` rebuild integration.
 - Schema versioning is wired into projection lifecycle for `knowledge.db`: Authority and projection versions are persisted and stale metadata triggers a full rebuild marker.
+- Working memory is the first budgeted context-pack projection: it records context budget metadata and emits `working_memory` reuse events for selected canonical objects.
 - The reader-first home is now the default entry; object pages have reader profiles, source rails, and kind-specific reader lenses; `/graph` has a first spatial map projection; `/search` groups reader results by kind, summary, evidence count, and match reason.
 
 ## 18. Near-Term Architecture Actions
@@ -686,7 +687,7 @@ Recommended order:
 1. Keep projection metadata attached to new access surfaces and add doctor/export checks that verify the labels are present.
 2. Add stricter factual evidence completeness checks before expanding automatic promotion.
 3. Expand doctor/export checks to verify projection marker replay and projection labels together.
-4. Move trusted reuse events into the reader/context-pack loop.
+4. Continue the trusted reuse/context-pack loop with session snapshots and an OVP prime input.
 5. Keep future projection backends on the same metadata contract before adding semantic reindex workers.
 
 ## Appendix: Backlog Mapping
@@ -703,5 +704,6 @@ The architecture should not depend on backlog IDs to be valid. The table below i
 | Candidate risk layering | `BL-007`, `KSR-003` done in PR #82 |
 | Reader-first access surfaces | `BL-001`; `BL-008` and `BL-009` done through PR #79 and PR #83; `BL-010` done in PR #80 |
 | Reader-oriented search | `BL-011` done in PR #84 |
+| Trusted reuse / context-pack loop | `BL-012` and `BL-013` partial in PR #89 |
 | Projection repair lifecycle | `BL-020` done in PR #87 |
 | Schema versioning and migration trigger | `BL-021` done in PR #87 plus PR #88 |

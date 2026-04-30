@@ -102,7 +102,7 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 
 - 已交付：`KSR-001` Evidence span 化、`KSR-002` Projection 标注、`KSR-003` Candidate 风险分层、`KSR-014` Article routing preview、`KSR-015` Dashboard/search hot-path audit、`KSR-018` Markdown-aware evidence span backfill、`KSR-026` Workflow wiring eval suite，以及第一版结构化 projection repair marker lifecycle。
 - 产品侧已交付：readable object page profile、source/backlink rail、按 kind 区分的 reader lens、visual `/graph` map，以及按 kind、evidence、reason 组织的 reader-oriented search。
-- 下一步：trusted reuse event 和 context-pack loop。
+- 下一步：继续 trusted reuse/context-pack loop，补 session snapshot 和 OVP prime input。
 - 产品线：Reader-first Knowledge Atlas 作为 projection layer 实现，不另建状态系统。
 
 ## Domain Packs

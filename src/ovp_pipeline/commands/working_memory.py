@@ -1,9 +1,9 @@
 """Phase 38 — Working Memory daily distill.
 
 Writes a single markdown file under ``60-Logs/working-memory/YYYY-MM-DD.md``
-that summarizes the state of the vault at a moment in time. Designed to be
-re-run cheaply (idempotent overwrite of today's file) so the autopilot daemon
-can call it once a day.
+that summarizes the state of the vault at a moment in time. The file itself is
+an idempotent overwrite; selected canonical objects also append reuse events so
+context-pack consumption remains auditable.
 
 Sections:
 
@@ -39,10 +39,14 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from ..packs.loader import DEFAULT_WORKFLOW_PACK_NAME
     from ..projection_labels import frontmatter_projection_fields
+    from ..reuse_emitter import emit_reuse_events
     from ..runtime import VaultLayout, resolve_vault_dir
 except ImportError:
+    from ovp_pipeline.packs.loader import DEFAULT_WORKFLOW_PACK_NAME  # type: ignore
     from ovp_pipeline.projection_labels import frontmatter_projection_fields  # type: ignore
+    from ovp_pipeline.reuse_emitter import emit_reuse_events  # type: ignore
     from ovp_pipeline.runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
 
@@ -50,6 +54,7 @@ WORKING_MEMORY_DIR = ("60-Logs", "working-memory")
 DEFAULT_TOP_N = 5
 DEFAULT_LOOKBACK_HOURS = 24
 DEFAULT_TOP_OF_MIND_LOOKBACK_DAYS = 7
+DEFAULT_CONTEXT_BUDGET_TOKENS = 1200
 
 
 def _parse_ts(value: object) -> datetime | None:
@@ -199,9 +204,47 @@ def _pulse_highlights(layout: VaultLayout, *, since: datetime) -> Counter:
     return counts
 
 
+def _estimate_tokens(text: str) -> int:
+    stripped = text.strip()
+    if not stripped:
+        return 0
+    return max(1, (len(stripped) + 3) // 4)
+
+
+def _top_of_mind_line(row: dict[str, Any]) -> str:
+    return (
+        f"- [[{row['slug']}]] — {row['citation_count']} citations, "
+        f"{row['reuse_count']} reuses"
+    )
+
+
+def _select_top_of_mind_for_budget(
+    rows: list[dict[str, Any]],
+    *,
+    context_budget_tokens: int,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    budget = max(0, int(context_budget_tokens))
+    selected: list[dict[str, Any]] = []
+    used_tokens = 0
+    for row in rows:
+        cost = _estimate_tokens(_top_of_mind_line(row))
+        if used_tokens + cost > budget:
+            continue
+        selected.append(row)
+        used_tokens += cost
+    return selected, {
+        "budget_tokens": budget,
+        "selected_tokens": used_tokens,
+        "remaining_tokens": max(0, budget - used_tokens),
+        "selected_objects": len(selected),
+        "omitted_objects": max(0, len(rows) - len(selected)),
+    }
+
+
 def _render(
     *,
     target_date: _date_cls,
+    context_budget: dict[str, int],
     top_of_mind: list[dict[str, Any]],
     fresh_crystals: list[dict[str, Any]],
     pending_decisions: list[str],
@@ -211,13 +254,18 @@ def _render(
     sections: list[str] = []
     sections.append(f"# Working Memory — {target_date.isoformat()}\n")
 
+    sections.append("## Context Budget\n")
+    sections.append(f"- Budget: {context_budget['budget_tokens']} tokens")
+    sections.append(f"- Selected: {context_budget['selected_tokens']} tokens")
+    sections.append(f"- Remaining: {context_budget['remaining_tokens']} tokens")
+    sections.append(f"- Selected objects: {context_budget['selected_objects']}")
+    sections.append(f"- Omitted by budget: {context_budget['omitted_objects']}")
+    sections.append("")
+
     sections.append("## Top of Mind\n")
     if top_of_mind:
         for row in top_of_mind:
-            sections.append(
-                f"- [[{row['slug']}]] — {row['citation_count']} citations, "
-                f"{row['reuse_count']} reuses"
-            )
+            sections.append(_top_of_mind_line(row))
     else:
         sections.append("- (none)")
     sections.append("")
@@ -268,6 +316,7 @@ def build_working_memory(
     target_date: _date_cls | None = None,
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS,
     top_n: int = DEFAULT_TOP_N,
+    context_budget_tokens: int = DEFAULT_CONTEXT_BUDGET_TOKENS,
     now: datetime | None = None,
 ) -> Path:
     """Materialize the working-memory file for ``target_date``.
@@ -285,9 +334,15 @@ def build_working_memory(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{target_date.isoformat()}.md"
 
+    top_of_mind_candidates = _top_of_mind(layout, top_n=top_n, now=now)
+    top_of_mind, context_budget = _select_top_of_mind_for_budget(
+        top_of_mind_candidates,
+        context_budget_tokens=context_budget_tokens,
+    )
     body = _render(
         target_date=target_date,
-        top_of_mind=_top_of_mind(layout, top_n=top_n, now=now),
+        context_budget=context_budget,
+        top_of_mind=top_of_mind,
         fresh_crystals=_fresh_crystals(vault_dir, since=since),
         pending_decisions=_pending_decisions(vault_dir),
         evolves_today=_evolves_today(layout, since=since),
@@ -297,6 +352,10 @@ def build_working_memory(
         "---\n"
         "type: working_memory\n"
         f"date: {target_date.isoformat()}\n"
+        f"context_budget_tokens: {context_budget['budget_tokens']}\n"
+        f"context_selected_tokens: {context_budget['selected_tokens']}\n"
+        f"context_selected_objects: {context_budget['selected_objects']}\n"
+        f"context_omitted_objects: {context_budget['omitted_objects']}\n"
         + "\n".join(
             frontmatter_projection_fields(
                 surface="working_memory",
@@ -310,6 +369,20 @@ def build_working_memory(
         + "\n---\n\n"
     )
     output_path.write_text(frontmatter + body, encoding="utf-8")
+    selected_slugs = [str(row["slug"]) for row in top_of_mind if row.get("slug")]
+    if selected_slugs:
+        emit_reuse_events(
+            vault_dir,
+            pack=DEFAULT_WORKFLOW_PACK_NAME,
+            slugs=selected_slugs,
+            surface="working_memory",
+            consumer_ref=str(output_path.relative_to(vault_dir)),
+            extra_payload={
+                "context_pack_date": target_date.isoformat(),
+                "context_budget_tokens": context_budget["budget_tokens"],
+                "context_selected_tokens": context_budget["selected_tokens"],
+            },
+        )
     return output_path
 
 
@@ -336,6 +409,12 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_TOP_N,
         help=f"Top-N items per ranked section (default: {DEFAULT_TOP_N})",
     )
+    parser.add_argument(
+        "--budget-tokens",
+        type=int,
+        default=DEFAULT_CONTEXT_BUDGET_TOKENS,
+        help=f"Approximate context budget for selected objects (default: {DEFAULT_CONTEXT_BUDGET_TOKENS})",
+    )
     parser.add_argument("--json", action="store_true", help="Print structured summary to stdout.")
     args = parser.parse_args(argv)
 
@@ -348,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         target_date=target_date,
         lookback_hours=args.lookback_hours,
         top_n=args.top_n,
+        context_budget_tokens=args.budget_tokens,
     )
 
     if args.json:

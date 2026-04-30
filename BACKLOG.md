@@ -43,8 +43,8 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-009 | P1 | Done | Mention/backlink rail with excerpts, source jumps, and relation context | M3, reader-product note, PR #79 |
 | BL-010 | P1 | Done | Visual `/graph` MVP as a spatial corpus map; analytical clusters remain under `/clusters` for ops/debug | M3, PR #80 |
 | BL-011 | P1 | Done | Reader-oriented search grouped by kind, summary, evidence, and reason | M3/M4, PR #84 |
-| BL-012 | P1 | Later | Trusted reuse event instrumentation for downstream use of accepted/cited knowledge | April 22 roadmap |
-| BL-013 | P1 | Later | Session snapshot / OVP context pack / explicit context budget | M5, KSR-004, KSR-017, KSR-022 |
+| BL-012 | P1 | Partial | Trusted reuse event instrumentation for downstream use of accepted/cited knowledge | April 22 roadmap, PR #89 |
+| BL-013 | P1 | Partial | Session snapshot / OVP context pack / explicit context budget | M5, KSR-004, KSR-017, KSR-022, PR #89 |
 | BL-014 | P1 | Later | Operational runtime graph, claim lease, observability metrics, provider facade | M5, KSR-020, KSR-021, KSR-023, KSR-025 |
 | BL-015 | P1 | Later | Permission layer and claim lifecycle fields | M6, KSR-005, KSR-006 |
 | BL-016 | P2 | Later | Conflict detection regularization, high-risk profile gate, candidate compaction with restore | M6, KSR-007, KSR-008, KSR-024 |
@@ -64,7 +64,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | KSR-001 Evidence span 化 | BL-006 | Done |
 | KSR-002 Projection 标注 | BL-002 | Done |
 | KSR-003 Candidate 风险分层 | BL-007 | Done |
-| KSR-004 Session snapshot/context pack | BL-013 | Later |
+| KSR-004 Session snapshot/context pack | BL-013 | Partial: working-memory context pack exists; session snapshot still open |
 | KSR-005 Permission layer 分离 | BL-015 | Later |
 | KSR-006 Claim lifecycle 字段 | BL-015 | Later |
 | KSR-007 Conflict detection 常规化 | BL-016 | Later |
@@ -77,12 +77,12 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | KSR-014 Article routing preview | BL-005 | Done |
 | KSR-015 Dashboard/search hot-path audit | BL-003 | Done |
 | KSR-016 Hybrid retrieval experiment | BL-019 | Later |
-| KSR-017 Explicit context budget | BL-013 | Later |
+| KSR-017 Explicit context budget | BL-013 | Partial: working-memory context pack records budget, selected tokens, selected objects, and omitted objects |
 | KSR-018 Markdown-aware evidence chunking | BL-006 | Done |
 | KSR-019 Multimodal caption-first ingest | BL-019 | Later |
 | KSR-020 Operational runtime graph | BL-014 | Later |
 | KSR-021 Claim lease for workflow items | BL-014 | Later |
-| KSR-022 OVP prime/context pack | BL-013 | Later |
+| KSR-022 OVP prime/context pack | BL-013 | Partial: first working-memory context-pack loop exists; OVP prime remains open |
 | KSR-023 Pipeline observability metrics | BL-014 | Later |
 | KSR-024 Candidate compaction with restore | BL-016 | Later |
 | KSR-025 Context provider facade | BL-014 | Later |
@@ -99,10 +99,12 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 `BL-001` is shipped in PR #75, `BL-003 + BL-004` are shipped in PR #77, `BL-002` is shipped in PR #78, `BL-009` plus the first `BL-008` slice are shipped in PR #79, `BL-010` is shipped in PR #80, `BL-005` is shipped in PR #81, `BL-006 + BL-007` are implemented in PR #82, `BL-008` is completed in PR #83, `BL-011` is completed in PR #84, the first `BL-020 / BL-021` slice is in PR #87, and BL-021 schema metadata is in PR #88. The default UI now has a reader-first entry point, `/ops` owns the operator dashboard, core access/materialized surfaces carry explicit projection labels, object pages expose readable source/backlink rails and kind-specific reader lenses, `/graph` renders a reader-facing spatial map over graph projections, `/search` groups reader results by kind with summaries, evidence counts, and match reasons, `ovp-absorb --dry-run --json` explains source lifecycle routing before mutation, evidence rows carry line/char spans, candidate review payloads expose risk tiers, and `knowledge.db` rebuilds now leave structured projection repair markers tied to persisted Authority/projection schema metadata.
 
-The next implementation PR should move into trusted reuse and context-pack loops.
+The current context-budget PR starts the trusted reuse/context-pack loop by making `ovp-working-memory` emit explicit budget metadata and `working_memory` reuse events for selected canonical objects.
+
+The next implementation PR should continue BL-012 / BL-013 by turning this daily context pack into a reusable session snapshot / OVP prime input.
 
 Recommended order:
 
-1. BL-012 / BL-013 trusted reuse events and context-pack loops
+1. BL-012 / BL-013 continuation: session snapshot / OVP prime input over the budgeted working-memory context pack
 2. BL-014 when operational runtime observability becomes the next bottleneck
 3. BL-015 when permission and claim lifecycle become the active blocker
