@@ -197,6 +197,23 @@ def test_ui_server_map_route_serves_readable_map_entry(temp_vault):
     assert 'href="/ops">Workbench</a>' in body
 
 
+def test_render_library_home_hides_unavailable_map_for_non_research_pack():
+    from ovp_pipeline.commands.ui_server import _render_library_home
+
+    body = _render_library_home(
+        {
+            "requested_pack": "media-editorial",
+            "objects": {"count": 0, "items": []},
+        }
+    )
+
+    assert "Knowledge Library" in body
+    assert "Search Library" in body
+    assert "Open Workbench" in body
+    assert "Knowledge Map" not in body
+    assert 'href="/map?pack=media-editorial"' not in body
+
+
 def test_render_runtime_card_shows_pipeline_process_identity():
     from ovp_pipeline.commands.ui_server import _render_runtime_card
 
@@ -1107,7 +1124,7 @@ def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vau
 
     assert response.status == 200
     assert 'href="/?pack=media-editorial"' in body
-    assert 'href="/map?pack=media-editorial"' in body
+    assert 'href="/map?pack=media-editorial"' not in body
     assert 'href="/ops?pack=media-editorial"' in body
     assert 'href="/clusters?pack=media-editorial"' not in body
     assert 'href="/contradictions?pack=media-editorial"' not in body
@@ -1176,6 +1193,40 @@ def test_ui_server_research_html_route_rejects_non_research_pack(temp_vault, mon
     assert "Route Unavailable" in body
     assert "research-specific observation shell" in body
     assert "media-editorial" in body
+
+
+def test_ui_server_map_route_rejects_non_research_pack_without_nav_link(
+    temp_vault, monkeypatch
+):
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
+
+    monkeypatch.setattr(
+        ui_server,
+        "build_cluster_browser_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("cluster builder should not run")
+        ),
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/map?pack=media-editorial")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Route Unavailable" in body
+    assert "research-specific observation shell" in body
+    assert 'href="/map?pack=media-editorial"' not in body
 
 
 def test_ui_server_summaries_endpoint_accepts_pack_scope(temp_vault):

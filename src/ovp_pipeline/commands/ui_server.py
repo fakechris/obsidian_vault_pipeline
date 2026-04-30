@@ -107,12 +107,14 @@ def _shell_supports_research_nav(requested_pack: str = "") -> bool:
 
 
 def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
-    return [
+    items = [
         ("Library", "/"),
-        ("Map", "/map"),
         ("Search", "/search"),
         ("Workbench", "/ops"),
     ]
+    if _shell_supports_research_nav(requested_pack):
+        items.insert(1, ("Map", "/map"))
+    return items
 
 
 def _build_runtime_home_payload_from_query(
@@ -1721,6 +1723,11 @@ def _render_library_home(payload: dict) -> str:
     map_path = _shell_href("/map", requested_pack)
     workbench_path = _shell_href("/ops", requested_pack)
     search_path = _shell_href("/search", requested_pack)
+    map_card = (
+        f"<div class='card'><h2>Knowledge Map</h2><p><a href='{escape(map_path)}'>See how ideas connect</a></p></div>"
+        if _shell_supports_research_nav(requested_pack)
+        else ""
+    )
     body = "".join(
         [
             "<section class='hero'>",
@@ -1730,7 +1737,7 @@ def _render_library_home(payload: dict) -> str:
             "<section class='grid stats'>",
             f"<div class='card'><h2>Library Items</h2><p>{object_count}</p></div>",
             f"<div class='card'><h2>Search Library</h2><p><a href='{escape(search_path)}'>Search by title, topic, or source</a></p></div>",
-            f"<div class='card'><h2>Knowledge Map</h2><p><a href='{escape(map_path)}'>See how ideas connect</a></p></div>",
+            map_card,
             "</section>",
             "<section class='grid two-col'>",
             "<section class='card'><h2>Recent Knowledge</h2>",
