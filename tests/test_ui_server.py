@@ -144,6 +144,7 @@ def test_ui_server_root_serves_reader_library_home(temp_vault):
     assert "Knowledge Library" in body
     assert 'href="/">Library</a>' in body
     assert 'href="/map">Map</a>' in body
+    assert 'href="/search">Search</a>' in body
     assert 'href="/ops">Workbench</a>' in body
     assert "Recent Knowledge" in body
     assert "Knowledge Map" in body
@@ -196,6 +197,7 @@ def test_ui_server_map_route_serves_readable_map_entry(temp_vault):
     assert "action='/clusters'" not in body
     assert 'href="/">Library</a>' in body
     assert 'href="/map">Map</a>' in body
+    assert 'href="/search">Search</a>' in body
     assert 'href="/ops">Workbench</a>' in body
 
 
