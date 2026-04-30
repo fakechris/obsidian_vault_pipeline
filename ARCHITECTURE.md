@@ -433,6 +433,13 @@ Operational rules:
 - `claimed_by` and `claim_lease_until` prevent duplicate workers from handling the same marker.
 - if the current Authority schema version is newer than the marker or projection version, promote to `full_rebuild`.
 
+Current implementation:
+
+- `projection_lifecycle.py` records projection repair marker events in `60-Logs/projection-repair.jsonl`.
+- The marker event log is append-oriented and reconstructs current marker state from `written`, `superseded`, `claimed`, and `closed` events.
+- `ensure_knowledge_db_current()` writes and closes a `full_rebuild` marker when `knowledge.db` is missing or has an incompatible legacy schema.
+- The broader Authority/projection schema metadata contract is still partial: current code has a schema constant and rebuild triggers, but does not yet persist `.ovp/schema_version` or projection metadata inside `knowledge.db`.
+
 ## 12. Canonical Scenarios
 
 ### Scenario A: User Clips An Article
@@ -656,6 +663,7 @@ Current implementation roughly maps as follows:
 | `truth_api.py` | read/query interface | Layer 2/3 access |
 | `ovp-ui` | dashboard, object pages, graph, signals/actions | Layer 3 + some Layer 4 controls |
 | promotion modules | candidate/relation/workspace promotion | Layer 4 Promotion + Audit |
+| `projection_lifecycle.py` | structured projection repair marker log and leases | Layer 4 Repair + Verification |
 | source lifecycle routing preview | `ovp-absorb --dry-run --json` `source_lifecycle.routing_preview` | Layer 4 Routing / Dispatch |
 | doctor/lint | checks and repair hints | Layer 4 Verification + Repair |
 | packs | `research-tech`, `default-knowledge` | ownership perspective |
@@ -665,8 +673,8 @@ Main gaps:
 - Layer 1 claim/evidence contracts now carry a first line/char span schema in derived evidence rows; factual evidence_kind enforcement and richer claim lifecycle fields still need hardening.
 - Layer 2 / Layer 3 projection labels now exist on core access payloads and materialized reader artifacts; doctor/export enforcement and future surfaces still need to consume them consistently.
 - Layer 4 fitness checks now cover the first hot-path, workflow-wiring, source routing preview, evidence span backfill, and candidate risk cases; deeper evidence completeness, projection replay, and import-boundary checks are still open.
-- Projection lifecycle markers need structured schema, scope, lease, and supersession.
-- Schema versioning is not yet wired into projection lifecycle.
+- Projection lifecycle markers now have structured schema, scope, lease, supersession, and `knowledge.db` rebuild integration.
+- Schema versioning is partially wired into projection lifecycle for rebuild markers; persistent Authority/projection version metadata is still open.
 - The reader-first home is now the default entry; object pages have reader profiles, source rails, and kind-specific reader lenses; `/graph` has a first spatial map projection; `/search` groups reader results by kind, summary, evidence count, and match reason.
 
 ## 18. Near-Term Architecture Actions
@@ -674,10 +682,10 @@ Main gaps:
 Recommended order:
 
 1. Keep projection metadata attached to new access surfaces and add doctor/export checks that verify the labels are present.
-2. Move to projection repair lifecycle and schema-version rebuild triggers now that the first reader-facing product loop is coherent.
+2. Finish the remaining schema-version metadata contract now that the first rebuild-marker trigger is wired.
 3. Add stricter factual evidence completeness checks before expanding automatic promotion.
-4. Introduce structured `ProjectionRepairMarker` schema.
-5. Add schema version fields to Authority and derived projection state.
+4. Add schema version fields to Authority and derived projection state.
+5. Expand doctor/export checks to verify projection marker replay and projection labels together.
 
 ## Appendix: Backlog Mapping
 
@@ -693,5 +701,5 @@ The architecture should not depend on backlog IDs to be valid. The table below i
 | Candidate risk layering | `BL-007`, `KSR-003` done in PR #82 |
 | Reader-first access surfaces | `BL-001`; `BL-008` and `BL-009` done through PR #79 and PR #83; `BL-010` done in PR #80 |
 | Reader-oriented search | `BL-011` done in PR #84 |
-| Projection repair lifecycle | `BL-020` |
-| Schema versioning and migration trigger | `BL-021` |
+| Projection repair lifecycle | `BL-020` done in PR #87 |
+| Schema versioning and migration trigger | `BL-021` partial in PR #87 |

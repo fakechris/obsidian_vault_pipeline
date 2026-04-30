@@ -53,14 +53,14 @@ That means the user-facing product should make compiled knowledge easy to read f
 | Kind-aware object pages and backlink rail | `BL-008` and `BL-009` done through PR #79 and PR #83 |
 | Visual graph MVP | `BL-010` done in PR #80 |
 | Reader-oriented search | `BL-011` done in PR #84 |
-| Projection repair lifecycle | `BL-020` |
-| Schema versioning and migration trigger | `BL-021` |
+| Projection repair lifecycle | `BL-020` done in PR #87 |
+| Schema versioning and migration trigger | `BL-021` partial in PR #87 |
 
 ## Near-Term Sequence
 
 Recommended order:
 
-1. Return to `BL-020 + BL-021` for projection repair and schema-migration rebuild triggers.
+1. Finish the remaining `BL-021` schema/version metadata contract beyond the current rebuild marker trigger.
 2. Move into `BL-012 + BL-013` once the reader surfaces need stronger reuse and context-pack loops.
 3. Pick up `BL-014` when operational runtime observability becomes the next bottleneck.
 

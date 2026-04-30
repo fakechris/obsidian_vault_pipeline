@@ -897,6 +897,76 @@ def test_knowledge_db_supports_pack_schema_requires_timeline_events(tmp_path):
     assert _knowledge_db_supports_pack_schema(db_path) is False
 
 
+def test_ensure_knowledge_db_current_records_projection_rebuild_marker_for_legacy_schema(temp_vault):
+    from ovp_pipeline.knowledge_index import ensure_knowledge_db_current
+    from ovp_pipeline.projection_lifecycle import list_projection_repair_markers
+    from ovp_pipeline.runtime import VaultLayout
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
+    note.write_text(
+        """---
+note_id: agent-harness
+title: Agent Harness
+type: evergreen
+date: 2026-04-07
+---
+
+# Agent Harness
+""",
+        encoding="utf-8",
+    )
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.knowledge_db.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE objects (object_id TEXT PRIMARY KEY, title TEXT);
+            """
+        )
+
+    ensure_knowledge_db_current(temp_vault)
+
+    markers = list_projection_repair_markers(temp_vault)
+    assert len(markers) == 1
+    assert markers[0].kind == "full_rebuild"
+    assert markers[0].scope == {"projection_kind": "knowledge_db"}
+    assert markers[0].reason == "knowledge_db_schema_incompatible"
+    assert markers[0].status == "closed"
+    assert layout.knowledge_db.exists()
+
+
+def test_ensure_knowledge_db_current_records_projection_rebuild_marker_for_missing_db(temp_vault):
+    from ovp_pipeline.knowledge_index import ensure_knowledge_db_current
+    from ovp_pipeline.projection_lifecycle import list_projection_repair_markers
+    from ovp_pipeline.runtime import VaultLayout
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Agent-Harness.md"
+    note.write_text(
+        """---
+note_id: agent-harness
+title: Agent Harness
+type: evergreen
+date: 2026-04-07
+---
+
+# Agent Harness
+""",
+        encoding="utf-8",
+    )
+    layout = VaultLayout.from_vault(temp_vault)
+    assert not layout.knowledge_db.exists()
+
+    ensure_knowledge_db_current(temp_vault)
+
+    markers = list_projection_repair_markers(temp_vault)
+    assert len(markers) == 1
+    assert markers[0].kind == "full_rebuild"
+    assert markers[0].scope == {"projection_kind": "knowledge_db"}
+    assert markers[0].reason == "knowledge_db_missing"
+    assert markers[0].status == "closed"
+    assert layout.knowledge_db.exists()
+
+
 def test_recent_audit_events_returns_newest_rows_first(temp_vault):
     from ovp_pipeline.knowledge_index import rebuild_knowledge_index, recent_audit_events
     from ovp_pipeline.runtime import VaultLayout
