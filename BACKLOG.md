@@ -1,6 +1,6 @@
 # OVP Active Backlog
 
-**Updated:** 2026-04-29
+**Updated:** 2026-04-30
 **Status:** Active implementation backlog source
 
 This file is the single current backlog entry point for implementation sequencing.
@@ -20,9 +20,9 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | --- | --- | --- |
 | M0 Pipeline And Pack Foundation | Done | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first source-lifecycle idempotency slice |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
-| M2 Roadmap And README Consolidation | Active | merge historical milestones, compiler roadmap, recent KSR input, reader-product research, and English-primary docs |
-| M3 Reader-First Knowledge Atlas | Next | `/` becomes reader home; current dashboard moves to `/ops`; objects and graph become knowledge products |
-| M4 KSR Safety And Hot-Path Hardening | Next | projection labels, hot-path audit, wiring evals, routing preview, evidence spans, candidate risk |
+| M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and English-primary docs |
+| M3 Reader-First Knowledge Atlas | Active | reader home and `/ops` split shipped; object pages, backlinks, and graph still need product shape |
+| M4 KSR Safety And Hot-Path Hardening | Active | next implementation wave for projection labels, hot-path audit, wiring evals, routing preview, evidence spans, candidate risk |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
@@ -32,10 +32,10 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | ID | Priority | Status | Work item | Source links |
 | --- | --- | --- | --- | --- |
 | BL-000 | P0 | Done | Commit current roadmap/README/backlog consolidation, including English-primary README/Architecture/Milestone docs with Chinese alternates | M2, PR #74 |
-| BL-001 | P0 | Active | Reader shell route split: make `/` a Knowledge Atlas home and move current dashboard to `/ops` | M3, reader-product note |
+| BL-001 | P0 | Done | Reader shell route split: make `/` a Knowledge Atlas home and move current dashboard to `/ops` | M3, reader-product note, PR #75 |
 | BL-002 | P0 | Next | Projection marking: label dashboard, MOC, wiki, briefing, reader pages, graph, and context packs as projections | M4, KSR-002 |
-| BL-003 | P0 | Next | Dashboard/search hot-path audit: default UI/search paths must not scan raw/PDF/Office sources | M4, KSR-015 |
-| BL-004 | P0 | Next | Workflow wiring eval suite for lifecycle routing, promote gates, projection labels, hot paths, and read/write boundaries | M4, KSR-026 |
+| BL-003 | P0 | Active | Dashboard/search hot-path audit: default UI/search paths must not scan raw/PDF/Office sources | M4, KSR-015, `docs/plans/2026-04-30-bl-003-004-hot-path-wiring-safety.md` |
+| BL-004 | P0 | Active | Workflow wiring eval suite for lifecycle routing, promote gates, projection labels, hot paths, and read/write boundaries | M4, KSR-026, `docs/plans/2026-04-30-bl-003-004-hot-path-wiring-safety.md` |
 | BL-005 | P0 | Next | Article routing preview before source lifecycle changes | M4, KSR-014 |
 | BL-006 | P0 | Next | Evidence span schema and markdown-aware locator backfill | M4, KSR-001, KSR-018 |
 | BL-007 | P0 | Next | Candidate risk layering by evidence strength, identity ambiguity, sensitivity, and impact | M4, KSR-003 |
@@ -90,15 +90,13 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 ## Next Decision
 
-After BL-000 is committed, choose the first implementation PR:
+`BL-001` is shipped in PR #75, so the default UI now has a reader-first entry point and `/ops` owns the operator dashboard.
 
-1. **BL-001 Reader shell route split**: best product-shape move; makes the app understandable without changing data models.
-2. **BL-003 + BL-004 safety pass**: best engineering-risk move; locks hot paths and wiring before UI becomes the default product surface.
+The next implementation PR should be the **BL-003 + BL-004 safety pass**. It protects the new default product entry by proving that reader/search/dashboard routes do not trigger heavy raw-source scans and by adding no-LLM wiring evals for the critical routing and read/write boundaries.
 
 Recommended order:
 
-1. BL-001
-2. BL-003 + BL-004
-3. BL-002
-4. BL-008 + BL-009
-5. BL-010
+1. BL-003 + BL-004
+2. BL-002
+3. BL-008 + BL-009
+4. BL-010

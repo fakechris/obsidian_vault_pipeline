@@ -47,7 +47,7 @@ The current release wires those layers into the actual runtime:
 - `ovp --full --with-refine` inserts `refine` before the final derived refresh
 - `ovp-autopilot` runs real-time `absorb -> moc -> knowledge_index`
 - `ovp-autopilot --with-refine` adds `refine` to that path
-- `ovp-ui` provides a local UI. It is currently operator-oriented; the next product wave moves the default entry toward a reader-first Knowledge Atlas.
+- `ovp-ui` provides a local UI. The default `/` entry is now a reader-first Knowledge Library, while the operator dashboard lives under `/ops`; the next product wave makes object and graph pages readable.
 
 ## Why The Architecture Looks Like This
 
@@ -93,9 +93,9 @@ Current milestone sequence:
 | --- | --- | --- |
 | M0 Pipeline And Pack Foundation | Complete | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first KSR-013 slice |
 | M1 Operator Workbench And Review Runtime | Complete enough | truth UI, candidates, signals/actions, contradictions, action worker |
-| M2 Roadmap And README Consolidation | Active now | merge historical milestones, compiler roadmap, recent KSR input, and reader-product research |
-| M3 Reader-First Knowledge Atlas | Next | `/` becomes reader home, current dashboard moves to `/ops`, objects/graph become knowledge products |
-| M4 KSR Safety And Hot-Path Hardening | Next | evidence spans, projection labels, candidate risk tiers, routing preview, wiring evals |
+| M2 Roadmap And README Consolidation | Complete | merged historical milestones, compiler roadmap, recent KSR input, and reader-product research |
+| M3 Reader-First Knowledge Atlas | Active | reader home and `/ops` split shipped; object and graph pages still need product shape |
+| M4 KSR Safety And Hot-Path Hardening | Active | hot-path audit and wiring evals are next, followed by evidence spans, projection labels, candidate risk tiers, routing preview |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facades, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, skill/routine extraction, notebook/raw-source mode |

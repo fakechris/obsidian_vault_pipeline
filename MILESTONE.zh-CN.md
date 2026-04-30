@@ -2,7 +2,7 @@
 
 > 语言： [English](MILESTONE.md) | 简体中文
 
-**更新时间：** 2026-04-29
+**更新时间：** 2026-04-30
 **状态：** 当前 milestone 顺序与实施方向
 
 这份文档是稳定的 milestone 入口。它总结当前产品和工程路线；[BACKLOG.md](BACKLOG.md) 仍然是唯一 active implementation queue。
@@ -32,9 +32,9 @@ OVP 正在从 document-processing pipeline 变成：
 | --- | --- | --- |
 | M0 Pipeline And Pack Foundation | Done | CLI、source lifecycle、pack/profile runtime、`knowledge.db`、第一段 source-lifecycle idempotency |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI、candidates、signals/actions、contradictions、action worker |
-| M2 Roadmap And README Consolidation | Active | 合并历史 milestones、compiler roadmap、近期 KSR 输入、reader-product 研究，以及英文主文档结构 |
-| M3 Reader-First Knowledge Atlas | Next | `/` 变成 reader home；当前 dashboard 移到 `/ops`；objects 和 graph 成为知识产品 |
-| M4 KSR Safety And Hot-Path Hardening | Next | projection labels、hot-path audit、wiring evals、routing preview、evidence spans、candidate risk |
+| M2 Roadmap And README Consolidation | Done | 已合并历史 milestones、compiler roadmap、近期 KSR 输入、reader-product 研究，以及英文主文档结构 |
+| M3 Reader-First Knowledge Atlas | Active | reader home 和 `/ops` 拆分已交付；object pages、backlinks、graph 仍是下一批产品化 surface |
+| M4 KSR Safety And Hot-Path Hardening | Active | 下一批实施重点：projection labels、hot-path audit、wiring evals、routing preview、evidence spans、candidate risk |
 | M5 Context Pack And Operational Runtime | Later | session snapshots、context budget、claim leases、provider facade、observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、routines、notebook/raw-source mode |
@@ -43,7 +43,7 @@ OVP 正在从 document-processing pipeline 变成：
 
 | 架构 / 产品工作 | Active backlog 映射 |
 | --- | --- |
-| Reader shell route split | `BL-001` |
+| Reader shell route split | `BL-001` 已在 PR #75 交付 |
 | Projection marking | `BL-002`, `KSR-002` |
 | Dashboard/search hot-path audit | `BL-003`, `KSR-015` |
 | Workflow wiring eval suite | `BL-004`, `KSR-026` |
@@ -59,12 +59,10 @@ OVP 正在从 document-processing pipeline 变成：
 
 建议顺序：
 
-1. 完成文档整理 PR：README、Architecture、Milestone 都改成英文主文档，并提供中文副本。
-2. 实施 `BL-001`：把 reader home 和 operator dashboard 拆开，当前 dashboard 移到 `/ops`。
-3. 实施 `BL-003 + BL-004`：在 reader surface 成为默认入口之前，锁住 hot path 和 wiring boundary。
-4. 实施 `BL-002`：把 reader、dashboard、graph、briefing、context pack 等 surface 标注为 projection。
-5. 实施 `BL-008 + BL-009`：让 object page 更可读，并补 source/backlink rail。
-6. 实施 `BL-010`：把 `/graph` 做成 spatial corpus map 的 MVP。
+1. 实施 `BL-003 + BL-004`：reader surface 已成为默认入口，先锁住 hot path 和 wiring boundary。
+2. 实施 `BL-002`：把 reader、dashboard、graph、briefing、context pack 等 surface 标注为 projection。
+3. 实施 `BL-008 + BL-009`：让 object page 更可读，并补 source/backlink rail。
+4. 实施 `BL-010`：把 `/graph` 做成 spatial corpus map 的 MVP。
 
 ## 文档规则
 
