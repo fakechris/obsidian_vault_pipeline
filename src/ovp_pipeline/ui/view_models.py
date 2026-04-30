@@ -59,6 +59,15 @@ DEFAULT_TRACEABILITY_BROWSER_LIMIT = 15
 DEFAULT_GRAPH_MAP_LIMIT = 24
 GRAPH_MAP_WIDTH = 960
 GRAPH_MAP_HEIGHT = 640
+GRAPH_MAP_CLUSTER_ORBIT_X_FACTOR = 0.26
+GRAPH_MAP_CLUSTER_ORBIT_Y_FACTOR = 0.22
+GRAPH_MAP_MARGIN = 42.0
+GRAPH_MAP_LOCAL_RADIUS_BASE = 42.0
+GRAPH_MAP_LOCAL_RADIUS_PER_MEMBER = 12.0
+GRAPH_MAP_LOCAL_RADIUS_MAX = 128.0
+GRAPH_MAP_NODE_BASE_RADIUS = 7
+GRAPH_MAP_NODE_RADIUS_PER_DEGREE = 2
+GRAPH_MAP_NODE_RADIUS_BONUS_MAX = 10
 
 
 def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
@@ -2866,25 +2875,36 @@ def build_graph_map_payload(
     requested_pack = pack_name or cluster_payload.get("requested_pack", "")
     center_x = GRAPH_MAP_WIDTH / 2
     center_y = GRAPH_MAP_HEIGHT / 2
-    cluster_orbit_x = GRAPH_MAP_WIDTH * 0.26
-    cluster_orbit_y = GRAPH_MAP_HEIGHT * 0.22
-    margin = 42.0
+    cluster_orbit_x = GRAPH_MAP_WIDTH * GRAPH_MAP_CLUSTER_ORBIT_X_FACTOR
+    cluster_orbit_y = GRAPH_MAP_HEIGHT * GRAPH_MAP_CLUSTER_ORBIT_Y_FACTOR
     nodes: dict[str, dict[str, Any]] = {}
     edges: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     for cluster_index, cluster in enumerate(clusters):
+        cluster_pack = str(cluster.get("pack") or requested_pack)
         cluster_count = max(1, len(clusters))
         cluster_angle = (2 * math.pi * cluster_index / cluster_count) if cluster_count > 1 else 0
         cluster_x = center_x + (math.cos(cluster_angle) * cluster_orbit_x if cluster_count > 1 else 0)
         cluster_y = center_y + (math.sin(cluster_angle) * cluster_orbit_y if cluster_count > 1 else 0)
         members = cluster.get("members", [])
         member_count = max(1, len(members))
-        local_radius = min(128.0, 42.0 + member_count * 12.0)
+        local_radius = min(
+            GRAPH_MAP_LOCAL_RADIUS_MAX,
+            GRAPH_MAP_LOCAL_RADIUS_BASE + member_count * GRAPH_MAP_LOCAL_RADIUS_PER_MEMBER,
+        )
         for member_index, member in enumerate(members):
             object_id = str(member["object_id"])
             member_angle = (2 * math.pi * member_index / member_count) - (math.pi / 2)
-            x = _clamp_graph_coordinate(cluster_x + math.cos(member_angle) * local_radius, margin, GRAPH_MAP_WIDTH - margin)
-            y = _clamp_graph_coordinate(cluster_y + math.sin(member_angle) * local_radius, margin, GRAPH_MAP_HEIGHT - margin)
+            x = _clamp_graph_coordinate(
+                cluster_x + math.cos(member_angle) * local_radius,
+                GRAPH_MAP_MARGIN,
+                GRAPH_MAP_WIDTH - GRAPH_MAP_MARGIN,
+            )
+            y = _clamp_graph_coordinate(
+                cluster_y + math.sin(member_angle) * local_radius,
+                GRAPH_MAP_MARGIN,
+                GRAPH_MAP_HEIGHT - GRAPH_MAP_MARGIN,
+            )
             node = nodes.setdefault(
                 object_id,
                 {
@@ -2894,7 +2914,7 @@ def build_graph_map_payload(
                     "kind_label": _object_kind_label(str(member.get("object_kind") or "")),
                     "path": _scoped_path(
                         f"/object?id={quote(object_id, safe='')}",
-                        pack_name=requested_pack,
+                        pack_name=cluster_pack,
                     ),
                     "x": round(x, 1),
                     "y": round(y, 1),
@@ -2911,7 +2931,7 @@ def build_graph_map_payload(
             detail = get_graph_cluster_detail(
                 vault_dir,
                 str(cluster["cluster_id"]),
-                pack_name=requested_pack or None,
+                pack_name=cluster_pack or None,
             )
         except (OSError, sqlite3.Error, ValueError):
             detail = {"edges": []}
@@ -2921,17 +2941,18 @@ def build_graph_map_payload(
             if source_id not in nodes or target_id not in nodes:
                 continue
             key = (source_id, target_id, str(edge["edge_kind"]))
-            edges.setdefault(
-                key,
-                {
+            edge_weight = float(edge.get("weight") or 0.0)
+            if key in edges:
+                edges[key]["weight"] += edge_weight
+            else:
+                edges[key] = {
                     "source_object_id": source_id,
                     "target_object_id": target_id,
                     "edge_kind": str(edge["edge_kind"]),
-                    "weight": float(edge.get("weight") or 0.0),
+                    "weight": edge_weight,
                     "source_title": nodes[source_id]["title"],
                     "target_title": nodes[target_id]["title"],
-                },
-            )
+                }
 
     for edge in edges.values():
         nodes[edge["source_object_id"]]["degree"] += 1
@@ -2939,7 +2960,10 @@ def build_graph_map_payload(
 
     node_items = sorted(nodes.values(), key=lambda item: (-int(item["degree"]), str(item["title"]).lower()))
     for node in node_items:
-        node["radius"] = 7 + min(10, int(node["degree"]) * 2)
+        node["radius"] = GRAPH_MAP_NODE_BASE_RADIUS + min(
+            GRAPH_MAP_NODE_RADIUS_BONUS_MAX,
+            int(node["degree"]) * GRAPH_MAP_NODE_RADIUS_PER_DEGREE,
+        )
     edge_items = sorted(
         edges.values(),
         key=lambda item: (
@@ -2979,6 +3003,8 @@ def build_graph_map_payload(
             "edge_count": len(edge_items),
             "cluster_count": len(clusters),
             "largest_cluster_size": cluster_payload["largest_cluster_size"],
+            "is_limited": cluster_payload["is_limited"],
+            "limit": limit,
         },
         "model_notes": [
             "This spatial map is a reader projection over graph clusters and edges.",

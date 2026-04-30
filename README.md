@@ -47,7 +47,7 @@ The current release wires those layers into the actual runtime:
 - `ovp --full --with-refine` inserts `refine` before the final derived refresh
 - `ovp-autopilot` runs real-time `absorb -> moc -> knowledge_index`
 - `ovp-autopilot --with-refine` adds `refine` to that path
-- `ovp-ui` provides a local UI. The default `/` entry is now a reader-first Knowledge Library, the operator dashboard lives under `/ops`, object pages expose source/backlink context, and `/graph` renders a reader-facing knowledge map.
+- `ovp-ui` provides a local UI. The default `/` entry is now a reader-first Knowledge Library, the operator dashboard lives under `/ops`, object pages expose source/backlink context, and `/graph` (also `/map`) renders a reader-facing knowledge map.
 
 ## Why The Architecture Looks Like This
 

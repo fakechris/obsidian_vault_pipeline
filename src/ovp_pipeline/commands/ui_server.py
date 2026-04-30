@@ -70,6 +70,8 @@ _GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
 _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
 _CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
 _INLINE_MEMBER_LINK_LIMIT = 8
+_GRAPH_MAP_CLUSTER_PREVIEW_LIMIT = 6
+_GRAPH_MAP_NODE_LABEL_Y_OFFSET = 13
 
 
 def _render_limited_inline_links(
@@ -2652,6 +2654,11 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
     layout = payload["layout"]
+    limit_note = (
+        f" Showing the first {payload['map_summary']['limit']} graph neighborhoods in this map."
+        if payload["map_summary"].get("is_limited")
+        else ""
+    )
     clusters = (
         "".join(
             "<li>"
@@ -2660,27 +2667,24 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
             f" <span class='muted'>{cluster['member_count']} objects</span>"
             f"<div class='muted'>{escape(str(cluster['summary']))}</div>"
             "</li>"
-            for cluster in payload["clusters"][:6]
+            for cluster in payload["clusters"][:_GRAPH_MAP_CLUSTER_PREVIEW_LIMIT]
         )
         or "<li class='muted'>No graph clusters found yet.</li>"
     )
     notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
-    payload = {
-        **payload,
-        "_node_lookup": {str(node["object_id"]): node for node in payload["nodes"]},
-    }
+    node_lookup = {str(node["object_id"]): node for node in payload["nodes"]}
     edge_lines = "".join(
         "<line "
-        f"x1='{payload['_node_lookup'][edge['source_object_id']]['x']}' "
-        f"y1='{payload['_node_lookup'][edge['source_object_id']]['y']}' "
-        f"x2='{payload['_node_lookup'][edge['target_object_id']]['x']}' "
-        f"y2='{payload['_node_lookup'][edge['target_object_id']]['y']}' "
+        f"x1='{node_lookup[edge['source_object_id']]['x']}' "
+        f"y1='{node_lookup[edge['source_object_id']]['y']}' "
+        f"x2='{node_lookup[edge['target_object_id']]['x']}' "
+        f"y2='{node_lookup[edge['target_object_id']]['y']}' "
         "stroke='#c7b8a6' stroke-width='1.4' stroke-opacity='0.7'>"
         f"<title>{escape(edge['source_title'])} -> {escape(edge['target_title'])}: {escape(edge['edge_kind'])}</title>"
         "</line>"
         for edge in payload["edges"]
-        if edge["source_object_id"] in payload["_node_lookup"]
-        and edge["target_object_id"] in payload["_node_lookup"]
+        if edge["source_object_id"] in node_lookup
+        and edge["target_object_id"] in node_lookup
     )
     node_marks = "".join(
         "<a "
@@ -2689,7 +2693,7 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
         "stroke='#fffdfa' stroke-width='2'>"
         f"<title>{escape(str(node['title']))} · {escape(str(node['kind_label']))} · {node['degree']} links</title>"
         "</circle>"
-        f"<text x='{node['x']}' y='{float(node['y']) + float(node['radius']) + 13}' "
+        f"<text x='{node['x']}' y='{float(node['y']) + float(node['radius']) + _GRAPH_MAP_NODE_LABEL_Y_OFFSET}' "
         "text-anchor='middle' font-size='12' fill='#3c332b'>"
         f"{escape(str(node['title']))}</text>"
         "</a>"
@@ -2700,7 +2704,8 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
         "".join(
             [
                 "<h1>Knowledge Graph</h1>",
-                "<p class='muted'>A reader map of nearby concepts, claims, people, and sources in this vault.</p>",
+                "<p class='muted'>A reader map of nearby concepts, claims, people, and sources in this vault."
+                f"{escape(limit_note)}</p>",
                 f"<form method='get' action='{escape(action_path)}'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -2717,8 +2722,10 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
                 "</section>",
                 "<section class='card'>",
                 "<h2>Map</h2>",
-                f"<svg id='graph-map-canvas' role='img' aria-label='Knowledge graph map' viewBox='0 0 {layout['width']} {layout['height']}' "
+                f"<svg id='graph-map-canvas' viewBox='0 0 {layout['width']} {layout['height']}' "
                 "style='width:100%;height:auto;max-height:68vh;background:#fffdfa;border:1px solid #e7e1d8;border-radius:8px'>",
+                "<title>Knowledge graph map</title>",
+                "<desc>Interactive map of knowledge objects and their connections.</desc>",
                 edge_lines,
                 node_marks,
                 "</svg>",

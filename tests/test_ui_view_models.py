@@ -768,6 +768,7 @@ date: 2026-04-10
     assert all(0 <= node["y"] <= payload["layout"]["height"] for node in payload["nodes"])
     assert any(edge["source_object_id"] == "source-note" for edge in payload["edges"])
     assert payload["clusters"][0]["detail_path"].startswith("/cluster?id=")
+    assert "pack=default-knowledge" in payload["clusters"][0]["detail_path"]
     assert "spatial" in payload["model_notes"][0].lower()
 
 

@@ -45,7 +45,7 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 - `ovp --full --with-refine` 会在 `moc` 后追加 `refine`
 - `ovp-autopilot` 默认实时跑 `absorb -> moc -> knowledge_index`
 - `ovp-autopilot --with-refine` 会在实时链路里追加 `refine`
-- `ovp-ui` 提供本地 UI。默认 `/` 入口现在是 reader-first Knowledge Library，operator dashboard 放在 `/ops`；object page 已有 source/backlink 上下文，`/graph` 已是面向读者的 knowledge map。
+- `ovp-ui` 提供本地 UI。默认 `/` 入口现在是 reader-first Knowledge Library，operator dashboard 放在 `/ops`；object page 已有 source/backlink 上下文，`/graph`（也包括 `/map`）已是面向读者的 knowledge map。
 
 ## 为什么会变成现在这套架构
 

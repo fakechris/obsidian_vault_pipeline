@@ -198,6 +198,9 @@ def test_ui_server_map_route_serves_readable_map_entry(temp_vault):
     assert "Beta" in body
     assert "How To Read This Map" in body
     assert "Open Cluster Browser" in body
+    assert "Showing the first 24 graph neighborhoods" in body
+    assert "<title>Knowledge graph map</title>" in body
+    assert "role='img'" not in body
     assert "action='/map'" in body
     assert "action='/clusters'" not in body
     assert 'href="/">Library</a>' in body
@@ -216,6 +219,7 @@ def test_ui_server_graph_route_serves_visual_graph_mvp(temp_vault):
     assert "graph-map-canvas" in body
     assert "Alpha" in body
     assert "Beta" in body
+    assert "Showing the first 24 graph neighborhoods" in body
     assert "action='/graph'" in body
     assert "action='/clusters'" not in body
     assert 'href="/">Library</a>' in body
