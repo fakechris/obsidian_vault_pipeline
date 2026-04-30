@@ -115,6 +115,13 @@ def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
     ]
 
 
+def _build_runtime_home_payload_from_query(
+    vault_dir: Path, query: dict[str, list[str]]
+) -> dict:
+    pack_name = query.get("pack", [""])[0] or None
+    return build_runtime_home_payload(vault_dir, pack_name=pack_name)
+
+
 def _layout(
     title: str, body: str, *, requested_pack: str = "", auto_refresh_seconds: int | None = None
 ) -> str:
@@ -4456,13 +4463,11 @@ def create_server(
 
             try:
                 if path == "/":
-                    pack_name = query.get("pack", [""])[0] or None
-                    payload = build_runtime_home_payload(resolved_vault, pack_name=pack_name)
+                    payload = _build_runtime_home_payload_from_query(resolved_vault, query)
                     self._write_html(_render_library_home(payload))
                     return
                 if path == "/ops":
-                    pack_name = query.get("pack", [""])[0] or None
-                    payload = build_runtime_home_payload(resolved_vault, pack_name=pack_name)
+                    payload = _build_runtime_home_payload_from_query(resolved_vault, query)
                     self._write_html(_render_dashboard(payload))
                     return
                 if path == "/api/objects":
