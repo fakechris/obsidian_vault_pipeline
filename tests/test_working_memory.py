@@ -7,6 +7,8 @@ Coverage:
 * Top of Mind respects citation_count from page_metrics
 * EVOLVES Today groups events by subtype within the lookback window
 * Pulse Highlights counts pipeline.jsonl events in the window
+* Context Budget records explicit budget/usage and limits Top of Mind items
+* selected Top of Mind items emit working_memory reuse events
 * CLI runs end-to-end on an empty vault
 """
 
@@ -39,8 +41,10 @@ def test_empty_vault_renders_all_section_headers(temp_vault):
     assert "projection_kind: context_pack_projection" in text
     assert "projection_surface: working_memory" in text
     assert "projection_layer: Layer 3" in text
+    assert "context_budget_tokens: 1200" in text
     assert "# Working Memory — 2026-04-24" in text
     for section in (
+        "## Context Budget",
         "## Top of Mind",
         "## Fresh Crystals",
         "## Pending Decisions",
@@ -105,6 +109,88 @@ def test_top_of_mind_uses_page_metrics(temp_vault):
     cold_idx = text.find("[[cold]]")
     assert hot_idx != -1 and cold_idx != -1
     assert hot_idx < cold_idx
+
+
+def test_context_budget_limits_top_of_mind_items(temp_vault):
+    eg = temp_vault / "10-Knowledge" / "Evergreen"
+    (eg / "Hot.md").write_text(
+        "---\nnote_id: hot\ntitle: Hot\ntype: evergreen\ndate: 2026-04-24\n---\n# Hot\n",
+        encoding="utf-8",
+    )
+    (eg / "Cold.md").write_text(
+        "---\nnote_id: cold\ntitle: Cold\ntype: evergreen\ndate: 2026-04-24\n---\n# Cold\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    now = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
+    db = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db) as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO page_metrics "
+            "(slug, last_seen_ts, reuse_count, citation_count) VALUES (?, ?, ?, ?)",
+            [
+                ("hot", int(now.timestamp()), 5, 12),
+                ("cold", int(now.timestamp()), 1, 1),
+            ],
+        )
+        conn.commit()
+
+    output = build_working_memory(
+        temp_vault,
+        target_date=now.date(),
+        now=now,
+        context_budget_tokens=10,
+    )
+    text = output.read_text(encoding="utf-8")
+
+    assert "context_budget_tokens: 10" in text
+    assert "- Budget: 10 tokens" in text
+    assert "- Selected objects: 1" in text
+    assert "- Omitted by budget: 1" in text
+    assert "[[hot]]" in text
+    assert "[[cold]]" not in text
+
+
+def test_working_memory_emits_reuse_events_for_selected_context(temp_vault):
+    eg = temp_vault / "10-Knowledge" / "Evergreen"
+    (eg / "Hot.md").write_text(
+        "---\nnote_id: hot\ntitle: Hot\ntype: evergreen\ndate: 2026-04-24\n---\n# Hot\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault, pack_name="research-tech")
+
+    now = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
+    db = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO page_metrics "
+            "(slug, last_seen_ts, reuse_count, citation_count) VALUES (?, ?, ?, ?)",
+            ("hot", int(now.timestamp()), 1, 12),
+        )
+        conn.commit()
+
+    output = build_working_memory(
+        temp_vault,
+        target_date=now.date(),
+        now=now,
+        context_budget_tokens=1200,
+    )
+
+    events = [
+        json.loads(line)
+        for line in (temp_vault / "60-Logs" / "reuse-events.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    ]
+    assert len(events) == 1
+    assert events[0]["event_type"] == "trusted_reuse_event"
+    assert events[0]["surface"] == "working_memory"
+    assert events[0]["object_id"] == "hot"
+    assert events[0]["consumer_ref"] == str(output.relative_to(temp_vault))
+    assert events[0]["context_budget_tokens"] == 1200
+    assert events[0]["context_pack_date"] == "2026-04-24"
 
 
 def test_evolves_today_groups_by_subtype(temp_vault):

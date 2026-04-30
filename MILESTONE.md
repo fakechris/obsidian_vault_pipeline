@@ -60,7 +60,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 
 Recommended order:
 
-1. Move into `BL-012 + BL-013` once the reader surfaces need stronger reuse and context-pack loops.
+1. Continue `BL-012 + BL-013`: session snapshot / OVP prime input over the budgeted working-memory context pack.
 2. Pick up `BL-014` when operational runtime observability becomes the next bottleneck.
 3. Pick up `BL-015` when permission and claim lifecycle become the active blocker.
 

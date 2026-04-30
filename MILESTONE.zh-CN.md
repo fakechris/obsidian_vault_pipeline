@@ -60,7 +60,7 @@ OVP 正在从 document-processing pipeline 变成：
 
 建议顺序：
 
-1. 当 reader surface 需要更强的复用和 context-pack 闭环时，进入 `BL-012 + BL-013`。
+1. 继续 `BL-012 + BL-013`：基于带 budget 的 working-memory context pack，补 session snapshot / OVP prime input。
 2. 当 operational runtime observability 成为下一个瓶颈时，再进入 `BL-014`。
 3. 当 permission 和 claim lifecycle 成为主动瓶颈时，再进入 `BL-015`。
 
