@@ -662,18 +662,18 @@ Main gaps:
 - Layer 4 fitness checks are not fully implemented.
 - Projection lifecycle markers need structured schema, scope, lease, and supersession.
 - Schema versioning is not yet wired into projection lifecycle.
-- Reader-first surfaces are not yet the default product shape.
+- The reader-first home is now the default entry; object pages, graph, backlinks, and search still need product shape.
 
 ## 18. Near-Term Architecture Actions
 
 Recommended order:
 
 1. Move backlog mapping out of architecture prose and into `BACKLOG.md`.
-2. Add projection labels for dashboard, MOC, wiki, briefing, reader pages, graph, and context packs.
-3. Implement the first fitness checks for evidence completeness, hot-path access, read/write boundary, and naming discipline.
+2. Implement the first fitness checks for hot-path access, workflow wiring, read/write boundary, and naming discipline.
+3. Add projection labels for dashboard, MOC, wiki, briefing, reader pages, graph, and context packs.
 4. Introduce structured `ProjectionRepairMarker` schema.
 5. Add schema version fields to Authority and derived projection state.
-6. Make reader-first Layer 3 surfaces the default product entry while keeping operator surfaces under `/ops`.
+6. Continue reader-first Layer 3 product work on object pages, graph, backlinks, and search.
 
 ## Appendix: Backlog Mapping
 

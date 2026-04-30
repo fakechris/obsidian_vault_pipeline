@@ -2,7 +2,7 @@
 
 > Language: English | [简体中文](MILESTONE.zh-CN.md)
 
-**Updated:** 2026-04-29
+**Updated:** 2026-04-30
 **Status:** Current milestone sequence and implementation direction
 
 This document is the stable milestone entry point. It summarizes the current product and engineering route; [BACKLOG.md](BACKLOG.md) remains the single active implementation queue.
@@ -32,9 +32,9 @@ That means the user-facing product should make compiled knowledge easy to read f
 | --- | --- | --- |
 | M0 Pipeline And Pack Foundation | Done | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first source-lifecycle idempotency slice |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
-| M2 Roadmap And README Consolidation | Active | merge historical milestones, compiler roadmap, recent KSR input, reader-product research, and the English-primary docs structure |
-| M3 Reader-First Knowledge Atlas | Next | `/` becomes reader home; current dashboard moves to `/ops`; objects and graph become knowledge products |
-| M4 KSR Safety And Hot-Path Hardening | Next | projection labels, hot-path audit, wiring evals, routing preview, evidence spans, candidate risk |
+| M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and the English-primary docs structure |
+| M3 Reader-First Knowledge Atlas | Active | reader home and `/ops` split shipped; objects, backlinks, and graph remain the next product surfaces |
+| M4 KSR Safety And Hot-Path Hardening | Active | next implementation wave for projection labels, hot-path audit, wiring evals, routing preview, evidence spans, candidate risk |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
@@ -43,7 +43,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 
 | Architecture / product work | Active backlog mapping |
 | --- | --- |
-| Reader shell route split | `BL-001` |
+| Reader shell route split | `BL-001` done in PR #75 |
 | Projection marking | `BL-002`, `KSR-002` |
 | Dashboard/search hot-path audit | `BL-003`, `KSR-015` |
 | Workflow wiring eval suite | `BL-004`, `KSR-026` |
@@ -59,12 +59,10 @@ That means the user-facing product should make compiled knowledge easy to read f
 
 Recommended order:
 
-1. Finish the documentation consolidation PR: English-primary README, Architecture, and Milestone with Chinese alternates.
-2. Implement `BL-001`: split the reader home from the operator dashboard by moving the current dashboard to `/ops`.
-3. Implement `BL-003 + BL-004`: lock the hot paths and wiring boundaries before making the reader surface the default entry.
-4. Implement `BL-002`: label reader, dashboard, graph, briefing, and context-pack surfaces as projections.
-5. Implement `BL-008 + BL-009`: make object pages readable and add source/backlink rails.
-6. Implement `BL-010`: ship the visual `/graph` MVP as a spatial corpus map.
+1. Implement `BL-003 + BL-004`: lock the hot paths and wiring boundaries now that the reader surface is the default entry.
+2. Implement `BL-002`: label reader, dashboard, graph, briefing, and context-pack surfaces as projections.
+3. Implement `BL-008 + BL-009`: make object pages readable and add source/backlink rails.
+4. Implement `BL-010`: ship the visual `/graph` MVP as a spatial corpus map.
 
 ## Documentation Rules
 

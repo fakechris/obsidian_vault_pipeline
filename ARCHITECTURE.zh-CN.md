@@ -773,6 +773,7 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 - governance / resolver contracts 还需要显式化。
 - schema versioning 和 projection compatibility 还需要工程化。
 - fitness functions 还没有落地到 CI/doctor/pre-commit。
+- reader-first home 已经成为默认入口；object page、graph、backlink、search 还需要继续产品化。
 
 ## 17. 近期架构动作
 
@@ -785,9 +786,9 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 3. 建立最小 architectural fitness functions。
 4. 明确哪些文件、registry、audit event 是 Authority。
 5. 给 `knowledge.db` 内部 projection 分类。
-6. 给 dashboard、MOC、wiki、briefing、graph、reader page、context pack 加 projection label。
-7. 引入结构化 ProjectionRepairMarker。
-8. 给 dashboard/search 加 hot-path eval。
+6. 先把 dashboard/search hot-path eval、workflow wiring eval、read/write boundary、naming discipline 做成第一批 fitness functions。
+7. 给 dashboard、MOC、wiki、briefing、graph、reader page、context pack 加 projection label。
+8. 引入结构化 ProjectionRepairMarker。
 9. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
 10. 预留 semantic_reindex lifecycle kind，但不提前锁定 LanceDB 或其它 backend。
 

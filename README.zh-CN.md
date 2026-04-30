@@ -45,7 +45,7 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 - `ovp --full --with-refine` 会在 `moc` 后追加 `refine`
 - `ovp-autopilot` 默认实时跑 `absorb -> moc -> knowledge_index`
 - `ovp-autopilot --with-refine` 会在实时链路里追加 `refine`
-- `ovp-ui` 提供本地 UI，目前偏 operator workbench；下一阶段会把默认入口改成 reader-first Knowledge Atlas
+- `ovp-ui` 提供本地 UI。默认 `/` 入口现在是 reader-first Knowledge Library，operator dashboard 放在 `/ops`；下一阶段继续把 object page 和 graph page 做成可读产品界面
 
 ## 为什么会变成现在这套架构
 
@@ -91,9 +91,9 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 | --- | --- | --- |
 | M0 Pipeline And Pack Foundation | Complete | CLI、source lifecycle、pack/profile、`knowledge.db`、KSR-013 第一版 |
 | M1 Operator Workbench And Review Runtime | Complete enough | truth UI、candidates、signals/actions、contradictions、action worker |
-| M2 Roadmap And README Consolidation | Active now | 合并历史 milestone、compiler roadmap、近期 KSR 输入与 reader-product 研究，重整 README |
-| M3 Reader-First Knowledge Atlas | Next | `/` 变成 reader home，当前 dashboard 移到 `/ops`，对象页/图谱更像知识产品 |
-| M4 KSR Safety And Hot-Path Hardening | Next | evidence span、projection 标注、candidate 风险分层、routing preview、wiring eval |
+| M2 Roadmap And README Consolidation | Complete | 已合并历史 milestone、compiler roadmap、近期 KSR 输入与 reader-product 研究，重整 README |
+| M3 Reader-First Knowledge Atlas | Active | reader home 和 `/ops` 拆分已交付；object page / graph page 仍需产品化 |
+| M4 KSR Safety And Hot-Path Hardening | Active | 下一步先做 hot-path audit 和 wiring eval，再推进 evidence span、projection 标注、candidate 风险分层、routing preview |
 | M5 Context Pack And Operational Runtime | Later | session snapshot、context budget、claim lease、provider facade、observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、skill/routine extraction、notebook/raw-source mode |
