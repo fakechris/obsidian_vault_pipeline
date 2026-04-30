@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 try:
     from .runtime import VaultLayout
@@ -29,6 +30,17 @@ def unique_child(directory: Path, name: str) -> Path:
         if not next_candidate.exists():
             return next_candidate
         counter += 1
+
+
+def clipping_raw_name(
+    source: Path,
+    sanitize_filename: Callable[[str], str],
+    *,
+    when: datetime | None = None,
+) -> str:
+    clean_name = sanitize_filename(source.stem) + ".md"
+    timestamp = (when or datetime.now()).strftime("%Y-%m-%d")
+    return f"{timestamp}_{clean_name}"
 
 
 def archive_pinboard_source(layout: VaultLayout, source: Path) -> Path:

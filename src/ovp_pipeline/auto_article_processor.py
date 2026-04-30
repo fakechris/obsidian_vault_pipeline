@@ -71,12 +71,14 @@ except ImportError:  # pragma: no cover - script mode fallback
 try:
     from .source_lifecycle import (
         archive_pinboard_source,
+        clipping_raw_name,
         is_under as lifecycle_is_under,
         unique_child as lifecycle_unique_child,
     )
 except ImportError:  # pragma: no cover - script mode fallback
     from source_lifecycle import (  # type: ignore
         archive_pinboard_source,
+        clipping_raw_name,
         is_under as lifecycle_is_under,
         unique_child as lifecycle_unique_child,
     )
@@ -602,14 +604,15 @@ class AutoArticleProcessor:
             from clippings_processor import ClippingsProcessor
 
         clippings = ClippingsProcessor(self.vault_dir, self.logger, self.txn)
-        clean_name = clippings.sanitize_filename(source.stem) + ".md"
-        new_name = f"{datetime.now().strftime('%Y-%m-%d')}_{clean_name}"
+        new_name = clipping_raw_name(source, clippings.sanitize_filename)
         destination = self._unique_child(self.raw_dir, new_name)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
 
         if not clippings.obsidian_move(source, self.raw_dir, destination.name):
             raise RuntimeError(f"failed to move clipping into raw intake: {source}")
         if not destination.exists():
+            # Obsidian CLI can report success before the destination is visible;
+            # keep the fallback so a completed move cannot leave Clippings live.
             if source.exists():
                 source.rename(destination)
             else:
