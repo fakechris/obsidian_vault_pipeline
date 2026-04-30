@@ -326,6 +326,141 @@ Example SDK body
     assert processed_file.exists()
 
 
+def test_process_single_source_moves_clipping_through_lifecycle(temp_vault, monkeypatch):
+    clipping = temp_vault / "Clippings" / "Raw Clip.md"
+    clipping.parent.mkdir(parents=True, exist_ok=True)
+    clipping.write_text(
+        """---
+title: "Raw Clip"
+source: https://example.com/raw-clip
+author: unknown
+date: 2026-04-07
+type: article
+tags: [sdk]
+---
+
+Raw clip body
+""",
+        encoding="utf-8",
+    )
+
+    logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+    txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor.article_processor = SimpleNamespace(
+        generate_interpretation=lambda **kwargs: (
+            "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
+            {"tokens": 1},
+            "tools",
+        )
+    )
+    monkeypatch.setattr(
+        processor,
+        "_prepare_interpretation_source",
+        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
+    )
+    monkeypatch.setattr(
+        "ovp_pipeline.image_downloader.ImageDownloader.process_file",
+        lambda self, file_path, backup=True: [],
+    )
+
+    def fake_obsidian_move(self, source, dest_dir, new_name=None):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        source.rename(dest_dir / (new_name or source.name))
+        return True
+
+    monkeypatch.setattr("ovp_pipeline.clippings_processor.ClippingsProcessor.obsidian_move", fake_obsidian_move)
+
+    result = processor.process_single_source(clipping, dry_run=False)
+
+    processed_files = list((temp_vault / "50-Inbox" / "03-Processed").glob("*/*Raw_Clip.md"))
+
+    assert result["status"] == "completed"
+    assert not clipping.exists()
+    assert not list((temp_vault / "50-Inbox" / "01-Raw").glob("*Raw_Clip.md"))
+    assert not list((temp_vault / "50-Inbox" / "02-Processing").glob("*Raw_Clip.md"))
+    assert len(processed_files) == 1
+
+
+def test_article_cli_process_single_uses_source_lifecycle(temp_vault, monkeypatch):
+    clipping = temp_vault / "Clippings" / "Raw Clip.md"
+    clipping.parent.mkdir(parents=True, exist_ok=True)
+    clipping.write_text("# Raw Clip\n", encoding="utf-8")
+
+    called: dict[str, object] = {}
+
+    def stub_init_llm(self, *, api_key=None, api_base=None):
+        self.llm = SimpleNamespace(model="stub-model")
+
+    def stub_process_single_source(self, file_path, dry_run=False):
+        called["file_path"] = Path(file_path)
+        called["dry_run"] = dry_run
+        return {"status": "completed", "tokens_used": 0, "output_path": "out.md"}
+
+    monkeypatch.setattr(article_module.AutoArticleProcessor, "init_llm", stub_init_llm)
+    monkeypatch.setattr(article_module.AutoArticleProcessor, "process_single_source", stub_process_single_source)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "auto_article_processor.py",
+            "--process-single",
+            str(clipping),
+            "--vault-dir",
+            str(temp_vault),
+        ],
+    )
+
+    assert article_module.main() == 0
+    assert called == {"file_path": clipping, "dry_run": False}
+
+
+def test_process_single_source_archives_pinboard_after_success(temp_vault, monkeypatch):
+    pinboard_file = temp_vault / "50-Inbox" / "02-Pinboard" / "2026-04-07_example.md"
+    pinboard_file.parent.mkdir(parents=True, exist_ok=True)
+    pinboard_file.write_text(
+        """---
+title: "Example SDK"
+source: https://example.com
+author: unknown
+date: 2026-04-07
+type: article
+tags: [sdk]
+---
+
+Example body
+""",
+        encoding="utf-8",
+    )
+
+    logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
+    txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor.article_processor = SimpleNamespace(
+        generate_interpretation=lambda **kwargs: (
+            "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
+            {"tokens": 1},
+            "tools",
+        )
+    )
+    monkeypatch.setattr(
+        processor,
+        "_prepare_interpretation_source",
+        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
+    )
+    monkeypatch.setattr(
+        "ovp_pipeline.image_downloader.ImageDownloader.process_file",
+        lambda self, file_path, backup=True: [],
+    )
+
+    result = processor.process_single_source(pinboard_file, dry_run=False)
+    archived_files = list((temp_vault / "70-Archive" / "Pinboard").glob("*/2026-04-07_example.md"))
+
+    assert result["status"] == "completed"
+    assert not pinboard_file.exists()
+    assert len(archived_files) == 1
+
+
 def test_process_inbox_restores_failed_sources_back_to_raw(temp_vault, monkeypatch):
     raw_file = temp_vault / "50-Inbox" / "01-Raw" / "2026-04-07_failure.md"
     raw_file.parent.mkdir(parents=True, exist_ok=True)
@@ -574,6 +709,8 @@ tags: [tool]
 
     assert github_module.main() == 0
     assert captured["model"] is None
+    assert not pinboard_file.exists()
+    assert len(list((temp_vault / "70-Archive" / "Pinboard").glob("*/2026-04-07_example.md"))) == 1
 
 
 def test_paper_cli_does_not_override_auto_vault_model_when_flag_is_omitted(temp_vault, monkeypatch):
@@ -618,6 +755,8 @@ tags: [paper]
 
     assert paper_module.main() == 0
     assert captured["model"] is None
+    assert not pinboard_file.exists()
+    assert len(list((temp_vault / "70-Archive" / "Pinboard").glob("*/2026-04-07_paper.md"))) == 1
 
 
 def test_article_cli_summary_handles_results_without_queued_total(temp_vault, monkeypatch, capsys):

@@ -1740,11 +1740,15 @@ class EnhancedPipeline:
                     results["processed"] += 1
 
                     # 移动到 archive
-                    month_dir = archive_dir / datetime.now().strftime("%Y-%m")
-                    month_dir.mkdir(parents=True, exist_ok=True)
-                    archive_file = month_dir / f.name
-                    f.rename(archive_file)
-                    self.logger.log("pinboard_process_file_completed", {"file": f.name, "processor": url_type, "archived_to": str(archive_file)})
+                    if f.exists():
+                        month_dir = archive_dir / datetime.now().strftime("%Y-%m")
+                        month_dir.mkdir(parents=True, exist_ok=True)
+                        archive_file = month_dir / f.name
+                        f.rename(archive_file)
+                        archived_to = str(archive_file)
+                    else:
+                        archived_to = "processor-managed"
+                    self.logger.log("pinboard_process_file_completed", {"file": f.name, "processor": url_type, "archived_to": archived_to})
                     if self.txn_id:
                         self.txn.heartbeat(
                             self.txn_id,

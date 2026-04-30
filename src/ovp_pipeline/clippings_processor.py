@@ -34,6 +34,11 @@ try:
 except ImportError:
     from runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
+try:
+    from .source_lifecycle import clipping_raw_name
+except ImportError:
+    from source_lifecycle import clipping_raw_name  # type: ignore
+
 
 VAULT_DIR = resolve_vault_dir()
 DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
@@ -316,10 +321,7 @@ class ClippingsProcessor:
                 "status": "pending"
             }
 
-            # 清理文件名
-            clean_name = self.sanitize_filename(file_path.stem) + ".md"
-            date_prefix = datetime.now().strftime("%Y-%m-%d")
-            new_name = f"{date_prefix}_{clean_name}"
+            new_name = clipping_raw_name(file_path, self.sanitize_filename)
 
             file_info["new_name"] = new_name
 

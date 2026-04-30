@@ -59,6 +59,11 @@ try:
 except ImportError:
     from markdown_generation import sanitize_generated_markdown  # type: ignore
 
+try:
+    from .source_lifecycle import maybe_archive_pinboard_process_single
+except ImportError:
+    from source_lifecycle import maybe_archive_pinboard_process_single  # type: ignore
+
 
 VAULT_DIR = resolve_vault_dir()
 DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
@@ -530,6 +535,12 @@ def main():
             description=item["description"],
             llm_client=llm_client,
             output_dir=args.output_dir,
+            dry_run=args.dry_run,
+        )
+        maybe_archive_pinboard_process_single(
+            layout,
+            args.process_single if args.process_single and len(urls_to_process) == 1 else None,
+            result,
             dry_run=args.dry_run,
         )
         results.append(result)

@@ -12,6 +12,7 @@ from ..auto_article_processor import AutoArticleProcessor, PipelineLogger, Trans
 from ..clippings_processor import ClippingsProcessor
 from ..evidence import build_evidence_payload
 from ..runtime import VaultLayout, resolve_vault_dir
+from ..source_lifecycle import clipping_raw_name
 
 ISO_DATE_PREFIX_LEN = 10
 
@@ -96,9 +97,7 @@ def _clipping_raw_name(
     *,
     when: datetime | None = None,
 ) -> str:
-    clean_name = processor.sanitize_filename(source.stem) + ".md"
-    timestamp = (when or datetime.now()).strftime("%Y-%m-%d")
-    return f"{timestamp}_{clean_name}"
+    return clipping_raw_name(source, processor.sanitize_filename, when=when)
 
 
 def _move_clipping_to_raw(
