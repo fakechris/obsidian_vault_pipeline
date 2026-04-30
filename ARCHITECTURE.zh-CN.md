@@ -279,6 +279,7 @@ Layer 4 是 OVP 的控制面。
 - focused action handlers
 - signals/actions
 - doctor checks
+- projection repair marker lifecycle
 - pack contracts
 - workflow/profile routing
 
@@ -532,7 +533,12 @@ Operational rules:
 - 如果 marker 的 `authority_schema_version` 小于当前 Authority schema version，resolver 必须提升到 `full_rebuild`。
 - 如果 projection backend 支持 partial rebuild，scope 必须被用于限制 rebuild 范围。
 
-当前 OVP 对 “derived 可重建” 已经有原则和习惯，但 marker/control plane 还不够显式。
+当前实现：
+
+- `projection_lifecycle.py` 将 projection repair marker events 记录在 `60-Logs/projection-repair.jsonl`。
+- marker event log 通过 `written`、`superseded`、`claimed`、`closed` events replay 出当前 marker state。
+- `ensure_knowledge_db_current()` 在 `knowledge.db` 缺失或 legacy schema 不兼容时，会写入并关闭一个 `full_rebuild` marker。
+- 更完整的 Authority/projection schema metadata contract 仍是 partial：当前代码有 schema constant 和 rebuild trigger，但还没有持久化 `.ovp/schema_version` 或 `knowledge.db` 内部 projection metadata。
 
 ## 11. Canonical Scenarios
 
@@ -771,11 +777,11 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 - canonical artifact contract 仍需继续一等公民化；derived evidence rows 已有第一版 line/char span schema，但 factual evidence_kind enforcement 和 claim lifecycle 字段仍需加强。
 - Layer 4 子轴还没有完全反映到代码结构。
 - projection labels 已经贯穿核心 access payload 和 materialized reader artifacts；doctor/export enforcement 以及未来新增 surface 还需要持续消费这些标注。
-- projection lifecycle marker 还没有明确区分 metadata_only / full_rebuild / semantic_reindex。
+- projection lifecycle marker 已有结构化 kind/scope/reason、supersession、claim lease，并已接入 `knowledge.db` rebuild 路径。
 - dashboard/search hot path、workflow wiring、source routing preview、evidence span backfill 和 candidate risk 已经有第一批 fitness checks；更深的 evidence completeness、projection replay、import-boundary checks 仍未完成。
 - context assembly recipes 还需要收束。
 - governance / resolver contracts 还需要显式化。
-- schema versioning 和 projection compatibility 还需要工程化。
+- schema versioning 已经有第一版 rebuild marker trigger；Authority/projection version metadata 持久化仍需工程化。
 - fitness functions 只落地了第一批，仍需扩展到 CI/doctor/pre-commit 的完整契约。
 - reader-first home 已经成为默认入口；object page 已有 reader profile、source rail 和按 kind 区分的 reader lens；`/graph` 已有第一版 spatial map projection；`/search` 已按 kind、summary、evidence count、match reason 组织 reader results。
 
@@ -786,10 +792,10 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 优先顺序：
 
 1. 新增 access surface 时必须继续带 projection metadata，并补 doctor/export checks 验证标注存在。
-2. 第一版 reader-facing product loop 已经成形，下一步转向 projection repair lifecycle 和 schema-version rebuild trigger。
+2. 第一版 rebuild-marker trigger 已接上，下一步补完 schema-version metadata contract。
 3. 在扩大自动 promotion 前，补更严格的 factual evidence completeness checks。
-4. 引入结构化 ProjectionRepairMarker。
-5. 给 Authority 和 derived projection state 增加 schema version 字段。
+4. 给 Authority 和 derived projection state 增加 schema version 字段。
+5. 扩展 doctor/export checks，同时验证 projection marker replay 和 projection labels。
 6. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
 7. 预留 semantic_reindex lifecycle kind，但不提前锁定 LanceDB 或其它 backend。
 
@@ -807,8 +813,8 @@ Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
 | Candidate risk layering | `BL-007`, `KSR-003` 已在 PR #82 交付 |
 | Reader-first access surfaces | `BL-001`；`BL-008`、`BL-009` 已通过 PR #79 和 PR #83 交付；`BL-010` 已在 PR #80 交付 |
 | Reader-oriented search | `BL-011` 已在 PR #84 交付 |
-| Projection repair lifecycle | `BL-020` |
-| Schema versioning and migration trigger | `BL-021` |
+| Projection repair lifecycle | `BL-020` 已在 PR #87 落地 |
+| Schema versioning and migration trigger | `BL-021` 已在 PR #87 落地第一片 |
 
 ## Bottom Line
 

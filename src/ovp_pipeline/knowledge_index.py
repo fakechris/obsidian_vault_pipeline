@@ -17,12 +17,14 @@ from .graph.frontmatter import FrontmatterParser, NoteMetadata
 from .graph.link_parser import LinkParser
 from .identity import canonicalize_note_id
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
+from .projection_lifecycle import close_projection_repair_marker, write_projection_repair_marker
 from .runtime import VaultLayout, knowledge_db_write_lock, resolve_vault_dir
 from .truth_projection_registry import execute_truth_projection_builder, resolve_truth_projection_builder
 from .truth_store import TRUTH_STORE_SCHEMA
 
 SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
+AUTHORITY_SCHEMA_VERSION = 1
 
 
 _FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
@@ -528,8 +530,24 @@ def _initialize_database(db_path: Path) -> sqlite3.Connection:
 def _ensure_knowledge_db(vault_dir: Path) -> tuple[Path, VaultLayout]:
     resolved_vault = resolve_vault_dir(vault_dir)
     layout = VaultLayout.from_vault(resolved_vault)
-    if not layout.knowledge_db.exists() or not _knowledge_db_supports_pack_schema(layout.knowledge_db):
+    rebuild_reason = ""
+    if not layout.knowledge_db.exists():
+        rebuild_reason = "knowledge_db_missing"
+    elif not _knowledge_db_supports_pack_schema(layout.knowledge_db):
+        rebuild_reason = "knowledge_db_schema_incompatible"
+
+    if rebuild_reason:
+        marker = write_projection_repair_marker(
+            resolved_vault,
+            kind="full_rebuild",
+            scope={"projection_kind": "knowledge_db"},
+            reason=rebuild_reason,
+            caused_by="ensure_knowledge_db_current",
+            authority_schema_version=AUTHORITY_SCHEMA_VERSION,
+            projection_schema_version=0,
+        )
         rebuild_knowledge_index(resolved_vault)
+        close_projection_repair_marker(resolved_vault, marker.marker_id)
     return resolved_vault, layout
 
 

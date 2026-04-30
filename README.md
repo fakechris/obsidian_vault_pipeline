@@ -102,9 +102,9 @@ Current milestone sequence:
 
 Current active backlog focus:
 
-- Shipped: `KSR-001` evidence spans, `KSR-002` projection labels, `KSR-003` candidate risk tiers, `KSR-014` article routing preview, `KSR-015` dashboard/search hot-path audit, `KSR-018` markdown-aware evidence span backfill, `KSR-026` workflow wiring eval suite.
+- Shipped: `KSR-001` evidence spans, `KSR-002` projection labels, `KSR-003` candidate risk tiers, `KSR-014` article routing preview, `KSR-015` dashboard/search hot-path audit, `KSR-018` markdown-aware evidence span backfill, `KSR-026` workflow wiring eval suite, and the first structured projection repair marker lifecycle.
 - Product shipped: readable object page profiles, source/backlink rail, kind-specific reader lenses, visual `/graph` map, and reader-oriented search grouped by kind, evidence, and reason.
-- Next: projection repair lifecycle and schema-version rebuild triggers.
+- Next: finish the schema/version metadata contract, then move into trusted reuse events and context-pack loops.
 - Product track: reader-first Knowledge Atlas stays a projection layer, not a new state system.
 
 ## Domain Packs
