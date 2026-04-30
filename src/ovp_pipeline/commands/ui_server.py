@@ -39,6 +39,7 @@ from ..ui.view_models import (
     build_derivation_browser_payload,
     build_evolution_browser_payload,
     build_event_dossier_payload,
+    build_graph_map_payload,
     build_note_page_payload,
     build_object_page_payload,
     build_objects_index_payload,
@@ -2647,6 +2648,99 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/clusters") -> s
     )
 
 
+def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str:
+    query = payload.get("query", "")
+    requested_pack = payload.get("requested_pack", "")
+    layout = payload["layout"]
+    clusters = (
+        "".join(
+            "<li>"
+            f"<a href='{escape(str(cluster['detail_path']))}'>{escape(str(cluster['title']))}</a>"
+            f" <span class='pill'>{escape(str(cluster['priority_band']))}</span>"
+            f" <span class='muted'>{cluster['member_count']} objects</span>"
+            f"<div class='muted'>{escape(str(cluster['summary']))}</div>"
+            "</li>"
+            for cluster in payload["clusters"][:6]
+        )
+        or "<li class='muted'>No graph clusters found yet.</li>"
+    )
+    notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
+    payload = {
+        **payload,
+        "_node_lookup": {str(node["object_id"]): node for node in payload["nodes"]},
+    }
+    edge_lines = "".join(
+        "<line "
+        f"x1='{payload['_node_lookup'][edge['source_object_id']]['x']}' "
+        f"y1='{payload['_node_lookup'][edge['source_object_id']]['y']}' "
+        f"x2='{payload['_node_lookup'][edge['target_object_id']]['x']}' "
+        f"y2='{payload['_node_lookup'][edge['target_object_id']]['y']}' "
+        "stroke='#c7b8a6' stroke-width='1.4' stroke-opacity='0.7'>"
+        f"<title>{escape(edge['source_title'])} -> {escape(edge['target_title'])}: {escape(edge['edge_kind'])}</title>"
+        "</line>"
+        for edge in payload["edges"]
+        if edge["source_object_id"] in payload["_node_lookup"]
+        and edge["target_object_id"] in payload["_node_lookup"]
+    )
+    node_marks = "".join(
+        "<a "
+        f"href='{escape(str(node['path']))}' aria-label='{escape(str(node['title']))}'>"
+        f"<circle cx='{node['x']}' cy='{node['y']}' r='{node['radius']}' fill='#9f4f24' "
+        "stroke='#fffdfa' stroke-width='2'>"
+        f"<title>{escape(str(node['title']))} · {escape(str(node['kind_label']))} · {node['degree']} links</title>"
+        "</circle>"
+        f"<text x='{node['x']}' y='{float(node['y']) + float(node['radius']) + 13}' "
+        "text-anchor='middle' font-size='12' fill='#3c332b'>"
+        f"{escape(str(node['title']))}</text>"
+        "</a>"
+        for node in payload["nodes"]
+    )
+    return _layout(
+        "Knowledge Graph",
+        "".join(
+            [
+                "<h1>Knowledge Graph</h1>",
+                "<p class='muted'>A reader map of nearby concepts, claims, people, and sources in this vault.</p>",
+                f"<form method='get' action='{escape(action_path)}'>",
+                (
+                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+                    if requested_pack
+                    else ""
+                ),
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter the map' /> ",
+                "<button type='submit'>Search</button>",
+                "</form>",
+                "<section class='grid stats'>",
+                f"<div class='card'><h2>Ideas</h2><p>{payload['map_summary']['node_count']}</p></div>",
+                f"<div class='card'><h2>Connections</h2><p>{payload['map_summary']['edge_count']}</p></div>",
+                f"<div class='card'><h2>Neighborhoods</h2><p>{payload['map_summary']['cluster_count']}</p></div>",
+                "</section>",
+                "<section class='card'>",
+                "<h2>Map</h2>",
+                f"<svg id='graph-map-canvas' role='img' aria-label='Knowledge graph map' viewBox='0 0 {layout['width']} {layout['height']}' "
+                "style='width:100%;height:auto;max-height:68vh;background:#fffdfa;border:1px solid #e7e1d8;border-radius:8px'>",
+                edge_lines,
+                node_marks,
+                "</svg>",
+                "</section>",
+                "<section class='grid two-col'>",
+                "<section class='card'><h2>How To Read This Map</h2>"
+                "<ul class='list-tight'>"
+                "<li>Each dot is a knowledge object you can open.</li>"
+                "<li>Lines show accepted graph relations from the local projection.</li>"
+                "<li>Nearby groups are reading neighborhoods, not canonical truth boundaries.</li>"
+                "</ul></section>",
+                "<section class='card'><h2>Neighborhoods</h2>"
+                f"<p><a href='{escape(_shell_href('/clusters', requested_pack))}'>Open Cluster Browser</a></p>"
+                f"<ul class='list-tight'>{clusters}</ul></section>",
+                "</section>",
+                f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{notes}</ul></section>",
+            ]
+        ),
+        requested_pack=requested_pack,
+    )
+
+
 def _render_cluster_detail_page(payload: dict) -> str:
     cluster = payload["cluster"]
     requested_pack = payload.get("requested_pack", "")
@@ -4882,6 +4976,29 @@ def create_server(
                     )
                     self._write_html(_render_clusters_page(payload))
                     return
+                if path == "/api/graph":
+                    q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/graph", api=True
+                    ):
+                        return
+                    self._write_json(
+                        build_graph_map_payload(resolved_vault, pack_name=pack_name, query=q)
+                    )
+                    return
+                if path == "/graph":
+                    q = query.get("q", [""])[0]
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/graph", api=False
+                    ):
+                        return
+                    payload = build_graph_map_payload(
+                        resolved_vault, pack_name=pack_name, query=q
+                    )
+                    self._write_html(_render_graph_map_page(payload, action_path="/graph"))
+                    return
                 if path == "/map":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
@@ -4889,10 +5006,10 @@ def create_server(
                         pack_name=pack_name, route_path="/map", api=False
                     ):
                         return
-                    payload = build_cluster_browser_payload(
+                    payload = build_graph_map_payload(
                         resolved_vault, pack_name=pack_name, query=q
                     )
-                    self._write_html(_render_clusters_page(payload, action_path="/map"))
+                    self._write_html(_render_graph_map_page(payload, action_path="/map"))
                     return
                 if path == "/api/cluster":
                     cluster_id = self._required(query, "id")
