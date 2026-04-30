@@ -1853,6 +1853,30 @@ def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
     )
 
 
+def _render_kind_profile_card(payload: dict) -> str:
+    profile = payload.get("kind_profile") or {}
+    prompts = profile.get("reading_prompts") or []
+    prompt_html = (
+        "".join(
+            "<li>"
+            f"<strong>{escape(str(item.get('label') or 'Prompt'))}</strong>"
+            f"<p class='muted'>{escape(str(item.get('detail') or ''))}</p>"
+            "</li>"
+            for item in prompts
+            if isinstance(item, dict)
+        )
+        or "<li class='muted'>Start with the summary, then verify against sources.</li>"
+    )
+    return (
+        "<section class='card'><h2>"
+        f"{escape(str(profile.get('title') or 'Object Brief'))}"
+        "</h2>"
+        f"<p>{escape(str(profile.get('primary_question') or 'What should I understand here?'))}</p>"
+        f"<ul class='list-tight'>{prompt_html}</ul>"
+        "</section>"
+    )
+
+
 def _render_object_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     research_shell_enabled = bool(
@@ -2018,6 +2042,7 @@ def _render_object_page(payload: dict) -> str:
         right_sections.append(_render_research_scope_notice(requested_pack))
     right_sections.extend(
         [
+            _render_kind_profile_card(payload),
             _render_source_backlink_rail(payload, requested_pack=requested_pack),
             "<section class='card'><h2>Context</h2><dl class='meta-list'>"
             f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"

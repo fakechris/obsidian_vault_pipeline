@@ -33,7 +33,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 | M0 Pipeline And Pack Foundation | Done | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first source-lifecycle idempotency slice |
 | M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and the English-primary docs structure |
-| M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, first object source/backlink rail, and visual graph map shipped; deeper kind-specific object layouts remain |
+| M3 Reader-First Knowledge Atlas | Active | reader home, `/ops` split, object source/backlink rail, visual graph map, and kind-specific object reader lenses shipped; reader search remains |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk shipped; deeper enforcement remains |
 | M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facade, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
@@ -50,7 +50,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 | Article routing preview | `BL-005`, `KSR-014` done in PR #81 |
 | Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` done in PR #82 |
 | Candidate risk layering | `BL-007`, `KSR-003` done in PR #82 |
-| Kind-aware object pages and backlink rail | `BL-008` partial and `BL-009` done in PR #79 |
+| Kind-aware object pages and backlink rail | `BL-008` and `BL-009` done through PR #79 and PR #83 |
 | Visual graph MVP | `BL-010` done in PR #80 |
 | Projection repair lifecycle | `BL-020` |
 | Schema versioning and migration trigger | `BL-021` |
@@ -59,9 +59,9 @@ That means the user-facing product should make compiled knowledge easy to read f
 
 Recommended order:
 
-1. Continue `BL-008`: deeper per-kind object layouts beyond the first reader profile.
-2. Implement `BL-011`: reader-oriented search grouped by kind, summary, evidence, and reason.
-3. Return to `BL-020 + BL-021` when projection repair and schema migration need operational hardening.
+1. Implement `BL-011`: reader-oriented search grouped by kind, summary, evidence, and reason.
+2. Return to `BL-020 + BL-021` when projection repair and schema migration need operational hardening.
+3. Move into `BL-012 + BL-013` once the reader surfaces need stronger reuse and context-pack loops.
 
 ## Documentation Rules
 

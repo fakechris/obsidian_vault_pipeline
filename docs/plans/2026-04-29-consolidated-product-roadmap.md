@@ -161,6 +161,7 @@ First PR slice:
 Second PR slice:
 
 - kind-aware object pages for person, concept, company/tool/project, event, claim
+- kind-specific reader lenses and section labels for those object pages
 - backlink/mention rail with excerpts and source jumps
 - raw audit/provenance kept secondary and expandable
 
@@ -313,5 +314,5 @@ The better sequence is likely:
 
 1. reader shell route split (`/` vs `/ops`)
 2. hot-path/wiring evals
-3. kind-aware object pages and backlink rail
+3. kind-aware object pages, reader lenses, and backlink rail
 4. visual graph MVP
