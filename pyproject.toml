@@ -119,6 +119,7 @@ ovp-promote-backfill = "ovp_pipeline.commands.promote_backfill:main"
 ovp-link-suggest = "ovp_pipeline.commands.link_suggest:main"
 ovp-build-crystals = "ovp_pipeline.commands.build_crystals:main"
 ovp-working-memory = "ovp_pipeline.commands.working_memory:main"
+ovp-prime = "ovp_pipeline.commands.prime:main"
 
 [project.entry-points."ovp.packs"]
 default-knowledge = "ovp_pipeline.packs.default_knowledge:get_pack"

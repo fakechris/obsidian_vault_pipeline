@@ -53,6 +53,7 @@ OVP 正在从 document-processing pipeline 变成：
 | Kind-aware object pages and backlink rail | `BL-008`、`BL-009` 已通过 PR #79 和 PR #83 交付 |
 | Visual graph MVP | `BL-010` 已在 PR #80 交付 |
 | Reader-oriented search | `BL-011` 已在 PR #84 交付 |
+| Trusted reuse context pack / OVP prime | `BL-012`、`BL-013` 第一版已在 PR #89 和 PR #90 交付 |
 | Projection repair lifecycle | `BL-020` 已在 PR #87 落地 |
 | Schema versioning and migration trigger | `BL-021` 已在 PR #87 和 PR #88 中补完 |
 
@@ -60,9 +61,9 @@ OVP 正在从 document-processing pipeline 变成：
 
 建议顺序：
 
-1. 继续 `BL-012 + BL-013`：基于带 budget 的 working-memory context pack，补 session snapshot / OVP prime input。
-2. 当 operational runtime observability 成为下一个瓶颈时，再进入 `BL-014`。
-3. 当 permission 和 claim lifecycle 成为主动瓶颈时，再进入 `BL-015`。
+1. 进入 `BL-014`：operational runtime graph、claim lease、provider facade 和 observability。
+2. 当 permission 和 claim lifecycle 成为主动瓶颈时，再进入 `BL-015`。
+3. 只有当新的 reuse surface 需要同一套 context-pack contract 时，再回到 `BL-012 + BL-013`。
 
 ## 文档规则
 

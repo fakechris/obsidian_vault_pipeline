@@ -11,8 +11,9 @@ This module owns the contract:
 Closed `event_type` vocabulary (forward-compat for Phase 37 Pulse feed):
 
   trusted_reuse_event      — Phase 32. Canonical object consumed by a surface
-                             (query|briefing|working_memory|writing_prompt|
-                              compiled_view|export|truth_api|prompt).
+                             (query|briefing|working_memory|ovp_prime|
+                              writing_prompt|compiled_view|export|truth_api|
+                              prompt).
   promotion                — Phase 32/34/35. State boundary crossed
                              (candidate→canonical, draft→accepted,
                               relation_candidate→relation_row).
