@@ -93,20 +93,16 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 | M1 Operator Workbench And Review Runtime | Complete enough | truth UI、candidates、signals/actions、contradictions、action worker |
 | M2 Roadmap And README Consolidation | Complete | 已合并历史 milestone、compiler roadmap、近期 KSR 输入与 reader-product 研究，重整 README |
 | M3 Reader-First Knowledge Atlas | Active | reader home 和 `/ops` 拆分已交付；object page / graph page 仍需产品化 |
-| M4 KSR Safety And Hot-Path Hardening | Active | 下一步先做 hot-path audit 和 wiring eval，再推进 evidence span、projection 标注、candidate 风险分层、routing preview |
+| M4 KSR Safety And Hot-Path Hardening | Active | projection 标注、hot-path audit、wiring eval 已交付；下一步推进 evidence span、candidate 风险分层、routing preview，以及 object/graph 的产品化 |
 | M5 Context Pack And Operational Runtime | Later | session snapshot、context budget、claim lease、provider facade、observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、skill/routine extraction、notebook/raw-source mode |
 
-当前 P0 候选 backlog（合并草案）：
+当前 active backlog 重点：
 
-- `KSR-002` Projection 标注
-- `KSR-015` Dashboard/search hot-path audit
-- `KSR-026` Workflow wiring eval suite
-- `KSR-014` Article routing preview
-- `KSR-001` Evidence span 化
-- `KSR-003` Candidate 风险分层
-- Reader-first Knowledge Atlas（产品 P0，作为 projection layer 实现，不另建状态系统）
+- 已交付：`KSR-002` Projection 标注、`KSR-015` Dashboard/search hot-path audit、`KSR-026` Workflow wiring eval suite。
+- 下一步：`KSR-014` Article routing preview、`KSR-001` Evidence span 化、`KSR-003` Candidate 风险分层。
+- 产品线：Reader-first Knowledge Atlas 作为 projection layer 实现，不另建状态系统。
 
 ## Domain Packs
 
@@ -198,7 +194,7 @@ profile 是某个 pack 下的一条可执行 DAG。
 - `ovp-truth`
   直接读取 `knowledge.db` 中的 object / contradiction / neighborhood truth rows
 - `ovp-ui`
-  启动一个本地 UI。当前默认页偏 operator dashboard；路线图会把 reader-facing atlas 设为首页，并把现有 dashboard 移到 `/ops`
+  启动一个本地 UI。默认 `/` 入口是 reader-first Knowledge Library；operator dashboard 放在 `/ops`
 - `docs/research-tech/RESEARCH_TECH_SKILLPACK.md`
 - `docs/research-tech/RESEARCH_TECH_VERIFY.md`
 - `docs/recipes/research-tech/*.md`
@@ -570,7 +566,7 @@ HTTP_PROXY=http://127.0.0.1:7897
 - `registry` 与文件系统共同定义 canonical 状态
 - `knowledge.db` 只做 derived retrieval，不做第二真相源
 - 吸收是日常自动化的一部分；整形是强能力，但默认 opt-in
-- Wiki、MOC、Dashboard、Briefing、Context Pack 都是 projection，必须能追回 source/evidence
+- Wiki、MOC、Dashboard、Briefing、Graph、Reader Page、Context Pack 都是 projection，已带显式 projection metadata，并且必须能追回 source/evidence
 - Reader-facing UI 应先让用户理解知识，再暴露 operator/debug 细节
 - 文档必须描述“现在真实能跑的东西”，不是未来路线图
 

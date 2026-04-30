@@ -45,6 +45,11 @@ except ImportError:
     from packs.loader import DEFAULT_PACK_NAME  # type: ignore
 
 try:
+    from .projection_labels import frontmatter_projection_fields
+except ImportError:
+    from projection_labels import frontmatter_projection_fields  # type: ignore
+
+try:
     from .llm_defaults import (
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
         DEFAULT_MINIMAX_API_BASE,
@@ -420,10 +425,21 @@ title: {question}
         if moc_file.exists():
             content = moc_file.read_text(encoding='utf-8')
         else:
-            content = """---
+            projection_fields = "\n".join(
+                frontmatter_projection_fields(
+                    surface="moc_queries",
+                    projection_kind="compiled_wiki_projection",
+                    owner_pack=self.pack,
+                    generated_by="ovp-query",
+                    derived_from=("query results", "user query"),
+                    rebuild_policy="append_on_query_save",
+                )
+            )
+            content = f"""---
 title: "MOC - 查询归档"
 date: 2026-04-03
 type: moc
+{projection_fields}
 ---
 
 # MOC - 查询归档

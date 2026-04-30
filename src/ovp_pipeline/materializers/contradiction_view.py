@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ..derived.paths import compiled_view_path
 from ..knowledge_index import list_contradictions
+from ..projection_labels import markdown_projection_lines
 from ..runtime import VaultLayout, resolve_vault_dir
 
 
@@ -20,6 +21,14 @@ def materialize_contradiction_view(vault_dir: Path, *, pack_name: str, view_name
         "",
         f"- pack: {pack_name}",
         "- builder: contradiction_view",
+        *markdown_projection_lines(
+            surface="contradiction_view",
+            projection_kind="compiled_wiki_projection",
+            owner_pack=pack_name,
+            generated_by="materialize_contradiction_view",
+            derived_from=("knowledge.db.contradictions", "review audit"),
+            rebuild_policy="on_derived_refresh",
+        ),
         "",
         "## Contradiction Records",
         "",

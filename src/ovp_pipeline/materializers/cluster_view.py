@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..derived.paths import compiled_view_path
+from ..projection_labels import markdown_projection_lines
 from ..runtime import VaultLayout, resolve_vault_dir
 from ..ui.view_models import build_cluster_browser_payload
 
@@ -21,6 +22,14 @@ def materialize_cluster_view(vault_dir: Path, *, pack_name: str, view_name: str)
         "",
         f"- pack: {pack_name}",
         "- builder: cluster_view",
+        *markdown_projection_lines(
+            surface="cluster_view",
+            projection_kind="compiled_wiki_projection",
+            owner_pack=pack_name,
+            generated_by="materialize_cluster_view",
+            derived_from=("knowledge.db.graph_clusters", "knowledge.db.graph_edges"),
+            rebuild_policy="on_derived_refresh",
+        ),
         "",
         "## Graph Clusters",
         "",

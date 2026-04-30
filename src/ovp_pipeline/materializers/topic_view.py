@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from ..derived.paths import compiled_view_path
+from ..projection_labels import markdown_projection_lines
 from ..runtime import VaultLayout, resolve_vault_dir
 
 
@@ -39,6 +40,14 @@ def materialize_topic_view(vault_dir: Path, *, pack_name: str, view_name: str) -
         "",
         f"- pack: {pack_name}",
         "- builder: topic_view",
+        *markdown_projection_lines(
+            surface="topic_view",
+            projection_kind="compiled_wiki_projection",
+            owner_pack=pack_name,
+            generated_by="materialize_topic_view",
+            derived_from=("knowledge.db",),
+            rebuild_policy="on_derived_refresh",
+        ),
         "",
         "## Object Summaries",
         "",

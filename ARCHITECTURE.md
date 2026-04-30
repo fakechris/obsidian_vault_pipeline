@@ -658,8 +658,8 @@ Current implementation roughly maps as follows:
 Main gaps:
 
 - Layer 1 claim/evidence contracts are not explicit enough yet.
-- Layer 2 / Layer 3 projection labels are incomplete.
-- Layer 4 fitness checks are not fully implemented.
+- Layer 2 / Layer 3 projection labels now exist on core access payloads and materialized reader artifacts; doctor/export enforcement and future surfaces still need to consume them consistently.
+- Layer 4 fitness checks now cover the first hot-path and workflow-wiring cases; evidence completeness, projection replay, and import-boundary checks are still open.
 - Projection lifecycle markers need structured schema, scope, lease, and supersession.
 - Schema versioning is not yet wired into projection lifecycle.
 - The reader-first home is now the default entry; object pages, graph, backlinks, and search still need product shape.
@@ -668,12 +668,12 @@ Main gaps:
 
 Recommended order:
 
-1. Move backlog mapping out of architecture prose and into `BACKLOG.md`.
-2. Implement the first fitness checks for hot-path access, workflow wiring, read/write boundary, and naming discipline.
-3. Add projection labels for dashboard, MOC, wiki, briefing, reader pages, graph, and context packs.
-4. Introduce structured `ProjectionRepairMarker` schema.
-5. Add schema version fields to Authority and derived projection state.
-6. Continue reader-first Layer 3 product work on object pages, graph, backlinks, and search.
+1. Keep projection metadata attached to new access surfaces and add doctor/export checks that verify the labels are present.
+2. Continue reader-first Layer 3 product work on object pages, graph, backlinks, and search.
+3. Add evidence spans and factual evidence completeness checks.
+4. Add candidate risk tiers and routing preview before expanding automatic promotion.
+5. Introduce structured `ProjectionRepairMarker` schema.
+6. Add schema version fields to Authority and derived projection state.
 
 ## Appendix: Backlog Mapping
 
@@ -681,9 +681,9 @@ The architecture should not depend on backlog IDs to be valid. The table below i
 
 | Architecture work | Current backlog/task mapping |
 | --- | --- |
-| Projection marking | `BL-002`, `KSR-002` |
-| Dashboard/search hot-path audit | `BL-003`, `KSR-015` |
-| Workflow wiring eval suite | `BL-004`, `KSR-026` |
+| Projection marking | `BL-002`, `KSR-002` shipped in PR #78 |
+| Dashboard/search hot-path audit | `BL-003`, `KSR-015` shipped in PR #77 |
+| Workflow wiring eval suite | `BL-004`, `KSR-026` shipped in PR #77 |
 | Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` |
 | Candidate risk layering | `BL-007`, `KSR-003` |
 | Reader-first access surfaces | `BL-001`, `BL-008`, `BL-009`, `BL-010` |
