@@ -48,6 +48,8 @@ LAYER_MAP = {
         "identity",
         "concept_registry",
         "concept_resolver",
+        "object_registry",
+        "semantic_relation_registry",
     },
     "L2_derived": {
         "truth_store",
@@ -55,6 +57,9 @@ LAYER_MAP = {
         "graph",
         "graph_cli",
         "lint_checker",
+        "discovery",
+        "evidence",
+        "evidence_replay",
     },
     "L3_assembly": {
         "query_tool",
@@ -65,6 +70,8 @@ LAYER_MAP = {
         "governance_registry",
         "promote_candidates",
         "batch_evergreen",
+        "relation_promotion",
+        "refine",
     },
 }
 
@@ -72,11 +79,14 @@ FORBIDDEN_DEPS = [
     ("L1_canonical", "L4_governance"),
     ("L1_canonical", "L3_assembly"),
     ("L1_canonical", "L2_derived"),
+    ("L2_derived", "L4_governance"),
 ]
 
 EXCLUDED_FROM_LAYER_CHECK = {
     "truth_api",
+    "_truth_helpers",
     "commands/ui_server",
+    "commands/_ui_renderers",
 }
 
 
@@ -185,6 +195,62 @@ def test_no_direct_sqlite_in_non_data_modules(repo_root):
         if "import sqlite3" in text or "sqlite3.connect" in text:
             violations.append(rel)
     assert not violations, f"Unexpected sqlite3 usage in: {violations}"
+
+
+# ---------------------------------------------------------------------------
+# Doctor bypass detection (tech-debt baseline)
+# ---------------------------------------------------------------------------
+
+DOCTOR_SQLITE_MAX = 6
+
+
+def test_doctor_sqlite_bypass_count(repo_root):
+    """Track doctor.py direct sqlite3.connect calls as tech-debt baseline.
+
+    doctor.py uses direct sqlite3 reads for health checks (no rebuild trigger).
+    This test pins the current count so new bypasses are caught.
+    """
+    doctor = repo_root / "src" / "ovp_pipeline" / "commands" / "doctor.py"
+    if not doctor.exists():
+        return
+    text = doctor.read_text(encoding="utf-8")
+    count = text.count("sqlite3.connect")
+    assert count <= DOCTOR_SQLITE_MAX, (
+        f"doctor.py has {count} sqlite3.connect calls (baseline: {DOCTOR_SQLITE_MAX}). "
+        f"New bypasses should use truth_api/truth_queries instead."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Layer violation summary (informational, not blocking)
+# ---------------------------------------------------------------------------
+
+def test_layer_violation_count_baseline(repo_root):
+    """Track total known layer violations as a decreasing baseline."""
+    src = repo_root / "src" / "ovp_pipeline"
+    violations = []
+    for py in sorted(src.rglob("*.py")):
+        rel = str(py.relative_to(src)).replace(".py", "").replace("/__init__", "")
+        if rel == "__init__":
+            continue
+        if any(rel == ex or rel.endswith(f"/{ex}") for ex in EXCLUDED_FROM_LAYER_CHECK):
+            continue
+        stem = rel.split("/")[-1]
+        source_layer = _module_to_layer(stem)
+        if source_layer is None:
+            continue
+        for imported in _extract_ovp_imports(py):
+            target_layer = _module_to_layer(imported)
+            if target_layer is None:
+                continue
+            if (source_layer, target_layer) in FORBIDDEN_DEPS:
+                violations.append(
+                    f"{rel} ({source_layer}) imports {imported} ({target_layer})"
+                )
+    assert len(violations) <= 5, (
+        f"Layer violations increased to {len(violations)} (baseline: 5):\n"
+        + "\n".join(violations)
+    )
 
 
 @pytest.mark.parametrize("path", ["/", "/search?q=alpha", "/objects"])
