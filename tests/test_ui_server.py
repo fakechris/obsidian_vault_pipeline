@@ -536,6 +536,21 @@ def test_ui_server_ops_route_renders_runtime_state_card(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
     from ovp_pipeline.projection_lifecycle import write_projection_repair_marker
 
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        json.dumps(
+            {
+                "action_id": "action::queued",
+                "action_kind": "deep_dive_workflow",
+                "status": "queued",
+                "created_at": "2026-04-30T12:00:00Z",
+                "safe_to_run": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     write_projection_repair_marker(
         temp_vault,
         kind="metadata_only",
@@ -564,6 +579,7 @@ def test_ui_server_ops_route_renders_runtime_state_card(temp_vault):
     assert "System Health" in body
     assert "Runtime state: attention_required" in body
     assert "Open repair markers: 1" in body
+    assert "Queued actions: 1" in body
 
 
 def test_ui_server_runtime_endpoint_returns_structured_error(temp_vault, monkeypatch):

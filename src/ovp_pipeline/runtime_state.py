@@ -14,6 +14,7 @@ from .runtime import VaultLayout, resolve_vault_dir
 
 DEFAULT_RECENT_LIMIT = 20
 RUNTIME_STATE_DIR = ("60-Logs", "runtime-state")
+ACTION_RUNNING_STALE_AFTER_SECONDS = 3600
 
 
 def _utc_now() -> datetime:
@@ -77,6 +78,99 @@ def _truthy(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes"}
 
 
+def _int_value(value: object, default: int = 0) -> int:
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _action_queue_path(layout: VaultLayout) -> Path:
+    return layout.actions_log
+
+
+def _action_worker_state_path(layout: VaultLayout) -> Path:
+    return layout.action_worker_state
+
+
+def _action_row(action: dict[str, Any], *, now: datetime) -> dict[str, Any]:
+    status = str(action.get("status") or "")
+    started_at = _parse_dt(action.get("started_at") or action.get("created_at"))
+    running_age_seconds = (
+        max(0, int((now - started_at).total_seconds()))
+        if status == "running" and started_at is not None
+        else None
+    )
+    stale_running = bool(
+        status == "running"
+        and running_age_seconds is not None
+        and running_age_seconds > ACTION_RUNNING_STALE_AFTER_SECONDS
+    )
+    return {
+        "action_id": str(action.get("action_id") or ""),
+        "action_kind": str(action.get("action_kind") or ""),
+        "pack": str(action.get("pack") or ""),
+        "source_signal_id": str(action.get("source_signal_id") or ""),
+        "title": str(action.get("title") or ""),
+        "target_ref": str(action.get("target_ref") or ""),
+        "status": status,
+        "safe_to_run": _truthy(action.get("safe_to_run")),
+        "created_at": str(action.get("created_at") or ""),
+        "started_at": str(action.get("started_at") or ""),
+        "finished_at": str(action.get("finished_at") or ""),
+        "failure_bucket": str(action.get("failure_bucket") or ""),
+        "retry_count": _int_value(action.get("retry_count")),
+        "running_age_seconds": running_age_seconds,
+        "stale_running": stale_running,
+    }
+
+
+def _action_worker_state(layout: VaultLayout, *, now: datetime) -> dict[str, Any]:
+    path = _action_worker_state_path(layout)
+    if not path.exists():
+        return {
+            "active": False,
+            "state": "stopped",
+            "worker_id": "",
+            "heartbeat_at": "",
+            "heartbeat_age_seconds": None,
+            "current_action": {},
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    heartbeat_at = _parse_dt(payload.get("heartbeat_at"))
+    heartbeat_age_seconds = (
+        max(0, int((now - heartbeat_at).total_seconds())) if heartbeat_at is not None else None
+    )
+    state = str(payload.get("state") or "stopped")
+    active = state in {"running", "idle"} and (
+        heartbeat_age_seconds is None
+        or heartbeat_age_seconds <= ACTION_RUNNING_STALE_AFTER_SECONDS
+    )
+    return {
+        "active": active,
+        "state": state,
+        "worker_id": str(payload.get("worker_id") or ""),
+        "pid": _int_value(payload.get("pid")),
+        "mode": str(payload.get("mode") or ""),
+        "safe_only": _truthy(payload.get("safe_only")),
+        "heartbeat_at": str(payload.get("heartbeat_at") or ""),
+        "heartbeat_age_seconds": heartbeat_age_seconds,
+        "current_action": payload.get("current_action")
+        if isinstance(payload.get("current_action"), dict)
+        else {},
+        "last_result": payload.get("last_result")
+        if isinstance(payload.get("last_result"), dict)
+        else {},
+    }
+
+
 def _recent_events(events: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     ordered = sorted(events, key=lambda event: _event_time(event) or datetime.min.replace(tzinfo=timezone.utc))
     return [
@@ -134,6 +228,13 @@ def build_runtime_state(
 
     pipeline_events = _read_jsonl(layout.pipeline_log)
     reuse_events = _read_jsonl(layout.logs_dir / "reuse-events.jsonl")
+    raw_actions = _read_jsonl(_action_queue_path(layout))
+    action_rows = [_action_row(action, now=current_time) for action in raw_actions]
+    action_counts = Counter(str(action.get("status") or "(unknown)") for action in action_rows)
+    stale_running_actions = [action for action in action_rows if action["stale_running"]]
+    failed_actions = [action for action in action_rows if action["status"] == "failed"]
+    blocked_actions = [action for action in action_rows if action["status"] == "blocked"]
+    worker_state = _action_worker_state(layout, now=current_time)
 
     pipeline_counts = Counter(str(event.get("event_type") or "(unknown)") for event in pipeline_events)
     reuse_by_surface: dict[str, dict[str, Any]] = defaultdict(
@@ -173,6 +274,24 @@ def build_runtime_state(
                 "message": f"repair marker lease expired for worker {marker.claimed_by}",
             }
         )
+    for action in stale_running_actions:
+        attention.append(
+            {
+                "kind": "stale_running_action",
+                "severity": "warning",
+                "ref": action["action_id"],
+                "message": f"{action['action_kind']} action has been running for more than one hour",
+            }
+        )
+    for action in failed_actions[:5]:
+        attention.append(
+            {
+                "kind": "failed_action",
+                "severity": "warning",
+                "ref": action["action_id"],
+                "message": f"{action['action_kind']} action failed in {action['failure_bucket'] or 'unknown'}",
+            }
+        )
 
     nodes: list[dict[str, Any]] = [
         {
@@ -199,11 +318,18 @@ def build_runtime_state(
             "label": "projection-repair.jsonl",
             "events": len(repair_events),
         },
+        {
+            "id": "log:actions",
+            "kind": "event_log",
+            "label": "actions.jsonl",
+            "events": len(action_rows),
+        },
     ]
     edges: list[dict[str, str]] = [
         {"source": "runtime", "target": "log:pipeline", "kind": "reads"},
         {"source": "runtime", "target": "log:reuse-events", "kind": "reads"},
         {"source": "runtime", "target": "log:projection-repair", "kind": "reads"},
+        {"source": "runtime", "target": "log:actions", "kind": "reads"},
     ]
 
     seen_projection_nodes: set[str] = set()
@@ -259,12 +385,72 @@ def build_runtime_state(
         )
         edges.append({"source": surface_node, "target": "log:reuse-events", "kind": "emits"})
 
+    seen_signal_nodes: set[str] = set()
+    for action in action_rows:
+        if not action["action_id"]:
+            continue
+        action_node = f"action:{action['action_id']}"
+        nodes.append(
+            {
+                "id": action_node,
+                "kind": "workflow_action",
+                "label": action["action_kind"] or action["action_id"],
+                "status": action["status"],
+                "stale_running": action["stale_running"],
+            }
+        )
+        edges.append({"source": action_node, "target": "log:actions", "kind": "recorded_in"})
+        if action["source_signal_id"]:
+            signal_node = f"signal:{action['source_signal_id']}"
+            if signal_node not in seen_signal_nodes:
+                nodes.append(
+                    {
+                        "id": signal_node,
+                        "kind": "signal",
+                        "label": action["source_signal_id"],
+                    }
+                )
+                seen_signal_nodes.add(signal_node)
+            edges.append({"source": action_node, "target": signal_node, "kind": "responds_to"})
+
+    worker_id = str(worker_state.get("worker_id") or "")
+    if worker_id:
+        worker_node = f"action-worker:{worker_id}"
+        nodes.append(
+            {
+                "id": worker_node,
+                "kind": "action_worker",
+                "label": worker_id,
+                "status": str(worker_state.get("state") or ""),
+                "active": bool(worker_state.get("active")),
+            }
+        )
+        edges.append({"source": "runtime", "target": worker_node, "kind": "tracks"})
+        current_action = worker_state.get("current_action")
+        if isinstance(current_action, dict) and current_action.get("action_id"):
+            edges.append(
+                {
+                    "source": worker_node,
+                    "target": f"action:{current_action['action_id']}",
+                    "kind": "working_on",
+                }
+            )
+
     metrics = {
         "projection_repair_markers": len(repair_markers),
         "projection_repair_events": len(repair_events),
         "open_projection_repair_markers": len(open_markers),
         "claimed_projection_repair_markers": len(claimed_markers),
         "expired_projection_repair_leases": len(expired_claims),
+        "action_queue_items": len(action_rows),
+        "queued_actions": action_counts.get("queued", 0),
+        "running_actions": action_counts.get("running", 0),
+        "stale_running_actions": len(stale_running_actions),
+        "failed_actions": len(failed_actions),
+        "blocked_actions": len(blocked_actions),
+        "obsolete_actions": action_counts.get("obsolete", 0),
+        "dismissed_actions": action_counts.get("dismissed", 0),
+        "succeeded_actions": action_counts.get("succeeded", 0),
         "pipeline_events": len(pipeline_events),
         "reuse_events": len(reuse_events),
         "trusted_reuse_events": sum(1 for event in reuse_events if _truthy(event.get("trusted"))),
@@ -278,6 +464,9 @@ def build_runtime_state(
         "metrics": metrics,
         "attention": attention,
         "projection_repair_markers": repair_rows,
+        "workflow_actions": action_rows,
+        "action_worker": worker_state,
+        "action_status_counts": dict(sorted(action_counts.items())),
         "reuse_surfaces": sorted(reuse_by_surface.values(), key=lambda row: str(row["surface"])),
         "pipeline_event_counts": dict(sorted(pipeline_counts.items())),
         "recent_pipeline_events": _recent_events(pipeline_events, limit=recent_limit),
@@ -307,6 +496,11 @@ def render_runtime_state_markdown(state: dict[str, Any]) -> str:
         if isinstance(state.get("projection_repair_markers"), list)
         else []
     )
+    action_rows = (
+        state.get("workflow_actions")
+        if isinstance(state.get("workflow_actions"), list)
+        else []
+    )
 
     frontmatter = (
         "---\n"
@@ -332,6 +526,9 @@ def render_runtime_state_markdown(state: dict[str, Any]) -> str:
         f"- Status: {state.get('status') or 'unknown'}",
         f"- Open repair markers: {metrics.get('open_projection_repair_markers', 0)}",
         f"- Expired repair leases: {metrics.get('expired_projection_repair_leases', 0)}",
+        f"- Queued actions: {metrics.get('queued_actions', 0)}",
+        f"- Stale running actions: {metrics.get('stale_running_actions', 0)}",
+        f"- Failed actions: {metrics.get('failed_actions', 0)}",
         f"- Pipeline events: {metrics.get('pipeline_events', 0)}",
         f"- Reuse events: {metrics.get('reuse_events', 0)}",
         "",
@@ -357,6 +554,23 @@ def render_runtime_state_markdown(state: dict[str, Any]) -> str:
                     projection=scope.get("projection_kind", ""),
                     claimed_by=marker.get("claimed_by", ""),
                     lease_expired=marker.get("lease_expired", False),
+                )
+            )
+    else:
+        lines.append("- (none)")
+
+    lines.extend(["", "## Workflow Actions", ""])
+    if action_rows:
+        lines.extend(["| action_id | kind | status | stale_running | retry_count | target |", "|---|---|---|---|---:|---|"])
+        for action in action_rows:
+            lines.append(
+                "| {action_id} | {kind} | {status} | {stale_running} | {retry_count} | {target} |".format(
+                    action_id=action.get("action_id", ""),
+                    kind=action.get("action_kind", ""),
+                    status=action.get("status", ""),
+                    stale_running=action.get("stale_running", False),
+                    retry_count=action.get("retry_count", 0),
+                    target=action.get("target_ref", ""),
                 )
             )
     else:
