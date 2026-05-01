@@ -139,6 +139,7 @@ def test_layer_import_direction(repo_root):
 # ---------------------------------------------------------------------------
 
 SQLITE_ALLOWED_MODULES = {
+    "_truth_helpers",
     "truth_api",
     "truth_store",
     "knowledge_index",
