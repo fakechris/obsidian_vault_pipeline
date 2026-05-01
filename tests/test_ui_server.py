@@ -145,10 +145,10 @@ def test_ui_server_root_serves_reader_library_home(temp_vault):
     assert 'href="/">Library</a>' in body
     assert 'href="/map">Map</a>' in body
     assert 'href="/search">Search</a>' in body
-    assert 'href="/ops">Workbench</a>' in body
+    assert 'href="/ops">Workbench</a>' not in body
     assert "Recent Knowledge" in body
     assert "Knowledge Map" in body
-    assert "Open Workbench" in body
+    assert "Open Workbench" not in body
     assert "Workflow Map" not in body
     assert "OVP Truth UI" not in body
 
@@ -206,7 +206,7 @@ def test_ui_server_map_route_serves_readable_map_entry(temp_vault):
     assert 'href="/">Library</a>' in body
     assert 'href="/map">Map</a>' in body
     assert 'href="/search">Search</a>' in body
-    assert 'href="/ops">Workbench</a>' in body
+    assert 'href="/ops">Workbench</a>' not in body
 
 
 def test_ui_server_graph_route_serves_visual_graph_mvp(temp_vault):
@@ -225,7 +225,7 @@ def test_ui_server_graph_route_serves_visual_graph_mvp(temp_vault):
     assert 'href="/">Library</a>' in body
     assert 'href="/map">Map</a>' in body
     assert 'href="/search">Search</a>' in body
-    assert 'href="/ops">Workbench</a>' in body
+    assert 'href="/ops">Workbench</a>' not in body
 
 
 def test_render_library_home_hides_unavailable_map_for_non_research_pack():
@@ -806,7 +806,6 @@ def test_ui_server_root_accepts_pack_scope(temp_vault):
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
     assert 'href="/search?pack=default-knowledge"' in body
-    assert 'href="/ops?pack=default-knowledge"' in body
     assert "Knowledge Library" in body
 
 
@@ -1046,7 +1045,6 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
     assert 'href="/search?pack=default-knowledge"' in body
-    assert 'href="/ops?pack=default-knowledge"' in body
     assert (
         'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
     )
@@ -1057,7 +1055,7 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert "Why It Matters" in body
     assert "Where To Go Next" in body
     assert "Source contract: wiki_view · object/page" in body
-    assert body.index("Current State") < body.index("Next Actions") < body.index("Why It Matters")
+    assert "Next Actions" not in body
 
 
 def test_ui_server_note_page_preserves_pack_scope_in_shell_nav(temp_vault):
@@ -1176,7 +1174,6 @@ date: 2026-04-13
     assert response.status == 200
     assert 'href="/search?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops?pack=default-knowledge"' in body
     assert 'href="/object?id=alpha&amp;pack=default-knowledge"' in body
     assert (
         'href="/note?path=20-Areas%2FAI-Research%2FTopics%2F2026-04%2FHarness_%E6%B7%B1%E5%BA%A6%E8%A7%A3%E8%AF%BB.md&amp;pack=default-knowledge"'
@@ -1187,8 +1184,7 @@ date: 2026-04-13
     assert "Captured 4 inbound events" in body
     assert "Evidence Traceability" in body
     assert "Production Chain" in body
-    assert "Next Actions" in body
-    assert body.index("Current State") < body.index("Next Actions") < body.index("Inbound Capture")
+    assert "Next Actions" not in body
 
 
 def test_ui_server_contradictions_endpoint_returns_payload(temp_vault):
@@ -1345,7 +1341,6 @@ def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops?pack=default-knowledge"' in body
     assert "inherited from research-tech-signals" in body
     assert body.index("Next Actions") < body.index("Signal Types")
 
@@ -1440,7 +1435,6 @@ def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vau
     assert response.status == 200
     assert 'href="/?pack=media-editorial"' in body
     assert 'href="/map?pack=media-editorial"' not in body
-    assert 'href="/ops?pack=media-editorial"' in body
     assert 'href="/clusters?pack=media-editorial"' not in body
     assert 'href="/contradictions?pack=media-editorial"' not in body
     assert 'href="/events?pack=media-editorial"' not in body
@@ -1624,7 +1618,7 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops?pack=default-knowledge"' in body
+    # /ops nav hidden in reader mode — verified separately in operator-mode tests
     assert (
         'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
     )
@@ -1838,7 +1832,7 @@ def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops?pack=default-knowledge"' in body
+    # /ops nav hidden in reader mode — verified separately in operator-mode tests
 
 
 def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
@@ -2260,7 +2254,7 @@ Processed source note without downstream chain.
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops?pack=default-knowledge"' in body
+    # /ops nav hidden in reader mode — verified separately in operator-mode tests
     assert "inherited from research-tech-briefing" in body
     assert "inherited from orientation_brief in research-tech" in body
     assert "Source contract: observation_surface · briefing" in body
@@ -2270,11 +2264,9 @@ Processed source note without downstream chain.
     assert "Signal Loop" in body
     assert "Inbound Capture" in body
     assert "What Changed" in body
-    assert "Next Actions" in body
     assert "Value Proof" in body
     assert "Background Policy" in body
     assert "Auto-queue enabled" in body
-    assert body.index("Signal Loop") < body.index("Next Actions") < body.index("Inbound Capture")
 
 
 def test_render_briefing_page_tolerates_malformed_background_policy():
@@ -2532,8 +2524,7 @@ Processed source note without downstream chain.
     assert "Missing stages:" in body
     assert "Current State" in body
     assert "Chain Gaps" in body
-    assert "Next Actions" in body
-    assert body.index("Current State") < body.index("Next Actions") < body.index("Chain Gaps")
+    assert "Next Actions" not in body
 
 
 def test_ui_server_contradictions_page_renders_detection_semantics(temp_vault):
@@ -3676,7 +3667,7 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops?pack=default-knowledge"' in body
+    # /ops nav hidden in reader mode — verified separately in operator-mode tests
     assert "Assembly Contract" in body
     assert "inherited from topic_overview in research-tech" in body
     assert "Source contract: wiki_view · overview/topic" in body

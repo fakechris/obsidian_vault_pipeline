@@ -109,6 +109,8 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _shell_href,
     _shell_supports_research_nav,
     _unsupported_route_payload,
+    OPERATOR_ROUTES,
+    set_reader_mode,
 )
 
 
@@ -127,6 +129,10 @@ def create_server(
             parsed = urlparse(self.path)
             path = parsed.path
             query = parse_qs(parsed.query)
+
+            mode_param = query.get("mode", [""])[0]
+            is_operator = mode_param == "operator" or path in OPERATOR_ROUTES
+            set_reader_mode(not is_operator)
 
             try:
                 if path == "/":
@@ -760,6 +766,7 @@ def create_server(
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = parsed.path
+            set_reader_mode(False)
             try:
                 form = self._read_form()
                 cookie_header = self.headers.get("Cookie", "")

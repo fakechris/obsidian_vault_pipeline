@@ -11,6 +11,7 @@ import json
 import mimetypes
 import re
 import sqlite3
+import threading
 from html import escape
 from pathlib import Path
 from urllib.parse import quote, urlparse
@@ -32,6 +33,22 @@ _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).e
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
 _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
+
+_request_ctx = threading.local()
+
+OPERATOR_ROUTES = frozenset({
+    "/ops", "/actions", "/pulse", "/explore", "/signals",
+    "/contradictions", "/summaries", "/candidates",
+})
+
+
+def set_reader_mode(mode: bool) -> None:
+    """Set per-request reader/operator mode (called by the HTTP handler)."""
+    _request_ctx.reader_mode = mode
+
+
+def _is_reader_mode() -> bool:
+    return getattr(_request_ctx, "reader_mode", False)
 
 
 def _safe_redirect_path(location: str, *, fallback: str = "/") -> str:
@@ -90,14 +107,17 @@ def _shell_supports_research_nav(requested_pack: str = "") -> bool:
         return False
 
 
-def _shell_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
-    items = [
+def _shell_nav_items(
+    requested_pack: str = "", *, reader_mode: bool = False
+) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = [
         ("Library", "/"),
         ("Search", "/search"),
-        ("Workbench", "/ops"),
     ]
     if _shell_supports_research_nav(requested_pack):
         items.insert(1, ("Map", "/map"))
+    if not reader_mode:
+        items.append(("Workbench", "/ops"))
     return items
 
 
@@ -113,7 +133,7 @@ def _layout(
 ) -> str:
     nav_items = "".join(
         f'<a href="{escape(_shell_href(path, requested_pack))}">{escape(label)}</a>'
-        for label, path in _shell_nav_items(requested_pack)
+        for label, path in _shell_nav_items(requested_pack, reader_mode=_is_reader_mode())
     )
     refresh_meta = (
         f'    <meta http-equiv="refresh" content="{int(auto_refresh_seconds)}" />\n'
@@ -664,6 +684,8 @@ def _render_runtime_state_card(runtime_state: dict[str, object] | None) -> str:
 
 
 def _render_operator_rail(payload: dict) -> str:
+    if _is_reader_mode():
+        return ""
     items = payload.get("operator_rail")
     if not isinstance(items, list) or not items:
         return ""
@@ -1794,6 +1816,16 @@ def _render_library_home(payload: dict) -> str:
         if _shell_supports_research_nav(requested_pack)
         else ""
     )
+    workbench_card = (
+        ""
+        if _is_reader_mode()
+        else (
+            "<section class='card'><h2>Open Workbench</h2>"
+            "<p class='muted'>Use the workbench when you need to fix items or check recent activity.</p>"
+            f"<p><a href='{escape(workbench_path)}'>Open Workbench</a></p>"
+            "</section>"
+        )
+    )
     body = "".join(
         [
             "<section class='hero'>",
@@ -1809,10 +1841,7 @@ def _render_library_home(payload: dict) -> str:
             "<section class='card'><h2>Recent Knowledge</h2>",
             f"<ul class='list-tight'>{object_items}</ul>",
             "</section>",
-            "<section class='card'><h2>Open Workbench</h2>",
-            "<p class='muted'>Use the workbench when you need to fix items or check recent activity.</p>",
-            f"<p><a href='{escape(workbench_path)}'>Open Workbench</a></p>",
-            "</section>",
+            workbench_card,
             "</section>",
         ]
     )

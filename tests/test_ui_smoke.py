@@ -1000,7 +1000,7 @@ Thin note.
     assert "Knowledge Library" in root_body
     assert 'href="/">Library</a>' in root_body
     assert 'href="/map">Map</a>' in root_body
-    assert 'href="/ops">Workbench</a>' in root_body
+    assert 'href="/ops">Workbench</a>' not in root_body
     assert "Recent Knowledge" in root_body
     assert "Knowledge Map" in root_body
     assert "Alpha" in root_body
