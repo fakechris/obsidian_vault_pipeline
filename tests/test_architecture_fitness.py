@@ -18,7 +18,7 @@ def repo_root() -> Path:
 MAX_MODULE_LINES = 3000
 KNOWN_OVERSIZED = {
     "truth_api.py": 7000,
-    "commands/ui_server.py": 7000,
+    "commands/_ui_renderers.py": 5000,
     "ui/view_models.py": 5000,
     "unified_pipeline_enhanced.py": 3500,
 }
@@ -151,6 +151,7 @@ SQLITE_ALLOWED_MODULES = {
     "commands/repair",
     "commands/reuse_report",
     "commands/ui_server",
+    "commands/_ui_renderers",
     "commands/working_memory",
     "discovery",
     "evidence",
