@@ -7,12 +7,25 @@ ALLOWED_PACK_ROLES = {"domain", "primary", "compatibility"}
 
 
 @dataclass(frozen=True)
+class ObjectKindPropertySpec:
+    """A property that objects of this kind may carry in frontmatter or truth_store."""
+
+    name: str
+    field_type: str = "text"
+    description: str = ""
+    required: bool = False
+
+
+@dataclass(frozen=True)
 class ObjectKindSpec:
     kind: str
     display_name: str
     description: str
     canonical: bool = True
     schema_ref: str | None = None
+    properties: tuple[ObjectKindPropertySpec, ...] = ()
+    reader_layout: str | None = None
+    extraction_hint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -223,6 +236,22 @@ class SemanticRelationTypeSpec:
     evidence_required: bool = True
     review_required: bool = True
 
+    def accepts_source_kind(self, kind: str) -> bool:
+        """Check whether *kind* is a valid source for this relation type."""
+        if not self.source_object_kinds:
+            return True
+        return kind in self.source_object_kinds
+
+    def accepts_target_kind(self, kind: str) -> bool:
+        """Check whether *kind* is a valid target for this relation type."""
+        if not self.target_object_kinds:
+            return True
+        return kind in self.target_object_kinds
+
+    def validate_pair(self, source_kind: str, target_kind: str) -> bool:
+        """Return True if both source and target kinds are accepted."""
+        return self.accepts_source_kind(source_kind) and self.accepts_target_kind(target_kind)
+
 
 @dataclass(frozen=True)
 class SemanticRelationContractSpec:
@@ -422,6 +451,25 @@ class BaseDomainPack:
 
     def object_kinds(self) -> list[ObjectKindSpec]:
         return list(self._object_kinds)
+
+    def object_kind_spec(self, kind: str) -> ObjectKindSpec:
+        """Look up a single ObjectKindSpec by kind string."""
+        for spec in self._object_kinds:
+            if spec.kind == kind:
+                return spec
+        raise ValueError(f"Unknown object kind '{kind}' for pack '{self.name}'")
+
+    def valid_entity_types(self) -> frozenset[str]:
+        """Return the set of entity_type values this pack recognizes.
+
+        Only canonical kinds (those that can appear in Evergreen frontmatter's
+        ``entity_type`` field) are included.
+        """
+        return frozenset(s.kind for s in self._object_kinds if s.canonical)
+
+    def validate_entity_type(self, entity_type: str) -> bool:
+        """Check whether an entity_type string is valid for this pack."""
+        return entity_type in self.valid_entity_types()
 
     def workflow_profiles(self) -> list[WorkflowProfile]:
         return list(self._workflow_profiles)
