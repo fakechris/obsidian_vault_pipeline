@@ -524,6 +524,30 @@ def test_truth_api_get_runtime_status_reads_active_run_ledger(temp_vault):
     assert payload["stale_count"] == 1
 
 
+def test_truth_api_get_operational_runtime_state_provider_writes_projection(temp_vault):
+    from ovp_pipeline.projection_lifecycle import write_projection_repair_marker
+    from ovp_pipeline.truth_api import get_operational_runtime_state
+
+    write_projection_repair_marker(
+        temp_vault,
+        kind="full_rebuild",
+        scope={"projection_kind": "knowledge_db"},
+        reason="knowledge db missing",
+        caused_by="provider_test",
+        authority_schema_version=2,
+        projection_schema_version=1,
+    )
+
+    payload = get_operational_runtime_state(temp_vault, write_projection=True)
+
+    assert payload["type"] == "operational_runtime_state"
+    assert payload["status"] == "attention_required"
+    assert payload["metrics"]["open_projection_repair_markers"] == 1
+    assert payload["paths"]["json"].endswith("60-Logs/runtime-state/current.json")
+    assert payload["paths"]["markdown"].endswith("60-Logs/runtime-state/current.md")
+    assert (temp_vault / "60-Logs" / "runtime-state" / "current.json").exists()
+
+
 def test_truth_api_runtime_progress_accepts_naive_ledger_timestamps(temp_vault):
     from ovp_pipeline.truth_api import get_runtime_status
 

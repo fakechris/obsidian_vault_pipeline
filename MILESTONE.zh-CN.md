@@ -35,7 +35,7 @@ OVP 正在从 document-processing pipeline 变成：
 | M2 Roadmap And README Consolidation | Done | 已合并历史 milestones、compiler roadmap、近期 KSR 输入、reader-product 研究，以及英文主文档结构 |
 | M3 Reader-First Knowledge Atlas | Done / iterate | reader home、`/ops` 拆分、object source/backlink rail、visual graph map、按 kind 区分的 object reader lens、reader-oriented search 已交付 |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels、hot-path audit、wiring evals、article routing preview、evidence spans、candidate risk 已交付；更深的 enforcement 仍待推进 |
-| M5 Context Pack And Operational Runtime | Active | session snapshots、context budget、第一版 operational runtime state projection、claim leases、provider facade、observability |
+| M5 Context Pack And Operational Runtime | Active / closeout | session snapshots、context budget、`/ops` 和 doctor 可见的 runtime state、provider-facing runtime-state API |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、routines、notebook/raw-source mode |
 
@@ -54,7 +54,7 @@ OVP 正在从 document-processing pipeline 变成：
 | Visual graph MVP | `BL-010` 已在 PR #80 交付 |
 | Reader-oriented search | `BL-011` 已在 PR #84 交付 |
 | Trusted reuse context pack / OVP prime | `BL-012`、`BL-013` 第一版已在 PR #89 和 PR #90 交付 |
-| Operational runtime state projection | `BL-014` 第一片在 PR #91 落地 |
+| Operational runtime state projection | `BL-014` 第一片在 PR #91 落地；`/ops` / doctor / API 集成在 PR #92 |
 | Projection repair lifecycle | `BL-020` 已在 PR #87 落地 |
 | Schema versioning and migration trigger | `BL-021` 已在 PR #87 和 PR #88 中补完 |
 
@@ -62,9 +62,9 @@ OVP 正在从 document-processing pipeline 变成：
 
 建议顺序：
 
-1. 继续 `BL-014`：把 runtime state 接到 `/ops` 和 `ovp doctor`，再暴露 provider-facing read API。
-2. 继续 `BL-014`：只有当 workflow item lease 成为必要能力时，才把 claim lease 从 projection repair marker 扩展出去。
-3. 当 permission 和 claim lifecycle 成为主动瓶颈时，再进入 `BL-015`。
+1. 收口 `BL-014`：判断 workflow item lease 是否真的需要从 projection repair marker 扩展出去。
+2. 当 permission 和 claim lifecycle 成为主动瓶颈时，再进入 `BL-015`。
+3. `BL-012` / `BL-013` 后续只在新增 context-pack surface 时继续扩展。
 
 ## 文档规则
 

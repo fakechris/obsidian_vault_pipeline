@@ -376,6 +376,46 @@ def test_doctor_command_reports_vault_health(temp_vault, capsys):
     assert payload["vault"]["raw_count"] == 1
     assert payload["vault"]["clippings_count"] == 1
     assert payload["vault"]["knowledge_db_exists"] is False
+    assert payload["runtime_state"]["type"] == "operational_runtime_state"
+
+
+def test_doctor_reports_runtime_state_health(temp_vault, capsys):
+    from ovp_pipeline.commands.doctor import main
+    from ovp_pipeline.projection_lifecycle import (
+        claim_projection_repair_marker,
+        write_projection_repair_marker,
+    )
+
+    marker = write_projection_repair_marker(
+        temp_vault,
+        kind="full_rebuild",
+        scope={"projection_kind": "knowledge_db"},
+        reason="knowledge db missing",
+        caused_by="doctor_test",
+        authority_schema_version=2,
+        projection_schema_version=1,
+    )
+    claim_projection_repair_marker(
+        temp_vault,
+        marker.marker_id,
+        worker_id="doctor-worker",
+        lease_seconds=1,
+    )
+
+    exit_code = main(["--vault-dir", str(temp_vault), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["runtime_state"]["metrics"]["claimed_projection_repair_markers"] == 1
+    assert payload["runtime_state"]["metrics"]["projection_repair_markers"] == 1
+
+    exit_code = main(["--vault-dir", str(temp_vault)])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "Runtime state:" in output
+    assert "open_repair_markers=0" in output
+    assert "pipeline_events=0" in output
 
 
 def test_doctor_reports_candidate_consistency_gaps(temp_vault, capsys):
