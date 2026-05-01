@@ -13,6 +13,7 @@ from .projection_lifecycle import ProjectionRepairMarker, list_projection_repair
 from .runtime import (
     VaultLayout,
     format_utc_timestamp,
+    iter_jsonl,
     parse_utc_timestamp,
     resolve_vault_dir,
     utc_now,
@@ -29,34 +30,18 @@ _format_dt = format_utc_timestamp
 _parse_dt = parse_utc_timestamp
 
 
-def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
-    if not path.exists():
-        return
-    with path.open("r", encoding="utf-8", errors="ignore") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                yield payload
+RUNTIME_TAIL_LINES = 1000
+
+
+def _iter_jsonl(path: Path, *, tail_lines: int | None = None) -> Iterable[dict[str, Any]]:
+    return iter_jsonl(path, tail_lines=tail_lines)
 
 
 def _count_jsonl_lines(path: Path) -> int:
     """Count non-empty lines in a JSONL file without parsing JSON."""
-    if not path.exists():
-        return 0
-    count = 0
-    try:
-        with path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                if line.strip():
-                    count += 1
-    except OSError:
-        return 0
-    return count
+    from .runtime import _count_lines_fast
+
+    return _count_lines_fast(path)
 
 
 def _event_time(event: dict[str, Any]) -> datetime | None:
@@ -205,7 +190,7 @@ def _summarize_event_log(path: Path, *, recent_limit: int) -> EventLogSummary:
     total = 0
     counts: Counter[str] = Counter()
     recent_heap: list[tuple[datetime, int, dict[str, Any]]] = []
-    for event in _iter_jsonl(path):
+    for event in _iter_jsonl(path, tail_lines=RUNTIME_TAIL_LINES):
         total += 1
         counts[str(event.get("event_type") or "(unknown)")] += 1
         if recent_limit <= 0:
@@ -245,7 +230,7 @@ def _summarize_reuse_event_log(path: Path, *, recent_limit: int) -> ReuseEventSu
     reuse_by_surface: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"surface": "", "events": 0, "trusted": 0, "untrusted": 0, "last_event_at": ""}
     )
-    for event in _iter_jsonl(path):
+    for event in _iter_jsonl(path, tail_lines=RUNTIME_TAIL_LINES):
         total += 1
         if recent_limit > 0:
             entry = (_event_sort_time(event), total, event)
@@ -294,7 +279,7 @@ def _summarize_action_queue(
     stale_running_actions: list[dict[str, Any]] = []
     failed_actions: list[dict[str, Any]] = []
     blocked_actions: list[dict[str, Any]] = []
-    for action in _iter_jsonl(path):
+    for action in _iter_jsonl(path, tail_lines=RUNTIME_TAIL_LINES):
         total += 1
         row = _action_row(action, now=now)
         status = str(row.get("status") or "(unknown)")

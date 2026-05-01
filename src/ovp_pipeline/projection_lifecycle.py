@@ -11,7 +11,9 @@ from typing import Iterator, Literal
 from .runtime import (
     VaultLayout,
     advisory_file_lock,
+    append_jsonl,
     format_utc_iso,
+    iter_jsonl,
     parse_utc_timestamp,
     resolve_vault_dir,
     utc_now,
@@ -139,25 +141,13 @@ class ProjectionRepairMarker:
 
 def _append_event(vault_dir: Path | str, event: dict[str, object]) -> None:
     path = _marker_log_path(vault_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+    append_jsonl(path, event)  # type: ignore[arg-type]
 
 
 def _iter_events(vault_dir: Path | str) -> Iterator[dict[str, object]]:
     path = _marker_log_path(vault_dir)
-    if not path.exists():
-        return
-    with path.open("r", encoding="utf-8", errors="ignore") as handle:
-        for raw_line in handle:
-            if not raw_line.strip():
-                continue
-            try:
-                payload = json.loads(raw_line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                yield payload
+    for obj in iter_jsonl(path):
+        yield obj
 
 
 def _is_broader_marker(new_marker: ProjectionRepairMarker, old_marker: ProjectionRepairMarker) -> bool:

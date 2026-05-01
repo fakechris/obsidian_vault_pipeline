@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +9,7 @@ from contextlib import contextmanager
 import fcntl
 import os
 import time
-from typing import Iterator
+from typing import Any, Iterable, Iterator
 
 import yaml
 
@@ -338,3 +340,193 @@ def vault_workflow_lock(
     layout = VaultLayout.from_vault(vault_dir)
     with advisory_file_lock(layout.workflow_lock, timeout_seconds=timeout_seconds):
         yield
+
+
+# ---------------------------------------------------------------------------
+# JSONL rotation & bounded-read utilities
+# ---------------------------------------------------------------------------
+
+JSONL_DEFAULT_MAX_LINES = 10_000
+
+
+def _count_lines_fast(path: Path) -> int:
+    """Count non-empty lines without parsing JSON."""
+    if not path.exists():
+        return 0
+    count = 0
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if line.strip():
+                    count += 1
+    except OSError:
+        return 0
+    return count
+
+
+def _write_sidecar_stats(
+    archived_path: Path,
+    *,
+    line_count: int,
+    event_types: Counter[str],
+    first_ts: str,
+    last_ts: str,
+) -> Path:
+    sidecar_path = archived_path.with_suffix(".stats.json")
+    stats = {
+        "archived_from": archived_path.stem.rsplit(".", 1)[0] + ".jsonl",
+        "archived_at": format_utc_iso(utc_now()),
+        "line_count": line_count,
+        "event_types": dict(event_types.most_common()),
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+    }
+    sidecar_path.write_text(
+        json.dumps(stats, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return sidecar_path
+
+
+def rotate_jsonl_if_needed(
+    path: Path,
+    *,
+    max_lines: int = JSONL_DEFAULT_MAX_LINES,
+) -> Path | None:
+    """Rotate *path* when it exceeds *max_lines*.
+
+    Returns the archived path on rotation, or ``None`` if no rotation occurred.
+    Writes a ``{stem}.{timestamp}.stats.json`` sidecar with aggregate metadata.
+    """
+    if not path.exists():
+        return None
+    line_count = _count_lines_fast(path)
+    if line_count < max_lines:
+        return None
+
+    event_types: Counter[str] = Counter()
+    first_ts = ""
+    last_ts = ""
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    obj = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    et = str(obj.get("event_type") or obj.get("type") or "")
+                    if et:
+                        event_types[et] += 1
+                    ts = str(obj.get("ts") or obj.get("timestamp") or "")
+                    if ts:
+                        if not first_ts:
+                            first_ts = ts
+                        last_ts = ts
+    except OSError:
+        pass
+
+    ts_suffix = utc_now().strftime("%Y%m%d-%H%M%S")
+    archived = path.with_name(f"{path.stem}.{ts_suffix}.jsonl")
+    seq = 0
+    while archived.exists():
+        seq += 1
+        archived = path.with_name(f"{path.stem}.{ts_suffix}-{seq}.jsonl")
+    path.rename(archived)
+    _write_sidecar_stats(
+        archived,
+        line_count=line_count,
+        event_types=event_types,
+        first_ts=first_ts,
+        last_ts=last_ts,
+    )
+    return archived
+
+
+def append_jsonl(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    max_lines: int = JSONL_DEFAULT_MAX_LINES,
+) -> None:
+    """Append a JSON object to *path*, rotating beforehand if the file is large."""
+    rotate_jsonl_if_needed(path, max_lines=max_lines)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def iter_jsonl(
+    path: Path,
+    *,
+    tail_lines: int | None = None,
+) -> Iterable[dict[str, Any]]:
+    """Yield parsed dicts from a JSONL file.
+
+    When *tail_lines* is set, only the last N non-empty lines are parsed.
+    This avoids reading multi-megabyte historic logs when only recent data
+    is needed (e.g. for runtime-state summaries).
+    """
+    if not path.exists():
+        return
+
+    if tail_lines is not None and tail_lines > 0:
+        yield from _iter_jsonl_tail(path, tail_lines)
+        return
+
+    with path.open("r", encoding="utf-8", errors="ignore") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                yield obj
+
+
+def _iter_jsonl_tail(path: Path, n: int) -> Iterable[dict[str, Any]]:
+    """Read approximately the last *n* non-empty lines from *path*.
+
+    Uses a seek-from-end strategy: reads blocks backwards until enough
+    lines are collected, then parses only those lines.
+    """
+    block_size = 8192
+    lines: list[str] = []
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size == 0:
+        return
+
+    with path.open("rb") as fh:
+        offset = size
+        leftover = b""
+        while len(lines) < n + 1 and offset > 0:
+            read_size = min(block_size, offset)
+            offset -= read_size
+            fh.seek(offset)
+            chunk = fh.read(read_size) + leftover
+            parts = chunk.split(b"\n")
+            leftover = parts[0]
+            for part in reversed(parts[1:]):
+                stripped = part.strip()
+                if stripped:
+                    lines.append(stripped.decode("utf-8", errors="ignore"))
+                    if len(lines) >= n + 1:
+                        break
+        if leftover.strip():
+            lines.append(leftover.strip().decode("utf-8", errors="ignore"))
+
+    for raw in reversed(lines[:n]):
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            yield obj
