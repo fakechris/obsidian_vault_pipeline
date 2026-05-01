@@ -93,10 +93,14 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 | M1 Operator Workbench And Review Runtime | Complete enough | truth UI、candidates、signals/actions、contradictions、action worker |
 | M2 Roadmap And README Consolidation | Complete | 已合并历史 milestone、compiler roadmap、近期 KSR 输入与 reader-product 研究，重整 README |
 | M3 Reader-First Knowledge Atlas | Done / iterate | reader home、`/ops` 拆分、object source/backlink rail、visual graph map、按 kind 区分的 object reader lens、reader-oriented search 已交付 |
-| M4 KSR Safety And Hot-Path Hardening | Active | projection 标注、hot-path audit、wiring eval、article routing preview、evidence span、candidate 风险分层已交付；更深的 enforcement 仍待推进 |
+| M4 KSR Safety And Hot-Path Hardening | Done | projection 标注、hot-path audit、wiring eval、evidence span、candidate 风险分层、JSONL 流式化、projection lifecycle 加固、runtime-state API 修复 (PRs: #98, #99, #100) |
 | M5 Context Pack And Operational Runtime | Done | session snapshot、context budget、`/ops` 和 doctor 可见的 runtime state、provider-facing runtime-state API、action queue health |
+| M5a Quality And Dedup Hardening | Done | concept dedup pipeline 集成、promote semantic guard、历史数据清理 (71→61 Evergreens) (PR #101) |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、skill/routine extraction、notebook/raw-source mode |
+| **M8 Type Unification And Extraction Quality** | **Active** | 统一 object kind 分类、Layer 1 entity_type、body-size-aware extraction、quote-grounding、single-pass LLM 重构 |
+| **M9 Pack As Domain Ontology** | **Next** | Pack 定义 object kind specs、typed relation constraints、schema registry |
+| **M10 Operational Knowledge Layer** | **Later** | action types、permission + contract、跨实体聚合、decision memory |
 
 当前 active backlog 重点：
 
@@ -293,6 +297,8 @@ pinboard
 → quality
 → fix_links
 → absorb
+→ dedup
+→ note_type_normalize
 → registry_sync
 → moc
 → knowledge_index
@@ -308,6 +314,8 @@ pinboard
 → quality
 → fix_links
 → absorb
+→ dedup
+→ note_type_normalize
 → registry_sync
 → moc
 → refine
@@ -316,7 +324,9 @@ pinboard
 
 关键点：
 
-- `absorb` 现在走的是 `ovp_pipeline.commands.absorb`
+- `absorb` 走 `ovp_pipeline.commands.absorb`，并输出 `promoted_slugs` 供下游步骤使用
+- `dedup` 在 absorb 后运行概念去重，作用域限于本轮新 promote 的 slugs（trigram-Jaccard 相似度）
+- `note_type_normalize` 规范化 Evergreen 文件的 note_type 元数据
 - `refine` 是 `cleanup + breakdown` 的批处理包装
 - `knowledge_index` 永远放最后，保证 `knowledge.db` 反映最终 canonical 状态
 - `--step evergreen` / `--from-step evergreen` 仍然接受，内部会映射到 `absorb`
@@ -586,4 +596,4 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-当前文档对应版本：`v0.9.2`
+当前文档对应版本：`v0.9.3`

@@ -2,42 +2,51 @@
 
 > 语言： [English](MILESTONE.md) | 简体中文
 
-**更新时间：** 2026-04-30
+**更新时间：** 2026-05-01
 **状态：** 当前 milestone 顺序与实施方向
 
 这份文档是稳定的 milestone 入口。它总结当前产品和工程路线；[BACKLOG.md](BACKLOG.md) 仍然是唯一 active implementation queue。
 
 ## 输入来源
 
-当前 milestone 顺序是四类输入的合并视图：
+当前 milestone 顺序合并以下输入：
 
 - repo 已交付 milestone 历史和 phase 文档
 - [Vision & Roadmap: The Auditable Knowledge Compiler](docs/plans/2026-04-22-vision-and-roadmap-trusted-reuse-compiler.md)
 - `/Users/chris/Documents/ovp-vault/30-Projects/Active/OVP-Knowledge-State-Runtime.md` 里的近期 KSR task extraction
 - [reader-first 产品形态研究](docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md)
+- kg-eval 质量评估和 `OVP_FIX_PLAN.md` (2026-05-01)
 
 vault 里的 KSR 项目页是高信号的近期输入，但不是完整 backlog authority。实施顺序由 [BACKLOG.md](BACKLOG.md) 维护。
 
 ## 产品判断
 
-OVP 正在从 document-processing pipeline 变成：
+OVP 正在从个人 Zettelkasten 演进为：
 
-> reader-first, evidence-backed knowledge atlas over an auditable knowledge state runtime.
+> 类型化、证据支撑的知识平台 —— 对人 reader-first，对 Agent 可编程，通过领域 Pack 可扩展。
 
-这意味着面向用户的产品应该先让“编译后的知识”容易阅读和理解；operator dashboard 仍然保留，但应放到 `/ops` 这类维护型界面下。
+三个目标层级：
+
+1. **个人知识地图** — 带类型化实体的 Zettelkasten 质量（当前 + M8）
+2. **公司第二大脑** — Pack 驱动的领域本体，团队共享的类型化知识（M9）
+3. **运营知识层** — Palantir 式的 Action、Decision、Audit（M10，按 ROI 评估）
 
 ## 当前 Milestones
 
 | Milestone | 状态 | 含义 |
 | --- | --- | --- |
 | M0 Pipeline And Pack Foundation | Done | CLI、source lifecycle、pack/profile runtime、`knowledge.db`、第一段 source-lifecycle idempotency |
-| M1 Operator Workbench And Review Runtime | Done / maintain | truth UI、candidates、signals/actions、contradictions、action worker |
+| M1 Operator Workbench And Review Runtime | Done | truth UI、candidates、signals/actions、contradictions、action worker |
 | M2 Roadmap And README Consolidation | Done | 已合并历史 milestones、compiler roadmap、近期 KSR 输入、reader-product 研究，以及英文主文档结构 |
-| M3 Reader-First Knowledge Atlas | Done / iterate | reader home、`/ops` 拆分、object source/backlink rail、visual graph map、按 kind 区分的 object reader lens、reader-oriented search 已交付 |
-| M4 KSR Safety And Hot-Path Hardening | Active | projection labels、hot-path audit、wiring evals、article routing preview、evidence spans、candidate risk 已交付；更深的 enforcement 仍待推进 |
+| M3 Reader-First Knowledge Atlas | Done | reader home、`/ops` 拆分、object source/backlink rail、visual graph map、按 kind 区分的 object reader lens、reader-oriented search 已交付 |
+| M4 KSR Safety And Hot-Path Hardening | Done | projection labels、hot-path audit、wiring evals、evidence spans、candidate risk、JSONL 流式化、projection lifecycle 加固、runtime-state API 修复 (最终 PRs: #98, #99, #100) |
 | M5 Context Pack And Operational Runtime | Done | session snapshots、context budget、`/ops` 和 doctor 可见的 runtime state、provider-facing runtime-state API、action queue health |
+| M5a Quality And Dedup Hardening | Done | concept dedup pipeline 集成（scope_slugs）、promote semantic guard (trigram-Jaccard)、历史数据清理 (71→61 Evergreens)、`find_similar_slugs` 工具 (PR #101) |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、routines、notebook/raw-source mode |
+| **M8 Type Unification And Extraction Quality** | **Active** | 统一 object kind 分类体系、Layer 1 `entity_type` frontmatter、body-size-aware extraction (P3)、quote-grounding (P4)、single-pass LLM 重构 (P5)、历史回填 |
+| **M9 Pack As Domain Ontology** | **Next** | Pack 定义 object kind specs、typed relation constraints、schema registry、domain-specific extraction profiles |
+| **M10 Operational Knowledge Layer** | **Later** | object 上的 action types、permission + contract、跨实体聚合、decision memory |
 
 ## Active Backlog 对齐
 
@@ -57,14 +66,18 @@ OVP 正在从 document-processing pipeline 变成：
 | Operational runtime state projection | `BL-014` 第一片在 PR #91 落地；`/ops` / doctor / API 集成在 PR #92；M5 closeout slice 收口 action queue health 和物化读侧策略 |
 | Projection repair lifecycle | `BL-020` 已在 PR #87 落地 |
 | Schema versioning and migration trigger | `BL-021` 已在 PR #87 和 PR #88 中补完 |
+| 架构重构 (JSONL、truth_api、ui_server、projection) | PR #100 |
+| Concept dedup pipeline + promote semantic guard | PR #101，`BL-025` 至 `BL-030` 是 M8 范围 |
 
 ## 近期顺序
 
 建议顺序：
 
-1. 当 permission 和 claim lifecycle 成为主动瓶颈时，再进入 `BL-015`。
-2. workflow action 继续使用现有 action worker lock 加 stale-running runtime-state attention；只有引入多 worker 调度时才新增通用 workflow lease。
-3. `BL-012` / `BL-013` 后续只在新增 context-pack surface 时继续扩展。
+1. **M8 优先**：执行 `BL-025`（类型统一）→ `BL-026`（extraction 输出）→ `BL-027`（P3）→ `BL-028`（P4）→ `BL-029`（P5）→ `BL-030`（回填）。
+2. **M9 随后**：M8 类型体系稳定后，执行 `BL-031` 至 `BL-034`。
+3. **M10 评估**：M9 交付后，基于真实多 Pack 采用情况和公司大脑用例决定范围。
+4. `BL-015`（permissions）当 permission 和 claim lifecycle 成为主动瓶颈时再进入。
+5. workflow action 继续使用现有 action worker lock；只有引入多 worker 调度时才新增通用 workflow lease。
 
 ## 文档规则
 

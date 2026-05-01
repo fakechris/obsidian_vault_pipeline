@@ -2,42 +2,51 @@
 
 > Language: English | [简体中文](MILESTONE.zh-CN.md)
 
-**Updated:** 2026-04-30
+**Updated:** 2026-05-01
 **Status:** Current milestone sequence and implementation direction
 
 This document is the stable milestone entry point. It summarizes the current product and engineering route; [BACKLOG.md](BACKLOG.md) remains the single active implementation queue.
 
 ## Inputs
 
-The milestone sequence is a reconciled view over four inputs:
+The milestone sequence is a reconciled view over:
 
 - shipped repo milestone history and phase docs
 - [Vision & Roadmap: The Auditable Knowledge Compiler](docs/plans/2026-04-22-vision-and-roadmap-trusted-reuse-compiler.md)
 - recent KSR task extraction in `/Users/chris/Documents/ovp-vault/30-Projects/Active/OVP-Knowledge-State-Runtime.md`
 - [reader-first product-shape research](docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md)
+- kg-eval quality assessment and `OVP_FIX_PLAN.md` (2026-05-01)
 
 The KSR vault page is a high-signal recent input, not the complete backlog authority. Implementation sequencing is maintained in [BACKLOG.md](BACKLOG.md).
 
 ## Product Thesis
 
-OVP is moving from a document-processing pipeline into:
+OVP is evolving from a personal Zettelkasten into:
 
-> A reader-first, evidence-backed knowledge atlas over an auditable knowledge state runtime.
+> A typed, evidence-backed knowledge platform — reader-first for humans, programmable for agents, extensible through domain packs.
 
-That means the user-facing product should make compiled knowledge easy to read first, while the operator dashboard remains available under maintenance-oriented surfaces such as `/ops`.
+Three target tiers:
+
+1. **Personal knowledge atlas** — Zettelkasten-quality with typed entities (current + M8)
+2. **Company second brain** — pack-driven domain ontology, team-shared typed knowledge (M9)
+3. **Operational knowledge layer** — Palantir-style actions, decisions, audit (M10, evaluate ROI)
 
 ## Current Milestones
 
 | Milestone | Status | Meaning |
 | --- | --- | --- |
 | M0 Pipeline And Pack Foundation | Done | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first source-lifecycle idempotency slice |
-| M1 Operator Workbench And Review Runtime | Done / maintain | truth UI, candidates, signals/actions, contradictions, action worker |
+| M1 Operator Workbench And Review Runtime | Done | truth UI, candidates, signals/actions, contradictions, action worker |
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and the English-primary docs structure |
-| M3 Reader-First Knowledge Atlas | Done / iterate | reader home, `/ops` split, object source/backlink rail, visual graph map, kind-specific object reader lenses, and reader-oriented search shipped |
-| M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk shipped; deeper enforcement remains |
+| M3 Reader-First Knowledge Atlas | Done | reader home, `/ops` split, object source/backlink rail, visual graph map, kind-specific object reader lenses, and reader-oriented search shipped |
+| M4 KSR Safety And Hot-Path Hardening | Done | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, candidate risk, JSONL streaming fix, projection lifecycle hardening, runtime-state API fixes (final PRs: #98, #99, #100) |
 | M5 Context Pack And Operational Runtime | Done | session snapshots, context budget, runtime state in `/ops` and doctor, provider-facing runtime-state API, action queue health |
+| M5a Quality And Dedup Hardening | Done | concept dedup pipeline integration with `scope_slugs`, promote semantic guard (trigram-Jaccard), historical data cleanup (71→61 Evergreens), `find_similar_slugs` utility (PR #101) |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
+| **M8 Type Unification And Extraction Quality** | **Active** | unified object kind taxonomy, Layer 1 `entity_type` frontmatter, body-size-aware extraction (P3), quote-grounding (P4), single-pass LLM refactor (P5), historical backfill |
+| **M9 Pack As Domain Ontology** | **Next** | pack-defined object kind specs, typed relation constraints, schema registry, domain-specific extraction profiles |
+| **M10 Operational Knowledge Layer** | **Later** | action types on objects, permission + contract, cross-entity aggregation, decision memory |
 
 ## Active Backlog Alignment
 
@@ -57,14 +66,18 @@ That means the user-facing product should make compiled knowledge easy to read f
 | Operational runtime state projection | `BL-014` first slice in PR #91; `/ops` / doctor / API integration in PR #92; action queue health and materialized read-side policy in the M5 closeout slice |
 | Projection repair lifecycle | `BL-020` done in PR #87 |
 | Schema versioning and migration trigger | `BL-021` done in PR #87 plus PR #88 |
+| Architecture refactor (JSONL, truth_api, ui_server, projection) | PR #100 |
+| Concept dedup pipeline + promote semantic guard | PR #101, `BL-025` through `BL-030` are M8 |
 
 ## Near-Term Sequence
 
 Recommended order:
 
-1. Pick up `BL-015` when permission and claim lifecycle become the active blocker.
-2. Keep workflow actions on the existing action worker lock plus stale-running runtime-state attention; add generalized workflow leases only when multi-worker scheduling is introduced.
-3. Keep `BL-012` / `BL-013` follow-ups scoped to new context-pack surfaces only.
+1. **M8 first**: execute `BL-025` (type unification) → `BL-026` (extraction output) → `BL-027` (P3) → `BL-028` (P4) → `BL-029` (P5) → `BL-030` (backfill).
+2. **M9 second**: `BL-031` through `BL-034` once M8 type system is stable.
+3. **M10 evaluate**: after M9 ships, decide scope based on real multi-pack adoption and company-brain use cases.
+4. `BL-015` (permissions) when permission and claim lifecycle become the active blocker.
+5. Keep workflow actions on the existing action worker lock; add generalized workflow leases only when multi-worker scheduling is introduced.
 
 ## Documentation Rules
 
