@@ -497,6 +497,75 @@ def test_ui_server_runtime_endpoint_returns_payload(temp_vault):
     assert payload["active_run"]["runtime_progress"]["performance"]["items_per_minute"] > 0
 
 
+def test_ui_server_runtime_state_endpoint_returns_provider_projection(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.projection_lifecycle import write_projection_repair_marker
+
+    write_projection_repair_marker(
+        temp_vault,
+        kind="full_rebuild",
+        scope={"projection_kind": "knowledge_db"},
+        reason="knowledge db missing",
+        caused_by="ui_test",
+        authority_schema_version=2,
+        projection_schema_version=1,
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/runtime-state?write=1")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["type"] == "operational_runtime_state"
+    assert payload["status"] == "attention_required"
+    assert payload["metrics"]["open_projection_repair_markers"] == 1
+    assert payload["paths"]["json"].endswith("60-Logs/runtime-state/current.json")
+
+
+def test_ui_server_ops_route_renders_runtime_state_card(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.projection_lifecycle import write_projection_repair_marker
+
+    write_projection_repair_marker(
+        temp_vault,
+        kind="metadata_only",
+        scope={"projection_kind": "knowledge_db"},
+        reason="metadata drift",
+        caused_by="ui_test",
+        authority_schema_version=1,
+        projection_schema_version=1,
+    )
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/ops")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "System Health" in body
+    assert "Runtime state: attention_required" in body
+    assert "Open repair markers: 1" in body
+
+
 def test_ui_server_runtime_endpoint_returns_structured_error(temp_vault, monkeypatch):
     import ovp_pipeline.commands.ui_server as ui_server
 

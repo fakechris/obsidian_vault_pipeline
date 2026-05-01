@@ -41,6 +41,7 @@ from .runtime import (
     signal_ledger_write_lock,
 )
 from .runtime_processes import detect_runtime_processes
+from .runtime_state import build_runtime_state, write_runtime_state
 from .run_history import list_run_history
 from .txn import classify_run_ledgers
 
@@ -165,6 +166,31 @@ def get_runtime_status(
         "action_worker": action_worker,
         "run_history": run_history,
     }
+
+
+def get_operational_runtime_state(
+    vault_dir: Path | str,
+    *,
+    recent_limit: int = 20,
+    write_projection: bool = False,
+) -> dict[str, Any]:
+    """Return the derived operational runtime state projection.
+
+    This is the stable provider-facing read API for BL-014. It deliberately
+    returns a rebuildable projection over JSONL event streams and repair
+    markers; callers must not treat the payload itself as Authority.
+    """
+    state = build_runtime_state(vault_dir, recent_limit=recent_limit)
+    if write_projection:
+        paths = write_runtime_state(vault_dir, state)
+        state = {
+            **state,
+            "paths": {
+                "json": str(paths.json_path),
+                "markdown": str(paths.markdown_path),
+            },
+        }
+    return state
 
 
 def _worker_identity_from_processes(processes: list[dict[str, Any]]) -> dict[str, Any] | None:

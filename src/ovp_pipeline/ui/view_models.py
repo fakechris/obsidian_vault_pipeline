@@ -31,6 +31,7 @@ from ..truth_api import (
     get_note_inbound_capture_summary,
     get_note_provenance,
     get_note_traceability,
+    get_operational_runtime_state,
     get_object_provenance_map,
     get_review_context,
     get_runtime_status,
@@ -3707,6 +3708,7 @@ def build_truth_dashboard_payload(
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
     runtime = get_runtime_status(vault_dir)
+    operational_runtime_state = get_operational_runtime_state(vault_dir)
     objects = build_objects_index_payload(vault_dir, limit=12, offset=0, pack_name=pack_name)
     signals = build_signal_browser_payload(vault_dir, pack_name=pack_name)
     production = build_production_browser_payload(vault_dir, pack_name=pack_name)
@@ -3944,6 +3946,7 @@ def build_truth_dashboard_payload(
             "browser_path": _scoped_path("/signals", pack_name=requested_pack),
         },
         "runtime": runtime,
+        "runtime_state": operational_runtime_state,
         "orientation": orientation,
         "workflow_groups": workflow_groups,
         "entry_sections": entry_sections,
@@ -3959,6 +3962,7 @@ def build_runtime_home_payload(
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
     runtime = get_runtime_status(vault_dir)
+    operational_runtime_state = get_operational_runtime_state(vault_dir)
     research_overview_supported = _supports_research_shell(pack_name)
     try:
         objects = build_objects_index_payload(vault_dir, limit=8, offset=0, pack_name=pack_name)
@@ -3979,6 +3983,7 @@ def build_runtime_home_payload(
             derived_from=("knowledge.db", "runtime ledgers"),
         ),
         "runtime": runtime,
+        "runtime_state": operational_runtime_state,
         "research_overview": {
             "status": "supported" if research_overview_supported else "shared_shell_only",
             "reason": (

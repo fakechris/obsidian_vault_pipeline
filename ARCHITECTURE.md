@@ -679,7 +679,7 @@ Main gaps:
 - Schema versioning is wired into projection lifecycle for `knowledge.db`: Authority and projection versions are persisted and stale metadata triggers a full rebuild marker.
 - Working memory is the first budgeted context-pack projection: it records context budget metadata and emits `working_memory` reuse events for selected canonical objects.
 - OVP Prime materializes that budgeted context pack into `60-Logs/session-snapshots/<session_id>.md` plus `latest.md`, and emits `ovp_prime` reuse events for the selected objects injected into a session.
-- Runtime state is now a derived operational projection: `ovp-runtime-state` reads projection repair markers, pipeline events, and trusted reuse events, then writes `60-Logs/runtime-state/current.{json,md}` with graph nodes/edges and attention items.
+- Runtime state is now a derived operational projection and read surface: `ovp-runtime-state` writes `60-Logs/runtime-state/current.{json,md}`, `/ops` renders system health from the same projection, `ovp doctor` includes the same metrics, and `/api/runtime-state` exposes the provider-facing read API.
 - The reader-first home is now the default entry; object pages have reader profiles, source rails, and kind-specific reader lenses; `/graph` has a first spatial map projection; `/search` groups reader results by kind, summary, evidence count, and match reason.
 
 ## 18. Near-Term Architecture Actions
@@ -689,7 +689,7 @@ Recommended order:
 1. Keep projection metadata attached to new access surfaces and add doctor/export checks that verify the labels are present.
 2. Add stricter factual evidence completeness checks before expanding automatic promotion.
 3. Expand doctor/export checks to verify projection marker replay and projection labels together.
-4. Continue BL-014 by wiring runtime state into `/ops`, `ovp doctor`, and a provider-facing read API without turning the projection into Authority.
+4. Close out BL-014 by deciding whether workflow item leases are needed beyond projection repair markers; keep runtime state as a projection, not Authority.
 5. Keep future projection backends on the same metadata contract before adding semantic reindex workers.
 
 ## Appendix: Backlog Mapping
@@ -707,6 +707,6 @@ The architecture should not depend on backlog IDs to be valid. The table below i
 | Reader-first access surfaces | `BL-001`; `BL-008` and `BL-009` done through PR #79 and PR #83; `BL-010` done in PR #80 |
 | Reader-oriented search | `BL-011` done in PR #84 |
 | Trusted reuse / context-pack loop | `BL-012` and `BL-013` first implementation done in PR #89 plus PR #90 |
-| Operational runtime graph / observability | `BL-014` first runtime-state slice in PR #91 |
+| Operational runtime graph / observability | `BL-014` first runtime-state slice in PR #91; `/ops` / doctor / API wiring in PR #92 |
 | Projection repair lifecycle | `BL-020` done in PR #87 |
 | Schema versioning and migration trigger | `BL-021` done in PR #87 plus PR #88 |

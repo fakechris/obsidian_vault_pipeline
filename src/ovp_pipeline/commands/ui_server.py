@@ -54,6 +54,7 @@ from ..truth_api import (
     dismiss_action_queue_item,
     enqueue_signal_action,
     ensure_signal_ledger_synced,
+    get_operational_runtime_state,
     get_runtime_status,
     list_review_actions,
     record_review_action,
@@ -630,6 +631,50 @@ def _render_run_history_card(runtime: dict[str, object] | None) -> str:
         "<section class='card'><h2>Recent Runs</h2>"
         f"{total_suffix}"
         f"<ul class='list-tight'>{''.join(rendered_items)}</ul>"
+        "</section>"
+    )
+
+
+def _render_runtime_state_card(runtime_state: dict[str, object] | None) -> str:
+    if not isinstance(runtime_state, dict):
+        return ""
+    metrics = (
+        runtime_state.get("metrics")
+        if isinstance(runtime_state.get("metrics"), dict)
+        else {}
+    )
+    attention = (
+        runtime_state.get("attention")
+        if isinstance(runtime_state.get("attention"), list)
+        else []
+    )
+    status = str(runtime_state.get("status") or "unknown")
+    facts = [
+        f"<li>Open repair markers: {escape(str(metrics.get('open_projection_repair_markers', 0)))}</li>",
+        f"<li>Expired repair leases: {escape(str(metrics.get('expired_projection_repair_leases', 0)))}</li>",
+        f"<li>Pipeline events: {escape(str(metrics.get('pipeline_events', 0)))}</li>",
+        f"<li>Reuse surfaces: {escape(str(metrics.get('reuse_surfaces', 0)))}</li>",
+    ]
+    attention_items: list[str] = []
+    for item in attention[:5]:
+        if not isinstance(item, dict):
+            continue
+        severity = str(item.get("severity") or "info")
+        message = str(item.get("message") or "")
+        attention_items.append(
+            f"<li><span class='pill'>{escape(severity)}</span> {escape(message)}</li>"
+        )
+    attention_html = (
+        f"<ul class='list-tight'>{''.join(attention_items)}</ul>"
+        if attention_items
+        else "<p class='muted'>No runtime-state attention items surfaced.</p>"
+    )
+    return (
+        "<section class='card'><h2>System Health</h2>"
+        f"<p class='muted'>Runtime state: {escape(status)}. Derived from repair markers, "
+        "pipeline events, and trusted reuse events.</p>"
+        f"<ul class='list-tight'>{''.join(facts)}</ul>"
+        f"{attention_html}"
         "</section>"
     )
 
@@ -1577,6 +1622,7 @@ def _render_dashboard(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     runtime_card = _render_runtime_card(payload.get("runtime"))
     run_history_card = _render_run_history_card(payload.get("runtime"))
+    runtime_state_card = _render_runtime_state_card(payload.get("runtime_state"))
     research_overview = payload.get("research_overview", {})
     research_overview_supported = research_overview.get("status") == "supported"
     orientation = payload.get("orientation", {})
@@ -1713,6 +1759,7 @@ def _render_dashboard(payload: dict) -> str:
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
             "</section>",
             runtime_card,
+            runtime_state_card,
             run_history_card,
             "<section class='grid stats'>",
             "".join(stats_cards),
@@ -4731,6 +4778,30 @@ def create_server(
                                 "stale_runs": [],
                                 "error": "runtime_status_unavailable",
                                 "detail": str(exc),
+                            },
+                            status=503,
+                        )
+                    return
+                if path == "/api/runtime-state":
+                    try:
+                        limit = int(query.get("limit", ["20"])[0])
+                        write_projection = query.get("write", ["0"])[0] in {"1", "true", "yes"}
+                        self._write_json(
+                            get_operational_runtime_state(
+                                resolved_vault,
+                                recent_limit=limit,
+                                write_projection=write_projection,
+                            )
+                        )
+                    except (OSError, sqlite3.Error) as exc:
+                        self._write_json(
+                            {
+                                "type": "operational_runtime_state",
+                                "status": "unavailable",
+                                "error": "runtime_state_unavailable",
+                                "detail": str(exc),
+                                "metrics": {},
+                                "attention": [],
                             },
                             status=503,
                         )

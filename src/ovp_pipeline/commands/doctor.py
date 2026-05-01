@@ -29,6 +29,7 @@ from ..packs.loader import (
     load_pack,
 )
 from ..runtime import VaultLayout, iter_markdown_files, resolve_vault_dir
+from ..truth_api import get_operational_runtime_state
 from ..truth_projection_registry import resolve_truth_projection_builder
 
 _SHARED_SHELL_ROUTES = [
@@ -1357,6 +1358,7 @@ def _payload(pack_name: str, vault_dir: Path | None) -> dict[str, object]:
         "candidate_consistency": _candidate_consistency_payload(vault_dir, pack_name=pack_name),
         "relations_health": _relations_health_payload(vault_dir, pack_name=pack_name),
         "feedback": _feedback_payload(vault_dir, pack_name=pack_name),
+        "runtime_state": get_operational_runtime_state(vault_dir) if vault_dir else None,
     }
 
 
@@ -1458,6 +1460,20 @@ def main(argv: list[str] | None = None) -> int:
             f"writing_prompts={feedback['writing_prompts']} "
             f"proposed_relations={feedback['proposed_relations']}"
         )
+    runtime_state = payload.get("runtime_state") or {}
+    if runtime_state:
+        metrics = runtime_state.get("metrics") or {}
+        print(
+            "Runtime state: "
+            f"status={runtime_state.get('status', 'unknown')} "
+            f"open_repair_markers={metrics.get('open_projection_repair_markers', 0)} "
+            f"expired_repair_leases={metrics.get('expired_projection_repair_leases', 0)} "
+            f"pipeline_events={metrics.get('pipeline_events', 0)} "
+            f"reuse_surfaces={metrics.get('reuse_surfaces', 0)}"
+        )
+        for item in (runtime_state.get("attention") or [])[:3]:
+            if isinstance(item, dict):
+                print(f"  attention: {item.get('message', '')}")
     return 0
 
 
