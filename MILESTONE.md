@@ -35,7 +35,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 | M2 Roadmap And README Consolidation | Done | merged historical milestones, compiler roadmap, recent KSR input, reader-product research, and the English-primary docs structure |
 | M3 Reader-First Knowledge Atlas | Done / iterate | reader home, `/ops` split, object source/backlink rail, visual graph map, kind-specific object reader lenses, and reader-oriented search shipped |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk shipped; deeper enforcement remains |
-| M5 Context Pack And Operational Runtime | Active / closeout | session snapshots, context budget, runtime state in `/ops` and doctor, provider-facing runtime-state API |
+| M5 Context Pack And Operational Runtime | Done | session snapshots, context budget, runtime state in `/ops` and doctor, provider-facing runtime-state API, action queue health |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
 
@@ -54,7 +54,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 | Visual graph MVP | `BL-010` done in PR #80 |
 | Reader-oriented search | `BL-011` done in PR #84 |
 | Trusted reuse context pack / OVP prime | `BL-012` and `BL-013` first implementation done in PR #89 plus PR #90 |
-| Operational runtime state projection | `BL-014` first slice in PR #91; `/ops` / doctor / API integration in PR #92 |
+| Operational runtime state projection | `BL-014` first slice in PR #91; `/ops` / doctor / API integration in PR #92; action queue health in the M5 closeout slice |
 | Projection repair lifecycle | `BL-020` done in PR #87 |
 | Schema versioning and migration trigger | `BL-021` done in PR #87 plus PR #88 |
 
@@ -62,8 +62,8 @@ That means the user-facing product should make compiled knowledge easy to read f
 
 Recommended order:
 
-1. Close out `BL-014` by deciding whether workflow item leases are needed beyond projection repair markers.
-2. Pick up `BL-015` when permission and claim lifecycle become the active blocker.
+1. Pick up `BL-015` when permission and claim lifecycle become the active blocker.
+2. Keep workflow actions on the existing action worker lock plus stale-running runtime-state attention; add generalized workflow leases only when multi-worker scheduling is introduced.
 3. Keep `BL-012` / `BL-013` follow-ups scoped to new context-pack surfaces only.
 
 ## Documentation Rules

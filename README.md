@@ -96,7 +96,7 @@ Current milestone sequence:
 | M2 Roadmap And README Consolidation | Complete | merged historical milestones, compiler roadmap, recent KSR input, and reader-product research |
 | M3 Reader-First Knowledge Atlas | Done / iterate | reader home, `/ops` split, object source/backlink rail, visual graph map, kind-specific object reader lenses, and reader-oriented search shipped |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk tiers have shipped; deeper enforcement remains |
-| M5 Context Pack And Operational Runtime | Active / closeout | session snapshots, context budget, operational runtime state in `/ops` and doctor, provider-facing runtime-state API |
+| M5 Context Pack And Operational Runtime | Done | session snapshots, context budget, operational runtime state in `/ops` and doctor, provider-facing runtime-state API, action queue health in runtime state |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, skill/routine extraction, notebook/raw-source mode |
 
@@ -104,7 +104,7 @@ Current active backlog focus:
 
 - Shipped: `KSR-001` evidence spans, `KSR-002` projection labels, `KSR-003` candidate risk tiers, `KSR-004` session snapshots/context packs, `KSR-014` article routing preview, `KSR-015` dashboard/search hot-path audit, `KSR-017` explicit context budgets, `KSR-018` markdown-aware evidence span backfill, `KSR-022` OVP prime context packs, `KSR-026` workflow wiring eval suite, and the first structured projection repair marker lifecycle.
 - Product shipped: readable object page profiles, source/backlink rail, kind-specific reader lenses, visual `/graph` map, and reader-oriented search grouped by kind, evidence, and reason.
-- Current: `BL-014` wires runtime state into `/ops`, `ovp doctor`, and `/api/runtime-state` so users can see system health without reading raw logs.
+- Current: M5 is closed out. `BL-014` now keeps workflow actions observable through runtime state instead of introducing a generalized workflow lease; the existing action worker lock and stale-running status remain the execution boundary until multi-worker scheduling becomes real.
 - Product track: reader-first Knowledge Atlas stays a projection layer, not a new state system.
 
 ## Domain Packs
@@ -411,7 +411,7 @@ Refine is not hidden or missing. It is wired in, but opt-in by default to avoid 
 
 | Command | Purpose |
 |---|---|
-| `ovp-runtime-state --vault-dir <vault> --write --json` | Build the operational runtime state projection from repair markers, pipeline events, and reuse events; writes `60-Logs/runtime-state/current.{json,md}` |
+| `ovp-runtime-state --vault-dir <vault> --write --json` | Build the operational runtime state projection from repair markers, workflow actions, pipeline events, and reuse events; writes `60-Logs/runtime-state/current.{json,md}` |
 | `/api/runtime-state?write=1` | Local UI/API read endpoint for the same provider-facing runtime-state projection |
 
 ### Context packs

@@ -1468,6 +1468,9 @@ def main(argv: list[str] | None = None) -> int:
             f"status={runtime_state.get('status', 'unknown')} "
             f"open_repair_markers={metrics.get('open_projection_repair_markers', 0)} "
             f"expired_repair_leases={metrics.get('expired_projection_repair_leases', 0)} "
+            f"queued_actions={metrics.get('queued_actions', 0)} "
+            f"stale_running_actions={metrics.get('stale_running_actions', 0)} "
+            f"failed_actions={metrics.get('failed_actions', 0)} "
             f"pipeline_events={metrics.get('pipeline_events', 0)} "
             f"reuse_surfaces={metrics.get('reuse_surfaces', 0)}"
         )

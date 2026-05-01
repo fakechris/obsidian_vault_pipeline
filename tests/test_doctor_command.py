@@ -401,6 +401,20 @@ def test_doctor_reports_runtime_state_health(temp_vault, capsys):
         worker_id="doctor-worker",
         lease_seconds=1,
     )
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        json.dumps(
+            {
+                "action_id": "action::queued",
+                "action_kind": "deep_dive_workflow",
+                "status": "queued",
+                "created_at": "2026-04-30T12:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     exit_code = main(["--vault-dir", str(temp_vault), "--json"])
     payload = json.loads(capsys.readouterr().out)
@@ -408,6 +422,7 @@ def test_doctor_reports_runtime_state_health(temp_vault, capsys):
     assert exit_code == 0
     assert payload["runtime_state"]["metrics"]["claimed_projection_repair_markers"] == 1
     assert payload["runtime_state"]["metrics"]["projection_repair_markers"] == 1
+    assert payload["runtime_state"]["metrics"]["queued_actions"] == 1
 
     exit_code = main(["--vault-dir", str(temp_vault)])
     output = capsys.readouterr().out
@@ -415,6 +430,7 @@ def test_doctor_reports_runtime_state_health(temp_vault, capsys):
     assert exit_code == 0
     assert "Runtime state:" in output
     assert "open_repair_markers=0" in output
+    assert "queued_actions=1" in output
     assert "pipeline_events=0" in output
 
 

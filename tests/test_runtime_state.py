@@ -23,8 +23,10 @@ def test_runtime_state_empty_vault_is_ok(temp_vault):
     assert state["metrics"]["projection_repair_events"] == 0
     assert state["metrics"]["pipeline_events"] == 0
     assert state["metrics"]["reuse_events"] == 0
+    assert state["metrics"]["action_queue_items"] == 0
     assert any(node["id"] == "runtime" for node in state["graph"]["nodes"])
     assert any(node["id"] == "log:projection-repair" for node in state["graph"]["nodes"])
+    assert any(node["id"] == "log:actions" for node in state["graph"]["nodes"])
 
 
 def test_runtime_state_reports_open_and_expired_repair_lease(temp_vault):
@@ -106,6 +108,81 @@ def test_runtime_state_summarizes_pipeline_and_reuse_surfaces(temp_vault):
     assert any(node["id"] == "surface:ovp_prime" for node in state["graph"]["nodes"])
 
 
+def test_runtime_state_reports_action_queue_health_without_generalized_leases(temp_vault):
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "actions.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "action_id": "action::queued",
+                        "action_kind": "deep_dive_workflow",
+                        "pack": "research-tech",
+                        "source_signal_id": "signal::queued",
+                        "title": "Queued action",
+                        "target_ref": "50-Inbox/03-Processed/Queued.md",
+                        "status": "queued",
+                        "created_at": "2026-04-30T11:55:00Z",
+                        "safe_to_run": True,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "action_id": "action::running",
+                        "action_kind": "object_extraction_workflow",
+                        "pack": "research-tech",
+                        "source_signal_id": "signal::running",
+                        "title": "Running action",
+                        "target_ref": "20-Areas/AI-Research/Topics/Running.md",
+                        "status": "running",
+                        "started_at": "2026-04-30T10:30:00Z",
+                        "safe_to_run": True,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "action_id": "action::failed",
+                        "action_kind": "deep_dive_workflow",
+                        "pack": "research-tech",
+                        "source_signal_id": "signal::failed",
+                        "title": "Failed action",
+                        "target_ref": "50-Inbox/03-Processed/Failed.md",
+                        "status": "failed",
+                        "failure_bucket": "workflow_failed",
+                        "retry_count": 1,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = build_runtime_state(
+        temp_vault,
+        now=datetime(2026, 4, 30, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert state["status"] == "attention_required"
+    assert state["metrics"]["action_queue_items"] == 3
+    assert state["metrics"]["queued_actions"] == 1
+    assert state["metrics"]["running_actions"] == 1
+    assert state["metrics"]["stale_running_actions"] == 1
+    assert state["metrics"]["failed_actions"] == 1
+    assert state["action_status_counts"] == {"failed": 1, "queued": 1, "running": 1}
+    running = next(action for action in state["workflow_actions"] if action["status"] == "running")
+    assert running["stale_running"] is True
+    assert any(item["kind"] == "stale_running_action" for item in state["attention"])
+    assert any(item["kind"] == "failed_action" for item in state["attention"])
+    assert any(node["id"] == "action:action::running" for node in state["graph"]["nodes"])
+    assert {
+        "source": "action:action::running",
+        "target": "signal:signal::running",
+        "kind": "responds_to",
+    } in state["graph"]["edges"]
+
+
 def test_write_runtime_state_materializes_json_and_markdown(temp_vault):
     state = build_runtime_state(
         temp_vault,
@@ -121,6 +198,7 @@ def test_write_runtime_state_materializes_json_and_markdown(temp_vault):
     assert paths.markdown_path.name == "current.md"
     assert "projection_kind: operational_runtime_projection" in markdown
     assert "# Operational Runtime State" in markdown
+    assert "## Workflow Actions" in markdown
 
 
 def test_runtime_state_cli_writes_and_prints_json(temp_vault, monkeypatch, capsys):

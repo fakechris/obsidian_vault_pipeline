@@ -652,6 +652,10 @@ def _render_runtime_state_card(runtime_state: dict[str, object] | None) -> str:
     facts = [
         f"<li>Open repair markers: {escape(str(metrics.get('open_projection_repair_markers', 0)))}</li>",
         f"<li>Expired repair leases: {escape(str(metrics.get('expired_projection_repair_leases', 0)))}</li>",
+        f"<li>Queued actions: {escape(str(metrics.get('queued_actions', 0)))}</li>",
+        f"<li>Running actions: {escape(str(metrics.get('running_actions', 0)))}</li>",
+        f"<li>Stale running actions: {escape(str(metrics.get('stale_running_actions', 0)))}</li>",
+        f"<li>Failed actions: {escape(str(metrics.get('failed_actions', 0)))}</li>",
         f"<li>Pipeline events: {escape(str(metrics.get('pipeline_events', 0)))}</li>",
         f"<li>Reuse surfaces: {escape(str(metrics.get('reuse_surfaces', 0)))}</li>",
     ]
@@ -672,7 +676,7 @@ def _render_runtime_state_card(runtime_state: dict[str, object] | None) -> str:
     return (
         "<section class='card'><h2>System Health</h2>"
         f"<p class='muted'>Runtime state: {escape(status)}. Derived from repair markers, "
-        "pipeline events, and trusted reuse events.</p>"
+        "workflow actions, pipeline events, and trusted reuse events.</p>"
         f"<ul class='list-tight'>{''.join(facts)}</ul>"
         f"{attention_html}"
         "</section>"
