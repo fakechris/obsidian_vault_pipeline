@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import secrets
 import sqlite3
 import re
 import subprocess
@@ -4770,6 +4771,7 @@ def create_server(
     vault_dir: Path | str, *, host: str = "127.0.0.1", port: int = 8787
 ) -> ThreadingHTTPServer:
     resolved_vault = resolve_vault_dir(vault_dir)
+    csrf_token = secrets.token_hex(16)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args) -> None:  # pragma: no cover
@@ -5414,6 +5416,12 @@ def create_server(
             path = parsed.path
             try:
                 form = self._read_form()
+                cookie_header = self.headers.get("Cookie", "")
+                if f"_csrf={csrf_token}" in cookie_header:
+                    submitted_token = (form.get("_csrf") or [""])[0]
+                    if submitted_token != csrf_token:
+                        self._write_json({"error": "csrf_token_mismatch"}, status=403)
+                        return
                 if path == "/api/contradictions/resolve":
                     pack_name = self._form_first(form, "pack").strip() or None
                     if self._guard_research_route(
@@ -5820,14 +5828,44 @@ def create_server(
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'",
+            )
             self.end_headers()
             self.wfile.write(body)
 
         def _write_html(self, html: str, *, status: int = 200) -> None:
+            csrf_snippet = (
+                f'<meta name="csrf-token" content="{csrf_token}" />\n'
+                "<script>\n"
+                "document.addEventListener('DOMContentLoaded', function() {\n"
+                "  document.querySelectorAll('form[method=\"post\"]').forEach(function(f) {\n"
+                "    if (!f.querySelector('input[name=\"_csrf\"]')) {\n"
+                "      var i = document.createElement('input');\n"
+                "      i.type = 'hidden'; i.name = '_csrf';\n"
+                "      i.value = document.querySelector('meta[name=\"csrf-token\"]').content;\n"
+                "      f.appendChild(i);\n"
+                "    }\n"
+                "  });\n"
+                "});\n"
+                "</script>\n"
+            )
+            html = html.replace("</head>", csrf_snippet + "</head>", 1)
             body = html.encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header(
+                "Set-Cookie",
+                f"_csrf={csrf_token}; SameSite=Strict; HttpOnly; Path=/",
+            )
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'",
+            )
             self.end_headers()
             self.wfile.write(body)
 
@@ -5960,6 +5998,11 @@ def create_server(
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'",
+            )
             self.end_headers()
             self.wfile.write(body)
 
@@ -5968,6 +6011,11 @@ def create_server(
             self.send_response(303)
             self.send_header("Location", safe_location)
             self.send_header("Content-Length", "0")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'",
+            )
             self.end_headers()
 
     return ThreadingHTTPServer((host, port), Handler)
