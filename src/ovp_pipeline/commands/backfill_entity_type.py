@@ -113,7 +113,7 @@ def run(
         print(f"Evergreen directory not found: {evergreen_dir}")
         return {"error": "directory_not_found"}
 
-    log_path = vault_dir / "60-Logs" / "entity-type-backfill.jsonl"
+    log_path = vault_dir / "60-Logs" / "pipeline.jsonl"
     md_files = sorted(evergreen_dir.glob("*.md"))
     total = len(md_files)
     print(f"Found {total} Evergreen notes in {evergreen_dir}")
@@ -158,7 +158,7 @@ def run(
 
         try:
             kind = _classify(llm, title, definition, body[:500])
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - continue per-note processing; errors are audited
             print(f"  [{i+1}/{len(needs_classification)}] ERROR {fp.name}: {exc}")
             _emit_audit(
                 log_path,

@@ -123,6 +123,7 @@ ovp-prime = "ovp_pipeline.commands.prime:main"
 ovp-runtime-state = "ovp_pipeline.commands.runtime_state:main"
 ovp-schema = "ovp_pipeline.commands.schema_cmd:main"
 ovp-backfill-entity-type = "ovp_pipeline.commands.backfill_entity_type:main"
+ovp-embedding-dedup = "ovp_pipeline.commands.embedding_dedup:main"
 
 [project.entry-points."ovp.packs"]
 default-knowledge = "ovp_pipeline.packs.default_knowledge:get_pack"
