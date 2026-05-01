@@ -163,6 +163,12 @@ class TestEmitEvidenceVerified:
             "source_slug": "s1",
             "evidence_kind": "ek",
         }
+        assert event["content_hash"] == "abc"
+        assert event["retrieval_context"] == "ctx"
+        assert event["status"] == "verified"
+        assert event["verified_at"] == "2026-04-30T00:00:00Z"
+        assert event.get("quote_start_line", 0) == 0
+        assert event.get("quote_end_line", 0) == 0
 
     def test_rejects_unknown_table(self, replay_vault: Path):
         with pytest.raises(ValueError, match="Unsupported evidence table"):

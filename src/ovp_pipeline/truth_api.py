@@ -1575,9 +1575,9 @@ def list_objects(
     if normalized_query:
         where_clause += (
             " AND ("
-            " lower(object_id) LIKE ? ESCAPE '\\'"
-            " OR lower(title) LIKE ? ESCAPE '\\'"
-            " OR lower(source_slug) LIKE ? ESCAPE '\\'"
+            " object_id LIKE ? ESCAPE '\\'"
+            " OR title LIKE ? ESCAPE '\\'"
+            " OR source_slug LIKE ? ESCAPE '\\'"
             ")"
         )
         inner_params.extend([
