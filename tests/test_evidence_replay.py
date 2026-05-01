@@ -25,7 +25,7 @@ def replay_vault(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
-def replay_db(replay_vault: Path) -> sqlite3.Connection:
+def replay_db(replay_vault: Path):
     db_path = replay_vault / "knowledge.db"
     conn = sqlite3.connect(db_path)
     conn.execute("""
@@ -64,7 +64,10 @@ def replay_db(replay_vault: Path) -> sqlite3.Connection:
         )
     """)
     conn.commit()
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 class TestLatestPerKey:
