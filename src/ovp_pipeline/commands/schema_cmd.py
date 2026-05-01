@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 _ENTITY_TYPE_RE = re.compile(r"^entity_type:\s*(.+)$", re.MULTILINE)
-_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---", re.DOTALL)
+_FRONTMATTER_RE = re.compile(r"\A\s*\ufeff?---\r?\n(.*?)\r?\n---", re.DOTALL)
 
 DEFAULT_PACK_NAME = "research-tech"
 

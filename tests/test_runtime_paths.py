@@ -202,6 +202,7 @@ def test_build_execution_plan_includes_pinboard_process_for_history():
         "quality",
         "fix_links",
         "absorb",
+        "dedup",
         "note_type_normalize",
         "registry_sync",
         "moc",
