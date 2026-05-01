@@ -4791,12 +4791,10 @@ def create_server(
                 if path == "/api/runtime-state":
                     try:
                         limit = int(query.get("limit", ["20"])[0])
-                        write_projection = query.get("write", ["0"])[0] in {"1", "true", "yes"}
                         self._write_json(
                             get_operational_runtime_state(
                                 resolved_vault,
                                 recent_limit=limit,
-                                write_projection=write_projection,
                             )
                         )
                     except (OSError, sqlite3.Error) as exc:
@@ -5377,6 +5375,30 @@ def create_server(
                     ):
                         return
                     self._write_json(self._resolve_contradiction_action(form))
+                    return
+                if path == "/api/runtime-state":
+                    try:
+                        limit = int(self._form_first(form, "limit").strip() or "20")
+                        self._write_json(
+                            get_operational_runtime_state(
+                                resolved_vault,
+                                recent_limit=limit,
+                                write_projection=True,
+                                prefer_materialized=False,
+                            )
+                        )
+                    except (OSError, sqlite3.Error) as exc:
+                        self._write_json(
+                            {
+                                "type": "operational_runtime_state",
+                                "status": "unavailable",
+                                "error": "runtime_state_unavailable",
+                                "detail": str(exc),
+                                "metrics": {},
+                                "attention": [],
+                            },
+                            status=503,
+                        )
                     return
                 if path == "/contradictions/resolve":
                     pack_name = self._form_first(form, "pack").strip() or None

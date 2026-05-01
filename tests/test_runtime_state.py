@@ -8,7 +8,7 @@ from ovp_pipeline.projection_lifecycle import (
     claim_projection_repair_marker,
     write_projection_repair_marker,
 )
-from ovp_pipeline.runtime_state import build_runtime_state, write_runtime_state
+from ovp_pipeline.runtime_state import build_runtime_state, read_runtime_state, write_runtime_state
 
 
 def test_runtime_state_empty_vault_is_ok(temp_vault):
@@ -199,6 +199,7 @@ def test_write_runtime_state_materializes_json_and_markdown(temp_vault):
     assert "projection_kind: operational_runtime_projection" in markdown
     assert "# Operational Runtime State" in markdown
     assert "## Workflow Actions" in markdown
+    assert read_runtime_state(temp_vault)["type"] == "operational_runtime_state"
 
 
 def test_runtime_state_cli_writes_and_prints_json(temp_vault, monkeypatch, capsys):

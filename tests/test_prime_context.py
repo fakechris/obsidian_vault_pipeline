@@ -38,6 +38,18 @@ def test_build_prime_context_writes_session_snapshot_and_latest(temp_vault):
     assert "# Working Memory — 2026-04-30" in text
 
 
+def test_build_prime_context_uses_timestamp_session_for_invalid_session_id(temp_vault):
+    output = build_prime_context(
+        temp_vault,
+        session_id="!!!",
+        target_date=date(2026, 4, 30),
+        now=datetime(2026, 4, 30, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert output == temp_vault.joinpath(*SESSION_SNAPSHOT_DIR, "session-20260430T120000Z.md")
+    assert "session_id: session-20260430T120000Z" in output.read_text(encoding="utf-8")
+
+
 def test_prime_context_uses_budgeted_working_memory(temp_vault):
     eg = temp_vault / "10-Knowledge" / "Evergreen"
     (eg / "Hot.md").write_text(

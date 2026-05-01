@@ -1,7 +1,8 @@
-from pathlib import Path
-
 from ovp_pipeline.commands.cleanup_processing_backups import main as cleanup_main
-from ovp_pipeline.processing_backups import cleanup_orphan_processing_backups
+from ovp_pipeline.processing_backups import (
+    build_processed_source_lookup,
+    cleanup_orphan_processing_backups,
+)
 from ovp_pipeline.runtime import VaultLayout
 
 
@@ -52,6 +53,34 @@ def test_cleanup_orphan_processing_backup_skips_missing_or_mismatched_processed_
     }
     assert missing.exists()
     assert mismatch.exists()
+
+
+def test_cleanup_orphan_processing_backups_indexes_processed_sources_once(temp_vault, monkeypatch):
+    import ovp_pipeline.processing_backups as processing_backups
+
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.processing_dir.mkdir(parents=True, exist_ok=True)
+    processed_dir = layout.processed_month_dir(__import__("datetime").datetime(2026, 4, 7))
+    processed_dir.mkdir(parents=True, exist_ok=True)
+    (layout.processing_dir / "One.md.backup").write_text("# One\n", encoding="utf-8")
+    (layout.processing_dir / "Two.md.backup").write_text("# Two\n", encoding="utf-8")
+    (processed_dir / "One.md").write_text("# One\n", encoding="utf-8")
+    (processed_dir / "Two.md").write_text("# Two\n", encoding="utf-8")
+
+    call_count = 0
+    real_build_lookup = build_processed_source_lookup
+
+    def counting_build_lookup(observed_layout):
+        nonlocal call_count
+        call_count += 1
+        return real_build_lookup(observed_layout)
+
+    monkeypatch.setattr(processing_backups, "build_processed_source_lookup", counting_build_lookup)
+
+    checks = cleanup_orphan_processing_backups(layout, apply=False)
+
+    assert call_count == 1
+    assert [check.ok for check in checks] == [True, True]
 
 
 def test_cleanup_processing_backups_command_reports_skips(temp_vault, capsys):

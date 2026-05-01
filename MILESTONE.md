@@ -54,7 +54,7 @@ That means the user-facing product should make compiled knowledge easy to read f
 | Visual graph MVP | `BL-010` done in PR #80 |
 | Reader-oriented search | `BL-011` done in PR #84 |
 | Trusted reuse context pack / OVP prime | `BL-012` and `BL-013` first implementation done in PR #89 plus PR #90 |
-| Operational runtime state projection | `BL-014` first slice in PR #91; `/ops` / doctor / API integration in PR #92; action queue health in the M5 closeout slice |
+| Operational runtime state projection | `BL-014` first slice in PR #91; `/ops` / doctor / API integration in PR #92; action queue health and materialized read-side policy in the M5 closeout slice |
 | Projection repair lifecycle | `BL-020` done in PR #87 |
 | Schema versioning and migration trigger | `BL-021` done in PR #87 plus PR #88 |
 

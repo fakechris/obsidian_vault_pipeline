@@ -548,6 +548,29 @@ def test_truth_api_get_operational_runtime_state_provider_writes_projection(temp
     assert (temp_vault / "60-Logs" / "runtime-state" / "current.json").exists()
 
 
+def test_truth_api_get_operational_runtime_state_prefers_materialized_projection(temp_vault):
+    from ovp_pipeline.projection_lifecycle import write_projection_repair_marker
+    from ovp_pipeline.truth_api import get_operational_runtime_state
+
+    written = get_operational_runtime_state(temp_vault, write_projection=True)
+    write_projection_repair_marker(
+        temp_vault,
+        kind="full_rebuild",
+        scope={"projection_kind": "knowledge_db"},
+        reason="after materialized write",
+        caused_by="test",
+        authority_schema_version=2,
+        projection_schema_version=1,
+    )
+
+    payload = get_operational_runtime_state(temp_vault)
+    rebuilt = get_operational_runtime_state(temp_vault, prefer_materialized=False)
+
+    assert payload["generated_at"] == written["generated_at"]
+    assert payload["metrics"]["open_projection_repair_markers"] == 0
+    assert rebuilt["metrics"]["open_projection_repair_markers"] == 1
+
+
 def test_truth_api_runtime_progress_accepts_naive_ledger_timestamps(temp_vault):
     from ovp_pipeline.truth_api import get_runtime_status
 

@@ -216,12 +216,8 @@ def _utc_now_text() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _authority_schema_version_path(vault_dir: Path | str) -> Path:
-    return resolve_vault_dir(vault_dir) / ".ovp" / "schema_version"
-
-
 def _ensure_authority_schema_version(vault_dir: Path | str) -> int:
-    path = _authority_schema_version_path(vault_dir)
+    path = resolve_vault_dir(vault_dir) / ".ovp" / "schema_version"
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{AUTHORITY_SCHEMA_VERSION}\n", encoding="utf-8")

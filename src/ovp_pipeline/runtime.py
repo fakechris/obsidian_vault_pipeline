@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import contextmanager
 import fcntl
@@ -56,12 +56,39 @@ def iter_markdown_files(directory: Path, recursive: bool = True) -> Iterator[Pat
 def read_markdown_frontmatter(path: Path) -> dict[str, object]:
     """Return parsed YAML frontmatter for a markdown file, if present."""
     content = path.read_text(encoding="utf-8")
-    if not content.startswith("---"):
-        return {}
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return {}
-    return yaml.safe_load(parts[1]) or {}
+    metadata, _body = split_markdown_frontmatter(content)
+    return metadata
+
+
+def split_markdown_frontmatter(text: str) -> tuple[dict[str, object], str]:
+    """Return YAML frontmatter and body for standard or fenced markdown notes."""
+    raw_frontmatter = ""
+    body = text
+    if text.startswith("```yaml\n---\n") or text.startswith("```yml\n---\n"):
+        first_newline = text.find("\n")
+        closing = "\n---\n```"
+        end = text.find(closing, first_newline + 1)
+        if end < 0:
+            return {}, text
+        raw_frontmatter = text[first_newline + len("\n---\n") : end]
+        body = text[end + len(closing) :].lstrip("\n")
+    elif text.startswith("---\n"):
+        end = text.find("\n---", 4)
+        if end < 0:
+            return {}, text
+        raw_frontmatter = text[4:end]
+        body = text[end + len("\n---") :].lstrip("\n")
+    else:
+        return {}, text
+    parsed = yaml.safe_load(raw_frontmatter) or {}
+    if not isinstance(parsed, dict):
+        return {}, body
+    return parsed, body
+
+
+def format_utc_timestamp(value: datetime) -> str:
+    """Return stable second-precision UTC timestamps for projections and logs."""
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def markdown_title(path: Path) -> str:

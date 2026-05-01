@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from typing import Any, Iterable
 
 from .projection_labels import frontmatter_projection_fields
 from .projection_lifecycle import ProjectionRepairMarker, list_projection_repair_markers
-from .runtime import VaultLayout, resolve_vault_dir
+from .runtime import VaultLayout, format_utc_timestamp, resolve_vault_dir
 
 
 DEFAULT_RECENT_LIMIT = 20
@@ -24,7 +25,7 @@ def _utc_now() -> datetime:
 def _format_dt(value: datetime | None) -> str:
     if value is None:
         return ""
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return format_utc_timestamp(value)
 
 
 def _parse_dt(value: object) -> datetime | None:
@@ -37,20 +38,23 @@ def _parse_dt(value: object) -> datetime | None:
         return None
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
     if not path.exists():
-        return []
-    out: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        if not line.strip():
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            out.append(payload)
-    return out
+        return
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                yield payload
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return list(_iter_jsonl(path))
 
 
 def _event_time(event: dict[str, Any]) -> datetime | None:
@@ -60,14 +64,6 @@ def _event_time(event: dict[str, Any]) -> datetime | None:
 def _event_time_text(event: dict[str, Any]) -> str:
     parsed = _event_time(event)
     return _format_dt(parsed) if parsed else str(event.get("ts") or event.get("timestamp") or "")
-
-
-def _last_event_time(events: Iterable[dict[str, Any]]) -> str:
-    parsed = [_event_time(event) for event in events]
-    present = [value for value in parsed if value is not None]
-    if not present:
-        return ""
-    return _format_dt(max(present))
 
 
 def _truthy(value: object) -> bool:
@@ -171,8 +167,14 @@ def _action_worker_state(layout: VaultLayout, *, now: datetime) -> dict[str, Any
     }
 
 
-def _recent_events(events: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
-    ordered = sorted(events, key=lambda event: _event_time(event) or datetime.min.replace(tzinfo=timezone.utc))
+def _event_sort_time(event: dict[str, Any]) -> datetime:
+    return _event_time(event) or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _recent_events(events: Iterable[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    ordered = sorted(heapq.nlargest(limit, events, key=_event_sort_time), key=_event_sort_time)
     return [
         {
             "event_type": str(event.get("event_type") or ""),
@@ -185,9 +187,86 @@ def _recent_events(events: list[dict[str, Any]], *, limit: int) -> list[dict[str
 
 
 @dataclass(frozen=True)
+class EventLogSummary:
+    total: int
+    counts: Counter[str]
+    recent: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
 class RuntimeStatePaths:
     json_path: Path
     markdown_path: Path
+
+
+def _summarize_event_log(path: Path, *, recent_limit: int) -> EventLogSummary:
+    total = 0
+    counts: Counter[str] = Counter()
+    recent_heap: list[tuple[datetime, int, dict[str, Any]]] = []
+    for event in _iter_jsonl(path):
+        total += 1
+        counts[str(event.get("event_type") or "(unknown)")] += 1
+        if recent_limit <= 0:
+            continue
+        entry = (_event_sort_time(event), total, event)
+        if len(recent_heap) < recent_limit:
+            heapq.heappush(recent_heap, entry)
+        else:
+            heapq.heappushpop(recent_heap, entry)
+    recent_events = [event for _event_time, _seq, event in sorted(recent_heap)]
+    return EventLogSummary(total=total, counts=counts, recent=_recent_events(recent_events, limit=recent_limit))
+
+
+@dataclass(frozen=True)
+class ReuseEventSummary:
+    total: int
+    trusted: int
+    reuse_by_surface: dict[str, dict[str, Any]]
+    recent: list[dict[str, Any]]
+
+
+def _summarize_reuse_event_log(path: Path, *, recent_limit: int) -> ReuseEventSummary:
+    total = 0
+    trusted = 0
+    recent_heap: list[tuple[datetime, int, dict[str, Any]]] = []
+    surface_last_event: dict[str, datetime] = {}
+    reuse_by_surface: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"surface": "", "events": 0, "trusted": 0, "untrusted": 0, "last_event_at": ""}
+    )
+    for event in _iter_jsonl(path):
+        total += 1
+        if recent_limit > 0:
+            entry = (_event_sort_time(event), total, event)
+            if len(recent_heap) < recent_limit:
+                heapq.heappush(recent_heap, entry)
+            else:
+                heapq.heappushpop(recent_heap, entry)
+
+        surface = str(event.get("surface") or "(unknown)")
+        row = reuse_by_surface[surface]
+        row["surface"] = surface
+        row["events"] += 1
+        if _truthy(event.get("trusted")):
+            row["trusted"] += 1
+            trusted += 1
+        else:
+            row["untrusted"] += 1
+
+        event_time = _event_time(event)
+        if event_time is not None and event_time >= surface_last_event.get(
+            surface,
+            datetime.min.replace(tzinfo=timezone.utc),
+        ):
+            surface_last_event[surface] = event_time
+            row["last_event_at"] = _format_dt(event_time)
+
+    recent_events = [event for _event_time, _seq, event in sorted(recent_heap)]
+    return ReuseEventSummary(
+        total=total,
+        trusted=trusted,
+        reuse_by_surface=dict(reuse_by_surface),
+        recent=_recent_events(recent_events, limit=recent_limit),
+    )
 
 
 def _marker_projection_kind(marker: ProjectionRepairMarker) -> str:
@@ -200,9 +279,7 @@ def _marker_row(marker: ProjectionRepairMarker, *, now: datetime) -> dict[str, A
         and marker.claim_lease_until is not None
         and marker.claim_lease_until <= now
     )
-    row = marker.to_dict()
-    row["lease_expired"] = lease_expired
-    return row
+    return {**marker.to_dict(), "lease_expired": lease_expired}
 
 
 def build_runtime_state(
@@ -215,7 +292,7 @@ def build_runtime_state(
     layout = VaultLayout.from_vault(resolved_vault)
     current_time = now or _utc_now()
 
-    repair_events = _read_jsonl(layout.logs_dir / "projection-repair.jsonl")
+    repair_event_count = sum(1 for _event in _iter_jsonl(layout.logs_dir / "projection-repair.jsonl"))
     repair_markers = list_projection_repair_markers(resolved_vault)
     repair_rows = [_marker_row(marker, now=current_time) for marker in repair_markers]
     open_markers = [marker for marker in repair_markers if marker.status == "open"]
@@ -226,8 +303,11 @@ def build_runtime_state(
         if marker.claim_lease_until is not None and marker.claim_lease_until <= current_time
     ]
 
-    pipeline_events = _read_jsonl(layout.pipeline_log)
-    reuse_events = _read_jsonl(layout.logs_dir / "reuse-events.jsonl")
+    pipeline_summary = _summarize_event_log(layout.pipeline_log, recent_limit=recent_limit)
+    reuse_summary = _summarize_reuse_event_log(
+        layout.logs_dir / "reuse-events.jsonl",
+        recent_limit=recent_limit,
+    )
     raw_actions = _read_jsonl(_action_queue_path(layout))
     action_rows = [_action_row(action, now=current_time) for action in raw_actions]
     action_counts = Counter(str(action.get("status") or "(unknown)") for action in action_rows)
@@ -236,24 +316,8 @@ def build_runtime_state(
     blocked_actions = [action for action in action_rows if action["status"] == "blocked"]
     worker_state = _action_worker_state(layout, now=current_time)
 
-    pipeline_counts = Counter(str(event.get("event_type") or "(unknown)") for event in pipeline_events)
-    reuse_by_surface: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"surface": "", "events": 0, "trusted": 0, "untrusted": 0, "last_event_at": ""}
-    )
-    surface_events: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for event in reuse_events:
-        surface = str(event.get("surface") or "(unknown)")
-        surface_events[surface].append(event)
-        row = reuse_by_surface[surface]
-        row["surface"] = surface
-        row["events"] += 1
-        if _truthy(event.get("trusted")):
-            row["trusted"] += 1
-        else:
-            row["untrusted"] += 1
-
-    for surface, events in surface_events.items():
-        reuse_by_surface[surface]["last_event_at"] = _last_event_time(events)
+    pipeline_counts = pipeline_summary.counts
+    reuse_by_surface = reuse_summary.reuse_by_surface
 
     attention: list[dict[str, Any]] = []
     for marker in open_markers:
@@ -304,19 +368,19 @@ def build_runtime_state(
             "id": "log:pipeline",
             "kind": "event_log",
             "label": "pipeline.jsonl",
-            "events": len(pipeline_events),
+            "events": pipeline_summary.total,
         },
         {
             "id": "log:reuse-events",
             "kind": "event_log",
             "label": "reuse-events.jsonl",
-            "events": len(reuse_events),
+            "events": reuse_summary.total,
         },
         {
             "id": "log:projection-repair",
             "kind": "event_log",
             "label": "projection-repair.jsonl",
-            "events": len(repair_events),
+            "events": repair_event_count,
         },
         {
             "id": "log:actions",
@@ -438,7 +502,7 @@ def build_runtime_state(
 
     metrics = {
         "projection_repair_markers": len(repair_markers),
-        "projection_repair_events": len(repair_events),
+        "projection_repair_events": repair_event_count,
         "open_projection_repair_markers": len(open_markers),
         "claimed_projection_repair_markers": len(claimed_markers),
         "expired_projection_repair_leases": len(expired_claims),
@@ -451,9 +515,9 @@ def build_runtime_state(
         "obsolete_actions": action_counts.get("obsolete", 0),
         "dismissed_actions": action_counts.get("dismissed", 0),
         "succeeded_actions": action_counts.get("succeeded", 0),
-        "pipeline_events": len(pipeline_events),
-        "reuse_events": len(reuse_events),
-        "trusted_reuse_events": sum(1 for event in reuse_events if _truthy(event.get("trusted"))),
+        "pipeline_events": pipeline_summary.total,
+        "reuse_events": reuse_summary.total,
+        "trusted_reuse_events": reuse_summary.trusted,
         "reuse_surfaces": len(reuse_by_surface),
     }
 
@@ -469,8 +533,8 @@ def build_runtime_state(
         "action_status_counts": dict(sorted(action_counts.items())),
         "reuse_surfaces": sorted(reuse_by_surface.values(), key=lambda row: str(row["surface"])),
         "pipeline_event_counts": dict(sorted(pipeline_counts.items())),
-        "recent_pipeline_events": _recent_events(pipeline_events, limit=recent_limit),
-        "recent_reuse_events": _recent_events(reuse_events, limit=recent_limit),
+        "recent_pipeline_events": pipeline_summary.recent,
+        "recent_reuse_events": reuse_summary.recent,
         "graph": {
             "nodes": nodes,
             "edges": edges,
@@ -485,6 +549,17 @@ def runtime_state_paths(vault_dir: Path | str) -> RuntimeStatePaths:
         json_path=output_dir / "current.json",
         markdown_path=output_dir / "current.md",
     )
+
+
+def read_runtime_state(vault_dir: Path | str) -> dict[str, Any] | None:
+    paths = runtime_state_paths(vault_dir)
+    if not paths.json_path.exists():
+        return None
+    try:
+        payload = json.loads(paths.json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def render_runtime_state_markdown(state: dict[str, Any]) -> str:

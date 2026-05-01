@@ -42,9 +42,22 @@ def processing_backup_for_source(source_path: Path) -> Path:
     return source_path.with_suffix(".md.backup")
 
 
-def find_processed_source_for_backup(layout: VaultLayout, backup_path: Path) -> Path | None:
+def build_processed_source_lookup(layout: VaultLayout) -> dict[str, list[Path]]:
+    lookup: dict[str, list[Path]] = {}
+    for path in layout.processed_dir.rglob("*.md"):
+        lookup.setdefault(path.name, []).append(path)
+    return {name: sorted(paths) for name, paths in lookup.items()}
+
+
+def find_processed_source_for_backup(
+    layout: VaultLayout,
+    backup_path: Path,
+    *,
+    processed_lookup: dict[str, list[Path]] | None = None,
+) -> Path | None:
     source_name = backup_path.name.removesuffix(".backup")
-    exact_matches = sorted(path for path in layout.processed_dir.rglob("*.md") if path.name == source_name)
+    lookup = processed_lookup if processed_lookup is not None else build_processed_source_lookup(layout)
+    exact_matches = lookup.get(source_name, [])
     if len(exact_matches) == 1:
         return exact_matches[0]
     return None
@@ -105,8 +118,13 @@ def cleanup_orphan_processing_backups(
     apply: bool = False,
 ) -> list[BackupCleanupCheck]:
     checks: list[BackupCleanupCheck] = []
+    processed_lookup = build_processed_source_lookup(layout)
     for backup_path in iter_orphan_processing_backups(layout):
-        processed_path = find_processed_source_for_backup(layout, backup_path)
+        processed_path = find_processed_source_for_backup(
+            layout,
+            backup_path,
+            processed_lookup=processed_lookup,
+        )
         check = verify_processing_backup_covered(backup_path, processed_path)
         if apply and check.ok:
             backup_path.unlink()

@@ -41,7 +41,7 @@ from .runtime import (
     signal_ledger_write_lock,
 )
 from .runtime_processes import detect_runtime_processes
-from .runtime_state import build_runtime_state, write_runtime_state
+from .runtime_state import build_runtime_state, read_runtime_state, write_runtime_state
 from .run_history import list_run_history
 from .txn import classify_run_ledgers
 
@@ -173,6 +173,7 @@ def get_operational_runtime_state(
     *,
     recent_limit: int = 20,
     write_projection: bool = False,
+    prefer_materialized: bool = True,
 ) -> dict[str, Any]:
     """Return the derived operational runtime state projection.
 
@@ -180,7 +181,14 @@ def get_operational_runtime_state(
     returns a rebuildable projection over JSONL event streams and repair
     markers; callers must not treat the payload itself as Authority.
     """
-    state = build_runtime_state(vault_dir, recent_limit=recent_limit)
+    if write_projection:
+        state = build_runtime_state(vault_dir, recent_limit=recent_limit)
+    elif prefer_materialized:
+        state = read_runtime_state(vault_dir)
+        if state is None:
+            state = build_runtime_state(vault_dir, recent_limit=recent_limit)
+    else:
+        state = build_runtime_state(vault_dir, recent_limit=recent_limit)
     if write_projection:
         paths = write_runtime_state(vault_dir, state)
         state = {
