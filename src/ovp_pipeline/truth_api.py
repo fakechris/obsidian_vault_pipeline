@@ -2265,6 +2265,54 @@ def list_graph_clusters(
     return items
 
 
+def list_graph_edges_for_object_scope(
+    vault_dir: Path | str,
+    *,
+    object_ids: list[str],
+    pack_names: list[str] | None = None,
+    pack_name: str | None = None,
+) -> list[dict[str, Any]]:
+    normalized_object_ids = sorted({str(object_id) for object_id in object_ids if object_id})
+    if not normalized_object_ids:
+        return []
+    if pack_names:
+        candidate_packs = sorted({str(pack) for pack in pack_names if pack})
+    else:
+        candidate_packs = _materialized_truth_packs(
+            vault_dir, pack_name=pack_name, table_name="graph_edges"
+        )
+    if not candidate_packs:
+        return []
+
+    db_path = _db_path(vault_dir)
+    object_placeholders = ",".join("?" for _ in normalized_object_ids)
+    pack_placeholders = ",".join("?" for _ in candidate_packs)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT pack, edge_id, source_object_id, target_object_id, edge_kind, weight, evidence_source_slug
+            FROM graph_edges
+            WHERE pack IN ({pack_placeholders})
+              AND source_object_id IN ({object_placeholders})
+              AND target_object_id IN ({object_placeholders})
+            ORDER BY pack, weight DESC, edge_kind, source_object_id, target_object_id
+            """,
+            (*candidate_packs, *normalized_object_ids, *normalized_object_ids),
+        ).fetchall()
+    return [
+        {
+            "pack": str(row[0]),
+            "edge_id": str(row[1]),
+            "source_object_id": str(row[2]),
+            "target_object_id": str(row[3]),
+            "edge_kind": str(row[4]),
+            "weight": float(row[5] or 0.0),
+            "evidence_source_slug": str(row[6] or ""),
+        }
+        for row in rows
+    ]
+
+
 def get_graph_cluster_detail(
     vault_dir: Path | str,
     cluster_id: str,

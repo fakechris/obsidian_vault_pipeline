@@ -61,32 +61,22 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
     return unique
 
 
-def _unique_child(directory: Path, name: str) -> Path:
+def _unique_child(directory: Path, name: str, *, reserved: set[Path] | None = None) -> Path:
     candidate = directory / name
-    if not candidate.exists():
+    candidate_key = candidate.resolve(strict=False)
+    if not candidate.exists() and (reserved is None or candidate_key not in reserved):
+        if reserved is not None:
+            reserved.add(candidate_key)
         return candidate
     stem = candidate.stem
     suffix = candidate.suffix
     counter = 2
     while True:
         next_candidate = directory / f"{stem}-{counter}{suffix}"
-        if not next_candidate.exists():
-            return next_candidate
-        counter += 1
-
-
-def _unique_child_with_reservations(directory: Path, name: str, reserved: set[Path]) -> Path:
-    candidate = directory / name
-    if not candidate.exists() and candidate.resolve(strict=False) not in reserved:
-        reserved.add(candidate.resolve(strict=False))
-        return candidate
-    stem = candidate.stem
-    suffix = candidate.suffix
-    counter = 2
-    while True:
-        next_candidate = directory / f"{stem}-{counter}{suffix}"
-        if not next_candidate.exists() and next_candidate.resolve(strict=False) not in reserved:
-            reserved.add(next_candidate.resolve(strict=False))
+        next_key = next_candidate.resolve(strict=False)
+        if not next_candidate.exists() and (reserved is None or next_key not in reserved):
+            if reserved is not None:
+                reserved.add(next_key)
             return next_candidate
         counter += 1
 
@@ -146,7 +136,7 @@ def _preview_clipping_raw_destination(
     when: datetime,
 ) -> Path:
     new_name = _clipping_raw_name(processor, source, when=when)
-    return _unique_child_with_reservations(layout.raw_dir, new_name, reserved)
+    return _unique_child(layout.raw_dir, new_name, reserved=reserved)
 
 
 def _archive_preview_path(layout: VaultLayout, source: Path) -> Path:

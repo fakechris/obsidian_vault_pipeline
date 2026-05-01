@@ -1271,47 +1271,49 @@ def _render_search_page(payload: dict) -> str:
             f"&middot; {prev_link} &middot; {next_link}</p>"
         )
 
-    def _render_reader_group(group: dict) -> str:
-        items = group.get("items") or []
-        item_html = (
-            "".join(
-                "<li>"
-                f'<a href="{escape(item.get("object_path") or _object_href(item["object_id"], requested_pack=requested_pack))}">{escape(str(item["title"]))}</a>'
-                f"<p>{escape(str(item.get('summary') or 'No compiled summary yet.'))}</p>"
-                f"<p class='muted'>{escape(str(item.get('reason') or 'Matched object text.'))} "
-                f"Evidence: {int(item.get('evidence_count') or 0)}</p>"
-                "</li>"
-                for item in items
-            )
-            or "<li class='muted'>No object hits.</li>"
-        )
+    def _render_group_card(group: dict, *, fallback_label: str, empty_text: str, item_html: str) -> str:
+        rendered_items = item_html or f'<li class="muted">{escape(empty_text)}</li>'
         return (
             "<section class='card'>"
-            f"<h2>{escape(str(group.get('label') or 'Objects'))}</h2>"
+            f"<h2>{escape(str(group.get('label') or fallback_label))}</h2>"
             f"<p class='muted'>{int(group.get('result_count') or 0)} result(s)</p>"
-            f"<ul class='list-tight'>{item_html}</ul>"
+            f"<ul class='list-tight'>{rendered_items}</ul>"
             "</section>"
+        )
+
+    def _render_reader_group(group: dict) -> str:
+        items = group.get("items") or []
+        item_html = "".join(
+            "<li>"
+            f'<a href="{escape(item.get("object_path") or _object_href(item["object_id"], requested_pack=requested_pack))}">{escape(str(item["title"]))}</a>'
+            f"<p>{escape(str(item.get('summary') or 'No compiled summary yet.'))}</p>"
+            f"<p class='muted'>{escape(str(item.get('reason') or 'Matched object text.'))} "
+            f"Evidence: {int(item.get('evidence_count') or 0)}</p>"
+            "</li>"
+            for item in items
+        )
+        return _render_group_card(
+            group,
+            fallback_label="Objects",
+            empty_text="No object hits.",
+            item_html=item_html,
         )
 
     def _render_source_group(group: dict) -> str:
         items = group.get("items") or []
-        item_html = (
-            "".join(
-                "<li>"
-                f'<a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(str(item["title"]))}</a> '
-                f'<span class="pill">{escape(str(item["note_type"]))}</span>'
-                f"<p class='muted'>{escape(str(item.get('reason') or 'Matched note title or body.'))}</p>"
-                "</li>"
-                for item in items
-            )
-            or "<li class='muted'>No note hits.</li>"
+        item_html = "".join(
+            "<li>"
+            f'<a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(str(item["title"]))}</a> '
+            f'<span class="pill">{escape(str(item["note_type"]))}</span>'
+            f"<p class='muted'>{escape(str(item.get('reason') or 'Matched note title or body.'))}</p>"
+            "</li>"
+            for item in items
         )
-        return (
-            "<section class='card'>"
-            f"<h2>{escape(str(group.get('label') or 'Notes'))}</h2>"
-            f"<p class='muted'>{int(group.get('result_count') or 0)} result(s)</p>"
-            f"<ul class='list-tight'>{item_html}</ul>"
-            "</section>"
+        return _render_group_card(
+            group,
+            fallback_label="Notes",
+            empty_text="No note hits.",
+            item_html=item_html,
         )
 
     reader_groups = payload.get("reader_groups") or []

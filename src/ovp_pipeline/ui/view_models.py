@@ -45,6 +45,7 @@ from ..truth_api import (
     list_contradictions,
     list_deep_dive_derivations,
     list_graph_clusters,
+    list_graph_edges_for_object_scope,
     list_objects,
     list_production_gaps,
     list_production_chains,
@@ -963,7 +964,7 @@ def _build_related_cluster_groups(related_clusters: list[dict[str, Any]]) -> lis
 
 
 def _plural_reader_label(label: str) -> str:
-    if label.endswith("y"):
+    if len(label) >= 2 and label.endswith("y") and label[-2].lower() not in "aeiou":
         return f"{label[:-1]}ies"
     if label.endswith("s"):
         return label
@@ -1026,14 +1027,21 @@ def _build_reader_search_projection(
     objects: list[dict[str, Any]],
     notes: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    object_ids = [str(item["object_id"]) for item in objects]
-    row_packs = sorted({str(item.get("row_pack") or item.get("pack") or "") for item in objects})
+    object_pack_pairs = sorted(
+        {
+            (str(item["object_id"]), str(item.get("row_pack") or item.get("pack") or ""))
+            for item in objects
+        }
+    )
     summary_by_object: dict[tuple[str, str], str] = {}
     evidence_count_by_object: dict[tuple[str, str], int] = {}
-    if object_ids:
+    if object_pack_pairs:
         db_path = _db_path(vault_dir)
-        object_placeholders = ",".join("?" for _ in object_ids)
-        pack_placeholders = ",".join("?" for _ in row_packs)
+        pair_clause = " OR ".join("(object_id = ? AND pack = ?)" for _ in object_pack_pairs)
+        claim_pair_clause = " OR ".join(
+            "(claims.object_id = ? AND claims.pack = ?)" for _ in object_pack_pairs
+        )
+        pair_params = [value for pair in object_pack_pairs for value in pair]
         with sqlite3.connect(db_path) as conn:
             summary_by_object = {
                 (str(object_id), str(pack)): str(summary_text or "")
@@ -1041,10 +1049,9 @@ def _build_reader_search_projection(
                     f"""
                     SELECT object_id, pack, summary_text
                     FROM compiled_summaries
-                    WHERE object_id IN ({object_placeholders})
-                      AND pack IN ({pack_placeholders})
+                    WHERE {pair_clause}
                     """,
-                    (*object_ids, *row_packs),
+                    tuple(pair_params),
                 ).fetchall()
             }
             evidence_count_by_object = {
@@ -1056,11 +1063,10 @@ def _build_reader_search_projection(
                     LEFT JOIN claim_evidence
                       ON claim_evidence.pack = claims.pack
                      AND claim_evidence.claim_id = claims.claim_id
-                    WHERE claims.object_id IN ({object_placeholders})
-                      AND claims.pack IN ({pack_placeholders})
+                    WHERE {claim_pair_clause}
                     GROUP BY claims.object_id, claims.pack
                     """,
-                    (*object_ids, *row_packs),
+                    tuple(pair_params),
                 ).fetchall()
             }
 
@@ -3190,9 +3196,34 @@ def build_graph_map_payload(
     cluster_orbit_y = GRAPH_MAP_HEIGHT * GRAPH_MAP_CLUSTER_ORBIT_Y_FACTOR
     nodes: dict[str, dict[str, Any]] = {}
     edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+    all_member_ids = sorted(
+        {
+            str(member["object_id"])
+            for cluster in clusters
+            for member in cluster.get("members", [])
+            if member.get("object_id")
+        }
+    )
+    cluster_packs = sorted(
+        {
+            str(cluster.get("row_pack") or cluster.get("pack") or requested_pack)
+            for cluster in clusters
+            if cluster.get("row_pack") or cluster.get("pack") or requested_pack
+        }
+    )
+    scoped_edges = list_graph_edges_for_object_scope(
+        vault_dir,
+        object_ids=all_member_ids,
+        pack_names=cluster_packs,
+        pack_name=pack_name,
+    )
+    edges_by_pack: dict[str, list[dict[str, Any]]] = {}
+    for edge in scoped_edges:
+        edges_by_pack.setdefault(str(edge.get("pack") or ""), []).append(edge)
 
     for cluster_index, cluster in enumerate(clusters):
-        cluster_pack = str(cluster.get("pack") or requested_pack)
+        display_pack = str(cluster.get("pack") or requested_pack)
+        edge_pack = str(cluster.get("row_pack") or display_pack)
         cluster_count = max(1, len(clusters))
         cluster_angle = (2 * math.pi * cluster_index / cluster_count) if cluster_count > 1 else 0
         cluster_x = center_x + (math.cos(cluster_angle) * cluster_orbit_x if cluster_count > 1 else 0)
@@ -3225,7 +3256,7 @@ def build_graph_map_payload(
                     "kind_label": _object_kind_label(str(member.get("object_kind") or "")),
                     "path": _scoped_path(
                         f"/object?id={quote(object_id, safe='')}",
-                        pack_name=cluster_pack,
+                        pack_name=display_pack,
                     ),
                     "x": round(x, 1),
                     "y": round(y, 1),
@@ -3238,17 +3269,12 @@ def build_graph_map_payload(
                 node["cluster_ids"].append(cluster["cluster_id"])
                 node["cluster_titles"].append(cluster.get("display_title") or cluster["label"])
 
-        try:
-            detail = get_graph_cluster_detail(
-                vault_dir,
-                str(cluster["cluster_id"]),
-                pack_name=cluster_pack or None,
-            )
-        except (OSError, sqlite3.Error, ValueError):
-            detail = {"edges": []}
-        for edge in detail["edges"]:
+        member_ids = {str(member["object_id"]) for member in members if member.get("object_id")}
+        for edge in edges_by_pack.get(edge_pack, []):
             source_id = str(edge["source_object_id"])
             target_id = str(edge["target_object_id"])
+            if source_id not in member_ids or target_id not in member_ids:
+                continue
             if source_id not in nodes or target_id not in nodes:
                 continue
             key = (source_id, target_id, str(edge["edge_kind"]))
