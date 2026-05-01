@@ -4,35 +4,25 @@ import hashlib
 import json
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterator, Literal
 
-from .runtime import VaultLayout, advisory_file_lock, resolve_vault_dir
+from .runtime import (
+    VaultLayout,
+    advisory_file_lock,
+    format_utc_iso,
+    parse_utc_timestamp,
+    resolve_vault_dir,
+    utc_now,
+)
 
 ProjectionRepairKind = Literal["metadata_only", "full_rebuild", "semantic_reindex"]
 ProjectionRepairStatus = Literal["open", "claimed", "closed", "superseded"]
 
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _format_dt(value: datetime | None) -> str:
-    if value is None:
-        return ""
-    normalized = value.astimezone(timezone.utc)
-    return normalized.isoformat().replace("+00:00", "Z")
-
-
-def _parse_dt(value: object) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
-        return None
+_utc_now = utc_now
+_format_dt = format_utc_iso
+_parse_dt = parse_utc_timestamp
 
 
 def _marker_log_path(vault_dir: Path | str) -> Path:
@@ -110,22 +100,25 @@ class ProjectionRepairMarker:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, object]) -> "ProjectionRepairMarker":
-        return cls(
-            marker_id=str(payload["marker_id"]),
-            kind=str(payload["kind"]),  # type: ignore[arg-type]
-            scope=dict(payload.get("scope") or {}),
-            reason=str(payload.get("reason") or ""),
-            caused_by=str(payload.get("caused_by") or ""),
-            created_at=_parse_dt(payload.get("created_at")) or _utc_now(),
-            authority_schema_version=int(payload.get("authority_schema_version") or 0),
-            projection_schema_version=int(payload.get("projection_schema_version") or 0),
-            status=str(payload.get("status") or "open"),  # type: ignore[arg-type]
-            superseded_by=str(payload.get("superseded_by") or ""),
-            claimed_by=str(payload.get("claimed_by") or ""),
-            claim_lease_until=_parse_dt(payload.get("claim_lease_until")),
-            closed_at=_parse_dt(payload.get("closed_at")),
-        )
+    def from_dict(cls, payload: dict[str, object]) -> "ProjectionRepairMarker | None":
+        try:
+            return cls(
+                marker_id=str(payload["marker_id"]),
+                kind=str(payload.get("kind") or "metadata_only"),  # type: ignore[arg-type]
+                scope=dict(payload.get("scope") or {}),
+                reason=str(payload.get("reason") or ""),
+                caused_by=str(payload.get("caused_by") or ""),
+                created_at=_parse_dt(payload.get("created_at")) or _utc_now(),
+                authority_schema_version=int(payload.get("authority_schema_version") or 0),
+                projection_schema_version=int(payload.get("projection_schema_version") or 0),
+                status=str(payload.get("status") or "open"),  # type: ignore[arg-type]
+                superseded_by=str(payload.get("superseded_by") or ""),
+                claimed_by=str(payload.get("claimed_by") or ""),
+                claim_lease_until=_parse_dt(payload.get("claim_lease_until")),
+                closed_at=_parse_dt(payload.get("closed_at")),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
 
 
 def _append_event(vault_dir: Path | str, event: dict[str, object]) -> None:
@@ -168,7 +161,12 @@ def _list_projection_repair_markers_unlocked(vault_dir: Path | str) -> list[Proj
         event_type = str(event.get("event_type") or "")
         marker_id = str(event.get("marker_id") or "")
         if event_type == "projection_repair_marker_written":
-            marker = ProjectionRepairMarker.from_dict(dict(event["marker"]))
+            raw_marker = event.get("marker")
+            if not isinstance(raw_marker, dict):
+                continue
+            marker = ProjectionRepairMarker.from_dict(dict(raw_marker))
+            if marker is None:
+                continue
             markers[marker.marker_id] = marker
             if marker.marker_id not in order:
                 order.append(marker.marker_id)

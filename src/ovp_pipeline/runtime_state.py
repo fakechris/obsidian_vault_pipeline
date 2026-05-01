@@ -10,7 +10,13 @@ from typing import Any, Iterable
 
 from .projection_labels import frontmatter_projection_fields
 from .projection_lifecycle import ProjectionRepairMarker, list_projection_repair_markers
-from .runtime import VaultLayout, format_utc_timestamp, resolve_vault_dir
+from .runtime import (
+    VaultLayout,
+    format_utc_timestamp,
+    parse_utc_timestamp,
+    resolve_vault_dir,
+    utc_now,
+)
 
 
 DEFAULT_RECENT_LIMIT = 20
@@ -18,25 +24,9 @@ DEFAULT_ACTION_DISPLAY_LIMIT = 200
 RUNTIME_STATE_DIR = ("60-Logs", "runtime-state")
 ACTION_RUNNING_STALE_AFTER_SECONDS = 3600
 
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _format_dt(value: datetime | None) -> str:
-    if value is None:
-        return ""
-    return format_utc_timestamp(value)
-
-
-def _parse_dt(value: object) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
-        return None
+_utc_now = utc_now
+_format_dt = format_utc_timestamp
+_parse_dt = parse_utc_timestamp
 
 
 def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
@@ -52,6 +42,18 @@ def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
                 continue
             if isinstance(payload, dict):
                 yield payload
+
+
+def _count_jsonl_lines(path: Path) -> int:
+    """Count non-empty lines in a JSONL file without parsing JSON."""
+    if not path.exists():
+        return 0
+    count = 0
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            if line.strip():
+                count += 1
+    return count
 
 
 def _event_time(event: dict[str, Any]) -> datetime | None:
@@ -342,7 +344,7 @@ def build_runtime_state(
     layout = VaultLayout.from_vault(resolved_vault)
     current_time = now or _utc_now()
 
-    repair_event_count = sum(1 for _event in _iter_jsonl(layout.logs_dir / "projection-repair.jsonl"))
+    repair_event_count = _count_jsonl_lines(layout.logs_dir / "projection-repair.jsonl")
     repair_markers = list_projection_repair_markers(resolved_vault)
     repair_rows = [_marker_row(marker, now=current_time) for marker in repair_markers]
     open_markers = [marker for marker in repair_markers if marker.status == "open"]

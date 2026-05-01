@@ -1563,56 +1563,59 @@ def list_objects(
         vault_dir, pack_name=pack_name, table_name="objects"
     )
     normalized_query = _escape_like(query.strip().lower()) if query else ""
-    with sqlite3.connect(db_path) as conn:
-        sql = """
-            SELECT pack, object_id, object_kind, title, canonical_path, source_slug
+
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
+    pack_order = " ".join(
+        f"WHEN ? THEN {index}" for index, _ in enumerate(pack_candidates)
+    )
+    fallback_order = len(pack_candidates)
+
+    inner_params: list[Any] = [*pack_candidates]
+    where_clause = f"pack IN ({pack_placeholders})"
+    if normalized_query:
+        where_clause += (
+            " AND ("
+            " lower(object_id) LIKE ? ESCAPE '\\'"
+            " OR lower(title) LIKE ? ESCAPE '\\'"
+            " OR lower(source_slug) LIKE ? ESCAPE '\\'"
+            ")"
+        )
+        inner_params.extend([
+            f"%{normalized_query}%",
+            f"%{normalized_query}%",
+            f"%{normalized_query}%",
+        ])
+
+    sql = f"""
+        SELECT pack, object_id, object_kind, title, canonical_path, source_slug
+        FROM (
+            SELECT pack, object_id, object_kind, title, canonical_path, source_slug,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY object_id
+                       ORDER BY CASE pack {pack_order} ELSE {fallback_order} END
+                   ) AS rn
             FROM objects
-        """
-        params: list[Any] = [*pack_candidates]
-        sql += f" WHERE pack IN ({','.join('?' for _ in pack_candidates)})"
-        if normalized_query:
-            sql += """
-                AND (
-                  lower(object_id) LIKE ? ESCAPE '\\'
-                  OR lower(title) LIKE ? ESCAPE '\\'
-                  OR lower(source_slug) LIKE ? ESCAPE '\\'
-                )
-            """
-            params.extend(
-                [
-                    f"%{normalized_query}%",
-                    f"%{normalized_query}%",
-                    f"%{normalized_query}%",
-                ]
-            )
-        sql += """
-            ORDER BY CASE pack
-              {pack_order}
-              ELSE {fallback_order}
-            END, object_id
-        """.format(
-            pack_order=" ".join(f"WHEN ? THEN {index}" for index, _ in enumerate(pack_candidates)),
-            fallback_order=len(pack_candidates),
+            WHERE {where_clause}
         )
-        params.extend(pack_candidates)
+        WHERE rn = 1
+        ORDER BY object_id
+        LIMIT ? OFFSET ?
+    """
+    params: list[Any] = [*pack_candidates, *inner_params, limit, offset]
+
+    with sqlite3.connect(db_path) as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
-    items: list[dict[str, Any]] = []
-    seen_object_ids: set[str] = set()
-    for pack, object_id, object_kind, title, canonical_path, source_slug in rows:
-        if object_id in seen_object_ids:
-            continue
-        seen_object_ids.add(object_id)
-        items.append(
-            {
-                "object_id": object_id,
-                "object_kind": object_kind,
-                "title": title,
-                "canonical_path": _vault_relative_path(resolved_vault, canonical_path),
-                "source_slug": source_slug,
-                "pack": pack,
-            }
-        )
-    return items[offset : offset + limit]
+    return [
+        {
+            "object_id": object_id,
+            "object_kind": object_kind,
+            "title": title,
+            "canonical_path": _vault_relative_path(resolved_vault, canonical_path),
+            "source_slug": source_slug,
+            "pack": pack,
+        }
+        for pack, object_id, object_kind, title, canonical_path, source_slug in rows
+    ]
 
 
 def search_vault_surface(

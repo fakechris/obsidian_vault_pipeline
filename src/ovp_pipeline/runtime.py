@@ -86,9 +86,32 @@ def split_markdown_frontmatter(text: str) -> tuple[dict[str, object], str]:
     return parsed, body
 
 
+def utc_now() -> datetime:
+    """Return the current UTC datetime."""
+    return datetime.now(timezone.utc)
+
+
 def format_utc_timestamp(value: datetime) -> str:
     """Return stable second-precision UTC timestamps for projections and logs."""
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def format_utc_iso(value: datetime | None) -> str:
+    """Return ISO 8601 UTC timestamp, or empty string for None."""
+    if value is None:
+        return ""
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parse_utc_timestamp(value: object) -> datetime | None:
+    """Parse an ISO 8601 or Z-suffixed UTC timestamp, returning None on failure."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
 
 
 def markdown_title(path: Path) -> str:
