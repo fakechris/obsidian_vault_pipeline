@@ -757,8 +757,9 @@ date: 2026-04-10
     assert all(item["pack"] == "default-knowledge" for item in payload["items"])
 
 
-def test_build_graph_map_payload_projects_clusters_into_reader_map(temp_vault):
+def test_build_graph_map_payload_projects_clusters_into_reader_map(temp_vault, monkeypatch):
     from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    import ovp_pipeline.ui.view_models as view_models
     from ovp_pipeline.ui.view_models import build_graph_map_payload
 
     source = temp_vault / "10-Knowledge" / "Evergreen" / "Source.md"
@@ -805,9 +806,18 @@ date: 2026-04-10
         encoding="utf-8",
     )
     rebuild_knowledge_index(temp_vault)
+    bulk_calls = {"count": 0}
+    original_bulk_edges = view_models.list_graph_edges_for_object_scope
+
+    def counted_bulk_edges(*args, **kwargs):
+        bulk_calls["count"] += 1
+        return original_bulk_edges(*args, **kwargs)
+
+    monkeypatch.setattr(view_models, "list_graph_edges_for_object_scope", counted_bulk_edges)
 
     payload = build_graph_map_payload(temp_vault, pack_name="default-knowledge")
 
+    assert bulk_calls["count"] == 1
     assert payload["screen"] == "graph/map"
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["map_summary"]["node_count"] >= 3
@@ -827,6 +837,21 @@ date: 2026-04-10
     assert payload["clusters"][0]["detail_path"].startswith("/cluster?id=")
     assert "pack=default-knowledge" in payload["clusters"][0]["detail_path"]
     assert "spatial" in payload["model_notes"][0].lower()
+
+
+def test_build_search_payload_pluralizes_vowel_y_reader_kinds(temp_vault):
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_search_payload
+
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE objects SET object_kind = 'journey' WHERE object_id = 'alpha'")
+        conn.commit()
+
+    payload = build_search_payload(temp_vault, query="alpha")
+
+    assert any(group["label"] == "Journeys" for group in payload["reader_groups"])
 
 
 def test_build_atlas_browser_payload_preserves_requested_pack(temp_vault):
