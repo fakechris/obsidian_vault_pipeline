@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 from pathlib import Path
 
 from ..artifact_registry import list_effective_artifact_specs
@@ -1012,8 +1013,10 @@ def _promotion_health_payload(vault_dir: Path | None, *, pack_name: str) -> dict
                 has_open_contradiction=entry.slug in disputed_ids,
             )
             lane_counts[decision.lane] = lane_counts.get(decision.lane, 0) + 1
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "lane evaluation failed, returning zero counts: %s", exc
+        )
 
     unreviewed_mutations = 0
     if db_path.exists():

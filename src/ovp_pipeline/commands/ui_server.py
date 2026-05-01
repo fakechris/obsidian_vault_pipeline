@@ -69,6 +69,23 @@ _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).e
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
 _GITHUB_REPO_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s#]+)")
 _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
+
+
+def _safe_redirect_path(location: str, *, fallback: str = "/") -> str:
+    """Validate redirect target is a safe relative path (no open redirect)."""
+    if any(ord(ch) < 0x20 or ch == "\\" for ch in location):
+        return fallback
+    stripped = location.strip()
+    if not stripped:
+        return fallback
+    parsed = urlparse(stripped)
+    if parsed.scheme or parsed.netloc:
+        return fallback
+    if stripped.startswith("//"):
+        return fallback
+    if not stripped.startswith("/"):
+        return fallback
+    return stripped
 _CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
 _INLINE_MEMBER_LINK_LIMIT = 8
 _GRAPH_MAP_CLUSTER_PREVIEW_LIMIT = 6
@@ -5947,8 +5964,9 @@ def create_server(
             self.wfile.write(body)
 
         def _redirect(self, location: str) -> None:
+            safe_location = _safe_redirect_path(location)
             self.send_response(303)
-            self.send_header("Location", location)
+            self.send_header("Location", safe_location)
             self.send_header("Content-Length", "0")
             self.end_headers()
 
