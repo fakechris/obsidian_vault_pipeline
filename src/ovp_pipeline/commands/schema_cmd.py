@@ -10,14 +10,32 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
+
+_ENTITY_TYPE_RE = re.compile(r"^entity_type:\s*(.+)$", re.MULTILINE)
+_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---", re.DOTALL)
+
+DEFAULT_PACK_NAME = "research-tech"
 
 
 def _resolve_pack(pack_name: str | None):
     from ..pack_resolution import resolve_pack
 
-    return resolve_pack(pack_name or "research-tech")
+    return resolve_pack(pack_name or DEFAULT_PACK_NAME)
+
+
+def _extract_entity_type_from_frontmatter(text: str) -> str | None:
+    """Extract entity_type from YAML frontmatter only (between first --- pair)."""
+    fm_match = _FRONTMATTER_RE.match(text)
+    if not fm_match:
+        return None
+    frontmatter = fm_match.group(1)
+    et_match = _ENTITY_TYPE_RE.search(frontmatter)
+    if not et_match:
+        return None
+    return et_match.group(1).strip().strip('"').strip("'")
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -35,15 +53,23 @@ def cmd_list(args: argparse.Namespace) -> None:
     print(f"\nTotal: {len(specs)} kinds ({sum(1 for s in specs if s.canonical)} canonical)")
 
 
-def cmd_validate(args: argparse.Namespace) -> None:
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Validate entity_type in Evergreen frontmatter. Returns 0 on success, 1 on failure."""
     pack = _resolve_pack(args.pack)
     valid_types = pack.valid_entity_types()
     vault_dir = Path(args.vault_dir).resolve()
-    eg_dir = vault_dir / "10-Knowledge" / "Evergreen"
+
+    try:
+        from ..runtime import VaultLayout
+
+        layout = VaultLayout.from_vault(vault_dir)
+        eg_dir = layout.evergreen_dir
+    except Exception:
+        eg_dir = vault_dir / "10-Knowledge" / "Evergreen"
 
     if not eg_dir.is_dir():
         print(f"Evergreen directory not found: {eg_dir}", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     total = 0
     missing = 0
@@ -53,18 +79,12 @@ def cmd_validate(args: argparse.Namespace) -> None:
     for md in eg_dir.glob("*.md"):
         total += 1
         text = md.read_text(encoding="utf-8", errors="replace")
-        if not text.startswith("---"):
+
+        et = _extract_entity_type_from_frontmatter(text)
+        if et is None:
             missing += 1
             continue
 
-        import re
-
-        m = re.search(r"^entity_type:\s*(.+)$", text, re.MULTILINE)
-        if not m:
-            missing += 1
-            continue
-
-        et = m.group(1).strip()
         type_counts[et] = type_counts.get(et, 0) + 1
 
         if et not in valid_types:
@@ -82,8 +102,7 @@ def cmd_validate(args: argparse.Namespace) -> None:
             marker = " *" if k not in valid_types else ""
             print(f"  {k:<15} {v:>5}{marker}")
 
-    if invalid > 0:
-        sys.exit(1)
+    return 1 if invalid > 0 else 0
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -102,7 +121,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "list":
         cmd_list(args)
     elif args.command == "validate":
-        cmd_validate(args)
+        rc = cmd_validate(args)
+        sys.exit(rc)
     else:
         parser.print_help()
         sys.exit(1)
