@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +9,7 @@ from contextlib import contextmanager
 import fcntl
 import os
 import time
-from typing import Iterator
+from typing import Any, Iterable, Iterator
 
 import yaml
 
@@ -338,3 +340,274 @@ def vault_workflow_lock(
     layout = VaultLayout.from_vault(vault_dir)
     with advisory_file_lock(layout.workflow_lock, timeout_seconds=timeout_seconds):
         yield
+
+
+# ---------------------------------------------------------------------------
+# JSONL rotation & bounded-read utilities
+# ---------------------------------------------------------------------------
+
+JSONL_DEFAULT_MAX_LINES = 10_000
+
+
+def _count_lines_fast(path: Path) -> int:
+    """Count non-empty lines without parsing JSON."""
+    if not path.exists():
+        return 0
+    count = 0
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                if line.strip():
+                    count += 1
+    except OSError:
+        return 0
+    return count
+
+
+def _write_sidecar_stats(
+    archived_path: Path,
+    *,
+    original_name: str,
+    line_count: int,
+    event_types: Counter[str],
+    first_ts: str,
+    last_ts: str,
+) -> Path:
+    sidecar_path = archived_path.with_suffix(".stats.json")
+    stats = {
+        "archived_from": original_name,
+        "archived_at": format_utc_iso(utc_now()),
+        "line_count": line_count,
+        "event_types": dict(event_types.most_common()),
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+    }
+    sidecar_path.write_text(
+        json.dumps(stats, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return sidecar_path
+
+
+def rotate_jsonl_if_needed(
+    path: Path,
+    *,
+    max_lines: int = JSONL_DEFAULT_MAX_LINES,
+) -> Path | None:
+    """Rotate *path* when it exceeds *max_lines*.
+
+    Returns the archived path on rotation, or ``None`` if no rotation occurred.
+    Writes a ``{stem}.{timestamp}.stats.json`` sidecar with aggregate metadata.
+    """
+    if not path.exists():
+        return None
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size < max_lines * 20:
+        return None
+
+    original_name = path.name
+    line_count = 0
+    event_types: Counter[str] = Counter()
+    first_ts = ""
+    last_ts = ""
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            line_count += 1
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            et = str(obj.get("event_type") or obj.get("type") or "")
+            if et:
+                event_types[et] += 1
+            ts = str(obj.get("ts") or obj.get("timestamp") or "")
+            if ts:
+                if not first_ts:
+                    first_ts = ts
+                last_ts = ts
+
+    if line_count < max_lines:
+        return None
+
+    ts_suffix = utc_now().strftime("%Y%m%d-%H%M%S")
+    archived = path.with_name(f"{path.stem}.{ts_suffix}.jsonl")
+    seq = 0
+    while archived.exists():
+        seq += 1
+        archived = path.with_name(f"{path.stem}.{ts_suffix}-{seq}.jsonl")
+    path.rename(archived)
+    _write_sidecar_stats(
+        archived,
+        original_name=original_name,
+        line_count=line_count,
+        event_types=event_types,
+        first_ts=first_ts,
+        last_ts=last_ts,
+    )
+    return archived
+
+
+def append_jsonl(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    max_lines: int = JSONL_DEFAULT_MAX_LINES,
+) -> None:
+    """Append a JSON object to *path*, rotating beforehand if the file is large.
+
+    Holds an advisory lock around the rotate-then-append sequence so
+    concurrent writers cannot race on path.rename().
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.parent / (path.name + ".append.lock")
+    with advisory_file_lock(lock_path, timeout_seconds=30.0):
+        rotate_jsonl_if_needed(path, max_lines=max_lines)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def iter_jsonl(
+    path: Path,
+    *,
+    tail_lines: int | None = None,
+) -> Iterable[dict[str, Any]]:
+    """Yield parsed dicts from a JSONL file.
+
+    When *tail_lines* is set, only the last N non-empty lines are parsed.
+    This avoids reading multi-megabyte historic logs when only recent data
+    is needed (e.g. for runtime-state summaries).
+    """
+    if not path.exists():
+        return
+
+    if tail_lines is not None and tail_lines > 0:
+        yield from _iter_jsonl_tail(path, tail_lines)
+        return
+
+    with path.open("r", encoding="utf-8", errors="ignore") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                yield obj
+
+
+def _iter_jsonl_tail(path: Path, n: int) -> Iterable[dict[str, Any]]:
+    """Read approximately the last *n* non-empty lines from *path*.
+
+    Uses a seek-from-end strategy: reads blocks backwards until enough
+    lines are collected, then parses only those lines.
+    """
+    block_size = 8192
+    lines: list[str] = []
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size == 0:
+        return
+
+    with path.open("rb") as fh:
+        offset = size
+        leftover = b""
+        while len(lines) < n + 1 and offset > 0:
+            read_size = min(block_size, offset)
+            offset -= read_size
+            fh.seek(offset)
+            chunk = fh.read(read_size) + leftover
+            parts = chunk.split(b"\n")
+            leftover = parts[0]
+            for part in reversed(parts[1:]):
+                stripped = part.strip()
+                if stripped:
+                    lines.append(stripped.decode("utf-8", errors="ignore"))
+                    if len(lines) >= n + 1:
+                        break
+        if leftover.strip():
+            lines.append(leftover.strip().decode("utf-8", errors="ignore"))
+
+    for raw in reversed(lines[:n]):
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def _rotated_segments(path: Path) -> list[Path]:
+    """Return rotated archive files for *path* sorted chronologically (oldest first).
+
+    Archive names look like ``{stem}.{YYYYMMDD-HHMMSS}[-{seq}].jsonl``.
+    We parse the timestamp and optional sequence number so that ``-10``
+    sorts after ``-2`` (pure lexical sort would get this wrong).
+    """
+    stem = path.stem
+    parent = path.parent
+    if not parent.is_dir():
+        return []
+
+    import re as _re
+
+    _SEG_RE = _re.compile(
+        rf"^{_re.escape(stem)}\.(\d{{8}}-\d{{6}})(?:-(\d+))?\.jsonl$"
+    )
+
+    candidates: list[tuple[str, int, Path]] = []
+    for p in parent.iterdir():
+        m = _SEG_RE.match(p.name)
+        if m:
+            ts_part = m.group(1)
+            seq_part = int(m.group(2)) if m.group(2) else 0
+            candidates.append((ts_part, seq_part, p))
+
+    candidates.sort(key=lambda t: (t[0], t[1]))
+    return [c[2] for c in candidates]
+
+
+def read_sidecar_stats(sidecar: Path) -> dict[str, Any]:
+    """Parse a ``.stats.json`` sidecar written during rotation."""
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def sidecar_aggregate(path: Path) -> dict[str, int]:
+    """Sum ``line_count`` from all sidecar stats files for *path*.
+
+    Returns ``{"total_archived_lines": <int>}`` which callers can add to
+    a live-file count for an accurate grand total.
+    """
+    total = 0
+    parent = path.parent
+    stem = path.stem
+    if not parent.is_dir():
+        return {"total_archived_lines": 0}
+    for sidecar in parent.iterdir():
+        if sidecar.name.startswith(f"{stem}.") and sidecar.name.endswith(".stats.json"):
+            stats = read_sidecar_stats(sidecar)
+            total += int(stats.get("line_count") or 0)
+    return {"total_archived_lines": total}
+
+
+def iter_jsonl_with_rotated(path: Path) -> Iterable[dict[str, Any]]:
+    """Yield events from all rotated segments + live file in chronological order."""
+    for segment in _rotated_segments(path):
+        yield from iter_jsonl(segment)
+    yield from iter_jsonl(path)

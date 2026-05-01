@@ -175,4 +175,6 @@ def test_object_fragment_omits_full_page_chrome(running_server) -> None:
 
 def test_workbench_navbar_link_present(running_server) -> None:
     home = _fetch(running_server, "/")
-    assert 'href="/ops"' in home
+    assert 'href="/ops"' not in home
+    ops_home = _fetch(running_server, "/?mode=operator")
+    assert 'href="/ops"' in ops_home

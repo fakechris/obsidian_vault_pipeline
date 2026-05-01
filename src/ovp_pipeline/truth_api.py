@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 from collections import Counter
 import hashlib
 import json
-import logging
 import os
 import re
 import sqlite3
@@ -12,8 +11,62 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-import yaml
-
+from ._truth_helpers import (  # noqa: F401 — re-exported public constants
+    CONTRADICTION_STATUS_EXPLANATIONS,
+    EVOLUTION_LINK_EXPLANATIONS,
+    LOGGER,
+    MAX_PAGE_SIZE,
+    SIGNAL_TYPE_EXPLANATIONS,
+    _ACTION_LOG_NAME,
+    _ACTION_RUNNING_STALE_AFTER_SECONDS,
+    _ASCII_TOKEN_RE,
+    _BRIEFING_EVOLUTION_PRIORITY,
+    _BRIEFING_SIGNAL_PRIORITY,
+    _CANDIDATE_SENSITIVE_TERMS,
+    _CANDIDATE_STRONG_EVIDENCE_COUNT,
+    _CANDIDATE_STRONG_SOURCE_COUNT,
+    _CJK_RE,
+    _DEEP_DIVE_OBJECT_MAP_CACHE,
+    _EVOLUTION_CANDIDATE_CACHE,
+    _FENCED_FRONTMATTER_RE,
+    _LEGACY_AUTO_QUEUE_SIGNAL_TYPES,
+    _NOTE_CAPTURE_EVENT_TYPES,
+    _PIPELINE_LOG_INDEX_CACHE,
+    _REVIEW_AUDIT_LOG_NAME,
+    _SIGNAL_LEDGER_SYNC_CACHE,
+    _SIGNAL_LOG_NAME,
+    _SOURCE_NOTE_INDEX_CACHE,
+    _action_queue_path,
+    _append_jsonl,
+    _briefing_evolution_score,
+    _briefing_priority_score,
+    _build_fts_match,
+    _coerce_float,
+    _coerce_int,
+    _db_path,
+    _escape_like,
+    _format_duration,
+    _format_utc_timestamp,
+    _materialized_truth_packs,
+    _note_date_sort_key,
+    _note_date_text,
+    _parse_frontmatter,
+    _parse_iso_datetime,
+    _path_signature,
+    _read_jsonl_items,
+    _read_note_frontmatter,
+    _read_note_text,
+    _rewrite_jsonl,
+    _search_root_signatures,
+    _signal_dependency_signature,
+    _signal_ledger_path,
+    _tokenize_for_search,
+    _truth_pack_candidates,
+    _truth_pack_name,
+    _utc_now_text,
+    _validate_page_args,
+    _vault_relative_path,
+)
 from .execution_contract_registry import resolve_focused_action_execution_contract
 from .governance_registry import (
     describe_resolver_rule_contract,
@@ -22,9 +75,8 @@ from .governance_registry import (
 )
 from .handler_registry import execute_focused_action_handler
 from .identity import canonicalize_note_id
-from .knowledge_index import ensure_knowledge_db_current, rebuild_knowledge_index
+from .knowledge_index import rebuild_knowledge_index
 from .observation_surface_registry import execute_observation_surface_builder
-from .pack_resolution import iter_compatible_packs
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from .concept_registry import ConceptRegistry, ResolutionAction, STATUS_ACTIVE
 from .promote_candidates import (
@@ -44,96 +96,6 @@ from .runtime_processes import detect_runtime_processes
 from .runtime_state import build_runtime_state, read_runtime_state, write_runtime_state
 from .run_history import list_run_history
 from .txn import classify_run_ledgers
-
-MAX_PAGE_SIZE = 500
-LOGGER = logging.getLogger(__name__)
-_FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
-_REVIEW_AUDIT_LOG_NAME = "review-actions"
-_SIGNAL_LOG_NAME = "signals"
-_ACTION_LOG_NAME = "actions"
-_ACTION_RUNNING_STALE_AFTER_SECONDS = 3600
-_SOURCE_NOTE_INDEX_CACHE: dict[
-    tuple[str, tuple[tuple[str, int, int], ...]], dict[str, list[dict[str, str]]]
-] = {}
-_PIPELINE_LOG_INDEX_CACHE: dict[tuple[str, int, int], dict[str, Any]] = {}
-_DEEP_DIVE_OBJECT_MAP_CACHE: dict[tuple[str, int, int], dict[str, list[dict[str, str]]]] = {}
-_SIGNAL_LEDGER_SYNC_CACHE: dict[
-    tuple[str, str, tuple[tuple[str, int, int], ...]], dict[str, Any]
-] = {}
-_EVOLUTION_CANDIDATE_CACHE: dict[
-    tuple[str, tuple[tuple[str, int, int], ...], str, tuple[str, ...]],
-    list[dict[str, Any]],
-] = {}
-CONTRADICTION_STATUS_EXPLANATIONS = {
-    "open": "Active contradiction awaiting review.",
-    "resolved_keep_positive": "Reviewed and the positive claim set remains the preferred interpretation.",
-    "resolved_keep_negative": "Reviewed and the negative claim set remains the preferred interpretation.",
-    "dismissed": "Reviewed and dismissed as not worth keeping in the active contradiction queue.",
-    "needs_human": "Requires deeper human judgment before the contradiction can be considered closed.",
-}
-SIGNAL_TYPE_EXPLANATIONS = {
-    "contradiction_open": "Open contradiction detected from the current truth store and awaiting review.",
-    "stale_summary": "Compiled summary is currently weak enough to justify targeted rebuild review.",
-    "production_gap": "Knowledge production chain is missing an expected downstream stage or reach surface.",
-    "contradiction_reviewed": "A contradiction review action recently changed the maintenance state for one or more objects.",
-    "summary_rebuilt": "A summary rebuild action recently refreshed one or more compiled summaries.",
-    "source_needs_deep_dive": "A processed source note exists without any derived deep dive, so the next extraction step is still missing.",
-    "deep_dive_needs_objects": "A deep dive exists without any derived evergreen objects, so absorb-style extraction has not completed yet.",
-}
-_LEGACY_AUTO_QUEUE_SIGNAL_TYPES = {
-    "source_needs_deep_dive",
-    "deep_dive_needs_objects",
-}
-EVOLUTION_LINK_EXPLANATIONS = {
-    "challenges": "Newer evidence is challenging the current interpretation.",
-    "replaces": "A newer interpretation appears to supersede the older one.",
-    "confirms": "Independent evidence is reinforcing the current interpretation.",
-    "enriches": "Newer material is adding depth without overturning the core idea.",
-}
-_BRIEFING_SIGNAL_PRIORITY = {
-    "contradiction_open": 100,
-    "stale_summary": 90,
-    "production_gap": 80,
-    "source_needs_deep_dive": 70,
-    "deep_dive_needs_objects": 60,
-    "contradiction_reviewed": 40,
-    "summary_rebuilt": 30,
-}
-_BRIEFING_EVOLUTION_PRIORITY = {
-    "challenges": 100,
-    "replaces": 90,
-    "confirms": 70,
-    "enriches": 60,
-}
-_CANDIDATE_STRONG_EVIDENCE_COUNT = 3
-_CANDIDATE_STRONG_SOURCE_COUNT = 2
-_CANDIDATE_SENSITIVE_TERMS = (
-    "credential",
-    "medical",
-    "health",
-    "legal",
-    "finance",
-    "permission",
-    "personal",
-    "private",
-    "user profile",
-)
-_NOTE_CAPTURE_EVENT_TYPES = frozenset(
-    {
-        "source_staged_for_processing",
-        "source_archived_to_processed",
-        "source_restored_to_raw",
-        "article_processed",
-        "article_abstained",
-        "article_error",
-        "candidate_upsert_error",
-        "evergreen_error",
-        "candidates_upserted",
-        "evergreen_auto_promoted",
-        "evergreen_created",
-        "refine_mutation_applied",
-    }
-)
 
 
 def get_runtime_status(
@@ -326,41 +288,6 @@ def record_action_worker_state(
     return payload
 
 
-def _format_utc_timestamp(value: datetime) -> str:
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _coerce_int(value: object) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _coerce_float(value: object) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _format_duration(seconds: int) -> str:
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, remaining_seconds = divmod(seconds, 60)
-    if minutes < 60:
-        return f"{minutes}m" if remaining_seconds == 0 else f"{minutes}m {remaining_seconds}s"
-    hours, remaining_minutes = divmod(minutes, 60)
-    if hours < 24:
-        return f"{hours}h" if remaining_minutes == 0 else f"{hours}h {remaining_minutes}m"
-    days, remaining_hours = divmod(hours, 24)
-    return f"{days}d" if remaining_hours == 0 else f"{days}d {remaining_hours}h"
-
-
 def _runtime_planned_steps(
     active_run: dict[str, Any], ledger: dict[str, Any], current_step_name: str
 ) -> list[str]:
@@ -482,274 +409,8 @@ def _build_runtime_progress(active_run: dict[str, Any], *, now_iso: str) -> dict
     }
 
 
-def _db_path(vault_dir: Path | str) -> Path:
-    return ensure_knowledge_db_current(vault_dir)
-
-
-def _truth_pack_name(pack_name: str | None = None) -> str:
-    return str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
-
-
-def _truth_pack_candidates(pack_name: str | None = None) -> list[str]:
-    return [pack.name for pack in iter_compatible_packs(pack_name or DEFAULT_WORKFLOW_PACK_NAME)]
-
-
-def _materialized_truth_packs(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None,
-    table_name: str,
-) -> list[str]:
-    candidates = _truth_pack_candidates(pack_name)
-    requested_pack = candidates[0]
-    db_path = _db_path(vault_dir)
-    row = None
-    try:
-        with sqlite3.connect(db_path) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM truth_projections WHERE pack = ? LIMIT 1",
-                (requested_pack,),
-            ).fetchone()
-            if row is None:
-                row = conn.execute(
-                    f"SELECT 1 FROM {table_name} WHERE pack = ? LIMIT 1",
-                    (requested_pack,),
-                ).fetchone()
-    except sqlite3.OperationalError as exc:
-        if "no such table" not in str(exc).lower():
-            raise
-        with sqlite3.connect(db_path) as conn:
-            row = conn.execute(
-                f"SELECT 1 FROM {table_name} WHERE pack = ? LIMIT 1",
-                (requested_pack,),
-            ).fetchone()
-    if row is not None:
-        return [requested_pack]
-    return candidates
-
-
-def _utc_now_text() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _action_queue_path(vault_dir: Path | str) -> Path:
-    resolved = resolve_vault_dir(vault_dir)
-    return VaultLayout.from_vault(resolved).actions_log
-
-
-def _signal_ledger_path(vault_dir: Path | str, *, pack_name: str | None = None) -> Path:
-    resolved = resolve_vault_dir(vault_dir)
-    layout = VaultLayout.from_vault(resolved)
-    normalized_pack = str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
-    if normalized_pack == DEFAULT_WORKFLOW_PACK_NAME:
-        return layout.signals_log
-    safe_pack = re.sub(r"[^a-z0-9._-]+", "-", normalized_pack.lower()).strip("-") or "pack"
-    return layout.logs_dir / f"signals.{safe_pack}.jsonl"
-
-
-def _read_jsonl_items(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    items: list[dict[str, Any]] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        if not raw_line.strip():
-            continue
-        try:
-            payload = json.loads(raw_line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            items.append(payload)
-    return items
-
-
-def _briefing_priority_score(item: dict[str, Any]) -> tuple[int, int, int]:
-    signal_type = str(item.get("signal_type") or item.get("kind") or "")
-    recommended_action = item.get("recommended_action")
-    executable = 0
-    if isinstance(recommended_action, dict) and recommended_action.get("executable"):
-        executable = 1
-    object_count = len([value for value in item.get("object_ids", []) if value])
-    return (_BRIEFING_SIGNAL_PRIORITY.get(signal_type, 0), executable, object_count)
-
-
-def _briefing_evolution_score(item: dict[str, Any]) -> tuple[int, int]:
-    return (
-        _BRIEFING_EVOLUTION_PRIORITY.get(str(item.get("link_type") or ""), 0),
-        len([value for value in item.get("object_ids", []) if value]),
-    )
-
-
-def _path_signature(path: Path) -> tuple[str, int, int]:
-    try:
-        stat = path.stat()
-    except FileNotFoundError:
-        return (str(path), -1, -1)
-    return (str(path), stat.st_mtime_ns, stat.st_size)
-
-
-def _search_root_signatures(vault_dir: Path) -> tuple[tuple[str, int, int], ...]:
-    roots = [
-        vault_dir / "50-Inbox" / "03-Processed",
-        vault_dir / "50-Inbox" / "02-Processing",
-        vault_dir / "50-Inbox" / "01-Raw",
-    ]
-    signatures: list[tuple[str, int, int]] = []
-    for root in roots:
-        signatures.append(_path_signature(root))
-        if not root.exists():
-            continue
-        for child in sorted(root.iterdir(), key=lambda item: item.name):
-            signatures.append(_path_signature(child))
-    return tuple(signatures)
-
-
-def _signal_dependency_signature(vault_dir: Path) -> tuple[tuple[str, int, int], ...]:
-    layout = VaultLayout.from_vault(vault_dir)
-    signatures = [
-        _path_signature(layout.knowledge_db),
-        _path_signature(layout.logs_dir / f"{_REVIEW_AUDIT_LOG_NAME}.jsonl"),
-        _path_signature(layout.logs_dir / "pipeline.jsonl"),
-    ]
-    signatures.extend(_search_root_signatures(vault_dir))
-    return tuple(signatures)
-
-
 def _evolution_dependency_signature(vault_dir: Path) -> tuple[tuple[str, int, int], ...]:
     return _signal_dependency_signature(vault_dir)
-
-
-def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
-    resolved = resolve_vault_dir(vault_dir).resolve()
-    candidate = Path(path)
-    if not candidate.is_absolute():
-        return path
-    try:
-        return str(candidate.resolve().relative_to(resolved))
-    except ValueError:
-        return path
-
-
-def _validate_page_args(*, limit: int, offset: int = 0) -> tuple[int, int]:
-    if limit < 0 or offset < 0:
-        raise ValueError("limit and offset must be >= 0")
-    if limit > MAX_PAGE_SIZE:
-        raise ValueError(f"limit must be <= {MAX_PAGE_SIZE}")
-    return limit, offset
-
-
-def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-_ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
-
-
-def _tokenize_for_search(query: str) -> list[str]:
-    """Split a free-form query into searchable tokens.
-
-    English words come straight from a word-character regex. Chinese segments
-    are run through jieba (when available) so that "智能体记忆" splits into
-    ["智能体", "记忆"] instead of being treated as one opaque blob — which is
-    what the FTS5 unicode61 tokenizer would otherwise see.
-    """
-    if not query or not query.strip():
-        return []
-    lowered = query.lower()
-    tokens: list[str] = []
-    seen: set[str] = set()
-
-    def _add(tok: str) -> None:
-        tok = tok.strip()
-        if not tok or tok in seen:
-            return
-        # Drop pure ASCII single chars (too noisy); keep single Chinese chars.
-        if len(tok) == 1 and not _CJK_RE.match(tok):
-            return
-        seen.add(tok)
-        tokens.append(tok)
-
-    # ASCII words first — covers `agent-memory`, `RAG`, `gpt-4`.
-    for match in _ASCII_TOKEN_RE.findall(lowered):
-        _add(match)
-
-    # Chinese segments via jieba (best-effort: degrade to char-level if absent).
-    if _CJK_RE.search(lowered):
-        try:
-            import jieba
-
-            for word in jieba.cut(lowered):
-                if _CJK_RE.search(word):
-                    _add(word)
-        except ImportError:
-            for ch in lowered:
-                if _CJK_RE.match(ch):
-                    _add(ch)
-    return tokens
-
-
-def _build_fts_match(tokens: list[str]) -> str:
-    """Quote each token and AND them together into an FTS5 MATCH expression.
-
-    The trigram tokenizer silently drops tokens shorter than 3 characters
-    (anything that can't fit a full trigram), so an AND-clause containing a
-    2-char token would force the whole query to return nothing. Filter those
-    out here and let the caller decide whether to fall back to a substring
-    scan when no tokens remain.
-    """
-    long_enough = [tok for tok in tokens if len(tok) >= 3]
-    if not long_enough:
-        return ""
-    quoted = [f'"{tok.replace(chr(34), chr(34) * 2)}"' for tok in long_enough]
-    return " AND ".join(quoted)
-
-
-def _parse_frontmatter(markdown: str) -> dict[str, Any]:
-    fenced_match = _FENCED_FRONTMATTER_RE.match(markdown)
-    if fenced_match:
-        raw_frontmatter = fenced_match.group(1)
-        try:
-            parsed = yaml.safe_load(raw_frontmatter) or {}
-        except yaml.YAMLError:
-            parsed = {}
-        return parsed if isinstance(parsed, dict) else {}
-    if not markdown.startswith("---\n"):
-        return {}
-    end = markdown.find("\n---\n", 4)
-    if end == -1:
-        return {}
-    raw_frontmatter = markdown[4:end]
-    try:
-        parsed = yaml.safe_load(raw_frontmatter) or {}
-    except yaml.YAMLError:
-        parsed = {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _read_note_frontmatter(vault_dir: Path | str, relative_path: str) -> dict[str, Any]:
-    resolved = resolve_vault_dir(vault_dir)
-    note_path = (resolved / relative_path).resolve()
-    try:
-        note_path.relative_to(resolved.resolve())
-    except ValueError:
-        return {}
-    if not note_path.is_file():
-        return {}
-    return _parse_frontmatter(note_path.read_text(encoding="utf-8"))
-
-
-def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-
-
-def _rewrite_jsonl(path: Path, payloads: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for payload in payloads:
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def record_review_action(
@@ -1427,21 +1088,6 @@ def _rank_contradiction_evidence(item: dict[str, Any]) -> list[dict[str, Any]]:
     return ranked
 
 
-def _parse_iso_datetime(value: Any) -> datetime | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
 def _candidate_evolution_id(
     *,
     link_type: str,
@@ -1471,31 +1117,6 @@ def _page_paths_for_slugs(vault_dir: Path | str, slugs: list[str]) -> dict[str, 
             tuple(normalized_slugs),
         ).fetchall()
     return {str(slug): _vault_relative_path(resolved_vault, path) for slug, path in rows}
-
-
-def _note_date_text(vault_dir: Path | str, note_path: str) -> str:
-    frontmatter = _read_note_frontmatter(vault_dir, note_path)
-    date_value = frontmatter.get("date")
-    return str(date_value).strip() if date_value is not None else ""
-
-
-def _note_date_sort_key(date_text: str) -> tuple[int, float, str]:
-    parsed = _parse_iso_datetime(date_text)
-    if parsed is None:
-        return (0, 0.0, date_text)
-    return (1, parsed.timestamp(), date_text)
-
-
-def _read_note_text(vault_dir: Path | str, relative_path: str) -> str:
-    resolved = resolve_vault_dir(vault_dir)
-    note_path = (resolved / relative_path).resolve()
-    try:
-        note_path.relative_to(resolved.resolve())
-    except ValueError:
-        return ""
-    if not note_path.is_file():
-        return ""
-    return note_path.read_text(encoding="utf-8")
 
 
 _SUPERSESSION_CUE_RE = re.compile(
