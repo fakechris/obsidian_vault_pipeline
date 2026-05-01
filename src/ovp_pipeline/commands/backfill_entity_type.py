@@ -5,7 +5,7 @@ Traverses ``10-Knowledge/Evergreen/*.md``, skips notes that already have
 remaining notes into one of the 10 canonical core kinds defined in
 ``object_kinds.py``.
 
-Emits structured audit events to ``60-Logs/entity-type-backfill.jsonl``.
+Emits structured audit events to ``60-Logs/pipeline.jsonl``.
 """
 
 from __future__ import annotations
