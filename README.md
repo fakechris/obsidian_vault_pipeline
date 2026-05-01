@@ -412,7 +412,8 @@ Refine is not hidden or missing. It is wired in, but opt-in by default to avoid 
 | Command | Purpose |
 |---|---|
 | `ovp-runtime-state --vault-dir <vault> --write --json` | Build the operational runtime state projection from repair markers, workflow actions, pipeline events, and reuse events; writes `60-Logs/runtime-state/current.{json,md}` |
-| `/api/runtime-state?write=1` | Local UI/API read endpoint for the same provider-facing runtime-state projection |
+| `GET /api/runtime-state` | Local read endpoint for the provider-facing runtime-state projection; prefers the materialized `60-Logs/runtime-state/current.json` and falls back to rebuild when missing |
+| `POST /api/runtime-state` | Refresh and write the materialized runtime-state projection |
 
 ### Context packs
 

@@ -1474,7 +1474,7 @@ def main(argv: list[str] | None = None) -> int:
             f"pipeline_events={metrics.get('pipeline_events', 0)} "
             f"reuse_surfaces={metrics.get('reuse_surfaces', 0)}"
         )
-        for item in (runtime_state.get("attention") or [])[:3]:
+        for item in (runtime_state.get("attention") or [])[:5]:
             if isinstance(item, dict):
                 print(f"  attention: {item.get('message', '')}")
     return 0

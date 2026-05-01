@@ -3,18 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import shutil
 import sys
 from datetime import date as _date_cls, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from ..packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from ..projection_labels import frontmatter_projection_fields
 from ..reuse_emitter import emit_reuse_events
-from ..runtime import resolve_vault_dir
+from ..runtime import resolve_vault_dir, split_markdown_frontmatter
 from .working_memory import DEFAULT_CONTEXT_BUDGET_TOKENS, DEFAULT_TOP_N, build_working_memory
 
 
@@ -33,23 +30,9 @@ def _default_session_id(now: datetime) -> str:
     return f"session-{now.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
 
 
-def _safe_session_id(value: str) -> str:
+def _safe_session_id(value: str, *, fallback: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip())
-    return cleaned.strip("-") or "session"
-
-
-def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    if not text.startswith("---\n"):
-        return {}, text
-    end = text.find("\n---", 4)
-    if end < 0:
-        return {}, text
-    raw_frontmatter = text[4:end]
-    body = text[end + len("\n---") :].lstrip("\n")
-    parsed = yaml.safe_load(raw_frontmatter) or {}
-    if not isinstance(parsed, dict):
-        return {}, body
-    return parsed, body
+    return cleaned.strip("-") or fallback
 
 
 def _relative_path(path: Path, vault_dir: Path) -> str:
@@ -81,10 +64,7 @@ def _render_prime(
     working_memory_body: str,
     metadata: dict[str, Any],
 ) -> str:
-    budget = int(metadata.get("context_budget_tokens") or 0)
-    selected_tokens = int(metadata.get("context_selected_tokens") or 0)
-    selected_objects = int(metadata.get("context_selected_objects") or 0)
-    omitted_objects = int(metadata.get("context_omitted_objects") or 0)
+    budget_metadata = _context_budget_metadata(metadata)
     return "\n".join(
         [
             f"# OVP Prime — {session_id}",
@@ -93,10 +73,10 @@ def _render_prime(
             "",
             f"- Source context pack: `{source_context_pack}`",
             f"- Generated at: {_format_dt(generated_at)}",
-            f"- Budget: {budget} tokens",
-            f"- Selected: {selected_tokens} tokens",
-            f"- Selected objects: {selected_objects}",
-            f"- Omitted by budget: {omitted_objects}",
+            f"- Budget: {budget_metadata['context_budget_tokens']} tokens",
+            f"- Selected: {budget_metadata['context_selected_tokens']} tokens",
+            f"- Selected objects: {budget_metadata['context_selected_objects']}",
+            f"- Omitted by budget: {budget_metadata['context_omitted_objects']}",
             "- Boundary: this is a projection for session start, not Authority.",
             "",
             "## Working Memory Context",
@@ -105,6 +85,15 @@ def _render_prime(
             "",
         ]
     )
+
+
+def _context_budget_metadata(metadata: dict[str, Any]) -> dict[str, int]:
+    return {
+        "context_budget_tokens": int(metadata.get("context_budget_tokens") or 0),
+        "context_selected_tokens": int(metadata.get("context_selected_tokens") or 0),
+        "context_selected_objects": int(metadata.get("context_selected_objects") or 0),
+        "context_omitted_objects": int(metadata.get("context_omitted_objects") or 0),
+    }
 
 
 def build_prime_context(
@@ -118,7 +107,8 @@ def build_prime_context(
 ) -> Path:
     resolved_vault = resolve_vault_dir(vault_dir)
     current_time = now or _utc_now()
-    session = _safe_session_id(session_id or _default_session_id(current_time))
+    session_default = _default_session_id(current_time)
+    session = _safe_session_id(session_id or session_default, fallback=session_default)
     target_date = target_date or current_time.date()
 
     working_memory_path = build_working_memory(
@@ -129,7 +119,8 @@ def build_prime_context(
         now=current_time,
     )
     working_memory_text = working_memory_path.read_text(encoding="utf-8")
-    metadata, working_memory_body = _split_frontmatter(working_memory_text)
+    metadata, working_memory_body = split_markdown_frontmatter(working_memory_text)
+    budget_metadata = _context_budget_metadata(metadata)
     source_context_pack = _relative_path(working_memory_path, resolved_vault)
 
     output_dir = resolved_vault.joinpath(*SESSION_SNAPSHOT_DIR)
@@ -144,10 +135,10 @@ def build_prime_context(
         f"generated_at: {_format_dt(current_time)}\n"
         f"date: {target_date.isoformat()}\n"
         f"source_context_pack: {source_context_pack}\n"
-        f"context_budget_tokens: {int(metadata.get('context_budget_tokens') or 0)}\n"
-        f"context_selected_tokens: {int(metadata.get('context_selected_tokens') or 0)}\n"
-        f"context_selected_objects: {int(metadata.get('context_selected_objects') or 0)}\n"
-        f"context_omitted_objects: {int(metadata.get('context_omitted_objects') or 0)}\n"
+        f"context_budget_tokens: {budget_metadata['context_budget_tokens']}\n"
+        f"context_selected_tokens: {budget_metadata['context_selected_tokens']}\n"
+        f"context_selected_objects: {budget_metadata['context_selected_objects']}\n"
+        f"context_omitted_objects: {budget_metadata['context_omitted_objects']}\n"
         + "\n".join(
             frontmatter_projection_fields(
                 surface="ovp_prime",
@@ -167,8 +158,9 @@ def build_prime_context(
         working_memory_body=working_memory_body,
         metadata=metadata,
     )
-    output_path.write_text(frontmatter + body, encoding="utf-8")
-    shutil.copyfile(output_path, latest_path)
+    rendered = frontmatter + body
+    output_path.write_text(rendered, encoding="utf-8")
+    latest_path.write_text(rendered, encoding="utf-8")
 
     selected_slugs = _selected_top_of_mind_slugs(working_memory_body)
     if selected_slugs:
@@ -181,8 +173,8 @@ def build_prime_context(
             session_id=session,
             extra_payload={
                 "source_context_pack": source_context_pack,
-                "context_budget_tokens": int(metadata.get("context_budget_tokens") or 0),
-                "context_selected_tokens": int(metadata.get("context_selected_tokens") or 0),
+                "context_budget_tokens": budget_metadata["context_budget_tokens"],
+                "context_selected_tokens": budget_metadata["context_selected_tokens"],
             },
         )
     return output_path
@@ -221,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         top_n=args.top_n,
     )
     latest_path = vault_dir.joinpath(*SESSION_SNAPSHOT_DIR) / "latest.md"
-    metadata, _body = _split_frontmatter(output_path.read_text(encoding="utf-8"))
+    metadata, _body = split_markdown_frontmatter(output_path.read_text(encoding="utf-8"))
     summary = {
         "session_id": metadata.get("session_id"),
         "path": str(output_path),

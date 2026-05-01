@@ -517,7 +517,7 @@ def test_ui_server_runtime_state_endpoint_returns_provider_projection(temp_vault
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/api/runtime-state?write=1")
+        conn.request("POST", "/api/runtime-state", body="limit=20")
         response = conn.getresponse()
         payload = json.loads(response.read().decode("utf-8"))
     finally:
@@ -530,6 +530,56 @@ def test_ui_server_runtime_state_endpoint_returns_provider_projection(temp_vault
     assert payload["status"] == "attention_required"
     assert payload["metrics"]["open_projection_repair_markers"] == 1
     assert payload["paths"]["json"].endswith("60-Logs/runtime-state/current.json")
+
+
+def test_ui_server_runtime_state_get_is_read_only(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/runtime-state?write=1")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert payload["type"] == "operational_runtime_state"
+    assert "paths" not in payload
+    assert not (temp_vault / "60-Logs" / "runtime-state" / "current.json").exists()
+
+
+def test_ui_server_runtime_state_endpoint_returns_503_on_provider_error(temp_vault, monkeypatch):
+    import ovp_pipeline.commands.ui_server as ui_server
+    from ovp_pipeline.commands.ui_server import create_server
+
+    def fail_runtime_state(*args, **kwargs):
+        raise OSError("projection unavailable")
+
+    monkeypatch.setattr(ui_server, "get_operational_runtime_state", fail_runtime_state)
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/runtime-state")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 503
+    assert payload["error"] == "runtime_state_unavailable"
 
 
 def test_ui_server_ops_route_renders_runtime_state_card(temp_vault):

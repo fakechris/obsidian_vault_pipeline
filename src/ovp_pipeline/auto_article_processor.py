@@ -23,11 +23,10 @@ import json
 import os
 import re
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 try:
     import requests
@@ -584,24 +583,16 @@ class AutoArticleProcessor:
         })
         return archived
 
-    @staticmethod
-    def _is_under(path: Path, parent: Path) -> bool:
-        return lifecycle_is_under(path, parent)
-
-    @staticmethod
-    def _unique_child(directory: Path, name: str) -> Path:
-        return lifecycle_unique_child(directory, name)
-
     def _source_lifecycle_zone(self, source: Path) -> str:
-        if self._is_under(source, self.layout.clippings_dir):
+        if lifecycle_is_under(source, self.layout.clippings_dir):
             return "clippings"
-        if self._is_under(source, self.layout.pinboard_dir):
+        if lifecycle_is_under(source, self.layout.pinboard_dir):
             return "pinboard"
-        if self._is_under(source, self.raw_dir):
+        if lifecycle_is_under(source, self.raw_dir):
             return "raw"
-        if self._is_under(source, self.processing_dir):
+        if lifecycle_is_under(source, self.processing_dir):
             return "processing"
-        if self._is_under(source, self.processed_dir):
+        if lifecycle_is_under(source, self.processed_dir):
             return "processed"
         return "outside_source_lifecycle"
 
@@ -613,7 +604,7 @@ class AutoArticleProcessor:
 
         clippings = ClippingsProcessor(self.vault_dir, self.logger, self.txn)
         new_name = clipping_raw_name(source, clippings.sanitize_filename)
-        destination = self._unique_child(self.raw_dir, new_name)
+        destination = lifecycle_unique_child(self.raw_dir, new_name)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
 
         if not clippings.obsidian_move(source, self.raw_dir, destination.name):
@@ -632,13 +623,13 @@ class AutoArticleProcessor:
     def _finalize_lifecycle_source(self, working_path: Path, result: dict, dry_run: bool = False) -> Path | None:
         if dry_run:
             return None
-        if self._is_under(working_path, self.layout.pinboard_dir):
+        if lifecycle_is_under(working_path, self.layout.pinboard_dir):
             if result["status"] == "completed" and working_path.exists():
                 archived = archive_pinboard_source(self.layout, working_path)
                 result["source_path"] = str(archived)
                 return archived
             return None
-        if not self._is_under(working_path, self.processing_dir):
+        if not lifecycle_is_under(working_path, self.processing_dir):
             return None
         if result["status"] == "completed":
             archived = self._archive_source_to_processed(working_path)
@@ -675,7 +666,7 @@ class AutoArticleProcessor:
             if zone == "clippings":
                 working_path = self._move_clipping_to_raw(source)
 
-            if self._is_under(working_path, self.raw_dir):
+            if lifecycle_is_under(working_path, self.raw_dir):
                 working_path = self._stage_source_for_processing(working_path)
 
             result = self.process_single_file(working_path, dry_run=False)
@@ -698,7 +689,7 @@ class AutoArticleProcessor:
                     "working_path": str(working_path),
                 },
             }
-            if self._is_under(working_path, self.processing_dir) and working_path.exists():
+            if lifecycle_is_under(working_path, self.processing_dir) and working_path.exists():
                 self._finalize_lifecycle_source(working_path, result, dry_run=False)
             self.logger.log("article_error", {"file": str(source), "error": str(e)})
             return result

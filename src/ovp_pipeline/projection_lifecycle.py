@@ -264,7 +264,12 @@ def claim_projection_repair_marker(
             "timestamp": _format_dt(current_time),
         },
     )
-    return {item.marker_id: item for item in list_projection_repair_markers(vault_dir)}[marker_id]
+    return replace(
+        marker,
+        status="claimed",
+        claimed_by=worker_id,
+        claim_lease_until=lease_until,
+    )
 
 
 def close_projection_repair_marker(
@@ -286,7 +291,7 @@ def close_projection_repair_marker(
             "timestamp": _format_dt(current_time),
         },
     )
-    return {item.marker_id: item for item in list_projection_repair_markers(vault_dir)}[marker_id]
+    return replace(markers[marker_id], status="closed", closed_at=current_time)
 
 
 def ensure_projection_schema_current(

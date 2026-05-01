@@ -45,7 +45,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-011 | P1 | Done | Reader-oriented search grouped by kind, summary, evidence, and reason | M3/M4, PR #84 |
 | BL-012 | P1 | Done | Trusted reuse event instrumentation for downstream use of accepted/cited knowledge | April 22 roadmap, PR #89 + PR #90 |
 | BL-013 | P1 | Done | Session snapshot / OVP context pack / explicit context budget | M5, KSR-004, KSR-017, KSR-022, PR #89 + PR #90 |
-| BL-014 | P1 | Done | Operational runtime graph, action queue health, observability metrics, provider facade | M5, KSR-020, KSR-021, KSR-023, KSR-025, PR #91 + PR #92 + M5 closeout slice |
+| BL-014 | P1 | Done | Operational runtime graph, action queue health, observability metrics, materialized read-side policy, provider facade | M5, KSR-020, KSR-021, KSR-023, KSR-025, PR #91 + PR #92 + M5 closeout slice |
 | BL-015 | P1 | Later | Permission layer and claim lifecycle fields | M6, KSR-005, KSR-006 |
 | BL-016 | P2 | Later | Conflict detection regularization, high-risk profile gate, candidate compaction with restore | M6, KSR-007, KSR-008, KSR-024 |
 | BL-017 | P2 | Later | Schema-on-demand guard for new claim/candidate profiles | M6, KSR-028 |
@@ -85,7 +85,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | KSR-022 OVP prime/context pack | BL-013 | Done: `ovp-prime` turns the working-memory pack into a session-start snapshot and records `ovp_prime` reuse events |
 | KSR-023 Pipeline observability metrics | BL-014 | Done for first health surface: runtime state counts pipeline events, reuse events, trusted reuse events, repair markers, expired leases, queued/running/stale/failed actions; `/ops` and `ovp doctor` consume it |
 | KSR-024 Candidate compaction with restore | BL-016 | Later |
-| KSR-025 Context provider facade | BL-014 | Done for runtime state: `truth_api.get_operational_runtime_state()` and `/api/runtime-state` are stable read APIs; MCP exposure can be added when an MCP consumer needs it |
+| KSR-025 Context provider facade | BL-014 | Done for runtime state: `truth_api.get_operational_runtime_state()` and `GET /api/runtime-state` are stable read APIs over the materialized projection; `POST /api/runtime-state` refreshes it; MCP exposure can be added when an MCP consumer needs it |
 | KSR-026 Workflow wiring eval suite | BL-004 | Done |
 | KSR-027 Live-source routing policy | BL-005/BL-014 | Later |
 | KSR-028 Schema-on-demand guard | BL-017 | Later |
@@ -101,7 +101,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 PR #90 completes the first trusted reuse/context-pack loop: `ovp-working-memory` emits explicit budget metadata and `working_memory` reuse events, while `ovp-prime` turns that pack into a session snapshot and emits `ovp_prime` reuse events for selected canonical objects.
 
-PR #91 starts the operational runtime graph by adding `ovp-runtime-state`, a derived projection over projection repair markers, pipeline events, and trusted reuse events. PR #92 wires that projection into `/ops`, `ovp doctor`, and the provider-facing `/api/runtime-state` read API. The current closeout slice adds workflow action queue health to runtime state and records the decision not to generalize workflow item leases before multi-worker scheduling exists.
+PR #91 starts the operational runtime graph by adding `ovp-runtime-state`, a derived projection over projection repair markers, pipeline events, and trusted reuse events. PR #92 wires that projection into `/ops`, `ovp doctor`, and the provider-facing `/api/runtime-state` read API. The current closeout slice adds workflow action queue health, makes runtime-state reads prefer `60-Logs/runtime-state/current.json`, moves refresh writes to `POST /api/runtime-state`, and records the decision not to generalize workflow item leases before multi-worker scheduling exists.
 
 Recommended order:
 

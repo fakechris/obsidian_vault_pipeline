@@ -54,7 +54,7 @@ OVP 正在从 document-processing pipeline 变成：
 | Visual graph MVP | `BL-010` 已在 PR #80 交付 |
 | Reader-oriented search | `BL-011` 已在 PR #84 交付 |
 | Trusted reuse context pack / OVP prime | `BL-012`、`BL-013` 第一版已在 PR #89 和 PR #90 交付 |
-| Operational runtime state projection | `BL-014` 第一片在 PR #91 落地；`/ops` / doctor / API 集成在 PR #92；M5 closeout slice 收口 action queue health |
+| Operational runtime state projection | `BL-014` 第一片在 PR #91 落地；`/ops` / doctor / API 集成在 PR #92；M5 closeout slice 收口 action queue health 和物化读侧策略 |
 | Projection repair lifecycle | `BL-020` 已在 PR #87 落地 |
 | Schema versioning and migration trigger | `BL-021` 已在 PR #87 和 PR #88 中补完 |
 
