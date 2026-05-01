@@ -2572,6 +2572,7 @@ class EnhancedPipeline:
         print("=" * 60)
 
         from .concept_dedup import (
+            DEFAULT_THRESHOLD,
             apply_proposal,
             find_clusters,
             write_proposal,
@@ -2584,7 +2585,7 @@ class EnhancedPipeline:
             if promoted:
                 scope_slugs = set(promoted)
 
-        threshold = 0.82
+        threshold = DEFAULT_THRESHOLD
         clusters = find_clusters(self.vault_dir, threshold=threshold, scope_slugs=scope_slugs)
 
         if not clusters:

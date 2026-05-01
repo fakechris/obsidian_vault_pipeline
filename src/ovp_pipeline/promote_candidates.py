@@ -303,20 +303,20 @@ def promote_candidate(vault_dir: Path, slug: str, dry_run: bool = True) -> Lifec
         raise ValueError(f"'{slug}' is not a candidate (status: {entry.status})")
 
     try:
-        from .concept_dedup import find_similar_slugs
+        from .concept_dedup import DEFAULT_THRESHOLD, find_similar_slugs
 
-        similar = find_similar_slugs(vault_dir, slug, threshold=0.82)
+        similar = find_similar_slugs(vault_dir, slug, threshold=DEFAULT_THRESHOLD)
         if similar:
             best_slug, best_sim = similar[0]
             best_entry = registry.find_by_slug(best_slug)
-            if best_entry and best_entry.status == "active":
+            if best_entry and best_entry.status == STATUS_ACTIVE:
                 print(
                     f"  [dedup-guard] '{slug}' similar to active '{best_slug}' "
                     f"(sim={best_sim:.2f}) — merging instead of promoting."
                 )
                 return merge_candidate(vault_dir, slug, best_slug, dry_run=dry_run)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"  [dedup-guard] Warning: similarity check failed for '{slug}': {exc}")
 
     mutation = LifecycleMutation(action="promote", slug=slug, target_slug=slug)
 

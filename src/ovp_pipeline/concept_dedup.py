@@ -267,13 +267,18 @@ def find_clusters(
     cands = _scan_evergreen(vault_dir)
     if scope_slugs is not None:
         scope_norms = {_normalize_slug_for_compare(s) for s in scope_slugs}
+        scope_ngrams = [_char_ngrams(sn) for sn in scope_norms]
         filtered: list[DedupCandidate] = []
         for c in cands:
             cn = _normalize_slug_for_compare(c.slug)
             if cn in scope_norms:
                 filtered.append(c)
                 continue
-            if any(trigram_jaccard(cn, sn) >= threshold for sn in scope_norms):
+            gn = _char_ngrams(cn)
+            if any(
+                len(gn & gs) / max(len(gn | gs), 1) >= threshold
+                for gs in scope_ngrams
+            ):
                 filtered.append(c)
         cands = filtered
     raw = _cluster_by_similarity(cands, threshold=threshold)
@@ -298,16 +303,24 @@ def find_similar_slugs(
 
     Returns a list of ``(existing_slug, similarity)`` pairs sorted by
     descending similarity.  An empty list means *slug* is sufficiently unique.
+
+    Uses a lightweight directory scan (filenames only) rather than reading
+    file contents, since only slugs are needed for comparison.
     """
-    cands = _scan_evergreen(vault_dir)
+    eg_dir = vault_dir / "10-Knowledge" / "Evergreen"
+    if not eg_dir.is_dir():
+        return []
     norm = _normalize_slug_for_compare(slug)
     hits: list[tuple[str, float]] = []
-    for c in cands:
-        if c.slug == slug:
+    for p in eg_dir.iterdir():
+        if not p.suffix == ".md" or p.name.startswith(("_", ".")):
             continue
-        sim = trigram_jaccard(norm, _normalize_slug_for_compare(c.slug))
+        existing_slug = p.stem
+        if existing_slug == slug:
+            continue
+        sim = trigram_jaccard(norm, _normalize_slug_for_compare(existing_slug))
         if sim >= threshold:
-            hits.append((c.slug, sim))
+            hits.append((existing_slug, sim))
     hits.sort(key=lambda t: -t[1])
     return hits
 
