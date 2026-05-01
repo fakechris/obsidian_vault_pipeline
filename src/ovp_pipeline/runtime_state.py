@@ -49,10 +49,13 @@ def _count_jsonl_lines(path: Path) -> int:
     if not path.exists():
         return 0
     count = 0
-    with path.open("r", encoding="utf-8", errors="ignore") as handle:
-        for line in handle:
-            if line.strip():
-                count += 1
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if line.strip():
+                    count += 1
+    except OSError:
+        return 0
     return count
 
 

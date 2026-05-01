@@ -73,6 +73,8 @@ _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
 
 def _safe_redirect_path(location: str, *, fallback: str = "/") -> str:
     """Validate redirect target is a safe relative path (no open redirect)."""
+    if any(ord(ch) < 0x20 or ch == "\\" for ch in location):
+        return fallback
     stripped = location.strip()
     if not stripped:
         return fallback

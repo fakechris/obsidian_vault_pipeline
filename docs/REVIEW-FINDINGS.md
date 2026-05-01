@@ -92,6 +92,7 @@
 ### 2.3 巨型文件的拆分计划（Critical）
 
 **现状**:
+
 | 文件 | 行数 | 职责 |
 |------|------|------|
 | `ui_server.py` | 6035 | HTTP routing + HTML rendering + mutation handlers |

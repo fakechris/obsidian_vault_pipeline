@@ -156,6 +156,13 @@ class TestEmitEvidenceVerified:
         assert event["event_type"] == "evidence_verified"
         assert event["table"] == "claim_evidence"
         assert event["locator"] == "loc"
+        assert event["pack"] == "default"
+        assert event["key"] == {
+            "pack": "default",
+            "claim_id": "c1",
+            "source_slug": "s1",
+            "evidence_kind": "ek",
+        }
 
     def test_rejects_unknown_table(self, replay_vault: Path):
         with pytest.raises(ValueError, match="Unsupported evidence table"):
@@ -198,11 +205,13 @@ class TestReplayEvidenceVerifications:
         assert applied == 1
 
         row = replay_db.execute(
-            "SELECT locator, status, verified_at FROM claim_evidence WHERE claim_id = 'c1'"
+            """
+            SELECT locator, content_hash, retrieval_context, status, verified_at
+              FROM claim_evidence
+             WHERE claim_id = 'c1'
+            """
         ).fetchone()
-        assert row[0] == "file.md:10"
-        assert row[1] == "verified"
-        assert row[2] == "2026-04-30T12:00:00Z"
+        assert row == ("file.md:10", "hash123", "context-text", "verified", "2026-04-30T12:00:00Z")
 
     def test_replay_returns_zero_for_empty_log(
         self, replay_vault: Path, replay_db: sqlite3.Connection

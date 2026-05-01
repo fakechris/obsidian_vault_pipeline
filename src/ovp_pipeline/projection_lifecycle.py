@@ -102,16 +102,32 @@ class ProjectionRepairMarker:
     @classmethod
     def from_dict(cls, payload: dict[str, object]) -> "ProjectionRepairMarker | None":
         try:
+            marker_id = str(payload.get("marker_id") or "").strip()
+            if not marker_id:
+                return None
+            kind = str(payload.get("kind") or "metadata_only")
+            if kind not in {"metadata_only", "full_rebuild", "semantic_reindex"}:
+                return None
+            status = str(payload.get("status") or "open")
+            if status not in {"open", "claimed", "closed", "superseded"}:
+                return None
+            raw_scope = payload.get("scope")
+            if raw_scope is None:
+                scope: dict[str, object] = {}
+            elif isinstance(raw_scope, dict):
+                scope = dict(raw_scope)
+            else:
+                return None
             return cls(
-                marker_id=str(payload["marker_id"]),
-                kind=str(payload.get("kind") or "metadata_only"),  # type: ignore[arg-type]
-                scope=dict(payload.get("scope") or {}),
+                marker_id=marker_id,
+                kind=kind,  # type: ignore[arg-type]
+                scope=scope,
                 reason=str(payload.get("reason") or ""),
                 caused_by=str(payload.get("caused_by") or ""),
                 created_at=_parse_dt(payload.get("created_at")) or _utc_now(),
                 authority_schema_version=int(payload.get("authority_schema_version") or 0),
                 projection_schema_version=int(payload.get("projection_schema_version") or 0),
-                status=str(payload.get("status") or "open"),  # type: ignore[arg-type]
+                status=status,  # type: ignore[arg-type]
                 superseded_by=str(payload.get("superseded_by") or ""),
                 claimed_by=str(payload.get("claimed_by") or ""),
                 claim_lease_until=_parse_dt(payload.get("claim_lease_until")),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 from pathlib import Path
 
 from ..artifact_registry import list_effective_artifact_specs
@@ -1013,8 +1014,6 @@ def _promotion_health_payload(vault_dir: Path | None, *, pack_name: str) -> dict
             )
             lane_counts[decision.lane] = lane_counts.get(decision.lane, 0) + 1
     except Exception as exc:
-        import logging
-
         logging.getLogger(__name__).warning(
             "lane evaluation failed, returning zero counts: %s", exc
         )
