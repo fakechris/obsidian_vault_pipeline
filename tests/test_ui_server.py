@@ -555,6 +555,48 @@ def test_ui_server_runtime_state_get_is_read_only(temp_vault):
     assert not (temp_vault / "60-Logs" / "runtime-state" / "current.json").exists()
 
 
+def test_ui_server_runtime_state_get_rejects_invalid_limit_as_json(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/api/runtime-state?limit=abc")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 400
+    assert payload["error"] == "invalid_runtime_state_limit"
+
+
+def test_ui_server_runtime_state_post_rejects_invalid_limit_as_json(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("POST", "/api/runtime-state", body="limit=abc")
+        response = conn.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 400
+    assert payload["error"] == "invalid_runtime_state_limit"
+
+
 def test_ui_server_runtime_state_endpoint_returns_503_on_provider_error(temp_vault, monkeypatch):
     import ovp_pipeline.commands.ui_server as ui_server
     from ovp_pipeline.commands.ui_server import create_server
@@ -580,6 +622,81 @@ def test_ui_server_runtime_state_endpoint_returns_503_on_provider_error(temp_vau
 
     assert response.status == 503
     assert payload["error"] == "runtime_state_unavailable"
+
+
+def test_render_source_backlink_rail_skips_non_dict_items():
+    from ovp_pipeline.commands.ui_server import _render_source_backlink_rail
+
+    html = _render_source_backlink_rail(
+        {
+            "source_backlink_rail": {
+                "evergreen": "bad-data",
+                "source_notes": ["bad-data", {"title": "Source A", "path": "A.md"}],
+                "atlas_pages": ["bad-data", {"title": "Atlas A", "path": "Atlas.md"}],
+                "related_objects": [
+                    "bad-data",
+                    {"object_id": "obj-a", "title": "Object A", "path": "Object.md"},
+                ],
+            }
+        },
+        requested_pack="",
+    )
+
+    assert "Source A" in html
+    assert "Atlas A" in html
+    assert "Object A" in html
+    assert "bad-data" not in html
+
+
+def test_render_graph_map_defaults_missing_coordinates():
+    from ovp_pipeline.commands.ui_server import _render_graph_map_page
+
+    html = _render_graph_map_page(
+        {
+            "query": "",
+            "requested_pack": "",
+            "layout": {"width": 640, "height": 360},
+            "map_summary": {
+                "limit": 20,
+                "is_limited": False,
+                "node_count": 2,
+                "edge_count": 1,
+                "cluster_count": 0,
+            },
+            "clusters": [],
+            "model_notes": [],
+            "nodes": [
+                {
+                    "object_id": "a",
+                    "path": "/object?id=a",
+                    "title": "A",
+                    "radius": 8,
+                    "kind_label": "Concept",
+                    "degree": 1,
+                },
+                {
+                    "object_id": "b",
+                    "path": "/object?id=b",
+                    "title": "B",
+                    "radius": 8,
+                    "kind_label": "Concept",
+                    "degree": 1,
+                },
+            ],
+            "edges": [
+                {
+                    "source_object_id": "a",
+                    "target_object_id": "b",
+                    "source_title": "A",
+                    "target_title": "B",
+                    "edge_kind": "related",
+                }
+            ],
+        }
+    )
+
+    assert "cx='0.0'" in html
+    assert "x1='0.0'" in html
 
 
 def test_ui_server_ops_route_renders_runtime_state_card(temp_vault):

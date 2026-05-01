@@ -1871,7 +1871,9 @@ def _render_objects_index(payload: dict) -> str:
 
 def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
     rail = payload.get("source_backlink_rail") or {}
+    rail = rail if isinstance(rail, dict) else {}
     evergreen = rail.get("evergreen") or {}
+    evergreen = evergreen if isinstance(evergreen, dict) else {}
     evergreen_path = str(evergreen.get("path") or "")
     evergreen_html = (
         f'<a href="{escape(str(evergreen.get("jump_path") or _note_href(evergreen_path, requested_pack)))}">{escape(evergreen_path)}</a>'
@@ -1909,17 +1911,23 @@ def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
             "</li>"
         )
 
-    source_notes = rail.get("source_notes") or []
+    source_notes = [
+        item for item in rail.get("source_notes") or [] if isinstance(item, dict)
+    ]
     source_html = (
         "".join(render_source_note(item) for item in source_notes)
         or "<li class='muted'>No source notes linked yet.</li>"
     )
-    atlas_pages = rail.get("atlas_pages") or []
+    atlas_pages = [
+        item for item in rail.get("atlas_pages") or [] if isinstance(item, dict)
+    ]
     atlas_html = (
         "".join(render_atlas_page(item) for item in atlas_pages)
         or "<li class='muted'>No atlas pages link here yet.</li>"
     )
-    related_objects = rail.get("related_objects") or []
+    related_objects = [
+        item for item in rail.get("related_objects") or [] if isinstance(item, dict)
+    ]
     related_html = (
         "".join(render_related_object(item) for item in related_objects)
         or "<li class='muted'>No related objects yet.</li>"
@@ -2781,27 +2789,34 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
     )
     notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
     node_lookup = {str(node["object_id"]): node for node in payload["nodes"]}
+
+    def node_x(node: dict) -> float:
+        return float(node.get("x") or 0)
+
+    def node_y(node: dict) -> float:
+        return float(node.get("y") or 0)
+
     edge_lines = "".join(
         "<line "
-        f"x1='{node_lookup[edge['source_object_id']]['x']}' "
-        f"y1='{node_lookup[edge['source_object_id']]['y']}' "
-        f"x2='{node_lookup[edge['target_object_id']]['x']}' "
-        f"y2='{node_lookup[edge['target_object_id']]['y']}' "
+        f"x1='{node_x(node_lookup[str(edge['source_object_id'])])}' "
+        f"y1='{node_y(node_lookup[str(edge['source_object_id'])])}' "
+        f"x2='{node_x(node_lookup[str(edge['target_object_id'])])}' "
+        f"y2='{node_y(node_lookup[str(edge['target_object_id'])])}' "
         "stroke='#c7b8a6' stroke-width='1.4' stroke-opacity='0.7'>"
         f"<title>{escape(edge['source_title'])} -> {escape(edge['target_title'])}: {escape(edge['edge_kind'])}</title>"
         "</line>"
         for edge in payload["edges"]
-        if edge["source_object_id"] in node_lookup
-        and edge["target_object_id"] in node_lookup
+        if str(edge["source_object_id"]) in node_lookup
+        and str(edge["target_object_id"]) in node_lookup
     )
     node_marks = "".join(
         "<a "
         f"href='{escape(str(node['path']))}' aria-label='{escape(str(node['title']))}'>"
-        f"<circle cx='{node['x']}' cy='{node['y']}' r='{node['radius']}' fill='#9f4f24' "
+        f"<circle cx='{node_x(node)}' cy='{node_y(node)}' r='{node['radius']}' fill='#9f4f24' "
         "stroke='#fffdfa' stroke-width='2'>"
         f"<title>{escape(str(node['title']))} · {escape(str(node['kind_label']))} · {node['degree']} links</title>"
         "</circle>"
-        f"<text x='{node['x']}' y='{float(node['y']) + float(node['radius']) + _GRAPH_MAP_NODE_LABEL_Y_OFFSET}' "
+        f"<text x='{node_x(node)}' y='{node_y(node) + float(node['radius']) + _GRAPH_MAP_NODE_LABEL_Y_OFFSET}' "
         "text-anchor='middle' font-size='12' fill='#3c332b'>"
         f"{escape(str(node['title']))}</text>"
         "</a>"
@@ -4791,6 +4806,20 @@ def create_server(
                 if path == "/api/runtime-state":
                     try:
                         limit = int(query.get("limit", ["20"])[0])
+                    except ValueError as exc:
+                        self._write_json(
+                            {
+                                "type": "operational_runtime_state",
+                                "status": "invalid_request",
+                                "error": "invalid_runtime_state_limit",
+                                "detail": str(exc),
+                                "metrics": {},
+                                "attention": [],
+                            },
+                            status=400,
+                        )
+                        return
+                    try:
                         self._write_json(
                             get_operational_runtime_state(
                                 resolved_vault,
@@ -5379,6 +5408,20 @@ def create_server(
                 if path == "/api/runtime-state":
                     try:
                         limit = int(self._form_first(form, "limit").strip() or "20")
+                    except ValueError as exc:
+                        self._write_json(
+                            {
+                                "type": "operational_runtime_state",
+                                "status": "invalid_request",
+                                "error": "invalid_runtime_state_limit",
+                                "detail": str(exc),
+                                "metrics": {},
+                                "attention": [],
+                            },
+                            status=400,
+                        )
+                        return
+                    try:
                         self._write_json(
                             get_operational_runtime_state(
                                 resolved_vault,

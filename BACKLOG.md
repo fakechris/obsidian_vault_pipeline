@@ -101,7 +101,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 PR #90 completes the first trusted reuse/context-pack loop: `ovp-working-memory` emits explicit budget metadata and `working_memory` reuse events, while `ovp-prime` turns that pack into a session snapshot and emits `ovp_prime` reuse events for selected canonical objects.
 
-PR #91 starts the operational runtime graph by adding `ovp-runtime-state`, a derived projection over projection repair markers, pipeline events, and trusted reuse events. PR #92 wires that projection into `/ops`, `ovp doctor`, and the provider-facing `/api/runtime-state` read API. The current closeout slice adds workflow action queue health, makes runtime-state reads prefer `60-Logs/runtime-state/current.json`, moves refresh writes to `POST /api/runtime-state`, and records the decision not to generalize workflow item leases before multi-worker scheduling exists.
+PR #91 starts the operational runtime graph by adding `ovp-runtime-state`, a derived projection over projection repair markers, pipeline events, and trusted reuse events. PR #92 wires that projection into `/ops`, `ovp doctor`, and the provider-facing `/api/runtime-state` read API. The current closeout slice adds workflow action queue health, makes runtime-state reads prefer `60-Logs/runtime-state/current.json`, moves refresh writes to `POST /api/runtime-state`, streams runtime-state log reads with bounded action display rows, and records the decision not to generalize workflow item leases before multi-worker scheduling exists.
 
 Recommended order:
 
