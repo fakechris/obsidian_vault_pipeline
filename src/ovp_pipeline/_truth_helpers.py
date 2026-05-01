@@ -21,7 +21,7 @@ import yaml
 from .knowledge_index import ensure_knowledge_db_current
 from .pack_resolution import iter_compatible_packs
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
-from .runtime import VaultLayout, resolve_vault_dir
+from .runtime import VaultLayout, iter_jsonl, resolve_vault_dir
 
 MAX_PAGE_SIZE = 500
 LOGGER = logging.getLogger("ovp_pipeline.truth_api")
@@ -192,17 +192,7 @@ def _signal_ledger_path(vault_dir: Path | str, *, pack_name: str | None = None) 
 def _read_jsonl_items(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    items: list[dict[str, Any]] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        if not raw_line.strip():
-            continue
-        try:
-            payload = json.loads(raw_line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            items.append(payload)
-    return items
+    return list(iter_jsonl(path))
 
 
 def _validate_page_args(*, limit: int, offset: int = 0) -> tuple[int, int]:

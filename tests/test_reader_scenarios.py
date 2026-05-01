@@ -85,7 +85,7 @@ def _get_redirect(port: int, path: str) -> tuple[int, str]:
     return resp.status, resp.getheader("Location", "")
 
 
-_HREF_RE = re.compile(r'href="([^"]+)"')
+_HREF_RE = re.compile(r'href=["\']([^"\']+)["\']')
 
 
 def _extract_hrefs(html: str, prefix: str) -> list[str]:
@@ -173,14 +173,10 @@ def test_reader_graph_navigation(temp_vault):
         assert 'href="/ops' not in graph
 
         obj_links = _extract_hrefs(graph, "/object?")
-        if obj_links:
-            st, obj = _get(port, obj_links[0])
-            assert st == 200
-            assert 'href="/ops' not in obj
-        else:
-            st, obj = _get(port, "/object?id=alpha")
-            assert st == 200
-            assert 'href="/ops' not in obj
+        assert obj_links, "/map page should contain at least one /object? link"
+        st, obj = _get(port, obj_links[0])
+        assert st == 200
+        assert 'href="/ops' not in obj
     finally:
         server.shutdown()
         server.server_close()
@@ -203,11 +199,8 @@ def test_reader_evidence_traceability(temp_vault):
         assert "Alpha" in obj
 
         note_links = _extract_hrefs(obj, "/note?")
-        if note_links:
-            st, note = _get(port, note_links[0])
-        else:
-            note_path = "50-Inbox/03-Processed/2026-04/Source%20Article.md"
-            st, note = _get(port, f"/note?path={note_path}")
+        assert note_links, "object page should contain at least one /note? link"
+        st, note = _get(port, note_links[0])
         assert st == 200
         assert 'href="/ops' not in note
     finally:

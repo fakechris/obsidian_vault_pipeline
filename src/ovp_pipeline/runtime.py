@@ -407,23 +407,35 @@ def rotate_jsonl_if_needed(
         return None
     if size < max_lines * 20:
         return None
-    line_count = _count_lines_fast(path)
-    if line_count < max_lines:
-        return None
 
     original_name = path.name
+    line_count = 0
     event_types: Counter[str] = Counter()
     first_ts = ""
     last_ts = ""
-    for obj in iter_jsonl(path):
-        et = str(obj.get("event_type") or obj.get("type") or "")
-        if et:
-            event_types[et] += 1
-        ts = str(obj.get("ts") or obj.get("timestamp") or "")
-        if ts:
-            if not first_ts:
-                first_ts = ts
-            last_ts = ts
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            line_count += 1
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            et = str(obj.get("event_type") or obj.get("type") or "")
+            if et:
+                event_types[et] += 1
+            ts = str(obj.get("ts") or obj.get("timestamp") or "")
+            if ts:
+                if not first_ts:
+                    first_ts = ts
+                last_ts = ts
+
+    if line_count < max_lines:
+        return None
 
     ts_suffix = utc_now().strftime("%Y%m%d-%H%M%S")
     archived = path.with_name(f"{path.stem}.{ts_suffix}.jsonl")
@@ -536,28 +548,44 @@ def _iter_jsonl_tail(path: Path, n: int) -> Iterable[dict[str, Any]]:
 
 
 def _rotated_segments(path: Path) -> list[Path]:
-    """Return rotated archive files for *path* sorted chronologically (oldest first)."""
+    """Return rotated archive files for *path* sorted chronologically (oldest first).
+
+    Archive names look like ``{stem}.{YYYYMMDD-HHMMSS}[-{seq}].jsonl``.
+    We parse the timestamp and optional sequence number so that ``-10``
+    sorts after ``-2`` (pure lexical sort would get this wrong).
+    """
     stem = path.stem
     parent = path.parent
     if not parent.is_dir():
         return []
-    segments = sorted(
-        [
-            p
-            for p in parent.iterdir()
-            if p.name.startswith(f"{stem}.") and p.suffix == ".jsonl" and p.name != path.name
-        ],
-        key=lambda p: p.name,
+
+    import re as _re
+
+    _SEG_RE = _re.compile(
+        rf"^{_re.escape(stem)}\.(\d{{8}}-\d{{6}})(?:-(\d+))?\.jsonl$"
     )
-    return segments
+
+    candidates: list[tuple[str, int, Path]] = []
+    for p in parent.iterdir():
+        m = _SEG_RE.match(p.name)
+        if m:
+            ts_part = m.group(1)
+            seq_part = int(m.group(2)) if m.group(2) else 0
+            candidates.append((ts_part, seq_part, p))
+
+    candidates.sort(key=lambda t: (t[0], t[1]))
+    return [c[2] for c in candidates]
 
 
 def read_sidecar_stats(sidecar: Path) -> dict[str, Any]:
     """Parse a ``.stats.json`` sidecar written during rotation."""
     try:
-        return json.loads(sidecar.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
 
 
 def sidecar_aggregate(path: Path) -> dict[str, int]:
