@@ -767,7 +767,6 @@ class EnhancedPipeline:
             {
                 "stage": "quality",
                 "algorithm_version": QUALITY_STAGE_ALGORITHM_VERSION,
-                "input_scope": "targeted" if target_files is not None else "all_current_month",
             }
         )
         fingerprint = build_stage_fingerprint(
@@ -1102,12 +1101,25 @@ class EnhancedPipeline:
         result["stage_artifact"] = str(self._stage_artifact_store().path_for(stage, manifest["fingerprint"]))
 
     def _load_quality_stage_artifact(self) -> dict[str, Any] | None:
-        _, _, _, fingerprint = self._quality_stage_inputs()
-        artifact = self._stage_artifact_store().load(
-            "quality",
-            fingerprint,
-            validate_outputs_under=self.vault_dir,
-        )
+        candidate_targets: list[list[str | Path] | None] = []
+        if self.run_mode == "incremental":
+            candidate_targets.append(self._incremental_quality_target_files(None))
+        candidate_targets.append(None)
+
+        artifact = None
+        seen_fingerprints: set[str] = set()
+        for target_files in candidate_targets:
+            _, _, _, fingerprint = self._quality_stage_inputs(target_files)
+            if fingerprint in seen_fingerprints:
+                continue
+            seen_fingerprints.add(fingerprint)
+            artifact = self._stage_artifact_store().load(
+                "quality",
+                fingerprint,
+                validate_outputs_under=self.vault_dir,
+            )
+            if artifact is not None:
+                break
         if artifact is None:
             return None
         artifact_files = artifact.get("outputs", {}).get("qualified_files")
@@ -1254,11 +1266,11 @@ class EnhancedPipeline:
             current_count = len(current_files)
             before_files = set(before_counts.get("interpretation_files", []))
             produced_files = [
-                str(path.resolve())
+                resolved
                 for path in current_files
-                if str(path.resolve()) not in before_files
+                if (resolved := str(path.resolve())) not in before_files
             ]
-            results["produced"] = current_count - before_counts.get("interpretations", 0)
+            results["produced"] = len(produced_files)
             results["total_interpretations"] = current_count
             results["produced_files"] = sorted(produced_files)
 

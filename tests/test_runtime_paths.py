@@ -27,6 +27,8 @@ from ovp_pipeline.unified_pipeline_enhanced import (
     init_env_file,
 )
 
+QUALITY_TEST_MONTH = datetime.now().strftime("%Y-%m")
+
 
 def test_resolve_vault_dir_returns_absolute_path(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
@@ -424,7 +426,7 @@ def test_run_pipeline_checkouts_cacheable_stage_artifact_without_dispatching_han
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
-    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH
     topic_dir.mkdir(parents=True, exist_ok=True)
     (topic_dir / "cached_深度解读.md").write_text("# cached\n", encoding="utf-8")
     (vault / "60-Logs").mkdir(parents=True)
@@ -560,7 +562,7 @@ def test_run_pipeline_writes_stage_artifact_after_cacheable_stage_success(tmp_pa
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
-    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH
     topic_dir.mkdir(parents=True, exist_ok=True)
     (topic_dir / "write_artifact_深度解读.md").write_text("# write artifact\n", encoding="utf-8")
     (vault / "60-Logs").mkdir(parents=True)
@@ -704,7 +706,7 @@ def test_step_quality_parses_qualified_files_from_qc_json(tmp_path, monkeypatch)
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
 
-    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "example_深度解读.md"
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH / "example_深度解读.md"
     qualified_file.parent.mkdir(parents=True, exist_ok=True)
     qualified_file.write_text("# example\n", encoding="utf-8")
 
@@ -775,6 +777,70 @@ def test_incremental_quality_uses_article_outputs_instead_of_all_current_month(t
     assert command[command.index("--batch-size") + 1] == "1"
 
 
+def test_incremental_load_quality_artifact_finds_recent_targeted_manifest(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.run_mode = "incremental"
+
+    month = datetime.now().strftime("%Y-%m")
+    old_file = vault / "20-Areas" / "Tools" / "Topics" / month / "old_深度解读.md"
+    target_file = vault / "20-Areas" / "Tools" / "Topics" / month / "target_深度解读.md"
+    old_file.parent.mkdir(parents=True, exist_ok=True)
+    old_file.write_text("# old\n", encoding="utf-8")
+    target_file.write_text("# target\n", encoding="utf-8")
+    old_mtime = datetime.now().timestamp() - (3 * 24 * 60 * 60)
+    os.utime(old_file, (old_mtime, old_mtime))
+
+    stdout = (
+        "__QC_JSON__: "
+        '{"checked": 1, "qualified": 1, "failed": 0, '
+        f'"qualified_files": ["{target_file}"]'
+        "}"
+    )
+
+    monkeypatch.setattr(
+        pipeline,
+        "run_command",
+        lambda *_args, **_kwargs: {"success": True, "stdout": stdout, "stderr": ""},
+    )
+
+    result = pipeline.step_quality(target_files=[target_file], dry_run=False)
+
+    assert result["success"] is True
+    assert pipeline._load_quality_stage_artifact() is not None
+
+
+def test_articles_output_count_matches_new_interpretation_files(tmp_path):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+
+    month = datetime.now().strftime("%Y-%m")
+    topics_dir = vault / "20-Areas" / "Tools" / "Topics" / month
+    topics_dir.mkdir(parents=True, exist_ok=True)
+    old_file = topics_dir / "old_深度解读.md"
+    new_file = topics_dir / "new_深度解读.md"
+    old_file.write_text("# old\n", encoding="utf-8")
+    before_counts = pipeline._get_before_counts()
+
+    old_file.unlink()
+    new_file.write_text("# new\n", encoding="utf-8")
+
+    result = pipeline._count_output_files("articles", before_counts, {})
+
+    assert result["produced"] == 1
+    assert result["produced_files"] == [str(new_file.resolve())]
+
+
 def test_step_quality_writes_reusable_stage_artifact(tmp_path, monkeypatch):
     from ovp_pipeline.stage_artifacts import StageArtifactStore
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
@@ -786,7 +852,7 @@ def test_step_quality_writes_reusable_stage_artifact(tmp_path, monkeypatch):
     pipeline = EnhancedPipeline(vault, logger, txn)
     pipeline.txn_id = txn.start("enhanced-pipeline", "Quality artifact")
 
-    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "artifact_深度解读.md"
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH / "artifact_深度解读.md"
     qualified_file.parent.mkdir(parents=True, exist_ok=True)
     qualified_file.write_text("# artifact\n", encoding="utf-8")
 
@@ -843,7 +909,7 @@ def test_step_absorb_checkouts_matching_quality_stage_artifact(tmp_path, monkeyp
     quality_pipeline = EnhancedPipeline(vault, logger, txn)
     quality_pipeline.txn_id = txn.start("enhanced-pipeline", "Quality artifact source")
 
-    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "checkout_深度解读.md"
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH / "checkout_深度解读.md"
     qualified_file.parent.mkdir(parents=True, exist_ok=True)
     qualified_file.write_text("# checkout\n", encoding="utf-8")
 
@@ -926,7 +992,7 @@ def test_step_quality_batches_and_aggregates_qc_results(tmp_path, monkeypatch):
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
-    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH
     topic_dir.mkdir(parents=True, exist_ok=True)
     files = []
     for idx in range(3):
@@ -986,7 +1052,7 @@ def test_step_quality_updates_parent_run_progress_before_each_batch(tmp_path, mo
 
     vault = tmp_path / "vault"
     (vault / "60-Logs").mkdir(parents=True)
-    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH
     topic_dir.mkdir(parents=True, exist_ok=True)
     files = []
     for idx in range(3):
@@ -1096,7 +1162,7 @@ def test_step_absorb_uses_qualified_files_even_when_quality_score_is_low(tmp_pat
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
 
-    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "example_深度解读.md"
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH / "example_深度解读.md"
     qualified_file.parent.mkdir(parents=True, exist_ok=True)
     qualified_file.write_text("# example\n", encoding="utf-8")
 
@@ -1187,7 +1253,7 @@ def test_step_absorb_requires_quality_artifact_without_using_quality_report_hist
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
 
-    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "example_深度解读.md"
+    qualified_file = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH / "example_深度解读.md"
     qualified_file.parent.mkdir(parents=True, exist_ok=True)
     qualified_file.write_text("# example\n", encoding="utf-8")
 
@@ -1232,8 +1298,8 @@ def test_load_quality_stage_artifact_returns_none_without_matching_manifest(tmp_
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
 
-    file_a = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "a_深度解读.md"
-    file_b = vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "b_深度解读.md"
+    file_a = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH / "a_深度解读.md"
+    file_b = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH / "b_深度解读.md"
     file_a.parent.mkdir(parents=True, exist_ok=True)
     file_a.write_text("# a\n", encoding="utf-8")
     file_b.write_text("# b\n", encoding="utf-8")
@@ -1286,7 +1352,7 @@ def test_step_absorb_batches_qualified_files_and_aggregates_results(tmp_path, mo
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
 
-    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH
     topic_dir.mkdir(parents=True, exist_ok=True)
     files = []
     for idx in range(3):
@@ -1358,7 +1424,7 @@ def test_step_absorb_skips_previously_succeeded_items_and_retries_failed_items(t
     txn = TransactionManager(vault / "60-Logs" / "transactions")
     pipeline = EnhancedPipeline(vault, logger, txn)
 
-    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH
     topic_dir.mkdir(parents=True, exist_ok=True)
     succeeded = topic_dir / "succeeded_深度解读.md"
     failed = topic_dir / "failed_深度解读.md"
@@ -1474,7 +1540,7 @@ def test_step_absorb_updates_txn_ledger_with_counted_progress(tmp_path, monkeypa
     pipeline = EnhancedPipeline(vault, logger, txn)
     pipeline.txn_id = txn.start("enhanced-pipeline", "Phase 25 absorb progress")
 
-    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH
     topic_dir.mkdir(parents=True, exist_ok=True)
     deep_dives = []
     for name in ("alpha_深度解读.md", "beta_深度解读.md"):
@@ -1917,7 +1983,7 @@ def test_fix_links_timeout_scales_with_deep_dive_count(tmp_path):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
-    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH
     topic_dir.mkdir(parents=True, exist_ok=True)
     (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
 
@@ -1960,7 +2026,7 @@ def test_step_fix_links_uses_dynamic_timeout(tmp_path, monkeypatch):
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
 
     vault = tmp_path / "vault"
-    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / "2026-04"
+    topic_dir = vault / "20-Areas" / "Tools" / "Topics" / QUALITY_TEST_MONTH
     topic_dir.mkdir(parents=True, exist_ok=True)
     (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
 
