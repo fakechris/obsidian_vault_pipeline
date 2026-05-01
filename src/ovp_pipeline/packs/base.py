@@ -238,15 +238,19 @@ class SemanticRelationTypeSpec:
 
     def accepts_source_kind(self, kind: str) -> bool:
         """Check whether *kind* is a valid source for this relation type."""
+        from ..object_kinds import normalize_kind
+
         if not self.source_object_kinds:
             return True
-        return kind in self.source_object_kinds
+        return normalize_kind(kind) in self.source_object_kinds
 
     def accepts_target_kind(self, kind: str) -> bool:
         """Check whether *kind* is a valid target for this relation type."""
+        from ..object_kinds import normalize_kind
+
         if not self.target_object_kinds:
             return True
-        return kind in self.target_object_kinds
+        return normalize_kind(kind) in self.target_object_kinds
 
     def validate_pair(self, source_kind: str, target_kind: str) -> bool:
         """Return True if both source and target kinds are accepted."""
@@ -454,8 +458,11 @@ class BaseDomainPack:
 
     def object_kind_spec(self, kind: str) -> ObjectKindSpec:
         """Look up a single ObjectKindSpec by kind string."""
+        from ..object_kinds import normalize_kind
+
+        normalized = normalize_kind(kind)
         for spec in self._object_kinds:
-            if spec.kind == kind:
+            if spec.kind == normalized:
                 return spec
         raise ValueError(f"Unknown object kind '{kind}' for pack '{self.name}'")
 
@@ -469,7 +476,9 @@ class BaseDomainPack:
 
     def validate_entity_type(self, entity_type: str) -> bool:
         """Check whether an entity_type string is valid for this pack."""
-        return entity_type in self.valid_entity_types()
+        from ..object_kinds import normalize_kind
+
+        return normalize_kind(entity_type) in self.valid_entity_types()
 
     def workflow_profiles(self) -> list[WorkflowProfile]:
         return list(self._workflow_profiles)

@@ -305,12 +305,12 @@ OBJECT_SOURCE_RAIL_RELATED_LIMIT = 8
 
 
 def _object_kind_label(object_kind: str) -> str:
-    from ..object_kinds import display_label
+    from ..object_kinds import display_label, normalize_kind
 
-    normalized = (object_kind or "").strip().lower()
-    if not normalized:
+    raw = (object_kind or "").strip().lower()
+    if not raw:
         return "Object"
-    return display_label(normalized)
+    return display_label(normalize_kind(raw))
 
 
 def _object_reader_profile(detail: dict[str, Any], *, relation_count: int) -> dict[str, object]:
@@ -330,8 +330,10 @@ def _object_reader_profile(detail: dict[str, Any], *, relation_count: int) -> di
 
 
 def _object_kind_profile(detail: dict[str, Any], *, relation_count: int) -> dict[str, object]:
+    from ..object_kinds import normalize_kind
+
     object_row = detail["object"]
-    object_kind = str(object_row.get("object_kind") or "").strip().lower()
+    object_kind = normalize_kind(str(object_row.get("object_kind") or "").strip())
     spec = _OBJECT_KIND_READER_PROFILES.get(object_kind)
     if spec is None:
         return {

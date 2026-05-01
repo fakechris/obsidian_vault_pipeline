@@ -102,7 +102,10 @@ def cmd_validate(args: argparse.Namespace) -> int:
             marker = " *" if k not in valid_types else ""
             print(f"  {k:<15} {v:>5}{marker}")
 
-    return 1 if invalid > 0 else 0
+    failed = invalid > 0
+    if getattr(args, "strict", False) and missing > 0:
+        failed = True
+    return 1 if failed else 0
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -115,6 +118,9 @@ def main(argv: list[str] | None = None) -> None:
     val = sub.add_parser("validate", help="Validate Evergreen entity_type against pack schema")
     val.add_argument("--vault-dir", default=".", help="Vault root directory")
     val.add_argument("--quiet", "-q", action="store_true", help="Suppress per-file output")
+    val.add_argument(
+        "--strict", action="store_true", help="Fail when entity_type is missing (CI mode)"
+    )
 
     args = parser.parse_args(argv)
 

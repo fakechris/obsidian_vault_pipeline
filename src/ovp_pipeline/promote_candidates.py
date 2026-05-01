@@ -102,9 +102,10 @@ def write_evergreen_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = T
         if not body.startswith("# "):
             body = f"# {entry.title}\n\n{body}".strip()
 
-    from .object_kinds import KIND_CONCEPT, normalize_kind
+    from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
 
-    entity_type = normalize_kind(entry.kind) if entry.kind else KIND_CONCEPT
+    normalized = normalize_kind(entry.kind) if entry.kind else KIND_CONCEPT
+    entity_type = normalized if normalized in CORE_OBJECT_KINDS else KIND_CONCEPT
 
     frontmatter = f'''---
 note_id: {entry.slug}

@@ -42,7 +42,7 @@ class TestCanonicalTaxonomy:
         assert not extra, f"Extra label keys not in taxonomy: {extra}"
 
     def test_taxonomy_size_bounded(self):
-        assert len(ALL_OBJECT_KINDS) <= 15, "Taxonomy should stay small (< 15)"
+        assert len(ALL_OBJECT_KINDS) < 15, "Taxonomy should stay small (< 15)"
 
 
 class TestNormalization:

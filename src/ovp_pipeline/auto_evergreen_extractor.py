@@ -335,10 +335,11 @@ Evergreen笔记标准：
         # 构建相关链接
         related_links = "\n".join([f"- [[{c}]]" for c in related if c])
 
-        from .object_kinds import KIND_CONCEPT, normalize_kind
+        from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
 
         raw_kind = concept.get("entity_type", concept.get("kind", ""))
-        entity_type = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT
+        normalized = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT
+        entity_type = normalized if normalized in CORE_OBJECT_KINDS else KIND_CONCEPT
 
         note = f"""---
 note_id: {note_id}
