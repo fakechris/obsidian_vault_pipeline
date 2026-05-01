@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Iterator, Literal
 
-from .runtime import VaultLayout, resolve_vault_dir
+from .runtime import VaultLayout, advisory_file_lock, resolve_vault_dir
 
 ProjectionRepairKind = Literal["metadata_only", "full_rebuild", "semantic_reindex"]
 ProjectionRepairStatus = Literal["open", "claimed", "closed", "superseded"]
@@ -28,12 +29,25 @@ def _parse_dt(value: object) -> datetime | None:
     text = str(value or "").strip()
     if not text:
         return None
-    return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
 
 
 def _marker_log_path(vault_dir: Path | str) -> Path:
     layout = VaultLayout.from_vault(resolve_vault_dir(vault_dir))
     return layout.logs_dir / "projection-repair.jsonl"
+
+
+def _marker_log_lock_path(vault_dir: Path | str) -> Path:
+    return _marker_log_path(vault_dir).with_suffix(".jsonl.lock")
+
+
+@contextmanager
+def _marker_log_lock(vault_dir: Path | str) -> Iterator[None]:
+    with advisory_file_lock(_marker_log_lock_path(vault_dir)):
+        yield
 
 
 def _canonical_json(value: object) -> str:
@@ -121,21 +135,20 @@ def _append_event(vault_dir: Path | str, event: dict[str, object]) -> None:
         handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def _events(vault_dir: Path | str) -> list[dict[str, object]]:
+def _iter_events(vault_dir: Path | str) -> Iterator[dict[str, object]]:
     path = _marker_log_path(vault_dir)
     if not path.exists():
-        return []
-    events: list[dict[str, object]] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        if not raw_line.strip():
-            continue
-        try:
-            payload = json.loads(raw_line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            events.append(payload)
-    return events
+        return
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for raw_line in handle:
+            if not raw_line.strip():
+                continue
+            try:
+                payload = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                yield payload
 
 
 def _is_broader_marker(new_marker: ProjectionRepairMarker, old_marker: ProjectionRepairMarker) -> bool:
@@ -148,10 +161,10 @@ def _is_broader_marker(new_marker: ProjectionRepairMarker, old_marker: Projectio
     return bool(new_projection and new_projection == old_projection)
 
 
-def list_projection_repair_markers(vault_dir: Path | str) -> list[ProjectionRepairMarker]:
+def _list_projection_repair_markers_unlocked(vault_dir: Path | str) -> list[ProjectionRepairMarker]:
     markers: dict[str, ProjectionRepairMarker] = {}
     order: list[str] = []
-    for event in _events(vault_dir):
+    for event in _iter_events(vault_dir):
         event_type = str(event.get("event_type") or "")
         marker_id = str(event.get("marker_id") or "")
         if event_type == "projection_repair_marker_written":
@@ -185,6 +198,11 @@ def list_projection_repair_markers(vault_dir: Path | str) -> list[ProjectionRepa
     return [markers[marker_id] for marker_id in order if marker_id in markers]
 
 
+def list_projection_repair_markers(vault_dir: Path | str) -> list[ProjectionRepairMarker]:
+    with _marker_log_lock(vault_dir):
+        return _list_projection_repair_markers_unlocked(vault_dir)
+
+
 def write_projection_repair_marker(
     vault_dir: Path | str,
     *,
@@ -213,28 +231,29 @@ def write_projection_repair_marker(
         authority_schema_version=int(authority_schema_version),
         projection_schema_version=int(projection_schema_version),
     )
-    _append_event(
-        vault_dir,
-        {
-            "event_type": "projection_repair_marker_written",
-            "marker_id": marker.marker_id,
-            "timestamp": _format_dt(created),
-            "marker": marker.to_dict(),
-        },
-    )
-    for existing in list_projection_repair_markers(vault_dir):
-        if existing.marker_id == marker.marker_id:
-            continue
-        if _is_broader_marker(marker, existing):
-            _append_event(
-                vault_dir,
-                {
-                    "event_type": "projection_repair_marker_superseded",
-                    "marker_id": existing.marker_id,
-                    "superseded_by": marker.marker_id,
-                    "timestamp": _format_dt(created),
-                },
-            )
+    with _marker_log_lock(vault_dir):
+        _append_event(
+            vault_dir,
+            {
+                "event_type": "projection_repair_marker_written",
+                "marker_id": marker.marker_id,
+                "timestamp": _format_dt(created),
+                "marker": marker.to_dict(),
+            },
+        )
+        for existing in _list_projection_repair_markers_unlocked(vault_dir):
+            if existing.marker_id == marker.marker_id:
+                continue
+            if _is_broader_marker(marker, existing):
+                _append_event(
+                    vault_dir,
+                    {
+                        "event_type": "projection_repair_marker_superseded",
+                        "marker_id": existing.marker_id,
+                        "superseded_by": marker.marker_id,
+                        "timestamp": _format_dt(created),
+                    },
+                )
     return marker
 
 
@@ -247,29 +266,33 @@ def claim_projection_repair_marker(
     now: datetime | None = None,
 ) -> ProjectionRepairMarker | None:
     current_time = now or _utc_now()
-    markers = {marker.marker_id: marker for marker in list_projection_repair_markers(vault_dir)}
-    marker = markers.get(marker_id)
-    if marker is None or marker.status not in {"open", "claimed"}:
-        return None
-    if marker.claimed_by and marker.claim_lease_until and marker.claim_lease_until > current_time:
-        return None
-    lease_until = current_time + timedelta(seconds=lease_seconds)
-    _append_event(
-        vault_dir,
-        {
-            "event_type": "projection_repair_marker_claimed",
-            "marker_id": marker_id,
-            "claimed_by": worker_id,
-            "claim_lease_until": _format_dt(lease_until),
-            "timestamp": _format_dt(current_time),
-        },
-    )
-    return replace(
-        marker,
-        status="claimed",
-        claimed_by=worker_id,
-        claim_lease_until=lease_until,
-    )
+    with _marker_log_lock(vault_dir):
+        markers = {
+            marker.marker_id: marker
+            for marker in _list_projection_repair_markers_unlocked(vault_dir)
+        }
+        marker = markers.get(marker_id)
+        if marker is None or marker.status not in {"open", "claimed"}:
+            return None
+        if marker.claimed_by and marker.claim_lease_until and marker.claim_lease_until > current_time:
+            return None
+        lease_until = current_time + timedelta(seconds=lease_seconds)
+        _append_event(
+            vault_dir,
+            {
+                "event_type": "projection_repair_marker_claimed",
+                "marker_id": marker_id,
+                "claimed_by": worker_id,
+                "claim_lease_until": _format_dt(lease_until),
+                "timestamp": _format_dt(current_time),
+            },
+        )
+        return replace(
+            marker,
+            status="claimed",
+            claimed_by=worker_id,
+            claim_lease_until=lease_until,
+        )
 
 
 def close_projection_repair_marker(
@@ -279,19 +302,23 @@ def close_projection_repair_marker(
     closed_at: datetime | None = None,
 ) -> ProjectionRepairMarker | None:
     current_time = closed_at or _utc_now()
-    markers = {marker.marker_id: marker for marker in list_projection_repair_markers(vault_dir)}
-    if marker_id not in markers:
-        return None
-    _append_event(
-        vault_dir,
-        {
-            "event_type": "projection_repair_marker_closed",
-            "marker_id": marker_id,
-            "closed_at": _format_dt(current_time),
-            "timestamp": _format_dt(current_time),
-        },
-    )
-    return replace(markers[marker_id], status="closed", closed_at=current_time)
+    with _marker_log_lock(vault_dir):
+        markers = {
+            marker.marker_id: marker
+            for marker in _list_projection_repair_markers_unlocked(vault_dir)
+        }
+        if marker_id not in markers:
+            return None
+        _append_event(
+            vault_dir,
+            {
+                "event_type": "projection_repair_marker_closed",
+                "marker_id": marker_id,
+                "closed_at": _format_dt(current_time),
+                "timestamp": _format_dt(current_time),
+            },
+        )
+        return replace(markers[marker_id], status="closed", closed_at=current_time)
 
 
 def ensure_projection_schema_current(

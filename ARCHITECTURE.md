@@ -679,7 +679,7 @@ Main gaps:
 - Schema versioning is wired into projection lifecycle for `knowledge.db`: Authority and projection versions are persisted and stale metadata triggers a full rebuild marker.
 - Working memory is the first budgeted context-pack projection: it records context budget metadata and emits `working_memory` reuse events for selected canonical objects.
 - OVP Prime materializes that budgeted context pack into `60-Logs/session-snapshots/<session_id>.md` plus `latest.md`, and emits `ovp_prime` reuse events for the selected objects injected into a session.
-- Runtime state is now a derived operational projection and read surface: `ovp-runtime-state` writes `60-Logs/runtime-state/current.{json,md}`, `/ops` and `ovp doctor` consume the same health projection, `GET /api/runtime-state` prefers the materialized `current.json`, and `POST /api/runtime-state` refreshes that materialized projection. It also tracks workflow action queue health; workflow actions use the existing action worker lock plus stale-running attention instead of a generalized lease until multi-worker scheduling exists.
+- Runtime state is now a derived operational projection and read surface: `ovp-runtime-state` writes `60-Logs/runtime-state/current.{json,md}`, `/ops` and `ovp doctor` consume the same health projection, `GET /api/runtime-state` prefers the materialized `current.json`, and `POST /api/runtime-state` refreshes that materialized projection. Runtime-state refreshes stream event logs and keep workflow-action display rows bounded while preserving aggregate counts. It also tracks workflow action queue health; workflow actions use the existing action worker lock plus stale-running attention instead of a generalized lease until multi-worker scheduling exists.
 - The reader-first home is now the default entry; object pages have reader profiles, source rails, and kind-specific reader lenses; `/graph` has a first spatial map projection; `/search` groups reader results by kind, summary, evidence count, and match reason.
 
 ## 18. Near-Term Architecture Actions
@@ -689,7 +689,7 @@ Recommended order:
 1. Keep projection metadata attached to new access surfaces and add doctor/export checks that verify the labels are present.
 2. Add stricter factual evidence completeness checks before expanding automatic promotion.
 3. Expand doctor/export checks to verify projection marker replay and projection labels together.
-4. Keep future projection backends on the same metadata contract before adding semantic reindex workers.
+4. Keep future projection backends on the same metadata contract before adding semantic reindex workers; projection-repair marker state transitions must remain under the marker log file lock.
 5. Add generalized workflow leases only when action processing moves beyond the current single-worker lock model; keep runtime state as a projection, not Authority.
 
 ## Appendix: Backlog Mapping

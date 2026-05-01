@@ -14,6 +14,7 @@ from .runtime import VaultLayout, format_utc_timestamp, resolve_vault_dir
 
 
 DEFAULT_RECENT_LIMIT = 20
+DEFAULT_ACTION_DISPLAY_LIMIT = 200
 RUNTIME_STATE_DIR = ("60-Logs", "runtime-state")
 ACTION_RUNNING_STALE_AFTER_SECONDS = 3600
 
@@ -51,10 +52,6 @@ def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
                 continue
             if isinstance(payload, dict):
                 yield payload
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return list(_iter_jsonl(path))
 
 
 def _event_time(event: dict[str, Any]) -> datetime | None:
@@ -225,6 +222,16 @@ class ReuseEventSummary:
     recent: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class ActionQueueSummary:
+    total: int
+    counts: Counter[str]
+    rows: list[dict[str, Any]]
+    stale_running_actions: list[dict[str, Any]]
+    failed_actions: list[dict[str, Any]]
+    blocked_actions: list[dict[str, Any]]
+
+
 def _summarize_reuse_event_log(path: Path, *, recent_limit: int) -> ReuseEventSummary:
     total = 0
     trusted = 0
@@ -269,6 +276,49 @@ def _summarize_reuse_event_log(path: Path, *, recent_limit: int) -> ReuseEventSu
     )
 
 
+def _summarize_action_queue(
+    path: Path,
+    *,
+    now: datetime,
+    row_limit: int = DEFAULT_ACTION_DISPLAY_LIMIT,
+) -> ActionQueueSummary:
+    total = 0
+    counts: Counter[str] = Counter()
+    important_rows: list[dict[str, Any]] = []
+    fallback_rows: list[dict[str, Any]] = []
+    stale_running_actions: list[dict[str, Any]] = []
+    failed_actions: list[dict[str, Any]] = []
+    blocked_actions: list[dict[str, Any]] = []
+    for action in _iter_jsonl(path):
+        total += 1
+        row = _action_row(action, now=now)
+        status = str(row.get("status") or "(unknown)")
+        counts[status] += 1
+
+        if row["stale_running"] and len(stale_running_actions) < 5:
+            stale_running_actions.append(row)
+        if status == "failed" and len(failed_actions) < 5:
+            failed_actions.append(row)
+        if status == "blocked" and len(blocked_actions) < 5:
+            blocked_actions.append(row)
+
+        is_active_or_attention = status in {"queued", "running", "failed", "blocked"}
+        if is_active_or_attention and len(important_rows) < row_limit:
+            important_rows.append(row)
+        elif not important_rows and len(fallback_rows) < row_limit:
+            fallback_rows.append(row)
+
+    rows = important_rows if important_rows else fallback_rows
+    return ActionQueueSummary(
+        total=total,
+        counts=counts,
+        rows=rows,
+        stale_running_actions=stale_running_actions,
+        failed_actions=failed_actions,
+        blocked_actions=blocked_actions,
+    )
+
+
 def _marker_projection_kind(marker: ProjectionRepairMarker) -> str:
     return str(marker.scope.get("projection_kind") or "unknown")
 
@@ -308,12 +358,12 @@ def build_runtime_state(
         layout.logs_dir / "reuse-events.jsonl",
         recent_limit=recent_limit,
     )
-    raw_actions = _read_jsonl(_action_queue_path(layout))
-    action_rows = [_action_row(action, now=current_time) for action in raw_actions]
-    action_counts = Counter(str(action.get("status") or "(unknown)") for action in action_rows)
-    stale_running_actions = [action for action in action_rows if action["stale_running"]]
-    failed_actions = [action for action in action_rows if action["status"] == "failed"]
-    blocked_actions = [action for action in action_rows if action["status"] == "blocked"]
+    action_summary = _summarize_action_queue(_action_queue_path(layout), now=current_time)
+    action_rows = action_summary.rows
+    action_counts = action_summary.counts
+    stale_running_actions = action_summary.stale_running_actions
+    failed_actions = action_summary.failed_actions
+    blocked_actions = action_summary.blocked_actions
     worker_state = _action_worker_state(layout, now=current_time)
 
     pipeline_counts = pipeline_summary.counts
@@ -386,7 +436,7 @@ def build_runtime_state(
             "id": "log:actions",
             "kind": "event_log",
             "label": "actions.jsonl",
-            "events": len(action_rows),
+            "events": action_summary.total,
         },
     ]
     edges: list[dict[str, str]] = [
@@ -506,7 +556,7 @@ def build_runtime_state(
         "open_projection_repair_markers": len(open_markers),
         "claimed_projection_repair_markers": len(claimed_markers),
         "expired_projection_repair_leases": len(expired_claims),
-        "action_queue_items": len(action_rows),
+        "action_queue_items": action_summary.total,
         "queued_actions": action_counts.get("queued", 0),
         "running_actions": action_counts.get("running", 0),
         "stale_running_actions": len(stale_running_actions),

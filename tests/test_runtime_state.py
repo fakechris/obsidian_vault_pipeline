@@ -183,6 +183,55 @@ def test_runtime_state_reports_action_queue_health_without_generalized_leases(te
     } in state["graph"]["edges"]
 
 
+def test_runtime_state_streams_large_action_queue_with_bounded_rows(temp_vault):
+    logs_dir = temp_vault / "60-Logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "action_id": f"action::succeeded-{idx}",
+            "action_kind": "deep_dive_workflow",
+            "status": "succeeded",
+            "finished_at": "2026-04-30T10:00:00Z",
+        }
+        for idx in range(250)
+    ]
+    rows.extend(
+        [
+            {
+                "action_id": "action::failed-late",
+                "action_kind": "deep_dive_workflow",
+                "status": "failed",
+                "failure_bucket": "workflow_failed",
+            },
+            {
+                "action_id": "action::running-late",
+                "action_kind": "object_extraction_workflow",
+                "status": "running",
+                "started_at": "2026-04-30T10:00:00Z",
+            },
+        ]
+    )
+    (logs_dir / "actions.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    state = build_runtime_state(
+        temp_vault,
+        now=datetime(2026, 4, 30, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert state["metrics"]["action_queue_items"] == 252
+    assert state["metrics"]["succeeded_actions"] == 250
+    assert state["metrics"]["failed_actions"] == 1
+    assert state["metrics"]["stale_running_actions"] == 1
+    assert len(state["workflow_actions"]) == 2
+    assert {row["action_id"] for row in state["workflow_actions"]} == {
+        "action::failed-late",
+        "action::running-late",
+    }
+
+
 def test_write_runtime_state_materializes_json_and_markdown(temp_vault):
     state = build_runtime_state(
         temp_vault,
