@@ -13,7 +13,7 @@ from .runtime import (
     advisory_file_lock,
     append_jsonl,
     format_utc_iso,
-    iter_jsonl,
+    iter_jsonl_with_rotated,
     parse_utc_timestamp,
     resolve_vault_dir,
     utc_now,
@@ -145,8 +145,9 @@ def _append_event(vault_dir: Path | str, event: dict[str, object]) -> None:
 
 
 def _iter_events(vault_dir: Path | str) -> Iterator[dict[str, object]]:
+    """Replay all marker events including rotated archive segments."""
     path = _marker_log_path(vault_dir)
-    for obj in iter_jsonl(path):
+    for obj in iter_jsonl_with_rotated(path):
         yield obj
 
 

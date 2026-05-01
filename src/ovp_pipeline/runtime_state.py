@@ -12,10 +12,12 @@ from .projection_labels import frontmatter_projection_fields
 from .projection_lifecycle import ProjectionRepairMarker, list_projection_repair_markers
 from .runtime import (
     VaultLayout,
+    _count_lines_fast,
     format_utc_timestamp,
     iter_jsonl,
     parse_utc_timestamp,
     resolve_vault_dir,
+    sidecar_aggregate,
     utc_now,
 )
 
@@ -31,17 +33,6 @@ _parse_dt = parse_utc_timestamp
 
 
 RUNTIME_TAIL_LINES = 1000
-
-
-def _iter_jsonl(path: Path, *, tail_lines: int | None = None) -> Iterable[dict[str, Any]]:
-    return iter_jsonl(path, tail_lines=tail_lines)
-
-
-def _count_jsonl_lines(path: Path) -> int:
-    """Count non-empty lines in a JSONL file without parsing JSON."""
-    from .runtime import _count_lines_fast
-
-    return _count_lines_fast(path)
 
 
 def _event_time(event: dict[str, Any]) -> datetime | None:
@@ -187,19 +178,21 @@ class RuntimeStatePaths:
 
 
 def _summarize_event_log(path: Path, *, recent_limit: int) -> EventLogSummary:
-    total = 0
+    archived = sidecar_aggregate(path)
+    live_total = 0
     counts: Counter[str] = Counter()
     recent_heap: list[tuple[datetime, int, dict[str, Any]]] = []
-    for event in _iter_jsonl(path, tail_lines=RUNTIME_TAIL_LINES):
-        total += 1
+    for event in iter_jsonl(path, tail_lines=RUNTIME_TAIL_LINES):
+        live_total += 1
         counts[str(event.get("event_type") or "(unknown)")] += 1
         if recent_limit <= 0:
             continue
-        entry = (_event_sort_time(event), total, event)
+        entry = (_event_sort_time(event), live_total, event)
         if len(recent_heap) < recent_limit:
             heapq.heappush(recent_heap, entry)
         else:
             heapq.heappushpop(recent_heap, entry)
+    total = _count_lines_fast(path) + archived["total_archived_lines"]
     recent_events = [event for _event_time, _seq, event in sorted(recent_heap)]
     return EventLogSummary(total=total, counts=counts, recent=_recent_events(recent_events, limit=recent_limit))
 
@@ -223,17 +216,18 @@ class ActionQueueSummary:
 
 
 def _summarize_reuse_event_log(path: Path, *, recent_limit: int) -> ReuseEventSummary:
-    total = 0
+    archived = sidecar_aggregate(path)
+    live_count = 0
     trusted = 0
     recent_heap: list[tuple[datetime, int, dict[str, Any]]] = []
     surface_last_event: dict[str, datetime] = {}
     reuse_by_surface: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"surface": "", "events": 0, "trusted": 0, "untrusted": 0, "last_event_at": ""}
     )
-    for event in _iter_jsonl(path, tail_lines=RUNTIME_TAIL_LINES):
-        total += 1
+    for event in iter_jsonl(path, tail_lines=RUNTIME_TAIL_LINES):
+        live_count += 1
         if recent_limit > 0:
-            entry = (_event_sort_time(event), total, event)
+            entry = (_event_sort_time(event), live_count, event)
             if len(recent_heap) < recent_limit:
                 heapq.heappush(recent_heap, entry)
             else:
@@ -257,6 +251,7 @@ def _summarize_reuse_event_log(path: Path, *, recent_limit: int) -> ReuseEventSu
             surface_last_event[surface] = event_time
             row["last_event_at"] = _format_dt(event_time)
 
+    total = _count_lines_fast(path) + archived["total_archived_lines"]
     recent_events = [event for _event_time, _seq, event in sorted(recent_heap)]
     return ReuseEventSummary(
         total=total,
@@ -279,7 +274,7 @@ def _summarize_action_queue(
     stale_running_actions: list[dict[str, Any]] = []
     failed_actions: list[dict[str, Any]] = []
     blocked_actions: list[dict[str, Any]] = []
-    for action in _iter_jsonl(path, tail_lines=RUNTIME_TAIL_LINES):
+    for action in iter_jsonl(path):
         total += 1
         row = _action_row(action, now=now)
         status = str(row.get("status") or "(unknown)")
@@ -332,7 +327,7 @@ def build_runtime_state(
     layout = VaultLayout.from_vault(resolved_vault)
     current_time = now or _utc_now()
 
-    repair_event_count = _count_jsonl_lines(layout.logs_dir / "projection-repair.jsonl")
+    repair_event_count = _count_lines_fast(layout.logs_dir / "projection-repair.jsonl")
     repair_markers = list_projection_repair_markers(resolved_vault)
     repair_rows = [_marker_row(marker, now=current_time) for marker in repair_markers]
     open_markers = [marker for marker in repair_markers if marker.status == "open"]

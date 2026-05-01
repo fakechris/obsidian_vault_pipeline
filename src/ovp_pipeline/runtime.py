@@ -367,6 +367,7 @@ def _count_lines_fast(path: Path) -> int:
 def _write_sidecar_stats(
     archived_path: Path,
     *,
+    original_name: str,
     line_count: int,
     event_types: Counter[str],
     first_ts: str,
@@ -374,7 +375,7 @@ def _write_sidecar_stats(
 ) -> Path:
     sidecar_path = archived_path.with_suffix(".stats.json")
     stats = {
-        "archived_from": archived_path.stem.rsplit(".", 1)[0] + ".jsonl",
+        "archived_from": original_name,
         "archived_at": format_utc_iso(utc_now()),
         "line_count": line_count,
         "event_types": dict(event_types.most_common()),
@@ -404,30 +405,19 @@ def rotate_jsonl_if_needed(
     if line_count < max_lines:
         return None
 
+    original_name = path.name
     event_types: Counter[str] = Counter()
     first_ts = ""
     last_ts = ""
-    try:
-        with path.open("r", encoding="utf-8", errors="ignore") as fh:
-            for line in fh:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    obj = json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(obj, dict):
-                    et = str(obj.get("event_type") or obj.get("type") or "")
-                    if et:
-                        event_types[et] += 1
-                    ts = str(obj.get("ts") or obj.get("timestamp") or "")
-                    if ts:
-                        if not first_ts:
-                            first_ts = ts
-                        last_ts = ts
-    except OSError:
-        pass
+    for obj in iter_jsonl(path):
+        et = str(obj.get("event_type") or obj.get("type") or "")
+        if et:
+            event_types[et] += 1
+        ts = str(obj.get("ts") or obj.get("timestamp") or "")
+        if ts:
+            if not first_ts:
+                first_ts = ts
+            last_ts = ts
 
     ts_suffix = utc_now().strftime("%Y%m%d-%H%M%S")
     archived = path.with_name(f"{path.stem}.{ts_suffix}.jsonl")
@@ -438,6 +428,7 @@ def rotate_jsonl_if_needed(
     path.rename(archived)
     _write_sidecar_stats(
         archived,
+        original_name=original_name,
         line_count=line_count,
         event_types=event_types,
         first_ts=first_ts,
@@ -452,11 +443,17 @@ def append_jsonl(
     *,
     max_lines: int = JSONL_DEFAULT_MAX_LINES,
 ) -> None:
-    """Append a JSON object to *path*, rotating beforehand if the file is large."""
-    rotate_jsonl_if_needed(path, max_lines=max_lines)
+    """Append a JSON object to *path*, rotating beforehand if the file is large.
+
+    Holds an advisory lock around the rotate-then-append sequence so
+    concurrent writers cannot race on path.rename().
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+    lock_path = path.parent / (path.name + ".append.lock")
+    with advisory_file_lock(lock_path, timeout_seconds=30.0):
+        rotate_jsonl_if_needed(path, max_lines=max_lines)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def iter_jsonl(
@@ -530,3 +527,53 @@ def _iter_jsonl_tail(path: Path, n: int) -> Iterable[dict[str, Any]]:
             continue
         if isinstance(obj, dict):
             yield obj
+
+
+def _rotated_segments(path: Path) -> list[Path]:
+    """Return rotated archive files for *path* sorted chronologically (oldest first)."""
+    stem = path.stem
+    parent = path.parent
+    if not parent.is_dir():
+        return []
+    segments = sorted(
+        [
+            p
+            for p in parent.iterdir()
+            if p.name.startswith(f"{stem}.") and p.suffix == ".jsonl" and p.name != path.name
+        ],
+        key=lambda p: p.name,
+    )
+    return segments
+
+
+def read_sidecar_stats(sidecar: Path) -> dict[str, Any]:
+    """Parse a ``.stats.json`` sidecar written during rotation."""
+    try:
+        return json.loads(sidecar.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def sidecar_aggregate(path: Path) -> dict[str, int]:
+    """Sum ``line_count`` from all sidecar stats files for *path*.
+
+    Returns ``{"total_archived_lines": <int>}`` which callers can add to
+    a live-file count for an accurate grand total.
+    """
+    total = 0
+    parent = path.parent
+    stem = path.stem
+    if not parent.is_dir():
+        return {"total_archived_lines": 0}
+    for sidecar in parent.iterdir():
+        if sidecar.name.startswith(f"{stem}.") and sidecar.name.endswith(".stats.json"):
+            stats = read_sidecar_stats(sidecar)
+            total += int(stats.get("line_count") or 0)
+    return {"total_archived_lines": total}
+
+
+def iter_jsonl_with_rotated(path: Path) -> Iterable[dict[str, Any]]:
+    """Yield events from all rotated segments + live file in chronological order."""
+    for segment in _rotated_segments(path):
+        yield from iter_jsonl(segment)
+    yield from iter_jsonl(path)

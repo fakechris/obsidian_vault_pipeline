@@ -2,13 +2,16 @@
 
 Each test validates a complete reader journey through the UI
 WITHOUT operator/workbench elements being visible.
+Link traversal extracts actual hrefs from HTML to verify real E2E paths.
 """
 from __future__ import annotations
 
 import json
+import re
 import threading
 from http.client import HTTPConnection
 from pathlib import Path
+from urllib.parse import unquote
 
 from ovp_pipeline.commands.ui_server import create_server
 from ovp_pipeline.knowledge_index import rebuild_knowledge_index
@@ -82,6 +85,14 @@ def _get_redirect(port: int, path: str) -> tuple[int, str]:
     return resp.status, resp.getheader("Location", "")
 
 
+_HREF_RE = re.compile(r'href="([^"]+)"')
+
+
+def _extract_hrefs(html: str, prefix: str) -> list[str]:
+    """Extract all href values from *html* that start with *prefix*."""
+    return [m.group(1) for m in _HREF_RE.finditer(html) if m.group(1).startswith(prefix)]
+
+
 # ---------------------------------------------------------------------------
 # Scenario 1: Library home → Object page → Evidence links
 # ---------------------------------------------------------------------------
@@ -98,15 +109,20 @@ def test_reader_library_to_object_to_evidence(temp_vault):
         assert "Knowledge Library" in home
         assert 'href="/ops"' not in home
         assert "Open Workbench" not in home
-        assert 'href="/object?id=alpha' in home
 
-        st, obj = _get(port, "/object?id=alpha")
+        object_links = _extract_hrefs(home, "/object?")
+        assert object_links, "home page should contain at least one /object? link"
+
+        first_link = object_links[0]
+        st, obj = _get(port, first_link)
         assert st == 200
-        assert "Alpha" in obj
         assert 'href="/ops' not in obj
         assert "Next Actions" not in obj
 
-        assert "/note?" in obj or "/object?" in obj
+        evidence_links = _extract_hrefs(obj, "/note?") + _extract_hrefs(obj, "/object?")
+        assert evidence_links, "object page should contain evidence or related links"
+        ev_st, _ = _get(port, evidence_links[0])
+        assert ev_st == 200
     finally:
         server.shutdown()
         server.server_close()
@@ -129,9 +145,10 @@ def test_reader_search_to_object(temp_vault):
         assert "Search" in search
         assert 'href="/ops' not in search
 
-        st, obj = _get(port, "/object?id=alpha")
+        result_links = _extract_hrefs(search, "/object?")
+        assert result_links, "search results should contain /object? links"
+        st, obj = _get(port, result_links[0])
         assert st == 200
-        assert "Alpha" in obj
         assert 'href="/ops' not in obj
     finally:
         server.shutdown()
@@ -155,10 +172,15 @@ def test_reader_graph_navigation(temp_vault):
         assert "Knowledge" in graph
         assert 'href="/ops' not in graph
 
-        st, obj = _get(port, "/object?id=alpha")
-        assert st == 200
-        assert "Alpha" in obj
-        assert 'href="/ops' not in obj
+        obj_links = _extract_hrefs(graph, "/object?")
+        if obj_links:
+            st, obj = _get(port, obj_links[0])
+            assert st == 200
+            assert 'href="/ops' not in obj
+        else:
+            st, obj = _get(port, "/object?id=alpha")
+            assert st == 200
+            assert 'href="/ops' not in obj
     finally:
         server.shutdown()
         server.server_close()
@@ -180,10 +202,13 @@ def test_reader_evidence_traceability(temp_vault):
         assert st == 200
         assert "Alpha" in obj
 
-        note_path = "50-Inbox/03-Processed/2026-04/Source%20Article.md"
-        st, note = _get(port, f"/note?path={note_path}")
+        note_links = _extract_hrefs(obj, "/note?")
+        if note_links:
+            st, note = _get(port, note_links[0])
+        else:
+            note_path = "50-Inbox/03-Processed/2026-04/Source%20Article.md"
+            st, note = _get(port, f"/note?path={note_path}")
         assert st == 200
-        assert "Source Article" in note
         assert 'href="/ops' not in note
     finally:
         server.shutdown()

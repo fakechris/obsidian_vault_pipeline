@@ -224,10 +224,16 @@ _ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 def _tokenize_for_search(query: str) -> list[str]:
     """Split a free-form query into searchable tokens.
 
-    English words come straight from a word-character regex. Chinese segments
-    are run through jieba (when available) so that "智能体记忆" splits into
-    ["智能体", "记忆"] instead of being treated as one opaque blob — which is
-    what the FTS5 unicode61 tokenizer would otherwise see.
+    **English / ASCII tokens**: extracted via ``_ASCII_TOKEN_RE``
+    (``[A-Za-z0-9]+``).  Single-char ASCII fragments are dropped because
+    they cause FTS5 noise, but CJK single chars are kept.
+
+    **CJK tokens**: run through ``jieba.cut()`` when the library is
+    available.  This splits strings like ``"智能体记忆"`` into
+    ``["智能体", "记忆"]`` instead of treating the whole run as one
+    opaque blob — which is what the FTS5 ``unicode61`` tokenizer would
+    otherwise see.  When jieba is not installed we fall back to
+    per-character tokenisation (still useful for trigram-style matching).
     """
     if not query or not query.strip():
         return []
@@ -249,12 +255,13 @@ def _tokenize_for_search(query: str) -> list[str]:
 
     if _CJK_RE.search(lowered):
         try:
-            import jieba
+            import jieba  # optional: gives much better CJK segmentation
 
             for word in jieba.cut(lowered):
                 if _CJK_RE.search(word):
                     _add(word)
         except ImportError:
+            # Fallback: per-char tokenisation — still useful for trigram FTS5 matching
             for ch in lowered:
                 if _CJK_RE.match(ch):
                     _add(ch)
@@ -262,7 +269,12 @@ def _tokenize_for_search(query: str) -> list[str]:
 
 
 def _build_fts_match(tokens: list[str]) -> str:
-    """Quote each token and AND them together into an FTS5 MATCH expression."""
+    """Quote each token and AND them together into an FTS5 MATCH expression.
+
+    FTS5 trigram tokenizer physically cannot match tokens shorter than 3
+    characters — regardless of script.  Short CJK tokens (1-2 chars like
+    "投资", "AI") are handled by the LIKE fallback in the caller instead.
+    """
     long_enough = [tok for tok in tokens if len(tok) >= 3]
     if not long_enough:
         return ""
@@ -292,14 +304,22 @@ def _parse_frontmatter(markdown: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _read_note_frontmatter(vault_dir: Path | str, relative_path: str) -> dict[str, Any]:
+def _resolve_note_path(vault_dir: Path | str, relative_path: str) -> Path | None:
+    """Resolve a vault-relative path, returning None if it escapes the vault or doesn't exist."""
     resolved = resolve_vault_dir(vault_dir)
     note_path = (resolved / relative_path).resolve()
     try:
         note_path.relative_to(resolved.resolve())
     except ValueError:
-        return {}
+        return None
     if not note_path.is_file():
+        return None
+    return note_path
+
+
+def _read_note_frontmatter(vault_dir: Path | str, relative_path: str) -> dict[str, Any]:
+    note_path = _resolve_note_path(vault_dir, relative_path)
+    if note_path is None:
         return {}
     return _parse_frontmatter(note_path.read_text(encoding="utf-8"))
 
@@ -329,13 +349,8 @@ def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
 
 
 def _read_note_text(vault_dir: Path | str, relative_path: str) -> str:
-    resolved = resolve_vault_dir(vault_dir)
-    note_path = (resolved / relative_path).resolve()
-    try:
-        note_path.relative_to(resolved.resolve())
-    except ValueError:
-        return ""
-    if not note_path.is_file():
+    note_path = _resolve_note_path(vault_dir, relative_path)
+    if note_path is None:
         return ""
     return note_path.read_text(encoding="utf-8")
 
@@ -417,12 +432,26 @@ def _truth_pack_candidates(pack_name: str | None = None) -> list[str]:
     return [pack.name for pack in iter_compatible_packs(pack_name or DEFAULT_WORKFLOW_PACK_NAME)]
 
 
+_ALLOWED_TRUTH_TABLES: frozenset[str] = frozenset({
+    "objects",
+    "object_relations",
+    "truth_projections",
+    "semantic_relations",
+    "evidence_notes",
+    "graph_clusters",
+    "graph_edges",
+    "contradictions",
+})
+
+
 def _materialized_truth_packs(
     vault_dir: Path | str,
     *,
     pack_name: str | None,
     table_name: str,
 ) -> list[str]:
+    if table_name not in _ALLOWED_TRUTH_TABLES:
+        raise ValueError(f"table_name must be one of {sorted(_ALLOWED_TRUTH_TABLES)}")
     candidates = _truth_pack_candidates(pack_name)
     requested_pack = candidates[0]
     db = _db_path(vault_dir)
@@ -441,8 +470,8 @@ def _materialized_truth_packs(
     except sqlite3.OperationalError as exc:
         if "no such table" not in str(exc).lower():
             raise
-        with sqlite3.connect(db) as conn:
-            row = conn.execute(
+        with sqlite3.connect(db) as conn2:
+            row = conn2.execute(
                 f"SELECT 1 FROM {table_name} WHERE pack = ? LIMIT 1",
                 (requested_pack,),
             ).fetchone()
