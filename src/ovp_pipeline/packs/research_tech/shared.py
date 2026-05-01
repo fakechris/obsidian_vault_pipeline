@@ -9,33 +9,98 @@ from ...extraction.specs import (
 )
 from ...operations.specs import OperationCheckSpec, OperationProfileSpec, OperationProposalSpec
 from ...wiki_views.specs import TraceabilityPolicy, WikiViewInputSpec, WikiViewSpec
+from ...object_kinds import (
+    ALL_OBJECT_KINDS,
+    KIND_CLAIM,
+    KIND_COMPANY,
+    KIND_CONCEPT,
+    KIND_DOCUMENT,
+    KIND_ENTITY,
+    KIND_EVENT,
+    KIND_EVERGREEN,
+    KIND_FRAMEWORK,
+    KIND_METHOD,
+    KIND_PAPER,
+    KIND_PERSON,
+    KIND_PROJECT,
+    KIND_TOOL,
+    OBJECT_KIND_LABELS,
+)
 from ..base import ObjectKindSpec, WorkflowProfile
 
 
 def build_object_kinds() -> list[ObjectKindSpec]:
     return [
         ObjectKindSpec(
-            kind="concept",
-            display_name="Concept",
-            description="Canonical concept-like knowledge object",
+            kind=KIND_CONCEPT,
+            display_name=OBJECT_KIND_LABELS[KIND_CONCEPT],
+            description="Abstract idea, principle, or theory",
             canonical=True,
         ),
         ObjectKindSpec(
-            kind="entity",
-            display_name="Entity",
-            description="Named people, organizations, tools, or products",
+            kind=KIND_ENTITY,
+            display_name=OBJECT_KIND_LABELS[KIND_ENTITY],
+            description="Generic named entity",
             canonical=True,
         ),
         ObjectKindSpec(
-            kind="evergreen",
-            display_name="Evergreen",
-            description="Reusable evergreen note in the research/knowledge pack",
+            kind=KIND_PERSON,
+            display_name=OBJECT_KIND_LABELS[KIND_PERSON],
+            description="Named individual",
             canonical=True,
         ),
         ObjectKindSpec(
-            kind="document",
-            display_name="Document",
-            description="Interpreted or raw document artifact tracked by the pack",
+            kind=KIND_COMPANY,
+            display_name=OBJECT_KIND_LABELS[KIND_COMPANY],
+            description="Named organization or company",
+            canonical=True,
+        ),
+        ObjectKindSpec(
+            kind=KIND_TOOL,
+            display_name=OBJECT_KIND_LABELS[KIND_TOOL],
+            description="Software tool, library, framework, or product",
+            canonical=True,
+        ),
+        ObjectKindSpec(
+            kind=KIND_PROJECT,
+            display_name=OBJECT_KIND_LABELS[KIND_PROJECT],
+            description="Named project or open-source repository",
+            canonical=True,
+        ),
+        ObjectKindSpec(
+            kind=KIND_PAPER,
+            display_name=OBJECT_KIND_LABELS[KIND_PAPER],
+            description="Research paper or publication",
+            canonical=True,
+        ),
+        ObjectKindSpec(
+            kind=KIND_EVENT,
+            display_name=OBJECT_KIND_LABELS[KIND_EVENT],
+            description="Named event or dated occurrence",
+            canonical=True,
+        ),
+        ObjectKindSpec(
+            kind=KIND_FRAMEWORK,
+            display_name=OBJECT_KIND_LABELS[KIND_FRAMEWORK],
+            description="Methodology, mental model, or analytical framework",
+            canonical=True,
+        ),
+        ObjectKindSpec(
+            kind=KIND_METHOD,
+            display_name=OBJECT_KIND_LABELS[KIND_METHOD],
+            description="Specific technique, algorithm, or protocol",
+            canonical=True,
+        ),
+        ObjectKindSpec(
+            kind=KIND_EVERGREEN,
+            display_name=OBJECT_KIND_LABELS[KIND_EVERGREEN],
+            description="Reusable evergreen note",
+            canonical=True,
+        ),
+        ObjectKindSpec(
+            kind=KIND_DOCUMENT,
+            display_name=OBJECT_KIND_LABELS[KIND_DOCUMENT],
+            description="Interpreted or raw document artifact",
             canonical=False,
         ),
     ]

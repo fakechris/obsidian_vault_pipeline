@@ -239,10 +239,12 @@ class ObjectRow:
     source_slug: str
 
     def to_row(self) -> tuple[str, str, str, str, str, str]:
+        from .object_kinds import normalize_kind
+
         return (
             self.pack,
             self.object_id,
-            self.object_kind,
+            normalize_kind(self.object_kind),
             self.title,
             self.canonical_path,
             self.source_slug,

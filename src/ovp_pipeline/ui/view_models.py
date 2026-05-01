@@ -145,16 +145,7 @@ def _access_projection_label(
     )
 
 
-_OBJECT_KIND_LABELS = {
-    "person": "Person",
-    "concept": "Concept",
-    "company": "Company",
-    "tool": "Tool",
-    "project": "Project",
-    "event": "Event",
-    "claim": "Claim",
-    "evergreen": "Concept",
-}
+from ..object_kinds import OBJECT_KIND_LABELS as _OBJECT_KIND_LABELS
 _OBJECT_KIND_READER_PROFILES = {
     "person": {
         "layout": "person_profile",
@@ -263,16 +254,63 @@ _OBJECT_KIND_READER_PROFILES = {
             "evidence_traceability": "Evidence For This Claim",
         },
     },
+    "paper": {
+        "layout": "entity_brief",
+        "title": "Paper Brief",
+        "primary_question": "What does this paper contribute, who wrote it, and what does it build on?",
+        "prompts": (
+            ("Contribution", "Start with the core finding or contribution."),
+            ("Context", "Look for related work, prior papers, and concepts."),
+            ("Evidence", "Check source notes and quoted claims for accuracy."),
+        ),
+        "section_labels": {
+            "current_state": "Paper Snapshot",
+            "why_it_matters": "Why It Matters",
+            "evidence_traceability": "Sources About This Paper",
+        },
+    },
+    "framework": {
+        "layout": "concept_brief",
+        "title": "Framework Brief",
+        "primary_question": "What is this framework, how is it applied, and what supports it?",
+        "prompts": (
+            ("Definition", "Start with what the framework is and its core structure."),
+            ("Application", "Look for where and how this framework is used in practice."),
+            ("Evidence", "Check source notes for grounding before adopting the framework."),
+        ),
+        "section_labels": {
+            "current_state": "Framework Overview",
+            "why_it_matters": "Application Context",
+            "evidence_traceability": "Framework Sources",
+        },
+    },
+    "method": {
+        "layout": "concept_brief",
+        "title": "Method Brief",
+        "primary_question": "What is this method, when is it used, and what results does it produce?",
+        "prompts": (
+            ("Definition", "Start with a clear description of the method."),
+            ("Usage", "Look for when and where this method applies."),
+            ("Evidence", "Check evidence and results before recommending this method."),
+        ),
+        "section_labels": {
+            "current_state": "Method Description",
+            "why_it_matters": "When To Use",
+            "evidence_traceability": "Method Sources",
+        },
+    },
 }
 _LIST_MARKER_RE = re.compile(r"^([-*•]|\d+\.)\s+")
 OBJECT_SOURCE_RAIL_RELATED_LIMIT = 8
 
 
 def _object_kind_label(object_kind: str) -> str:
+    from ..object_kinds import display_label
+
     normalized = (object_kind or "").strip().lower()
     if not normalized:
         return "Object"
-    return _OBJECT_KIND_LABELS.get(normalized, normalized.replace("_", " ").title())
+    return display_label(normalized)
 
 
 def _object_reader_profile(detail: dict[str, Any], *, relation_count: int) -> dict[str, object]:

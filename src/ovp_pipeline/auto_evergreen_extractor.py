@@ -335,10 +335,16 @@ Evergreen笔记标准：
         # 构建相关链接
         related_links = "\n".join([f"- [[{c}]]" for c in related if c])
 
+        from .object_kinds import KIND_CONCEPT, normalize_kind
+
+        raw_kind = concept.get("entity_type", concept.get("kind", ""))
+        entity_type = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT
+
         note = f"""---
 note_id: {note_id}
 title: "{title}"
 type: evergreen
+entity_type: {entity_type}
 date: {datetime.now().strftime('%Y-%m-%d')}
 tags: [evergreen]
 aliases: ["{concept_name}"]

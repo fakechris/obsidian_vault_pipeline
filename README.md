@@ -22,7 +22,7 @@ Capture → Compile → Reuse
 
 </div>
 
-Current document version: `v0.9.2`
+Current document version: `v0.9.3`
 
 Primary docs:
 
@@ -79,10 +79,9 @@ with:
 
 ## Current Roadmap
 
-The current roadmap is consolidating repo milestone history, the April 22 compiler roadmap, the recent KSR backlog in the dogfooding vault, and reader-first product-shape research. The KSR page is a recent task-extraction input, not the complete backlog authority:
+OVP is evolving from a personal Zettelkasten into a typed knowledge platform — reader-first for humans, programmable for agents, extensible through domain packs.
 
 - active backlog: `BACKLOG.md`
-- recent KSR backlog input: `/Users/chris/Documents/ovp-vault/30-Projects/Active/OVP-Knowledge-State-Runtime.md`
 - current milestone: `MILESTONE.md`
 - current merged roadmap rationale: `docs/plans/2026-04-29-consolidated-product-roadmap.md`
 - reader product-shape note: `docs/plans/2026-04-29-reader-product-shape-and-backlog-reconciliation.md`
@@ -91,21 +90,22 @@ Current milestone sequence:
 
 | Milestone | Status | Meaning |
 | --- | --- | --- |
-| M0 Pipeline And Pack Foundation | Complete | CLI, source lifecycle, pack/profile runtime, `knowledge.db`, first KSR-013 slice |
-| M1 Operator Workbench And Review Runtime | Complete enough | truth UI, candidates, signals/actions, contradictions, action worker |
-| M2 Roadmap And README Consolidation | Complete | merged historical milestones, compiler roadmap, recent KSR input, and reader-product research |
-| M3 Reader-First Knowledge Atlas | Done / iterate | reader home, `/ops` split, object source/backlink rail, visual graph map, kind-specific object reader lenses, and reader-oriented search shipped |
-| M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk tiers have shipped; deeper enforcement remains |
-| M5 Context Pack And Operational Runtime | Done | session snapshots, context budget, operational runtime state in `/ops` and doctor, provider-facing runtime-state API, action queue health in runtime state |
-| M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
-| M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, skill/routine extraction, notebook/raw-source mode |
+| M0–M3 | Done | Foundation, operator workbench, roadmap consolidation, reader-first atlas |
+| M4 KSR Safety And Hot-Path Hardening | Done | projection labels, hot-path audit, wiring evals, evidence spans, candidate risk, JSONL streaming, projection lifecycle hardening |
+| M5 Context Pack And Operational Runtime | Done | session snapshots, context budget, runtime state, runtime-state API, action queue health |
+| M5a Quality And Dedup Hardening | Done | concept dedup pipeline integration, promote semantic guard, historical data cleanup |
+| M8 Type Unification And Extraction Quality | Active | unified object kind taxonomy, Layer 1 entity_type, body-size-aware extraction, quote-grounding, single-pass LLM refactor |
+| M9 Pack As Domain Ontology | Next | pack-defined object kind specs, typed relation constraints, schema registry |
+| M10 Operational Knowledge Layer | Later | action types, permissions, cross-entity aggregation, decision memory |
 
-Current active backlog focus:
+Recent major changes (PRs #98–#101):
 
-- Shipped: `KSR-001` evidence spans, `KSR-002` projection labels, `KSR-003` candidate risk tiers, `KSR-004` session snapshots/context packs, `KSR-014` article routing preview, `KSR-015` dashboard/search hot-path audit, `KSR-017` explicit context budgets, `KSR-018` markdown-aware evidence span backfill, `KSR-022` OVP prime context packs, `KSR-026` workflow wiring eval suite, and the first structured projection repair marker lifecycle.
-- Product shipped: readable object page profiles, source/backlink rail, kind-specific reader lenses, visual `/graph` map, and reader-oriented search grouped by kind, evidence, and reason.
-- Current: M5 is closed out. `BL-014` now keeps workflow actions observable through runtime state instead of introducing a generalized workflow lease; the existing action worker lock and stale-running status remain the execution boundary until multi-worker scheduling becomes real.
-- Product track: reader-first Knowledge Atlas stays a projection layer, not a new state system.
+- JSONL streaming hardening, advisory file locks, runtime-state API fixes
+- Four-phase architecture refactor: module boundary cleanup, route hardening (CSP/CSRF), projection lifecycle
+- Concept dedup pipeline integration with scoped `scope_slugs` parameter
+- Promote semantic guard: trigram-Jaccard pre-check merges near-duplicate candidates into existing Evergreens
+- Historical Evergreen data cleanup (71→61 active Evergreens)
+- `find_similar_slugs` utility for similarity checking
 
 ## Domain Packs
 
@@ -295,6 +295,8 @@ pinboard
 → quality
 → fix_links
 → absorb
+→ dedup
+→ note_type_normalize
 → registry_sync
 → moc
 → knowledge_index
@@ -310,6 +312,8 @@ pinboard
 → quality
 → fix_links
 → absorb
+→ dedup
+→ note_type_normalize
 → registry_sync
 → moc
 → refine
@@ -318,7 +322,9 @@ pinboard
 
 Important details:
 
-- `absorb` now shells to `ovp_pipeline.commands.absorb`
+- `absorb` shells to `ovp_pipeline.commands.absorb` and emits `promoted_slugs` for downstream steps
+- `dedup` runs post-absorb concept deduplication scoped to recently promoted slugs (trigram-Jaccard similarity)
+- `note_type_normalize` normalizes note_type metadata across Evergreen files
 - `refine` is a batch wrapper over `cleanup + breakdown`
 - `knowledge_index` always runs last so `knowledge.db` reflects final canonical state
 - `--step evergreen` and `--from-step evergreen` are still accepted and map to `absorb`
@@ -384,6 +390,8 @@ Refine is not hidden or missing. It is wired in, but opt-in by default to avoid 
 | `ovp-absorb --recent 7 --json` | Absorb recent deep dives |
 | `ovp-absorb --file <source.md> --dry-run --json` | Preview source lifecycle routing before moving or processing source material |
 | `ovp-evergreen --recent 7 --json` | Compatibility alias for `ovp-absorb` |
+| `ovp-concept-dedup --vault-dir <vault> --threshold 0.82` | Find and propose concept deduplication clusters |
+| `ovp-concept-dedup --vault-dir <vault> --apply` | Apply deduplication proposal (archive losers, rewrite wikilinks) |
 | `ovp-cleanup --all --json` | Generate cleanup proposals |
 | `ovp-cleanup --all --write --json` | Apply deterministic cleanup |
 | `ovp-breakdown --all --json` | Generate breakdown proposals |
@@ -560,4 +568,4 @@ HTTP_PROXY=http://127.0.0.1:7897
 
 ---
 
-This document targets: `v0.9.2`
+This document targets: `v0.9.3`

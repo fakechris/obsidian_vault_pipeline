@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from ...object_kinds import RELATABLE_OBJECT_KINDS
 from ..base import SemanticRelationContractSpec, SemanticRelationTypeSpec
 
 
 def build_semantic_relation_contracts(
     pack_name: str = "research-tech",
 ) -> list[SemanticRelationContractSpec]:
-    object_kinds = ("concept", "entity", "tool", "company", "paper", "project")
+    object_kinds = RELATABLE_OBJECT_KINDS
     return [
         SemanticRelationContractSpec(
             name="research_semantic_relations",

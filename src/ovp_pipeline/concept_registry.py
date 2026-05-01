@@ -191,15 +191,29 @@ def _trigrams(text: str) -> set[str]:
 # Legacy ConceptEntry (for backwards compatibility with existing code)
 # =============================================================================
 
-# Kind constants for registry entry classification
-KIND_ENTITY = "entity"
-KIND_CONCEPT = "concept"
-KIND_FRAMEWORK = "framework"
-KIND_PROTOCOL = "protocol"
-KIND_PROPOSITION = "proposition"
-KIND_CASE = "case"
+# Kind constants — imported from canonical taxonomy; legacy aliases kept for
+# backwards compatibility with existing registry JSONL files.
+from .object_kinds import (
+    KIND_CASE,
+    KIND_COMPANY,
+    KIND_CONCEPT,
+    KIND_ENTITY,
+    KIND_EVENT,
+    KIND_FRAMEWORK,
+    KIND_METHOD,
+    KIND_PAPER,
+    KIND_PERSON,
+    KIND_PROJECT,
+    KIND_PROPOSITION,
+    KIND_PROTOCOL,
+    KIND_TOOL,
+    LEGACY_KIND_MAP,
+    REGISTRY_VALID_KINDS,
+    normalize_kind,
+)
 
-VALID_KINDS = {KIND_ENTITY, KIND_CONCEPT, KIND_FRAMEWORK, KIND_PROTOCOL, KIND_PROPOSITION, KIND_CASE}
+# Accept both canonical and legacy kinds in registry data.
+VALID_KINDS = REGISTRY_VALID_KINDS | frozenset(LEGACY_KIND_MAP.keys())
 
 @dataclass
 class ConceptEntry:

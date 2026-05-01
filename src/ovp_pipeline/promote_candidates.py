@@ -102,10 +102,15 @@ def write_evergreen_file(vault_dir: Path, entry: ConceptEntry, dry_run: bool = T
         if not body.startswith("# "):
             body = f"# {entry.title}\n\n{body}".strip()
 
+    from .object_kinds import KIND_CONCEPT, normalize_kind
+
+    entity_type = normalize_kind(entry.kind) if entry.kind else KIND_CONCEPT
+
     frontmatter = f'''---
 note_id: {entry.slug}
 title: "{entry.title}"
 type: evergreen
+entity_type: {entity_type}
 date: {datetime.now().strftime("%Y-%m-%d")}
 tags: [{entry.area}, evergreen]
 aliases: [{", ".join(f'"{a}"' for a in aliases)}]
