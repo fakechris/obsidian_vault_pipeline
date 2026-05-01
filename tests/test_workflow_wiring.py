@@ -5,29 +5,18 @@ import json
 import pytest
 
 
-def test_root_and_ops_dispatch_to_distinct_renderers(temp_vault, monkeypatch, fetch_ui):
-    import ovp_pipeline.commands.ui_server as ui_server
+def test_root_and_ops_dispatch_to_distinct_reader_and_ops_surfaces(temp_vault, fetch_ui):
+    root_status, root_body, _ = fetch_ui(temp_vault, "/")
+    ops_status, ops_body, _ = fetch_ui(temp_vault, "/ops")
 
-    calls = []
-    monkeypatch.setattr(
-        ui_server,
-        "_build_runtime_home_payload_from_query",
-        lambda vault_dir, query: {"screen": "runtime/home", "requested_pack": ""},
-    )
-    monkeypatch.setattr(
-        ui_server,
-        "_render_library_home",
-        lambda payload: calls.append("library") or "<html>library</html>",
-    )
-    monkeypatch.setattr(
-        ui_server,
-        "_render_dashboard",
-        lambda payload: calls.append("dashboard") or "<html>dashboard</html>",
-    )
-
-    assert fetch_ui(temp_vault, "/")[0] == 200
-    assert fetch_ui(temp_vault, "/ops")[0] == 200
-    assert calls == ["library", "dashboard"]
+    assert root_status == 200
+    assert ops_status == 200
+    assert "Knowledge Library" in root_body
+    assert "Search Library" in root_body
+    assert "OVP Truth UI" not in root_body
+    assert "OVP Truth UI" in ops_body
+    assert "Workflow Map" in ops_body
+    assert root_body != ops_body
 
 
 def test_candidate_review_route_uses_truth_api_governance_seam(

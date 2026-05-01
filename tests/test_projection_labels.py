@@ -110,7 +110,10 @@ def test_projection_label_helper_keeps_stable_boundary_fields():
 
 
 def test_markdown_projection_lines_are_stable_metadata():
-    from ovp_pipeline.projection_labels import markdown_projection_lines
+    from ovp_pipeline.projection_labels import (
+        frontmatter_projection_fields,
+        markdown_projection_lines,
+    )
 
     assert markdown_projection_lines(
         surface="cluster_view",
@@ -129,6 +132,24 @@ def test_markdown_projection_lines_are_stable_metadata():
         "- projection_derived_from: knowledge.db",
         "- projection_rebuild_policy: on_derived_refresh",
         "- projection_authority_boundary: derived_not_authority",
+    ]
+    assert frontmatter_projection_fields(
+        surface="cluster_view",
+        projection_kind="compiled_wiki_projection",
+        owner_pack="research-tech",
+        generated_by="cluster_view",
+        derived_from=("knowledge.db",),
+        rebuild_policy="on_derived_refresh",
+    ) == [
+        "projection_schema_version: 1",
+        "projection_kind: compiled_wiki_projection",
+        "projection_surface: cluster_view",
+        "projection_layer: Layer 3",
+        "projection_owner_pack: research-tech",
+        "projection_generated_by: cluster_view",
+        "projection_derived_from: [knowledge.db]",
+        "projection_rebuild_policy: on_derived_refresh",
+        "projection_authority_boundary: derived_not_authority",
     ]
 
 

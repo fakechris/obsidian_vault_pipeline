@@ -3,12 +3,8 @@ Pytest fixtures for ovp_pipeline tests.
 """
 
 import pytest
-import tempfile
-import json
 import threading
-from pathlib import Path
 from http.client import HTTPConnection
-from datetime import datetime
 
 
 @pytest.fixture
@@ -29,40 +25,42 @@ def temp_vault(tmp_path):
 
 
 @pytest.fixture
-def fetch_ui():
-    def _fetch(temp_vault, path: str) -> tuple[int, str, str]:
-        from ovp_pipeline.commands.ui_server import create_server
+def ui_server_port(temp_vault):
+    from ovp_pipeline.commands.ui_server import create_server
 
-        server = create_server(temp_vault, host="127.0.0.1", port=0)
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield port
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.fixture
+def fetch_ui(ui_server_port):
+    def _fetch(_temp_vault, path: str) -> tuple[int, str, str]:
+        conn = HTTPConnection("127.0.0.1", ui_server_port, timeout=5)
         try:
-            conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("GET", path)
             response = conn.getresponse()
             body = response.read().decode("utf-8")
             content_type = response.getheader("Content-Type") or ""
         finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
+            conn.close()
         return response.status, body, content_type
 
     return _fetch
 
 
 @pytest.fixture
-def post_ui():
-    def _post(temp_vault, path: str, body: str) -> tuple[int, str]:
-        from ovp_pipeline.commands.ui_server import create_server
-
-        server = create_server(temp_vault, host="127.0.0.1", port=0)
-        port = server.server_address[1]
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+def post_ui(ui_server_port):
+    def _post(_temp_vault, path: str, body: str) -> tuple[int, str]:
+        conn = HTTPConnection("127.0.0.1", ui_server_port, timeout=5)
         try:
-            conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request(
                 "POST",
                 path,
@@ -72,9 +70,7 @@ def post_ui():
             response = conn.getresponse()
             payload = response.read().decode("utf-8")
         finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
+            conn.close()
         return response.status, payload
 
     return _post

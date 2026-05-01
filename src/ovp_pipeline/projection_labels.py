@@ -29,6 +29,34 @@ def projection_label(
     }
 
 
+def _projection_label_for_output(
+    *,
+    surface: str,
+    projection_kind: str,
+    layer: str,
+    owner_pack: str,
+    generated_by: str,
+    derived_from: Iterable[str],
+    rebuild_policy: str,
+) -> dict[str, object]:
+    return projection_label(
+        surface=surface,
+        projection_kind=projection_kind,
+        layer=layer,
+        owner_pack=owner_pack,
+        generated_by=generated_by,
+        derived_from=derived_from,
+        rebuild_policy=rebuild_policy,
+    )
+
+
+def _format_projection_value(value: object, *, frontmatter: bool) -> str:
+    if isinstance(value, list):
+        joined = ", ".join(str(item) for item in value)
+        return f"[{joined}]" if frontmatter else joined
+    return str(value)
+
+
 def markdown_projection_lines(
     *,
     surface: str,
@@ -39,17 +67,16 @@ def markdown_projection_lines(
     derived_from: Iterable[str],
     rebuild_policy: str,
 ) -> list[str]:
-    return [
-        f"- projection_schema_version: {PROJECTION_LABEL_SCHEMA_VERSION}",
-        f"- projection_kind: {projection_kind}",
-        f"- projection_surface: {surface}",
-        f"- projection_layer: {layer}",
-        f"- projection_owner_pack: {owner_pack}",
-        f"- projection_generated_by: {generated_by}",
-        f"- projection_derived_from: {', '.join(derived_from)}",
-        f"- projection_rebuild_policy: {rebuild_policy}",
-        f"- projection_authority_boundary: {PROJECTION_AUTHORITY_BOUNDARY}",
-    ]
+    label = _projection_label_for_output(
+        surface=surface,
+        projection_kind=projection_kind,
+        layer=layer,
+        owner_pack=owner_pack,
+        generated_by=generated_by,
+        derived_from=derived_from,
+        rebuild_policy=rebuild_policy,
+    )
+    return [f"- {key}: {_format_projection_value(value, frontmatter=False)}" for key, value in label.items()]
 
 
 def frontmatter_projection_fields(
@@ -62,14 +89,13 @@ def frontmatter_projection_fields(
     derived_from: Iterable[str],
     rebuild_policy: str,
 ) -> list[str]:
-    return [
-        f"projection_schema_version: {PROJECTION_LABEL_SCHEMA_VERSION}",
-        f"projection_kind: {projection_kind}",
-        f"projection_surface: {surface}",
-        f"projection_layer: {layer}",
-        f"projection_owner_pack: {owner_pack}",
-        f"projection_generated_by: {generated_by}",
-        f"projection_derived_from: [{', '.join(derived_from)}]",
-        f"projection_rebuild_policy: {rebuild_policy}",
-        f"projection_authority_boundary: {PROJECTION_AUTHORITY_BOUNDARY}",
-    ]
+    label = _projection_label_for_output(
+        surface=surface,
+        projection_kind=projection_kind,
+        layer=layer,
+        owner_pack=owner_pack,
+        generated_by=generated_by,
+        derived_from=derived_from,
+        rebuild_policy=rebuild_policy,
+    )
+    return [f"{key}: {_format_projection_value(value, frontmatter=True)}" for key, value in label.items()]

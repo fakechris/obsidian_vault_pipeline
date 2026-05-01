@@ -78,6 +78,13 @@ def _scoped_path(path: str, *, pack_name: str | None = None) -> str:
     return f"{path}{separator}pack={quote(pack_name, safe='')}"
 
 
+def _build_note_jump_path(path: object, *, pack_name: str | None = None) -> str:
+    normalized = str(path or "").strip()
+    if not normalized:
+        return ""
+    return _scoped_path(f"/note?path={quote(normalized, safe='')}", pack_name=pack_name)
+
+
 def _emit_briefing_reuse(
     vault_dir: Path | str,
     payload: dict[str, Any],
@@ -388,20 +395,14 @@ def _build_source_backlink_rail(
                 object_id=object_id,
                 title=title,
             ),
-            "jump_path": _scoped_path(
-                f"/note?path={quote(str(item.get('path') or ''), safe='')}",
-                pack_name=requested_pack,
-            ),
+            "jump_path": _build_note_jump_path(item.get("path"), pack_name=requested_pack),
         }
         for item in detail["provenance"]["source_notes"]
     ]
     atlas_pages = [
         {
             **item,
-            "jump_path": _scoped_path(
-                f"/note?path={quote(str(item.get('path') or ''), safe='')}",
-                pack_name=requested_pack,
-            ),
+            "jump_path": _build_note_jump_path(item.get("path"), pack_name=requested_pack),
         }
         for item in detail["provenance"]["mocs"]
     ]
@@ -425,11 +426,7 @@ def _build_source_backlink_rail(
         "evergreen": {
             "title": title,
             "path": evergreen_path,
-            "jump_path": (
-                _scoped_path(f"/note?path={quote(evergreen_path, safe='')}", pack_name=requested_pack)
-                if evergreen_path
-                else ""
-            ),
+            "jump_path": _build_note_jump_path(evergreen_path, pack_name=requested_pack),
         },
         "source_notes": source_notes,
         "atlas_pages": atlas_pages,
