@@ -49,9 +49,13 @@ def run_pipeline_quality(
     pipeline: Any,
     batch_size: int | None = None,
     dry_run: bool = False,
+    results: dict[str, Any] | None = None,
     **_: Any,
 ) -> dict[str, Any]:
-    return pipeline.step_quality(batch_size=batch_size, dry_run=dry_run)
+    target_files = None
+    if getattr(pipeline, "run_mode", None) == "incremental":
+        target_files = pipeline._incremental_quality_target_files(results or {})
+    return pipeline.step_quality(batch_size=batch_size, dry_run=dry_run, target_files=target_files)
 
 
 def run_pipeline_fix_links(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
