@@ -333,7 +333,7 @@ def promote_candidate(vault_dir: Path, slug: str, dry_run: bool = True) -> Lifec
             pass
         raise RuntimeError(
             f"[dedup-guard] Similarity check failed for '{slug}': {exc}. "
-            f"Use --force to skip the dedup guard."
+            f"Resolve the underlying error and retry."
         ) from exc
 
     mutation = LifecycleMutation(action="promote", slug=slug, target_slug=slug)

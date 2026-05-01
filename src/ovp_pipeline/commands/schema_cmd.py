@@ -21,7 +21,7 @@ DEFAULT_PACK_NAME = "research-tech"
 
 
 def _resolve_pack(pack_name: str | None):
-    from ..pack_resolution import resolve_pack
+    from ..pack_resolution import coerce_pack as resolve_pack
 
     return resolve_pack(pack_name or DEFAULT_PACK_NAME)
 

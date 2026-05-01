@@ -19,22 +19,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_FRONTMATTER_RE = re.compile(r"\A\s*\ufeff?---\r?\n(.*?)\r?\n---", re.DOTALL)
+from ..object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
 
-VALID_KINDS = frozenset(
-    {
-        "concept",
-        "entity",
-        "person",
-        "company",
-        "tool",
-        "project",
-        "paper",
-        "event",
-        "framework",
-        "method",
-    }
-)
+_FRONTMATTER_RE = re.compile(r"\A\s*\ufeff?---\r?\n(.*?)\r?\n---", re.DOTALL)
+_ENTITY_TYPE_LINE_RE = re.compile(r"^entity_type:\s*.*$", re.MULTILINE)
+
+VALID_KINDS = CORE_OBJECT_KINDS
 
 SYSTEM_PROMPT = """You are a knowledge taxonomy classifier. Given a note's title, one-sentence definition, and a short excerpt from its body, classify it into exactly ONE of these 10 entity types:
 
@@ -67,20 +57,22 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], int, int]:
 
 
 def _inject_entity_type(text: str, entity_type: str) -> str:
-    """Insert ``entity_type: <value>`` into frontmatter after ``type:`` or
-    before the closing ``---``."""
+    """Insert or replace ``entity_type: <value>`` in frontmatter."""
     m = _FRONTMATTER_RE.match(text)
     if not m:
         return text
     fm_block = m.group(1)
-    lines = fm_block.splitlines()
-    insert_idx = len(lines)
-    for i, line in enumerate(lines):
-        if line.startswith("type:"):
-            insert_idx = i + 1
-            break
-    lines.insert(insert_idx, f"entity_type: {entity_type}")
-    new_fm = "\n".join(lines)
+    if _ENTITY_TYPE_LINE_RE.search(fm_block):
+        new_fm = _ENTITY_TYPE_LINE_RE.sub(f"entity_type: {entity_type}", fm_block)
+    else:
+        lines = fm_block.splitlines()
+        insert_idx = len(lines)
+        for i, line in enumerate(lines):
+            if line.startswith("type:"):
+                insert_idx = i + 1
+                break
+        lines.insert(insert_idx, f"entity_type: {entity_type}")
+        new_fm = "\n".join(lines)
     return text[: m.start(1)] + new_fm + text[m.end(1) :]
 
 
@@ -94,15 +86,19 @@ def _classify(llm: Any, title: str, definition: str, excerpt: str) -> str:
     user_prompt = f"Title: {title}\nDefinition: {definition}\nExcerpt: {excerpt[:500]}"
     raw = llm.generate(SYSTEM_PROMPT, user_prompt, max_tokens=20).strip().lower()
     raw = raw.strip('"').strip("'").strip(".")
-    if raw in VALID_KINDS:
-        return raw
-    return "concept"
+    normalized = normalize_kind(raw)
+    if normalized in VALID_KINDS:
+        return normalized
+    return KIND_CONCEPT
 
 
 def _emit_audit(log_path: Path, event: dict[str, Any]) -> None:
+    event_type = event.pop("event_type", "backfill")
+    event.pop("timestamp", None)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    from ..auto_moc_updater import PipelineLogger
+
+    PipelineLogger(log_path).log(event_type, event)
 
 
 def run(
@@ -156,7 +152,7 @@ def run(
         body_start = _FRONTMATTER_RE.match(text)
         body = text[body_start.end() :] if body_start else text
         definition = ""
-        def_match = re.search(r">\s*\*\*一句话定义\*\*:\s*(.+)", body)
+        def_match = re.search(r">\s*\*\*(?:一句话定义|Definition)\*\*:\s*(.+)", body, re.IGNORECASE)
         if def_match:
             definition = def_match.group(1).strip()
 
@@ -241,9 +237,15 @@ def main() -> None:
         default=0,
         help="Limit number of notes to classify (0=all)",
     )
+    def _positive_int(value: str) -> int:
+        parsed = int(value)
+        if parsed <= 0:
+            raise argparse.ArgumentTypeError("batch-size must be a positive integer")
+        return parsed
+
     parser.add_argument(
         "--batch-size",
-        type=int,
+        type=_positive_int,
         default=50,
         help="Print progress every N notes",
     )
