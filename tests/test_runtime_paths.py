@@ -728,6 +728,53 @@ def test_step_quality_parses_qualified_files_from_qc_json(tmp_path, monkeypatch)
     assert result["quality_qualified_files"] == [str(qualified_file)]
 
 
+def test_incremental_quality_uses_article_outputs_instead_of_all_current_month(tmp_path, monkeypatch):
+    from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager
+    from ovp_pipeline.workflow_handlers import run_pipeline_quality
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    logger = PipelineLogger(vault / "60-Logs" / "pipeline.jsonl")
+    txn = TransactionManager(vault / "60-Logs" / "transactions")
+    pipeline = EnhancedPipeline(vault, logger, txn)
+    pipeline.run_mode = "incremental"
+
+    month = datetime.now().strftime("%Y-%m")
+    old_file = vault / "20-Areas" / "Tools" / "Topics" / month / "old_深度解读.md"
+    new_file = vault / "20-Areas" / "Tools" / "Topics" / month / "new_深度解读.md"
+    old_file.parent.mkdir(parents=True, exist_ok=True)
+    old_file.write_text("# old\n", encoding="utf-8")
+    new_file.write_text("# new\n", encoding="utf-8")
+
+    captured_commands: list[list[str]] = []
+    stdout = (
+        "__QC_JSON__: "
+        '{"checked": 1, "qualified": 1, "failed": 0, '
+        f'"qualified_files": ["{new_file}"]'
+        "}"
+    )
+
+    def fake_run_command(cmd: list[str], step_name: str, timeout: int | None = None) -> dict:
+        captured_commands.append(cmd)
+        return {"success": True, "stdout": stdout, "stderr": ""}
+
+    monkeypatch.setattr(pipeline, "run_command", fake_run_command)
+
+    result = run_pipeline_quality(
+        pipeline=pipeline,
+        results={"articles": {"produced_files": [str(new_file)]}},
+        dry_run=False,
+    )
+
+    assert result["success"] is True
+    assert result["quality_checked"] == 1
+    assert captured_commands
+    command = captured_commands[0]
+    assert "--all" not in command
+    assert "--dir" in command
+    assert command[command.index("--batch-size") + 1] == "1"
+
+
 def test_step_quality_writes_reusable_stage_artifact(tmp_path, monkeypatch):
     from ovp_pipeline.stage_artifacts import StageArtifactStore
     from ovp_pipeline.unified_pipeline_enhanced import PipelineLogger, TransactionManager

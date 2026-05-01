@@ -719,14 +719,55 @@ class EnhancedPipeline:
         self.txn_id = None
         self.workflow_pack_name = DEFAULT_WORKFLOW_PACK_NAME
         self.workflow_profile_name = "full"
+        self.run_mode = "custom"
 
-    def _quality_stage_inputs(self) -> tuple[list[Path], str, str, str]:
-        files = collect_quality_files(self.layout, all_areas=True)
+    def _normalize_quality_target_files(self, target_files: list[str | Path] | None) -> list[Path]:
+        if target_files is None:
+            return collect_quality_files(self.layout, all_areas=True)
+
+        normalized: list[Path] = []
+        seen: set[Path] = set()
+        for raw_path in target_files:
+            resolved = self._resolve_existing_vault_file(raw_path)
+            if resolved is None:
+                continue
+            path = Path(resolved)
+            if path in seen:
+                continue
+            seen.add(path)
+            normalized.append(path)
+        return sorted(normalized)
+
+    def _recent_quality_files(self, *, days: int = 1) -> list[Path]:
+        cutoff = time.time() - (days * 24 * 60 * 60)
+        recent: list[Path] = []
+        for path in collect_quality_files(self.layout, all_areas=True):
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    recent.append(path)
+            except OSError:
+                continue
+        return sorted(recent)
+
+    def _incremental_quality_target_files(self, results: dict[str, Any] | None) -> list[str | Path] | None:
+        if self.run_mode != "incremental":
+            return None
+
+        article_result = (results or {}).get("articles", {})
+        if isinstance(article_result, dict) and "produced_files" in article_result:
+            produced_files = article_result.get("produced_files")
+            return produced_files if isinstance(produced_files, list) else []
+
+        return self._recent_quality_files(days=1)
+
+    def _quality_stage_inputs(self, target_files: list[str | Path] | None = None) -> tuple[list[Path], str, str, str]:
+        files = self._normalize_quality_target_files(target_files)
         input_digest = hash_file_set(self.vault_dir, files)
         algorithm_digest = hash_json_payload(
             {
                 "stage": "quality",
                 "algorithm_version": QUALITY_STAGE_ALGORITHM_VERSION,
+                "input_scope": "targeted" if target_files is not None else "all_current_month",
             }
         )
         fingerprint = build_stage_fingerprint(
@@ -945,6 +986,14 @@ class EnhancedPipeline:
                 **input_payload,
                 "qualified_file_count": len(input_payload["qualified_files"]),
             }
+        elif stage == "quality":
+            files, input_digest, algorithm_digest, fingerprint = self._quality_stage_inputs(
+                self._incremental_quality_target_files(results)
+            )
+            inputs = {
+                "files": [self._relative_artifact_path(path) for path in files],
+                "file_count": len(files),
+            }
         else:
             files = self._stage_input_files(stage)
             input_digest = hash_file_set(self.vault_dir, files)
@@ -952,13 +1001,14 @@ class EnhancedPipeline:
                 "files": [self._relative_artifact_path(path) for path in files],
                 "file_count": len(files),
             }
-        fingerprint = build_stage_fingerprint(
-            stage=stage,
-            input_digest=input_digest,
-            algorithm_digest=algorithm_digest,
-            pack_name=self.workflow_pack_name,
-            workflow_profile=self.workflow_profile_name,
-        )
+        if stage != "quality":
+            fingerprint = build_stage_fingerprint(
+                stage=stage,
+                input_digest=input_digest,
+                algorithm_digest=algorithm_digest,
+                pack_name=self.workflow_pack_name,
+                workflow_profile=self.workflow_profile_name,
+            )
         output_files = self._stage_output_files(stage)
         outputs = {
             "paths": [self._relative_artifact_path(path) for path in output_files],
@@ -1140,6 +1190,11 @@ class EnhancedPipeline:
         counts["interpretations"] = sum(
             len(list(d.glob("*_深度解读.md"))) for d in topics_dirs if d.exists()
         )
+        interpretation_files: list[str] = []
+        for directory in topics_dirs:
+            if directory.exists():
+                interpretation_files.extend(str(path.resolve()) for path in directory.glob("*_深度解读.md"))
+        counts["interpretation_files"] = sorted(interpretation_files)
 
         # Evergreen 数量（供 absorb 产出统计使用）
         evergreen_dir = self.layout.evergreen_dir
@@ -1192,9 +1247,20 @@ class EnhancedPipeline:
                 self.layout.month_topics_dir("Programming"),
                 self.layout.month_topics_dir("Tools"),
             ]
-            current_count = sum(len(list(d.glob("*_深度解读.md"))) for d in topics_dirs if d.exists())
+            current_files: list[Path] = []
+            for directory in topics_dirs:
+                if directory.exists():
+                    current_files.extend(sorted(directory.glob("*_深度解读.md")))
+            current_count = len(current_files)
+            before_files = set(before_counts.get("interpretation_files", []))
+            produced_files = [
+                str(path.resolve())
+                for path in current_files
+                if str(path.resolve()) not in before_files
+            ]
             results["produced"] = current_count - before_counts.get("interpretations", 0)
             results["total_interpretations"] = current_count
+            results["produced_files"] = sorted(produced_files)
 
         elif step == "absorb":
             # 检查 absorb 阶段新增的 Evergreen 数量
@@ -1858,7 +1924,12 @@ class EnhancedPipeline:
 
         return result
 
-    def step_quality(self, batch_size: int | None = None, dry_run: bool = False) -> dict:
+    def step_quality(
+        self,
+        batch_size: int | None = None,
+        dry_run: bool = False,
+        target_files: list[str | Path] | None = None,
+    ) -> dict:
         """执行质量检查步骤"""
         print("\n" + "="*60)
         print("STEP 5: Quality Check")
@@ -1876,8 +1947,8 @@ class EnhancedPipeline:
                 "quality_score": 0.0,
             }
 
-        target_files, input_digest, algorithm_digest, fingerprint = self._quality_stage_inputs()
-        total_files = len(target_files)
+        quality_files, input_digest, algorithm_digest, fingerprint = self._quality_stage_inputs(target_files)
+        total_files = len(quality_files)
         effective_batch_size = batch_size or total_files
 
         if total_files == 0:
@@ -1894,7 +1965,7 @@ class EnhancedPipeline:
             if not dry_run:
                 self._write_quality_stage_artifact(
                     result,
-                    target_files,
+                    quality_files,
                     input_digest,
                     algorithm_digest,
                     fingerprint,
@@ -1911,87 +1982,119 @@ class EnhancedPipeline:
             "quality_score": 0.0,
         }
 
-        total_batches = (total_files + effective_batch_size - 1) // effective_batch_size
-        for batch_index, start_index in enumerate(range(0, total_files, effective_batch_size), start=1):
-            current_batch = min(effective_batch_size, total_files - start_index)
-            cmd = [
-                sys.executable, "-m", "ovp_pipeline.batch_quality_checker",
-                "--all",
-                "--vault-dir", str(self.vault_dir),
-                "--start-index", str(start_index),
-                "--batch-size", str(current_batch),
-            ]
-            if dry_run:
-                cmd.append("--dry-run")
-
-            if self.txn_id:
-                self.txn.heartbeat(
-                    self.txn_id,
-                    step_name="quality",
-                    progress_mode="counted",
-                    work_units_total=total_files,
-                    work_units_done=aggregated["quality_checked"],
-                    work_units_failed=aggregated["quality_failed"],
-                    current_item=f"quality batch {batch_index}/{total_batches}",
-                    progress_summary=f"{aggregated['quality_checked']}/{total_files} files checked",
-                    last_meaningful_event={
-                        "event_type": "quality_batch_started",
-                        "start_index": start_index,
-                        "batch_size": current_batch,
-                    },
+        temp_quality_dir = None
+        quality_target_dir: Path | None = None
+        quality_original_by_name: dict[str, str] = {}
+        try:
+            if target_files is not None:
+                self.layout.logs_dir.mkdir(parents=True, exist_ok=True)
+                temp_quality_dir = tempfile.TemporaryDirectory(
+                    prefix="quality-targets-",
+                    dir=str(self.layout.logs_dir),
                 )
-
-            result = self.run_command(
-                cmd,
-                "quality",
-                timeout=self._calculate_timeout("quality", batch_size=current_batch),
-            )
-
-            if not result["success"]:
-                print(f"✗ Quality check failed: {result.get('error', 'Unknown error')}")
-                result.update(aggregated)
-                return result
-
-            batch_payload = None
-            stdout = result.get("stdout", "")
-            for line in stdout.split("\n"):
-                if line.startswith("__QC_JSON__:"):
+                quality_target_dir = Path(temp_quality_dir.name)
+                for index, path in enumerate(quality_files):
+                    link_name = path.name
+                    if (quality_target_dir / link_name).exists():
+                        link_name = f"{index:04d}-{path.name}"
+                    link = quality_target_dir / link_name
                     try:
-                        batch_payload = json.loads(line.split("__QC_JSON__:", 1)[1].strip())
-                    except json.JSONDecodeError:
-                        batch_payload = None
-                    break
+                        link.symlink_to(path)
+                    except OSError:
+                        link.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+                    quality_original_by_name[link.name] = str(path.resolve())
 
-            if batch_payload is None:
-                print("✗ Quality check failed: missing __QC_JSON__ payload")
-                return {
-                    "success": False,
-                    "error": "missing_quality_payload",
-                    **aggregated,
-                }
+            total_batches = (total_files + effective_batch_size - 1) // effective_batch_size
+            for batch_index, start_index in enumerate(range(0, total_files, effective_batch_size), start=1):
+                current_batch = min(effective_batch_size, total_files - start_index)
+                cmd = [
+                    sys.executable, "-m", "ovp_pipeline.batch_quality_checker",
+                    "--vault-dir", str(self.vault_dir),
+                    "--start-index", str(start_index),
+                    "--batch-size", str(current_batch),
+                ]
+                if quality_target_dir is not None:
+                    cmd.extend(["--dir", str(quality_target_dir)])
+                else:
+                    cmd.append("--all")
+                if dry_run:
+                    cmd.append("--dry-run")
 
-            aggregated["quality_checked"] += batch_payload.get("checked", 0)
-            aggregated["quality_qualified"] += batch_payload.get("qualified", 0)
-            aggregated["quality_failed"] += batch_payload.get("failed", 0)
-            aggregated["quality_qualified_files"].extend(batch_payload.get("qualified_files", []))
-            aggregated["quality_results_json"] = batch_payload.get("results_json")
-            if self.txn_id:
-                self.txn.heartbeat(
-                    self.txn_id,
-                    step_name="quality",
-                    progress_mode="counted",
-                    work_units_total=total_files,
-                    work_units_done=aggregated["quality_checked"],
-                    work_units_failed=aggregated["quality_failed"],
-                    current_item=f"quality batch {batch_index}/{total_batches}",
-                    progress_summary=f"{aggregated['quality_checked']}/{total_files} files checked",
-                    last_meaningful_event={
-                        "event_type": "quality_batch_completed",
-                        "checked": batch_payload.get("checked", 0),
-                        "qualified": batch_payload.get("qualified", 0),
-                        "failed": batch_payload.get("failed", 0),
-                    },
+                if self.txn_id:
+                    self.txn.heartbeat(
+                        self.txn_id,
+                        step_name="quality",
+                        progress_mode="counted",
+                        work_units_total=total_files,
+                        work_units_done=aggregated["quality_checked"],
+                        work_units_failed=aggregated["quality_failed"],
+                        current_item=f"quality batch {batch_index}/{total_batches}",
+                        progress_summary=f"{aggregated['quality_checked']}/{total_files} files checked",
+                        last_meaningful_event={
+                            "event_type": "quality_batch_started",
+                            "start_index": start_index,
+                            "batch_size": current_batch,
+                        },
+                    )
+
+                result = self.run_command(
+                    cmd,
+                    "quality",
+                    timeout=self._calculate_timeout("quality", batch_size=current_batch),
                 )
+
+                if not result["success"]:
+                    print(f"✗ Quality check failed: {result.get('error', 'Unknown error')}")
+                    result.update(aggregated)
+                    return result
+
+                batch_payload = None
+                stdout = result.get("stdout", "")
+                for line in stdout.split("\n"):
+                    if line.startswith("__QC_JSON__:"):
+                        try:
+                            batch_payload = json.loads(line.split("__QC_JSON__:", 1)[1].strip())
+                        except json.JSONDecodeError:
+                            batch_payload = None
+                        break
+
+                if batch_payload is None:
+                    print("✗ Quality check failed: missing __QC_JSON__ payload")
+                    return {
+                        "success": False,
+                        "error": "missing_quality_payload",
+                        **aggregated,
+                    }
+
+                aggregated["quality_checked"] += batch_payload.get("checked", 0)
+                aggregated["quality_qualified"] += batch_payload.get("qualified", 0)
+                aggregated["quality_failed"] += batch_payload.get("failed", 0)
+                qualified_files = []
+                for raw_path in batch_payload.get("qualified_files", []):
+                    original = quality_original_by_name.get(Path(raw_path).name)
+                    qualified_files.append(original or raw_path)
+                aggregated["quality_qualified_files"].extend(qualified_files)
+                aggregated["quality_results_json"] = batch_payload.get("results_json")
+                if self.txn_id:
+                    self.txn.heartbeat(
+                        self.txn_id,
+                        step_name="quality",
+                        progress_mode="counted",
+                        work_units_total=total_files,
+                        work_units_done=aggregated["quality_checked"],
+                        work_units_failed=aggregated["quality_failed"],
+                        current_item=f"quality batch {batch_index}/{total_batches}",
+                        progress_summary=f"{aggregated['quality_checked']}/{total_files} files checked",
+                        last_meaningful_event={
+                            "event_type": "quality_batch_completed",
+                            "checked": batch_payload.get("checked", 0),
+                            "qualified": batch_payload.get("qualified", 0),
+                            "failed": batch_payload.get("failed", 0),
+                        },
+                    )
+        finally:
+            if temp_quality_dir is not None:
+                temp_quality_dir.cleanup()
 
         if aggregated["quality_checked"] > 0:
             aggregated["quality_score"] = (
@@ -2002,7 +2105,7 @@ class EnhancedPipeline:
         if not dry_run:
             self._write_quality_stage_artifact(
                 aggregated,
-                target_files,
+                quality_files,
                 input_digest,
                 algorithm_digest,
                 fingerprint,
@@ -2727,6 +2830,10 @@ class EnhancedPipeline:
                             before_counts["pinboard_archived"] += produced
                         elif step == "articles":
                             before_counts["interpretations"] = before_counts.get("interpretations", 0) + produced
+                            before_counts["interpretation_files"] = sorted(
+                                set(before_counts.get("interpretation_files", []))
+                                | set(cmd_result.get("produced_files", []))
+                            )
                         elif step == "absorb":
                             before_counts["evergreen"] += produced
                         elif step == "refine":
@@ -2938,6 +3045,7 @@ def main():
     logger = PipelineLogger(layout.pipeline_log)
     txn = TransactionManager(layout.transactions_dir)
     pipeline = EnhancedPipeline(layout.vault_dir, logger, txn)
+    pipeline.run_mode = "full" if args.full else ("incremental" if args.incremental else "custom")
 
     steps = execution_plan["steps"]
     pinboard_days = execution_plan["pinboard_days"]
@@ -2955,7 +3063,7 @@ def main():
     )
     logger.log("pipeline_started", {
         "txn_id": pipeline.txn_id,
-        "mode": "full" if args.full else "custom",
+        "mode": pipeline.run_mode,
         "steps": steps or "all"
     })
 
