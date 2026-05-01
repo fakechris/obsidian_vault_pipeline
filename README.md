@@ -96,7 +96,7 @@ Current milestone sequence:
 | M2 Roadmap And README Consolidation | Complete | merged historical milestones, compiler roadmap, recent KSR input, and reader-product research |
 | M3 Reader-First Knowledge Atlas | Done / iterate | reader home, `/ops` split, object source/backlink rail, visual graph map, kind-specific object reader lenses, and reader-oriented search shipped |
 | M4 KSR Safety And Hot-Path Hardening | Active | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, and candidate risk tiers have shipped; deeper enforcement remains |
-| M5 Context Pack And Operational Runtime | Later | session snapshots, context budget, claim leases, provider facades, observability |
+| M5 Context Pack And Operational Runtime | Active | session snapshots, context budget, first operational runtime state projection, claim leases, provider facades, observability |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, skill/routine extraction, notebook/raw-source mode |
 
@@ -104,7 +104,7 @@ Current active backlog focus:
 
 - Shipped: `KSR-001` evidence spans, `KSR-002` projection labels, `KSR-003` candidate risk tiers, `KSR-004` session snapshots/context packs, `KSR-014` article routing preview, `KSR-015` dashboard/search hot-path audit, `KSR-017` explicit context budgets, `KSR-018` markdown-aware evidence span backfill, `KSR-022` OVP prime context packs, `KSR-026` workflow wiring eval suite, and the first structured projection repair marker lifecycle.
 - Product shipped: readable object page profiles, source/backlink rail, kind-specific reader lenses, visual `/graph` map, and reader-oriented search grouped by kind, evidence, and reason.
-- Next: move into `BL-014` operational runtime graph, claim leases, provider facade, and observability.
+- Current: `BL-014` starts with `ovp-runtime-state`, a visible runtime projection over repair markers, pipeline events, and trusted reuse events.
 - Product track: reader-first Knowledge Atlas stays a projection layer, not a new state system.
 
 ## Domain Packs
@@ -407,6 +407,12 @@ Refine is not hidden or missing. It is wired in, but opt-in by default to avoid 
 | `ovp-graph daily today --vault-dir <vault>` | Build daily graph delta |
 | `ovp-lint --check --vault-dir <vault>` | Run structure/link checks |
 
+### Operations
+
+| Command | Purpose |
+|---|---|
+| `ovp-runtime-state --vault-dir <vault> --write --json` | Build the operational runtime state projection from repair markers, pipeline events, and reuse events; writes `60-Logs/runtime-state/current.{json,md}` |
+
 ### Context packs
 
 | Command | Purpose |
@@ -447,6 +453,7 @@ vault/
 │   ├── daily-deltas/
 │   ├── working-memory/
 │   ├── session-snapshots/
+│   ├── runtime-state/
 │   └── knowledge.db
 └── 70-Archive/
 ```
