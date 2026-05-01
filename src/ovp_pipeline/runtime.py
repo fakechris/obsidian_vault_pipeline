@@ -401,6 +401,12 @@ def rotate_jsonl_if_needed(
     """
     if not path.exists():
         return None
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size < max_lines * 20:
+        return None
     line_count = _count_lines_fast(path)
     if line_count < max_lines:
         return None

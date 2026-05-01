@@ -1618,7 +1618,7 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    # /ops nav hidden in reader mode — verified separately in operator-mode tests
+    assert 'href="/ops"' not in body
     assert (
         'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
     )
@@ -1832,7 +1832,7 @@ def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    # /ops nav hidden in reader mode — verified separately in operator-mode tests
+    assert 'href="/ops"' not in body
 
 
 def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
@@ -2254,7 +2254,7 @@ Processed source note without downstream chain.
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    # /ops nav hidden in reader mode — verified separately in operator-mode tests
+    assert 'href="/ops"' not in body
     assert "inherited from research-tech-briefing" in body
     assert "inherited from orientation_brief in research-tech" in body
     assert "Source contract: observation_surface · briefing" in body
@@ -3667,7 +3667,7 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert 'href="/map?pack=default-knowledge"' in body
-    # /ops nav hidden in reader mode — verified separately in operator-mode tests
+    assert 'href="/ops"' not in body
     assert "Assembly Contract" in body
     assert "inherited from topic_overview in research-tech" in body
     assert "Source contract: wiki_view · overview/topic" in body
