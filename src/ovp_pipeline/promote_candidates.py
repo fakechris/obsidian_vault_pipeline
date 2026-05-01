@@ -288,13 +288,35 @@ def rewrite_candidate_links(
 
 
 def promote_candidate(vault_dir: Path, slug: str, dry_run: bool = True) -> LifecycleMutation:
-    """Promote a candidate and synchronize filesystem side effects."""
+    """Promote a candidate and synchronize filesystem side effects.
+
+    Before creating a new Evergreen, a trigram-Jaccard similarity check runs
+    against existing active slugs.  If a near-duplicate is found (>= 0.82),
+    the candidate is merged into the existing Evergreen instead of creating a
+    new file — preventing paraphrastic clones at the source.
+    """
     registry = ConceptRegistry(vault_dir).load()
     entry = registry.find_by_slug(slug)
     if not entry:
         raise ValueError(f"Concept '{slug}' not found")
     if entry.status != STATUS_CANDIDATE:
         raise ValueError(f"'{slug}' is not a candidate (status: {entry.status})")
+
+    try:
+        from .concept_dedup import find_similar_slugs
+
+        similar = find_similar_slugs(vault_dir, slug, threshold=0.82)
+        if similar:
+            best_slug, best_sim = similar[0]
+            best_entry = registry.find_by_slug(best_slug)
+            if best_entry and best_entry.status == "active":
+                print(
+                    f"  [dedup-guard] '{slug}' similar to active '{best_slug}' "
+                    f"(sim={best_sim:.2f}) — merging instead of promoting."
+                )
+                return merge_candidate(vault_dir, slug, best_slug, dry_run=dry_run)
+    except Exception:
+        pass
 
     mutation = LifecycleMutation(action="promote", slug=slug, target_slug=slug)
 

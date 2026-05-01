@@ -251,8 +251,31 @@ def _pick_canonical(members: list[DedupCandidate]) -> DedupCandidate:
     )
 
 
-def find_clusters(vault_dir: Path, *, threshold: float = DEFAULT_THRESHOLD) -> list[DedupCluster]:
+def find_clusters(
+    vault_dir: Path,
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+    scope_slugs: set[str] | None = None,
+) -> list[DedupCluster]:
+    """Find duplicate clusters among Evergreen files.
+
+    If *scope_slugs* is given, only candidates whose normalized slug is in the
+    scope set — or whose trigram-Jaccard similarity to any scope slug is above
+    *threshold* — are considered.  This makes incremental (post-absorb) runs
+    O(scope × N) instead of O(N²).
+    """
     cands = _scan_evergreen(vault_dir)
+    if scope_slugs is not None:
+        scope_norms = {_normalize_slug_for_compare(s) for s in scope_slugs}
+        filtered: list[DedupCandidate] = []
+        for c in cands:
+            cn = _normalize_slug_for_compare(c.slug)
+            if cn in scope_norms:
+                filtered.append(c)
+                continue
+            if any(trigram_jaccard(cn, sn) >= threshold for sn in scope_norms):
+                filtered.append(c)
+        cands = filtered
     raw = _cluster_by_similarity(cands, threshold=threshold)
     clusters: list[DedupCluster] = []
     for members, min_sim in raw:
@@ -263,6 +286,30 @@ def find_clusters(vault_dir: Path, *, threshold: float = DEFAULT_THRESHOLD) -> l
         clusters.append(DedupCluster(canonical=canonical, duplicates=dups, min_similarity=min_sim))
     clusters.sort(key=lambda c: (-len(c.duplicates), c.canonical.slug))
     return clusters
+
+
+def find_similar_slugs(
+    vault_dir: Path,
+    slug: str,
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+) -> list[tuple[str, float]]:
+    """Return existing Evergreen slugs with trigram-Jaccard >= *threshold* to *slug*.
+
+    Returns a list of ``(existing_slug, similarity)`` pairs sorted by
+    descending similarity.  An empty list means *slug* is sufficiently unique.
+    """
+    cands = _scan_evergreen(vault_dir)
+    norm = _normalize_slug_for_compare(slug)
+    hits: list[tuple[str, float]] = []
+    for c in cands:
+        if c.slug == slug:
+            continue
+        sim = trigram_jaccard(norm, _normalize_slug_for_compare(c.slug))
+        if sim >= threshold:
+            hits.append((c.slug, sim))
+    hits.sort(key=lambda t: -t[1])
+    return hits
 
 
 # ---------------------------------------------------------------------------

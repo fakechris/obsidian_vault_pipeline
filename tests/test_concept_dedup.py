@@ -14,6 +14,7 @@ from ovp_pipeline.concept_dedup import (
     apply_proposal,
     archive_applied_proposal,
     find_clusters,
+    find_similar_slugs,
     list_proposals,
     load_proposal,
     trigram_jaccard,
@@ -352,3 +353,73 @@ def test_concept_dedup_apply_uses_vault_workflow_lock(tmp_path: Path, monkeypatc
 
     assert exit_code == 0
     assert calls == ["enter", "apply", "archive", "exit"]
+
+
+# ---------------------------------------------------------------------------
+# scope_slugs filtering
+# ---------------------------------------------------------------------------
+
+
+def test_find_clusters_scope_slugs_limits_search(tmp_path: Path):
+    """Only candidates in scope (or similar to scope) should be clustered."""
+    _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
+    _evergreen(tmp_path, "MCP-Clients", body="dup")
+    _evergreen(tmp_path, "Vector-Database", body="canonical " * 10)
+    _evergreen(tmp_path, "Vector-Databases", body="dup")
+
+    clusters = find_clusters(tmp_path, threshold=0.5, scope_slugs={"MCP-Client"})
+    slugs_in_clusters = {c.canonical.slug for c in clusters} | {
+        d.slug for c in clusters for d in c.duplicates
+    }
+    assert "MCP-Client" in slugs_in_clusters or "MCP-Clients" in slugs_in_clusters
+    assert "Vector-Database" not in slugs_in_clusters
+    assert "Vector-Databases" not in slugs_in_clusters
+
+
+def test_find_clusters_scope_slugs_none_returns_all(tmp_path: Path):
+    _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
+    _evergreen(tmp_path, "MCP-Clients", body="dup")
+    _evergreen(tmp_path, "Vector-Database", body="canonical " * 10)
+    _evergreen(tmp_path, "Vector-Databases", body="dup")
+
+    clusters_all = find_clusters(tmp_path, threshold=0.5, scope_slugs=None)
+    assert len(clusters_all) == 2
+
+
+def test_find_clusters_scope_slugs_empty_set_returns_none(tmp_path: Path):
+    _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
+    _evergreen(tmp_path, "MCP-Clients", body="dup")
+
+    clusters = find_clusters(tmp_path, threshold=0.5, scope_slugs=set())
+    assert clusters == []
+
+
+# ---------------------------------------------------------------------------
+# find_similar_slugs
+# ---------------------------------------------------------------------------
+
+
+def test_find_similar_slugs_returns_matches(tmp_path: Path):
+    _evergreen(tmp_path, "MCP-Client", body="canonical " * 10)
+    _evergreen(tmp_path, "MCP-Clients", body="dup")
+    _evergreen(tmp_path, "Unrelated-Concept", body="no match")
+
+    hits = find_similar_slugs(tmp_path, "MCP-Client", threshold=0.5)
+    matched_slugs = {s for s, _ in hits}
+    assert "MCP-Clients" in matched_slugs
+    assert "Unrelated-Concept" not in matched_slugs
+
+
+def test_find_similar_slugs_excludes_self(tmp_path: Path):
+    _evergreen(tmp_path, "MCP-Client", body="body")
+
+    hits = find_similar_slugs(tmp_path, "MCP-Client", threshold=0.1)
+    assert all(s != "MCP-Client" for s, _ in hits)
+
+
+def test_find_similar_slugs_empty_when_no_match(tmp_path: Path):
+    _evergreen(tmp_path, "Quantum-Computing")
+    _evergreen(tmp_path, "Banana-Bread")
+
+    hits = find_similar_slugs(tmp_path, "MCP-Client", threshold=0.8)
+    assert hits == []

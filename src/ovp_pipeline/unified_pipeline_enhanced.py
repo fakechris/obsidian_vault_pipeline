@@ -419,6 +419,7 @@ BASE_PIPELINE_STEPS = [
     "quality",        # 5. 质量检查
     "fix_links",      # 6. 修复断裂链接
     "absorb",         # 7. 吸收 Evergreen 生命周期动作（quality >= 3.0 才能执行）
+    "dedup",          # 7a. 去重刚吸收的 Evergreen（scope 限于本轮 absorb 产出）
     "note_type_normalize",  # 8. 规范化 note_type 元数据
     "registry_sync",  # 9. 同步Registry与文件系统
     "moc",            # 10. 更新MOC
@@ -2304,10 +2305,16 @@ class EnhancedPipeline:
                 "stderr": stderr,
             },
         )
+        promoted_slugs: list[str] = []
+        for item in results:
+            for concept in (item.get("concepts") or []):
+                if concept.get("status") == "promoted_created" and concept.get("slug"):
+                    promoted_slugs.append(concept["slug"])
         result = {
             "success": success,
             "stdout": stdout,
             "stderr": stderr,
+            "promoted_slugs": promoted_slugs,
             **payload,
         }
         if not success:
@@ -2557,6 +2564,76 @@ class EnhancedPipeline:
     def step_evergreen(self, recent_days: int = 7, dry_run: bool = False, quality_score: float = -1.0) -> dict:
         """兼容旧调用，内部转到 Absorb。"""
         return self.step_absorb(recent_days=recent_days, dry_run=dry_run, quality_score=quality_score)
+
+    def step_dedup(self, dry_run: bool = False) -> dict:
+        """Post-absorb deduplication scoped to recently absorbed slugs."""
+        print("\n" + "=" * 60)
+        print("STEP 7a: Dedup Evergreen (scoped to absorbed)")
+        print("=" * 60)
+
+        from .concept_dedup import (
+            apply_proposal,
+            find_clusters,
+            write_proposal,
+        )
+
+        scope_slugs: set[str] | None = None
+        absorb_result = self.step_results.get("absorb")
+        if absorb_result and isinstance(absorb_result, dict):
+            promoted = absorb_result.get("promoted_slugs") or []
+            if promoted:
+                scope_slugs = set(promoted)
+
+        threshold = 0.82
+        clusters = find_clusters(self.vault_dir, threshold=threshold, scope_slugs=scope_slugs)
+
+        if not clusters:
+            scope_desc = f"scope={len(scope_slugs)} slugs" if scope_slugs else "full vault"
+            print(f"  No duplicates found ({scope_desc}, threshold={threshold}).")
+            return {"success": True, "clusters": 0, "archived": 0, "rewrites": 0}
+
+        prop_path, proposal = write_proposal(self.vault_dir, clusters, threshold=threshold)
+        print(f"  Proposal: {prop_path.name} ({len(clusters)} cluster(s))")
+
+        if dry_run:
+            for cl in clusters:
+                dups = ", ".join(d.slug for d in cl.duplicates)
+                print(f"    [DRY] {cl.canonical.slug} ← {dups}")
+            return {
+                "success": True,
+                "clusters": len(clusters),
+                "archived": 0,
+                "rewrites": 0,
+                "dry_run": True,
+                "proposal_id": proposal.proposal_id,
+            }
+
+        results = apply_proposal(
+            self.vault_dir, proposal, dry_run=False, pack=self.pack_name
+        )
+        from .concept_dedup import archive_applied_proposal
+        archive_applied_proposal(self.vault_dir, prop_path)
+
+        total_archived = sum(len(r.archived) for r in results)
+        total_rewrites = sum(r.wikilink_rewrites for r in results)
+        errors = [e for r in results for e in r.errors]
+
+        for r in results:
+            dups = ", ".join(str(p.name) for p in r.archived) if r.archived else "(none)"
+            print(f"    {r.canonical_slug}: archived={len(r.archived)} rewrites={r.wikilink_rewrites}")
+
+        if errors:
+            for e in errors:
+                print(f"    [WARN] {e}")
+
+        print(f"  ✓ Dedup complete: {len(clusters)} clusters, {total_archived} archived, {total_rewrites} rewrites")
+        return {
+            "success": not errors,
+            "clusters": len(clusters),
+            "archived": total_archived,
+            "rewrites": total_rewrites,
+            "errors": errors,
+        }
 
     def step_moc(self, dry_run: bool = False) -> dict:
         """执行MOC更新步骤"""
