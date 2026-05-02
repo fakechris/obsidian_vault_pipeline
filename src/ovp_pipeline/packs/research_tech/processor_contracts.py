@@ -83,6 +83,17 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             description="Project qualified deep dives into evergreen truth artifacts.",
         ),
         ProcessorContractSpec(
+            name="entity_extract",
+            pack=pack_name,
+            stage="entity_extract",
+            mode="hybrid",
+            inputs=("deep_dive",),
+            outputs=("entity_candidate",),
+            quality_hooks=(),
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_entity_extract",
+            description="Extract named entities from deep dives via LLM NER.",
+        ),
+        ProcessorContractSpec(
             name="dedup",
             pack=pack_name,
             stage="dedup",

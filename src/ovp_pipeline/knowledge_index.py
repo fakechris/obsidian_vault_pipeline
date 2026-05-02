@@ -718,6 +718,11 @@ def rebuild_knowledge_index(
             for meta in parser.parse_directory(evergreen_dir, recursive=True)
             if "_Candidates" not in Path(meta.path).parts
         ]
+        entity_dir = resolved_vault / "10-Knowledge" / "Entity"
+        if entity_dir.exists():
+            for meta in parser.parse_directory(entity_dir, recursive=True):
+                if "_Candidates" not in Path(meta.path).parts:
+                    object_metadata_items.append(meta)
         page_metadata_items = list(object_metadata_items)
         for extra_dir in (atlas_dir, areas_dir):
             if not extra_dir.exists():

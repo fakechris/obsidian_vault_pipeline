@@ -83,6 +83,10 @@ def run_pipeline_absorb(
     )
 
 
+def run_pipeline_entity_extract(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
+    return pipeline.step_entity_extract(dry_run=dry_run)
+
+
 def run_pipeline_dedup(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
     return pipeline.step_dedup(dry_run)
 
