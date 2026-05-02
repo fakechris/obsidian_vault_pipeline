@@ -110,11 +110,19 @@ kind 说明：
 - event: 事件/会议（如 NeurIPS 2024, GPT-4 发布）
 
 要求：
-- 每个实体 confidence 按你的确定程度打分
 - text 使用实体最常见的规范名称
 - 同一实体只提取一次（选 confidence 最高的）
 - 最多提取 15 个实体
 - 如果文本中没有命名实体，返回空数组 []
+
+**confidence 打分锚点（严格遵守）：**
+- 0.95+ : 实体名 + 上下文都明确无歧义（"Andrej Karpathy 加入 OpenAI"——既有人名又有上下文佐证）
+- 0.85  : 实体名明确但孤立提及（"Karpathy 说..." ——名字明确但无上下文细节）
+- 0.75  : 名字可能有多义（"Anthropic" 可能是公司也可能是字段名/形容词）
+- < 0.75: 别的人/物可能也叫这个名字（"chris" / "alex" / "OS" / "context"——常见词）
+
+**禁止打分偏置**：不要默认给所有实体打 0.85+。如果上下文不足以排除歧义，应该降到 0.75 或更低；
+低 confidence 实体仍会被记录但不会自动建 candidate（CONFIDENCE_THRESHOLD=0.8 拦住）。
 """
 
 CONFIDENCE_THRESHOLD = 0.8

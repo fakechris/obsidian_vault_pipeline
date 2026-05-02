@@ -62,6 +62,13 @@ dev = [
     "mypy>=1.0.0",
 ]
 mlx = [
+    # Preferred: mlx-embeddings handles encoder pooling for embedding models.
+    # Pin <0.1 to avoid the upstream bump that requires mlx>=0.31.1
+    # (incompatible with the macOS-14 wheel of mlx 0.30 that some users
+    # rely on).
+    "mlx-embeddings>=0.0.5,<0.1",
+    # Fallback: mlx-lm still works for the 4-bit DWQ model with
+    # last-token pooling (less accurate but functional).
     "mlx-lm>=0.24.0",
     "huggingface_hub>=0.20.0",
 ]
