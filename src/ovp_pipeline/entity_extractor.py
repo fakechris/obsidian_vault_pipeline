@@ -198,6 +198,78 @@ class EntityExtractor:
             pass
         return []
 
+    # ----- Pure-alias scan (no-LLM mode) -----
+
+    _ALIAS_MIN_LEN = 2
+
+    def _scan_aliases(self, content: str) -> list[dict[str, Any]]:
+        """Find verbatim alias matches in *content*.
+
+        Used when ``llm_call is None``: scan every alias in the registry
+        as a case-insensitive whole-word substring against the content.
+        Each match emits one mention with confidence 1.0 and a snippet of
+        the surrounding ±60 chars.
+
+        Skips aliases shorter than ``_ALIAS_MIN_LEN`` (2 chars) to avoid
+        false positives on common 1-character tokens.
+        """
+        if not content:
+            return []
+
+        # Build {alias_lower: (entity_slug, kind, canonical_title)} once.
+        # Only ACTIVE + CANDIDATE entries are scannable (rejected aliases
+        # would create noise).
+        scannable: list[tuple[str, str, str, str]] = []
+        for entry in self.registry.all_entries():
+            if entry.status not in ("active", "candidate"):
+                continue
+            for surface in entry.all_surfaces():
+                if len(surface) >= self._ALIAS_MIN_LEN:
+                    scannable.append(
+                        (surface, entry.slug, entry.entity_type, entry.title)
+                    )
+
+        if not scannable:
+            return []
+
+        content_lower = content.lower()
+        seen_slugs: set[str] = set()
+        out: list[dict[str, Any]] = []
+
+        for surface, slug, kind, title in scannable:
+            if slug in seen_slugs:
+                continue  # one mention per entity per source — keep it sparse
+            surface_lc = surface.lower()
+            # Word-boundary aware substring search.  For Chinese / non-ASCII
+            # we use a permissive substring match because \b doesn't help.
+            ascii_only = surface_lc.isascii()
+            idx = -1
+            if ascii_only:
+                # Use word boundary regex
+                m = re.search(
+                    r"(?<![a-z0-9])" + re.escape(surface_lc) + r"(?![a-z0-9])",
+                    content_lower,
+                )
+                if m:
+                    idx = m.start()
+            else:
+                idx = content_lower.find(surface_lc)
+            if idx < 0:
+                continue
+            start = max(0, idx - 30)
+            end = min(len(content), idx + len(surface) + 30)
+            snippet = content[start:end].replace("\n", " ").strip()
+            out.append({
+                "text": title,             # canonical, not the surface form
+                "kind": kind,
+                "confidence": 1.0,         # exact alias match → high conf
+                "snippet": snippet,
+                "_alias_match": True,      # marker so caller knows path
+            })
+            seen_slugs.add(slug)
+
+        return out
+
     # ----- Resolution -----
 
     def _resolve_and_upsert(
@@ -245,6 +317,15 @@ class EntityExtractor:
     ) -> ExtractionResult:
         """Extract entities from *content* and resolve against the registry.
 
+        When ``self.llm_call`` is set, runs LLM NER first and resolves each
+        mention against the registry alias index.  When ``self.llm_call``
+        is ``None`` (``--no-llm`` flag), falls back to a pure-alias scan:
+        each canonical title and each alias in the registry is searched for
+        verbatim in *content* (case-insensitive, word-boundary aware).
+        Pure-alias mode is fast (~3000 files/sec) and useful for bootstrap
+        runs where seed entities should already cover the obvious named
+        things.
+
         Parameters
         ----------
         content : str
@@ -258,7 +339,10 @@ class EntityExtractor:
         """
         result = ExtractionResult(source_file=source_file)
 
-        raw_mentions = self._call_llm_ner(content, source_file)
+        if self.llm_call is None:
+            raw_mentions = self._scan_aliases(content)
+        else:
+            raw_mentions = self._call_llm_ner(content, source_file)
 
         for item in raw_mentions:
             if "_error" in item:
