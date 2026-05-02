@@ -508,7 +508,7 @@ def test_run_pipeline_does_not_skip_record_only_source_stage(tmp_path, monkeypat
 
     assert calls == ["pinboard"]
     assert results["pinboard"]["success"] is True
-    assert "cache_hit" not in results["pinboard"]
+    assert results["pinboard"].get("cache_hit") is None
 
 
 def test_run_pipeline_ignores_cache_artifact_when_declared_output_is_missing(tmp_path, monkeypatch):
@@ -556,7 +556,7 @@ def test_run_pipeline_ignores_cache_artifact_when_declared_output_is_missing(tmp
 
     assert calls == ["knowledge_index"]
     assert results["knowledge_index"]["success"] is True
-    assert "cache_hit" not in results["knowledge_index"]
+    assert results["knowledge_index"].get("cache_hit") is None
 
 
 def test_run_pipeline_writes_stage_artifact_after_cacheable_stage_success(tmp_path, monkeypatch):
@@ -627,7 +627,7 @@ def test_run_pipeline_writes_record_only_article_artifact_without_skipping(tmp_p
     second_results = pipeline.run_pipeline(steps=["articles"], dry_run=False)
 
     assert calls == ["articles", "articles"]
-    assert "cache_hit" not in second_results["articles"]
+    assert second_results["articles"].get("cache_hit") is None
 
 
 def test_detect_pinboard_processor_routes_gist_to_article_stack():

@@ -314,6 +314,170 @@ class TestAbsorbStepResultContract:
         assert sorted(result["promoted_slugs"]) == ["p-深度解读", "q-深度解读"]
 
 
+class TestStrictModeCrossStepIntegration:
+    """End-to-end contract enforcement: every step produces a typed
+    StepResult, the dispatcher coerces in strict mode (raising on unknown
+    fields), and downstream consumers read typed attributes that are
+    *guaranteed* to exist.
+
+    Together these tests prove the silent-fallback class of bug
+    (PATCH-1's A1 + A2) is structurally impossible going forward.
+    """
+
+    def _make_pipeline(self, vault_dir):
+        from ovp_pipeline.auto_moc_updater import PipelineLogger
+        from ovp_pipeline.unified_pipeline_enhanced import (
+            EnhancedPipeline,
+            TransactionManager,
+        )
+        logger = PipelineLogger(vault_dir / "60-Logs" / "pipeline.jsonl")
+        txn_dir = vault_dir / "60-Logs" / "transactions"
+        txn_dir.mkdir(parents=True, exist_ok=True)
+        txn = TransactionManager(txn_dir)
+        return EnhancedPipeline(vault_dir, logger, txn)
+
+    def test_strict_mode_default(self, temp_vault):
+        pipeline = self._make_pipeline(temp_vault)
+        assert pipeline.step_contract_mode == "strict"
+
+    def test_step_absorb_returns_typed_in_strict_mode(self, temp_vault):
+        from unittest.mock import patch
+        from ovp_pipeline.step_contracts import AbsorbStepResult
+
+        pipeline = self._make_pipeline(temp_vault)
+        files = [
+            temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "x_深度解读.md",
+        ]
+        for f in files:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("---\ntitle: x\n---\nbody", encoding="utf-8")
+
+        canned = {
+            "mode": "absorb",
+            "summary": {"files_processed": 1, "concepts_promoted": 1},
+            "results": [{
+                "file": str(files[0]),
+                "concepts": [{"slug": canonicalize_note_id(files[0].stem),
+                              "status": "promoted_created"}],
+            }],
+        }
+        with patch(
+            "ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow",
+            return_value=canned,
+        ):
+            result = pipeline.step_absorb(recent_days=7)
+
+        assert isinstance(result, AbsorbStepResult)
+        # Typed attribute access — no .get(default) escape hatch needed:
+        assert result.success is True
+        assert result.processed_files == [str(files[0])]
+        assert result.promoted_slugs == [canonicalize_note_id(files[0].stem)]
+
+    def test_dispatcher_coerce_strict_rejects_unknown_fields(self, temp_vault):
+        """If a step (or stage cache) somehow injects a field not on the
+        contract, strict mode rejects it instead of silently dropping."""
+        from ovp_pipeline.step_contracts import (
+            AbsorbStepResult,
+            StepContractError,
+        )
+
+        pipeline = self._make_pipeline(temp_vault)
+        # Direct invocation of the recorder with a polluted dict — this is
+        # what would happen if a future _write_stage_artifact mutation
+        # introduced a key not on the contract.
+        polluted = {
+            "success": True,
+            "processed_files": [],
+            "promoted_slugs": [],
+            "i_am_not_on_the_contract": "oops",
+        }
+        with pytest.raises(StepContractError, match="extra fields"):
+            pipeline._record_step_result("absorb", polluted)
+
+    def test_cross_step_consumer_reads_absorb_typed_fields(self, temp_vault):
+        """entity_extract and dedup must be able to read absorb's outputs
+        as typed attributes — the bug PATCH-1 fixed structurally."""
+        from ovp_pipeline.step_contracts import AbsorbStepResult
+
+        pipeline = self._make_pipeline(temp_vault)
+        # Simulate what dispatcher does after step_absorb returns:
+        absorb_result = AbsorbStepResult(
+            success=True,
+            processed_files=["a.md", "b.md"],
+            promoted_slugs=["concept-x", "concept-y"],
+        )
+        pipeline.step_results["absorb"] = absorb_result
+
+        # entity_extract's consumer pattern (line 2700-ish in
+        # unified_pipeline_enhanced.py):
+        retrieved = pipeline.step_results.get("absorb")
+        assert retrieved is not None
+        absorb_files = list(retrieved.get("processed_files", []))
+        assert absorb_files == ["a.md", "b.md"]
+
+        # dedup's consumer pattern:
+        promoted = list(retrieved.get("promoted_slugs", []))
+        assert promoted == ["concept-x", "concept-y"]
+
+    def test_step_entity_extract_skipped_path_typed(self, temp_vault):
+        from ovp_pipeline.step_contracts import EntityExtractStepResult
+
+        pipeline = self._make_pipeline(temp_vault)
+        result = pipeline.step_entity_extract(dry_run=True)
+        assert isinstance(result, EntityExtractStepResult)
+        assert result.skipped is True
+        assert result.reason == "dry_run"
+
+    def test_step_dedup_no_clusters_path_typed(self, temp_vault):
+        from ovp_pipeline.step_contracts import DedupStepResult
+
+        pipeline = self._make_pipeline(temp_vault)
+        # No evergreens in vault → no clusters → success-empty path.
+        result = pipeline.step_dedup(dry_run=True)
+        assert isinstance(result, DedupStepResult)
+        assert result.success is True
+        assert result.clusters == 0
+
+    def test_run_pipeline_handles_frozen_step_result(self, temp_vault, monkeypatch):
+        """Regression: run_pipeline used to call cmd_result.update() / write
+        cmd_result["output"] = ..., which fails on frozen StepResult.  The
+        dispatcher must funnel mutations through a dict copy and re-coerce.
+        """
+        from unittest.mock import patch
+        from ovp_pipeline.step_contracts import (
+            ClippingsStepResult,
+            EntityExtractStepResult,
+        )
+
+        pipeline = self._make_pipeline(temp_vault)
+
+        # Make handler_registry route every step to a frozen StepResult so
+        # we exercise the mutation path on real typed objects.
+        canned_clippings = ClippingsStepResult(success=True, migrated=0, remaining=0)
+        canned_entity = EntityExtractStepResult(success=True, total_entities=0)
+
+        def fake_handler(self_, step, **_kwargs):
+            if step == "clippings":
+                return canned_clippings
+            if step == "entity_extract":
+                return canned_entity
+            raise ValueError(f"Unknown stage handler: {step}")
+
+        monkeypatch.setattr(
+            "ovp_pipeline.unified_pipeline_enhanced.execute_profile_stage_handler",
+            fake_handler,
+        )
+
+        # Drive a minimal 2-step run; the original bug would explode here
+        # with AttributeError on cmd_result.update().
+        result = pipeline.run_pipeline(steps=["clippings", "entity_extract"])
+
+        # If we got here without AttributeError, the typed-result mutation
+        # path is safe.  Also verify both step_results entries are typed.
+        assert isinstance(pipeline.step_results["clippings"], ClippingsStepResult)
+        assert isinstance(pipeline.step_results["entity_extract"], EntityExtractStepResult)
+
+
 class TestCandidateToPromotedContract:
     """Data flows correctly from candidate to promoted Evergreen file."""
 

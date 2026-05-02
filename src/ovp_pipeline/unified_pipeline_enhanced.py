@@ -38,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,28 @@ try:
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
     from .stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
+    from .step_contracts import (
+        STEP_CONTRACTS,
+        AbsorbStepResult,
+        ArticlesStepResult,
+        ClippingsStepResult,
+        DedupStepResult,
+        EntityExtractStepResult,
+        FixLinksStepResult,
+        KnowledgeIndexStepResult,
+        MocStepResult,
+        NoteTypeNormalizeStepResult,
+        PinboardProcessStepResult,
+        PinboardStepResult,
+        QualityStepResult,
+        RefineStepResult,
+        RegistrySyncStepResult,
+        StepContractError,
+        StepResult,
+        coerce_step_result,
+        to_absorb_result as _to_absorb_result,
+        to_typed_step_result as _to_typed_step_result,
+    )
     from .txn import (
         build_transaction_payload,
         heartbeat_transaction,
@@ -62,6 +85,28 @@ except ImportError:  # pragma: no cover - script mode fallback
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
+    from step_contracts import (
+        STEP_CONTRACTS,
+        AbsorbStepResult,
+        ArticlesStepResult,
+        ClippingsStepResult,
+        DedupStepResult,
+        EntityExtractStepResult,
+        FixLinksStepResult,
+        KnowledgeIndexStepResult,
+        MocStepResult,
+        NoteTypeNormalizeStepResult,
+        PinboardProcessStepResult,
+        PinboardStepResult,
+        QualityStepResult,
+        RefineStepResult,
+        RegistrySyncStepResult,
+        StepContractError,
+        StepResult,
+        coerce_step_result,
+        to_absorb_result as _to_absorb_result,
+        to_typed_step_result as _to_typed_step_result,
+    )
     from stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from txn import (
         build_transaction_payload,
@@ -718,11 +763,36 @@ class EnhancedPipeline:
         self.scripts_dir = self.vault_dir / "60-Logs" / "scripts"
         self.logger = logger
         self.txn = txn
-        self.step_results = {}
+        self.step_results: dict[str, StepResult] = {}
         self.txn_id = None
         self.workflow_pack_name = DEFAULT_WORKFLOW_PACK_NAME
         self.workflow_profile_name = "full"
         self.run_mode = "custom"
+        # Contract mode: "strict" (default) raises on unknown fields,
+        # "warn" emits StepContractWarning, "off" stores raw dicts.
+        self.step_contract_mode: str = "strict"
+
+    def _record_step_result(
+        self,
+        step: str,
+        raw: dict[str, Any] | StepResult,
+    ) -> StepResult:
+        """Coerce a step's raw return value through its declared contract
+        and write it to ``self.step_results[step]``.
+
+        In ``warn`` mode (default): unknown fields emit a StepContractWarning
+        and are dropped.  In ``strict`` mode: unknown fields raise
+        StepContractError.  In ``off`` mode: the raw value is stored as-is
+        (legacy fallback for steps that have not been registered yet — only
+        permitted when ``step`` is missing from STEP_CONTRACTS).
+        """
+        if self.step_contract_mode == "off" or step not in STEP_CONTRACTS:
+            self.step_results[step] = raw  # type: ignore[assignment]
+            return raw  # type: ignore[return-value]
+        strict = self.step_contract_mode == "strict"
+        typed = coerce_step_result(step, raw, strict=strict)
+        self.step_results[step] = typed
+        return typed
 
     def _normalize_quality_target_files(self, target_files: list[str | Path] | None) -> list[Path]:
         if target_files is None:
@@ -755,12 +825,13 @@ class EnhancedPipeline:
     def _incremental_quality_target_files(self, results: dict[str, Any] | None) -> list[str | Path] | None:
         if self.run_mode != "incremental":
             return None
-
-        article_result = (results or {}).get("articles", {})
-        if isinstance(article_result, dict) and "produced_files" in article_result:
+        # ``results["articles"]`` is an ArticlesStepResult or dict; both
+        # expose ``.get()`` so no isinstance check is needed.
+        article_result = (results or {}).get("articles")
+        if article_result is not None and hasattr(article_result, "get"):
             produced_files = article_result.get("produced_files")
-            return produced_files if isinstance(produced_files, list) else []
-
+            if produced_files is not None:
+                return produced_files if isinstance(produced_files, list) else []
         return self._recent_quality_files(days=1)
 
     def _quality_stage_inputs(self, target_files: list[str | Path] | None = None) -> tuple[list[Path], str, str, str]:
@@ -1153,12 +1224,25 @@ class EnhancedPipeline:
             return None
         return str(path)
 
-    def _write_quality_stage_artifact(self, result: dict[str, Any], files: list[Path], input_digest: str, algorithm_digest: str, fingerprint: str) -> None:
-        if result.get("success") is not True:
-            return
+    def _write_quality_stage_artifact(
+        self,
+        result: "QualityStepResult | dict[str, Any]",
+        files: list[Path],
+        input_digest: str,
+        algorithm_digest: str,
+        fingerprint: str,
+    ) -> tuple[str, str] | tuple[None, None]:
+        """Write the quality stage artifact and return (fingerprint, artifact_path).
+
+        Returns ``(None, None)`` when ``result.success is not True``.  Callers
+        feed the returned tuple back into the QualityStepResult's
+        ``quality_stage_fingerprint`` / ``quality_stage_artifact`` fields.
+        """
+        if (result.get("success") if hasattr(result, "get") else result.get("success")) is not True:
+            return (None, None)
         normalized_files = [
             normalized
-            for raw_path in result.get("quality_qualified_files", [])
+            for raw_path in (result.get("quality_qualified_files") or [])
             if isinstance(raw_path, (str, Path)) and (normalized := self._resolve_existing_vault_file(raw_path)) is not None
         ]
         base_vault = self.vault_dir.resolve()
@@ -1179,14 +1263,14 @@ class EnhancedPipeline:
                 "results_json": result.get("quality_results_json"),
             },
             metrics={
-                "quality_checked": result.get("quality_checked", 0),
-                "quality_qualified": result.get("quality_qualified", 0),
-                "quality_failed": result.get("quality_failed", 0),
-                "quality_score": result.get("quality_score", 0.0),
+                "quality_checked": result.get("quality_checked", 0) or 0,
+                "quality_qualified": result.get("quality_qualified", 0) or 0,
+                "quality_failed": result.get("quality_failed", 0) or 0,
+                "quality_score": result.get("quality_score", 0.0) or 0.0,
             },
         )
-        result["quality_stage_fingerprint"] = manifest["fingerprint"]
-        result["quality_stage_artifact"] = str(self._stage_artifact_store().path_for("quality", fingerprint))
+        artifact_path = str(self._stage_artifact_store().path_for("quality", fingerprint))
+        return (manifest["fingerprint"], artifact_path)
 
     def _get_before_counts(self) -> dict:
         """获取执行前的文件计数（用于基于产出的检测）"""
@@ -1261,9 +1345,9 @@ class EnhancedPipeline:
             archived_dir = self.layout.pinboard_archive_dir / datetime.now().strftime("%Y-%m")
             archived_count = len(list(archived_dir.glob("*.md"))) if archived_dir.exists() else 0
             results["produced"] = archived_count - before_counts.get("pinboard_archived", 0)
-            results["processed"] = cmd_result.get("processed", results["produced"])
-            results["skipped"] = cmd_result.get("skipped", 0)
-            results["failed"] = cmd_result.get("failed", 0)
+            results["files_processed"] = cmd_result.get("files_processed", cmd_result.get("processed", results["produced"]))
+            results["files_skipped"] = cmd_result.get("files_skipped", cmd_result.get("skipped", 0))
+            results["files_failed"] = cmd_result.get("files_failed", cmd_result.get("failed", 0))
 
         elif step == "articles":
             # 检查生成的深度解读数量
@@ -1318,16 +1402,16 @@ class EnhancedPipeline:
             results["changed_files"] = sorted(changed)
 
         elif step == "quality":
+            # Use the qualified contract field names; ``quality_checked`` etc.
+            # are already populated by step_quality, this is just the
+            # produced-count derivation.
             checked = cmd_result.get("quality_checked", 0)
             results["produced"] = checked
-            results["checked"] = checked > 0
-            results["qualified"] = cmd_result.get("quality_qualified", 0)
-            results["failed"] = cmd_result.get("quality_failed", 0)
 
         elif step == "note_type_normalize":
             results["produced"] = int(cmd_result.get("note_type_changed", 0) or 0)
-            results["changed"] = results["produced"]
-            results["skipped"] = int(cmd_result.get("note_type_skipped", 0) or 0)
+            # note_type_changed / note_type_skipped are the contract fields;
+            # the producer (run_command stdout parser) already sets them.
 
         elif step == "knowledge_index":
             current_mtime = self.layout.knowledge_db.stat().st_mtime if self.layout.knowledge_db.exists() else 0.0
@@ -1555,7 +1639,7 @@ class EnhancedPipeline:
         start_date: str | None = None,
         end_date: str | None = None,
         dry_run: bool = False
-    ) -> dict:
+    ) -> "PinboardStepResult":
         """执行Pinboard处理步骤"""
         print("\n" + "="*60)
         print("STEP 1: Processing Pinboard Bookmarks")
@@ -1573,12 +1657,12 @@ class EnhancedPipeline:
             except ValueError:
                 error = f"Invalid pinboard date format: {start_date} ~ {end_date}. Expected YYYY-MM-DD."
                 print(f"✗ Pinboard processing failed: {error}")
-                return {"success": False, "error": error}
+                return PinboardStepResult(success=False, error=error)
 
             if start_day > end_day:
                 error = f"Invalid pinboard date range: {start_date} is after {end_date}"
                 print(f"✗ Pinboard processing failed: {error}")
-                return {"success": False, "error": error}
+                return PinboardStepResult(success=False, error=error)
 
             if start_day != end_day:
                 print(f"  Date range: {start_date} to {end_date}")
@@ -1613,9 +1697,9 @@ class EnhancedPipeline:
         else:
             print(f"✗ Pinboard processing failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("pinboard", result)
 
-    def _step_pinboard_by_day(self, start_day, end_day, dry_run: bool = False) -> dict:
+    def _step_pinboard_by_day(self, start_day, end_day, dry_run: bool = False) -> "PinboardStepResult":
         combined_stdout: list[str] = []
         combined_stderr: list[str] = []
         current = start_day
@@ -1649,27 +1733,26 @@ class EnhancedPipeline:
                     "see that day's stdout/stderr for details."
                 )
                 print(f"✗ Pinboard processing failed: {error}")
-                return {
+                return _to_typed_step_result("pinboard", {
                     "success": False,
                     "error": error,
                     "stdout": "\n".join(combined_stdout),
                     "stderr": "\n".join(combined_stderr),
                     "days_processed": day_count,
-                    "failed_day": day_str,
-                }
+                })
 
             day_count += 1
             current += timedelta(days=1)
 
         print(f"✓ Pinboard processed successfully across {day_count} daily request(s)")
-        return {
+        return _to_typed_step_result("pinboard", {
             "success": True,
             "stdout": "\n".join(combined_stdout),
             "stderr": "\n".join(combined_stderr),
             "days_processed": day_count,
-        }
+        })
 
-    def step_pinboard_process(self, dry_run: bool = False) -> dict:
+    def step_pinboard_process(self, dry_run: bool = False) -> "PinboardProcessStepResult":
         """处理 02-Pinboard/ 中的书签文件，路由到对应处理器"""
         print("\n" + "="*60)
         print("STEP 2: Processing Pinboard Files")
@@ -1680,12 +1763,12 @@ class EnhancedPipeline:
 
         if not pinboard_dir.exists():
             print("  02-Pinboard/ 目录不存在，跳过")
-            return {"success": True, "processed": 0, "skipped": 0}
+            return PinboardProcessStepResult(success=True, skipped=True, reason="pinboard_dir_missing")
 
         files = list(pinboard_dir.glob("*.md"))
         if not files:
             print("  没有待处理的 Pinboard 文件")
-            return {"success": True, "processed": 0, "skipped": 0}
+            return PinboardProcessStepResult(success=True, skipped=True, reason="no_files")
 
         print(f"  找到 {len(files)} 个 Pinboard 文件")
 
@@ -1904,9 +1987,14 @@ class EnhancedPipeline:
                     )
 
         print(f"\n  汇总: 处理 {results['processed']}, 跳过 {results['skipped']}, 失败 {results['failed']}")
-        return {"success": results["failed"] == 0, **results}
+        return PinboardProcessStepResult(
+            success=results["failed"] == 0,
+            files_processed=results["processed"],
+            files_skipped=results["skipped"],
+            files_failed=results["failed"],
+        )
 
-    def step_clippings(self, batch_size: int | None = None, dry_run: bool = False) -> dict:
+    def step_clippings(self, batch_size: int | None = None, dry_run: bool = False) -> "ClippingsStepResult":
         """执行Clippings处理步骤"""
         print("\n" + "="*60)
         print("STEP 3: Processing Clippings")
@@ -1928,9 +2016,9 @@ class EnhancedPipeline:
         else:
             print(f"✗ Clippings processing failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("clippings", result)
 
-    def step_articles(self, batch_size: int | None = None, dry_run: bool = False) -> dict:
+    def step_articles(self, batch_size: int | None = None, dry_run: bool = False) -> "ArticlesStepResult":
         """执行文章深度解读步骤"""
         print("\n" + "="*60)
         print("STEP 4: Generating Article Interpretations")
@@ -1953,30 +2041,24 @@ class EnhancedPipeline:
         else:
             print(f"✗ Article processing failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("articles", result)
 
     def step_quality(
         self,
         batch_size: int | None = None,
         dry_run: bool = False,
         target_files: list[str | Path] | None = None,
-    ) -> dict:
+    ) -> "QualityStepResult":
         """执行质量检查步骤"""
         print("\n" + "="*60)
         print("STEP 5: Quality Check")
         print("="*60)
 
         if batch_size is not None and batch_size <= 0:
-            return {
-                "success": False,
-                "error": f"invalid_batch_size ({batch_size} <= 0)",
-                "quality_checked": 0,
-                "quality_qualified": 0,
-                "quality_failed": 0,
-                "quality_qualified_files": [],
-                "quality_results_json": None,
-                "quality_score": 0.0,
-            }
+            return QualityStepResult(
+                success=False,
+                error=f"invalid_batch_size ({batch_size} <= 0)",
+            )
 
         quality_files, input_digest, algorithm_digest, fingerprint = self._quality_stage_inputs(target_files)
         total_files = len(quality_files)
@@ -1984,24 +2066,22 @@ class EnhancedPipeline:
 
         if total_files == 0:
             print("  没有待质检的深度解读文件")
-            result = {
-                "success": True,
-                "quality_checked": 0,
-                "quality_qualified": 0,
-                "quality_failed": 0,
-                "quality_qualified_files": [],
-                "quality_results_json": None,
-                "quality_score": 0.0,
-            }
+            empty = QualityStepResult(success=True)
             if not dry_run:
-                self._write_quality_stage_artifact(
-                    result,
+                stage_fp, artifact_path = self._write_quality_stage_artifact(
+                    empty.to_dict(),
                     quality_files,
                     input_digest,
                     algorithm_digest,
                     fingerprint,
                 )
-            return result
+                if stage_fp is not None:
+                    empty = replace(
+                        empty,
+                        quality_stage_fingerprint=stage_fp,
+                        quality_stage_artifact=artifact_path,
+                    )
+            return empty
 
         aggregated = {
             "success": True,
@@ -2076,8 +2156,13 @@ class EnhancedPipeline:
 
                 if not result["success"]:
                     print(f"✗ Quality check failed: {result.get('error', 'Unknown error')}")
-                    result.update(aggregated)
-                    return result
+                    return _to_typed_step_result("quality", {
+                        **aggregated, "success": False,
+                        "error": str(result.get("error", "")),
+                        "stdout": str(result.get("stdout", "")),
+                        "stderr": str(result.get("stderr", "")),
+                        "returncode": int(result.get("returncode", 0) or 0),
+                    })
 
                 batch_payload = None
                 stdout = result.get("stdout", "")
@@ -2091,11 +2176,9 @@ class EnhancedPipeline:
 
                 if batch_payload is None:
                     print("✗ Quality check failed: missing __QC_JSON__ payload")
-                    return {
-                        "success": False,
-                        "error": "missing_quality_payload",
-                        **aggregated,
-                    }
+                    return _to_typed_step_result("quality", {
+                        **aggregated, "success": False, "error": "missing_quality_payload",
+                    })
 
                 aggregated["quality_checked"] += batch_payload.get("checked", 0)
                 aggregated["quality_qualified"] += batch_payload.get("qualified", 0)
@@ -2133,17 +2216,29 @@ class EnhancedPipeline:
             )
 
         print("✓ Quality check completed")
+        stage_fp = None
+        artifact_path = None
         if not dry_run:
-            self._write_quality_stage_artifact(
+            stage_fp, artifact_path = self._write_quality_stage_artifact(
                 aggregated,
                 quality_files,
                 input_digest,
                 algorithm_digest,
                 fingerprint,
             )
-        return aggregated
+        return QualityStepResult(
+            success=True,
+            quality_checked=aggregated["quality_checked"],
+            quality_qualified=aggregated["quality_qualified"],
+            quality_failed=aggregated["quality_failed"],
+            quality_qualified_files=list(aggregated["quality_qualified_files"]),
+            quality_results_json=aggregated["quality_results_json"],
+            quality_score=aggregated["quality_score"],
+            quality_stage_fingerprint=stage_fp,
+            quality_stage_artifact=artifact_path,
+        )
 
-    def step_fix_links(self, dry_run: bool = False) -> dict:
+    def step_fix_links(self, dry_run: bool = False) -> "FixLinksStepResult":
         """执行断裂链接修复步骤"""
         print("\n" + "="*60)
         print("STEP 6: Fixing Broken Links")
@@ -2184,9 +2279,9 @@ class EnhancedPipeline:
         else:
             print(f"✗ Fix links failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("fix_links", result)
 
-    def step_registry_sync(self, dry_run: bool = False) -> dict:
+    def step_registry_sync(self, dry_run: bool = False) -> "RegistrySyncStepResult":
         """执行Registry同步步骤"""
         print("\n" + "="*60)
         print("STEP 8: Syncing Registry with Filesystem")
@@ -2205,7 +2300,7 @@ class EnhancedPipeline:
         else:
             print(f"✗ Registry sync failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("registry_sync", result)
 
     def _build_absorb_progress_callback(
         self,
@@ -2341,7 +2436,7 @@ class EnhancedPipeline:
         }
         if not success:
             result["error"] = stderr
-        return result
+        return _to_absorb_result(result)
 
     def step_absorb(
         self,
@@ -2351,7 +2446,7 @@ class EnhancedPipeline:
         qualified_files: list[str] | None = None,
         batch_size: int | None = None,
         require_quality_artifact: bool = False,
-    ) -> dict:
+    ) -> "AbsorbStepResult":
         """执行 Absorb 步骤
 
         Args:
@@ -2367,10 +2462,10 @@ class EnhancedPipeline:
                 找不到 artifact 时停线，避免扫历史 quality reports。
         """
         if batch_size is not None and batch_size <= 0:
-            return {
+            return _to_absorb_result({
                 "success": False,
                 "error": f"invalid_batch_size ({batch_size} <= 0)",
-            }
+            })
 
         normalized_files = None
         input_artifact: dict[str, Any] | None = None
@@ -2378,20 +2473,20 @@ class EnhancedPipeline:
             if require_quality_artifact:
                 input_artifact = self._load_quality_stage_artifact()
                 if not input_artifact:
-                    return {
+                    return _to_absorb_result({
                         "success": False,
                         "blocked": True,
                         "reason": "missing_quality_stage_artifact",
                         "error": "Absorb requires a matching quality stage artifact; refusing to scan historical quality reports.",
-                    }
+                    })
                 artifact_files = input_artifact.get("outputs", {}).get("qualified_files")
                 if not isinstance(artifact_files, list):
-                    return {
+                    return _to_absorb_result({
                         "success": False,
                         "blocked": True,
                         "reason": "invalid_quality_stage_artifact",
                         "error": "Quality stage artifact is missing outputs.qualified_files.",
-                    }
+                    })
                 normalized_files = [
                     normalized
                     for path in artifact_files
@@ -2421,19 +2516,19 @@ class EnhancedPipeline:
                     "fingerprint": input_artifact.get("fingerprint"),
                     "run_id": input_artifact.get("run_id"),
                 }
-            return result
+            return _to_absorb_result(result)
 
         # Quality gate: 仅在没有文件级质检结果时才阻断
         if normalized_files is None and 0 <= quality_score < 3.0:
             print(f"\n⚠️  Quality score ({quality_score:.1f}) < 3.0, blocking absorb stage")
-            return {
+            return _to_absorb_result({
                 "success": False,
                 "blocked": True,
                 "reason": f"quality_score_too_low ({quality_score:.1f} < 3.0)",
                 "error": "Absorb stage blocked due to low quality score",
                 "promoted_slugs": [],
                 "processed_files": [],
-            }
+            })
 
         print("\n" + "="*60)
         print("STEP 7: Absorbing Knowledge Into Evergreen Layer")
@@ -2484,7 +2579,7 @@ class EnhancedPipeline:
                         "fingerprint": input_artifact.get("fingerprint"),
                         "run_id": input_artifact.get("run_id"),
                     }
-                return result
+                return _to_absorb_result(result)
 
             effective_batch_size = batch_size or len(normalized_files)
             aggregated_summary = {
@@ -2534,39 +2629,45 @@ class EnhancedPipeline:
                         staged_sources=staged_sources,
                         record_item_ledger=not dry_run,
                     )
+                    # result is AbsorbStepResult from _run_absorb_workflow_direct
                     if not result["success"]:
                         print(f"✗ Absorb stage failed: {result.get('error', 'Unknown error')}")
-                        summary = result.get("summary", {})
-                        if isinstance(summary, dict):
+                        batch_summary = result.get("summary") or {}
+                        if isinstance(batch_summary, dict):
                             for key in aggregated_summary:
-                                aggregated_summary[key] += _safe_int(summary.get(key))
-                        batch_results = result.get("results", [])
-                        if isinstance(batch_results, list):
-                            aggregated_results.extend(batch_results)
-                        result["qualified_files"] = qualified_input_files
-                        result["pending_qualified_files"] = normalized_files
-                        result["item_cache_hits"] = len(item_cache_hit_files)
-                        result["item_cache_hit_files"] = item_cache_hit_files
-                        result["summary"] = aggregated_summary
-                        result["results"] = aggregated_results
-                        result["promoted_slugs"] = [
-                            concept["slug"]
-                            for item in aggregated_results
-                            if isinstance(item, dict)
-                            for concept in (item.get("concepts") or [])
-                            if concept.get("status") == "promoted_created" and concept.get("slug")
-                        ]
-                        result["processed_files"] = [
-                            str(item["file"])
-                            for item in aggregated_results
-                            if isinstance(item, dict) and item.get("file")
-                        ]
-                        return result
+                                aggregated_summary[key] += _safe_int(batch_summary.get(key))
+                        batch_results_list = result.get("results") or []
+                        if isinstance(batch_results_list, list):
+                            aggregated_results.extend(batch_results_list)
+                        return _to_absorb_result({
+                            "success": False,
+                            "error": result.get("error"),
+                            "stdout": result.get("stdout", ""),
+                            "stderr": result.get("stderr", ""),
+                            "qualified_files": qualified_input_files,
+                            "pending_qualified_files": normalized_files,
+                            "item_cache_hits": len(item_cache_hit_files),
+                            "item_cache_hit_files": item_cache_hit_files,
+                            "summary": aggregated_summary,
+                            "results": aggregated_results,
+                            "promoted_slugs": [
+                                concept["slug"]
+                                for item in aggregated_results
+                                if isinstance(item, dict)
+                                for concept in (item.get("concepts") or [])
+                                if concept.get("status") == "promoted_created" and concept.get("slug")
+                            ],
+                            "processed_files": [
+                                str(item["file"])
+                                for item in aggregated_results
+                                if isinstance(item, dict) and item.get("file")
+                            ],
+                        })
 
-                    summary = result.get("summary", {})
+                    batch_summary = result.get("summary") or {}
                     for key in aggregated_summary:
-                        aggregated_summary[key] += int(summary.get(key, 0) or 0)
-                    aggregated_results.extend(result.get("results", []))
+                        aggregated_summary[key] += int(batch_summary.get(key, 0) or 0)
+                    aggregated_results.extend(result.get("results") or [])
 
             aggregated_promoted_slugs = [
                 concept["slug"]
@@ -2580,7 +2681,7 @@ class EnhancedPipeline:
                 for item in aggregated_results
                 if isinstance(item, dict) and item.get("file")
             ]
-            result = {
+            payload = {
                 "success": True,
                 "qualified_files": qualified_input_files,
                 "pending_qualified_files": normalized_files,
@@ -2590,22 +2691,14 @@ class EnhancedPipeline:
                 "results": aggregated_results,
                 "promoted_slugs": aggregated_promoted_slugs,
                 "processed_files": aggregated_processed_files,
-                "stdout": json.dumps(
-                    {
-                        "summary": aggregated_summary,
-                        "results": aggregated_results,
-                    },
-                    ensure_ascii=False,
-                ),
+                "stdout": json.dumps({"summary": aggregated_summary, "results": aggregated_results}, ensure_ascii=False),
                 "stderr": "",
             }
             if input_artifact is not None:
-                result["input_artifact"] = {
-                    "stage": input_artifact.get("stage"),
-                    "fingerprint": input_artifact.get("fingerprint"),
-                    "run_id": input_artifact.get("run_id"),
-                }
+                payload["input_artifact"] = {k: input_artifact.get(k) for k in ("stage", "fingerprint", "run_id")}
+            result = _to_absorb_result(payload)
         else:
+            # _run_absorb_workflow_direct already returns AbsorbStepResult
             result = self._run_absorb_workflow_direct(dry_run=dry_run, recent=recent_days)
 
         if result["success"]:
@@ -2619,7 +2712,7 @@ class EnhancedPipeline:
         """兼容旧调用，内部转到 Absorb。"""
         return self.step_absorb(recent_days=recent_days, dry_run=dry_run, quality_score=quality_score)
 
-    def step_entity_extract(self, dry_run: bool = False) -> dict:
+    def step_entity_extract(self, dry_run: bool = False) -> "EntityExtractStepResult":
         """Extract named entities from recent deep dives using LLM NER."""
         print("\n" + "=" * 60)
         print("ENTITY EXTRACT — 命名实体提取")
@@ -2628,16 +2721,16 @@ class EnhancedPipeline:
         from .entity_extractor import make_extractor
         from .entity_registry import EntityRegistry
 
-        result: dict = {"success": True, "produced": 0, "total_entities": 0}
-
         try:
             registry = EntityRegistry(self.vault_dir).load()
             before_count = len(registry)
 
             if dry_run:
                 print("  [DRY RUN] Entity extraction skipped")
-                result["total_entities"] = before_count
-                return result
+                return EntityExtractStepResult(
+                    success=True, skipped=True, reason="dry_run",
+                    total_entities=before_count,
+                )
 
             llm_call = None
             try:
@@ -2651,15 +2744,22 @@ class EnhancedPipeline:
 
             if llm_call is None:
                 print("  ⚠ No LLM client available — entity extraction skipped")
-                result["total_entities"] = before_count
-                return result
+                return EntityExtractStepResult(
+                    success=True, skipped=True, reason="no_llm_client",
+                    total_entities=before_count,
+                )
 
             extractor = make_extractor(
                 self.vault_dir, llm_call=llm_call
             )
 
-            absorb_result = self.step_results.get("absorb", {})
-            absorb_files = absorb_result.get("processed_files", [])
+            # Read absorb's typed contract — the silent-fallback bug we fixed
+            # in PATCH-1 is now structurally impossible because absorb_result
+            # always exposes processed_files (empty list if nothing absorbed).
+            absorb_result = self.step_results.get("absorb")
+            absorb_files: list[str] = []
+            if absorb_result is not None:
+                absorb_files = list(absorb_result.get("processed_files", []))
 
             if not absorb_files:
                 areas_dir = self.vault_dir / "20-Areas"
@@ -2717,22 +2817,23 @@ class EnhancedPipeline:
             extractor.registry.save()
             after_count = len(extractor.registry)
             produced = after_count - before_count
-            result["produced"] = produced
-            result["total_entities"] = after_count
-            result["mentions_extracted"] = total_mentions
 
             print(f"  新增 Entity 候选: {produced}")
             print(f"  累计 Entity: {after_count}")
             print(f"  提取到 Mentions: {total_mentions}")
 
+            return EntityExtractStepResult(
+                success=True,
+                produced=produced,
+                total_entities=after_count,
+                mentions_extracted=total_mentions,
+            )
+
         except Exception as exc:
-            result["success"] = False
-            result["error"] = str(exc)
             print(f"  ✗ Entity extraction failed: {exc}")
+            return EntityExtractStepResult(success=False, error=str(exc))
 
-        return result
-
-    def step_dedup(self, dry_run: bool = False) -> dict:
+    def step_dedup(self, dry_run: bool = False) -> "DedupStepResult":
         """Post-absorb deduplication scoped to recently absorbed slugs."""
         print("\n" + "=" * 60)
         print("STEP 7a: Dedup Evergreen (scoped to absorbed)")
@@ -2745,10 +2846,14 @@ class EnhancedPipeline:
             write_proposal,
         )
 
+        # Read absorb's typed contract.  promoted_slugs is now guaranteed
+        # to exist on every absorb return path (PATCH-1 + commit 2 of the
+        # contract refactor); empty list means "no scope, fall back to
+        # full vault".
         scope_slugs: set[str] | None = None
         absorb_result = self.step_results.get("absorb")
-        if absorb_result and isinstance(absorb_result, dict):
-            promoted = absorb_result.get("promoted_slugs") or []
+        if absorb_result is not None:
+            promoted = list(absorb_result.get("promoted_slugs", []))
             if promoted:
                 scope_slugs = set(promoted)
 
@@ -2758,7 +2863,7 @@ class EnhancedPipeline:
         if not clusters:
             scope_desc = f"scope={len(scope_slugs)} slugs" if scope_slugs else "full vault"
             print(f"  No duplicates found ({scope_desc}, threshold={threshold}).")
-            return {"success": True, "clusters": 0, "archived": 0, "rewrites": 0}
+            return DedupStepResult(success=True)
 
         prop_path, proposal = write_proposal(self.vault_dir, clusters, threshold=threshold)
         print(f"  Proposal: {prop_path.name} ({len(clusters)} cluster(s))")
@@ -2767,17 +2872,15 @@ class EnhancedPipeline:
             for cl in clusters:
                 dups = ", ".join(d.slug for d in cl.duplicates)
                 print(f"    [DRY] {cl.canonical.slug} ← {dups}")
-            return {
-                "success": True,
-                "clusters": len(clusters),
-                "archived": 0,
-                "rewrites": 0,
-                "dry_run": True,
-                "proposal_id": proposal.proposal_id,
-            }
+            return DedupStepResult(
+                success=True,
+                clusters=len(clusters),
+                dry_run=True,
+                proposal_id=proposal.proposal_id,
+            )
 
         results = apply_proposal(
-            self.vault_dir, proposal, dry_run=False, pack=self.pack_name
+            self.vault_dir, proposal, dry_run=False, pack=self.workflow_pack_name
         )
         from .concept_dedup import archive_applied_proposal
         archive_applied_proposal(self.vault_dir, prop_path)
@@ -2795,15 +2898,15 @@ class EnhancedPipeline:
                 print(f"    [WARN] {e}")
 
         print(f"  ✓ Dedup complete: {len(clusters)} clusters, {total_archived} archived, {total_rewrites} rewrites")
-        return {
-            "success": not errors,
-            "clusters": len(clusters),
-            "archived": total_archived,
-            "rewrites": total_rewrites,
-            "errors": errors,
-        }
+        return DedupStepResult(
+            success=not errors,
+            clusters=len(clusters),
+            archived=total_archived,
+            rewrites=total_rewrites,
+            errors=errors,
+        )
 
-    def step_moc(self, dry_run: bool = False) -> dict:
+    def step_moc(self, dry_run: bool = False) -> "MocStepResult":
         """执行MOC更新步骤"""
         print("\n" + "="*60)
         print("STEP 9: Updating MOC Indexes")
@@ -2824,9 +2927,9 @@ class EnhancedPipeline:
         else:
             print(f"✗ MOC update failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("moc", result)
 
-    def step_refine(self, dry_run: bool = False) -> dict:
+    def step_refine(self, dry_run: bool = False) -> "RefineStepResult":
         """执行 Refine 批处理步骤（cleanup + breakdown）。"""
         print("\n" + "="*60)
         print("STEP 10: Refining Existing Evergreen Notes")
@@ -2851,21 +2954,34 @@ class EnhancedPipeline:
         cleanup_result = self.run_command(cleanup_cmd, "refine_cleanup", timeout=300)
         if not cleanup_result["success"]:
             print(f"✗ Cleanup refine failed: {cleanup_result.get('error', 'Unknown error')}")
-            return cleanup_result
+            return RefineStepResult(
+                success=False,
+                error=str(cleanup_result.get("error", "")),
+                stdout=str(cleanup_result.get("stdout", "")),
+                stderr=str(cleanup_result.get("stderr", "")),
+                cleanup=cleanup_result,
+            )
 
         breakdown_result = self.run_command(breakdown_cmd, "refine_breakdown", timeout=300)
         if not breakdown_result["success"]:
             print(f"✗ Breakdown refine failed: {breakdown_result.get('error', 'Unknown error')}")
-            return breakdown_result
+            return RefineStepResult(
+                success=False,
+                error=str(breakdown_result.get("error", "")),
+                stdout=str(breakdown_result.get("stdout", "")),
+                stderr=str(breakdown_result.get("stderr", "")),
+                cleanup=cleanup_result,
+                breakdown=breakdown_result,
+            )
 
         print("✓ Refine batch completed")
-        return {
-            "success": True,
-            "cleanup": cleanup_result,
-            "breakdown": breakdown_result,
-        }
+        return RefineStepResult(
+            success=True,
+            cleanup=cleanup_result,
+            breakdown=breakdown_result,
+        )
 
-    def step_note_type_normalize(self, dry_run: bool = False) -> dict:
+    def step_note_type_normalize(self, dry_run: bool = False) -> "NoteTypeNormalizeStepResult":
         """Normalize note_type frontmatter before derived indexes are rebuilt."""
         print("\n" + "="*60)
         print("Normalizing note_type Metadata")
@@ -2893,9 +3009,9 @@ class EnhancedPipeline:
                 f"Normalized {result['note_type_changed']} note_type values; "
                 f"skipped {result['note_type_skipped']}"
             )
-        return result
+        return _to_typed_step_result("note_type_normalize", result)
 
-    def step_knowledge_index(self, dry_run: bool = False) -> dict:
+    def step_knowledge_index(self, dry_run: bool = False) -> "KnowledgeIndexStepResult":
         """刷新派生 knowledge.db。"""
         print("\n" + "="*60)
         print("STEP 10: Refreshing Knowledge Index")
@@ -2958,7 +3074,7 @@ class EnhancedPipeline:
         else:
             print(f"✗ Knowledge index refresh failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("knowledge_index", result)
 
     def run_pipeline(
         self,
@@ -3035,17 +3151,17 @@ class EnhancedPipeline:
                 if not dry_run:
                     cache_result = self._checkout_stage_artifact(step, results=results)
                     if cache_result:
-                        results[step] = cache_result
-                        self.step_results[step] = cache_result
+                        typed_cache = self._record_step_result(step, cache_result)
+                        results[step] = typed_cache
                         self.txn.step(
                             self.txn_id,
                             step,
                             "completed",
-                            cache_result.get("output", ""),
-                            cache_hit=cache_result.get("cache_hit"),
-                            skipped=cache_result.get("skipped"),
-                            stage_fingerprint=cache_result.get("stage_fingerprint"),
-                            stage_artifact=cache_result.get("stage_artifact"),
+                            typed_cache.get("output", ""),
+                            cache_hit=typed_cache.get("cache_hit"),
+                            skipped=typed_cache.get("skipped"),
+                            stage_fingerprint=typed_cache.get("stage_fingerprint"),
+                            stage_artifact=typed_cache.get("stage_artifact"),
                         )
                         continue
 
@@ -3066,18 +3182,22 @@ class EnhancedPipeline:
                         raise
                     cmd_result = {"success": False, "error": f"Unknown step: {step}"}
 
+                # cmd_result is a frozen StepResult (or a dict from the
+                # "Unknown step" fallback); accumulate dispatcher additions
+                # on a mutable copy, re-coerce to typed at the end.
+                payload = cmd_result.to_dict() if isinstance(cmd_result, StepResult) else dict(cmd_result)
+
                 # 基于实际产出判断状态（非dry_run模式）
-                if not dry_run and cmd_result.get("success"):
-                    output_check = self._count_output_files(step, before_counts, cmd_result)
+                if not dry_run and payload.get("success"):
+                    output_check = self._count_output_files(step, before_counts, payload)
                     produced = output_check.get("produced", 0)
 
-                    # 更新结果信息
-                    cmd_result.update(output_check)
-                    cmd_result["output"] = f"Produced {produced} items"
+                    payload.update(output_check)
+                    payload["output"] = f"Produced {produced} items"
 
                     # 有产出即视为成功（不再依赖超时导致的退出码）
                     if produced > 0:
-                        cmd_result["success"] = True
+                        payload["success"] = True
                         # 更新 before_counts 为下次检查做准备
                         if step == "clippings":
                             before_counts["processed"] += produced
@@ -3089,42 +3209,42 @@ class EnhancedPipeline:
                             before_counts["interpretations"] = before_counts.get("interpretations", 0) + produced
                             before_counts["interpretation_files"] = sorted(
                                 set(before_counts.get("interpretation_files", []))
-                                | set(cmd_result.get("produced_files", []))
+                                | set(payload.get("produced_files", []))
                             )
                         elif step == "absorb":
                             before_counts["evergreen"] += produced
                         elif step == "refine":
                             before_counts["refine_log_mtime"] = (self.layout.logs_dir / "refine-mutations.jsonl").stat().st_mtime if (self.layout.logs_dir / "refine-mutations.jsonl").exists() else before_counts.get("refine_log_mtime", 0.0)
 
-                    self._write_stage_artifact(step, cmd_result, results={**results, step: cmd_result})
+                    self._write_stage_artifact(step, payload, results={**results, step: payload})
 
-                results[step] = cmd_result
-                self.step_results[step] = cmd_result
+                typed_result = self._record_step_result(step, payload)
+                results[step] = typed_result
 
-                if cmd_result["success"]:
+                if typed_result["success"]:
                     self.txn.step(
                         self.txn_id,
                         step,
                         "completed",
-                        cmd_result.get("output", ""),
-                        cache_hit=cmd_result.get("cache_hit"),
-                        skipped=cmd_result.get("skipped"),
-                        stage_fingerprint=cmd_result.get("stage_fingerprint"),
-                        stage_artifact=cmd_result.get("stage_artifact"),
+                        typed_result.get("output", ""),
+                        cache_hit=typed_result.get("cache_hit"),
+                        skipped=typed_result.get("skipped"),
+                        stage_fingerprint=typed_result.get("stage_fingerprint"),
+                        stage_artifact=typed_result.get("stage_artifact"),
                     )
                 else:
-                    blocked_reason = str(cmd_result.get("reason") or cmd_result.get("error") or "").strip()
-                    step_status = "blocked" if cmd_result.get("blocked") else "failed"
+                    blocked_reason = str(typed_result.get("reason") or typed_result.get("error") or "").strip()
+                    step_status = "blocked" if typed_result.get("blocked") else "failed"
                     self.txn.step(
                         self.txn_id,
                         step,
                         step_status,
-                        cmd_result.get("error", ""),
-                        skipped=cmd_result.get("skipped"),
-                        blocked_reason=blocked_reason if cmd_result.get("blocked") else None,
+                        typed_result.get("error", ""),
+                        skipped=typed_result.get("skipped"),
+                        blocked_reason=blocked_reason if typed_result.get("blocked") else None,
                     )
                     print(f"\nPipeline stopped at step: {step}")
-                    if cmd_result.get("blocked"):
+                    if typed_result.get("blocked"):
                         self.txn.fail(self.txn_id, f"Blocked at step: {step} ({blocked_reason})")
                     else:
                         self.txn.fail(self.txn_id, f"Failed at step: {step}")
