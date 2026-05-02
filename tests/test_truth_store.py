@@ -108,8 +108,8 @@ Target note captures downstream effects.
         ).fetchall()
 
     assert objects == [
-        ("source-note", "evergreen", "Source Note"),
-        ("target-note", "evergreen", "Target Note"),
+        ("source-note", "concept", "Source Note"),
+        ("target-note", "concept", "Target Note"),
     ]
     assert claims == [
         ("source-note", "Source note explains the runtime architecture.", "page_summary"),

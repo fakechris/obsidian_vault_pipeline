@@ -176,9 +176,9 @@ def test_build_object_page_payload_hides_research_affordances_when_research_shel
     assert [item["label"] for item in payload["section_nav"]] == [
         "Summary",
         "Sources",
-        "Current State",
-        "Why It Matters",
-        "Evidence Traceability",
+        "Definition",
+        "Where It Matters",
+        "Evidence For This Concept",
         "Production Chain",
         "Open Tensions",
         "Where To Go Next",
@@ -421,7 +421,7 @@ def test_build_search_payload_groups_results_for_readers(temp_vault):
     payload = build_search_payload(temp_vault, query="alpha")
 
     assert payload["screen"] == "search/results"
-    assert payload["reader_summary"] == "1 concept, 2 evergreens, 3 notes"
+    assert payload["reader_summary"] == "3 concepts, 3 notes"
     assert payload["reader_groups"][0]["kind"] == "concept"
     assert payload["reader_groups"][0]["label"] == "Concepts"
     assert payload["reader_groups"][0]["items"][0]["title"] == "Alpha"
@@ -1033,7 +1033,7 @@ date: 2026-04-13
     assert payload["relation_pattern_items"]
     assert payload["relation_pattern_items"][0]["display_name"].endswith("links")
     assert payload["summary_bullets"]
-    assert payload["object_kind_counts"]["evergreen"] == payload["cluster"]["member_count"]
+    assert payload["object_kind_counts"]["concept"] == payload["cluster"]["member_count"]
     assert payload["review_context"]["source_note_count"] >= 1
     assert payload["review_context"]["moc_count"] >= 1
     assert payload["open_contradictions"]

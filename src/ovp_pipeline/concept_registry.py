@@ -1061,7 +1061,8 @@ class ConceptRegistry:
         self._build_surface_index()
 
     def upsert_candidate(self, slug: str, title: str, definition: str, area: str,
-                         aliases: list[str] | None = None) -> ConceptEntry:
+                         aliases: list[str] | None = None,
+                         kind: str = KIND_CONCEPT) -> ConceptEntry:
         """Create or update a candidate concept."""
         entry = ConceptEntry(
             slug=slug,
@@ -1069,6 +1070,7 @@ class ConceptRegistry:
             aliases=aliases or [],
             definition=definition,
             area=area,
+            kind=kind,
             status=STATUS_CANDIDATE,
             source_count=1,
             evidence_count=1,

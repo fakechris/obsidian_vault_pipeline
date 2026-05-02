@@ -502,12 +502,22 @@ class AutoEvergreenExtractor:
                 # 添加到candidate队列（而不是直接创建active Evergreen）
                 if registry:
                     try:
+                        from .identity import canonicalize_note_id
+                        from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
+
+                        canonical_slug = canonicalize_note_id(concept_name)
+                        raw_kind = concept.get("entity_type", KIND_CONCEPT)
+                        resolved_kind = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT
+                        if resolved_kind not in CORE_OBJECT_KINDS:
+                            resolved_kind = KIND_CONCEPT
+
                         entry = registry.upsert_candidate(
-                            slug=concept_name,
+                            slug=canonical_slug,
                             title=concept.get("title", concept_name.replace("-", " ")),
                             definition=concept.get("one_sentence_def", ""),
                             area="general",
-                            aliases=[concept_name],
+                            aliases=[concept_name] if concept_name != canonical_slug else [canonical_slug],
+                            kind=resolved_kind,
                         )
 
                         # Auto-promote: source_count 达到阈值时自动创建文件
