@@ -683,9 +683,12 @@ Usage patterns cover prompts, workflows, and operator loops.
             "SELECT slug, chunk_index, section_title, embedding_model FROM page_embeddings ORDER BY chunk_index"
         ).fetchall()
 
+    from ovp_pipeline.embedding import get_model_name
+
+    expected_model = get_model_name()
     assert chunks == [
-        ("agent-harness", 0, "Architecture", "local-hash-v1"),
-        ("agent-harness", 1, "Usage Patterns", "local-hash-v1"),
+        ("agent-harness", 0, "Architecture", expected_model),
+        ("agent-harness", 1, "Usage Patterns", expected_model),
     ]
 
 
@@ -1305,7 +1308,7 @@ Stable body.
     first = rebuild_knowledge_index(temp_vault)
     assert first["pages_indexed"] == 1
 
-    def fail_embed(_: str, dimensions: int = 128) -> bytes:
+    def fail_embed(_: str) -> bytes:
         raise RuntimeError("boom")
 
     monkeypatch.setattr("ovp_pipeline.knowledge_index._embed_text", fail_embed)

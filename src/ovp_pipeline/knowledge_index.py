@@ -138,8 +138,7 @@ CREATE TABLE projection_metadata (
 
 SCHEMA += "\n" + TRUTH_STORE_SCHEMA
 
-EMBEDDING_DIMENSIONS = 128
-EMBEDDING_MODEL = "local-hash-v1"
+from .embedding import embed_text as _embed_text_semantic, get_dimensions, get_model_name
 TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug"),
     "claims": ("pack", "claim_id", "object_id", "claim_kind", "claim_text", "confidence"),
@@ -523,22 +522,9 @@ def _chunk_page_body(body: str, fallback_title: str) -> list[tuple[str, str]]:
     return [(fallback_title, normalized_body)]
 
 
-def _tokenize_for_embedding(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", text.lower())
-
-
-def _embed_text(text: str, dimensions: int = EMBEDDING_DIMENSIONS) -> bytes:
-    vector = [0.0] * dimensions
-    for token in _tokenize_for_embedding(text):
-        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
-        bucket = int.from_bytes(digest[:4], "big") % dimensions
-        sign = 1.0 if digest[4] % 2 == 0 else -1.0
-        vector[bucket] += sign
-
-    norm = math.sqrt(sum(value * value for value in vector))
-    if norm > 0:
-        vector = [value / norm for value in vector]
-    return array("f", vector).tobytes()
+def _embed_text(text: str) -> bytes:
+    """Delegate to the semantic embedding backend (Qwen3-Embedding MLX or hash fallback)."""
+    return _embed_text_semantic(text)
 
 
 def _decode_embedding(blob: bytes) -> list[float]:
@@ -786,7 +772,7 @@ def rebuild_knowledge_index(
                             section_title,
                             chunk_text,
                             _embed_text(f"{section_title}\n{chunk_text}"),
-                            EMBEDDING_MODEL,
+                            get_model_name(),
                         )
                     )
 
