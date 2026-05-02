@@ -37,6 +37,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 def _rebuild_frontmatter(fm: dict[str, Any]) -> str:
+    import json as _json
     key_order = [
         "note_id", "title", "type", "entity_type",
         "date", "tags", "aliases",
@@ -48,10 +49,11 @@ def _rebuild_frontmatter(fm: dict[str, Any]) -> str:
             done.add(key)
             val = fm[key]
             if key == "title":
-                lines.append(f'title: "{val}"')
+                lines.append(f"title: {_json.dumps(val, ensure_ascii=False)}")
             elif isinstance(val, list):
                 items = ", ".join(
-                    f'"{v}"' if isinstance(v, str) else str(v) for v in val
+                    _json.dumps(v, ensure_ascii=False) if isinstance(v, str) else str(v)
+                    for v in val
                 )
                 lines.append(f"{key}: [{items}]")
             else:

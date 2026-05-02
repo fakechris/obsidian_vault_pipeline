@@ -26,7 +26,7 @@ SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
 AUTHORITY_SCHEMA_VERSION = 1
 KNOWLEDGE_DB_PROJECTION_KIND = "knowledge_db"
-KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 1
+KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 2
 
 
 _FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
@@ -642,6 +642,11 @@ def _embed_text(text: str) -> bytes:
     return _embed_text_semantic(text)
 
 
+def _get_embedding_model_name() -> str:
+    from .embedding import get_model_name
+    return get_model_name()
+
+
 def _decode_embedding(blob: bytes) -> list[float]:
     decoded = array("f")
     decoded.frombytes(blob)
@@ -749,6 +754,13 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
             "projection_schema_version",
             "built_at",
         },
+        "entity_mentions": {
+            "entity_slug",
+            "entity_type",
+            "source_slug",
+            "confidence",
+            "detection_method",
+        },
     }
     try:
         with sqlite3.connect(db_path) as conn:
@@ -828,16 +840,15 @@ def rebuild_knowledge_index(
         link_parser = LinkParser(resolved_vault)
         registry = ConceptRegistry(resolved_vault).load()
 
-        object_metadata_items = [
-            meta
-            for meta in parser.parse_directory(evergreen_dir, recursive=True)
-            if "_Candidates" not in Path(meta.path).parts
-        ]
+        object_metadata_items: list[NoteMetadata] = []
         entity_dir = resolved_vault / "10-Knowledge" / "Entity"
         if entity_dir.exists():
             for meta in parser.parse_directory(entity_dir, recursive=True):
                 if "_Candidates" not in Path(meta.path).parts:
                     object_metadata_items.append(meta)
+        for meta in parser.parse_directory(evergreen_dir, recursive=True):
+            if "_Candidates" not in Path(meta.path).parts:
+                object_metadata_items.append(meta)
         page_metadata_items = list(object_metadata_items)
         for extra_dir in (atlas_dir, areas_dir):
             if not extra_dir.exists():
@@ -1255,17 +1266,24 @@ def query_knowledge_index(vault_dir: Path, query: str, limit: int = 5) -> list[d
     _, layout = _ensure_knowledge_db(vault_dir)
 
     query_vector = _decode_embedding(_embed_text(query))
+    current_model = _get_embedding_model_name()
+    query_dim = len(query_vector)
     with sqlite3.connect(layout.knowledge_db) as conn:
         rows = conn.execute(
             """
             SELECT slug, chunk_index, section_title, chunk_text, embedding_blob
             FROM page_embeddings
-            """
+            WHERE embedding_model = ?
+            """,
+            (current_model,),
         ).fetchall()
 
     scored = []
     for slug, chunk_index, section_title, chunk_text, embedding_blob in rows:
-        score = _dot_product(query_vector, _decode_embedding(embedding_blob))
+        stored_vector = _decode_embedding(embedding_blob)
+        if len(stored_vector) != query_dim:
+            continue
+        score = _dot_product(query_vector, stored_vector)
         scored.append(
             {
                 "slug": slug,

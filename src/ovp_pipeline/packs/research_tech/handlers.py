@@ -76,6 +76,16 @@ def build_stage_handlers(pack_name: str = "research-tech") -> list[StageHandlerS
             target_mode="batch",
         ),
         StageHandlerSpec(
+            name="entity_extract",
+            pack=pack_name,
+            handler_kind="profile_stage",
+            runtime_adapter="pipeline_step",
+            stage="entity_extract",
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_entity_extract",
+            description="Extract named entities from deep dives via LLM NER",
+            target_mode="batch",
+        ),
+        StageHandlerSpec(
             name="dedup",
             pack=pack_name,
             handler_kind="profile_stage",

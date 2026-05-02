@@ -57,8 +57,9 @@ class EntityMutation:
 
 def _entity_frontmatter(entry: EntityEntry) -> str:
     """Generate YAML frontmatter for an Entity .md file."""
+    import json as _json
     aliases = list(dict.fromkeys(a for a in entry.aliases if a))
-    aliases_yaml = ", ".join(f'"{a}"' for a in aliases)
+    aliases_yaml = ", ".join(_json.dumps(a, ensure_ascii=False) for a in aliases)
     now = datetime.now().strftime("%Y-%m-%d")
 
     return f"""---
@@ -123,8 +124,9 @@ def write_candidate_file(
     if candidate_path.exists():
         return candidate_path
 
+    import json as _json
     aliases = list(dict.fromkeys(a for a in entry.aliases if a))
-    aliases_yaml = ", ".join(f'"{a}"' for a in aliases)
+    aliases_yaml = ", ".join(_json.dumps(a, ensure_ascii=False) for a in aliases)
     now = datetime.now().strftime("%Y-%m-%d")
 
     content = f"""---

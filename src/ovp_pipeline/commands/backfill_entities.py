@@ -76,7 +76,9 @@ def run(
     if use_llm and llm_call is None:
         print("  ⚠ No LLM client available — using alias-only matching")
 
-    extractor = make_extractor(vault_dir, llm_call=llm_call)
+    extractor = make_extractor(
+        vault_dir, llm_call=llm_call, confidence_threshold=confidence_threshold
+    )
 
     extraction_log = vault_dir / "60-Logs" / "entity-extractions.jsonl"
     extraction_log.parent.mkdir(parents=True, exist_ok=True)

@@ -43,7 +43,7 @@ _backend: str | None = None
 def _load_mlx_model():
     """Load the MLX model and tokenizer once, caching globally."""
     global _loaded_model, _loaded_tokenizer, _backend
-    if _loaded_model is not None:
+    if _backend is not None:
         return
 
     try:

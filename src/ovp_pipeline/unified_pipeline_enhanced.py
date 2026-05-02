@@ -827,6 +827,15 @@ class EnhancedPipeline:
         registry = self._concept_registry_file()
         if registry.exists():
             files.append(registry)
+        entity_dir = self.vault_dir / "10-Knowledge" / "Entity"
+        if entity_dir.is_dir():
+            files.extend(self._markdown_files_under(entity_dir))
+        entity_registry_file = entity_dir / "entity-registry.jsonl"
+        if entity_registry_file.exists():
+            files.append(entity_registry_file)
+        extraction_log = self.vault_dir / "60-Logs" / "entity-extractions.jsonl"
+        if extraction_log.exists():
+            files.append(extraction_log)
         return self._existing_files([path for path in files if "_Candidates" not in path.parts])
 
     def _stage_input_files(self, stage: str) -> list[Path]:
@@ -2631,10 +2640,28 @@ class EnhancedPipeline:
             total_mentions = 0
             extraction_log = self.vault_dir / "60-Logs" / "entity-extractions.jsonl"
             extraction_log.parent.mkdir(parents=True, exist_ok=True)
+
+            already_extracted: set[str] = set()
+            if extraction_log.exists():
+                import json as _json_reader
+                for line in extraction_log.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = _json_reader.loads(line)
+                        sf = obj.get("source_file", "")
+                        if sf:
+                            already_extracted.add(sf)
+                    except Exception:
+                        pass
+
             log_lines: list[str] = []
             for fpath_str in absorb_files:
                 fpath = Path(fpath_str)
                 if not fpath.exists():
+                    continue
+                if str(fpath) in already_extracted:
                     continue
                 extraction = extractor.extract_entities_from_file(fpath)
                 total_mentions += len(extraction.mentions)

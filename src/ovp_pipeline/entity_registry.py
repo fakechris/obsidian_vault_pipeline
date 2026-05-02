@@ -159,15 +159,28 @@ def _normalize_alias(text: str) -> str:
 
 
 def _build_alias_map(entries: list[EntityEntry]) -> dict[str, str]:
-    """Build normalized-surface -> canonical-slug map from entries."""
+    """Build normalized-surface -> canonical-slug map from entries.
+
+    Ambiguous aliases (mapping to multiple entities) are excluded from the
+    index to prevent silent mis-resolution.  Use ``find_alias_collisions``
+    to audit them.
+    """
     alias_map: dict[str, str] = {}
+    ambiguous: set[str] = set()
     for entry in entries:
         if entry.status == STATUS_REJECTED:
             continue
         for surface in entry.all_surfaces():
             key = _normalize_alias(surface)
-            if key:
-                alias_map[key] = entry.slug
+            if not key:
+                continue
+            if key in ambiguous:
+                continue
+            if key in alias_map and alias_map[key] != entry.slug:
+                ambiguous.add(key)
+                del alias_map[key]
+                continue
+            alias_map[key] = entry.slug
     return alias_map
 
 

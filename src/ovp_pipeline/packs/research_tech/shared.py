@@ -139,6 +139,7 @@ def build_workflow_profiles() -> list[WorkflowProfile]:
                 "quality",
                 "fix_links",
                 "absorb",
+                "entity_extract",
                 "dedup",
                 "note_type_normalize",
                 "registry_sync",
