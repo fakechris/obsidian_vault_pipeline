@@ -159,6 +159,11 @@ class QualityStepResult(StepResult):
     quality_qualified_files: list[str] = field(default_factory=list)
     quality_results_json: str | None = None
     quality_score: float = 0.0
+    # Stage artifact fingerprint set by _write_quality_stage_artifact.
+    # Downstream stages (absorb's require_quality_artifact path) read this
+    # to verify they're consuming a matching upstream artifact.
+    quality_stage_fingerprint: str | None = None
+    quality_stage_artifact: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

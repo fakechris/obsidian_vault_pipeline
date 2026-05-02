@@ -38,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -169,6 +170,25 @@ def _safe_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _to_absorb_result(payload: dict[str, Any]):
+    """Convert an absorb payload dict into a typed AbsorbStepResult.
+
+    Drops any fields not declared on AbsorbStepResult; ensures every
+    required field has a value (filling with sensible defaults).  Used
+    by ``step_absorb`` and ``_run_absorb_workflow_direct`` so all 7
+    return paths produce the same typed shape.
+    """
+    from dataclasses import fields as _fields
+
+    from .step_contracts import AbsorbStepResult
+
+    valid = {f.name for f in _fields(AbsorbStepResult)}
+    kwargs = {k: v for k, v in payload.items() if k in valid}
+    if "success" not in kwargs:
+        kwargs["success"] = bool(payload.get("success", False))
+    return AbsorbStepResult(**kwargs)
 
 
 def _load_env(vault_dir: Path | None = None) -> bool:
@@ -1195,12 +1215,25 @@ class EnhancedPipeline:
             return None
         return str(path)
 
-    def _write_quality_stage_artifact(self, result: dict[str, Any], files: list[Path], input_digest: str, algorithm_digest: str, fingerprint: str) -> None:
-        if result.get("success") is not True:
-            return
+    def _write_quality_stage_artifact(
+        self,
+        result: "QualityStepResult | dict[str, Any]",
+        files: list[Path],
+        input_digest: str,
+        algorithm_digest: str,
+        fingerprint: str,
+    ) -> tuple[str, str] | tuple[None, None]:
+        """Write the quality stage artifact and return (fingerprint, artifact_path).
+
+        Returns ``(None, None)`` when ``result.success is not True``.  Callers
+        feed the returned tuple back into the QualityStepResult's
+        ``quality_stage_fingerprint`` / ``quality_stage_artifact`` fields.
+        """
+        if (result.get("success") if hasattr(result, "get") else result.get("success")) is not True:
+            return (None, None)
         normalized_files = [
             normalized
-            for raw_path in result.get("quality_qualified_files", [])
+            for raw_path in (result.get("quality_qualified_files") or [])
             if isinstance(raw_path, (str, Path)) and (normalized := self._resolve_existing_vault_file(raw_path)) is not None
         ]
         base_vault = self.vault_dir.resolve()
@@ -1221,14 +1254,14 @@ class EnhancedPipeline:
                 "results_json": result.get("quality_results_json"),
             },
             metrics={
-                "quality_checked": result.get("quality_checked", 0),
-                "quality_qualified": result.get("quality_qualified", 0),
-                "quality_failed": result.get("quality_failed", 0),
-                "quality_score": result.get("quality_score", 0.0),
+                "quality_checked": result.get("quality_checked", 0) or 0,
+                "quality_qualified": result.get("quality_qualified", 0) or 0,
+                "quality_failed": result.get("quality_failed", 0) or 0,
+                "quality_score": result.get("quality_score", 0.0) or 0.0,
             },
         )
-        result["quality_stage_fingerprint"] = manifest["fingerprint"]
-        result["quality_stage_artifact"] = str(self._stage_artifact_store().path_for("quality", fingerprint))
+        artifact_path = str(self._stage_artifact_store().path_for("quality", fingerprint))
+        return (manifest["fingerprint"], artifact_path)
 
     def _get_before_counts(self) -> dict:
         """获取执行前的文件计数（用于基于产出的检测）"""
@@ -2002,23 +2035,19 @@ class EnhancedPipeline:
         batch_size: int | None = None,
         dry_run: bool = False,
         target_files: list[str | Path] | None = None,
-    ) -> dict:
+    ) -> "QualityStepResult":
         """执行质量检查步骤"""
+        from .step_contracts import QualityStepResult
+
         print("\n" + "="*60)
         print("STEP 5: Quality Check")
         print("="*60)
 
         if batch_size is not None and batch_size <= 0:
-            return {
-                "success": False,
-                "error": f"invalid_batch_size ({batch_size} <= 0)",
-                "quality_checked": 0,
-                "quality_qualified": 0,
-                "quality_failed": 0,
-                "quality_qualified_files": [],
-                "quality_results_json": None,
-                "quality_score": 0.0,
-            }
+            return QualityStepResult(
+                success=False,
+                error=f"invalid_batch_size ({batch_size} <= 0)",
+            )
 
         quality_files, input_digest, algorithm_digest, fingerprint = self._quality_stage_inputs(target_files)
         total_files = len(quality_files)
@@ -2026,24 +2055,22 @@ class EnhancedPipeline:
 
         if total_files == 0:
             print("  没有待质检的深度解读文件")
-            result = {
-                "success": True,
-                "quality_checked": 0,
-                "quality_qualified": 0,
-                "quality_failed": 0,
-                "quality_qualified_files": [],
-                "quality_results_json": None,
-                "quality_score": 0.0,
-            }
+            empty = QualityStepResult(success=True)
             if not dry_run:
-                self._write_quality_stage_artifact(
-                    result,
+                stage_fp, artifact_path = self._write_quality_stage_artifact(
+                    empty.to_dict(),
                     quality_files,
                     input_digest,
                     algorithm_digest,
                     fingerprint,
                 )
-            return result
+                if stage_fp is not None:
+                    empty = replace(
+                        empty,
+                        quality_stage_fingerprint=stage_fp,
+                        quality_stage_artifact=artifact_path,
+                    )
+            return empty
 
         aggregated = {
             "success": True,
@@ -2118,8 +2145,19 @@ class EnhancedPipeline:
 
                 if not result["success"]:
                     print(f"✗ Quality check failed: {result.get('error', 'Unknown error')}")
-                    result.update(aggregated)
-                    return result
+                    return QualityStepResult(
+                        success=False,
+                        error=str(result.get("error", "")),
+                        stdout=str(result.get("stdout", "")),
+                        stderr=str(result.get("stderr", "")),
+                        returncode=int(result.get("returncode", 0) or 0),
+                        quality_checked=aggregated["quality_checked"],
+                        quality_qualified=aggregated["quality_qualified"],
+                        quality_failed=aggregated["quality_failed"],
+                        quality_qualified_files=list(aggregated["quality_qualified_files"]),
+                        quality_results_json=aggregated["quality_results_json"],
+                        quality_score=aggregated["quality_score"],
+                    )
 
                 batch_payload = None
                 stdout = result.get("stdout", "")
@@ -2133,11 +2171,16 @@ class EnhancedPipeline:
 
                 if batch_payload is None:
                     print("✗ Quality check failed: missing __QC_JSON__ payload")
-                    return {
-                        "success": False,
-                        "error": "missing_quality_payload",
-                        **aggregated,
-                    }
+                    return QualityStepResult(
+                        success=False,
+                        error="missing_quality_payload",
+                        quality_checked=aggregated["quality_checked"],
+                        quality_qualified=aggregated["quality_qualified"],
+                        quality_failed=aggregated["quality_failed"],
+                        quality_qualified_files=list(aggregated["quality_qualified_files"]),
+                        quality_results_json=aggregated["quality_results_json"],
+                        quality_score=aggregated["quality_score"],
+                    )
 
                 aggregated["quality_checked"] += batch_payload.get("checked", 0)
                 aggregated["quality_qualified"] += batch_payload.get("qualified", 0)
@@ -2175,15 +2218,27 @@ class EnhancedPipeline:
             )
 
         print("✓ Quality check completed")
+        stage_fp = None
+        artifact_path = None
         if not dry_run:
-            self._write_quality_stage_artifact(
+            stage_fp, artifact_path = self._write_quality_stage_artifact(
                 aggregated,
                 quality_files,
                 input_digest,
                 algorithm_digest,
                 fingerprint,
             )
-        return aggregated
+        return QualityStepResult(
+            success=True,
+            quality_checked=aggregated["quality_checked"],
+            quality_qualified=aggregated["quality_qualified"],
+            quality_failed=aggregated["quality_failed"],
+            quality_qualified_files=list(aggregated["quality_qualified_files"]),
+            quality_results_json=aggregated["quality_results_json"],
+            quality_score=aggregated["quality_score"],
+            quality_stage_fingerprint=stage_fp,
+            quality_stage_artifact=artifact_path,
+        )
 
     def step_fix_links(self, dry_run: bool = False) -> dict:
         """执行断裂链接修复步骤"""
@@ -2383,7 +2438,7 @@ class EnhancedPipeline:
         }
         if not success:
             result["error"] = stderr
-        return result
+        return _to_absorb_result(result)
 
     def step_absorb(
         self,
@@ -2393,7 +2448,7 @@ class EnhancedPipeline:
         qualified_files: list[str] | None = None,
         batch_size: int | None = None,
         require_quality_artifact: bool = False,
-    ) -> dict:
+    ) -> "AbsorbStepResult":
         """执行 Absorb 步骤
 
         Args:
@@ -2409,10 +2464,10 @@ class EnhancedPipeline:
                 找不到 artifact 时停线，避免扫历史 quality reports。
         """
         if batch_size is not None and batch_size <= 0:
-            return {
+            return _to_absorb_result({
                 "success": False,
                 "error": f"invalid_batch_size ({batch_size} <= 0)",
-            }
+            })
 
         normalized_files = None
         input_artifact: dict[str, Any] | None = None
@@ -2420,20 +2475,20 @@ class EnhancedPipeline:
             if require_quality_artifact:
                 input_artifact = self._load_quality_stage_artifact()
                 if not input_artifact:
-                    return {
+                    return _to_absorb_result({
                         "success": False,
                         "blocked": True,
                         "reason": "missing_quality_stage_artifact",
                         "error": "Absorb requires a matching quality stage artifact; refusing to scan historical quality reports.",
-                    }
+                    })
                 artifact_files = input_artifact.get("outputs", {}).get("qualified_files")
                 if not isinstance(artifact_files, list):
-                    return {
+                    return _to_absorb_result({
                         "success": False,
                         "blocked": True,
                         "reason": "invalid_quality_stage_artifact",
                         "error": "Quality stage artifact is missing outputs.qualified_files.",
-                    }
+                    })
                 normalized_files = [
                     normalized
                     for path in artifact_files
@@ -2463,19 +2518,19 @@ class EnhancedPipeline:
                     "fingerprint": input_artifact.get("fingerprint"),
                     "run_id": input_artifact.get("run_id"),
                 }
-            return result
+            return _to_absorb_result(result)
 
         # Quality gate: 仅在没有文件级质检结果时才阻断
         if normalized_files is None and 0 <= quality_score < 3.0:
             print(f"\n⚠️  Quality score ({quality_score:.1f}) < 3.0, blocking absorb stage")
-            return {
+            return _to_absorb_result({
                 "success": False,
                 "blocked": True,
                 "reason": f"quality_score_too_low ({quality_score:.1f} < 3.0)",
                 "error": "Absorb stage blocked due to low quality score",
                 "promoted_slugs": [],
                 "processed_files": [],
-            }
+            })
 
         print("\n" + "="*60)
         print("STEP 7: Absorbing Knowledge Into Evergreen Layer")
@@ -2526,7 +2581,7 @@ class EnhancedPipeline:
                         "fingerprint": input_artifact.get("fingerprint"),
                         "run_id": input_artifact.get("run_id"),
                     }
-                return result
+                return _to_absorb_result(result)
 
             effective_batch_size = batch_size or len(normalized_files)
             aggregated_summary = {
@@ -2576,39 +2631,45 @@ class EnhancedPipeline:
                         staged_sources=staged_sources,
                         record_item_ledger=not dry_run,
                     )
+                    # result is AbsorbStepResult from _run_absorb_workflow_direct
                     if not result["success"]:
                         print(f"✗ Absorb stage failed: {result.get('error', 'Unknown error')}")
-                        summary = result.get("summary", {})
-                        if isinstance(summary, dict):
+                        batch_summary = result.get("summary") or {}
+                        if isinstance(batch_summary, dict):
                             for key in aggregated_summary:
-                                aggregated_summary[key] += _safe_int(summary.get(key))
-                        batch_results = result.get("results", [])
-                        if isinstance(batch_results, list):
-                            aggregated_results.extend(batch_results)
-                        result["qualified_files"] = qualified_input_files
-                        result["pending_qualified_files"] = normalized_files
-                        result["item_cache_hits"] = len(item_cache_hit_files)
-                        result["item_cache_hit_files"] = item_cache_hit_files
-                        result["summary"] = aggregated_summary
-                        result["results"] = aggregated_results
-                        result["promoted_slugs"] = [
-                            concept["slug"]
-                            for item in aggregated_results
-                            if isinstance(item, dict)
-                            for concept in (item.get("concepts") or [])
-                            if concept.get("status") == "promoted_created" and concept.get("slug")
-                        ]
-                        result["processed_files"] = [
-                            str(item["file"])
-                            for item in aggregated_results
-                            if isinstance(item, dict) and item.get("file")
-                        ]
-                        return result
+                                aggregated_summary[key] += _safe_int(batch_summary.get(key))
+                        batch_results_list = result.get("results") or []
+                        if isinstance(batch_results_list, list):
+                            aggregated_results.extend(batch_results_list)
+                        return _to_absorb_result({
+                            "success": False,
+                            "error": result.get("error"),
+                            "stdout": result.get("stdout", ""),
+                            "stderr": result.get("stderr", ""),
+                            "qualified_files": qualified_input_files,
+                            "pending_qualified_files": normalized_files,
+                            "item_cache_hits": len(item_cache_hit_files),
+                            "item_cache_hit_files": item_cache_hit_files,
+                            "summary": aggregated_summary,
+                            "results": aggregated_results,
+                            "promoted_slugs": [
+                                concept["slug"]
+                                for item in aggregated_results
+                                if isinstance(item, dict)
+                                for concept in (item.get("concepts") or [])
+                                if concept.get("status") == "promoted_created" and concept.get("slug")
+                            ],
+                            "processed_files": [
+                                str(item["file"])
+                                for item in aggregated_results
+                                if isinstance(item, dict) and item.get("file")
+                            ],
+                        })
 
-                    summary = result.get("summary", {})
+                    batch_summary = result.get("summary") or {}
                     for key in aggregated_summary:
-                        aggregated_summary[key] += int(summary.get(key, 0) or 0)
-                    aggregated_results.extend(result.get("results", []))
+                        aggregated_summary[key] += int(batch_summary.get(key, 0) or 0)
+                    aggregated_results.extend(result.get("results") or [])
 
             aggregated_promoted_slugs = [
                 concept["slug"]
@@ -2647,7 +2708,9 @@ class EnhancedPipeline:
                     "fingerprint": input_artifact.get("fingerprint"),
                     "run_id": input_artifact.get("run_id"),
                 }
+            result = _to_absorb_result(result)
         else:
+            # _run_absorb_workflow_direct already returns AbsorbStepResult
             result = self._run_absorb_workflow_direct(dry_run=dry_run, recent=recent_days)
 
         if result["success"]:
@@ -2661,8 +2724,10 @@ class EnhancedPipeline:
         """兼容旧调用，内部转到 Absorb。"""
         return self.step_absorb(recent_days=recent_days, dry_run=dry_run, quality_score=quality_score)
 
-    def step_entity_extract(self, dry_run: bool = False) -> dict:
+    def step_entity_extract(self, dry_run: bool = False) -> "EntityExtractStepResult":
         """Extract named entities from recent deep dives using LLM NER."""
+        from .step_contracts import EntityExtractStepResult
+
         print("\n" + "=" * 60)
         print("ENTITY EXTRACT — 命名实体提取")
         print("=" * 60)
@@ -2670,16 +2735,16 @@ class EnhancedPipeline:
         from .entity_extractor import make_extractor
         from .entity_registry import EntityRegistry
 
-        result: dict = {"success": True, "produced": 0, "total_entities": 0}
-
         try:
             registry = EntityRegistry(self.vault_dir).load()
             before_count = len(registry)
 
             if dry_run:
                 print("  [DRY RUN] Entity extraction skipped")
-                result["total_entities"] = before_count
-                return result
+                return EntityExtractStepResult(
+                    success=True, skipped=True, reason="dry_run",
+                    total_entities=before_count,
+                )
 
             llm_call = None
             try:
@@ -2693,15 +2758,22 @@ class EnhancedPipeline:
 
             if llm_call is None:
                 print("  ⚠ No LLM client available — entity extraction skipped")
-                result["total_entities"] = before_count
-                return result
+                return EntityExtractStepResult(
+                    success=True, skipped=True, reason="no_llm_client",
+                    total_entities=before_count,
+                )
 
             extractor = make_extractor(
                 self.vault_dir, llm_call=llm_call
             )
 
-            absorb_result = self.step_results.get("absorb", {})
-            absorb_files = absorb_result.get("processed_files", [])
+            # Read absorb's typed contract — the silent-fallback bug we fixed
+            # in PATCH-1 is now structurally impossible because absorb_result
+            # always exposes processed_files (empty list if nothing absorbed).
+            absorb_result = self.step_results.get("absorb")
+            absorb_files: list[str] = []
+            if absorb_result is not None:
+                absorb_files = list(absorb_result.get("processed_files", []))
 
             if not absorb_files:
                 areas_dir = self.vault_dir / "20-Areas"
@@ -2759,23 +2831,26 @@ class EnhancedPipeline:
             extractor.registry.save()
             after_count = len(extractor.registry)
             produced = after_count - before_count
-            result["produced"] = produced
-            result["total_entities"] = after_count
-            result["mentions_extracted"] = total_mentions
 
             print(f"  新增 Entity 候选: {produced}")
             print(f"  累计 Entity: {after_count}")
             print(f"  提取到 Mentions: {total_mentions}")
 
+            return EntityExtractStepResult(
+                success=True,
+                produced=produced,
+                total_entities=after_count,
+                mentions_extracted=total_mentions,
+            )
+
         except Exception as exc:
-            result["success"] = False
-            result["error"] = str(exc)
             print(f"  ✗ Entity extraction failed: {exc}")
+            return EntityExtractStepResult(success=False, error=str(exc))
 
-        return result
-
-    def step_dedup(self, dry_run: bool = False) -> dict:
+    def step_dedup(self, dry_run: bool = False) -> "DedupStepResult":
         """Post-absorb deduplication scoped to recently absorbed slugs."""
+        from .step_contracts import DedupStepResult
+
         print("\n" + "=" * 60)
         print("STEP 7a: Dedup Evergreen (scoped to absorbed)")
         print("=" * 60)
@@ -2787,10 +2862,14 @@ class EnhancedPipeline:
             write_proposal,
         )
 
+        # Read absorb's typed contract.  promoted_slugs is now guaranteed
+        # to exist on every absorb return path (PATCH-1 + commit 2 of the
+        # contract refactor); empty list means "no scope, fall back to
+        # full vault".
         scope_slugs: set[str] | None = None
         absorb_result = self.step_results.get("absorb")
-        if absorb_result and isinstance(absorb_result, dict):
-            promoted = absorb_result.get("promoted_slugs") or []
+        if absorb_result is not None:
+            promoted = list(absorb_result.get("promoted_slugs", []))
             if promoted:
                 scope_slugs = set(promoted)
 
@@ -2800,7 +2879,7 @@ class EnhancedPipeline:
         if not clusters:
             scope_desc = f"scope={len(scope_slugs)} slugs" if scope_slugs else "full vault"
             print(f"  No duplicates found ({scope_desc}, threshold={threshold}).")
-            return {"success": True, "clusters": 0, "archived": 0, "rewrites": 0}
+            return DedupStepResult(success=True)
 
         prop_path, proposal = write_proposal(self.vault_dir, clusters, threshold=threshold)
         print(f"  Proposal: {prop_path.name} ({len(clusters)} cluster(s))")
@@ -2809,14 +2888,12 @@ class EnhancedPipeline:
             for cl in clusters:
                 dups = ", ".join(d.slug for d in cl.duplicates)
                 print(f"    [DRY] {cl.canonical.slug} ← {dups}")
-            return {
-                "success": True,
-                "clusters": len(clusters),
-                "archived": 0,
-                "rewrites": 0,
-                "dry_run": True,
-                "proposal_id": proposal.proposal_id,
-            }
+            return DedupStepResult(
+                success=True,
+                clusters=len(clusters),
+                dry_run=True,
+                proposal_id=proposal.proposal_id,
+            )
 
         results = apply_proposal(
             self.vault_dir, proposal, dry_run=False, pack=self.pack_name
@@ -2837,13 +2914,13 @@ class EnhancedPipeline:
                 print(f"    [WARN] {e}")
 
         print(f"  ✓ Dedup complete: {len(clusters)} clusters, {total_archived} archived, {total_rewrites} rewrites")
-        return {
-            "success": not errors,
-            "clusters": len(clusters),
-            "archived": total_archived,
-            "rewrites": total_rewrites,
-            "errors": errors,
-        }
+        return DedupStepResult(
+            success=not errors,
+            clusters=len(clusters),
+            archived=total_archived,
+            rewrites=total_rewrites,
+            errors=errors,
+        )
 
     def step_moc(self, dry_run: bool = False) -> dict:
         """执行MOC更新步骤"""
