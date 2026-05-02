@@ -52,9 +52,25 @@ try:
     from .stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from .step_contracts import (
         STEP_CONTRACTS,
+        AbsorbStepResult,
+        ArticlesStepResult,
+        ClippingsStepResult,
+        DedupStepResult,
+        EntityExtractStepResult,
+        FixLinksStepResult,
+        KnowledgeIndexStepResult,
+        MocStepResult,
+        NoteTypeNormalizeStepResult,
+        PinboardProcessStepResult,
+        PinboardStepResult,
+        QualityStepResult,
+        RefineStepResult,
+        RegistrySyncStepResult,
         StepContractError,
         StepResult,
         coerce_step_result,
+        to_absorb_result as _to_absorb_result,
+        to_typed_step_result as _to_typed_step_result,
     )
     from .txn import (
         build_transaction_payload,
@@ -71,9 +87,25 @@ except ImportError:  # pragma: no cover - script mode fallback
     from auto_evergreen_extractor import run_absorb_workflow
     from step_contracts import (
         STEP_CONTRACTS,
+        AbsorbStepResult,
+        ArticlesStepResult,
+        ClippingsStepResult,
+        DedupStepResult,
+        EntityExtractStepResult,
+        FixLinksStepResult,
+        KnowledgeIndexStepResult,
+        MocStepResult,
+        NoteTypeNormalizeStepResult,
+        PinboardProcessStepResult,
+        PinboardStepResult,
+        QualityStepResult,
+        RefineStepResult,
+        RegistrySyncStepResult,
         StepContractError,
         StepResult,
         coerce_step_result,
+        to_absorb_result as _to_absorb_result,
+        to_typed_step_result as _to_typed_step_result,
     )
     from stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from txn import (
@@ -170,25 +202,6 @@ def _safe_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
-
-
-def _to_absorb_result(payload: dict[str, Any]):
-    """Convert an absorb payload dict into a typed AbsorbStepResult.
-
-    Drops any fields not declared on AbsorbStepResult; ensures every
-    required field has a value (filling with sensible defaults).  Used
-    by ``step_absorb`` and ``_run_absorb_workflow_direct`` so all 7
-    return paths produce the same typed shape.
-    """
-    from dataclasses import fields as _fields
-
-    from .step_contracts import AbsorbStepResult
-
-    valid = {f.name for f in _fields(AbsorbStepResult)}
-    kwargs = {k: v for k, v in payload.items() if k in valid}
-    if "success" not in kwargs:
-        kwargs["success"] = bool(payload.get("success", False))
-    return AbsorbStepResult(**kwargs)
 
 
 def _load_env(vault_dir: Path | None = None) -> bool:
@@ -1336,9 +1349,9 @@ class EnhancedPipeline:
             archived_dir = self.layout.pinboard_archive_dir / datetime.now().strftime("%Y-%m")
             archived_count = len(list(archived_dir.glob("*.md"))) if archived_dir.exists() else 0
             results["produced"] = archived_count - before_counts.get("pinboard_archived", 0)
-            results["processed"] = cmd_result.get("processed", results["produced"])
-            results["skipped"] = cmd_result.get("skipped", 0)
-            results["failed"] = cmd_result.get("failed", 0)
+            results["files_processed"] = cmd_result.get("files_processed", cmd_result.get("processed", results["produced"]))
+            results["files_skipped"] = cmd_result.get("files_skipped", cmd_result.get("skipped", 0))
+            results["files_failed"] = cmd_result.get("files_failed", cmd_result.get("failed", 0))
 
         elif step == "articles":
             # 检查生成的深度解读数量
@@ -1393,16 +1406,16 @@ class EnhancedPipeline:
             results["changed_files"] = sorted(changed)
 
         elif step == "quality":
+            # Use the qualified contract field names; ``quality_checked`` etc.
+            # are already populated by step_quality, this is just the
+            # produced-count derivation.
             checked = cmd_result.get("quality_checked", 0)
             results["produced"] = checked
-            results["checked"] = checked > 0
-            results["qualified"] = cmd_result.get("quality_qualified", 0)
-            results["failed"] = cmd_result.get("quality_failed", 0)
 
         elif step == "note_type_normalize":
             results["produced"] = int(cmd_result.get("note_type_changed", 0) or 0)
-            results["changed"] = results["produced"]
-            results["skipped"] = int(cmd_result.get("note_type_skipped", 0) or 0)
+            # note_type_changed / note_type_skipped are the contract fields;
+            # the producer (run_command stdout parser) already sets them.
 
         elif step == "knowledge_index":
             current_mtime = self.layout.knowledge_db.stat().st_mtime if self.layout.knowledge_db.exists() else 0.0
@@ -1630,7 +1643,7 @@ class EnhancedPipeline:
         start_date: str | None = None,
         end_date: str | None = None,
         dry_run: bool = False
-    ) -> dict:
+    ) -> "PinboardStepResult":
         """执行Pinboard处理步骤"""
         print("\n" + "="*60)
         print("STEP 1: Processing Pinboard Bookmarks")
@@ -1648,12 +1661,12 @@ class EnhancedPipeline:
             except ValueError:
                 error = f"Invalid pinboard date format: {start_date} ~ {end_date}. Expected YYYY-MM-DD."
                 print(f"✗ Pinboard processing failed: {error}")
-                return {"success": False, "error": error}
+                return PinboardStepResult(success=False, error=error)
 
             if start_day > end_day:
                 error = f"Invalid pinboard date range: {start_date} is after {end_date}"
                 print(f"✗ Pinboard processing failed: {error}")
-                return {"success": False, "error": error}
+                return PinboardStepResult(success=False, error=error)
 
             if start_day != end_day:
                 print(f"  Date range: {start_date} to {end_date}")
@@ -1688,9 +1701,9 @@ class EnhancedPipeline:
         else:
             print(f"✗ Pinboard processing failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("pinboard", result)
 
-    def _step_pinboard_by_day(self, start_day, end_day, dry_run: bool = False) -> dict:
+    def _step_pinboard_by_day(self, start_day, end_day, dry_run: bool = False) -> "PinboardStepResult":
         combined_stdout: list[str] = []
         combined_stderr: list[str] = []
         current = start_day
@@ -1724,27 +1737,26 @@ class EnhancedPipeline:
                     "see that day's stdout/stderr for details."
                 )
                 print(f"✗ Pinboard processing failed: {error}")
-                return {
+                return _to_typed_step_result("pinboard", {
                     "success": False,
                     "error": error,
                     "stdout": "\n".join(combined_stdout),
                     "stderr": "\n".join(combined_stderr),
                     "days_processed": day_count,
-                    "failed_day": day_str,
-                }
+                })
 
             day_count += 1
             current += timedelta(days=1)
 
         print(f"✓ Pinboard processed successfully across {day_count} daily request(s)")
-        return {
+        return _to_typed_step_result("pinboard", {
             "success": True,
             "stdout": "\n".join(combined_stdout),
             "stderr": "\n".join(combined_stderr),
             "days_processed": day_count,
-        }
+        })
 
-    def step_pinboard_process(self, dry_run: bool = False) -> dict:
+    def step_pinboard_process(self, dry_run: bool = False) -> "PinboardProcessStepResult":
         """处理 02-Pinboard/ 中的书签文件，路由到对应处理器"""
         print("\n" + "="*60)
         print("STEP 2: Processing Pinboard Files")
@@ -1755,12 +1767,12 @@ class EnhancedPipeline:
 
         if not pinboard_dir.exists():
             print("  02-Pinboard/ 目录不存在，跳过")
-            return {"success": True, "processed": 0, "skipped": 0}
+            return PinboardProcessStepResult(success=True, skipped=True, reason="pinboard_dir_missing")
 
         files = list(pinboard_dir.glob("*.md"))
         if not files:
             print("  没有待处理的 Pinboard 文件")
-            return {"success": True, "processed": 0, "skipped": 0}
+            return PinboardProcessStepResult(success=True, skipped=True, reason="no_files")
 
         print(f"  找到 {len(files)} 个 Pinboard 文件")
 
@@ -1979,9 +1991,14 @@ class EnhancedPipeline:
                     )
 
         print(f"\n  汇总: 处理 {results['processed']}, 跳过 {results['skipped']}, 失败 {results['failed']}")
-        return {"success": results["failed"] == 0, **results}
+        return PinboardProcessStepResult(
+            success=results["failed"] == 0,
+            files_processed=results["processed"],
+            files_skipped=results["skipped"],
+            files_failed=results["failed"],
+        )
 
-    def step_clippings(self, batch_size: int | None = None, dry_run: bool = False) -> dict:
+    def step_clippings(self, batch_size: int | None = None, dry_run: bool = False) -> "ClippingsStepResult":
         """执行Clippings处理步骤"""
         print("\n" + "="*60)
         print("STEP 3: Processing Clippings")
@@ -2003,9 +2020,9 @@ class EnhancedPipeline:
         else:
             print(f"✗ Clippings processing failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("clippings", result)
 
-    def step_articles(self, batch_size: int | None = None, dry_run: bool = False) -> dict:
+    def step_articles(self, batch_size: int | None = None, dry_run: bool = False) -> "ArticlesStepResult":
         """执行文章深度解读步骤"""
         print("\n" + "="*60)
         print("STEP 4: Generating Article Interpretations")
@@ -2028,7 +2045,7 @@ class EnhancedPipeline:
         else:
             print(f"✗ Article processing failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("articles", result)
 
     def step_quality(
         self,
@@ -2037,8 +2054,6 @@ class EnhancedPipeline:
         target_files: list[str | Path] | None = None,
     ) -> "QualityStepResult":
         """执行质量检查步骤"""
-        from .step_contracts import QualityStepResult
-
         print("\n" + "="*60)
         print("STEP 5: Quality Check")
         print("="*60)
@@ -2145,19 +2160,13 @@ class EnhancedPipeline:
 
                 if not result["success"]:
                     print(f"✗ Quality check failed: {result.get('error', 'Unknown error')}")
-                    return QualityStepResult(
-                        success=False,
-                        error=str(result.get("error", "")),
-                        stdout=str(result.get("stdout", "")),
-                        stderr=str(result.get("stderr", "")),
-                        returncode=int(result.get("returncode", 0) or 0),
-                        quality_checked=aggregated["quality_checked"],
-                        quality_qualified=aggregated["quality_qualified"],
-                        quality_failed=aggregated["quality_failed"],
-                        quality_qualified_files=list(aggregated["quality_qualified_files"]),
-                        quality_results_json=aggregated["quality_results_json"],
-                        quality_score=aggregated["quality_score"],
-                    )
+                    return _to_typed_step_result("quality", {
+                        **aggregated, "success": False,
+                        "error": str(result.get("error", "")),
+                        "stdout": str(result.get("stdout", "")),
+                        "stderr": str(result.get("stderr", "")),
+                        "returncode": int(result.get("returncode", 0) or 0),
+                    })
 
                 batch_payload = None
                 stdout = result.get("stdout", "")
@@ -2171,16 +2180,9 @@ class EnhancedPipeline:
 
                 if batch_payload is None:
                     print("✗ Quality check failed: missing __QC_JSON__ payload")
-                    return QualityStepResult(
-                        success=False,
-                        error="missing_quality_payload",
-                        quality_checked=aggregated["quality_checked"],
-                        quality_qualified=aggregated["quality_qualified"],
-                        quality_failed=aggregated["quality_failed"],
-                        quality_qualified_files=list(aggregated["quality_qualified_files"]),
-                        quality_results_json=aggregated["quality_results_json"],
-                        quality_score=aggregated["quality_score"],
-                    )
+                    return _to_typed_step_result("quality", {
+                        **aggregated, "success": False, "error": "missing_quality_payload",
+                    })
 
                 aggregated["quality_checked"] += batch_payload.get("checked", 0)
                 aggregated["quality_qualified"] += batch_payload.get("qualified", 0)
@@ -2240,7 +2242,7 @@ class EnhancedPipeline:
             quality_stage_artifact=artifact_path,
         )
 
-    def step_fix_links(self, dry_run: bool = False) -> dict:
+    def step_fix_links(self, dry_run: bool = False) -> "FixLinksStepResult":
         """执行断裂链接修复步骤"""
         print("\n" + "="*60)
         print("STEP 6: Fixing Broken Links")
@@ -2281,9 +2283,9 @@ class EnhancedPipeline:
         else:
             print(f"✗ Fix links failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("fix_links", result)
 
-    def step_registry_sync(self, dry_run: bool = False) -> dict:
+    def step_registry_sync(self, dry_run: bool = False) -> "RegistrySyncStepResult":
         """执行Registry同步步骤"""
         print("\n" + "="*60)
         print("STEP 8: Syncing Registry with Filesystem")
@@ -2302,7 +2304,7 @@ class EnhancedPipeline:
         else:
             print(f"✗ Registry sync failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("registry_sync", result)
 
     def _build_absorb_progress_callback(
         self,
@@ -2683,7 +2685,7 @@ class EnhancedPipeline:
                 for item in aggregated_results
                 if isinstance(item, dict) and item.get("file")
             ]
-            result = {
+            payload = {
                 "success": True,
                 "qualified_files": qualified_input_files,
                 "pending_qualified_files": normalized_files,
@@ -2693,22 +2695,12 @@ class EnhancedPipeline:
                 "results": aggregated_results,
                 "promoted_slugs": aggregated_promoted_slugs,
                 "processed_files": aggregated_processed_files,
-                "stdout": json.dumps(
-                    {
-                        "summary": aggregated_summary,
-                        "results": aggregated_results,
-                    },
-                    ensure_ascii=False,
-                ),
+                "stdout": json.dumps({"summary": aggregated_summary, "results": aggregated_results}, ensure_ascii=False),
                 "stderr": "",
             }
             if input_artifact is not None:
-                result["input_artifact"] = {
-                    "stage": input_artifact.get("stage"),
-                    "fingerprint": input_artifact.get("fingerprint"),
-                    "run_id": input_artifact.get("run_id"),
-                }
-            result = _to_absorb_result(result)
+                payload["input_artifact"] = {k: input_artifact.get(k) for k in ("stage", "fingerprint", "run_id")}
+            result = _to_absorb_result(payload)
         else:
             # _run_absorb_workflow_direct already returns AbsorbStepResult
             result = self._run_absorb_workflow_direct(dry_run=dry_run, recent=recent_days)
@@ -2726,8 +2718,6 @@ class EnhancedPipeline:
 
     def step_entity_extract(self, dry_run: bool = False) -> "EntityExtractStepResult":
         """Extract named entities from recent deep dives using LLM NER."""
-        from .step_contracts import EntityExtractStepResult
-
         print("\n" + "=" * 60)
         print("ENTITY EXTRACT — 命名实体提取")
         print("=" * 60)
@@ -2849,8 +2839,6 @@ class EnhancedPipeline:
 
     def step_dedup(self, dry_run: bool = False) -> "DedupStepResult":
         """Post-absorb deduplication scoped to recently absorbed slugs."""
-        from .step_contracts import DedupStepResult
-
         print("\n" + "=" * 60)
         print("STEP 7a: Dedup Evergreen (scoped to absorbed)")
         print("=" * 60)
@@ -2922,7 +2910,7 @@ class EnhancedPipeline:
             errors=errors,
         )
 
-    def step_moc(self, dry_run: bool = False) -> dict:
+    def step_moc(self, dry_run: bool = False) -> "MocStepResult":
         """执行MOC更新步骤"""
         print("\n" + "="*60)
         print("STEP 9: Updating MOC Indexes")
@@ -2943,9 +2931,9 @@ class EnhancedPipeline:
         else:
             print(f"✗ MOC update failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("moc", result)
 
-    def step_refine(self, dry_run: bool = False) -> dict:
+    def step_refine(self, dry_run: bool = False) -> "RefineStepResult":
         """执行 Refine 批处理步骤（cleanup + breakdown）。"""
         print("\n" + "="*60)
         print("STEP 10: Refining Existing Evergreen Notes")
@@ -2970,21 +2958,34 @@ class EnhancedPipeline:
         cleanup_result = self.run_command(cleanup_cmd, "refine_cleanup", timeout=300)
         if not cleanup_result["success"]:
             print(f"✗ Cleanup refine failed: {cleanup_result.get('error', 'Unknown error')}")
-            return cleanup_result
+            return RefineStepResult(
+                success=False,
+                error=str(cleanup_result.get("error", "")),
+                stdout=str(cleanup_result.get("stdout", "")),
+                stderr=str(cleanup_result.get("stderr", "")),
+                cleanup=cleanup_result,
+            )
 
         breakdown_result = self.run_command(breakdown_cmd, "refine_breakdown", timeout=300)
         if not breakdown_result["success"]:
             print(f"✗ Breakdown refine failed: {breakdown_result.get('error', 'Unknown error')}")
-            return breakdown_result
+            return RefineStepResult(
+                success=False,
+                error=str(breakdown_result.get("error", "")),
+                stdout=str(breakdown_result.get("stdout", "")),
+                stderr=str(breakdown_result.get("stderr", "")),
+                cleanup=cleanup_result,
+                breakdown=breakdown_result,
+            )
 
         print("✓ Refine batch completed")
-        return {
-            "success": True,
-            "cleanup": cleanup_result,
-            "breakdown": breakdown_result,
-        }
+        return RefineStepResult(
+            success=True,
+            cleanup=cleanup_result,
+            breakdown=breakdown_result,
+        )
 
-    def step_note_type_normalize(self, dry_run: bool = False) -> dict:
+    def step_note_type_normalize(self, dry_run: bool = False) -> "NoteTypeNormalizeStepResult":
         """Normalize note_type frontmatter before derived indexes are rebuilt."""
         print("\n" + "="*60)
         print("Normalizing note_type Metadata")
@@ -3012,9 +3013,9 @@ class EnhancedPipeline:
                 f"Normalized {result['note_type_changed']} note_type values; "
                 f"skipped {result['note_type_skipped']}"
             )
-        return result
+        return _to_typed_step_result("note_type_normalize", result)
 
-    def step_knowledge_index(self, dry_run: bool = False) -> dict:
+    def step_knowledge_index(self, dry_run: bool = False) -> "KnowledgeIndexStepResult":
         """刷新派生 knowledge.db。"""
         print("\n" + "="*60)
         print("STEP 10: Refreshing Knowledge Index")
@@ -3077,7 +3078,7 @@ class EnhancedPipeline:
         else:
             print(f"✗ Knowledge index refresh failed: {result.get('error', 'Unknown error')}")
 
-        return result
+        return _to_typed_step_result("knowledge_index", result)
 
     def run_pipeline(
         self,

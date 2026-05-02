@@ -74,3 +74,4 @@ node_modules/
 .worktrees/
 .supervisor/
 uv.lock
+.ovp/

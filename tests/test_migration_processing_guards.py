@@ -63,7 +63,7 @@ tags: [paper]
 
     result = pipeline.step_pinboard_process(dry_run=False)
 
-    assert result["processed"] == 1
+    assert result["files_processed"] == 1
     assert "ovp_pipeline.auto_paper_processor" in " ".join(captured[0])
     assert captured[0]
 
@@ -106,7 +106,7 @@ example/repo
 
     result = pipeline.step_pinboard_process(dry_run=False)
 
-    assert result["processed"] == 1
+    assert result["files_processed"] == 1
     assert captured == [600]
 
 

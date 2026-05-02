@@ -358,3 +358,29 @@ def with_derived(result: StepResult, **derived: Any) -> StepResult:
             f"{type(result).__name__}; add them to the contract first"
         )
     return replace(result, **derived)
+
+
+# ---------------------------------------------------------------------------
+# Producer-side conversion helpers (used by step methods that historically
+# returned free-form dicts).  Drops fields not declared on the contract;
+# ensures ``success`` is set.
+# ---------------------------------------------------------------------------
+
+
+def to_typed_step_result(step: str, payload: dict[str, Any]) -> StepResult:
+    """Convert any step's raw return dict to its typed StepResult."""
+    cls = STEP_CONTRACTS[step]
+    valid = {f.name for f in fields(cls)}
+    kwargs = {k: v for k, v in payload.items() if k in valid}
+    if "success" not in kwargs:
+        kwargs["success"] = bool(payload.get("success", False))
+    return cls(**kwargs)
+
+
+def to_absorb_result(payload: dict[str, Any]) -> "AbsorbStepResult":
+    """Convert an absorb payload dict into a typed AbsorbStepResult.
+
+    Used by ``step_absorb`` and ``_run_absorb_workflow_direct`` so all 7
+    absorb return paths produce the same typed shape.
+    """
+    return to_typed_step_result("absorb", payload)  # type: ignore[return-value]
