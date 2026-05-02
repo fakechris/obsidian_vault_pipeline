@@ -268,6 +268,10 @@ class EntityRegistry:
     def __len__(self) -> int:
         return len(self._entries)
 
+    def all_entries(self) -> list[EntityEntry]:
+        """Return all entries (including rejected)."""
+        return list(self._entries)
+
     def find_by_slug(self, slug: str) -> EntityEntry | None:
         idx = self._slug_index.get(slug)
         if idx is not None:

@@ -134,6 +134,20 @@ CREATE TABLE projection_metadata (
   projection_schema_version INTEGER NOT NULL,
   built_at TEXT NOT NULL
 );
+
+CREATE TABLE entity_mentions (
+  entity_slug TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  source_slug TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 1.0,
+  detection_method TEXT NOT NULL DEFAULT 'wikilink',
+  mention_text TEXT NOT NULL DEFAULT '',
+  snippet TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX idx_entity_mentions_entity ON entity_mentions(entity_slug);
+CREATE INDEX idx_entity_mentions_source ON entity_mentions(source_slug);
+CREATE INDEX idx_entity_mentions_type ON entity_mentions(entity_type);
 """
 
 SCHEMA += "\n" + TRUTH_STORE_SCHEMA
@@ -398,6 +412,107 @@ def _extract_timeline_events(meta: NoteMetadata, body: str) -> list[tuple[str, s
             )
         )
     return events
+
+
+def _collect_entity_mention_rows(
+    vault_dir: Path,
+    link_rows: list[tuple[str, str, str, str, int]],
+    known_slugs: set[str],
+) -> list[tuple[str, str, str, float, str, str, str]]:
+    """Collect entity mentions from two sources:
+
+    1. Wikilinks whose target resolves to an entity in EntityRegistry
+    2. Stored LLM extraction results from entity_extractor (JSONL sidecar)
+    """
+    from .entity_registry import EntityRegistry
+
+    entity_dir = vault_dir / "10-Knowledge" / "Entity"
+    if not entity_dir.exists():
+        return []
+
+    registry = EntityRegistry(vault_dir).load()
+    if len(registry) == 0:
+        return []
+
+    entity_slugs = {
+        e.slug for e in registry.all_entries()
+        if e.status in ("active", "candidate")
+    }
+    entity_map = {e.slug: e for e in registry.all_entries() if e.slug in entity_slugs}
+
+    rows: list[tuple[str, str, str, float, str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for source_slug, target_slug, target_raw, link_type, _line in link_rows:
+        if target_slug not in entity_slugs:
+            continue
+        key = (target_slug, source_slug)
+        if key in seen:
+            continue
+        seen.add(key)
+        entry = entity_map[target_slug]
+        rows.append((
+            target_slug,
+            entry.entity_type,
+            source_slug,
+            1.0,
+            "wikilink",
+            target_raw or target_slug,
+            "",
+        ))
+
+    for source_slug in known_slugs:
+        for entry in registry.all_entries():
+            if entry.slug not in entity_slugs:
+                continue
+            if entry.slug == source_slug:
+                continue
+            match = registry.resolve_mention(source_slug)
+            if match and match.slug == entry.slug:
+                key = (entry.slug, source_slug)
+                if key not in seen:
+                    seen.add(key)
+                    rows.append((
+                        entry.slug,
+                        entry.entity_type,
+                        source_slug,
+                        entry.confidence_avg or 0.8,
+                        "alias_match",
+                        source_slug,
+                        "",
+                    ))
+
+    extraction_log = vault_dir / "60-Logs" / "entity-extractions.jsonl"
+    if extraction_log.exists():
+        try:
+            for line in extraction_log.read_text(encoding="utf-8").strip().splitlines():
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                src = record.get("source_slug", "")
+                for m in record.get("mentions", []):
+                    e_slug = m.get("resolved_slug", "")
+                    if not e_slug or e_slug not in entity_slugs:
+                        continue
+                    key = (e_slug, src)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    entry = entity_map.get(e_slug)
+                    e_type = entry.entity_type if entry else m.get("kind", "")
+                    rows.append((
+                        e_slug,
+                        e_type,
+                        src,
+                        m.get("confidence", 0.8),
+                        m.get("resolution", "llm_ner"),
+                        m.get("text", ""),
+                        m.get("snippet", ""),
+                    ))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return rows
 
 
 def _collect_raw_rows(layout: VaultLayout) -> list[tuple[str, str, str, str]]:
@@ -992,12 +1107,20 @@ def rebuild_knowledge_index(
                 embedding_rows,
             )
 
-            # Phase 35 durability: re-apply promoted relations that the
-            # projection (which only sees wikilink-derived relations) does not
-            # know about. Phase 33 durability: re-apply per-row evidence
-            # verification metadata (locator/content_hash/status/verified_at)
-            # for both ``claim_evidence`` and ``relations`` rows. Both replays
-            # are JSONL-backed so they survive arbitrary rebuilds.
+            entity_mention_rows = _collect_entity_mention_rows(
+                resolved_vault, link_rows, known_slugs
+            )
+            conn.executemany(
+                """
+                INSERT INTO entity_mentions (
+                    entity_slug, entity_type, source_slug,
+                    confidence, detection_method, mention_text, snippet
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                entity_mention_rows,
+            )
+
             from .relation_promotion import replay_relation_promotions
             from .evidence_replay import replay_evidence_verifications
 
@@ -1042,6 +1165,7 @@ def rebuild_knowledge_index(
                 "contradictions_indexed": len(truth_projection.contradictions),
                 "graph_edges_indexed": len(truth_projection.graph_edges),
                 "graph_clusters_indexed": len(truth_projection.graph_clusters),
+                "entity_mentions_indexed": len(entity_mention_rows),
             }
 
 

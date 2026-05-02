@@ -2629,12 +2629,27 @@ class EnhancedPipeline:
                     ]
 
             total_mentions = 0
+            extraction_log = self.vault_dir / "60-Logs" / "entity-extractions.jsonl"
+            extraction_log.parent.mkdir(parents=True, exist_ok=True)
+            log_lines: list[str] = []
             for fpath_str in absorb_files:
                 fpath = Path(fpath_str)
                 if not fpath.exists():
                     continue
                 extraction = extractor.extract_entities_from_file(fpath)
                 total_mentions += len(extraction.mentions)
+                if extraction.mentions:
+                    from .identity import canonicalize_note_id as _cni
+                    import json as _json
+                    log_lines.append(_json.dumps({
+                        "source_slug": _cni(fpath.stem),
+                        "source_file": str(fpath),
+                        "mentions": [m.to_dict() for m in extraction.mentions],
+                    }, ensure_ascii=False))
+
+            if log_lines:
+                with open(extraction_log, "a", encoding="utf-8") as f:
+                    f.write("\n".join(log_lines) + "\n")
 
             extractor.registry.save()
             after_count = len(extractor.registry)
