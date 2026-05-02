@@ -768,14 +768,9 @@ class EnhancedPipeline:
         self.workflow_pack_name = DEFAULT_WORKFLOW_PACK_NAME
         self.workflow_profile_name = "full"
         self.run_mode = "custom"
-        # Step contract enforcement mode:
-        #   "warn"  — coerce raw dicts → StepResult, drop unknown fields with
-        #             a StepContractWarning (current default during migration)
-        #   "strict" — same coercion but unknown fields raise StepContractError
-        #   "off"   — store raw dict unchanged (legacy behaviour, for tests
-        #             that haven't been migrated yet)
-        # Flipped to "strict" in PR #2 of the contract rollout.
-        self.step_contract_mode: str = "warn"
+        # Contract mode: "strict" (default) raises on unknown fields,
+        # "warn" emits StepContractWarning, "off" stores raw dicts.
+        self.step_contract_mode: str = "strict"
 
     def _record_step_result(
         self,
