@@ -1331,6 +1331,44 @@ def list_mention_kind_stats(
     ]
 
 
+def list_relation_kind_stats(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return per-kind counts of relation targets for *object_id*.
+
+    Groups outgoing relations by the ``object_kind`` of the target object.
+    Each result dict has ``object_kind``, ``label``, and ``count``.
+    Results are ordered by count descending.
+    """
+    from .object_kinds import display_label
+
+    db_path = _db_path(vault_dir)
+    truth_pack = _truth_pack_name(pack_name)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(tgt.object_kind, '') AS kind, COUNT(*) AS cnt
+            FROM relations r
+            LEFT JOIN objects tgt ON tgt.object_id = r.target_object_id AND tgt.pack = r.pack
+            WHERE r.pack = ? AND r.source_object_id = ?
+            GROUP BY kind
+            ORDER BY cnt DESC
+            """,
+            (truth_pack, object_id),
+        ).fetchall()
+    return [
+        {
+            "object_kind": kind,
+            "label": display_label(kind) if kind else "unknown",
+            "count": cnt,
+        }
+        for kind, cnt in rows
+    ]
+
+
 def search_vault_surface(
     vault_dir: Path | str,
     *,
@@ -1779,10 +1817,14 @@ def get_object_detail(
         ).fetchall()
         relation_rows = conn.execute(
             """
-            SELECT source_object_id, target_object_id, relation_type, evidence_source_slug
-            FROM relations
-            WHERE pack = ? AND source_object_id = ?
-            ORDER BY target_object_id
+            SELECT r.source_object_id, r.target_object_id, r.relation_type, r.evidence_source_slug,
+                   COALESCE(src.object_kind, '') AS source_kind,
+                   COALESCE(tgt.object_kind, '') AS target_kind
+            FROM relations r
+            LEFT JOIN objects src ON src.object_id = r.source_object_id AND src.pack = r.pack
+            LEFT JOIN objects tgt ON tgt.object_id = r.target_object_id AND tgt.pack = r.pack
+            WHERE r.pack = ? AND r.source_object_id = ?
+            ORDER BY r.target_object_id
             """,
             (truth_pack, object_id),
         ).fetchall()
@@ -1895,6 +1937,8 @@ def get_object_detail(
                 "target_object_id": row[1],
                 "relation_type": row[2],
                 "evidence_source_slug": row[3],
+                "source_kind": row[4],
+                "target_kind": row[5],
             }
             for row in relation_rows
         ],
@@ -2026,12 +2070,17 @@ def list_graph_edges_for_object_scope(
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
             f"""
-            SELECT pack, edge_id, source_object_id, target_object_id, edge_kind, weight, evidence_source_slug
-            FROM graph_edges
-            WHERE pack IN ({pack_placeholders})
-              AND source_object_id IN ({object_placeholders})
-              AND target_object_id IN ({object_placeholders})
-            ORDER BY pack, weight DESC, edge_kind, source_object_id, target_object_id
+            SELECT ge.pack, ge.edge_id, ge.source_object_id, ge.target_object_id,
+                   ge.edge_kind, ge.weight, ge.evidence_source_slug,
+                   COALESCE(src.object_kind, '') AS source_kind,
+                   COALESCE(tgt.object_kind, '') AS target_kind
+            FROM graph_edges ge
+            LEFT JOIN objects src ON src.object_id = ge.source_object_id AND src.pack = ge.pack
+            LEFT JOIN objects tgt ON tgt.object_id = ge.target_object_id AND tgt.pack = ge.pack
+            WHERE ge.pack IN ({pack_placeholders})
+              AND ge.source_object_id IN ({object_placeholders})
+              AND ge.target_object_id IN ({object_placeholders})
+            ORDER BY ge.pack, ge.weight DESC, ge.edge_kind, ge.source_object_id, ge.target_object_id
             """,
             (*candidate_packs, *normalized_object_ids, *normalized_object_ids),
         ).fetchall()
@@ -2044,6 +2093,8 @@ def list_graph_edges_for_object_scope(
             "edge_kind": str(row[4]),
             "weight": float(row[5] or 0.0),
             "evidence_source_slug": str(row[6] or ""),
+            "source_kind": str(row[7]),
+            "target_kind": str(row[8]),
         }
         for row in rows
     ]
@@ -5487,10 +5538,14 @@ def get_topic_neighborhood(
 
         edge_rows = conn.execute(
             """
-            SELECT source_object_id, target_object_id, relation_type, evidence_source_slug
-            FROM relations
-            WHERE pack = ? AND source_object_id = ?
-            ORDER BY target_object_id
+            SELECT r.source_object_id, r.target_object_id, r.relation_type, r.evidence_source_slug,
+                   COALESCE(src.object_kind, '') AS source_kind,
+                   COALESCE(tgt.object_kind, '') AS target_kind
+            FROM relations r
+            LEFT JOIN objects src ON src.object_id = r.source_object_id AND src.pack = r.pack
+            LEFT JOIN objects tgt ON tgt.object_id = r.target_object_id AND tgt.pack = r.pack
+            WHERE r.pack = ? AND r.source_object_id = ?
+            ORDER BY r.target_object_id
             """,
             (truth_pack, object_id),
         ).fetchall()
@@ -5535,6 +5590,8 @@ def get_topic_neighborhood(
                 "target_object_id": row[1],
                 "relation_type": row[2],
                 "evidence_source_slug": row[3],
+                "source_kind": row[4],
+                "target_kind": row[5],
             }
             for row in edge_rows
         ],

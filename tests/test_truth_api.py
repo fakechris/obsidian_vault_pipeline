@@ -1965,6 +1965,8 @@ def test_truth_api_builds_topic_neighborhood(temp_vault):
             "target_object_id": "target-note",
             "relation_type": "wikilink",
             "evidence_source_slug": "source-note",
+            "source_kind": "concept",
+            "target_kind": "concept",
         }
     ]
 
