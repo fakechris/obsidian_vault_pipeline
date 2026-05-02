@@ -2324,7 +2324,10 @@ class EnhancedPipeline:
             },
         )
         promoted_slugs: list[str] = []
+        processed_files: list[str] = []
         for item in results:
+            if isinstance(item, dict) and item.get("file"):
+                processed_files.append(str(item["file"]))
             for concept in (item.get("concepts") or []):
                 if concept.get("status") == "promoted_created" and concept.get("slug"):
                     promoted_slugs.append(concept["slug"])
@@ -2333,6 +2336,7 @@ class EnhancedPipeline:
             "stdout": stdout,
             "stderr": stderr,
             "promoted_slugs": promoted_slugs,
+            "processed_files": processed_files,
             **payload,
         }
         if not success:
@@ -2408,6 +2412,8 @@ class EnhancedPipeline:
                 "reason": "no_qualified_files",
                 "output": "No qualified files to absorb",
                 "produced": 0,
+                "promoted_slugs": [],
+                "processed_files": [],
             }
             if input_artifact is not None:
                 result["input_artifact"] = {
@@ -2425,6 +2431,8 @@ class EnhancedPipeline:
                 "blocked": True,
                 "reason": f"quality_score_too_low ({quality_score:.1f} < 3.0)",
                 "error": "Absorb stage blocked due to low quality score",
+                "promoted_slugs": [],
+                "processed_files": [],
             }
 
         print("\n" + "="*60)
@@ -2464,6 +2472,8 @@ class EnhancedPipeline:
                         "errors": 0,
                     },
                     "results": [],
+                    "promoted_slugs": [],
+                    "processed_files": [],
                     "stdout": "All qualified files already absorbed",
                     "stderr": "",
                     "produced": 0,
@@ -2539,6 +2549,18 @@ class EnhancedPipeline:
                         result["item_cache_hit_files"] = item_cache_hit_files
                         result["summary"] = aggregated_summary
                         result["results"] = aggregated_results
+                        result["promoted_slugs"] = [
+                            concept["slug"]
+                            for item in aggregated_results
+                            if isinstance(item, dict)
+                            for concept in (item.get("concepts") or [])
+                            if concept.get("status") == "promoted_created" and concept.get("slug")
+                        ]
+                        result["processed_files"] = [
+                            str(item["file"])
+                            for item in aggregated_results
+                            if isinstance(item, dict) and item.get("file")
+                        ]
                         return result
 
                     summary = result.get("summary", {})
@@ -2546,6 +2568,18 @@ class EnhancedPipeline:
                         aggregated_summary[key] += int(summary.get(key, 0) or 0)
                     aggregated_results.extend(result.get("results", []))
 
+            aggregated_promoted_slugs = [
+                concept["slug"]
+                for item in aggregated_results
+                if isinstance(item, dict)
+                for concept in (item.get("concepts") or [])
+                if concept.get("status") == "promoted_created" and concept.get("slug")
+            ]
+            aggregated_processed_files = [
+                str(item["file"])
+                for item in aggregated_results
+                if isinstance(item, dict) and item.get("file")
+            ]
             result = {
                 "success": True,
                 "qualified_files": qualified_input_files,
@@ -2554,6 +2588,8 @@ class EnhancedPipeline:
                 "item_cache_hit_files": item_cache_hit_files,
                 "summary": aggregated_summary,
                 "results": aggregated_results,
+                "promoted_slugs": aggregated_promoted_slugs,
+                "processed_files": aggregated_processed_files,
                 "stdout": json.dumps(
                     {
                         "summary": aggregated_summary,
