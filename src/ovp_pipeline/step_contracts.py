@@ -65,6 +65,11 @@ class StepResult:
 
     Per-step subclasses extend with their domain-specific fields.  Fields
     declared here are universal; do not duplicate them in subclasses.
+
+    The dispatcher (``EnhancedPipeline.run_full_pipeline``) writes the
+    ``output``, ``cache_hit``, ``stage_*`` and ``returncode`` fields after
+    the step method returns; per-step contracts do not need to populate
+    them.
     """
 
     success: bool
@@ -75,6 +80,20 @@ class StepResult:
     stdout: str = ""
     stderr: str = ""
     produced: int = 0  # primary "how many items did this step produce" count
+    output: str = ""   # dispatcher-composed summary line (e.g. "Produced N items")
+    returncode: int = 0
+    # Detection / counting strategy — "filesystem" when _count_output_files
+    # had to scan the FS to derive ``produced``, "step_emitted" when the
+    # step itself returned authoritative numbers.  Set by the dispatcher.
+    method: str | None = None
+    # Stage-cache plumbing — set by _checkout_stage_artifact /
+    # _write_stage_artifact / _count_output_files.
+    cache_hit: bool | None = None
+    stage_fingerprint: str | None = None
+    stage_artifact: str | None = None
+    input_digest: str | None = None
+    algorithm_digest: str | None = None
+    output_digest: str | None = None
 
     # ----- backward-compat dict-style access ---------------------------
 

@@ -49,6 +49,12 @@ try:
     from .batch_quality_checker import collect_quality_files
     from .auto_evergreen_extractor import run_absorb_workflow
     from .stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
+    from .step_contracts import (
+        STEP_CONTRACTS,
+        StepContractError,
+        StepResult,
+        coerce_step_result,
+    )
     from .txn import (
         build_transaction_payload,
         heartbeat_transaction,
@@ -62,6 +68,12 @@ except ImportError:  # pragma: no cover - script mode fallback
     from packs.loader import DEFAULT_PACK_NAME, DEFAULT_WORKFLOW_PACK_NAME, PRIMARY_PACK_NAME, resolve_workflow_profile
     from batch_quality_checker import collect_quality_files
     from auto_evergreen_extractor import run_absorb_workflow
+    from step_contracts import (
+        STEP_CONTRACTS,
+        StepContractError,
+        StepResult,
+        coerce_step_result,
+    )
     from stage_artifacts import StageArtifactStore, build_file_records, build_stage_fingerprint, hash_file_set, hash_json_payload
     from txn import (
         build_transaction_payload,
@@ -718,11 +730,41 @@ class EnhancedPipeline:
         self.scripts_dir = self.vault_dir / "60-Logs" / "scripts"
         self.logger = logger
         self.txn = txn
-        self.step_results = {}
+        self.step_results: dict[str, StepResult] = {}
         self.txn_id = None
         self.workflow_pack_name = DEFAULT_WORKFLOW_PACK_NAME
         self.workflow_profile_name = "full"
         self.run_mode = "custom"
+        # Step contract enforcement mode:
+        #   "warn"  — coerce raw dicts → StepResult, drop unknown fields with
+        #             a StepContractWarning (current default during migration)
+        #   "strict" — same coercion but unknown fields raise StepContractError
+        #   "off"   — store raw dict unchanged (legacy behaviour, for tests
+        #             that haven't been migrated yet)
+        # Flipped to "strict" in PR #2 of the contract rollout.
+        self.step_contract_mode: str = "warn"
+
+    def _record_step_result(
+        self,
+        step: str,
+        raw: dict[str, Any] | StepResult,
+    ) -> StepResult:
+        """Coerce a step's raw return value through its declared contract
+        and write it to ``self.step_results[step]``.
+
+        In ``warn`` mode (default): unknown fields emit a StepContractWarning
+        and are dropped.  In ``strict`` mode: unknown fields raise
+        StepContractError.  In ``off`` mode: the raw value is stored as-is
+        (legacy fallback for steps that have not been registered yet — only
+        permitted when ``step`` is missing from STEP_CONTRACTS).
+        """
+        if self.step_contract_mode == "off" or step not in STEP_CONTRACTS:
+            self.step_results[step] = raw  # type: ignore[assignment]
+            return raw  # type: ignore[return-value]
+        strict = self.step_contract_mode == "strict"
+        typed = coerce_step_result(step, raw, strict=strict)
+        self.step_results[step] = typed
+        return typed
 
     def _normalize_quality_target_files(self, target_files: list[str | Path] | None) -> list[Path]:
         if target_files is None:
@@ -3035,17 +3077,17 @@ class EnhancedPipeline:
                 if not dry_run:
                     cache_result = self._checkout_stage_artifact(step, results=results)
                     if cache_result:
-                        results[step] = cache_result
-                        self.step_results[step] = cache_result
+                        typed_cache = self._record_step_result(step, cache_result)
+                        results[step] = typed_cache
                         self.txn.step(
                             self.txn_id,
                             step,
                             "completed",
-                            cache_result.get("output", ""),
-                            cache_hit=cache_result.get("cache_hit"),
-                            skipped=cache_result.get("skipped"),
-                            stage_fingerprint=cache_result.get("stage_fingerprint"),
-                            stage_artifact=cache_result.get("stage_artifact"),
+                            typed_cache.get("output", ""),
+                            cache_hit=typed_cache.get("cache_hit"),
+                            skipped=typed_cache.get("skipped"),
+                            stage_fingerprint=typed_cache.get("stage_fingerprint"),
+                            stage_artifact=typed_cache.get("stage_artifact"),
                         )
                         continue
 
@@ -3098,10 +3140,10 @@ class EnhancedPipeline:
 
                     self._write_stage_artifact(step, cmd_result, results={**results, step: cmd_result})
 
-                results[step] = cmd_result
-                self.step_results[step] = cmd_result
+                typed_result = self._record_step_result(step, cmd_result)
+                results[step] = typed_result
 
-                if cmd_result["success"]:
+                if typed_result["success"]:
                     self.txn.step(
                         self.txn_id,
                         step,

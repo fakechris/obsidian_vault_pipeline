@@ -159,8 +159,13 @@ class TestAbsorbContract:
     """The contract that PATCH-1 was protecting — verify shape is locked."""
 
     REQUIRED_KEYS = {
+        # base StepResult fields
         "success", "skipped", "blocked", "reason", "error",
         "stdout", "stderr", "produced",
+        "output", "returncode", "method",
+        "cache_hit", "stage_fingerprint", "stage_artifact",
+        "input_digest", "algorithm_digest", "output_digest",
+        # absorb-specific fields
         "processed_files", "promoted_slugs",
         "qualified_files", "pending_qualified_files",
         "item_cache_hits", "item_cache_hit_files",
