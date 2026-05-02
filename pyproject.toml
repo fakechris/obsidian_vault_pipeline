@@ -128,6 +128,7 @@ ovp-runtime-state = "ovp_pipeline.commands.runtime_state:main"
 ovp-schema = "ovp_pipeline.commands.schema_cmd:main"
 ovp-backfill-entity-type = "ovp_pipeline.commands.backfill_entity_type:main"
 ovp-backfill-entities = "ovp_pipeline.commands.backfill_entities:main"
+ovp-refresh-entities = "ovp_pipeline.commands.refresh_entities:main"
 ovp-embedding-dedup = "ovp_pipeline.commands.embedding_dedup:main"
 
 [project.entry-points."ovp.packs"]
