@@ -1175,6 +1175,7 @@ def list_objects(
     limit: int = 100,
     offset: int = 0,
     query: str | None = None,
+    object_kind: str | None = None,
     pack_name: str | None = None,
 ) -> list[dict[str, Any]]:
     limit, offset = _validate_page_args(limit=limit, offset=offset)
@@ -1193,6 +1194,11 @@ def list_objects(
 
     inner_params: list[Any] = [*pack_candidates]
     where_clause = f"pack IN ({pack_placeholders})"
+    if object_kind:
+        from .object_kinds import normalize_kind
+
+        where_clause += " AND object_kind = ?"
+        inner_params.append(normalize_kind(object_kind))
     if normalized_query:
         where_clause += (
             " AND ("
@@ -1236,6 +1242,48 @@ def list_objects(
             "pack": pack,
         }
         for pack, object_id, object_kind, title, canonical_path, source_slug in rows
+    ]
+
+
+def list_object_kind_stats(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return per-kind counts for all objects in the truth store."""
+    from .object_kinds import display_label
+
+    db_path = _db_path(vault_dir)
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
+    pack_order = " ".join(
+        f"WHEN ? THEN {index}" for index, _ in enumerate(pack_candidates)
+    )
+    fallback_order = len(pack_candidates)
+
+    sql = f"""
+        SELECT object_kind, COUNT(*) as cnt
+        FROM (
+            SELECT object_id, object_kind,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY object_id
+                       ORDER BY CASE pack {pack_order} ELSE {fallback_order} END
+                   ) AS rn
+            FROM objects
+            WHERE pack IN ({pack_placeholders})
+        )
+        WHERE rn = 1
+        GROUP BY object_kind
+        ORDER BY cnt DESC
+    """
+    params: list[Any] = [*pack_candidates, *pack_candidates]
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    return [
+        {"object_kind": kind, "label": display_label(kind), "count": cnt}
+        for kind, cnt in rows
     ]
 
 
@@ -1498,7 +1546,11 @@ def search_vault_surface(
 
 
 def count_objects(
-    vault_dir: Path | str, *, query: str | None = None, pack_name: str | None = None
+    vault_dir: Path | str,
+    *,
+    query: str | None = None,
+    object_kind: str | None = None,
+    pack_name: str | None = None,
 ) -> int:
     db_path = _db_path(vault_dir)
     pack_candidates = _materialized_truth_packs(
@@ -1507,6 +1559,11 @@ def count_objects(
     normalized_query = _escape_like(query.strip().lower()) if query else ""
     sql = f"SELECT COUNT(DISTINCT object_id) FROM objects WHERE pack IN ({','.join('?' for _ in pack_candidates)})"
     params: list[Any] = [*pack_candidates]
+    if object_kind:
+        from .object_kinds import normalize_kind
+
+        sql += " AND object_kind = ?"
+        params.append(normalize_kind(object_kind))
     if normalized_query:
         sql += """
             AND (

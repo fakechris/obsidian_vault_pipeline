@@ -147,6 +147,7 @@ def create_server(
                     limit = int(query.get("limit", ["100"])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     q = query.get("q", [""])[0]
+                    kind = query.get("kind", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
                     self._write_json(
                         build_objects_index_payload(
@@ -154,6 +155,7 @@ def create_server(
                             limit=limit,
                             offset=offset,
                             query=q,
+                            object_kind=kind,
                             pack_name=pack_name,
                         )
                     )
