@@ -15,13 +15,13 @@ import sys
 from pathlib import Path
 
 _ENTITY_TYPE_RE = re.compile(r"^entity_type:\s*(.+)$", re.MULTILINE)
-_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---", re.DOTALL)
+_FRONTMATTER_RE = re.compile(r"\A\s*\ufeff?---\r?\n(.*?)\r?\n---", re.DOTALL)
 
 DEFAULT_PACK_NAME = "research-tech"
 
 
 def _resolve_pack(pack_name: str | None):
-    from ..pack_resolution import resolve_pack
+    from ..pack_resolution import coerce_pack as resolve_pack
 
     return resolve_pack(pack_name or DEFAULT_PACK_NAME)
 

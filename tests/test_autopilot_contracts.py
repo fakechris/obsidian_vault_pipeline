@@ -68,7 +68,7 @@ def test_autopilot_success_path_runs_absorb_and_knowledge_index_after_moc(tmp_pa
     result = daemon.process_task(task)
 
     assert result["success"] is True
-    assert result["stages"] == ["interpretation", "absorb", "moc", "knowledge_index"]
+    assert result["stages"] == ["interpretation", "absorb", "dedup", "moc", "knowledge_index"]
     assert order == ["absorb", "moc", "knowledge_index"]
 
 
@@ -86,7 +86,7 @@ def test_autopilot_accepts_explicit_default_pack_profile(tmp_path):
 
     assert daemon.pack.name == "default-knowledge"
     assert daemon.workflow_profile.name == "autopilot"
-    assert daemon.workflow_profile.stages == ["interpretation", "quality", "absorb", "moc", "knowledge_index"]
+    assert daemon.workflow_profile.stages == ["interpretation", "quality", "absorb", "dedup", "moc", "knowledge_index"]
 
 
 def test_autopilot_accepts_explicit_research_tech_pack_profile(tmp_path):
@@ -103,7 +103,7 @@ def test_autopilot_accepts_explicit_research_tech_pack_profile(tmp_path):
 
     assert daemon.pack.name == "research-tech"
     assert daemon.workflow_profile.name == "autopilot"
-    assert daemon.workflow_profile.stages == ["interpretation", "quality", "absorb", "moc", "knowledge_index"]
+    assert daemon.workflow_profile.stages == ["interpretation", "quality", "absorb", "dedup", "moc", "knowledge_index"]
 
 
 def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monkeypatch):
@@ -127,7 +127,7 @@ def test_autopilot_with_refine_runs_refine_before_knowledge_index(tmp_path, monk
     result = daemon.process_task(task)
 
     assert result["success"] is True
-    assert result["stages"] == ["interpretation", "absorb", "moc", "refine", "knowledge_index"]
+    assert result["stages"] == ["interpretation", "absorb", "dedup", "moc", "refine", "knowledge_index"]
     assert order == ["absorb", "moc", "refine", "knowledge_index"]
 
 
@@ -173,7 +173,7 @@ def test_autopilot_uses_handler_registry_for_follow_up_stages(tmp_path, monkeypa
     result = daemon.process_task(task)
 
     assert result["success"] is True
-    assert calls == ["interpretation", "quality", "absorb", "moc", "knowledge_index"]
+    assert calls == ["interpretation", "quality", "absorb", "dedup", "moc", "knowledge_index"]
 
 
 def test_autopilot_knowledge_index_refresh_passes_pack(tmp_path, monkeypatch):

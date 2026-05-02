@@ -83,6 +83,10 @@ def run_pipeline_absorb(
     )
 
 
+def run_pipeline_dedup(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
+    return pipeline.step_dedup(dry_run)
+
+
 def run_pipeline_registry_sync(*, pipeline: Any, dry_run: bool = False, **_: Any) -> dict[str, Any]:
     return pipeline.step_registry_sync(dry_run)
 
@@ -115,6 +119,16 @@ def run_autopilot_quality(*, daemon: Any, task: Any, **_: Any) -> dict[str, Any]
 def run_autopilot_absorb(*, daemon: Any, **_: Any) -> dict[str, Any]:
     daemon._run_absorb()
     return {"stage": "absorb"}
+
+
+def run_autopilot_dedup(*, daemon: Any, **_: Any) -> dict[str, Any]:
+    from .concept_dedup import DEFAULT_THRESHOLD, find_clusters
+
+    vault_dir = daemon.vault_dir if hasattr(daemon, "vault_dir") else None
+    if vault_dir:
+        clusters = find_clusters(vault_dir, threshold=DEFAULT_THRESHOLD)
+        return {"stage": "dedup", "clusters_found": len(clusters)}
+    return {"stage": "dedup", "skipped": True}
 
 
 def run_autopilot_moc(*, daemon: Any, **_: Any) -> dict[str, Any]:

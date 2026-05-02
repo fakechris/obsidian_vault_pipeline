@@ -222,12 +222,26 @@ def build_truth_projection(
     claim_evidence: list[ClaimEvidenceRow] = []
     compiled_summaries: list[CompiledSummaryRow] = []
 
+    from ...object_kinds import CORE_OBJECT_KINDS, normalize_kind
+
     for slug, title, note_type, path, _day_id, _frontmatter_json, body in page_rows:
+        resolved_kind = note_type
+        if _frontmatter_json:
+            try:
+                fm = json.loads(_frontmatter_json)
+                if isinstance(fm, dict):
+                    et = fm.get("entity_type", "")
+                    if isinstance(et, str) and et:
+                        normalized = normalize_kind(et)
+                        if normalized in CORE_OBJECT_KINDS:
+                            resolved_kind = normalized
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
         objects.append(
             ObjectRow(
                 pack=resolved_pack_name,
                 object_id=slug,
-                object_kind=note_type,
+                object_kind=resolved_kind,
                 title=title,
                 canonical_path=path,
                 source_slug=slug,

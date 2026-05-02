@@ -114,8 +114,8 @@ def build_object_kinds() -> list[ObjectKindSpec]:
         ObjectKindSpec(
             kind=KIND_EVERGREEN,
             display_name=OBJECT_KIND_LABELS[KIND_EVERGREEN],
-            description="Reusable evergreen note",
-            canonical=True,
+            description="Reusable evergreen note (structural — not a valid entity_type)",
+            canonical=False,
         ),
         ObjectKindSpec(
             kind=KIND_DOCUMENT,
@@ -139,6 +139,7 @@ def build_workflow_profiles() -> list[WorkflowProfile]:
                 "quality",
                 "fix_links",
                 "absorb",
+                "dedup",
                 "note_type_normalize",
                 "registry_sync",
                 "moc",
@@ -152,6 +153,7 @@ def build_workflow_profiles() -> list[WorkflowProfile]:
                 "interpretation",
                 "quality",
                 "absorb",
+                "dedup",
                 "moc",
                 "knowledge_index",
             ],

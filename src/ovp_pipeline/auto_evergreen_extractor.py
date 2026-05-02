@@ -178,12 +178,15 @@ Evergreen笔记标准：
   {
     "concept_name": "Concept-Name-Kebab-Case",
     "title": "AI agents require persistent memory",
+    "entity_type": "concept",
     "one_sentence_def": "一句话定义（中文，但保留技术术语英文）",
     "explanation": "详细解释（中文，技术术语不翻译）",
     "importance": "为什么重要",
     "related_concepts": ["Related-Concept-1", "Related-Concept-2", "Related-Concept-3"]
   }
 ]
+
+`entity_type` 必须是以下 10 个值之一：concept, entity, person, company, tool, project, paper, event, framework, method。根据概念的本质选择最准确的类型。
 
 要求：
 - 每个概念必须是一个可独立理解的知识单元

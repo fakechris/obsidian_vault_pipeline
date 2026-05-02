@@ -313,16 +313,28 @@ def promote_candidate(vault_dir: Path, slug: str, dry_run: bool = True) -> Lifec
 
         similar = find_similar_slugs(vault_dir, slug, threshold=DEFAULT_THRESHOLD)
         if similar:
-            best_slug, best_sim = similar[0]
-            best_entry = registry.find_by_slug(best_slug)
-            if best_entry and best_entry.status == STATUS_ACTIVE:
-                print(
-                    f"  [dedup-guard] '{slug}' similar to active '{best_slug}' "
-                    f"(sim={best_sim:.2f}) — merging instead of promoting."
-                )
-                return merge_candidate(vault_dir, slug, best_slug, dry_run=dry_run)
-    except Exception as exc:
-        print(f"  [dedup-guard] Warning: similarity check failed for '{slug}': {exc}")
+            for match_slug, match_sim in similar:
+                match_entry = registry.find_by_slug(match_slug)
+                if match_entry and match_entry.status == STATUS_ACTIVE:
+                    print(
+                        f"  [dedup-guard] '{slug}' similar to active '{match_slug}' "
+                        f"(sim={match_sim:.2f}) — merging instead of promoting."
+                    )
+                    return merge_candidate(vault_dir, slug, match_slug, dry_run=dry_run)
+    except (ImportError, FileNotFoundError, OSError) as exc:
+        try:
+            from .auto_moc_updater import PipelineLogger as _PL
+
+            _PL(vault_dir / "60-Logs" / "pipeline.jsonl").log(
+                "dedup_guard_failure",
+                {"slug": slug, "error": str(exc), "policy": "fail-closed"},
+            )
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"[dedup-guard] Similarity check failed for '{slug}': {exc}. "
+            f"Resolve the underlying error and retry."
+        ) from exc
 
     mutation = LifecycleMutation(action="promote", slug=slug, target_slug=slug)
 

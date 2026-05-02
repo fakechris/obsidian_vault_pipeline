@@ -23,6 +23,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M4 KSR Safety And Hot-Path Hardening | Done | projection labels, hot-path audit, wiring evals, article routing preview, evidence spans, candidate risk, JSONL streaming, projection lifecycle hardening, runtime-state API fixes (PR #98, #99, #100) |
 | M5 Context Pack And Operational Runtime | Done | session snapshots, context budget, runtime state in `/ops` and doctor, provider-facing runtime-state API, action queue health |
 | M5a Quality And Dedup Hardening | Done | concept dedup pipeline integration, promote semantic guard, historical data cleanup (PR #101) |
+| M5b Slug-Level Dedup Apply | Done | concept_dedup apply at threshold 0.75 (non-default override; code default=0.82): 297 clusters, 334 duplicates archived to 70-Archive/dedup-merged/, vault reduced 7020→6686 Evergreens |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
 | M8 Type Unification And Extraction Quality | Active | unified object kind taxonomy, Layer 1 entity_type, body-size-aware extraction, quote-grounding, single-pass LLM refactor |
@@ -62,6 +63,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-024 | P1 | Later | Machine-facing memory substrate: typed scored memory records with freshness, evidence count, supersession, last-used telemetry, and token-budgeted selective injection | M6/M7, KSR-033 |
 | BL-035 | P1 | Later | Action types on objects: typed operations (review, decide, verify) with preconditions, postconditions, audit trail | M10 |
 | BL-036 | P2 | Later | Cross-entity aggregation: typed-mention index, property aggregation by kind | M10 |
+| BL-037 | P1 | Next | Body-level semantic dedup: use page_embeddings cosine similarity to detect paraphrastic clones (same concept, different slug names); slug-trigram-Jaccard cannot reach these | M5b, OVP_FIX_PLAN |
 
 ## KSR Task Coverage
 

@@ -172,6 +172,7 @@ SQLITE_ALLOWED_MODULES = {
     # Data-adjacent modules with legitimate sqlite3 usage (tech-debt baseline)
     "autopilot/queue",
     "commands/evidence_verify",
+    "commands/embedding_dedup",
     "commands/link_suggest",
     "commands/repair",
     "commands/reuse_report",

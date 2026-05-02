@@ -40,6 +40,8 @@ class NoteMetadata:
     updated_at: str = ""
     day_id: str = ""
 
+    entity_type: str = ""
+
     # 可选字段
     schema_version: str = "1.0.0"
     vault_id: str = ""
@@ -191,6 +193,8 @@ class NoteMetadata:
                 self.tags = [t.strip() for t in value.split(',')]
             else:
                 self.tags = [value] if value else []
+        elif key == 'entity_type':
+            self.entity_type = value
         elif key == 'date':
             # 兼容旧格式
             self.day_id = value

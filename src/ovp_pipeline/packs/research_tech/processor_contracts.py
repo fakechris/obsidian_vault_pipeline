@@ -83,6 +83,17 @@ def build_processor_contracts(pack_name: str = "research-tech") -> list[Processo
             description="Project qualified deep dives into evergreen truth artifacts.",
         ),
         ProcessorContractSpec(
+            name="dedup",
+            pack=pack_name,
+            stage="dedup",
+            mode="rule_based",
+            inputs=("evergreen_object",),
+            outputs=("evergreen_object",),
+            quality_hooks=(),
+            entrypoint="ovp_pipeline.workflow_handlers:run_pipeline_dedup",
+            description="Deduplicate recently absorbed evergreen objects by slug similarity.",
+        ),
+        ProcessorContractSpec(
             name="note_type_normalize",
             pack=pack_name,
             stage="note_type_normalize",
