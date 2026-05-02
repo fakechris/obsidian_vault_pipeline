@@ -65,6 +65,7 @@ def test_research_tech_full_profile_runtime_e2e(tmp_path):
         return {"success": True, "produced": 2}
 
     pipeline.step_absorb = fake_absorb
+    _bind_success_step(pipeline, "entity_extract", calls)
     _bind_success_step(pipeline, "dedup", calls)
     _bind_success_step(pipeline, "note_type_normalize", calls)
     _bind_success_step(pipeline, "registry_sync", calls)
@@ -120,6 +121,7 @@ def test_default_knowledge_compatibility_runtime_from_step_e2e(tmp_path):
         return {"success": True, "produced": 1}
 
     pipeline.step_absorb = fake_absorb
+    _bind_success_step(pipeline, "entity_extract", calls)
     _bind_success_step(pipeline, "dedup", calls)
     _bind_success_step(pipeline, "note_type_normalize", calls)
     _bind_success_step(pipeline, "registry_sync", calls)

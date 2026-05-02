@@ -39,6 +39,8 @@ def run(
     batch_size: int = 20,
     confidence_threshold: float = 0.7,
     use_llm: bool = True,
+    rate_limit_rpm: int = 0,
+    inter_call_sleep_s: float = 0.0,
 ) -> dict[str, Any]:
     from ..entity_extractor import make_extractor
     from ..entity_registry import EntityRegistry
@@ -89,7 +91,29 @@ def run(
     errors = 0
     t0 = time.time()
 
+    # Rate limiting:
+    #   rate_limit_rpm — hard ceiling of LLM calls per rolling 60s window
+    #   inter_call_sleep_s — minimum gap between consecutive calls
+    # Only relevant when use_llm=True; alias-only mode skips both.
+    call_timestamps: list[float] = []
+
+    def _throttle() -> None:
+        if not use_llm or llm_call is None:
+            return
+        if inter_call_sleep_s > 0:
+            time.sleep(inter_call_sleep_s)
+        if rate_limit_rpm > 0:
+            now = time.time()
+            cutoff = now - 60.0
+            call_timestamps[:] = [t for t in call_timestamps if t > cutoff]
+            if len(call_timestamps) >= rate_limit_rpm:
+                wait = 60.0 - (now - call_timestamps[0]) + 0.05
+                if wait > 0:
+                    time.sleep(wait)
+            call_timestamps.append(time.time())
+
     for i, fpath in enumerate(md_files):
+        _throttle()
         try:
             extraction = extractor.extract_entities_from_file(fpath)
         except Exception as exc:
@@ -194,6 +218,20 @@ def main() -> None:
         action="store_true",
         help="Skip LLM NER, use alias-only matching",
     )
+    parser.add_argument(
+        "--rate-limit-rpm",
+        type=int,
+        default=0,
+        help="Hard ceiling for LLM calls per rolling 60s window (0=unlimited). "
+             "Set to your provider's RPM budget to avoid 429 errors.",
+    )
+    parser.add_argument(
+        "--inter-call-sleep",
+        type=float,
+        default=0.0,
+        help="Seconds to sleep between consecutive LLM calls (default 0). "
+             "Useful for providers with strict per-second limits.",
+    )
     args = parser.parse_args()
     result = run(
         args.vault_dir,
@@ -202,6 +240,8 @@ def main() -> None:
         batch_size=args.batch_size,
         confidence_threshold=args.confidence_threshold,
         use_llm=not args.no_llm,
+        rate_limit_rpm=args.rate_limit_rpm,
+        inter_call_sleep_s=args.inter_call_sleep,
     )
     if result.get("error"):
         sys.exit(1)

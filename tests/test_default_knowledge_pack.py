@@ -34,6 +34,7 @@ def test_default_knowledge_full_profile_matches_current_stage_order():
         "quality",
         "fix_links",
         "absorb",
+        "entity_extract",
         "dedup",
         "note_type_normalize",
         "registry_sync",

@@ -8,6 +8,7 @@ across pipeline stages (extractor -> registry -> candidate -> promote -> knowled
 import pytest
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from ovp_pipeline.identity import canonicalize_note_id
 from ovp_pipeline.object_kinds import (
@@ -178,6 +179,139 @@ class TestRegistryToCandidateContract:
         assert path is not None
         text = path.read_text(encoding="utf-8")
         assert "note_id: claude-code" in text
+
+
+class TestAbsorbStepResultContract:
+    """step_absorb / _run_absorb_workflow_direct must always expose
+    ``processed_files`` and ``promoted_slugs`` so downstream steps
+    (entity_extract, dedup) can rely on them without ``.get(default=...)``.
+
+    These keys had been silently absent from several return paths, causing
+    entity_extract to fall back to a 7-day rglob and dedup to fall back
+    to full-vault scope.  Lock the contract here.
+    """
+
+    REQUIRED_KEYS = {"processed_files", "promoted_slugs"}
+
+    def _make_pipeline(self, vault_dir):
+        from ovp_pipeline.auto_moc_updater import PipelineLogger
+        from ovp_pipeline.unified_pipeline_enhanced import (
+            EnhancedPipeline,
+            TransactionManager,
+        )
+        logger = PipelineLogger(vault_dir / "60-Logs" / "pipeline.jsonl")
+        txn_dir = vault_dir / "60-Logs" / "transactions"
+        txn_dir.mkdir(parents=True, exist_ok=True)
+        txn = TransactionManager(txn_dir)
+        return EnhancedPipeline(vault_dir, logger, txn)
+
+    def _canned_payload(self, files):
+        results = [
+            {
+                "file": str(f),
+                "concepts_extracted": 1,
+                "candidates_added": 0,
+                "concepts_promoted": 1,
+                "concepts_created": 0,
+                "concepts_skipped": 0,
+                "concepts": [
+                    {"slug": canonicalize_note_id(Path(f).stem), "status": "promoted_created"},
+                ],
+            }
+            for f in files
+        ]
+        return {
+            "mode": "absorb",
+            "dry_run": False,
+            "summary": {
+                "files_processed": len(results),
+                "concepts_extracted": len(results),
+                "candidates_added": 0,
+                "concepts_promoted": len(results),
+                "concepts_created": 0,
+                "concepts_skipped": 0,
+                "errors": 0,
+            },
+            "results": results,
+        }
+
+    def test_direct_workflow_includes_required_keys(self, temp_vault):
+        pipeline = self._make_pipeline(temp_vault)
+        files = [
+            temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "a_深度解读.md",
+            temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "b_深度解读.md",
+        ]
+        for f in files:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("---\ntitle: x\n---\nbody", encoding="utf-8")
+
+        with patch(
+            "ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow",
+            return_value=self._canned_payload(files),
+        ):
+            result = pipeline._run_absorb_workflow_direct(dry_run=False)
+
+        assert self.REQUIRED_KEYS <= result.keys(), (
+            f"Missing keys: {self.REQUIRED_KEYS - result.keys()}; got {sorted(result.keys())}"
+        )
+        assert sorted(result["processed_files"]) == sorted(str(f) for f in files)
+        assert sorted(result["promoted_slugs"]) == ["a-深度解读", "b-深度解读"]
+
+    def test_step_absorb_no_qualified_files_path(self, temp_vault):
+        pipeline = self._make_pipeline(temp_vault)
+        result = pipeline.step_absorb(qualified_files=[])
+        assert self.REQUIRED_KEYS <= result.keys()
+        assert result["processed_files"] == []
+        assert result["promoted_slugs"] == []
+
+    def test_step_absorb_quality_blocked_path(self, temp_vault):
+        pipeline = self._make_pipeline(temp_vault)
+        result = pipeline.step_absorb(quality_score=2.5)
+        assert self.REQUIRED_KEYS <= result.keys()
+        assert result["processed_files"] == []
+        assert result["promoted_slugs"] == []
+
+    def test_step_absorb_recent_days_path(self, temp_vault):
+        pipeline = self._make_pipeline(temp_vault)
+        files = [
+            temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "z_深度解读.md",
+        ]
+        for f in files:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("---\ntitle: z\n---\nbody", encoding="utf-8")
+
+        with patch(
+            "ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow",
+            return_value=self._canned_payload(files),
+        ):
+            result = pipeline.step_absorb(recent_days=7)
+
+        assert self.REQUIRED_KEYS <= result.keys()
+        assert result["processed_files"] == [str(files[0])]
+        assert result["promoted_slugs"] == ["z-深度解读"]
+
+    def test_step_absorb_qualified_files_batched_path(self, temp_vault):
+        pipeline = self._make_pipeline(temp_vault)
+        files = [
+            temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "p_深度解读.md",
+            temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "q_深度解读.md",
+        ]
+        for f in files:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("---\ntitle: x\n---\nbody", encoding="utf-8")
+
+        with patch(
+            "ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow",
+            return_value=self._canned_payload(files),
+        ):
+            result = pipeline.step_absorb(qualified_files=[str(f) for f in files])
+
+        assert self.REQUIRED_KEYS <= result.keys(), (
+            f"Batched absorb path dropped keys: {self.REQUIRED_KEYS - result.keys()}"
+        )
+        # Both files were absorbed in this run via the batched path.
+        assert sorted(result["processed_files"]) == sorted(str(f) for f in files)
+        assert sorted(result["promoted_slugs"]) == ["p-深度解读", "q-深度解读"]
 
 
 class TestCandidateToPromotedContract:

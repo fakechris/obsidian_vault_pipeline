@@ -190,7 +190,23 @@ SEED_ENTITIES = [
 
 
 def main():
-    registry = EntityRegistry(VAULT_DIR).load()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Seed canonical Entity candidates into a vault."
+    )
+    parser.add_argument(
+        "--vault-dir",
+        type=Path,
+        default=VAULT_DIR,
+        help="Vault root directory (default: repo root, for testing). "
+             "Set to your real vault when bootstrapping production.",
+    )
+    args = parser.parse_args()
+    target_vault = args.vault_dir.resolve()
+    print(f"Seeding entities into: {target_vault}")
+
+    registry = EntityRegistry(target_vault).load()
     created = 0
     skipped = 0
 
@@ -214,7 +230,7 @@ def main():
                 definition=seed.get("definition", ""),
                 confidence=0.95,
             )
-            write_candidate_file(VAULT_DIR, entry, dry_run=False)
+            write_candidate_file(target_vault, entry, dry_run=False)
             created += 1
             print(f"  CREATE: '{title}' [{seed['entity_type']}] → {entry.slug}")
 

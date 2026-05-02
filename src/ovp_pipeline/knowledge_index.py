@@ -5,11 +5,14 @@ from datetime import datetime, timezone
 import hashlib
 from io import TextIOBase
 import json
+import logging
 import math
 import re
 import sqlite3
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .concept_registry import ConceptRegistry, ResolutionAction
 from .event_emitter import iter_for_index
@@ -152,7 +155,12 @@ CREATE INDEX idx_entity_mentions_type ON entity_mentions(entity_type);
 
 SCHEMA += "\n" + TRUTH_STORE_SCHEMA
 
-from .embedding import embed_text as _embed_text_semantic, get_dimensions, get_model_name
+from .embedding import (
+    assert_consistent_with as _assert_embedding_consistent,
+    embed_text as _embed_text_semantic,
+    get_dimensions,
+    get_model_name,
+)
 TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
     "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug"),
     "claims": ("pack", "claim_id", "object_id", "claim_kind", "claim_text", "confidence"),
@@ -832,6 +840,28 @@ def rebuild_knowledge_index(
     layout = VaultLayout.from_vault(resolved_vault)
     truth_pack = _truth_pack_name(pack_name)
     authority_schema_version = _ensure_authority_schema_version(resolved_vault)
+
+    # Detect embedding-backend mismatch with existing page_embeddings rows.
+    # A rebuild rewrites every row (so post-rebuild is consistent regardless),
+    # but warning surfaces the implicit migration to operators.
+    if layout.knowledge_db.exists():
+        try:
+            with sqlite3.connect(layout.knowledge_db) as _check_conn:
+                row = _check_conn.execute(
+                    "SELECT embedding_model, length(embedding_blob) "
+                    "FROM page_embeddings LIMIT 1"
+                ).fetchone()
+            if row is not None:
+                stored_model = row[0] or ""
+                # Each float32 takes 4 bytes; embedding_blob length / 4 = dim
+                stored_dim = (row[1] or 0) // 4
+                ok, msg = _assert_embedding_consistent(stored_model, stored_dim)
+                if not ok:
+                    logger.warning("[rebuild] %s", msg)
+        except sqlite3.OperationalError:
+            # page_embeddings doesn't exist yet — first-time rebuild
+            pass
+
     with knowledge_db_write_lock(resolved_vault):
         evergreen_dir = layout.evergreen_dir
         atlas_dir = layout.atlas_dir
