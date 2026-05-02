@@ -438,6 +438,45 @@ class TestStrictModeCrossStepIntegration:
         assert result.success is True
         assert result.clusters == 0
 
+    def test_run_pipeline_handles_frozen_step_result(self, temp_vault, monkeypatch):
+        """Regression: run_pipeline used to call cmd_result.update() / write
+        cmd_result["output"] = ..., which fails on frozen StepResult.  The
+        dispatcher must funnel mutations through a dict copy and re-coerce.
+        """
+        from unittest.mock import patch
+        from ovp_pipeline.step_contracts import (
+            ClippingsStepResult,
+            EntityExtractStepResult,
+        )
+
+        pipeline = self._make_pipeline(temp_vault)
+
+        # Make handler_registry route every step to a frozen StepResult so
+        # we exercise the mutation path on real typed objects.
+        canned_clippings = ClippingsStepResult(success=True, migrated=0, remaining=0)
+        canned_entity = EntityExtractStepResult(success=True, total_entities=0)
+
+        def fake_handler(self_, step, **_kwargs):
+            if step == "clippings":
+                return canned_clippings
+            if step == "entity_extract":
+                return canned_entity
+            raise ValueError(f"Unknown stage handler: {step}")
+
+        monkeypatch.setattr(
+            "ovp_pipeline.unified_pipeline_enhanced.execute_profile_stage_handler",
+            fake_handler,
+        )
+
+        # Drive a minimal 2-step run; the original bug would explode here
+        # with AttributeError on cmd_result.update().
+        result = pipeline.run_pipeline(steps=["clippings", "entity_extract"])
+
+        # If we got here without AttributeError, the typed-result mutation
+        # path is safe.  Also verify both step_results entries are typed.
+        assert isinstance(pipeline.step_results["clippings"], ClippingsStepResult)
+        assert isinstance(pipeline.step_results["entity_extract"], EntityExtractStepResult)
+
 
 class TestCandidateToPromotedContract:
     """Data flows correctly from candidate to promoted Evergreen file."""

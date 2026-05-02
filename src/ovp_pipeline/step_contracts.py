@@ -103,7 +103,9 @@ class StepResult:
         return getattr(self, key)
 
     def __contains__(self, key: str) -> bool:
-        return key in self._field_names() and getattr(self, key) is not None
+        # Match dict semantics: declared field is "in" the result regardless
+        # of whether its current value is None.
+        return key in self._field_names()
 
     def get(self, key: str, default: Any = None) -> Any:
         if key in self._field_names():

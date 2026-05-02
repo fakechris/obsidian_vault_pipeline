@@ -825,12 +825,13 @@ class EnhancedPipeline:
     def _incremental_quality_target_files(self, results: dict[str, Any] | None) -> list[str | Path] | None:
         if self.run_mode != "incremental":
             return None
-
-        article_result = (results or {}).get("articles", {})
-        if isinstance(article_result, dict) and "produced_files" in article_result:
+        # ``results["articles"]`` is an ArticlesStepResult or dict; both
+        # expose ``.get()`` so no isinstance check is needed.
+        article_result = (results or {}).get("articles")
+        if article_result is not None and hasattr(article_result, "get"):
             produced_files = article_result.get("produced_files")
-            return produced_files if isinstance(produced_files, list) else []
-
+            if produced_files is not None:
+                return produced_files if isinstance(produced_files, list) else []
         return self._recent_quality_files(days=1)
 
     def _quality_stage_inputs(self, target_files: list[str | Path] | None = None) -> tuple[list[Path], str, str, str]:
@@ -2879,7 +2880,7 @@ class EnhancedPipeline:
             )
 
         results = apply_proposal(
-            self.vault_dir, proposal, dry_run=False, pack=self.pack_name
+            self.vault_dir, proposal, dry_run=False, pack=self.workflow_pack_name
         )
         from .concept_dedup import archive_applied_proposal
         archive_applied_proposal(self.vault_dir, prop_path)
@@ -3181,18 +3182,22 @@ class EnhancedPipeline:
                         raise
                     cmd_result = {"success": False, "error": f"Unknown step: {step}"}
 
+                # cmd_result is a frozen StepResult (or a dict from the
+                # "Unknown step" fallback); accumulate dispatcher additions
+                # on a mutable copy, re-coerce to typed at the end.
+                payload = cmd_result.to_dict() if isinstance(cmd_result, StepResult) else dict(cmd_result)
+
                 # 基于实际产出判断状态（非dry_run模式）
-                if not dry_run and cmd_result.get("success"):
-                    output_check = self._count_output_files(step, before_counts, cmd_result)
+                if not dry_run and payload.get("success"):
+                    output_check = self._count_output_files(step, before_counts, payload)
                     produced = output_check.get("produced", 0)
 
-                    # 更新结果信息
-                    cmd_result.update(output_check)
-                    cmd_result["output"] = f"Produced {produced} items"
+                    payload.update(output_check)
+                    payload["output"] = f"Produced {produced} items"
 
                     # 有产出即视为成功（不再依赖超时导致的退出码）
                     if produced > 0:
-                        cmd_result["success"] = True
+                        payload["success"] = True
                         # 更新 before_counts 为下次检查做准备
                         if step == "clippings":
                             before_counts["processed"] += produced
@@ -3204,16 +3209,16 @@ class EnhancedPipeline:
                             before_counts["interpretations"] = before_counts.get("interpretations", 0) + produced
                             before_counts["interpretation_files"] = sorted(
                                 set(before_counts.get("interpretation_files", []))
-                                | set(cmd_result.get("produced_files", []))
+                                | set(payload.get("produced_files", []))
                             )
                         elif step == "absorb":
                             before_counts["evergreen"] += produced
                         elif step == "refine":
                             before_counts["refine_log_mtime"] = (self.layout.logs_dir / "refine-mutations.jsonl").stat().st_mtime if (self.layout.logs_dir / "refine-mutations.jsonl").exists() else before_counts.get("refine_log_mtime", 0.0)
 
-                    self._write_stage_artifact(step, cmd_result, results={**results, step: cmd_result})
+                    self._write_stage_artifact(step, payload, results={**results, step: payload})
 
-                typed_result = self._record_step_result(step, cmd_result)
+                typed_result = self._record_step_result(step, payload)
                 results[step] = typed_result
 
                 if typed_result["success"]:
@@ -3221,25 +3226,25 @@ class EnhancedPipeline:
                         self.txn_id,
                         step,
                         "completed",
-                        cmd_result.get("output", ""),
-                        cache_hit=cmd_result.get("cache_hit"),
-                        skipped=cmd_result.get("skipped"),
-                        stage_fingerprint=cmd_result.get("stage_fingerprint"),
-                        stage_artifact=cmd_result.get("stage_artifact"),
+                        typed_result.get("output", ""),
+                        cache_hit=typed_result.get("cache_hit"),
+                        skipped=typed_result.get("skipped"),
+                        stage_fingerprint=typed_result.get("stage_fingerprint"),
+                        stage_artifact=typed_result.get("stage_artifact"),
                     )
                 else:
-                    blocked_reason = str(cmd_result.get("reason") or cmd_result.get("error") or "").strip()
-                    step_status = "blocked" if cmd_result.get("blocked") else "failed"
+                    blocked_reason = str(typed_result.get("reason") or typed_result.get("error") or "").strip()
+                    step_status = "blocked" if typed_result.get("blocked") else "failed"
                     self.txn.step(
                         self.txn_id,
                         step,
                         step_status,
-                        cmd_result.get("error", ""),
-                        skipped=cmd_result.get("skipped"),
-                        blocked_reason=blocked_reason if cmd_result.get("blocked") else None,
+                        typed_result.get("error", ""),
+                        skipped=typed_result.get("skipped"),
+                        blocked_reason=blocked_reason if typed_result.get("blocked") else None,
                     )
                     print(f"\nPipeline stopped at step: {step}")
-                    if cmd_result.get("blocked"):
+                    if typed_result.get("blocked"):
                         self.txn.fail(self.txn_id, f"Blocked at step: {step} ({blocked_reason})")
                     else:
                         self.txn.fail(self.txn_id, f"Failed at step: {step}")

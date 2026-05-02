@@ -68,6 +68,17 @@ class TestBaseFields:
         with pytest.raises(KeyError):
             _ = r["nonexistent"]
 
+    def test_contains_matches_dict_semantics(self):
+        """Declared fields are always 'in' the result, even when their value
+        is None (some fields default to None — they're still part of the
+        contract).  Filtering by truthiness would silently surprise consumers
+        that use ``"key" in result`` to ask "is this field declared?".
+        """
+        r = QualityStepResult(success=True)
+        assert "quality_stage_fingerprint" in r  # declared, defaults to None
+        assert "quality_checked" in r            # declared, defaults to 0
+        assert "nonexistent" not in r            # not declared
+
     def test_to_dict_roundtrip(self):
         r = EntityExtractStepResult(
             success=True, produced=5, total_entities=27, mentions_extracted=99,
