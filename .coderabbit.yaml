@@ -1,0 +1,21 @@
+# CodeRabbit configuration — auto-review all PRs
+# Docs: https://docs.coderabbit.ai/getting-started/configure-coderabbit
+reviews:
+  auto_review:
+    enabled: true
+    drafts: true
+    base_branches:
+      - main
+      - master
+      - develop
+  profile: assertive
+  path_instructions:
+    - path: "src/**"
+      instructions: "Review for correctness, performance, and maintainability"
+  tone_instructions: "Be direct and concise. Focus on real bugs and performance issues. Skip style nitpicks."
+  auto_commit:
+    enabled: false
+  labeling:
+    enabled: true
+chat:
+  auto_reply: true
