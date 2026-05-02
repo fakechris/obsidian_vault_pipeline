@@ -1052,7 +1052,7 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert "inherited from object_brief in research-tech" in body
     assert "Source contract: wiki_view · object/page" in body
     assert "Source provider: default-knowledge · object/page" in body
-    assert "Why It Matters" in body
+    assert "Where It Matters" in body
     assert "Where To Go Next" in body
     assert "Source contract: wiki_view · object/page" in body
     assert "Next Actions" not in body

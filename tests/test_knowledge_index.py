@@ -683,9 +683,12 @@ Usage patterns cover prompts, workflows, and operator loops.
             "SELECT slug, chunk_index, section_title, embedding_model FROM page_embeddings ORDER BY chunk_index"
         ).fetchall()
 
+    from ovp_pipeline.embedding import get_model_name
+
+    expected_model = get_model_name()
     assert chunks == [
-        ("agent-harness", 0, "Architecture", "local-hash-v1"),
-        ("agent-harness", 1, "Usage Patterns", "local-hash-v1"),
+        ("agent-harness", 0, "Architecture", expected_model),
+        ("agent-harness", 1, "Usage Patterns", expected_model),
     ]
 
 
@@ -1000,7 +1003,7 @@ date: 2026-04-07
 
     assert row[0] == "knowledge_db"
     assert row[1] == 1
-    assert row[2] == 1
+    assert row[2] == 2
     assert row[3]
 
 
@@ -1034,7 +1037,7 @@ date: 2026-04-07
         "authority_schema_version_newer_than_projection",
     ]
     assert markers[-1].authority_schema_version == 2
-    assert markers[-1].projection_schema_version == 1
+    assert markers[-1].projection_schema_version == 2
     assert markers[-1].status == "closed"
     with sqlite3.connect(layout.knowledge_db) as conn:
         row = conn.execute(
@@ -1044,7 +1047,7 @@ date: 2026-04-07
             WHERE projection_kind = 'knowledge_db'
             """
         ).fetchone()
-    assert row == (2, 1)
+    assert row == (2, 2)
 
 
 def test_ensure_knowledge_db_current_rebuilds_when_projection_schema_version_advances(temp_vault):
@@ -1093,7 +1096,7 @@ date: 2026-04-07
             WHERE projection_kind = 'knowledge_db'
             """
         ).fetchone()
-    assert row == (1, 1)
+    assert row == (1, 2)
 
 
 def test_recent_audit_events_returns_newest_rows_first(temp_vault):
@@ -1305,7 +1308,7 @@ Stable body.
     first = rebuild_knowledge_index(temp_vault)
     assert first["pages_indexed"] == 1
 
-    def fail_embed(_: str, dimensions: int = 128) -> bytes:
+    def fail_embed(_: str) -> bytes:
         raise RuntimeError("boom")
 
     monkeypatch.setattr("ovp_pipeline.knowledge_index._embed_text", fail_embed)

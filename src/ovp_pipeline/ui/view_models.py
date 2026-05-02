@@ -47,6 +47,9 @@ from ..truth_api import (
     list_graph_clusters,
     list_graph_edges_for_object_scope,
     list_objects,
+    list_mention_kind_stats,
+    list_object_kind_stats,
+    list_relation_kind_stats,
     list_production_gaps,
     list_production_chains,
     list_signals,
@@ -2397,6 +2400,8 @@ def build_object_page_payload(
             "canonical_path": detail["object"]["canonical_path"],
         },
         "provenance": detail["provenance"],
+        "mention_kind_stats": list_mention_kind_stats(vault_dir, object_id, pack_name=pack_name),
+        "relation_kind_stats": list_relation_kind_stats(vault_dir, object_id, pack_name=pack_name),
         "review_context": review_context,
         "review_history": list_review_actions(vault_dir, object_ids=[object_id], limit=8) if research_shell_enabled else [],
         "evolution": evolution_section,
@@ -4119,6 +4124,7 @@ def build_objects_index_payload(
     limit: int = 100,
     offset: int = 0,
     query: str | None = None,
+    object_kind: str | None = None,
     pack_name: str | None = None,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
@@ -4130,9 +4136,23 @@ def build_objects_index_payload(
                 pack_name=requested_pack,
             ),
         }
-        for item in list_objects(vault_dir, limit=limit, offset=offset, query=query, pack_name=pack_name)
+        for item in list_objects(
+            vault_dir,
+            limit=limit,
+            offset=offset,
+            query=query,
+            object_kind=object_kind,
+            pack_name=pack_name,
+        )
     ]
-    total_count = count_objects(vault_dir, query=query, pack_name=pack_name)
+    total_count = count_objects(vault_dir, query=query, object_kind=object_kind, pack_name=pack_name)
+
+    kind_stats: list[dict[str, Any]] = []
+    try:
+        kind_stats = list_object_kind_stats(vault_dir, pack_name=pack_name)
+    except Exception:
+        pass
+
     return {
         "screen": "objects/index",
         "requested_pack": requested_pack,
@@ -4144,9 +4164,11 @@ def build_objects_index_payload(
         "items": items,
         "count": len(items),
         "total_count": total_count,
+        "kind_stats": kind_stats,
         "limit": limit,
         "offset": offset,
         "query": query or "",
+        "object_kind": object_kind or "",
     }
 
 

@@ -224,8 +224,10 @@ def build_truth_projection(
 
     from ...object_kinds import CORE_OBJECT_KINDS, normalize_kind
 
+    from ...object_kinds import KIND_CONCEPT
+
     for slug, title, note_type, path, _day_id, _frontmatter_json, body in page_rows:
-        resolved_kind = note_type
+        resolved_kind = note_type if note_type in CORE_OBJECT_KINDS else KIND_CONCEPT
         if _frontmatter_json:
             try:
                 fm = json.loads(_frontmatter_json)

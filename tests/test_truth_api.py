@@ -79,7 +79,7 @@ def test_truth_api_lists_objects(temp_vault):
         "target-note",
     ]
     assert objects[1]["title"] == "Source Note"
-    assert objects[1]["object_kind"] == "evergreen"
+    assert objects[1]["object_kind"] == "concept"
 
 
 def test_truth_api_rebuilds_legacy_knowledge_db_before_object_queries(temp_vault):
@@ -1965,6 +1965,8 @@ def test_truth_api_builds_topic_neighborhood(temp_vault):
             "target_object_id": "target-note",
             "relation_type": "wikilink",
             "evidence_source_slug": "source-note",
+            "source_kind": "concept",
+            "target_kind": "concept",
         }
     ]
 

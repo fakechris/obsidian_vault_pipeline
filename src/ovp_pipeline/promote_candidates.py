@@ -177,10 +177,17 @@ def write_candidate_file(
     if source_file is not None:
         source_link = f"\n## 📚 来源\n- [[{source_file.stem}]]\n"
 
+    from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
+
+    candidate_kind = normalize_kind(entry.kind) if entry.kind else KIND_CONCEPT
+    if candidate_kind not in CORE_OBJECT_KINDS:
+        candidate_kind = KIND_CONCEPT
+
     frontmatter = f'''---
 note_id: {entry.slug}
 title: "{entry.title}"
 type: candidate
+entity_type: {candidate_kind}
 date: {datetime.now().strftime("%Y-%m-%d")}
 tags: [candidate, {entry.area}]
 aliases: [{", ".join(f'"{a}"' for a in aliases)}]

@@ -419,7 +419,8 @@ BASE_PIPELINE_STEPS = [
     "quality",        # 5. 质量检查
     "fix_links",      # 6. 修复断裂链接
     "absorb",         # 7. 吸收 Evergreen 生命周期动作（quality >= 3.0 才能执行）
-    "dedup",          # 7a. 去重刚吸收的 Evergreen（scope 限于本轮 absorb 产出）
+    "entity_extract", # 7b. Entity NER 提取 (从深度解读中提取命名实体)
+    "dedup",          # 7c. 去重刚吸收的 Evergreen（scope 限于本轮 absorb 产出）
     "note_type_normalize",  # 8. 规范化 note_type 元数据
     "registry_sync",  # 9. 同步Registry与文件系统
     "moc",            # 10. 更新MOC
@@ -443,6 +444,7 @@ STAGE_CACHE_POLICIES = {
     "quality": STAGE_CACHE_CHECKOUT,
     "fix_links": STAGE_CACHE_CHECKOUT,
     "absorb": STAGE_CACHE_CHECKOUT,
+    "entity_extract": STAGE_CACHE_RECORD_ONLY,
     "note_type_normalize": STAGE_CACHE_RECORD_ONLY,
     "registry_sync": STAGE_CACHE_CHECKOUT,
     "moc": STAGE_CACHE_CHECKOUT,
@@ -825,6 +827,15 @@ class EnhancedPipeline:
         registry = self._concept_registry_file()
         if registry.exists():
             files.append(registry)
+        entity_dir = self.vault_dir / "10-Knowledge" / "Entity"
+        if entity_dir.is_dir():
+            files.extend(self._markdown_files_under(entity_dir))
+        entity_registry_file = entity_dir / "entity-registry.jsonl"
+        if entity_registry_file.exists():
+            files.append(entity_registry_file)
+        extraction_log = self.vault_dir / "60-Logs" / "entity-extractions.jsonl"
+        if extraction_log.exists():
+            files.append(extraction_log)
         return self._existing_files([path for path in files if "_Candidates" not in path.parts])
 
     def _stage_input_files(self, stage: str) -> list[Path]:
@@ -856,6 +867,8 @@ class EnhancedPipeline:
             return self._existing_files(files)
         if stage == "knowledge_index":
             return self._knowledge_index_source_files()
+        if stage == "entity_extract":
+            return self._stage_input_files("absorb")
         if stage == "refine":
             return self._evergreen_source_files()
         return []
@@ -1281,6 +1294,11 @@ class EnhancedPipeline:
             current_count = len(list(evergreen_dir.glob("*.md"))) if evergreen_dir.exists() else 0
             results["produced"] = current_count - before_counts.get("evergreen", 0)
             results["total_evergreen"] = current_count
+
+        elif step == "entity_extract":
+            results["produced"] = cmd_result.get("produced", 0)
+            results["total_entities"] = cmd_result.get("total_entities", 0)
+            results["mentions_extracted"] = cmd_result.get("mentions_extracted", 0)
 
         elif step == "moc":
             current_state = {}
@@ -2565,6 +2583,119 @@ class EnhancedPipeline:
         """兼容旧调用，内部转到 Absorb。"""
         return self.step_absorb(recent_days=recent_days, dry_run=dry_run, quality_score=quality_score)
 
+    def step_entity_extract(self, dry_run: bool = False) -> dict:
+        """Extract named entities from recent deep dives using LLM NER."""
+        print("\n" + "=" * 60)
+        print("ENTITY EXTRACT — 命名实体提取")
+        print("=" * 60)
+
+        from .entity_extractor import make_extractor
+        from .entity_registry import EntityRegistry
+
+        result: dict = {"success": True, "produced": 0, "total_entities": 0}
+
+        try:
+            registry = EntityRegistry(self.vault_dir).load()
+            before_count = len(registry)
+
+            if dry_run:
+                print("  [DRY RUN] Entity extraction skipped")
+                result["total_entities"] = before_count
+                return result
+
+            llm_call = None
+            try:
+                from .llm_client import get_litellm_client
+
+                client = get_litellm_client(vault_dir=self.vault_dir)
+                if client:
+                    llm_call = client.call
+            except Exception:
+                pass
+
+            if llm_call is None:
+                print("  ⚠ No LLM client available — entity extraction skipped")
+                result["total_entities"] = before_count
+                return result
+
+            extractor = make_extractor(
+                self.vault_dir, llm_call=llm_call
+            )
+
+            absorb_result = self.step_results.get("absorb", {})
+            absorb_files = absorb_result.get("processed_files", [])
+
+            if not absorb_files:
+                areas_dir = self.vault_dir / "20-Areas"
+                if areas_dir.exists():
+                    from datetime import datetime, timedelta
+
+                    cutoff = datetime.now() - timedelta(days=7)
+                    absorb_files = [
+                        str(f)
+                        for f in areas_dir.rglob("*_深度解读.md")
+                        if f.stat().st_mtime >= cutoff.timestamp()
+                    ]
+
+            total_mentions = 0
+            extraction_log = self.vault_dir / "60-Logs" / "entity-extractions.jsonl"
+            extraction_log.parent.mkdir(parents=True, exist_ok=True)
+
+            already_extracted: set[str] = set()
+            if extraction_log.exists():
+                import json as _json_reader
+                for line in extraction_log.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = _json_reader.loads(line)
+                        sf = obj.get("source_file", "")
+                        if sf:
+                            already_extracted.add(sf)
+                    except Exception:
+                        pass
+
+            log_lines: list[str] = []
+            for fpath_str in absorb_files:
+                fpath = Path(fpath_str)
+                if not fpath.exists():
+                    continue
+                if str(fpath) in already_extracted:
+                    continue
+                extraction = extractor.extract_entities_from_file(fpath)
+                total_mentions += len(extraction.mentions)
+                if extraction.mentions:
+                    from .identity import canonicalize_note_id as _cni
+                    import json as _json
+                    log_lines.append(_json.dumps({
+                        "source_slug": _cni(fpath.stem),
+                        "source_file": str(fpath),
+                        "mentions": [m.to_dict() for m in extraction.mentions],
+                    }, ensure_ascii=False))
+
+            if log_lines:
+                with open(extraction_log, "a", encoding="utf-8") as f:
+                    f.write("\n".join(log_lines) + "\n")
+
+            extractor.registry.save()
+            after_count = len(extractor.registry)
+            produced = after_count - before_count
+            result["produced"] = produced
+            result["total_entities"] = after_count
+            result["mentions_extracted"] = total_mentions
+
+            print(f"  新增 Entity 候选: {produced}")
+            print(f"  累计 Entity: {after_count}")
+            print(f"  提取到 Mentions: {total_mentions}")
+
+        except Exception as exc:
+            result["success"] = False
+            result["error"] = str(exc)
+            print(f"  ✗ Entity extraction failed: {exc}")
+
+        return result
+
     def step_dedup(self, dry_run: bool = False) -> dict:
         """Post-absorb deduplication scoped to recently absorbed slugs."""
         print("\n" + "=" * 60)
@@ -3000,6 +3131,11 @@ class EnhancedPipeline:
                     produced = result.get("produced", 0)
                     total = result.get("total_evergreen", 0)
                     detail = f"新增: {produced}, 累计: {total}"
+                elif step == "entity_extract":
+                    produced = result.get("produced", 0)
+                    total = result.get("total_entities", 0)
+                    mentions = result.get("mentions_extracted", 0)
+                    detail = f"新增Entity: {produced}, 累计: {total}, Mentions: {mentions}"
                 elif step == "moc":
                     detail = "已更新"
                 elif step == "refine":

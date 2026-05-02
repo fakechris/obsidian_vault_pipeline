@@ -61,6 +61,10 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
+mlx = [
+    "mlx-lm>=0.24.0",
+    "huggingface_hub>=0.20.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/fakechris/obsidian_vault_pipeline"
@@ -123,6 +127,8 @@ ovp-prime = "ovp_pipeline.commands.prime:main"
 ovp-runtime-state = "ovp_pipeline.commands.runtime_state:main"
 ovp-schema = "ovp_pipeline.commands.schema_cmd:main"
 ovp-backfill-entity-type = "ovp_pipeline.commands.backfill_entity_type:main"
+ovp-backfill-entities = "ovp_pipeline.commands.backfill_entities:main"
+ovp-refresh-entities = "ovp_pipeline.commands.refresh_entities:main"
 ovp-embedding-dedup = "ovp_pipeline.commands.embedding_dedup:main"
 
 [project.entry-points."ovp.packs"]
