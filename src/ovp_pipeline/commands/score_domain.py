@@ -90,8 +90,13 @@ def _sample_for_host(vault_dir: Path, host: str, max_samples: int = 5) -> list[d
             ).fetchall()
         except sqlite3.OperationalError:
             return []
+        # Filter THEN cap — slicing rows[:max_samples] before the host
+        # check can drop all valid matches when the LIKE prefix collides
+        # with substrings (e.g. host "x.com" matching "matrix.com" rows).
         out: list[dict] = []
-        for url, title, author in rows[:max_samples]:
+        for url, title, author in rows:
+            if len(out) >= max_samples:
+                break
             if not url:
                 continue
             if normalize_host(url) != host:
@@ -107,18 +112,18 @@ def _sample_for_host(vault_dir: Path, host: str, max_samples: int = 5) -> list[d
 
 
 def _existing_override(vault_dir: Path, host: str) -> dict | None:
-    overrides = vault_dir / "60-Logs" / "domain_overrides.yaml"
-    if not overrides.exists():
+    """Look up an existing override via the canonical loader.
+
+    Going through ``DomainOverrides.load`` (rather than re-parsing here)
+    means we hit the same normalization + validation as runtime scoring
+    — so ``www.foo.com`` in YAML matches a CLI ``foo.com`` lookup, and
+    a malformed file is treated as "no override" instead of crashing.
+    """
+    from ..source_signals.overrides import DomainOverrides
+    path = vault_dir / "60-Logs" / "domain_overrides.yaml"
+    if not path.exists():
         return None
-    try:
-        import yaml
-    except ImportError:
-        return None
-    try:
-        data = yaml.safe_load(overrides.read_text(encoding="utf-8")) or {}
-    except (yaml.YAMLError, OSError, UnicodeDecodeError):
-        return None
-    return (data.get("domains") or {}).get(host)
+    return DomainOverrides.load(path).domains.get(host)
 
 
 def _llm_score_domain(host: str, samples: list[dict], vault_dir: Path) -> dict | None:
@@ -192,12 +197,24 @@ def _apply_override(
     path = vault_dir / "60-Logs" / "domain_overrides.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        raw = ""
+        # Refuse to overwrite a file we can't safely parse — silently
+        # treating "broken yaml" as "empty" would wipe the user's
+        # curation list on the next --apply.
         try:
             raw = path.read_text(encoding="utf-8")
-            existing = yaml.safe_load(raw) or {}
-        except (yaml.YAMLError, OSError, UnicodeDecodeError):
+            existing = yaml.safe_load(raw)
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+            raise SystemExit(
+                f"refusing to overwrite {path}: cannot parse existing file "
+                f"({exc}). Fix or remove the file before re-running --apply."
+            )
+        if existing is None:
             existing = {}
+        elif not isinstance(existing, dict):
+            raise SystemExit(
+                f"refusing to overwrite {path}: top-level YAML must be a "
+                f"mapping, got {type(existing).__name__}."
+            )
         # PyYAML's safe_dump strips comments — warn before overwriting a
         # human-curated file that contains them.  Long-term fix is to
         # switch to ruamel.yaml; for now surface the loss explicitly.

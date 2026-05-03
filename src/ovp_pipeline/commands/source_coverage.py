@@ -183,7 +183,15 @@ def collect_unrecognized_x_handles(
 
 
 def _load_known_authors(vault_dir: Path) -> set[str]:
+    """Union handles + aliases from authors.jsonl AND author_overrides.yaml.
+
+    Both surfaces feed AuthorRulesProvider at runtime (yaml wins on
+    handle collision), so the discovery dashboard must consider both
+    when filtering "unrecognized" handles — otherwise a handle the user
+    already curated via yaml shows up as unknown noise.
+    """
     out: set[str] = set()
+
     authors_jsonl = vault_dir / "60-Logs" / "authors.jsonl"
     if authors_jsonl.exists():
         for line in authors_jsonl.read_text(encoding="utf-8").splitlines():
@@ -200,6 +208,20 @@ def _load_known_authors(vault_dir: Path) -> set[str]:
             for alias in (rec.get("aliases") or []):
                 if isinstance(alias, str):
                     out.add(alias.lower().lstrip("@"))
+
+    # Merge in YAML-curated handles via the canonical loader, which
+    # already does normalization + clamping + warning on bad rows.
+    yaml_path = vault_dir / "60-Logs" / "author_overrides.yaml"
+    if yaml_path.exists():
+        from ..source_signals.overrides import AuthorOverrides
+        for rec in AuthorOverrides.load(yaml_path).authors:
+            handle = rec.get("handle", "")
+            if handle:
+                out.add(handle)
+            for alias in rec.get("aliases", []):
+                if isinstance(alias, str) and alias:
+                    out.add(alias)
+
     return out
 
 

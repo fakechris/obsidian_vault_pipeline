@@ -61,7 +61,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .url_utils import normalize_host
+
 logger = logging.getLogger(__name__)
+
+
+def _normalize_override_host(host: str) -> str:
+    """Apply the same host canonicalization that DomainRulesProvider uses
+    when looking up source URLs, so a YAML key like ``www.cloudflare.com``
+    or ``HTTPS://Cloudflare.COM`` matches a runtime ``cloudflare.com`` lookup.
+
+    ``normalize_host`` expects a URL — wrap bare hosts in ``https://``.
+    """
+    if not host:
+        return ""
+    s = host.strip()
+    if "://" not in s:
+        s = "https://" + s
+    return normalize_host(s)
 
 
 @dataclass
@@ -94,7 +111,16 @@ class DomainOverrides:
             return cls()
 
         domains: dict[str, dict[str, Any]] = {}
-        for host, entry in (data.get("domains") or {}).items():
+        domains_raw = data.get("domains")
+        if domains_raw is None:
+            domains_raw = {}
+        elif not isinstance(domains_raw, dict):
+            logger.warning(
+                "%s: 'domains' must be a mapping, got %s — skipping section",
+                path, type(domains_raw).__name__,
+            )
+            domains_raw = {}
+        for host, entry in domains_raw.items():
             if not isinstance(entry, dict):
                 continue
             authority = entry.get("authority")
@@ -111,7 +137,14 @@ class DomainOverrides:
                     host, authority_f,
                 )
                 continue
-            domains[str(host).lower()] = {
+            # Normalize the YAML key the same way runtime lookups normalize
+            # source URLs, so 'www.foo.com' / 'HTTPS://Foo.com' / 'foo.com'
+            # all collapse to one entry.
+            normalized = _normalize_override_host(str(host))
+            if not normalized:
+                logger.warning("Skipping override with empty host: %r", host)
+                continue
+            domains[normalized] = {
                 "authority": authority_f,
                 "bucket": str(entry.get("bucket", "manual")),
                 "rationale": str(entry.get("rationale", "")),
@@ -119,10 +152,19 @@ class DomainOverrides:
                 "added_at": str(entry.get("added_at", "")),
             }
 
-        excluded = set()
-        for host in (data.get("excluded_hosts") or []):
+        excluded: set[str] = set()
+        excluded_raw = data.get("excluded_hosts") or []
+        if not isinstance(excluded_raw, list):
+            logger.warning(
+                "%s: 'excluded_hosts' must be a list, got %s",
+                path, type(excluded_raw).__name__,
+            )
+            excluded_raw = []
+        for host in excluded_raw:
             if isinstance(host, str) and host:
-                excluded.add(host.lower())
+                normalized = _normalize_override_host(host)
+                if normalized:
+                    excluded.add(normalized)
 
         return cls(domains=domains, excluded_hosts=excluded)
 
