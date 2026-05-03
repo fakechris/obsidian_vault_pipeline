@@ -68,11 +68,21 @@ def default_providers(vault_dir: Path) -> list[SignalProvider]:
 
     Order matters only for ``AuthorityScore.signals`` audit clarity;
     the combination rule treats them as a multiset.
+
+    Picks up user overrides from:
+      * ``60-Logs/domain_overrides.yaml`` — extended/overridden domain table
+      * ``60-Logs/authors.jsonl`` — primary author list (legacy)
+      * ``60-Logs/author_overrides.yaml`` — alternate author surface
     """
     authors_path = vault_dir / "60-Logs" / "authors.jsonl"
+    domain_overrides_path = vault_dir / "60-Logs" / "domain_overrides.yaml"
+    author_overrides_path = vault_dir / "60-Logs" / "author_overrides.yaml"
     return [
-        DomainRulesProvider(),
-        AuthorRulesProvider(authors_path=authors_path),
+        DomainRulesProvider(overrides_path=domain_overrides_path),
+        AuthorRulesProvider(
+            authors_path=authors_path,
+            overrides_path=author_overrides_path,
+        ),
         GitHubSignalProvider(),
         ArxivSignalProvider(),
         TwitterSignalProvider(),    # stub; returns None unless OVP_TWITTER_BACKEND set
