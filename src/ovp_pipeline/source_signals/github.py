@@ -36,9 +36,10 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from .base import Signal, SignalProvider
+from .base import Signal
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,12 @@ _TIMEOUT_S = 10.0
 class GitHubSignalProvider:
     name: str = "github_stars"
     user_agent: str = "ovp-pipeline-source-authority/0.1"
+    # When set, scoring first consults the ``entities`` table (populated
+    # by ``ovp-backfill-github``).  An entity hit returns immediately —
+    # no live API call.  An entity miss falls through to the live fetch
+    # path below, preserving correctness for repos we haven't backfilled.
+    # Default ``None`` keeps PR-D2 behavior unchanged.
+    entity_store_path: Path | None = None
 
     def applies(self, source_url: str, frontmatter: dict[str, Any]) -> bool:
         return bool(source_url and _GITHUB_REPO_RE.match(source_url))
@@ -69,6 +76,13 @@ class GitHubSignalProvider:
         repo = m.group("repo")
         if repo.endswith(".git"):
             repo = repo[:-4]
+
+        # Entity-table fast path — returns the github_backfill score
+        # (more dimensions, calibrated 0-1) without an API call.
+        entity_signal = self._entity_fast_path(owner, repo)
+        if entity_signal is not None:
+            return entity_signal
+
         url = _API.format(owner=owner, repo=repo)
         req = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
         try:
@@ -127,5 +141,47 @@ class GitHubSignalProvider:
                     "star": round(star_component, 3),
                     "recency": round(recency_component, 3),
                 },
+            },
+        )
+
+    def _entity_fast_path(self, owner: str, repo: str) -> Signal | None:
+        """Return a Signal from the entity table or None.
+
+        Hits ``entities/github_project`` first (most precise), then
+        ``entities/github_user`` as an owner-fallback (capped at 0.55
+        inside the resolver — see entities/resolver.py).  Either path
+        yields the github_backfill formula score, which has more
+        dimensions than the live ``score`` body below.
+
+        Returns ``None`` (so the caller falls through to live fetch) if:
+          * ``entity_store_path`` is not configured;
+          * the store can't be opened;
+          * neither the project nor the owner has been backfilled yet.
+        """
+        if self.entity_store_path is None:
+            return None
+        # Lazy import keeps source_signals/ free of an entities/ dep
+        # when this fast path isn't wired.
+        from ..entities.resolver import resolve_github_project_authority
+        from ..entities.store import EntityStore
+
+        try:
+            store = EntityStore(db_path=self.entity_store_path)
+        except Exception as exc:  # noqa: BLE001 - resilience over diagnostics
+            logger.warning("entity store unavailable for %s/%s: %s",
+                           owner, repo, exc)
+            return None
+        result = resolve_github_project_authority(store, owner, repo)
+        if result.authority is None:
+            return None
+        return Signal(
+            provider=self.name,
+            value=round(result.authority, 4),
+            raw={
+                "owner": owner,
+                "repo": repo,
+                "matched_via": "entity_table",
+                "entity_source": result.source,
+                "entity_authority": result.authority,
             },
         )

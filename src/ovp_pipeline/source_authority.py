@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import sqlite3
 from dataclasses import asdict
 from math import isfinite
@@ -69,21 +68,29 @@ def default_providers(vault_dir: Path) -> list[SignalProvider]:
     Order matters only for ``AuthorityScore.signals`` audit clarity;
     the combination rule treats them as a multiset.
 
-    Picks up user overrides from:
-      * ``60-Logs/domain_overrides.yaml`` — extended/overridden domain table
-      * ``60-Logs/authors.jsonl`` — primary author list (legacy)
-      * ``60-Logs/author_overrides.yaml`` — alternate author surface
+    Three input surfaces wired in here:
+      * ``60-Logs/authors.jsonl`` + ``60-Logs/author_overrides.yaml``
+        — curated whitelist (PR-D1 / PR-D3)
+      * ``60-Logs/domain_overrides.yaml``
+        — extended/overridden domain table (PR-D3)
+      * ``60-Logs/knowledge.db``
+        — entity table fast path (PR-E1 / E2 / E3 / E4) for handles +
+        repos that aren't curated yet.  Providers no-op gracefully
+        when the file or its tables don't exist, so a fresh vault
+        still works.
     """
     authors_path = vault_dir / "60-Logs" / "authors.jsonl"
     domain_overrides_path = vault_dir / "60-Logs" / "domain_overrides.yaml"
     author_overrides_path = vault_dir / "60-Logs" / "author_overrides.yaml"
+    entity_store_path = vault_dir / "60-Logs" / "knowledge.db"
     return [
         DomainRulesProvider(overrides_path=domain_overrides_path),
         AuthorRulesProvider(
             authors_path=authors_path,
             overrides_path=author_overrides_path,
+            entity_store_path=entity_store_path,
         ),
-        GitHubSignalProvider(),
+        GitHubSignalProvider(entity_store_path=entity_store_path),
         ArxivSignalProvider(),
         TwitterSignalProvider(),    # stub; returns None unless OVP_TWITTER_BACKEND set
         SubstackSignalProvider(),   # stub; returns None unless OVP_SUBSTACK_BACKEND set
