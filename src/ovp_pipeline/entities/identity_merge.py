@@ -1,19 +1,30 @@
-"""Identity merge — collapse twitter_author + github_user into person.
+"""Identity merge — collapse twitter_author + github_user into person/organization.
 
 Why
 ---
 
 After PR-E1 (twitter_author) and PR-E2 (github_project + github_user)
-the entity table has two parallel slices for the same human.  E.g.
+the entity table has two parallel slices for the same actor.  E.g.
 @karpathy on Twitter (followers 1.5M, score 0.50) and karpathy on
 GitHub (50k followers, score 0.65) are the same person — but the
 entity store doesn't know that.
 
-The fix is **another entity type** rather than a pointer column:
+The fix is **two new entity types** rather than a pointer column:
 
   * ``person`` — canonical identity for a human
-  * its ``signals_json`` carries a ``links`` array pointing back at
-    the platform-specific entities
+  * ``organization`` — canonical identity for an org (huggingface,
+    polymarket, posthog) — split from ``person`` in PR-F1 because
+    the semantics differ:
+      - persons inherit individual-author authority (followers,
+        bio, written works)
+      - orgs inherit institutional-author authority (membership,
+        endorsements, brand)
+    Conflating them mis-files karpathy@x↔karpathy@gh next to
+    polymarket@x↔polymarket@gh in the same bucket.
+
+Both types carry the same ``links`` array pointing back at the
+platform-specific entities, so downstream code only needs ONE union
+read path (see ``resolver.py``).
 
 Three merge sources, in order of confidence:
 
@@ -55,8 +66,25 @@ logger = logging.getLogger(__name__)
 
 # Entity types we emit and consume.
 PERSON_TYPE = "person"
+ORGANIZATION_TYPE = "organization"
 TWITTER_TYPE = "twitter_author"
 GITHUB_USER_TYPE = "github_user"
+
+# All canonical-identity entity types that this module produces.
+# Resolver lookups iterate this set so adding a future type (e.g.
+# ``team`` for github org-within-org) only edits one constant.
+CANONICAL_TYPES: tuple[str, ...] = (PERSON_TYPE, ORGANIZATION_TYPE)
+
+
+def _is_organization(github_user: Entity) -> bool:
+    """Decide whether to file a merged actor under organization or person.
+
+    Source of truth: GitHub's own ``type`` field on the user object,
+    which is either ``User`` or ``Organization``.  We don't try to
+    second-guess via heuristics on the name (``-ai``, ``Inc.``, …) —
+    GitHub already classifies, just trust it.
+    """
+    return (github_user.signals.get("type") or "").lower() == "organization"
 
 # Confidence categories for the report / review queue.
 MergeMethod = Literal["self_reported", "exact_handle", "fuzzy"]
@@ -214,17 +242,22 @@ def find_merge_candidates(store: EntityStore) -> list[MergeCandidate]:
 def apply_merge(
     store: EntityStore, candidate: MergeCandidate,
 ) -> Entity | None:
-    """Upsert a person entity that links the gh + tw entities.
+    """Upsert a person OR organization entity linking the gh + tw entities.
 
-    Returns the freshly-written ``person`` Entity, or ``None`` if either
+    The choice between ``person`` and ``organization`` is driven by
+    ``github_user.signals.type`` — GitHub already classifies its
+    accounts, and we trust that classification.
+
+    Returns the freshly-written canonical Entity, or ``None`` if either
     side disappeared between discovery and apply (rare race).
 
-    Person identity_key
-    -------------------
-    We use the **lowercased twitter handle** as the canonical key.
-    Reason: Twitter handles are typically more "famous" / oft-quoted
-    than the GitHub login (think @karpathy vs karpathy@github), so
-    naming the person by their twitter handle keeps human-facing
+    identity_key
+    ------------
+    We use the **lowercased twitter handle** as the canonical key
+    for both types.  Reason: Twitter handles are typically more
+    "famous" / oft-quoted than the GitHub login (think @karpathy vs
+    karpathy@github, @langchain vs langchain-ai@github), so naming
+    the canonical entity by its twitter handle keeps human-facing
     surfaces (logs, dashboards) intuitive.
     """
     gh = store.get(GITHUB_USER_TYPE, candidate.github_login)
@@ -232,9 +265,10 @@ def apply_merge(
     if gh is None or tw is None:
         return None
 
-    person_key = candidate.twitter_handle
+    canonical_type = ORGANIZATION_TYPE if _is_organization(gh) else PERSON_TYPE
+    canonical_key = candidate.twitter_handle
     canonical_name = (
-        tw.canonical_name or gh.canonical_name or person_key
+        tw.canonical_name or gh.canonical_name or canonical_key
     )
     derived = max(
         a for a in (gh.derived_authority, tw.derived_authority)
@@ -242,7 +276,8 @@ def apply_merge(
     )
 
     signals = {
-        "person_canonical_handle": person_key,
+        "canonical_handle": canonical_key,
+        "actor_kind": canonical_type,        # "person" | "organization"
         "links": [
             {"entity_type": GITHUB_USER_TYPE,
              "identity_key": gh.identity_key,
@@ -264,14 +299,70 @@ def apply_merge(
         "bio": gh.signals.get("bio") or tw.signals.get("description"),
     }
 
+    # Migration safety: if a stale ``person`` row exists for an entity
+    # we now classify as ``organization`` (or vice versa), delete it
+    # so the entity table doesn't carry both.  See migration helper
+    # ``reclassify_persons_to_orgs`` for bulk-mode behavior.
+    other_type = (
+        PERSON_TYPE if canonical_type == ORGANIZATION_TYPE else ORGANIZATION_TYPE
+    )
+    stale = store.get(other_type, canonical_key)
+    if stale is not None:
+        store.delete(other_type, canonical_key)
+
     return store.upsert(
-        entity_type=PERSON_TYPE,
-        identity_key=person_key,
+        entity_type=canonical_type,
+        identity_key=canonical_key,
         canonical_name=canonical_name,
         signals=signals,
         derived_authority=derived,
         fetch_source="identity_merge",
     )
+
+
+def reclassify_persons_to_orgs(store: EntityStore) -> tuple[int, int]:
+    """One-shot migration: walk existing ``person`` rows and re-file
+    those whose linked github_user has ``type == "Organization"``.
+
+    Returns ``(reclassified, kept)``.  Idempotent — running twice is
+    a no-op on the second pass.
+
+    This is the bulk equivalent of ``apply_merge``'s inline cleanup;
+    use it once after PR-F1 lands to fix the 54 pre-split person
+    entities created by PR-E3.
+    """
+    reclassified = 0
+    kept = 0
+    for person in list(store.list_by_type(PERSON_TYPE)):
+        # The github_user link inside signals tells us which actor we
+        # came from — look it up and inspect its current type.
+        gh_link = next(
+            (ln for ln in (person.signals.get("links") or [])
+             if ln.get("entity_type") == GITHUB_USER_TYPE),
+            None,
+        )
+        if gh_link is None:
+            kept += 1
+            continue
+        gh = store.get(GITHUB_USER_TYPE, gh_link.get("identity_key", ""))
+        if gh is None or not _is_organization(gh):
+            kept += 1
+            continue
+        # Reclassify: re-upsert under organization with the same
+        # signals; delete the old person row.
+        new_signals = dict(person.signals)
+        new_signals["actor_kind"] = ORGANIZATION_TYPE
+        store.upsert(
+            entity_type=ORGANIZATION_TYPE,
+            identity_key=person.identity_key,
+            canonical_name=person.canonical_name,
+            signals=new_signals,
+            derived_authority=person.derived_authority,
+            fetch_source="identity_merge",
+        )
+        store.delete(PERSON_TYPE, person.identity_key)
+        reclassified += 1
+    return reclassified, kept
 
 
 def iter_auto_apply(

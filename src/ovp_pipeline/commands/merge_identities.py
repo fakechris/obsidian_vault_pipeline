@@ -1,4 +1,4 @@
-"""ovp-merge-identities — collapse twitter_author + github_user into person.
+"""ovp-merge-identities — collapse twitter_author + github_user into person/organization.
 
 Three modes:
 
@@ -9,10 +9,11 @@ Three modes:
 
 The merge is read-only against twitter_author / github_user — they
 stay untouched.  We only INSERT/UPDATE rows in the ``entities`` table
-where ``entity_type='person'``.
+where ``entity_type='person'`` or ``'organization'`` (PR-F1).
 
-Re-running is safe: each apply UPSERTs by ``(person, twitter_handle)``,
-so a person row that already exists is just refreshed.
+Re-running is safe: each apply UPSERTs by canonical handle.  A first
+``--migrate-existing`` pass also reclassifies pre-PR-F1 ``person``
+rows whose linked github_user is actually an organization.
 """
 
 from __future__ import annotations
@@ -22,8 +23,11 @@ import sys
 from pathlib import Path
 
 from ..entities.identity_merge import (
+    ORGANIZATION_TYPE,
+    PERSON_TYPE,
     apply_merge,
     find_merge_candidates,
+    reclassify_persons_to_orgs,
 )
 from ..entities.store import EntityStore
 
@@ -38,6 +42,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--include-fuzzy", action="store_true",
                         help="Also apply fuzzy (Levenshtein) candidates — "
                              "review the dry-run output first")
+    parser.add_argument("--migrate-existing", action="store_true",
+                        help="Before merging, reclassify pre-PR-F1 person "
+                             "rows that should be organization (one-shot, "
+                             "idempotent).  Default off so a routine refresh "
+                             "doesn't surprise anyone.")
     args = parser.parse_args(argv)
 
     vault = args.vault_dir.resolve()
@@ -47,6 +56,35 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     store = EntityStore(db_path=db_path)
+
+    if args.migrate_existing and not args.dry_run:
+        reclassified, kept = reclassify_persons_to_orgs(store)
+        print(f"PR-F1 migration: {reclassified} person → organization "
+              f"({kept} unchanged)")
+    elif args.migrate_existing and args.dry_run:
+        # Dry-run preview: only count, don't apply.
+        kept = 0
+        org_candidates: list[str] = []
+        for p in store.list_by_type(PERSON_TYPE):
+            gh_link = next(
+                (ln for ln in (p.signals.get("links") or [])
+                 if ln.get("entity_type") == "github_user"),
+                None,
+            )
+            if gh_link is None:
+                kept += 1
+                continue
+            gh = store.get("github_user", gh_link.get("identity_key", ""))
+            if gh and (gh.signals.get("type") or "").lower() == "organization":
+                org_candidates.append(p.identity_key)
+            else:
+                kept += 1
+        print(f"PR-F1 migration (dry-run): {len(org_candidates)} would be "
+              f"reclassified, {kept} unchanged")
+        for handle in org_candidates[:20]:
+            print(f"  person → organization: {handle}")
+        print()
+
     candidates = find_merge_candidates(store)
 
     by_method = {"self_reported": 0, "exact_handle": 0, "fuzzy": 0}
@@ -100,20 +138,25 @@ def main(argv: list[str] | None = None) -> int:
         else:
             skipped += 1
 
-    print(f"applied: {applied}  (person entities inserted/updated)")
+    print(f"applied: {applied}  (canonical entities inserted/updated)")
     print(f"skipped: {skipped}  (review queue + missing-side cases)")
-    print()
-    print("Top 10 person entities by authority:")
-    for e in store.list_by_type("person", limit=10):
-        if e.derived_authority is None:
+
+    for canonical_type in (PERSON_TYPE, ORGANIZATION_TYPE):
+        rows = store.list_by_type(canonical_type, limit=10)
+        if not rows:
             continue
-        links = e.signals.get("links", [])
-        link_summary = " + ".join(
-            f"{ln['entity_type'].split('_')[0]}:{ln['identity_key']}"
-            for ln in links
-        )
-        print(f"  {e.derived_authority:.2f}  {e.identity_key:<25} "
-              f"({link_summary})")
+        print()
+        print(f"Top 10 {canonical_type} entities by authority:")
+        for e in rows:
+            if e.derived_authority is None:
+                continue
+            links = e.signals.get("links", [])
+            link_summary = " + ".join(
+                f"{ln['entity_type'].split('_')[0]}:{ln['identity_key']}"
+                for ln in links
+            )
+            print(f"  {e.derived_authority:.2f}  {e.identity_key:<25} "
+                  f"({link_summary})")
 
     return 0
 
