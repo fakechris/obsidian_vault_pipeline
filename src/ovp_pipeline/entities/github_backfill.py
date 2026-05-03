@@ -188,6 +188,95 @@ def fetch_user(
 
 
 # ---------------------------------------------------------------------------
+# Score formula constants
+# ---------------------------------------------------------------------------
+# Each band table is ``(threshold, points)`` pairs evaluated top-to-bottom;
+# first matching threshold wins.  Tuples (vs. inline elif chains) make the
+# bands trivial to inspect, tune, and unit-test.
+
+_PROJECT_STARS_BANDS: tuple[tuple[int, int], ...] = (
+    (50_000, 30),
+    (10_000, 25),
+    (1_000,  20),
+    (100,    12),
+    (10,      5),
+)
+
+_PROJECT_FORKS_BANDS: tuple[tuple[int, int], ...] = (
+    (1_000, 10),
+    (100,    7),
+    (10,     3),
+)
+
+# (max_days_since_push, points) — first-match wins; days are non-negative.
+_PROJECT_RECENCY_BANDS: tuple[tuple[float, int], ...] = (
+    (30,         15),
+    (180,        10),
+    (365,         5),
+    (365 * 3,     2),
+)
+
+_PROJECT_AGE_BANDS: tuple[tuple[float, int], ...] = (
+    (5.0, 10),
+    (2.0,  6),
+    (1.0,  3),
+)
+
+_PROJECT_LICENSE_POINTS = 5
+_PROJECT_NOT_ARCHIVED_POINTS = 5
+_PROJECT_NOT_FORK_POINTS = 5
+_PROJECT_OWNER_LIFT_MAX = 20
+
+_USER_FOLLOWERS_BANDS: tuple[tuple[int, int], ...] = (
+    (10_000, 25),
+    (1_000,  20),
+    (100,    12),
+    (10,      5),
+)
+
+_USER_REPOS_BANDS: tuple[tuple[int, int], ...] = (
+    (100, 10),
+    (30,   7),
+    (5,    3),
+)
+
+_USER_AGE_BANDS: tuple[tuple[float, int], ...] = (
+    (7.0, 10),
+    (3.0,  6),
+    (1.0,  3),
+)
+
+_USER_BIO_POINTS = 5
+_USER_BLOG_POINTS = 5
+_USER_COMPANY_POINTS = 10
+_USER_ORGANIZATION_POINTS = 10
+
+_PROJECT_AUTHORITY_DENOMINATOR = 100.0
+_USER_AUTHORITY_DENOMINATOR = 100.0
+
+
+def _band_lookup(value: float, bands: tuple[tuple[float, int], ...]) -> int:
+    """Walk ``bands`` top-to-bottom; return the first band whose
+    threshold ``value`` meets or exceeds.  Returns 0 if no band matches.
+    """
+    for threshold, points in bands:
+        if value >= threshold:
+            return points
+    return 0
+
+
+def _band_lookup_max(value: float, bands: tuple[tuple[float, int], ...]) -> int:
+    """Like ``_band_lookup`` but for "≤ threshold" semantics — used by
+    the recency table where the score is determined by *how recent*,
+    not "at least N points of activity".
+    """
+    for threshold, points in bands:
+        if value <= threshold:
+            return points
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Score derivation
 # ---------------------------------------------------------------------------
 
@@ -228,73 +317,44 @@ def compute_project_authority(
     """
     breakdown: dict[str, int] = {}
 
-    # 1. stars (max 30) — log10 bands so 100k-star repos don't crowd
-    # out 1k-star repos that are still meaningful.
-    stars = int(payload.get("stargazers_count") or 0)
-    if stars >= 50_000:
-        breakdown["stars"] = 30
-    elif stars >= 10_000:
-        breakdown["stars"] = 25
-    elif stars >= 1_000:
-        breakdown["stars"] = 20
-    elif stars >= 100:
-        breakdown["stars"] = 12
-    elif stars >= 10:
-        breakdown["stars"] = 5
-    else:
-        breakdown["stars"] = 0
+    # 1. stars — log10-style bands so 100k-star repos don't crowd out
+    # 1k-star repos that are still meaningful.
+    breakdown["stars"] = _band_lookup(
+        int(payload.get("stargazers_count") or 0), _PROJECT_STARS_BANDS,
+    )
 
-    # 2. forks (max 10)
-    forks = int(payload.get("forks_count") or 0)
-    if forks >= 1_000:
-        breakdown["forks"] = 10
-    elif forks >= 100:
-        breakdown["forks"] = 7
-    elif forks >= 10:
-        breakdown["forks"] = 3
-    else:
-        breakdown["forks"] = 0
+    # 2. forks
+    breakdown["forks"] = _band_lookup(
+        int(payload.get("forks_count") or 0), _PROJECT_FORKS_BANDS,
+    )
 
-    # 3. recency (max 15) — last push window
+    # 3. recency — last push window (smaller-is-better, hence _band_lookup_max)
     pushed_at = payload.get("pushed_at") or payload.get("updated_at")
-    days = _days_since(pushed_at)
-    if days <= 30:
-        breakdown["recency"] = 15
-    elif days <= 180:
-        breakdown["recency"] = 10
-    elif days <= 365:
-        breakdown["recency"] = 5
-    elif days <= 365 * 3:
-        breakdown["recency"] = 2
-    else:
-        breakdown["recency"] = 0
+    breakdown["recency"] = _band_lookup_max(_days_since(pushed_at), _PROJECT_RECENCY_BANDS)
 
-    # 4. age (max 10) — mature repos earn trust
-    years = _years_since(payload.get("created_at"))
-    if years >= 5:
-        breakdown["age"] = 10
-    elif years >= 2:
-        breakdown["age"] = 6
-    elif years >= 1:
-        breakdown["age"] = 3
-    else:
-        breakdown["age"] = 0
+    # 4. age — mature repos earn trust
+    breakdown["age"] = _band_lookup(
+        _years_since(payload.get("created_at")), _PROJECT_AGE_BANDS,
+    )
 
-    # 5. license (max 5) — legitimate OSS signal
+    # 5. license — legitimate OSS signal
     license_obj = payload.get("license")
-    if isinstance(license_obj, dict) and license_obj.get("spdx_id"):
-        breakdown["license"] = 5
-    else:
-        breakdown["license"] = 0
+    breakdown["license"] = (
+        _PROJECT_LICENSE_POINTS
+        if isinstance(license_obj, dict) and license_obj.get("spdx_id")
+        else 0
+    )
 
-    # 6. not archived (max 5)
-    breakdown["not_archived"] = 0 if payload.get("archived") else 5
+    # 6. not archived
+    breakdown["not_archived"] = (
+        0 if payload.get("archived") else _PROJECT_NOT_ARCHIVED_POINTS
+    )
 
-    # 7. not a fork (max 5) — originals over mirrors
-    breakdown["not_fork"] = 0 if payload.get("fork") else 5
+    # 7. not a fork — originals over mirrors
+    breakdown["not_fork"] = 0 if payload.get("fork") else _PROJECT_NOT_FORK_POINTS
 
-    # 8. owner lift (max 20) — provided by caller after fetching user
-    breakdown["owner_lift"] = max(0, min(20, owner_lift))
+    # 8. owner lift — provided by caller after fetching the github_user
+    breakdown["owner_lift"] = max(0, min(_PROJECT_OWNER_LIFT_MAX, owner_lift))
 
     score = max(0, sum(breakdown.values()))
     return score, breakdown
@@ -304,54 +364,34 @@ def compute_user_authority(payload: dict[str, Any]) -> tuple[int, dict[str, int]
     """Score one GitHub user / org (0-75)."""
     breakdown: dict[str, int] = {}
 
-    # 1. followers (max 25)
-    followers = int(payload.get("followers") or 0)
-    if followers >= 10_000:
-        breakdown["followers"] = 25
-    elif followers >= 1_000:
-        breakdown["followers"] = 20
-    elif followers >= 100:
-        breakdown["followers"] = 12
-    elif followers >= 10:
-        breakdown["followers"] = 5
-    else:
-        breakdown["followers"] = 0
+    # 1. followers
+    breakdown["followers"] = _band_lookup(
+        int(payload.get("followers") or 0), _USER_FOLLOWERS_BANDS,
+    )
 
-    # 2. public_repos (max 10) — output volume
-    repos = int(payload.get("public_repos") or 0)
-    if repos >= 100:
-        breakdown["public_repos"] = 10
-    elif repos >= 30:
-        breakdown["public_repos"] = 7
-    elif repos >= 5:
-        breakdown["public_repos"] = 3
-    else:
-        breakdown["public_repos"] = 0
+    # 2. public_repos — output volume
+    breakdown["public_repos"] = _band_lookup(
+        int(payload.get("public_repos") or 0), _USER_REPOS_BANDS,
+    )
 
-    # 3. age (max 10)
-    years = _years_since(payload.get("created_at"))
-    if years >= 7:
-        breakdown["age"] = 10
-    elif years >= 3:
-        breakdown["age"] = 6
-    elif years >= 1:
-        breakdown["age"] = 3
-    else:
-        breakdown["age"] = 0
+    # 3. age
+    breakdown["age"] = _band_lookup(
+        _years_since(payload.get("created_at")), _USER_AGE_BANDS,
+    )
 
-    # 4. has bio (max 5) — populated profile is a humanity / care signal
-    breakdown["has_bio"] = 5 if (payload.get("bio") or "").strip() else 0
+    # 4. populated profile is a humanity / care signal
+    breakdown["has_bio"] = _USER_BIO_POINTS if (payload.get("bio") or "").strip() else 0
+    breakdown["has_blog"] = _USER_BLOG_POINTS if (payload.get("blog") or "").strip() else 0
+    breakdown["has_company"] = (
+        _USER_COMPANY_POINTS if (payload.get("company") or "").strip() else 0
+    )
 
-    # 5. has blog/url (max 5)
-    breakdown["has_blog"] = 5 if (payload.get("blog") or "").strip() else 0
-
-    # 6. has company affiliation (max 10)
-    breakdown["has_company"] = 10 if (payload.get("company") or "").strip() else 0
-
-    # 7. account type Organization (max 10)
-    breakdown["is_organization"] = 10 if (
-        (payload.get("type") or "").lower() == "organization"
-    ) else 0
+    # 5. account type Organization
+    breakdown["is_organization"] = (
+        _USER_ORGANIZATION_POINTS
+        if (payload.get("type") or "").lower() == "organization"
+        else 0
+    )
 
     score = max(0, sum(breakdown.values()))
     return score, breakdown
