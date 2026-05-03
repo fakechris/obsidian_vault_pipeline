@@ -81,12 +81,27 @@ _MIXED = {
 }
 
 # Path-level overrides for domains where authority varies sharply by
-# sub-path.  The first matching pattern wins.
-_PATH_OVERRIDES: list[tuple[re.Pattern, float, str]] = [
-    (re.compile(r"^/blog/"), 0.85, "official blog path"),
-    (re.compile(r"^/research/"), 0.90, "research path"),
-    (re.compile(r"^/orgs/"), 0.05, "github org listing — ignore"),
+# sub-path.  Each entry now scopes the path pattern to specific hosts
+# so a generic ``/blog/`` path on a random domain doesn't get the
+# canonical-blog bump (catches the case where any unrecognized site
+# uses ``/blog/`` for marketing content).
+#
+# The "" host pattern means "any host" — kept for genuinely
+# domain-agnostic paths like the GitHub org-listing dampener (which is
+# already host-locked to github.com elsewhere).
+_PATH_OVERRIDES: list[tuple[set[str], re.Pattern, float, str]] = [
+    # Github org listing pages — never canonical knowledge artifacts
+    ({"github.com"}, re.compile(r"^/orgs/"), 0.05, "github org listing — ignore"),
 ]
+
+
+# Hosts where a "/blog/" or "/research/" path should be treated as
+# canonical even if we haven't whitelisted the bare domain.  Kept
+# narrow so unknown domains don't get a free lift.
+_TRUSTED_BLOG_HOSTS: set[str] = {
+    # Add hosts here as we observe genuinely high-quality blog content.
+    # Empty by default — bare domain rules are the primary lift.
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,11 +120,15 @@ class DomainRulesProvider:
             parsed = urlparse(source_url)
         except ValueError:
             return None
-        host = (parsed.netloc or "").lower().lstrip("www.")
+        host = (parsed.netloc or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
         path = parsed.path or "/"
 
-        # 1. Path override always wins
-        for pattern, override, reason in _PATH_OVERRIDES:
+        # 1. Host-scoped path overrides (e.g. github.com /orgs/)
+        for hosts, pattern, override, reason in _PATH_OVERRIDES:
+            if hosts and host not in hosts:
+                continue
             if pattern.search(path):
                 return Signal(
                     provider=self.name,
@@ -117,7 +136,16 @@ class DomainRulesProvider:
                     raw={"host": host, "path": path, "reason": reason},
                 )
 
-        # 2. Domain table
+        # 2. Trusted-blog-host /blog/ or /research/ canonical bump
+        if host in _TRUSTED_BLOG_HOSTS and (
+            path.startswith("/blog/") or path.startswith("/research/")
+        ):
+            return Signal(
+                provider=self.name, value=0.85,
+                raw={"host": host, "path": path, "reason": "trusted blog path"},
+            )
+
+        # 3. Domain table — exact match first
         for table, label in ((_CANONICAL, "canonical"), (_MIXED, "mixed")):
             if host in table:
                 return Signal(
@@ -125,18 +153,58 @@ class DomainRulesProvider:
                     value=table[host],
                     raw={"host": host, "bucket": label},
                 )
-            # Subdomain match (e.g. ``blog.example.com`` → ``example.com``)
-            parent = ".".join(host.split(".")[-2:])
-            if parent in table:
-                return Signal(
-                    provider=self.name,
-                    value=table[parent] - 0.05,  # slight penalty for subdomain
-                    raw={"host": host, "matched": parent, "bucket": label},
-                )
 
-        # 3. Default
+        # 4. Subdomain → parent match (e.g. blog.huggingface.co → huggingface.co).
+        # Use ``_extract_registrable_domain`` which handles common
+        # multi-part TLDs (.co.uk, .com.au, .ac.jp) instead of the naive
+        # ``host.split(".")[-2:]`` that misclassified them.
+        parent = _extract_registrable_domain(host)
+        if parent and parent != host:
+            for table, label in ((_CANONICAL, "canonical"), (_MIXED, "mixed")):
+                if parent in table:
+                    return Signal(
+                        provider=self.name,
+                        value=table[parent] - 0.05,  # slight penalty for subdomain
+                        raw={"host": host, "matched": parent, "bucket": label},
+                    )
+
+        # 5. Default
         return Signal(
             provider=self.name,
             value=_DEFAULT_AUTHORITY,
             raw={"host": host, "bucket": "unknown"},
         )
+
+
+# Common multi-part public suffixes that the naive last-2-labels split
+# would mis-handle.  Not exhaustive (the full PSL has thousands), but
+# covers the venues we actually encounter in practice.
+_MULTIPART_SUFFIXES = frozenset({
+    "co.uk", "com.au", "co.jp", "ac.jp", "co.kr", "com.cn", "com.hk",
+    "com.sg", "com.br", "com.mx", "com.tr", "co.in", "co.nz", "co.za",
+})
+
+
+def _extract_registrable_domain(host: str) -> str:
+    """Return the registrable domain from a hostname.
+
+    Handles common multi-part public suffixes (``.co.uk``, ``.com.au``)
+    that would otherwise be misclassified by ``host.split(".")[-2:]``.
+    Falls back to the last two labels for everything else.
+
+    Examples
+    --------
+    >>> _extract_registrable_domain("blog.example.com")
+    'example.com'
+    >>> _extract_registrable_domain("blog.example.co.uk")
+    'example.co.uk'
+    >>> _extract_registrable_domain("example.com")
+    'example.com'
+    """
+    parts = host.split(".")
+    if len(parts) < 2:
+        return host
+    last_two = ".".join(parts[-2:])
+    if last_two in _MULTIPART_SUFFIXES and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return last_two

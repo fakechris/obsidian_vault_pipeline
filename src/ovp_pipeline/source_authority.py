@@ -17,7 +17,7 @@ the May 2026 design discussion: "soft, not hard".
 Combination rule
 ----------------
 
-Weighted geometric mean of provider signals, with one twist: the
+Weighted arithmetic mean of provider signals, with one twist: the
 ``domain_rules`` signal acts as the floor — a provider that contradicts
 the domain (e.g. arXiv paper on a low-quality preprint farm) drops the
 score, but the domain alone never raises it above what the path-based
@@ -25,9 +25,12 @@ signal said.
 
 ::
 
-    primary = weighted_avg([s.value * s.weight for s in signals])
-    floor   = signals_by_provider["domain_rules"].value if exists else 0.4
-    final   = max(floor * 0.7, primary)   # floor allowed to depress 30%
+    primary = sum(s.value * s.weight for s in signals) / sum(s.weight)
+    floor   = (domain_rules.value * 0.7) if domain_rules in signals else 0.0
+    final   = max(floor, primary)
+
+When no provider produced a signal at all, the orchestrator returns
+the neutral default 0.45 (matching unknown-domain default).
 """
 
 from __future__ import annotations

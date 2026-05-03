@@ -78,8 +78,12 @@ class SignalProvider(Protocol):
         """Return a ``Signal`` for this source, or ``None`` if the
         provider couldn't reach a verdict (e.g. API timeout).
 
-        May be slow / make network calls.  The orchestrator wraps each
-        call in a timeout and caches the result, so providers don't
-        need to implement their own caching.
+        May be slow / make network calls.  Providers that hit the
+        network are responsible for their own ``socket`` / ``urlopen``
+        timeouts (10s is the convention used by ``github.py`` and
+        ``arxiv.py``).  The orchestrator does not currently cache — a
+        7-day SQLite-backed cache is queued as a separate PR; for now,
+        ``ovp-score-sources --since YYYY-MM-DD`` provides incremental
+        scoring as a workaround.
         """
         ...

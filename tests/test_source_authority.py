@@ -62,13 +62,39 @@ class TestDomainRules:
         # Subdomain takes a small penalty vs base domain
         assert sig.value > 0.8
 
-    def test_path_override_wins(self):
+    def test_path_override_no_longer_lifts_unknown_domain(self):
+        """After PR review: ``/blog/`` on an unrecognized domain stays
+        at the unknown-domain default — only hosts in the explicit
+        ``_TRUSTED_BLOG_HOSTS`` set get the canonical-blog bump.
+        """
         p = DomainRulesProvider()
         sig = p.score("https://random-startup.example.com/blog/launch", {})
         assert sig is not None
-        # Path override raises an unknown-domain blog
-        assert sig.value >= 0.85
-        assert "official blog path" in sig.raw["reason"]
+        assert sig.value < 0.55  # falls back to unknown default
+        assert sig.raw["bucket"] == "unknown"
+
+    def test_github_orgs_path_dampener_still_fires(self):
+        """The host-scoped override for github.com /orgs/ pages still
+        works — those are listings, never canonical artifacts.
+        """
+        p = DomainRulesProvider()
+        sig = p.score("https://github.com/orgs/anthropic", {})
+        assert sig is not None
+        assert sig.value <= 0.10
+        assert "github org listing" in sig.raw["reason"]
+
+    def test_multipart_tld_subdomain_matched_correctly(self):
+        """``blog.huggingface.co`` should match ``huggingface.co``,
+        not be misclassified as ``co.uk``-style.  After PR review the
+        registrable-domain logic handles ``.co.uk`` etc.
+        """
+        from ovp_pipeline.source_signals.domain_rules import (
+            _extract_registrable_domain,
+        )
+        assert _extract_registrable_domain("blog.example.co.uk") == "example.co.uk"
+        assert _extract_registrable_domain("blog.example.com") == "example.com"
+        assert _extract_registrable_domain("example.com") == "example.com"
+        assert _extract_registrable_domain("a.b.c.example.co.jp") == "example.co.jp"
 
     def test_does_not_apply_to_non_http(self):
         p = DomainRulesProvider()

@@ -5,19 +5,19 @@ API and score on:
 
   * is the paper from a recognized lab (DeepMind / OpenAI / Anthropic /
     Meta AI / FAIR / MSR)?  → +0.15
-  * does the abstract mention 'state-of-the-art' / 'novel'?  → no, that's
-    too noisy.  Instead, signal on author count (single author → -0.05;
-    > 10 authors usually means a big lab → +0.05) and recency.
+  * recency: published within 2y → +0.10, within 5y → +0.05
 
-Note: arXiv API doesn't expose citation count directly.  For citations
-we'd need Semantic Scholar (separate provider, can be added later).
+Note: arXiv API doesn't expose citation count or author-count signals
+reliably (affiliation isn't always present in the public XML).  For
+citations we'd need Semantic Scholar (separate provider, can be added
+later).
 
 Score formula
 -------------
 
     base       = 0.65                              # arxiv default authority
     lab_bonus  = 0.15 if any(known_lab) in authors else 0
-    recency    = 0.10 if updated < 2y else 0.05 if < 5y else 0
+    recency    = 0.10 if published < 2y else 0.05 if < 5y else 0
     return min(1.0, base + lab_bonus + recency)
 """
 
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 _ARXIV_ID_RE = re.compile(
     r"^https?://arxiv\.org/(?:abs|pdf)/(?P<id>\d{4}\.\d{4,5}|\w+/\d{7,})(?:v\d+)?(?:\.pdf)?/?$"
 )
-_API = "http://export.arxiv.org/api/query?id_list={id}"
+_API = "https://export.arxiv.org/api/query?id_list={id}"
 _NS = {"a": "http://www.w3.org/2005/Atom"}
 _TIMEOUT_S = 10.0
 
