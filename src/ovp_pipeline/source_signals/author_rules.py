@@ -36,6 +36,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .base import Signal
+from .overrides import AuthorOverrides
 
 logger = logging.getLogger(__name__)
 
@@ -48,21 +49,26 @@ _HANDLE_FROM_X_URL = re.compile(
 class AuthorRulesProvider:
     """Match author identity against a curated authority list.
 
-    Two-tier lookup:
+    Two load surfaces for the curated whitelist (merged at first lookup):
+      * ``authors_path`` — JSONL, primary curation surface
+      * ``overrides_path`` — YAML (``author_overrides.yaml``), useful
+        for users who prefer grouped editing or exporting/importing
+        the list to/from another tool.  YAML overrides win over JSONL
+        on handle collision (most-recently-added wins).
 
-      1. Curated whitelist (``authors.jsonl``) — explicit user trust.
-         Wins when present.
-      2. Entity table fallback (``entity_store_path``, optional) —
-         partial authority computed by PR-E1/E2 backfills, used when
-         a handle isn't in the whitelist.  Returns Signals with a
-         softer 0.85 multiplier so explicit curation always beats
-         derived data.
+    Plus an optional entity-table fallback:
+      * ``entity_store_path`` — knowledge.db (PR-E1/E2 backfills).
+        When the curated whitelist misses a handle, look it up in the
+        entity table.  Result is multiplied by ``entity_score_multiplier``
+        (default 0.85) so curated entries strictly outrank derived ones
+        at the same raw score.
 
-    When ``entity_store_path`` is None (default), behavior is
-    identical to PR-D1 — whitelist or nothing.
+    When all three are None (the original PR-D1 default), behavior is
+    "whitelist or nothing".
     """
 
     authors_path: Path
+    overrides_path: Path | None = None
     name: str = "author_rules"
     entity_store_path: Path | None = None
     # Multiplier applied to entity-derived authority to keep curated
@@ -76,26 +82,33 @@ class AuthorRulesProvider:
         if self._index is not None:
             return self._index
         index: dict[str, dict[str, Any]] = {}
-        if not self.authors_path.exists():
-            self._index = index
-            return index
-        with self.authors_path.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    logger.warning("authors.jsonl parse error on %r: %s", line[:80], exc)
-                    continue
-                handle = (record.get("handle") or "").lower().lstrip("@")
-                if handle:
-                    index[handle] = record
-                for alias in record.get("aliases", []):
-                    norm = (alias or "").lower().lstrip("@").strip()
-                    if norm:
-                        index[norm] = record
+        if self.authors_path.exists():
+            with self.authors_path.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        logger.warning("authors.jsonl parse error on %r: %s", line[:80], exc)
+                        continue
+                    handle = (record.get("handle") or "").lower().lstrip("@")
+                    if handle:
+                        index[handle] = record
+                    for alias in record.get("aliases", []):
+                        norm = (alias or "").lower().lstrip("@").strip()
+                        if norm:
+                            index[norm] = record
+        # YAML overrides — applied after JSONL so they win on collision
+        if self.overrides_path is not None:
+            yaml_data = AuthorOverrides.load(self.overrides_path)
+            for record in yaml_data.authors:
+                handle = record["handle"]
+                index[handle] = record
+                for alias in record["aliases"]:
+                    if alias:
+                        index[alias] = record
         self._index = index
         return index
 

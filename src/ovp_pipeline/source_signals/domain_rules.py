@@ -22,11 +22,13 @@ backed by a one-line rationale comment.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from .base import Signal, SignalProvider
+from .overrides import DomainOverrides
 
 
 # Default authority for any URL whose domain isn't in the table.
@@ -104,11 +106,33 @@ _TRUSTED_BLOG_HOSTS: set[str] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass
 class DomainRulesProvider:
-    """Look up a hard-coded authority score by domain + path."""
+    """Look up an authority score by domain + path.
+
+    Merges the hardcoded ``_CANONICAL`` / ``_MIXED`` tables with
+    user-editable overrides loaded from
+    ``60-Logs/domain_overrides.yaml`` (the path is provided at
+    construction time; missing file is fine — defaults are used).
+
+    Override semantics:
+      * If the host appears in ``overrides.domains``, the override
+        wins regardless of whether the hardcoded tables also list it.
+      * If the host appears in ``overrides.excluded_hosts``, the
+        provider returns ``None`` (no signal — caller falls back to
+        the orchestrator default 0.45).
+    """
 
     name: str = "domain_rules"
+    overrides_path: Path | None = None
+    _overrides: DomainOverrides = field(default_factory=DomainOverrides)
+    _loaded: bool = False
+
+    def _load_overrides(self) -> DomainOverrides:
+        if not self._loaded and self.overrides_path is not None:
+            self._overrides = DomainOverrides.load(self.overrides_path)
+            self._loaded = True
+        return self._overrides
 
     def applies(self, source_url: str, frontmatter: dict[str, Any]) -> bool:
         return bool(source_url and source_url.startswith(("http://", "https://")))
@@ -126,6 +150,22 @@ class DomainRulesProvider:
         if host.startswith("www."):
             host = host[4:]
         path = parsed.path or "/"
+
+        overrides = self._load_overrides()
+
+        # 0. Excluded hosts — return None so the orchestrator falls back to default
+        if host in overrides.excluded_hosts:
+            return None
+
+        # 0a. User overrides win over hardcoded tables for any host
+        if host in overrides.domains:
+            o = overrides.domains[host]
+            return Signal(
+                provider=self.name,
+                value=o["authority"],
+                raw={"host": host, "bucket": o["bucket"], "source": "override",
+                     "rationale": o["rationale"]},
+            )
 
         # 1. Host-scoped path overrides (e.g. github.com /orgs/)
         for hosts, pattern, override, reason in _PATH_OVERRIDES:
