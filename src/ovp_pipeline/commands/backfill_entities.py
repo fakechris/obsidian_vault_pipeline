@@ -41,6 +41,7 @@ def run(
     use_llm: bool = True,
     rate_limit_rpm: int = 0,
     inter_call_sleep_s: float = 0.0,
+    force: bool = False,
 ) -> dict[str, Any]:
     from ..entity_extractor import make_extractor
     from ..entity_registry import EntityRegistry
@@ -85,7 +86,28 @@ def run(
     extraction_log = vault_dir / "60-Logs" / "entity-extractions.jsonl"
     extraction_log.parent.mkdir(parents=True, exist_ok=True)
 
+    # Dedup against prior runs: skip files already extracted unless --force.
+    # Without this, ``ovp-backfill-entities`` would re-process every file
+    # on every run (we hit this in the May 2026 history rerun: 274 files
+    # got 2-4 entries in the log, doubling token cost for no new data).
+    already_extracted: set[str] = set()
+    if not force and extraction_log.exists():
+        for line in extraction_log.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                sf = obj.get("source_file", "")
+                if sf:
+                    already_extracted.add(sf)
+            except json.JSONDecodeError:
+                continue
+        if already_extracted:
+            print(f"  Skipping {len(already_extracted)} previously-extracted files (use --force to re-process)")
+
     processed = 0
+    skipped_already_extracted = 0
     total_mentions = 0
     total_candidates = 0
     errors = 0
@@ -113,6 +135,9 @@ def run(
             call_timestamps.append(time.time())
 
     for i, fpath in enumerate(md_files):
+        if str(fpath) in already_extracted:
+            skipped_already_extracted += 1
+            continue
         _throttle()
         try:
             extraction = extractor.extract_entities_from_file(fpath)
@@ -155,6 +180,7 @@ def run(
     summary = {
         "files_total": total,
         "files_processed": processed,
+        "files_skipped_already_extracted": skipped_already_extracted,
         "errors": errors,
         "mentions_extracted": total_mentions,
         "candidates_created": total_candidates,
@@ -232,6 +258,13 @@ def main() -> None:
         help="Seconds to sleep between consecutive LLM calls (default 0). "
              "Useful for providers with strict per-second limits.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-process files that already have entries in the extraction "
+             "log.  By default, dedup against the log so reruns only "
+             "process new files.",
+    )
     args = parser.parse_args()
     result = run(
         args.vault_dir,
@@ -242,6 +275,7 @@ def main() -> None:
         use_llm=not args.no_llm,
         rate_limit_rpm=args.rate_limit_rpm,
         inter_call_sleep_s=args.inter_call_sleep,
+        force=args.force,
     )
     if result.get("error"):
         sys.exit(1)
