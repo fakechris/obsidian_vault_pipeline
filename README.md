@@ -97,15 +97,20 @@ Current milestone sequence:
 | M8 Type Unification And Extraction Quality | Active | unified object kind taxonomy, Layer 1 entity_type, body-size-aware extraction, quote-grounding, single-pass LLM refactor |
 | M9 Pack As Domain Ontology | Next | pack-defined object kind specs, typed relation constraints, schema registry |
 | M10 Operational Knowledge Layer | Later | action types, permissions, cross-entity aggregation, decision memory |
+| M11 Source Authority And Cross-Source Identity | Done | typed source-authority providers, entity layer (twitter_author / github_project / github_user / person / organization), runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
+| M12 Extraction-Time Entity Prime And Auto-Wikilink | Next | entity_aliases view, LLM extractor primed with known entities, auto-wikilink — the loop closer for the entity work shipped in M11 |
+| M13 Synthesis Layer (Crystal) | Next | Louvain communities + LLM-synthesized crystals + contradiction crystals + append-only versioning (closes the L3 gap with NM 0.8) |
 
-Recent major changes (PRs #98–#101):
+Recent major changes (PRs #98–#124):
 
-- JSONL streaming hardening, advisory file locks, runtime-state API fixes
-- Four-phase architecture refactor: module boundary cleanup, route hardening (CSP/CSRF), projection lifecycle
-- Concept dedup pipeline integration with scoped `scope_slugs` parameter
-- Promote semantic guard: trigram-Jaccard pre-check merges near-duplicate candidates into existing Evergreens
-- Historical Evergreen data cleanup (71→61 active Evergreens)
-- `find_similar_slugs` utility for similarity checking
+- JSONL streaming hardening, advisory file locks, runtime-state API fixes (#98–#100)
+- Concept dedup pipeline + promote semantic guard, historical Evergreen cleanup (#101)
+- Typed StepResult contracts + 4 pipeline guardrails (#109–#111)
+- Liberate evergreen extractor prompt (#112) — no more 3-5 cap on atomic units per article
+- **Source authority subsystem** (#113/#114): typed SignalProvider Protocol, domain/author whitelists, GitHub/arXiv/Twitter/Substack signals, yaml overrides, LLM-judge for new domains
+- **Entity layer** (#115/#119/#120/#121/#123): twitter_author + github_project + github_user backfills (1443 entities total, ~$0.10 one-shot), identity merge with person/organization split, runtime resolver
+- **Operational glue** (#117/#122): `ovp-backup-db` SQLite online-backup snapshots, `ovp-refresh-source-authority` chained refresh + launchd plist
+- 12 entity-layer review fixes (#124): read-side write side effects, identity-merge backlinks, lock race, append-only history, GitHub bare profile URLs, etc.
 
 ## Domain Packs
 
