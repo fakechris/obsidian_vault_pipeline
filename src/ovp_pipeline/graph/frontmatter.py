@@ -140,64 +140,98 @@ class NoteMetadata:
         return meta
 
     def _parse_fm_text(self, fm_text: str):
-        """解析 frontmatter 文本"""
-        for line in fm_text.split('\n'):
-            line = line.strip()
-            if not line or line.startswith('#'):
+        """解析 frontmatter 文本.
+
+        Uses ``yaml.safe_load`` (instead of the legacy line-by-line
+        parser) so that multi-line YAML lists like::
+
+            tags:
+              - AI-Agents
+              - LLM-Infrastructure
+
+        are recognised as lists.  The previous ad-hoc parser dropped
+        every multi-line list and silently produced ``tags=[]``.  This
+        was the symptom seen in May 2026's KG audit on the live vault.
+        """
+        try:
+            import yaml
+            data = yaml.safe_load(fm_text) or {}
+        except Exception:
+            # Malformed YAML: fall through with no fields set, just like
+            # the old parser would on a syntax error.
+            data = {}
+        if not isinstance(data, dict):
+            return
+        for key, value in data.items():
+            if value is None or value == "":
                 continue
+            self._set_field(str(key), value)
 
-            # 处理 key: value 格式
-            if ':' in line:
-                key, _, value = line.partition(':')
-                key = key.strip()
-                value = value.strip()
+    # Aliases: markdown frontmatter often uses a slightly different field
+    # name than NoteMetadata's canonical attribute.  Keep mappings here
+    # so generators can stay close to natural prose.
+    _FIELD_ALIASES = {
+        "source": "source_url",
+        "author": "source_authors",   # scalar string → wrapped to list
+        "authors": "source_authors",
+    }
 
-                # 移除可能的引号
-                if value.startswith('"') and value.endswith('"'):
-                    value = value[1:-1]
-                elif value.startswith("'") and value.endswith("'"):
-                    value = value[1:-1]
+    _LIST_FIELDS = frozenset({
+        "aliases", "tags", "source_authors", "derived_from",
+        "references", "moc_parents", "topic_clusters", "entities", "keywords",
+    })
 
-                self._set_field(key, value)
+    @staticmethod
+    def _coerce_list(value) -> list:
+        """Best-effort list coercion for fields declared list-typed."""
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if v not in (None, "")]
+        if isinstance(value, str):
+            v = value.strip()
+            if not v:
+                return []
+            # Inline ``[a, b, c]`` form (legacy line-based generators).
+            if v.startswith("[") and v.endswith("]"):
+                items = v[1:-1].split(",")
+                return [i.strip().strip('"').strip("'") for i in items if i.strip()]
+            return [v]
+        # numbers etc. — coerce to single-item string list
+        return [str(value)]
 
-    def _set_field(self, key: str, value: str):
-        """根据key设置字段"""
-        if key in ('aliases', 'tags', 'source_authors', 'derived_from',
-                   'references', 'moc_parents', 'topic_clusters', 'entities', 'keywords'):
-            # 解析列表格式 [item1, item2] 或 - item
-            if value.startswith('['):
-                # 简单逗号分隔
-                items = value.strip('[]').split(',')
-                value = [i.strip().strip('"').strip("'") for i in items if i.strip()]
-            elif value.startswith('-'):
-                # YAML列表格式 (简化处理)
-                value = []
-            else:
-                value = [value] if value else []
-            setattr(self, key, value)
-        elif key == 'title':
-            self.title = value
-        elif key == 'note_id':
-            self.note_id = canonicalize_note_id(value)
-        elif key == 'type':
-            self.note_type = value
-        elif key == 'note_type':
-            self.note_type = value
-        elif key == 'status':
-            self.status = value
-        elif key == 'source_url':
-            self.source_url = value
-        elif key == 'tags':
-            # 处理逗号分隔或数组格式
-            if ',' in value:
-                self.tags = [t.strip() for t in value.split(',')]
-            else:
-                self.tags = [value] if value else []
-        elif key == 'entity_type':
-            self.entity_type = value
-        elif key == 'date':
+    def _set_field(self, key: str, value):
+        """根据 key 设置字段.
+
+        ``value`` can be any YAML-loaded type (str, int, list, dict, bool).
+        List-typed fields are coerced via ``_coerce_list``; scalar fields
+        are stringified.  Unknown keys are silently ignored (we don't
+        want to crash on generator-emitted custom fields).
+        """
+        # Resolve aliases (e.g. ``source`` → ``source_url``).
+        canonical = self._FIELD_ALIASES.get(key, key)
+
+        if canonical in self._LIST_FIELDS:
+            setattr(self, canonical, self._coerce_list(value))
+            return
+
+        # Scalar fields — coerce non-string values to string.
+        sv = str(value).strip() if not isinstance(value, str) else value.strip()
+        if canonical == 'title':
+            self.title = sv
+        elif canonical == 'note_id':
+            self.note_id = canonicalize_note_id(sv)
+        elif canonical == 'type':
+            self.note_type = sv
+        elif canonical == 'note_type':
+            self.note_type = sv
+        elif canonical == 'status':
+            self.status = sv
+        elif canonical == 'source_url':
+            self.source_url = sv
+        elif canonical == 'entity_type':
+            self.entity_type = sv
+        elif canonical == 'date':
             # 兼容旧格式
-            self.day_id = value
+            self.day_id = sv
 
     @staticmethod
     def _generate_note_id(path: str) -> str:

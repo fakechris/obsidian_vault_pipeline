@@ -68,6 +68,35 @@ def detect_and_strip(content: str) -> tuple[str, bool]:
     return inner + rest, True
 
 
+_LEADING_FENCE_THEN_FM_RE = re.compile(
+    r"\A```[a-zA-Z]*\s*\n(---\s*\n.*?\n---\s*\n)",
+    re.DOTALL,
+)
+
+
+def detect_and_strip_aggressive(content: str) -> tuple[str, bool]:
+    """Aggressive variant for the open-fence cases.
+
+    If the file starts with ``\\`\\`\\`<lang>\\n---\\n...\\n---\\n`` but the
+    closing ``\\`\\`\\`\\n`` is missing or far away (the LLM wrote an open
+    fence and forgot to close it), strip only the leading fence line.
+    The frontmatter then starts at byte 0 and Obsidian / KG parse it.
+
+    A stray closing ``\\`\\`\\`\\n`` later in the body becomes an orphan
+    fence; Obsidian renders that as plain text, so we don't damage the
+    document.
+
+    Only safe to use on LLM-generated files that we know shouldn't
+    legitimately start with a code block (e.g. ``*_深度解读.md``).
+    """
+    m = _LEADING_FENCE_THEN_FM_RE.match(content)
+    if not m:
+        return content, False
+    # Strip just the leading "```<lang>\n" line, keep everything else.
+    leading_fence_line_end = content.index("\n") + 1
+    return content[leading_fence_line_end:], True
+
+
 def is_safe_to_repair(content: str) -> bool:
     """A file is safe to auto-repair only if the wrap match is unambiguous.
 
@@ -92,6 +121,7 @@ def repair(
         "50-Inbox/03-Processed/**/*.md",
     ),
     write: bool = False,
+    aggressive: bool = False,
 ) -> RepairReport:
     report = RepairReport()
     seen: set[Path] = set()
@@ -114,12 +144,24 @@ def repair(
                 report.files_skipped_no_wrap += 1
                 continue
 
-            if not is_safe_to_repair(content):
+            if is_safe_to_repair(content):
+                new_content, repaired = detect_and_strip(content)
+            elif aggressive:
+                # Only attempt for files matching deep-dive pattern
+                if "_深度解读.md" not in f.name:
+                    report.files_skipped_unsafe += 1
+                    report.unsafe_paths.append(f)
+                    continue
+                new_content, repaired = detect_and_strip_aggressive(content)
+                if not repaired:
+                    report.files_skipped_unsafe += 1
+                    report.unsafe_paths.append(f)
+                    continue
+            else:
                 report.files_skipped_unsafe += 1
                 report.unsafe_paths.append(f)
                 continue
 
-            new_content, repaired = detect_and_strip(content)
             if repaired:
                 report.files_repaired += 1
                 report.repaired_paths.append(f)
@@ -142,6 +184,12 @@ def main(argv: list[str] | None = None) -> int:
         "--show", type=int, default=20,
         help="Show first N repaired paths in summary (default 20)",
     )
+    parser.add_argument(
+        "--aggressive", action="store_true",
+        help="Also repair open-fence cases (no closing ``` after frontmatter) "
+             "by stripping just the leading fence line.  Only applies to "
+             "*_深度解读.md files; other patterns stay safe-only.",
+    )
     args = parser.parse_args(argv)
 
     vault = args.vault_dir.resolve()
@@ -149,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"vault not found: {vault}", file=sys.stderr)
         return 2
 
-    report = repair(vault, write=args.write)
+    report = repair(vault, write=args.write, aggressive=args.aggressive)
     print(f"Scanned: {report.files_scanned}")
     print(f"To repair: {report.files_repaired}")
     print(f"Skipped (no wrap): {report.files_skipped_no_wrap}")
