@@ -29,20 +29,15 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from .base import Signal
 from .overrides import AuthorOverrides
+from .url_utils import extract_x_handle
 
 logger = logging.getLogger(__name__)
-
-_HANDLE_FROM_X_URL = re.compile(
-    r"^/?(?:@)?(?P<handle>[A-Za-z0-9_]+)(?:/.*)?$"
-)
 
 
 @dataclass
@@ -113,20 +108,9 @@ class AuthorRulesProvider:
         return index
 
     def _extract_handle_from_url(self, source_url: str) -> str | None:
-        try:
-            parsed = urlparse(source_url)
-        except ValueError:
-            return None
-        # ``parsed.hostname`` strips port/userinfo automatically; the
-        # earlier ``lstrip("www.")`` was a character-set strip that
-        # would mangle hosts like ``wwwtwitter.com`` into ``itter.com``.
-        host = (parsed.hostname or "").lower()
-        if host.startswith("www."):
-            host = host[4:]
-        if host not in {"x.com", "twitter.com"}:
-            return None
-        m = _HANDLE_FROM_X_URL.match(parsed.path)
-        return m.group("handle").lower() if m else None
+        # Delegated to the shared utility so url_utils is the single
+        # source of truth for X/Twitter handle parsing.
+        return extract_x_handle(source_url)
 
     def applies(self, source_url: str, frontmatter: dict[str, Any]) -> bool:
         if frontmatter.get("author") or frontmatter.get("authors"):

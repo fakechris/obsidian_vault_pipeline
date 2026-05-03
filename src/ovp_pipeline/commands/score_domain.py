@@ -42,7 +42,8 @@ import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+
+from ..source_signals.url_utils import normalize_host
 
 
 _LLM_SYSTEM_PROMPT = """你是一个知识图谱的来源权威性评分专家。
@@ -78,12 +79,14 @@ def _sample_for_host(vault_dir: Path, host: str, max_samples: int = 5) -> list[d
     conn = sqlite3.connect(db_path)
     try:
         try:
+            # SQLite doesn't allow column aliases in WHERE — repeat
+            # the json_extract expression there.
             rows = conn.execute(
                 "SELECT json_extract(frontmatter_json, '$.source_url') AS url, "
                 "json_extract(frontmatter_json, '$.title') AS title, "
                 "json_extract(frontmatter_json, '$.author') AS author "
                 "FROM pages_index "
-                "WHERE url LIKE ?",
+                "WHERE json_extract(frontmatter_json, '$.source_url') LIKE ?",
                 (f"%{host}%",),
             ).fetchall()
         except sqlite3.OperationalError:
@@ -92,13 +95,7 @@ def _sample_for_host(vault_dir: Path, host: str, max_samples: int = 5) -> list[d
         for url, title, author in rows[:max_samples]:
             if not url:
                 continue
-            try:
-                parsed_host = (urlparse(url).hostname or "").lower()
-                if parsed_host.startswith("www."):
-                    parsed_host = parsed_host[4:]
-                if parsed_host != host:
-                    continue
-            except ValueError:
+            if normalize_host(url) != host:
                 continue
             out.append({
                 "url": url,
@@ -146,8 +143,11 @@ def _llm_score_domain(host: str, samples: list[dict], vault_dir: Path) -> dict |
 
     text = client.call(_LLM_SYSTEM_PROMPT, user_prompt, max_tokens=600)
     try:
-        # Match first { ... } block, tolerating markdown wrapping
-        m = re.search(r"\{[^{}]+\}", text, re.DOTALL)
+        # Greedy match — the negated-set ``[^{}]`` form fails on
+        # nested braces or braces inside string values (e.g. inside
+        # a multi-paragraph rationale).  ``\{.*\}`` with re.DOTALL
+        # works for the realistic LLM-output shape.
+        m = re.search(r"\{.*\}", text, re.DOTALL)
         if not m:
             return None
         parsed = json.loads(m.group(0))
@@ -224,7 +224,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"vault not found: {vault}", file=sys.stderr)
         return 2
 
-    host = args.host.lower().lstrip("www.")
+    host = args.host.lower()
+    if host.startswith("www."):
+        host = host[4:]
 
     existing = _existing_override(vault, host)
     if existing and not args.force:

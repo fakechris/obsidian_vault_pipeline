@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 
 from .base import Signal, SignalProvider
 from .overrides import DomainOverrides
+from .url_utils import normalize_host
 
 
 # Default authority for any URL whose domain isn't in the table.
@@ -140,15 +141,13 @@ class DomainRulesProvider:
     def score(
         self, source_url: str, frontmatter: dict[str, Any],
     ) -> Signal | None:
+        host = normalize_host(source_url)
+        if not host:
+            return None
         try:
             parsed = urlparse(source_url)
         except ValueError:
             return None
-        # ``parsed.hostname`` strips port/userinfo (would otherwise
-        # misclassify ``example.com:443`` as an unknown domain).
-        host = (parsed.hostname or "").lower()
-        if host.startswith("www."):
-            host = host[4:]
         path = parsed.path or "/"
 
         overrides = self._load_overrides()

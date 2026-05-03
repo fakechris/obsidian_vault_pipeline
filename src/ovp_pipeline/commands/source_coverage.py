@@ -30,16 +30,20 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sqlite3
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
+
+from ..source_signals.url_utils import extract_x_handle, normalize_host
 
 
-_X_HANDLE_RE = re.compile(r"^/?(?:@)?(?P<handle>[A-Za-z0-9_]+)/status/")
+# Number of sample URLs we keep per host for the ``ovp-score-domain``
+# follow-up workflow.  Three is the LLM-prompt sweet spot — enough
+# for the model to reason about content variance, few enough to
+# avoid token bloat.
+_MAX_SAMPLE_URLS_PER_HOST = 3
 
 
 @dataclass
@@ -84,29 +88,20 @@ def _query_unit_count_per_source(db_path: Path) -> dict[str, int]:
     conn = sqlite3.connect(db_path)
     try:
         try:
+            # SQLite doesn't allow column aliases in WHERE/GROUP BY —
+            # repeat the json_extract expression where needed.
             rows = conn.execute(
                 "SELECT json_extract(frontmatter_json, '$.source_url') AS source, "
                 "COUNT(*) FROM pages_index "
-                "WHERE note_type = 'evergreen' AND source IS NOT NULL "
-                "GROUP BY source"
+                "WHERE note_type = 'evergreen' "
+                "AND json_extract(frontmatter_json, '$.source_url') IS NOT NULL "
+                "GROUP BY json_extract(frontmatter_json, '$.source_url')"
             ).fetchall()
         except sqlite3.OperationalError:
             return {}
         return {url: count for url, count in rows if url}
     finally:
         conn.close()
-
-
-def _host_of(url: str) -> str:
-    if not url:
-        return ""
-    try:
-        host = (urlparse(url).hostname or "").lower()
-    except ValueError:
-        return ""
-    if host.startswith("www."):
-        host = host[4:]
-    return host
 
 
 def collect_host_stats(
@@ -130,7 +125,7 @@ def collect_host_stats(
     bucket_counts = {"high": 0, "mid": 0, "low": 0, "default": 0}
 
     for source_id, authority in authorities:
-        host = _host_of(source_id)
+        host = normalize_host(source_id)
         if not host:
             continue
         stats = by_host.setdefault(host, HostStats(host=host))
@@ -143,7 +138,7 @@ def collect_host_stats(
             (stats.avg_authority * (stats.source_count - 1) + authority)
             / stats.source_count
         )
-        if len(stats.sample_urls) < 3:
+        if len(stats.sample_urls) < _MAX_SAMPLE_URLS_PER_HOST:
             stats.sample_urls.append(source_id)
         # bucket
         if authority >= 0.75:
@@ -176,20 +171,8 @@ def collect_unrecognized_x_handles(
     authorities = _query_source_authorities(db_path)
     handle_counts: dict[str, int] = defaultdict(int)
     for source_id, _ in authorities:
-        try:
-            parsed = urlparse(source_id)
-        except ValueError:
-            continue
-        host = (parsed.hostname or "").lower()
-        if host.startswith("www."):
-            host = host[4:]
-        if host not in {"x.com", "twitter.com"}:
-            continue
-        m = _X_HANDLE_RE.match(parsed.path or "")
-        if not m:
-            continue
-        handle = m.group("handle").lower()
-        if handle in known_authors:
+        handle = extract_x_handle(source_id)
+        if handle is None or handle in known_authors:
             continue
         handle_counts[handle] += 1
     return sorted(handle_counts.items(), key=lambda kv: -kv[1])

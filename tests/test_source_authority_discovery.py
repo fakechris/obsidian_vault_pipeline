@@ -15,6 +15,47 @@ from ovp_pipeline.source_signals.overrides import (
 )
 from ovp_pipeline.source_signals.domain_rules import DomainRulesProvider
 from ovp_pipeline.source_signals.author_rules import AuthorRulesProvider
+from ovp_pipeline.source_signals.url_utils import (
+    extract_x_handle,
+    normalize_host,
+)
+
+
+# ---------------------------------------------------------------------------
+# url_utils — shared host normalization
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeHost:
+    def test_strips_www_as_prefix_not_charset(self):
+        # ``lstrip("www.")`` would mangle ``web.com`` into ``eb.com``.
+        # Prefix removal must keep it intact.
+        assert normalize_host("https://web.com/x") == "web.com"
+        assert normalize_host("https://www.example.com/x") == "example.com"
+
+    def test_strips_port_and_userinfo(self):
+        assert normalize_host("https://user:pass@example.com:443/x") == "example.com"
+
+    def test_lowercases(self):
+        assert normalize_host("https://Anthropic.COM/news") == "anthropic.com"
+
+    def test_returns_empty_on_bad_input(self):
+        assert normalize_host("") == ""
+        assert normalize_host("not-a-url") == ""
+
+
+class TestExtractXHandle:
+    def test_status_url(self):
+        assert extract_x_handle("https://x.com/karpathy/status/12345") == "karpathy"
+        assert extract_x_handle("https://twitter.com/sama/status/9") == "sama"
+
+    def test_lowercases_handle(self):
+        assert extract_x_handle("https://x.com/Karpathy/status/1") == "karpathy"
+
+    def test_returns_none_for_non_status_url(self):
+        assert extract_x_handle("https://x.com/karpathy") is None
+        assert extract_x_handle("https://example.com/foo") is None
+        assert extract_x_handle("") is None
 
 
 # ---------------------------------------------------------------------------
