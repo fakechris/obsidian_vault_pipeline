@@ -20,14 +20,15 @@ from typing import Any
 
 
 def _build_llm_call(vault_dir: Path) -> Any | None:
-    try:
-        from ..llm_client import get_litellm_client
+    # Don't silently swallow ImportError — this is exactly how the
+    # missing-llm_client.py bug hid silently in production for months.
+    # ``get_litellm_client`` itself returns None when no API key is
+    # configured; that's the only graceful-fallback path we want.
+    from ..llm_client import get_litellm_client
 
-        client = get_litellm_client(vault_dir=vault_dir)
-        if client:
-            return client.call
-    except Exception:
-        pass
+    client = get_litellm_client(vault_dir=vault_dir)
+    if client:
+        return client.call
     return None
 
 
