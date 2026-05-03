@@ -156,9 +156,12 @@ class TestMain:
         _make_fixture_db(vault / "60-Logs" / "knowledge.db")
         backups = vault / "60-Logs" / "backups"
         backups.mkdir(parents=True)
-        # Five old snapshots, all dated before "now" so they sort lower
+        # Five stale snapshots dated firmly in the past — using 1970
+        # instead of e.g. 2025 future-proofs the test (otherwise it
+        # silently flips when the system clock passes those dates).
+        stale_prefix = "knowledge-1970-01-"
         for i in range(5):
-            (backups / f"knowledge-2025-01-0{i+1}T03-00-00.db").write_text("stale")
+            (backups / f"{stale_prefix}0{i+1}T03-00-00.db").write_text("stale")
 
         rc = main(["--vault-dir", str(vault), "--keep", "3", "--quiet"])
         assert rc == 0
@@ -166,5 +169,5 @@ class TestMain:
         # plus 2 newest stale ones).
         remaining = sorted(p.name for p in backups.glob("knowledge-*.db"))
         assert len(remaining) == 3
-        # The freshly-written snapshot survived.
-        assert any("2026" in name for name in remaining)
+        # The freshly-written snapshot (any non-1970 date) survived.
+        assert any(stale_prefix not in name for name in remaining)

@@ -78,6 +78,12 @@ from pathlib import Path
 
 _DEFAULT_KEEP = 14
 _BUFFER_PAGES = 200    # Pages copied per Backup API step (200 ≈ 800KB)
+# ``sqlite3.Connection.backup`` defaults to ``sleep=0.25`` between
+# batches.  At our buffer size that would stretch a 215 MB snapshot
+# from ~3 s to ~60 s.  A tiny non-zero sleep still lets concurrent
+# autopilot writers slip in between batches without paying the full
+# default cost.
+_BACKUP_SLEEP_INTERVAL_S = 0.05
 
 
 def _iso_compact_now() -> str:
@@ -114,7 +120,11 @@ def backup_one(src: Path, dst: Path) -> int:
     try:
         # ``pages=N`` lets long-running writers slip in between
         # batches; ``progress=None`` because we don't need callbacks.
-        src_conn.backup(dst_conn, pages=_BUFFER_PAGES)
+        src_conn.backup(
+            dst_conn,
+            pages=_BUFFER_PAGES,
+            sleep=_BACKUP_SLEEP_INTERVAL_S,
+        )
     finally:
         dst_conn.close()
         src_conn.close()
