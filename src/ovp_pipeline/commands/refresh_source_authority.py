@@ -89,6 +89,14 @@ _STATUS_FILENAME = "entity_refresh_status.json"
 _TWITTER_COST_PER_CALL_USD = 0.00018
 _DEFAULT_MONTHLY_BUDGET_USD = 1.0
 
+# Cost-canary inputs.  ``_ESTIMATED_MAX_HANDLES`` is the upper bound on
+# unique X handles in the OVP vault as of PR-E1's recon.  Using a
+# constant — rather than recomputing per run — keeps the cost
+# warning fast (no scan) and conservative (real refreshes will hit
+# fewer handles after caching).
+_ESTIMATED_MAX_HANDLES = 521
+_DAYS_PER_MONTH = 30
+
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -249,10 +257,15 @@ def main(argv: list[str] | None = None) -> int:
     # signal, not an accountant).
     twitter_step = capture.get("twitter_backfill") or {}
     if twitter_step.get("ok"):
-        # Each weekly run *could* re-fetch up to 521 handles ≈ $0.10.
-        # 4 runs/month ≈ $0.40 — well below default budget.  The
-        # warning fires if the user dropped --max-age-days way down.
-        approx_monthly = 521 * _TWITTER_COST_PER_CALL_USD * (30 / max(args.max_age_days, 1))
+        # Each weekly run *could* re-fetch up to _ESTIMATED_MAX_HANDLES
+        # handles ≈ $0.10.  4 runs/month ≈ $0.40 — well below default
+        # budget.  The warning fires if the user dropped
+        # --max-age-days way down.
+        approx_monthly = (
+            _ESTIMATED_MAX_HANDLES
+            * _TWITTER_COST_PER_CALL_USD
+            * (_DAYS_PER_MONTH / max(args.max_age_days, 1))
+        )
         if approx_monthly > args.monthly_budget_usd:
             print(
                 f"\nwarning: estimated monthly twitter cost "
