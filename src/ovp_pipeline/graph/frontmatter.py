@@ -98,19 +98,31 @@ class NoteMetadata:
 
     @classmethod
     def from_markdown(cls, markdown: str, path: str = "") -> "NoteMetadata":
-        """从markdown内容解析frontmatter"""
+        """从markdown内容解析frontmatter.
+
+        Delegates to ``layer_schemas.parse_frontmatter`` so that the
+        audit / repair / KG paths all share a single source of truth
+        for the frontmatter regex + YAML semantics.  A historical
+        ``\\`\\`\\`yaml`` fence wrap is stripped first to keep the
+        ``LinkParser._get_note_id`` slug derivation aligned (divergence
+        between the two parsers causes pages_index.slug ≠
+        page_links.source_slug and silently zeros outbound-link queries).
+        """
+        from ovp_pipeline.layer_schemas import parse_frontmatter
+
         meta = cls()
 
-        # Tolerate frontmatter wrapped in a ```yaml code fence (~387 such files
-        # in production vaults). LinkParser._get_note_id mirrors this so both
-        # parsers agree on the source slug — divergence here causes
-        # pages_index.slug ≠ page_links.source_slug and outbound-link queries
-        # silently return zero.
-        text_for_fm = re.sub(r"^```yaml\s*\n", "", markdown, count=1)
-        fm_match = re.match(r'^---\n(.*?)\n---', text_for_fm, re.DOTALL)
-        if fm_match:
-            fm_text = fm_match.group(1)
-            meta._parse_fm_text(fm_text)
+        # Strip a leading ```yaml fence if any deep dives still have one
+        # — the May 2026 audit found ~290 such files; the repair removed
+        # them, but new generators may regress and the KG must stay
+        # forgiving.
+        text_for_fm = re.sub(r"^```[a-zA-Z]*\s*\n", "", markdown, count=1)
+        fm = parse_frontmatter(text_for_fm)
+        if fm:
+            for key, value in fm.items():
+                if value is None or value == "":
+                    continue
+                meta._set_field(str(key), value)
 
         # 设置路径
         if path:

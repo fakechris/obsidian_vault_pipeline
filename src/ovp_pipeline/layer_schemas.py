@@ -89,7 +89,7 @@ class LayerSchema:
 
 def _validate_note_id_matches_stem(value: Any, file_path: Path) -> str | None:
     if not isinstance(value, str) or not value:
-        return f"note_id missing or empty"
+        return "note_id missing or empty"
     if value != file_path.stem:
         return f"note_id={value!r} does not match filename stem {file_path.stem!r}"
     return None
@@ -120,8 +120,11 @@ def _validate_entity_type_in_layer_types(value: Any, _file: Path) -> str | None:
 
 
 def _validate_evergreen_tag_present(value: Any, _file: Path) -> str | None:
+    # Don't silently pass when tags isn't a list — that was the bug
+    # CodeRabbit flagged: a malformed scalar value would bypass the
+    # membership check entirely.
     if not isinstance(value, list):
-        return None  # caught by tags-is-list rule
+        return f"tags must be a list, got {type(value).__name__}"
     if "evergreen" not in value:
         return f"tags must include 'evergreen', got {value}"
     return None
@@ -129,7 +132,7 @@ def _validate_evergreen_tag_present(value: Any, _file: Path) -> str | None:
 
 def _validate_entity_tag_present(value: Any, _file: Path) -> str | None:
     if not isinstance(value, list):
-        return None
+        return f"tags must be a list, got {type(value).__name__}"
     if "entity" not in value:
         return f"tags must include 'entity', got {value}"
     return None
@@ -137,7 +140,7 @@ def _validate_entity_tag_present(value: Any, _file: Path) -> str | None:
 
 def _validate_candidate_tag_present(value: Any, _file: Path) -> str | None:
     if not isinstance(value, list):
-        return None
+        return f"tags must be a list, got {type(value).__name__}"
     if "candidate" not in value:
         return f"tags must include 'candidate', got {value}"
     return None
@@ -160,10 +163,14 @@ SOURCE_SCHEMA = LayerSchema(
 )
 
 def _validate_l2_url_origin(fm: dict[str, Any], _file: Path) -> str | None:
-    """L2 deep dives must have either ``source`` or ``github`` set."""
-    if fm.get("source") or fm.get("github"):
+    """L2 deep dives must have at least one URL-origin field set.
+
+    Accepts ``source``, ``github``, or ``source_url`` (the canonical KG
+    field name some generators emit directly).
+    """
+    if fm.get("source") or fm.get("github") or fm.get("source_url"):
         return None
-    return "neither 'source' nor 'github' set; one is required"
+    return "none of 'source' / 'github' / 'source_url' set; one is required"
 
 
 # L2 actually has two subtypes:
@@ -451,27 +458,32 @@ def audit_layer(
     floor_rank = severity_rank.get(severity_floor) if severity_floor else None
 
     violations: list[Violation] = []
+    counted = 0  # running counter — was previously O(n²) sum() per file
     files_scanned = 0
     for f in files:
         files_scanned += 1
+        new_violations: list[Violation]
         try:
             text = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
-            violations.append(Violation(
+            new_violations = [Violation(
                 layer=schema.name, file=f, rule="read",
                 severity="HIGH",
                 message=f"could not read file: {exc}",
-            ))
+            )]
         else:
             fm = parse_frontmatter(text)
-            violations.extend(_validate_one_file(schema, f, fm))
+            new_violations = _validate_one_file(schema, f, fm)
+        violations.extend(new_violations)
 
         if violation_limit is not None:
-            counted = (
-                len(violations) if floor_rank is None
-                else sum(1 for v in violations
-                         if severity_rank[v.severity] <= floor_rank)
-            )
+            if floor_rank is None:
+                counted = len(violations)
+            else:
+                counted += sum(
+                    1 for v in new_violations
+                    if severity_rank[v.severity] <= floor_rank
+                )
             if counted >= violation_limit:
                 break
 

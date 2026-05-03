@@ -67,16 +67,32 @@ class TestAnomalyDetection:
         assert all(a.rule != "llm_silently_disabled" for a in anomalies)
 
     def test_produced_drift_fires_on_50pct_delta(self):
-        # 4 historical runs all around produced=30, latest = 1 (97% drop).
+        # 3 historical runs (~30) + latest=1 = 97% drop → fires.
         history = [self._metric(produced=p) for p in (30, 28, 32)]
         latest = self._metric(produced=1)
         anomalies = detect_anomalies(history + [latest], has_llm_credentials=False)
         assert any(a.rule == "produced_drift" and a.step == "entity_extract" for a in anomalies)
 
     def test_produced_drift_skips_with_too_little_history(self):
+        # 1 historical + 1 latest = 2 runs → below the ≥4 threshold.
         ms = [self._metric(produced=30), self._metric(produced=1)]
         anomalies = detect_anomalies(ms, has_llm_credentials=False)
         assert all(a.rule != "produced_drift" for a in anomalies)
+
+    def test_produced_drift_skips_at_exactly_3_runs(self):
+        # Boundary: 2 historical + 1 latest = 3 runs → still below ≥4 threshold.
+        ms = [self._metric(produced=30), self._metric(produced=32), self._metric(produced=1)]
+        anomalies = detect_anomalies(ms, has_llm_credentials=False)
+        assert all(a.rule != "produced_drift" for a in anomalies)
+
+    def test_produced_drift_uses_true_median_for_even_history(self):
+        # Even-length history: median(30, 32) = 31.  Latest=15 → drop is
+        # ~52%, which crosses the 50% threshold → fires.  This guards
+        # against the previous "upper-middle element" stand-in for median.
+        history = [self._metric(produced=p) for p in (30, 32, 30, 32)]
+        latest = self._metric(produced=15)
+        anomalies = detect_anomalies(history + [latest], has_llm_credentials=False)
+        assert any(a.rule == "produced_drift" for a in anomalies)
 
 
 class TestReadMetrics:

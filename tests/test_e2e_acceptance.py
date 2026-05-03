@@ -127,12 +127,20 @@ class TestE2ECrossLayerFlow:
         # consumers — same machinery as run_pipeline.
         pipeline.step_results["absorb"] = absorb_result
 
-        # 2) entity_extract reads absorb's typed output
-        entity_result = pipeline.step_entity_extract(dry_run=True)
+        # 2) entity_extract reads absorb's typed output via the REAL path
+        # (no dry_run shortcut).  We mock the LLM client off so the
+        # extractor takes the "no LLM" branch but still exercises typed
+        # cross-step consumption of absorb_result.processed_files.
+        # Patching on ``llm_client`` itself rather than on the lazy
+        # import in unified_pipeline_enhanced.
+        with patch(
+            "ovp_pipeline.llm_client.get_litellm_client",
+            return_value=None,
+        ):
+            entity_result = pipeline.step_entity_extract(dry_run=False)
         assert isinstance(entity_result, EntityExtractStepResult)
-        # In dry-run the registry isn't queried, but the typed return
-        # path is exercised — the moment it falls back to a raw dict
-        # the integration tests in test_pipeline_data_contracts.py break.
+        # The typed handoff: the moment step_entity_extract falls back
+        # to dict-style access on absorb_result, this test breaks.
 
         # 3) dedup reads absorb's promoted_slugs via typed access
         dedup_result = pipeline.step_dedup(dry_run=True)

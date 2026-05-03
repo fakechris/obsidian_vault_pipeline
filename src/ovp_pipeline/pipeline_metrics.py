@@ -31,6 +31,7 @@ dispatcher boundary alongside StepResult coercion).
 from __future__ import annotations
 
 import json
+import statistics
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -176,10 +177,13 @@ def detect_anomalies(
         by_step.setdefault(m.step, []).append(m)
 
     for step, runs in by_step.items():
-        if len(runs) < 3:
+        # Need ≥3 historical points (excluding the latest) for the
+        # median to be statistically meaningful — so total runs ≥ 4.
+        if len(runs) < 4:
             continue
-        produced = sorted([r.produced for r in runs[:-1]])
-        median = produced[len(produced) // 2]
+        produced = [r.produced for r in runs[:-1]]
+        median = statistics.median(produced)  # true median (averages the
+                                              # middle two for even counts)
         latest = runs[-1].produced
         if median == 0:
             continue

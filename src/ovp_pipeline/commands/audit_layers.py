@@ -19,7 +19,9 @@ import json
 import sys
 from pathlib import Path
 
-from ..layer_schemas import audit_all_layers, summarize_report
+from ..layer_schemas import ALL_LAYERS, audit_all_layers, summarize_report
+
+_VALID_LAYER_NAMES = tuple(s.name for s in ALL_LAYERS)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,7 +46,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--layer",
-        help="Only emit violations from a specific layer (e.g. 'L3 Evergreen')",
+        choices=_VALID_LAYER_NAMES,
+        help="Only emit violations from a specific layer",
     )
     parser.add_argument(
         "--limit",
@@ -87,10 +90,22 @@ def main(argv: list[str] | None = None) -> int:
     # Final CLI-side filter for the per-violation severity floor (the
     # auditor itself only uses severity for early-exit accounting; the
     # final report still needs to match what the user asked for).
+    # Recompute the per-layer counters AFTER filtering so the JSON +
+    # summary numbers match the emitted violation list.
     for layer in report["layers"]:
         layer["violations"] = [v for v in layer["violations"] if keep(v["severity"])]
         if args.limit > 0:
             layer["violations"] = layer["violations"][:args.limit]
+        recomputed = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        for v in layer["violations"]:
+            recomputed[v["severity"]] += 1
+        layer["violations_by_severity"] = recomputed
+    # Same recompute for grand totals so summarize_report() doesn't lie.
+    grand = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for layer in report["layers"]:
+        for sev, n in layer["violations_by_severity"].items():
+            grand[sev] += n
+    report["total_violations"] = grand
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
