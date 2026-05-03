@@ -181,6 +181,7 @@ SQLITE_ALLOWED_MODULES = {
     "commands/working_memory",
     "commands/score_sources",
     "source_authority",
+    "entities/store",
     "discovery",
     "evidence",
     "evidence_replay",
