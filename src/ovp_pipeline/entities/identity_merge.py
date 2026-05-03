@@ -277,6 +277,9 @@ def apply_merge(
 
     signals = {
         "canonical_handle": canonical_key,
+        # Pre-PR-F1 readers expected ``person_canonical_handle``.  Keep
+        # both keys until we've audited the downstream consumers.
+        "person_canonical_handle": canonical_key,
         "actor_kind": canonical_type,        # "person" | "organization"
         "links": [
             {"entity_type": GITHUB_USER_TYPE,
@@ -320,38 +323,66 @@ def apply_merge(
     )
 
 
-def reclassify_persons_to_orgs(store: EntityStore) -> tuple[int, int]:
-    """One-shot migration: walk existing ``person`` rows and re-file
-    those whose linked github_user has ``type == "Organization"``.
-
-    Returns ``(reclassified, kept)``.  Idempotent — running twice is
-    a no-op on the second pass.
-
-    This is the bulk equivalent of ``apply_merge``'s inline cleanup;
-    use it once after PR-F1 lands to fix the 54 pre-split person
-    entities created by PR-E3.
+def _iter_reclassify_targets(store: EntityStore) -> Iterator[Entity]:
+    """Yield ``person`` rows whose linked github_user is now classified
+    as an organization.  Single source of truth for both the bulk
+    migration and any dry-run / preview caller — guarantees the two
+    can never disagree.
     """
-    reclassified = 0
-    kept = 0
-    for person in list(store.list_by_type(PERSON_TYPE)):
-        # The github_user link inside signals tells us which actor we
-        # came from — look it up and inspect its current type.
+    for person in store.list_by_type(PERSON_TYPE):
         gh_link = next(
             (ln for ln in (person.signals.get("links") or [])
              if ln.get("entity_type") == GITHUB_USER_TYPE),
             None,
         )
         if gh_link is None:
-            kept += 1
             continue
         gh = store.get(GITHUB_USER_TYPE, gh_link.get("identity_key", ""))
         if gh is None or not _is_organization(gh):
-            kept += 1
             continue
+        yield person
+
+
+def reclassify_persons_to_orgs(
+    store: EntityStore, *, dry_run: bool = False,
+) -> tuple[int, int, list[str]]:
+    """One-shot migration: walk existing ``person`` rows and re-file
+    those whose linked github_user has ``type == "Organization"``.
+
+    Parameters
+    ----------
+    dry_run :
+        When True, scans + reports without writing.
+
+    Returns
+    -------
+    ``(reclassified, kept, candidate_handles)``
+        ``reclassified`` is the count of rows moved (or that would be
+        moved in dry-run); ``kept`` is everything else; ``candidate_handles``
+        lists the identity_keys at issue (handy for CLI display).
+
+    Idempotent — running twice is a no-op on the second pass because
+    the org-typed rows are no longer ``person``.
+
+    This is the bulk equivalent of ``apply_merge``'s inline cleanup;
+    use it once after PR-F1 lands to fix the pre-split person entities
+    created by PR-E3.
+    """
+    candidates: list[Entity] = list(_iter_reclassify_targets(store))
+    candidate_handles = [p.identity_key for p in candidates]
+
+    if dry_run:
+        kept = len(store.list_by_type(PERSON_TYPE)) - len(candidates)
+        return len(candidates), kept, candidate_handles
+
+    for person in candidates:
         # Reclassify: re-upsert under organization with the same
-        # signals; delete the old person row.
+        # signals (plus the new actor_kind + canonical_handle keys
+        # so migrated rows match newly-merged rows exactly); delete
+        # the old person row.
         new_signals = dict(person.signals)
         new_signals["actor_kind"] = ORGANIZATION_TYPE
+        new_signals.setdefault("canonical_handle", person.identity_key)
         store.upsert(
             entity_type=ORGANIZATION_TYPE,
             identity_key=person.identity_key,
@@ -361,8 +392,9 @@ def reclassify_persons_to_orgs(store: EntityStore) -> tuple[int, int]:
             fetch_source="identity_merge",
         )
         store.delete(PERSON_TYPE, person.identity_key)
-        reclassified += 1
-    return reclassified, kept
+
+    kept = len(store.list_by_type(PERSON_TYPE))
+    return len(candidates), kept, candidate_handles
 
 
 def iter_auto_apply(

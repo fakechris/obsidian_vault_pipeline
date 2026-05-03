@@ -32,6 +32,14 @@ from ..entities.identity_merge import (
 from ..entities.store import EntityStore
 
 
+# Cap on how many reclassification candidates we print inline.  The
+# rest are summarized via "and N more"; full list lives in the JSON
+# status file (PR-E5).
+_MIGRATION_PREVIEW_LIMIT = 20
+_FUZZY_PREVIEW_LIMIT = 20
+_TOP_K = 10
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Merge twitter_author + github_user into person entities",
@@ -57,32 +65,19 @@ def main(argv: list[str] | None = None) -> int:
 
     store = EntityStore(db_path=db_path)
 
-    if args.migrate_existing and not args.dry_run:
-        reclassified, kept = reclassify_persons_to_orgs(store)
-        print(f"PR-F1 migration: {reclassified} person → organization "
-              f"({kept} unchanged)")
-    elif args.migrate_existing and args.dry_run:
-        # Dry-run preview: only count, don't apply.
-        kept = 0
-        org_candidates: list[str] = []
-        for p in store.list_by_type(PERSON_TYPE):
-            gh_link = next(
-                (ln for ln in (p.signals.get("links") or [])
-                 if ln.get("entity_type") == "github_user"),
-                None,
-            )
-            if gh_link is None:
-                kept += 1
-                continue
-            gh = store.get("github_user", gh_link.get("identity_key", ""))
-            if gh and (gh.signals.get("type") or "").lower() == "organization":
-                org_candidates.append(p.identity_key)
-            else:
-                kept += 1
-        print(f"PR-F1 migration (dry-run): {len(org_candidates)} would be "
-              f"reclassified, {kept} unchanged")
-        for handle in org_candidates[:20]:
+    if args.migrate_existing:
+        # Single source of truth — both real and dry-run go through
+        # reclassify_persons_to_orgs so the preview can never disagree
+        # with the actual write.
+        reclassified, kept, handles = reclassify_persons_to_orgs(
+            store, dry_run=args.dry_run,
+        )
+        verb = "would be reclassified" if args.dry_run else "person → organization"
+        print(f"PR-F1 migration: {reclassified} {verb} ({kept} unchanged)")
+        for handle in handles[:_MIGRATION_PREVIEW_LIMIT]:
             print(f"  person → organization: {handle}")
+        if len(handles) > _MIGRATION_PREVIEW_LIMIT:
+            print(f"  ... and {len(handles) - _MIGRATION_PREVIEW_LIMIT} more")
         print()
 
     candidates = find_merge_candidates(store)
@@ -112,10 +107,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {c.confidence:.2f}  github:{c.github_login:<25} "
                       f"↔ twitter:@{c.twitter_handle}")
         print()
-        print("=== fuzzy (review queue, top 20) ===")
+        print(f"=== fuzzy (review queue, top {_FUZZY_PREVIEW_LIMIT}) ===")
         fuzzy = [c for c in candidates if c.method == "fuzzy"]
         fuzzy.sort(key=lambda c: -c.confidence)
-        for c in fuzzy[:20]:
+        for c in fuzzy[:_FUZZY_PREVIEW_LIMIT]:
             print(f"  {c.confidence:.2f}  github:{c.github_login:<25} "
                   f"↔ twitter:@{c.twitter_handle:<25}  ({c.rationale})")
         print()
@@ -142,11 +137,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"skipped: {skipped}  (review queue + missing-side cases)")
 
     for canonical_type in (PERSON_TYPE, ORGANIZATION_TYPE):
-        rows = store.list_by_type(canonical_type, limit=10)
+        rows = store.list_by_type(canonical_type, limit=_TOP_K)
         if not rows:
             continue
         print()
-        print(f"Top 10 {canonical_type} entities by authority:")
+        print(f"Top {_TOP_K} {canonical_type} entities by authority:")
         for e in rows:
             if e.derived_authority is None:
                 continue

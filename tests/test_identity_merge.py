@@ -180,6 +180,11 @@ class TestApplyMerge:
         assert person.signals["twitter_followers"] == 1_500_000
         assert person.signals["github_followers"] == 60_000
         assert person.signals["bio"] == "AI researcher"
+        # Back-compat: ``person_canonical_handle`` (the pre-PR-F1
+        # name) must coexist with the new ``canonical_handle`` so
+        # downstream consumers reading the old key keep working.
+        assert person.signals["canonical_handle"] == "karpathy"
+        assert person.signals["person_canonical_handle"] == "karpathy"
 
     def test_apply_is_idempotent(self, tmp_path):
         store = EntityStore(db_path=tmp_path / "k.db")
@@ -322,9 +327,11 @@ class TestReclassifyMigration:
             }, derived_authority=0.65, fetch_source="identity_merge",
         )
 
-        reclassified, kept = reclassify_persons_to_orgs(store)
+        reclassified, kept, handles = reclassify_persons_to_orgs(store)
         assert reclassified == 2
         assert kept == 1
+        # The handles list lets the CLI preview match the actual write.
+        assert set(handles) == {"langchain", "posthog"}
         # Orgs are now organization rows; person rows for those gone.
         assert store.get(ORGANIZATION_TYPE, "langchain") is not None
         assert store.get(PERSON_TYPE, "langchain") is None
@@ -348,8 +355,58 @@ class TestReclassifyMigration:
         )
         first = reclassify_persons_to_orgs(store)
         second = reclassify_persons_to_orgs(store)
-        assert first == (1, 0)
-        assert second == (0, 0)
+        assert (first[0], first[1]) == (1, 0)       # 1 reclassified, 0 kept
+        assert (second[0], second[1]) == (0, 0)     # idempotent: no-op
+        # The handles list mirrors the count.
+        assert first[2] == ["langchain"]
+        assert second[2] == []
+
+    def test_dry_run_reports_without_writing(self, tmp_path):
+        # The CLI's --dry-run preview must use the same code path as
+        # the actual write so the two can never disagree.
+        store = EntityStore(db_path=tmp_path / "k.db")
+        _make_gh(store, "langchain-ai", authority=0.65,
+                 signals={"type": "Organization"})
+        store.upsert(
+            entity_type=PERSON_TYPE, identity_key="langchain",
+            canonical_name="LangChain", signals={
+                "links": [{"entity_type": GITHUB_USER_TYPE,
+                           "identity_key": "langchain-ai"}],
+            }, derived_authority=0.57, fetch_source="identity_merge",
+        )
+
+        reclassified, kept, handles = reclassify_persons_to_orgs(
+            store, dry_run=True,
+        )
+        assert reclassified == 1
+        assert kept == 0
+        assert handles == ["langchain"]
+        # Nothing was actually written: person row still there, org
+        # row not created.
+        assert store.get(PERSON_TYPE, "langchain") is not None
+        assert store.get(ORGANIZATION_TYPE, "langchain") is None
+
+    def test_migrated_row_carries_canonical_handle(self, tmp_path):
+        # Pre-PR-F1 person rows had ``person_canonical_handle`` (or
+        # nothing).  After migration the row should carry the unified
+        # ``canonical_handle`` so it matches newly-merged rows.
+        store = EntityStore(db_path=tmp_path / "k.db")
+        _make_gh(store, "langchain-ai", authority=0.65,
+                 signals={"type": "Organization"})
+        # Stale row missing the new key entirely.
+        store.upsert(
+            entity_type=PERSON_TYPE, identity_key="langchain",
+            canonical_name="LangChain", signals={
+                "person_canonical_handle": "langchain",
+                "links": [{"entity_type": GITHUB_USER_TYPE,
+                           "identity_key": "langchain-ai"}],
+            }, derived_authority=0.57, fetch_source="identity_merge",
+        )
+        reclassify_persons_to_orgs(store)
+        org = store.get(ORGANIZATION_TYPE, "langchain")
+        assert org is not None
+        assert org.signals["canonical_handle"] == "langchain"
+        assert org.signals["actor_kind"] == ORGANIZATION_TYPE
 
     def test_skips_when_github_link_missing(self, tmp_path):
         # If a person row's links don't include a github_user (perhaps
@@ -361,9 +418,10 @@ class TestReclassifyMigration:
             canonical_name="Orphan", signals={"links": []},
             derived_authority=0.5, fetch_source="identity_merge",
         )
-        reclassified, kept = reclassify_persons_to_orgs(store)
+        reclassified, kept, handles = reclassify_persons_to_orgs(store)
         assert reclassified == 0
         assert kept == 1
+        assert handles == []
         assert store.get(PERSON_TYPE, "orphan") is not None
 
 
