@@ -40,7 +40,7 @@ try:
 except ImportError:  # pragma: no cover - defusedxml is in requirements
     import xml.etree.ElementTree as ET  # type: ignore[no-redef]
 
-from .base import Signal, SignalProvider
+from .base import Signal
 
 logger = logging.getLogger(__name__)
 

@@ -253,11 +253,19 @@ def main(argv: list[str] | None = None) -> int:
         (m.owner, m.repo, m.mention_count)
         for m in mentions if m.repo is not None
     ]
-    # Owners come from the union of (a) all repo owners and (b) any
-    # github.com/<owner> URLs that didn't carry a /repo segment.
+    # Owners come from the union of:
+    #   (a) all repo owners (one user per <owner>/<repo> mention)
+    #   (b) bare profile URLs (``github.com/<owner>`` with no /repo)
+    # The scanner emits profile-only mentions as ``repo=None`` rows;
+    # we union both into owner_counts so a vault note that just says
+    # "Visit https://github.com/karpathy" still triggers a karpathy
+    # github_user backfill.
     owner_counts: dict[str, int] = {}
     for owner, _repo, c in repos:
         owner_counts[owner] = owner_counts.get(owner, 0) + c
+    for m in mentions:
+        if m.repo is None:
+            owner_counts[m.owner] = owner_counts.get(m.owner, 0) + m.mention_count
     users: list[tuple[str, int]] = sorted(
         owner_counts.items(), key=lambda kv: -kv[1],
     )

@@ -221,7 +221,12 @@ domains:
         assert sig.value == 0.95
         assert sig.raw["source"] == "override"
 
-    def test_excluded_host_returns_none(self, tmp_path):
+    def test_excluded_host_returns_tagged_signal(self, tmp_path):
+        # Updated behavior (review fix): excluded hosts return a
+        # neutral 0.45 Signal carrying ``excluded=True`` in raw.
+        # Returning None previously meant the audit log silently
+        # dropped the exclusion, contradicting the overrides.py
+        # documented contract.
         f = tmp_path / "overrides.yaml"
         f.write_text("""
 excluded_hosts:
@@ -229,7 +234,12 @@ excluded_hosts:
 """, encoding="utf-8")
         p = DomainRulesProvider(overrides_path=f)
         sig = p.score("http://localhost/foo", {})
-        assert sig is None  # excluded
+        assert sig is not None
+        assert sig.raw.get("excluded") is True
+        assert sig.raw.get("bucket") == "excluded"
+        # Score is the neutral default — exclusion neither rewards
+        # nor punishes the source, just records the decision.
+        assert sig.value == 0.45
 
     def test_hardcoded_still_works_without_override_file(self, tmp_path):
         p = DomainRulesProvider(overrides_path=tmp_path / "no-such-file.yaml")
