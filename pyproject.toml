@@ -142,6 +142,7 @@ ovp-backfill-twitter-authors = "ovp_pipeline.commands.backfill_twitter_authors:m
 ovp-backfill-github = "ovp_pipeline.commands.backfill_github:main"
 ovp-refresh-entities = "ovp_pipeline.commands.refresh_entities:main"
 ovp-embedding-dedup = "ovp_pipeline.commands.embedding_dedup:main"
+ovp-backup-db = "ovp_pipeline.commands.backup_db:main"
 
 [project.entry-points."ovp.packs"]
 default-knowledge = "ovp_pipeline.packs.default_knowledge:get_pack"
