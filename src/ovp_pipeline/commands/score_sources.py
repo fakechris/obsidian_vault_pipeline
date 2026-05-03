@@ -35,34 +35,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from dataclasses import asdict
-
 from ..layer_schemas import parse_frontmatter
 from ..source_authority import (
     AuthorityScore,
-    append_audit,
     default_providers,
     ensure_schema,
     score_source,
+    serialize_audit_record,
     upsert_score,
 )
-
-
-def _audit_line(score: AuthorityScore) -> str:
-    """Serialize one ``AuthorityScore`` to a JSONL line (with trailing \\n).
-
-    Lifted out of ``source_authority.append_audit`` so the batch CLI
-    can hold the file handle open for the whole run instead of paying
-    open/close per record.
-    """
-    record = {
-        "source_id": score.source_id,
-        "authority": score.authority,
-        "signals": [asdict(s) for s in score.signals],
-        "scored_at": score.scored_at,
-        "scorer_version": score.scorer_version,
-    }
-    return json.dumps(record, ensure_ascii=False) + "\n"
 from ..source_signals import (
     ArxivSignalProvider,
     AuthorRulesProvider,
@@ -171,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
                 skipped_count += 1
                 continue
             upsert_score(conn, score)
-            audit_fh.write(_audit_line(score))
+            audit_fh.write(serialize_audit_record(score))
             scored_count += 1
             if score.authority >= 0.75:
                 per_bucket["high"] += 1

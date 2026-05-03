@@ -222,11 +222,14 @@ def upsert_score(
     )
 
 
-def append_audit(
-    audit_path: Path, score: AuthorityScore,
-) -> None:
-    """Append-only JSONL log for replay / debug."""
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
+def serialize_audit_record(score: AuthorityScore) -> str:
+    """Render one ``AuthorityScore`` as a JSONL line (with trailing newline).
+
+    The batch CLI (``ovp-score-sources``) holds the audit log file
+    handle open for the whole run and writes via this helper, avoiding
+    the open-then-close-per-record overhead of the previous
+    ``append_audit`` helper that opened the file for each score.
+    """
     record = {
         "source_id": score.source_id,
         "authority": score.authority,
@@ -234,8 +237,7 @@ def append_audit(
         "scored_at": score.scored_at,
         "scorer_version": score.scorer_version,
     }
-    with audit_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return json.dumps(record, ensure_ascii=False) + "\n"
 
 
 # ---------------------------------------------------------------------------
