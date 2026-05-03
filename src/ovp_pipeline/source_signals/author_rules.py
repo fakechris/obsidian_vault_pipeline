@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .base import Signal, SignalProvider
+from .base import Signal
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +46,30 @@ _HANDLE_FROM_X_URL = re.compile(
 
 @dataclass
 class AuthorRulesProvider:
-    """Match author identity against a curated authority list."""
+    """Match author identity against a curated authority list.
+
+    Two-tier lookup:
+
+      1. Curated whitelist (``authors.jsonl``) — explicit user trust.
+         Wins when present.
+      2. Entity table fallback (``entity_store_path``, optional) —
+         partial authority computed by PR-E1/E2 backfills, used when
+         a handle isn't in the whitelist.  Returns Signals with a
+         softer 0.85 multiplier so explicit curation always beats
+         derived data.
+
+    When ``entity_store_path`` is None (default), behavior is
+    identical to PR-D1 — whitelist or nothing.
+    """
 
     authors_path: Path
     name: str = "author_rules"
+    entity_store_path: Path | None = None
+    # Multiplier applied to entity-derived authority to keep curated
+    # whitelist entries strictly above derived ones at the same raw
+    # score.  Tunable via the dataclass field if a future calibration
+    # round wants to lift entity signals.
+    entity_score_multiplier: float = 0.85
     _index: dict[str, dict[str, Any]] | None = None
 
     def _load(self) -> dict[str, dict[str, Any]]:
@@ -106,8 +126,6 @@ class AuthorRulesProvider:
         self, source_url: str, frontmatter: dict[str, Any],
     ) -> Signal | None:
         index = self._load()
-        if not index:
-            return None
 
         candidates: list[str] = []
         author = frontmatter.get("author") or ""
@@ -152,4 +170,50 @@ class AuthorRulesProvider:
                         },
                     )
 
+        # PR-E3 fallback: not in whitelist → consult the entity table
+        # (twitter_author + person merges).  This is where the 521
+        # twitterapi.io-backfilled entities start affecting scoring.
+        entity_signal = self._entity_fallback(candidates)
+        if entity_signal is not None:
+            return entity_signal
+
+        return None
+
+    def _entity_fallback(self, candidates: list[str]) -> Signal | None:
+        """Resolve a candidate handle through the entity table.
+
+        Returns ``None`` if no ``entity_store_path`` is configured,
+        if the store is empty, or if no candidate maps to an entity
+        with a derived_authority.  Multiplied by
+        ``entity_score_multiplier`` so curated whitelist entries
+        strictly outrank entity-derived ones at the same raw score.
+        """
+        if self.entity_store_path is None:
+            return None
+        # Lazy import keeps source_signals/ import-time graph clean
+        # (no entities/ pulled in unless this fallback fires).
+        from ..entities.store import EntityStore
+        from ..entities.resolver import resolve_twitter_authority
+
+        try:
+            store = EntityStore(db_path=self.entity_store_path)
+        except Exception as exc:  # noqa: BLE001 - resilience over diagnostics
+            logger.warning("entity store unavailable: %s", exc)
+            return None
+
+        for cand in candidates:
+            result = resolve_twitter_authority(store, cand)
+            if result.authority is None:
+                continue
+            return Signal(
+                provider=self.name,
+                value=round(result.authority * self.entity_score_multiplier, 4),
+                raw={
+                    "matched": cand,
+                    "matched_via": "entity_table",
+                    "entity_source": result.source,
+                    "raw_authority": result.authority,
+                    "multiplier": self.entity_score_multiplier,
+                },
+            )
         return None
