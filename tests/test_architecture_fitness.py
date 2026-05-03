@@ -179,6 +179,8 @@ SQLITE_ALLOWED_MODULES = {
     "commands/ui_server",
     "commands/_ui_renderers",
     "commands/working_memory",
+    "commands/score_sources",
+    "source_authority",
     "discovery",
     "evidence",
     "evidence_replay",
