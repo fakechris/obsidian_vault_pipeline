@@ -1,0 +1,128 @@
+"""Entity-table resolver — single read path for source-signal providers.
+
+Use case: ``AuthorRulesProvider.score()`` falls through when an X handle
+isn't in ``authors.jsonl``.  Before PR-E3 that meant a hardcoded 0.45
+default (via the orchestrator).  After PR-E3 the fallback is "look up
+the entity table" — using the partial author_weight that PR-E1 collected.
+
+The resolver also resolves person-merged identities: a handle that has
+been merged with another platform's entity returns the **higher**
+authority.  E.g. @karpathy on Twitter scores 0.50, but PR-E2 found him
+on GitHub at 0.65, so the merged person scores 0.65.
+
+Public surface kept tiny on purpose — only what callers need:
+
+  * ``resolve_twitter_authority(store, handle)``
+  * ``resolve_github_project_authority(store, owner, repo)``
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from .store import Entity, EntityStore
+
+
+# Source-of-truth labels we pass back so callers can record where the
+# authority came from in the audit log.
+ResolveSource = Literal["person", "twitter_author", "github_user", "github_project", "none"]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveResult:
+    """What the resolver knows about one platform handle.
+
+    ``authority`` is None when the entity isn't in the table at all
+    (or only exists as a not_found stub).  Callers should treat this
+    like ``Signal == None`` and let the fallback logic apply.
+    """
+
+    authority: float | None
+    source: ResolveSource
+    entity: Entity | None
+
+
+def _normalize(s: str | None) -> str:
+    return (s or "").strip().lstrip("@").lower()
+
+
+def resolve_twitter_authority(
+    store: EntityStore, handle: str,
+) -> ResolveResult:
+    """Look up a Twitter handle's authority via person → twitter_author."""
+    norm = _normalize(handle)
+    if not norm:
+        return ResolveResult(None, "none", None)
+
+    # 1. Person entity keyed by twitter handle (PR-E3 merges).  This is
+    #    the right answer when the handle has been linked to a github
+    #    entity — it carries the max-of-all-platforms authority.
+    person = store.get("person", norm)
+    if person is not None and person.derived_authority is not None:
+        return ResolveResult(person.derived_authority, "person", person)
+
+    # 2. Plain twitter_author entity from PR-E1.
+    tw = store.get("twitter_author", norm)
+    if tw is not None and tw.derived_authority is not None:
+        return ResolveResult(tw.derived_authority, "twitter_author", tw)
+
+    return ResolveResult(None, "none", None)
+
+
+def resolve_github_project_authority(
+    store: EntityStore, owner: str, repo: str,
+) -> ResolveResult:
+    """Look up a GitHub project's authority by ``owner/repo``.
+
+    Falls back to the owner's authority (capped) if the project is
+    missing — covers fresh repos we haven't backfilled yet but whose
+    owner is well-known.
+    """
+    owner_n = _normalize(owner)
+    repo_n = _normalize(repo)
+    if not owner_n or not repo_n:
+        return ResolveResult(None, "none", None)
+
+    proj = store.get("github_project", f"{owner_n}/{repo_n}")
+    if proj is not None and proj.derived_authority is not None:
+        return ResolveResult(proj.derived_authority, "github_project", proj)
+
+    user = store.get("github_user", owner_n)
+    if user is not None and user.derived_authority is not None:
+        # Owner-only fallback gets dampened — we don't actually know
+        # whether THIS particular repo is high quality, only that the
+        # owner usually ships good things.  Cap at 0.55 so an
+        # explicit project entity always wins on re-fetch.
+        return ResolveResult(
+            min(user.derived_authority, 0.55),
+            "github_user", user,
+        )
+
+    return ResolveResult(None, "none", None)
+
+
+def resolve_github_user_authority(
+    store: EntityStore, login: str,
+) -> ResolveResult:
+    """Look up a GitHub user's authority — used by author_rules when
+    the source URL is e.g. ``github.com/karpathy/dotfiles`` and we
+    want to credit Karpathy's reputation, not the dotfiles repo's
+    star count."""
+    norm = _normalize(login)
+    if not norm:
+        return ResolveResult(None, "none", None)
+
+    # Person merge takes precedence here too — if karpathy was merged
+    # to a person entity via his twitter handle, we want that view.
+    # Look up via the github_user's twitter_username field.
+    gh = store.get("github_user", norm)
+    if gh is not None and gh.derived_authority is not None:
+        tw_username = _normalize(gh.signals.get("twitter_username"))
+        if tw_username:
+            person = store.get("person", tw_username)
+            if person is not None and person.derived_authority is not None:
+                return ResolveResult(person.derived_authority, "person", person)
+        return ResolveResult(gh.derived_authority, "github_user", gh)
+
+    return ResolveResult(None, "none", None)
