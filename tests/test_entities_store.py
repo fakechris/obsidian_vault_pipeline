@@ -151,6 +151,37 @@ class TestUpsert:
         assert "🐯" in round_trip.signals["description"]
 
 
+class TestUpsertMany:
+    def test_bulk_writes_in_one_transaction(self, tmp_path):
+        # Verifies the review-fix invariant: upsert_many opens one
+        # connection, runs the whole batch, commits at end.  We can't
+        # observe transactions directly via the public API, but we can
+        # observe that an exception mid-batch rolls back the previously-
+        # inserted rows in the same call.
+        store = EntityStore(db_path=tmp_path / "k.db")
+        good = [
+            {"entity_type": "twitter_author", "identity_key": f"u{i}",
+             "canonical_name": f"U{i}", "signals": {"i": i},
+             "derived_authority": 0.5, "fetch_source": "t"}
+            for i in range(3)
+        ]
+        bad = [{"entity_type": "twitter_author", "identity_key": "ok",
+                "canonical_name": "OK", "signals": {}, "derived_authority": 0.5,
+                "fetch_source": "t"},
+               # Wrong key triggers TypeError → rollback.
+               {"entity_type": "twitter_author", "wrong_field": "boom"}]
+        store.upsert_many(good)
+        # Three rows after the good batch.
+        assert len(store.list_by_type("twitter_author")) == 3
+        # Bad batch raises.  Rollback must keep total row count at 3,
+        # not 4 (the "ok" row inserted before the failure).
+        import pytest as _pytest
+        with _pytest.raises(TypeError):
+            store.upsert_many(bad)
+        assert len(store.list_by_type("twitter_author")) == 3
+        assert store.get("twitter_author", "ok") is None
+
+
 class TestRead:
     def test_get_missing_returns_none(self, tmp_path):
         store = EntityStore(db_path=tmp_path / "k.db")

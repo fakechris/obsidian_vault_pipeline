@@ -272,6 +272,36 @@ class TestStubSignalsForMissing:
         assert "404" in s["fetch_reason"]
 
 
+class TestBandConstants:
+    """Pin the named-constant tables so a future tune to one band
+    doesn't silently break another.  Each test is one band boundary."""
+
+    def test_follower_bands_monotonic(self):
+        from ovp_pipeline.entities.twitter_backfill import _FOLLOWER_BANDS
+        thresholds = [t for t, _ in _FOLLOWER_BANDS]
+        # Bands must be sorted high-to-low for first-match-wins semantics.
+        assert thresholds == sorted(thresholds, reverse=True)
+
+    def test_age_bands_monotonic(self):
+        from ovp_pipeline.entities.twitter_backfill import _AGE_YEAR_BANDS
+        thresholds = [t for t, _ in _AGE_YEAR_BANDS]
+        assert thresholds == sorted(thresholds, reverse=True)
+
+    def test_band_lookup_zero_below_lowest(self):
+        from ovp_pipeline.entities.twitter_backfill import (
+            _FOLLOWER_BANDS, _band_lookup,
+        )
+        assert _band_lookup(0, _FOLLOWER_BANDS) == 0
+
+    def test_band_lookup_picks_highest_match(self):
+        from ovp_pipeline.entities.twitter_backfill import (
+            _FOLLOWER_BANDS, _band_lookup,
+        )
+        # 50_000 is between 10_000 (22pts) and 100_000 (25pts) — must
+        # return the higher 22, not silently fall through.
+        assert _band_lookup(50_000, _FOLLOWER_BANDS) == 22
+
+
 def test_price_constant_matches_intro_doc():
     # If twitterapi.io changes pricing we should see this fail.
     # Anchor against the documented $0.18/1k = $0.00018 figure.

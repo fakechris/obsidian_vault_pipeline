@@ -55,6 +55,49 @@ PRICE_PER_CALL_USD = 0.00018
 
 
 # ---------------------------------------------------------------------------
+# Score formula constants
+# ---------------------------------------------------------------------------
+# Each dimension is a list of ``(threshold, points)`` tuples evaluated
+# top-to-bottom; first matching threshold wins.  Tuples (vs. inline
+# elif chains) make the bands trivial to inspect, tune, and unit-test.
+
+# (followers ≥ N)  →  points
+_FOLLOWER_BANDS: tuple[tuple[int, int], ...] = (
+    (100_000, 25),
+    (10_000,  22),
+    (1_000,   17),
+    (500,     10),
+    (100,      5),
+)
+
+# (years_since_creation ≥ N)  →  points
+_AGE_YEAR_BANDS: tuple[tuple[float, int], ...] = (
+    (7.0, 10),
+    (3.0,  7),
+    (1.0,  3),
+)
+
+_BLUE_VERIFIED_POINTS = 5         # Twitter Blue alone — minor signal.
+_LEGACY_VERIFIED_POINTS = 10      # gov / business / company badge.
+_LEGACY_VERIFIED_TYPES = frozenset({"government", "business", "company"})
+
+_AFFILIATION_POINTS = 10          # affiliatesHighlightedLabel non-empty.
+
+# Three-band activity score: dormant 0, normal 5/10, suspicious 8.
+_ACTIVITY_NORMAL_MIN = 500
+_ACTIVITY_NORMAL_MAX = 50_000
+_ACTIVITY_LOW_MIN = 50
+_ACTIVITY_NORMAL_POINTS = 10
+_ACTIVITY_LOW_POINTS = 5
+_ACTIVITY_SUSPICIOUS_POINTS = 8   # firehose accounts (>50k tweets).
+
+_AUTOMATED_PENALTY_POINTS = -10
+
+# Total possible: 70.  See module docstring for the cap rationale.
+_PARTIAL_AUTHORITY_DENOMINATOR = 100.0
+
+
+# ---------------------------------------------------------------------------
 # Fetch
 # ---------------------------------------------------------------------------
 
@@ -193,73 +236,66 @@ def compute_partial_author_weight(payload: dict[str, Any]) -> tuple[int, dict[st
     """
     breakdown: dict[str, int] = {}
 
-    # 1. followers (max 25)
+    # 1. followers
     fol = int(payload.get("followers") or 0)
-    if fol >= 100_000:
-        breakdown["followers"] = 25
-    elif fol >= 10_000:
-        breakdown["followers"] = 22
-    elif fol >= 1_000:
-        breakdown["followers"] = 17
-    elif fol >= 500:
-        breakdown["followers"] = 10
-    elif fol >= 100:
-        breakdown["followers"] = 5
-    else:
-        breakdown["followers"] = 0
+    breakdown["followers"] = _band_lookup(fol, _FOLLOWER_BANDS)
 
-    # 2. account age in years (max 10)
+    # 2. account age (years)
     age_y = _account_age_years(payload.get("createdAt"))
-    if age_y >= 7:
-        breakdown["age"] = 10
-    elif age_y >= 3:
-        breakdown["age"] = 7
-    elif age_y >= 1:
-        breakdown["age"] = 3
-    else:
-        breakdown["age"] = 0
+    breakdown["age"] = _band_lookup(age_y, _AGE_YEAR_BANDS)
 
-    # 3. blue-verified flag (max 5).
-    # Per the clipper docs: "蓝标现在已经没用" — kept low intentionally.
-    breakdown["blue_verified"] = 5 if payload.get("isBlueVerified") else 0
+    # 3. Twitter Blue (low weight per clipper docs: "蓝标现在已经没用")
+    breakdown["blue_verified"] = (
+        _BLUE_VERIFIED_POINTS if payload.get("isBlueVerified") else 0
+    )
 
     # 4. legacy verified / verifiedType — closer to "old blue check"
-    # which the clipper docs flag as a strong signal (max 10).
+    # which the clipper docs flag as a strong signal.
     verified_type = (payload.get("verifiedType") or "").strip().lower()
     is_legacy_verified = bool(payload.get("isVerified"))
-    if verified_type in {"government", "business", "company"} or is_legacy_verified:
-        breakdown["legacy_verified"] = 10
+    if verified_type in _LEGACY_VERIFIED_TYPES or is_legacy_verified:
+        breakdown["legacy_verified"] = _LEGACY_VERIFIED_POINTS
     else:
         breakdown["legacy_verified"] = 0
 
-    # 5. affiliation label (max 10).
-    # twitterapi.io exposes ``affiliatesHighlightedLabel`` which
-    # corresponds to the company-badge UI feature on X.  Treat any
-    # non-empty mapping as "has affiliation".
+    # 5. affiliation label — twitterapi.io's ``affiliatesHighlightedLabel``
+    # corresponds to the company-badge UI feature.  Treat any non-empty
+    # mapping as "has affiliation".
     aff = payload.get("affiliatesHighlightedLabel")
-    if isinstance(aff, dict) and aff:
-        breakdown["affiliation"] = 10
-    else:
-        breakdown["affiliation"] = 0
+    breakdown["affiliation"] = (
+        _AFFILIATION_POINTS if isinstance(aff, dict) and aff else 0
+    )
 
-    # 6. activity / statusesCount (max 10).
-    # Anti-correlated with brand-new accounts and with bots.  Cap at
-    # the high end so a tweet-spam farm doesn't get a free 10 points.
+    # 6. activity / statusesCount.  Anti-correlated with brand-new
+    # accounts and with firehose bots — too-high tweet count gets a
+    # discount, not full credit.
     statuses = int(payload.get("statusesCount") or 0)
-    if 500 <= statuses <= 50_000:
-        breakdown["activity"] = 10
-    elif 50 <= statuses < 500:
-        breakdown["activity"] = 5
-    elif statuses > 50_000:
-        breakdown["activity"] = 8       # too active, slight discount
+    if _ACTIVITY_NORMAL_MIN <= statuses <= _ACTIVITY_NORMAL_MAX:
+        breakdown["activity"] = _ACTIVITY_NORMAL_POINTS
+    elif _ACTIVITY_LOW_MIN <= statuses < _ACTIVITY_NORMAL_MIN:
+        breakdown["activity"] = _ACTIVITY_LOW_POINTS
+    elif statuses > _ACTIVITY_NORMAL_MAX:
+        breakdown["activity"] = _ACTIVITY_SUSPICIOUS_POINTS
     else:
         breakdown["activity"] = 0
 
-    # 7. automated penalty (negative).
-    breakdown["automated_penalty"] = -10 if payload.get("isAutomated") else 0
+    # 7. automated penalty
+    breakdown["automated_penalty"] = (
+        _AUTOMATED_PENALTY_POINTS if payload.get("isAutomated") else 0
+    )
 
     score = max(0, sum(breakdown.values()))
     return score, breakdown
+
+
+def _band_lookup(value: float, bands: tuple[tuple[float, int], ...]) -> int:
+    """Walk ``bands`` top-to-bottom; return the first band whose
+    threshold ``value`` meets or exceeds.  Returns 0 if no band matches.
+    """
+    for threshold, points in bands:
+        if value >= threshold:
+            return points
+    return 0
 
 
 def derive_authority_from_payload(payload: dict[str, Any]) -> tuple[float, dict[str, Any]]:
@@ -272,7 +308,7 @@ def derive_authority_from_payload(payload: dict[str, Any]) -> tuple[float, dict[
     # Map 0-70 (theoretical max) → 0-1 by dividing by 100, NOT 70.
     # That reserves the 0.71-1.0 band for clipper-rich frontmatter
     # which has the missing-dimensions signal.  See PR-E3 design.
-    authority = round(score / 100.0, 4)
+    authority = round(score / _PARTIAL_AUTHORITY_DENOMINATOR, 4)
 
     signals = {
         # raw fields we care about for downstream score reconstruction

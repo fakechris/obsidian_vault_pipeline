@@ -178,6 +178,52 @@ class EntityStore:
 
     # ---- write ---------------------------------------------------------
 
+    def _upsert_in(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        entity_type: str,
+        identity_key: str,
+        canonical_name: str | None,
+        signals: dict[str, Any],
+        derived_authority: float | None,
+        fetch_source: str,
+    ) -> Entity:
+        """Atomic UPSERT against an open connection.
+
+        Uses SQLite's native ``INSERT ... ON CONFLICT(...) DO UPDATE``
+        (3.24+, available since 2018) so the insert-vs-update decision
+        is one round trip, atomically applied, and ``first_seen_at`` is
+        preserved on update without a separate SELECT.
+        """
+        now = _iso_now()
+        signals_json = json.dumps(signals, ensure_ascii=False, sort_keys=True)
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "INSERT INTO entities (entity_type, identity_key, canonical_name, "
+            "signals_json, derived_authority, fetch_source, first_seen_at, "
+            "last_fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(entity_type, identity_key) DO UPDATE SET "
+            "canonical_name=excluded.canonical_name, "
+            "signals_json=excluded.signals_json, "
+            "derived_authority=excluded.derived_authority, "
+            "fetch_source=excluded.fetch_source, "
+            "last_fetched_at=excluded.last_fetched_at",
+            (entity_type, identity_key, canonical_name, signals_json,
+             derived_authority, fetch_source, now, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM entities WHERE entity_type=? AND identity_key=?",
+            (entity_type, identity_key),
+        ).fetchone()
+        conn.execute(
+            "INSERT INTO entity_signals_history "
+            "(entity_id, observed_at, signals_json, fetch_source) "
+            "VALUES (?, ?, ?, ?)",
+            (row["entity_id"], now, signals_json, fetch_source),
+        )
+        return _row_to_entity(row)
+
     def upsert(
         self,
         *,
@@ -188,59 +234,39 @@ class EntityStore:
         derived_authority: float | None,
         fetch_source: str,
     ) -> Entity:
-        """Insert or update a single entity, plus append a history row.
-
-        Returns the freshly-read entity (after upsert).
-        """
-        now = _iso_now()
-        signals_json = json.dumps(signals, ensure_ascii=False, sort_keys=True)
+        """Insert or update a single entity, plus append a history row."""
         conn = sqlite3.connect(self.db_path)
         try:
-            conn.row_factory = sqlite3.Row
-            existing = conn.execute(
-                "SELECT entity_id, first_seen_at FROM entities "
-                "WHERE entity_type=? AND identity_key=?",
-                (entity_type, identity_key),
-            ).fetchone()
-            if existing is None:
-                cur = conn.execute(
-                    "INSERT INTO entities (entity_type, identity_key, "
-                    "canonical_name, signals_json, derived_authority, "
-                    "fetch_source, first_seen_at, last_fetched_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (entity_type, identity_key, canonical_name, signals_json,
-                     derived_authority, fetch_source, now, now),
-                )
-                entity_id = cur.lastrowid
-            else:
-                entity_id = existing["entity_id"]
-                conn.execute(
-                    "UPDATE entities SET canonical_name=?, signals_json=?, "
-                    "derived_authority=?, fetch_source=?, last_fetched_at=? "
-                    "WHERE entity_id=?",
-                    (canonical_name, signals_json, derived_authority,
-                     fetch_source, now, entity_id),
-                )
-            conn.execute(
-                "INSERT INTO entity_signals_history "
-                "(entity_id, observed_at, signals_json, fetch_source) "
-                "VALUES (?, ?, ?, ?)",
-                (entity_id, now, signals_json, fetch_source),
+            entity = self._upsert_in(
+                conn,
+                entity_type=entity_type, identity_key=identity_key,
+                canonical_name=canonical_name, signals=signals,
+                derived_authority=derived_authority,
+                fetch_source=fetch_source,
             )
             conn.commit()
-            row = conn.execute(
-                "SELECT * FROM entities WHERE entity_id=?",
-                (entity_id,),
-            ).fetchone()
-            return _row_to_entity(row)
+            return entity
         finally:
             conn.close()
 
     def upsert_many(
         self, records: Iterable[dict[str, Any]],
     ) -> list[Entity]:
-        """Bulk version — same fields as ``upsert`` keys per record."""
-        out = []
-        for rec in records:
-            out.append(self.upsert(**rec))
-        return out
+        """Bulk version — single connection + transaction for the whole batch.
+
+        Faster than calling ``upsert`` in a loop (one connection vs N,
+        one fsync at the end vs N), and the whole batch is committed
+        atomically: a mid-batch failure rolls back, no partial state.
+        """
+        conn = sqlite3.connect(self.db_path)
+        out: list[Entity] = []
+        try:
+            for rec in records:
+                out.append(self._upsert_in(conn, **rec))
+            conn.commit()
+            return out
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()

@@ -33,6 +33,21 @@ class TestScanTwitterHandles:
         result = scan_twitter_handles(tmp_path)
         assert result[0].handle == "karpathy"
 
+    def test_terminator_stops_at_subpath(self, tmp_path):
+        # Without the URL-end lookahead, x.com/karpathy/settings would
+        # capture "karpathy" but the regex would keep walking into the
+        # subpath.  Pin: the captured handle must be exactly "karpathy".
+        _write(tmp_path / "a.md",
+               "Linked to https://x.com/karpathy/settings/account "
+               "and https://x.com/sama)")
+        result = scan_twitter_handles(tmp_path)
+        handles = {m.handle for m in result}
+        assert "karpathy" in handles
+        assert "sama" in handles
+        # Settings sub-segments must not become handles
+        assert "settings" not in handles
+        assert "account" not in handles
+
     def test_filters_reserved_paths(self, tmp_path):
         # /home, /search etc. aren't real handles — drop them.
         _write(tmp_path / "a.md",
