@@ -41,7 +41,6 @@ import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 from ..source_signals.url_utils import normalize_host
 
@@ -123,12 +122,20 @@ def _existing_override(vault_dir: Path, host: str) -> dict | None:
 
 
 def _llm_score_domain(host: str, samples: list[dict], vault_dir: Path) -> dict | None:
-    """Call the LLM client, parse the JSON verdict.  Returns None on failure."""
+    """Call the LLM client, parse the JSON verdict.  Returns None on failure.
+
+    Any exception from client construction or the LLM call (network error,
+    auth failure, transport issue) is treated as failure — the caller
+    falls back to the heuristic stub instead of crashing the CLI.
+    """
     try:
         from ..llm_client import get_litellm_client
     except ImportError:
         return None
-    client = get_litellm_client(vault_dir=vault_dir)
+    try:
+        client = get_litellm_client(vault_dir=vault_dir)
+    except Exception:
+        return None
     if client is None:
         return None
 
@@ -141,7 +148,10 @@ def _llm_score_domain(host: str, samples: list[dict], vault_dir: Path) -> dict |
         for s in samples
     ]) + "\n\n请输出 JSON 格式的评分。"
 
-    text = client.call(_LLM_SYSTEM_PROMPT, user_prompt, max_tokens=600)
+    try:
+        text = client.call(_LLM_SYSTEM_PROMPT, user_prompt, max_tokens=600)
+    except Exception:
+        return None
     try:
         # Greedy match — the negated-set ``[^{}]`` form fails on
         # nested braces or braces inside string values (e.g. inside
@@ -182,10 +192,21 @@ def _apply_override(
     path = vault_dir / "60-Logs" / "domain_overrides.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
+        raw = ""
         try:
-            existing = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except (yaml.YAMLError, OSError):
+            raw = path.read_text(encoding="utf-8")
+            existing = yaml.safe_load(raw) or {}
+        except (yaml.YAMLError, OSError, UnicodeDecodeError):
             existing = {}
+        # PyYAML's safe_dump strips comments — warn before overwriting a
+        # human-curated file that contains them.  Long-term fix is to
+        # switch to ruamel.yaml; for now surface the loss explicitly.
+        if any(line.lstrip().startswith("#") for line in raw.splitlines()):
+            print(
+                f"warning: {path} contains comments that will be stripped by "
+                "--apply (PyYAML safe_dump limitation).",
+                file=sys.stderr,
+            )
     else:
         existing = {}
 

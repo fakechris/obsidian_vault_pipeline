@@ -121,7 +121,8 @@ def collect_host_stats(
     authorities = _query_source_authorities(db_path)
     units_per_source = _query_unit_count_per_source(db_path)
 
-    by_host: dict[str, HostStats] = defaultdict(lambda: HostStats(host=""))
+    by_host: dict[str, HostStats] = {}
+    units_by_host: dict[str, int] = defaultdict(int)
     bucket_counts = {"high": 0, "mid": 0, "low": 0, "default": 0}
 
     for source_id, authority in authorities:
@@ -129,7 +130,6 @@ def collect_host_stats(
         if not host:
             continue
         stats = by_host.setdefault(host, HostStats(host=host))
-        stats.host = host
         stats.source_count += 1
         if abs(authority - 0.45) > 0.001:
             stats.authoritative_count += 1
@@ -140,6 +140,8 @@ def collect_host_stats(
         )
         if len(stats.sample_urls) < _MAX_SAMPLE_URLS_PER_HOST:
             stats.sample_urls.append(source_id)
+        # accumulate atomic-unit weight per host (best-effort; 0 if KG missing)
+        units_by_host[host] += units_per_source.get(source_id, 0)
         # bucket
         if authority >= 0.75:
             bucket_counts["high"] += 1
@@ -150,13 +152,15 @@ def collect_host_stats(
         else:
             bucket_counts["default"] += 1
 
-    # Compute impact score = source_count * (1 - avg_authority) — hosts
-    # with many sources at default authority bubble to the top.
-    sorted_stats = sorted(
-        by_host.values(),
-        key=lambda s: (s.source_count * (1.0 - s.avg_authority)),
-        reverse=True,
-    )
+    # Impact score = source_count × (units || 1) × (1 - avg_authority).
+    # The unit-count factor weights hosts that produced lots of evergreens
+    # over hosts that produced 1-2 — when the KG isn't built it falls back
+    # to source_count alone.
+    def _impact(s: HostStats) -> float:
+        weight = max(units_by_host.get(s.host, 0), 1)
+        return s.source_count * weight * (1.0 - s.avg_authority)
+
+    sorted_stats = sorted(by_host.values(), key=_impact, reverse=True)
     return sorted_stats, bucket_counts
 
 
@@ -211,9 +215,9 @@ def emit_triage_yaml(stats: list[HostStats], top_n: int) -> str:
         sample = s.sample_urls[0] if s.sample_urls else ""
         lines.append(f"  {s.host}:")
         lines.append(f"    authority: 0.55  # TODO: review (sample: {sample})")
-        lines.append(f"    bucket: mixed    # TODO: canonical | mixed | low")
-        lines.append(f"    rationale: \"\"     # TODO: 1-line reason")
-        lines.append(f"    source: triage")
+        lines.append("    bucket: mixed    # TODO: canonical | mixed | low")
+        lines.append("    rationale: \"\"     # TODO: 1-line reason")
+        lines.append("    source: triage")
     return "\n".join(lines)
 
 

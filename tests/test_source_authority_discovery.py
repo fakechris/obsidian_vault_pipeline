@@ -109,6 +109,21 @@ domains:
         assert "no-authority.com" not in ov.domains
         assert "good.com" in ov.domains
 
+    def test_skips_negative_authority(self, tmp_path):
+        # DomainOverrides skips out-of-range values rather than clipping
+        # (AuthorOverrides clips — different design choice for each surface).
+        f = tmp_path / "overrides.yaml"
+        f.write_text("""
+domains:
+  negative.com:
+    authority: -0.5
+  good.com:
+    authority: 0.6
+""", encoding="utf-8")
+        ov = DomainOverrides.load(f)
+        assert "negative.com" not in ov.domains
+        assert "good.com" in ov.domains
+
     def test_malformed_yaml_returns_empty(self, tmp_path):
         f = tmp_path / "overrides.yaml"
         f.write_text("not: valid: yaml: at: all: [", encoding="utf-8")
@@ -140,6 +155,16 @@ authors:
 """, encoding="utf-8")
         ov = AuthorOverrides.load(f)
         assert ov.authors[0]["authority"] == 1.0
+
+    def test_clips_negative_authority_to_zero(self, tmp_path):
+        f = tmp_path / "authors.yaml"
+        f.write_text("""
+authors:
+  - handle: "y"
+    authority: -0.3
+""", encoding="utf-8")
+        ov = AuthorOverrides.load(f)
+        assert ov.authors[0]["authority"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +315,40 @@ class TestSourceCoverageDashboard:
         assert stats == []
         assert sum(buckets.values()) == 0
 
+    def test_json_output_mode(self, tmp_path, capsys):
+        from ovp_pipeline.commands.source_coverage import main
+
+        vault = tmp_path / "vault"
+        (vault / "60-Logs").mkdir(parents=True)
+        _seed_test_db(vault / "60-Logs" / "knowledge.db", [
+            ("https://anthropic.com/news/1", 0.95),
+            ("https://random.example.com/a", 0.45),
+        ])
+        rc = main(["--vault-dir", str(vault), "--json"])
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert "authority_distribution" in data
+        assert "top_hosts" in data
+        assert "unknown_x_handles" in data
+        hosts = {h["host"] for h in data["top_hosts"]}
+        assert "random.example.com" in hosts
+
+    def test_triage_output_mode(self, tmp_path, capsys):
+        from ovp_pipeline.commands.source_coverage import main
+
+        vault = tmp_path / "vault"
+        (vault / "60-Logs").mkdir(parents=True)
+        _seed_test_db(vault / "60-Logs" / "knowledge.db", [
+            ("https://unknown.example.com/a", 0.45),
+        ])
+        rc = main(["--vault-dir", str(vault), "--triage", "--top", "5"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "domains:" in out
+        assert "unknown.example.com" in out
+        assert "authority:" in out
+        assert "bucket:" in out
+
     def test_unknown_x_handles_filtered_against_known(self, tmp_path):
         from ovp_pipeline.commands.source_coverage import (
             _load_known_authors,
@@ -329,7 +388,11 @@ class TestScoreDomainCLI:
         out = capsys.readouterr().out
         assert "0.55" in out
         assert "mixed" in out
-        assert "Heuristic" in out or "manual review" in out
+        # Offline mode always emits the exact heuristic-default rationale
+        # from score_domain.py — pin it so future copy-edits don't silently
+        # break the contract that "offline" means "stub for manual review".
+        assert "Heuristic default" in out
+        assert "manual review pending" in out
 
     def test_offline_apply_writes_yaml(self, tmp_path):
         from ovp_pipeline.commands.score_domain import main
@@ -342,10 +405,14 @@ class TestScoreDomainCLI:
         ])
         yaml_path = vault / "60-Logs" / "domain_overrides.yaml"
         assert yaml_path.exists()
-        text = yaml_path.read_text(encoding="utf-8")
-        assert "mp.weixin.qq.com" in text
-        assert "0.55" in text
-        assert "heuristic" in text
+        # Parse + assert structure, not substrings — substring matches
+        # would pass on malformed YAML or wrong field names.
+        ov = DomainOverrides.load(yaml_path)
+        assert "mp.weixin.qq.com" in ov.domains
+        entry = ov.domains["mp.weixin.qq.com"]
+        assert entry["authority"] == 0.55
+        assert entry["bucket"] == "mixed"
+        assert entry["source"] == "heuristic"
 
     def test_existing_override_skipped_without_force(self, tmp_path, capsys):
         from ovp_pipeline.commands.score_domain import main

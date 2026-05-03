@@ -168,7 +168,17 @@ class AuthorOverrides:
             try:
                 authority_f = float(authority)
             except (TypeError, ValueError):
+                logger.warning(
+                    "Skipping author override %s: missing/invalid authority %r",
+                    handle, authority,
+                )
                 continue
+            clamped = max(0.0, min(1.0, authority_f))
+            if clamped != authority_f:
+                logger.warning(
+                    "Clamping author %s authority %s to %s (must be in [0, 1])",
+                    handle, authority_f, clamped,
+                )
             out.append({
                 "handle": handle.lower().lstrip("@"),
                 "aliases": [
@@ -176,7 +186,7 @@ class AuthorOverrides:
                     for a in (entry.get("aliases") or [])
                     if isinstance(a, str)
                 ],
-                "authority": max(0.0, min(1.0, authority_f)),
+                "authority": clamped,
                 "rationale": str(entry.get("rationale", "")),
                 "added_at": str(entry.get("added_at", "")),
             })
