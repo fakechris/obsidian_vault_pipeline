@@ -51,6 +51,7 @@ dependencies = [
     "watchdog>=3.0.0",
     "networkx>=3.0",
     "tomli>=1.0.0; python_version < '3.11'",
+    "defusedxml>=0.7.1",
 ]
 
 [project.optional-dependencies]

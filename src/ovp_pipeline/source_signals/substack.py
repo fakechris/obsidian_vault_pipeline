@@ -46,6 +46,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from .base import Signal, SignalProvider
 
@@ -64,7 +65,10 @@ class SubstackSignalProvider:
     def applies(self, source_url: str, frontmatter: dict[str, Any]) -> bool:
         if not source_url:
             return False
-        return "substack.com" in source_url
+        # Hostname-based check — ``"substack.com" in source_url`` would
+        # match URLs that just mention substack in their path or query.
+        host = (urlparse(source_url).hostname or "").lower()
+        return host == "substack.com" or host.endswith(".substack.com")
 
     def score(
         self, source_url: str, frontmatter: dict[str, Any],

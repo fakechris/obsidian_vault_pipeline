@@ -40,6 +40,7 @@ import logging
 import math
 import sqlite3
 from dataclasses import asdict
+from math import isfinite
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -102,11 +103,29 @@ def score_source(
             logger.warning("provider %s.score error: %s", p.name, exc)
             continue
         if sig is not None:
-            # Defensive clip
+            # Defensive normalization — a buggy provider returning
+            # NaN / inf / non-numeric value or weight should degrade
+            # gracefully (skip the signal + warn), never abort the run.
+            try:
+                value = float(sig.value)
+                weight = float(sig.weight)
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "provider %s returned non-numeric signal: %s",
+                    sig.provider, exc,
+                )
+                continue
+            if not isfinite(value) or not isfinite(weight) or weight <= 0:
+                logger.warning(
+                    "provider %s returned non-finite or non-positive "
+                    "value/weight (%s, %s); skipping",
+                    sig.provider, value, weight,
+                )
+                continue
             clipped = Signal(
                 provider=sig.provider,
-                value=max(0.0, min(1.0, float(sig.value))),
-                weight=sig.weight,
+                value=max(0.0, min(1.0, value)),
+                weight=weight,
                 raw=sig.raw,
             )
             signals.append(clipped)
@@ -115,7 +134,7 @@ def score_source(
     return AuthorityScore(
         source_id=_canonical_source_id(source_url, frontmatter),
         authority=authority,
-        signals=signals,
+        signals=tuple(signals),
         scored_at=datetime.now(timezone.utc).isoformat(),
         scorer_version=_SCORER_VERSION,
     )
@@ -136,7 +155,7 @@ def _canonical_source_id(source_url: str, frontmatter: dict[str, Any]) -> str:
     return ""
 
 
-def _combine(signals: list[Signal]) -> float:
+def _combine(signals: tuple[Signal, ...] | list[Signal]) -> float:
     """Combine provider signals into a single 0-1 score.
 
     Weighted average, with the ``domain_rules`` signal acting as a

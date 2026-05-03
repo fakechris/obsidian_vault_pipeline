@@ -120,7 +120,9 @@ class DomainRulesProvider:
             parsed = urlparse(source_url)
         except ValueError:
             return None
-        host = (parsed.netloc or "").lower()
+        # ``parsed.hostname`` strips port/userinfo (would otherwise
+        # misclassify ``example.com:443`` as an unknown domain).
+        host = (parsed.hostname or "").lower()
         if host.startswith("www."):
             host = host[4:]
         path = parsed.path or "/"

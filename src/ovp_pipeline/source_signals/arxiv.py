@@ -27,10 +27,18 @@ import logging
 import re
 import urllib.error
 import urllib.request
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+# arXiv API XML responses come from a trusted endpoint, but
+# ``xml.etree.ElementTree`` is documented as unsafe for untrusted
+# input (XXE / billion-laughs).  ``defusedxml.ElementTree`` is a
+# drop-in replacement with the same parsing API.
+try:
+    from defusedxml import ElementTree as ET  # type: ignore
+except ImportError:  # pragma: no cover - defusedxml is in requirements
+    import xml.etree.ElementTree as ET  # type: ignore[no-redef]
 
 from .base import Signal, SignalProvider
 

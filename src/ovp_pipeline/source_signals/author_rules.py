@@ -84,7 +84,12 @@ class AuthorRulesProvider:
             parsed = urlparse(source_url)
         except ValueError:
             return None
-        host = (parsed.netloc or "").lower().lstrip("www.")
+        # ``parsed.hostname`` strips port/userinfo automatically; the
+        # earlier ``lstrip("www.")`` was a character-set strip that
+        # would mangle hosts like ``wwwtwitter.com`` into ``itter.com``.
+        host = (parsed.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
         if host not in {"x.com", "twitter.com"}:
             return None
         m = _HANDLE_FROM_X_URL.match(parsed.path)

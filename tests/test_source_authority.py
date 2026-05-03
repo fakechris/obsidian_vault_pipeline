@@ -2,7 +2,7 @@
 
 Coverage:
   * Each provider's ``applies`` + ``score`` for canonical inputs
-  * Orchestrator combination math (geometric-mean + domain floor)
+  * Orchestrator combination math (weighted arithmetic mean + domain floor)
   * SQLite persistence + idempotent schema migration
   * Stub providers correctly return None when their backend isn't set
 """
@@ -278,11 +278,11 @@ class TestPersistence:
             ensure_schema(conn)
             score1 = AuthorityScore(
                 source_id="https://example.com/x",
-                authority=0.5, signals=[], scored_at="2026-05-01", scorer_version="v1",
+                authority=0.5, signals=(), scored_at="2026-05-01", scorer_version="v1",
             )
             score2 = AuthorityScore(
                 source_id="https://example.com/x",
-                authority=0.85, signals=[], scored_at="2026-05-03", scorer_version="v1",
+                authority=0.85, signals=(), scored_at="2026-05-03", scorer_version="v1",
             )
             upsert_score(conn, score1)
             upsert_score(conn, score2)

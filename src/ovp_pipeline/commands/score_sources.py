@@ -111,6 +111,17 @@ def _iter_sources(vault_dir: Path, *, since: datetime | None):
         yield (url, fm, f)
 
 
+def _non_negative_int(raw: str) -> int:
+    """Argparse type for flags where negative values would be silently
+    surprising (e.g. ``--limit -1`` would currently terminate after
+    zero records, contradicting the documented ``0 = all``).
+    """
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {value!r}")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Score every source's authority and persist to knowledge.db",
@@ -126,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip network providers (GitHub / arXiv); offline-safe",
     )
     parser.add_argument(
-        "--limit", type=int, default=0,
+        "--limit", type=_non_negative_int, default=0,
         help="Stop after N sources (0 = all). Useful for testing.",
     )
     parser.add_argument("--json", action="store_true",

@@ -9,7 +9,13 @@ between provider, orchestrator, and storage (knowledge.db /
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from types import MappingProxyType
+from typing import Any, Mapping, Protocol
+
+
+def _empty_mapping() -> Mapping[str, Any]:
+    """Return a read-only empty mapping for default ``Signal.raw``."""
+    return MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,26 +35,35 @@ class Signal:
         Relative weight when combined with other providers' signals.
         Defaults are set per-provider; the user can override via
         ``60-Logs/source_authority.config.json``.
-    raw : dict
+    raw : Mapping
         Structured backing data for audit (e.g. ``{"stars": 1500,
-        "forks": 47, "last_commit_iso": "2026-04-12"}``).  Goes into
-        ``signals_json`` in the DB; never participates in scoring math.
+        "forks": 47, "last_commit_iso": "2026-04-12"}``).  Typed as
+        ``Mapping`` (read-only protocol) rather than ``dict`` to
+        signal that the orchestrator + storage code MUST treat it as
+        immutable.  Providers may pass an ordinary dict; downstream
+        code never mutates.  Goes into ``signals_json`` in the DB;
+        never participates in scoring math.
     """
 
     provider: str
     value: float
     weight: float = 1.0
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw: Mapping[str, Any] = field(default_factory=_empty_mapping)
 
 
 @dataclass(frozen=True, slots=True)
 class AuthorityScore:
-    """Combined verdict across all providers for one source."""
+    """Combined verdict across all providers for one source.
 
-    source_id: str          # canonical identifier (URL or vault-relative path)
-    authority: float        # weighted combination, 0-1
-    signals: list[Signal]   # provenance — every contributing signal
-    scored_at: str          # ISO 8601 UTC
+    ``signals`` is typed ``tuple`` (immutable) rather than ``list`` so
+    audit/provenance state can't drift after the score is computed.
+    Construct with ``signals=tuple(your_list)``.
+    """
+
+    source_id: str             # canonical identifier (URL or vault-relative path)
+    authority: float           # weighted combination, 0-1
+    signals: tuple[Signal, ...]  # provenance — every contributing signal
+    scored_at: str             # ISO 8601 UTC
     scorer_version: str = "v1"  # bumps when combination logic changes
 
 

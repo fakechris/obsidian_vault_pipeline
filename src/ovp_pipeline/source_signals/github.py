@@ -63,7 +63,12 @@ class GitHubSignalProvider:
         m = _GITHUB_REPO_RE.match(source_url)
         if not m:
             return None
-        owner, repo = m.group("owner"), m.group("repo").rstrip(".git")
+        # ``rstrip(".git")`` was a character-set strip (would corrupt
+        # repos like "widget" → "wid").  Use suffix removal instead.
+        owner = m.group("owner")
+        repo = m.group("repo")
+        if repo.endswith(".git"):
+            repo = repo[:-4]
         url = _API.format(owner=owner, repo=repo)
         req = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
         try:
