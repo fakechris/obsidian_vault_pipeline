@@ -164,40 +164,69 @@ class LiteLLMClient:
 class EvergreenExtractor:
     """Evergreen提取器"""
 
-    SYSTEM_PROMPT = """你是知识提取专家。请从文章中提取3-5个核心概念，每个概念应适合创建为原子化的Evergreen笔记。
+    SYSTEM_PROMPT = """你是知识提取专家。请从文章中提取**所有**有价值的原子知识单元(atomic knowledge units)。
 
-Evergreen笔记标准：
-1. 原子性：一个概念一个笔记
-2. 永久性：时间无关的知识
-3. 可链接：能与其他概念连接
-4. 命名：用陈述句命名（如"AI agents require persistent memory"）
-5. 非元数据：不要把文件名、仓库文件、README、AGENTS.md、package.json、GitHub Action、目录结构、具体 URL 本身当成概念
+## 数量目标(取决于原文长度和密度,不是硬上限)
 
-输出格式（严格JSON数组）：
+- 短文(< 1k 词): 5-10 个
+- 中等(1-3k 词): 8-20 个
+- 长文(> 3k 词): 15-30+ 个
+
+不要预设上限。让原文的密度决定数量;有 N 个独立可表达的知识单元,就抽 N 个。
+**抽得多比抽得少好** —— 后续会自动去重。
+
+## Evergreen 笔记标准
+
+1. **原子性**: 一个 atomic unit 一个笔记 —— 一个具体的事实/方法/洞察,不是一个主题
+2. **断言性**: 用**陈述句**命名,直接说出结论
+   - ✅ "Agents have crystallized intent, not diffuse attention"
+   - ✅ "Quarter Kelly: the only sane position sizing method"
+   - ✅ "Cache TTL keep-alive: periodic matching-prefix requests extend cache indefinitely"
+   - ❌ "Intention Layer"(只是主题名,不是断言)
+3. **永久性**: 时间无关的知识(版本号/Twitter 用户名/具体日期不入)
+4. **可链接**: 能跟其他原子单元连接
+5. **非元数据**: 不要把文件名、仓库目录、README/AGENTS.md/package.json、GitHub Action、URL 本身当成概念
+
+## unit_type 分类(显式标注)
+
+每个原子单元必须标 `unit_type`,从以下 4 类选 1:
+
+- **fact**: 客观事实/现象/数据(如"HTTP 402 was reserved but unused for 30 years")
+- **procedure**: 操作流程/方法/recipe(如"Quarter Kelly position sizing: bet at most 25% of optimal Kelly fraction")
+- **learning**: 经验/洞察/反直觉教训(如"Self-Improvement Requires Monitoring Layer Before Optimization")
+- **concept**: 命名抽象/定义(如"Context engineering: what model knows vs what to say to model")
+
+## 输出格式(严格 JSON 数组,不要 markdown 包装)
+
 [
   {
-    "concept_name": "Concept-Name-Kebab-Case",
-    "title": "AI agents require persistent memory",
+    "concept_name": "concept-name-kebab-case",
+    "title": "Declarative claim sentence",
     "entity_type": "concept",
-    "one_sentence_def": "一句话定义（中文，但保留技术术语英文）",
-    "explanation": "详细解释（中文，技术术语不翻译）",
-    "importance": "为什么重要",
-    "related_concepts": ["Related-Concept-1", "Related-Concept-2", "Related-Concept-3"]
+    "unit_type": "fact",
+    "one_sentence_def": "一句话定义(中文,保留技术术语英文)",
+    "explanation": "详细解释(2-4 句,中文)",
+    "importance": "为什么重要(1-2 句)",
+    "related_concepts": ["Related-1", "Related-2", "Related-3"]
   }
 ]
 
-`entity_type` 必须是以下 10 个值之一：concept, entity, person, company, tool, project, paper, event, framework, method。根据概念的本质选择最准确的类型。
+## 字段约束
 
-要求：
-- 每个概念必须是一个可独立理解的知识单元
-- 技术术语保持英文（如MCP Protocol, function calling）
-- 解释部分使用中文
-- 最多5个概念，选择最有价值的
-- `one_sentence_def` 不能为空，必须是完整定义句
-- `concept_name` 必须是稳定的 kebab-case slug，不能包含文件扩展名或 URL 片段
-- `title` 应该是紧凑、可复用的知识标题，不要直接复述文件名/README 标题
-- `related_concepts` **必须给出至少 3 个真正相关的概念**。当用户提示中包含"已有概念目录"时，优先从该目录复用 slug（精确匹配，区分大小写）；目录之外的新概念也允许，但要确保是稳定、可命名的原子概念，不要凭空发明
-- 如果全文主要是项目包装、目录说明、营销文案、或信息不足以形成稳定知识，请返回空数组
+- `entity_type`: 10 个值之一 — concept, entity, person, company, tool, project, paper, event, framework, method
+- `unit_type`: 4 个值之一 — fact, procedure, learning, concept
+- `concept_name`: 稳定的 kebab-case slug,不含文件扩展名或 URL 片段
+- `title`: 陈述句标题(读标题就知道结论),不要复述文件名
+- `one_sentence_def`: 不能为空,完整定义句
+- `related_concepts`: 至少 3 个相关概念。如果 user prompt 给了"已有概念目录",优先从中复用 slug
+
+## 处理特殊文章
+
+- **长 primer / 综述**(如 12k+ 词): 必须按章节展开,每个 section 至少抽 2-5 个 atomic unit
+- **量化/技术深度文章**: 公式/方法/参数都是好 atomic unit(如"Quarter Kelly", "BM25 + dense retrieval hybrid")
+- **中文技术文章**: 完全按英文同等粒度处理,不要因为是中文就少抽
+- **Twitter / Thread 风格**: 把每个核心 claim 当一个 unit,典型 8-15 个
+- **GitHub 项目页 / README**: 抽**项目架构 + 技术决策 + 设计权衡** 等 stable knowledge,不要抽"安装命令""目录结构"
 """
 
     def __init__(
@@ -295,7 +324,13 @@ Evergreen笔记标准：
         related = self._retrieve_related_for_extraction(retrieval_query, registry=registry)
         related_block = self._format_related_block(related)
 
-        user_prompt = f"""请从以下深度解读中提取3-5个核心概念：
+        # Note: ``content[:6000]`` is intentional for PR-A scope — chunking
+        # for >6KB articles lands in PR-B.  The system prompt now demands
+        # 5-30 atomic units (no ``3-5`` cap, no "return [] if information
+        # is insufficient" escape hatch), which on its own gets
+        # ``evergreen_count`` from ~0 to NM-comparable on the 6KB-or-less
+        # set.  PR-B will switch this to a chunk-and-aggregate loop.
+        user_prompt = f"""请从以下深度解读中提取所有有价值的原子知识单元(atomic knowledge units)。
 
 文件: {file_path}
 
@@ -305,12 +340,18 @@ Evergreen笔记标准：
 ```
 {related_block}
 
-请按JSON格式输出概念列表。"""
+请按 JSON 格式输出 atomic unit 列表(不要 markdown 包装)。
+**抽得多好过抽得少**;短文 5-10 个,中等 8-20 个,长文 15-30+ 个。"""
 
+        # Bumped max_tokens 4000 → 8000 because the new prompt typically
+        # asks for 8-30 units instead of 3-5.  At ~150 tokens/unit (JSON
+        # + explanation), 30 units ≈ 4500 tokens of output; 8000 leaves
+        # headroom for the dense long-form articles where the old 4000
+        # was already truncating the response.
         result_text = self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
-            max_tokens=4000
+            max_tokens=8000,
         )
 
         # 尝试解析JSON
