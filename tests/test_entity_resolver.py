@@ -38,6 +38,13 @@ def _seed_person(store, h, auth):
     )
 
 
+def _seed_organization(store, h, auth):
+    store.upsert(
+        entity_type="organization", identity_key=h, canonical_name=h,
+        signals={"links": []}, derived_authority=auth, fetch_source="m",
+    )
+
+
 class TestResolveTwitter:
     def test_falls_back_to_twitter_author(self, tmp_path):
         store = EntityStore(db_path=tmp_path / "k.db")
@@ -118,3 +125,44 @@ class TestResolveGithubUser:
         r = resolve_github_user_authority(store, "karpathy")
         assert r.authority == 0.75
         assert r.source == "person"
+
+
+# ---------------------------------------------------------------------------
+# PR-F1: organization resolution
+# ---------------------------------------------------------------------------
+
+
+class TestOrganizationResolution:
+    def test_twitter_resolves_to_organization(self, tmp_path):
+        # langchain is filed as ``organization`` (PR-F1) — twitter
+        # resolution must surface that, not silently miss.
+        store = EntityStore(db_path=tmp_path / "k.db")
+        _seed_organization(store, "langchain", 0.57)
+        r = resolve_twitter_authority(store, "langchain")
+        assert r.authority == 0.57
+        assert r.source == "organization"
+
+    def test_github_user_via_org_canonical(self, tmp_path):
+        # github_user.langchain-ai has twitter_username="langchain";
+        # the organization entity for "langchain" should win over
+        # the bare github_user authority.
+        store = EntityStore(db_path=tmp_path / "k.db")
+        _seed_gh_user(store, "langchain-ai", 0.55, twitter_username="langchain")
+        _seed_organization(store, "langchain", 0.65)
+        r = resolve_github_user_authority(store, "langchain-ai")
+        assert r.authority == 0.65
+        assert r.source == "organization"
+
+    def test_person_and_org_dont_collide_on_same_handle(self, tmp_path):
+        # In practice the same identity_key won't exist as both — the
+        # apply_merge migration cleans up — but the resolver should
+        # behave deterministically if a stale row sneaks through.
+        # _CANONICAL_TYPES iterates person before organization, so
+        # person wins (matches the migration's expected end state
+        # where the stale row is the org one).
+        store = EntityStore(db_path=tmp_path / "k.db")
+        _seed_person(store, "ambiguous", 0.5)
+        _seed_organization(store, "ambiguous", 0.7)
+        r = resolve_twitter_authority(store, "ambiguous")
+        assert r.source == "person"
+        assert r.authority == 0.5

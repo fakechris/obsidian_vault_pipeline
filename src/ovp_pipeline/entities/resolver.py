@@ -26,7 +26,16 @@ from .store import Entity, EntityStore
 
 # Source-of-truth labels we pass back so callers can record where the
 # authority came from in the audit log.
-ResolveSource = Literal["person", "twitter_author", "github_user", "github_project", "none"]
+ResolveSource = Literal[
+    "person", "organization", "twitter_author",
+    "github_user", "github_project", "none",
+]
+
+
+# Canonical-identity types in lookup-priority order.  Both share
+# the same ``identity_key`` namespace (lowercased twitter handle),
+# so a given handle can only resolve to one of them.
+_CANONICAL_TYPES: tuple[ResolveSource, ...] = ("person", "organization")
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,12 +64,16 @@ def resolve_twitter_authority(
     if not norm:
         return ResolveResult(None, "none", None)
 
-    # 1. Person entity keyed by twitter handle (PR-E3 merges).  This is
-    #    the right answer when the handle has been linked to a github
-    #    entity — it carries the max-of-all-platforms authority.
-    person = store.get("person", norm)
-    if person is not None and person.derived_authority is not None:
-        return ResolveResult(person.derived_authority, "person", person)
+    # 1. Canonical-identity entity (person or organization) keyed by
+    #    twitter handle.  PR-F1 split person → person + organization;
+    #    a given handle is only in one bucket so the loop returns on
+    #    first hit.
+    for canonical_type in _CANONICAL_TYPES:
+        canonical = store.get(canonical_type, norm)
+        if canonical is not None and canonical.derived_authority is not None:
+            return ResolveResult(
+                canonical.derived_authority, canonical_type, canonical,
+            )
 
     # 2. Plain twitter_author entity from PR-E1.
     tw = store.get("twitter_author", norm)
@@ -113,16 +126,21 @@ def resolve_github_user_authority(
     if not norm:
         return ResolveResult(None, "none", None)
 
-    # Person merge takes precedence here too — if karpathy was merged
-    # to a person entity via his twitter handle, we want that view.
-    # Look up via the github_user's twitter_username field.
+    # Canonical-identity merge takes precedence here too — if karpathy
+    # was merged to a person entity via his twitter handle, or
+    # langchain-ai was merged to an organization entity, we want
+    # that view.  Look up via the github_user's twitter_username field.
     gh = store.get("github_user", norm)
     if gh is not None and gh.derived_authority is not None:
         tw_username = _normalize(gh.signals.get("twitter_username"))
         if tw_username:
-            person = store.get("person", tw_username)
-            if person is not None and person.derived_authority is not None:
-                return ResolveResult(person.derived_authority, "person", person)
+            for canonical_type in _CANONICAL_TYPES:
+                canonical = store.get(canonical_type, tw_username)
+                if (canonical is not None
+                        and canonical.derived_authority is not None):
+                    return ResolveResult(
+                        canonical.derived_authority, canonical_type, canonical,
+                    )
         return ResolveResult(gh.derived_authority, "github_user", gh)
 
     return ResolveResult(None, "none", None)

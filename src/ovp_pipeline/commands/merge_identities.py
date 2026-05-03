@@ -1,4 +1,4 @@
-"""ovp-merge-identities — collapse twitter_author + github_user into person.
+"""ovp-merge-identities — collapse twitter_author + github_user into person/organization.
 
 Three modes:
 
@@ -9,10 +9,11 @@ Three modes:
 
 The merge is read-only against twitter_author / github_user — they
 stay untouched.  We only INSERT/UPDATE rows in the ``entities`` table
-where ``entity_type='person'``.
+where ``entity_type='person'`` or ``'organization'`` (PR-F1).
 
-Re-running is safe: each apply UPSERTs by ``(person, twitter_handle)``,
-so a person row that already exists is just refreshed.
+Re-running is safe: each apply UPSERTs by canonical handle.  A first
+``--migrate-existing`` pass also reclassifies pre-PR-F1 ``person``
+rows whose linked github_user is actually an organization.
 """
 
 from __future__ import annotations
@@ -22,10 +23,21 @@ import sys
 from pathlib import Path
 
 from ..entities.identity_merge import (
+    ORGANIZATION_TYPE,
+    PERSON_TYPE,
     apply_merge,
     find_merge_candidates,
+    reclassify_persons_to_orgs,
 )
 from ..entities.store import EntityStore
+
+
+# Cap on how many reclassification candidates we print inline.  The
+# rest are summarized via "and N more"; full list lives in the JSON
+# status file (PR-E5).
+_MIGRATION_PREVIEW_LIMIT = 20
+_FUZZY_PREVIEW_LIMIT = 20
+_TOP_K = 10
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,6 +50,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--include-fuzzy", action="store_true",
                         help="Also apply fuzzy (Levenshtein) candidates — "
                              "review the dry-run output first")
+    parser.add_argument("--migrate-existing", action="store_true",
+                        help="Before merging, reclassify pre-PR-F1 person "
+                             "rows that should be organization (one-shot, "
+                             "idempotent).  Default off so a routine refresh "
+                             "doesn't surprise anyone.")
     args = parser.parse_args(argv)
 
     vault = args.vault_dir.resolve()
@@ -47,6 +64,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     store = EntityStore(db_path=db_path)
+
+    if args.migrate_existing:
+        # Single source of truth — both real and dry-run go through
+        # reclassify_persons_to_orgs so the preview can never disagree
+        # with the actual write.
+        reclassified, kept, handles = reclassify_persons_to_orgs(
+            store, dry_run=args.dry_run,
+        )
+        verb = "would be reclassified" if args.dry_run else "person → organization"
+        print(f"PR-F1 migration: {reclassified} {verb} ({kept} unchanged)")
+        for handle in handles[:_MIGRATION_PREVIEW_LIMIT]:
+            print(f"  person → organization: {handle}")
+        if len(handles) > _MIGRATION_PREVIEW_LIMIT:
+            print(f"  ... and {len(handles) - _MIGRATION_PREVIEW_LIMIT} more")
+        print()
+
     candidates = find_merge_candidates(store)
 
     by_method = {"self_reported": 0, "exact_handle": 0, "fuzzy": 0}
@@ -74,10 +107,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {c.confidence:.2f}  github:{c.github_login:<25} "
                       f"↔ twitter:@{c.twitter_handle}")
         print()
-        print("=== fuzzy (review queue, top 20) ===")
+        print(f"=== fuzzy (review queue, top {_FUZZY_PREVIEW_LIMIT}) ===")
         fuzzy = [c for c in candidates if c.method == "fuzzy"]
         fuzzy.sort(key=lambda c: -c.confidence)
-        for c in fuzzy[:20]:
+        for c in fuzzy[:_FUZZY_PREVIEW_LIMIT]:
             print(f"  {c.confidence:.2f}  github:{c.github_login:<25} "
                   f"↔ twitter:@{c.twitter_handle:<25}  ({c.rationale})")
         print()
@@ -100,20 +133,25 @@ def main(argv: list[str] | None = None) -> int:
         else:
             skipped += 1
 
-    print(f"applied: {applied}  (person entities inserted/updated)")
+    print(f"applied: {applied}  (canonical entities inserted/updated)")
     print(f"skipped: {skipped}  (review queue + missing-side cases)")
-    print()
-    print("Top 10 person entities by authority:")
-    for e in store.list_by_type("person", limit=10):
-        if e.derived_authority is None:
+
+    for canonical_type in (PERSON_TYPE, ORGANIZATION_TYPE):
+        rows = store.list_by_type(canonical_type, limit=_TOP_K)
+        if not rows:
             continue
-        links = e.signals.get("links", [])
-        link_summary = " + ".join(
-            f"{ln['entity_type'].split('_')[0]}:{ln['identity_key']}"
-            for ln in links
-        )
-        print(f"  {e.derived_authority:.2f}  {e.identity_key:<25} "
-              f"({link_summary})")
+        print()
+        print(f"Top {_TOP_K} {canonical_type} entities by authority:")
+        for e in rows:
+            if e.derived_authority is None:
+                continue
+            links = e.signals.get("links", [])
+            link_summary = " + ".join(
+                f"{ln['entity_type'].split('_')[0]}:{ln['identity_key']}"
+                for ln in links
+            )
+            print(f"  {e.derived_authority:.2f}  {e.identity_key:<25} "
+                  f"({link_summary})")
 
     return 0
 

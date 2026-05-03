@@ -136,6 +136,38 @@ class EntityStore:
         finally:
             conn.close()
 
+    def delete(self, entity_type: str, identity_key: str) -> bool:
+        """Remove an entity + its history rows.
+
+        Returns True if a row was deleted, False if the entity wasn't
+        present.  Used by identity_merge's reclassification when a
+        ``person`` should be re-filed as ``organization`` (or vice
+        versa) — the unique constraint on (entity_type, identity_key)
+        means we can't just upsert across types.
+        """
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT entity_id FROM entities "
+                "WHERE entity_type=? AND identity_key=?",
+                (entity_type, identity_key),
+            ).fetchone()
+            if row is None:
+                return False
+            entity_id = row[0]
+            conn.execute(
+                "DELETE FROM entity_signals_history WHERE entity_id=?",
+                (entity_id,),
+            )
+            conn.execute(
+                "DELETE FROM entities WHERE entity_id=?",
+                (entity_id,),
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
     def list_by_type(
         self, entity_type: str, *, limit: int | None = None,
     ) -> list[Entity]:
