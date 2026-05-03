@@ -180,6 +180,7 @@ SQLITE_ALLOWED_MODULES = {
     "commands/_ui_renderers",
     "commands/working_memory",
     "commands/score_sources",
+    "commands/backup_db",
     "source_authority",
     "discovery",
     "evidence",
