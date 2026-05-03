@@ -66,19 +66,28 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     sample = args.sample if args.sample > 0 else None
-    report = audit_all_layers(vault, sample_size=sample)
+    # Push filters DOWN into audit_all_layers so it can early-exit
+    # rather than scanning every layer + every file before the CLI
+    # post-filters.  Big win on vaults with 6500+ Evergreen files when
+    # the user only wants a single layer's HIGH violations.
+    report = audit_all_layers(
+        vault,
+        sample_size=sample,
+        layer_filter=args.layer,
+        violation_limit_per_layer=(args.limit if args.limit > 0 else None),
+        severity_floor=args.severity,
+    )
 
-    severity_floor = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-    floor = severity_floor[args.severity] if args.severity else 2
+    severity_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    floor_rank = severity_rank[args.severity] if args.severity else 2
 
     def keep(v_sev: str) -> bool:
-        return severity_floor[v_sev] <= floor
+        return severity_rank[v_sev] <= floor_rank
 
-    # Filter layers + violations per filters
+    # Final CLI-side filter for the per-violation severity floor (the
+    # auditor itself only uses severity for early-exit accounting; the
+    # final report still needs to match what the user asked for).
     for layer in report["layers"]:
-        if args.layer and layer["name"] != args.layer:
-            layer["violations"] = []
-            continue
         layer["violations"] = [v for v in layer["violations"] if keep(v["severity"])]
         if args.limit > 0:
             layer["violations"] = layer["violations"][:args.limit]

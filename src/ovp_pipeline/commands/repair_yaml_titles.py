@@ -26,7 +26,12 @@ from pathlib import Path
 import yaml
 
 
-_FRONTMATTER_RE = re.compile(r"\A(---\s*\n)(.*?)(\n---\s*\n)", re.DOTALL)
+# Frontmatter regex with capture groups split — the shared
+# ``layer_schemas.FRONTMATTER_BLOCK_RE`` collapses the delimiters into
+# the boundary; here we need the opener / body / closer separately so
+# we can splice repaired body back into the exact original framing.
+# Tolerates a closing ``---`` at end-of-file (no trailing newline).
+_FRONTMATTER_RE = re.compile(r"\A(---\s*\n)(.*?)(\n---\s*(?:\n|\Z))", re.DOTALL)
 # Lines like "title: <some value>" where <some value> isn't already quoted.
 _KEY_VALUE_RE = re.compile(r"^([a-zA-Z_][\w\-]*):\s*(.*?)\s*$")
 

@@ -297,11 +297,27 @@ class Violation:
         }
 
 
-_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+# ``(?:\n|\Z)`` lets the closing ``---`` be either followed by a newline
+# or be the very last bytes of the file — without ``\Z`` we false-positive
+# on legitimate markdown files that end exactly at the closing delimiter.
+#
+# Public so the repair scripts can share the exact same pattern; do NOT
+# re-roll this regex anywhere else in the codebase.  ``parse_frontmatter``
+# is the high-level entry point; for callers that need to keep the full
+# delimiter-bracketed match (e.g. to splice repaired body back together),
+# use this regex directly.
+FRONTMATTER_BLOCK_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
+_FRONTMATTER_RE = FRONTMATTER_BLOCK_RE  # legacy private alias
 
 
 def parse_frontmatter(text: str) -> dict[str, Any] | None:
-    """Return the YAML frontmatter dict, or ``None`` if none / malformed."""
+    """Return the YAML frontmatter dict, or ``None`` if none / malformed.
+
+    Single source of truth for frontmatter extraction across the
+    auditor, the repair commands, and the layer schemas tests.  Other
+    modules MUST import this rather than re-roll the regex (see PR #111
+    review for the duplication that motivated the consolidation).
+    """
     m = _FRONTMATTER_RE.match(text)
     if not m:
         return None
@@ -313,19 +329,29 @@ def parse_frontmatter(text: str) -> dict[str, Any] | None:
 
 
 def _files_for_layer(vault_dir: Path, schema: LayerSchema) -> list[Path]:
+    """Single-pass file iteration with inline exclusion check.
+
+    Compiles each ``exclude_globs`` pattern into a regex via
+    ``Path.match`` semantics so we don't have to separately glob the
+    excluded subtree (the previous double-scan approach was wasteful on
+    large vaults — see PR #111 review).
+    """
     seen: set[Path] = set()
-    excluded: set[Path] = set()
-    for pat in schema.exclude_globs:
-        for p in vault_dir.glob(pat):
-            if p.is_file():
-                excluded.add(p.resolve())
     files: list[Path] = []
     for pat in schema.glob_patterns:
         for p in vault_dir.glob(pat):
             if not p.is_file():
                 continue
             resolved = p.resolve()
-            if resolved in excluded or resolved in seen:
+            if resolved in seen:
+                continue
+            # Check exclusion via Path.match so we never have to walk
+            # the excluded glob ourselves.
+            try:
+                rel = p.relative_to(vault_dir)
+            except ValueError:
+                rel = p
+            if any(rel.match(ex) for ex in schema.exclude_globs):
                 continue
             seen.add(resolved)
             files.append(p)
@@ -393,7 +419,10 @@ def _validate_one_file(
 
 def audit_layer(
     vault_dir: Path, schema: LayerSchema,
-    *, sample_size: int | None = None,
+    *,
+    sample_size: int | None = None,
+    violation_limit: int | None = None,
+    severity_floor: str | None = None,
 ) -> tuple[list[Violation], int]:
     """Scan every file in ``schema``'s glob and validate against rules.
 
@@ -401,6 +430,14 @@ def audit_layer(
     ----------
     sample_size : optional
         If set, only scan the first N files (useful for fast unit tests).
+    violation_limit : optional
+        Stop scanning as soon as this many violations have been collected
+        (early-exit optimization for callers that only need a peek).
+    severity_floor : optional
+        If set (``"HIGH"`` / ``"MEDIUM"`` / ``"LOW"``), only count
+        violations at or above this level toward ``violation_limit``.
+        Other severities are still emitted but don't trigger the early
+        exit.
 
     Returns
     -------
@@ -410,8 +447,13 @@ def audit_layer(
     if sample_size is not None:
         files = files[:sample_size]
 
+    severity_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    floor_rank = severity_rank.get(severity_floor) if severity_floor else None
+
     violations: list[Violation] = []
+    files_scanned = 0
     for f in files:
+        files_scanned += 1
         try:
             text = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
@@ -420,14 +462,29 @@ def audit_layer(
                 severity="HIGH",
                 message=f"could not read file: {exc}",
             ))
-            continue
-        fm = parse_frontmatter(text)
-        violations.extend(_validate_one_file(schema, f, fm))
-    return violations, len(files)
+        else:
+            fm = parse_frontmatter(text)
+            violations.extend(_validate_one_file(schema, f, fm))
+
+        if violation_limit is not None:
+            counted = (
+                len(violations) if floor_rank is None
+                else sum(1 for v in violations
+                         if severity_rank[v.severity] <= floor_rank)
+            )
+            if counted >= violation_limit:
+                break
+
+    return violations, files_scanned
 
 
 def audit_all_layers(
-    vault_dir: Path, *, sample_size: int | None = None,
+    vault_dir: Path,
+    *,
+    sample_size: int | None = None,
+    layer_filter: str | None = None,
+    violation_limit_per_layer: int | None = None,
+    severity_floor: str | None = None,
 ) -> dict[str, Any]:
     """Audit every layer; return a structured report.
 
@@ -450,7 +507,21 @@ def audit_all_layers(
     grand_total = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
     total_files = 0
     for schema in ALL_LAYERS:
-        violations, n_files = audit_layer(vault_dir, schema, sample_size=sample_size)
+        if layer_filter and schema.name != layer_filter:
+            # Skip the whole scan when caller wants a single layer —
+            # avoids walking 6500+ Evergreen files just to view L2.
+            layer_reports.append({
+                "name": schema.name, "files_scanned": 0,
+                "violations_by_severity": {"HIGH": 0, "MEDIUM": 0, "LOW": 0},
+                "violations": [],
+            })
+            continue
+        violations, n_files = audit_layer(
+            vault_dir, schema,
+            sample_size=sample_size,
+            violation_limit=violation_limit_per_layer,
+            severity_floor=severity_floor,
+        )
         total_files += n_files
         by_sev = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
         for v in violations:

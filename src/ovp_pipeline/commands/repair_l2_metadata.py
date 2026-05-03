@@ -88,7 +88,9 @@ def _topic_tag_from_path(path: Path, vault_dir: Path) -> str | None:
     return None
 
 
-_FRONTMATTER_RE = re.compile(r"\A(---\s*\n)(.*?)(\n---\s*\n)", re.DOTALL)
+# See repair_yaml_titles.py: same pattern, split into capture groups for
+# splice-rewriting; tolerates EOF after closing ``---``.
+_FRONTMATTER_RE = re.compile(r"\A(---\s*\n)(.*?)(\n---\s*(?:\n|\Z))", re.DOTALL)
 # Match a "key: value" line we can rewrite (top-level scalar).
 _KEY_VALUE_RE = re.compile(r"^([a-zA-Z_][\w\-]*):\s*(.*?)\s*$")
 
