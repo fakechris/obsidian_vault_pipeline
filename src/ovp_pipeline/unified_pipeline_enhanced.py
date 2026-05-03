@@ -2732,15 +2732,14 @@ class EnhancedPipeline:
                     total_entities=before_count,
                 )
 
+            # Don't silently swallow ImportError here — this is exactly
+            # how the missing-llm_client.py bug hid for two months.
+            # Catch only the documented "no API key" path (None return).
+            from .llm_client import get_litellm_client
             llm_call = None
-            try:
-                from .llm_client import get_litellm_client
-
-                client = get_litellm_client(vault_dir=self.vault_dir)
-                if client:
-                    llm_call = client.call
-            except Exception:
-                pass
+            client = get_litellm_client(vault_dir=self.vault_dir)
+            if client:
+                llm_call = client.call
 
             if llm_call is None:
                 print("  ⚠ No LLM client available — entity extraction skipped")
