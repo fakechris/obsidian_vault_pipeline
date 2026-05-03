@@ -90,19 +90,29 @@ def run(
     # Without this, ``ovp-backfill-entities`` would re-process every file
     # on every run (we hit this in the May 2026 history rerun: 274 files
     # got 2-4 entries in the log, doubling token cost for no new data).
+    #
+    # Both sides of the comparison go through ``_canonical_path`` so a log
+    # entry written as a relative or non-resolved path still matches.
+    def _canonical_path(p: str | Path) -> str:
+        try:
+            return str(Path(p).resolve(strict=False))
+        except (OSError, ValueError):
+            return str(p)
+
     already_extracted: set[str] = set()
     if not force and extraction_log.exists():
-        for line in extraction_log.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
+        with extraction_log.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 sf = obj.get("source_file", "")
                 if sf:
-                    already_extracted.add(sf)
-            except json.JSONDecodeError:
-                continue
+                    already_extracted.add(_canonical_path(sf))
         if already_extracted:
             print(f"  Skipping {len(already_extracted)} previously-extracted files (use --force to re-process)")
 
@@ -135,7 +145,7 @@ def run(
             call_timestamps.append(time.time())
 
     for i, fpath in enumerate(md_files):
-        if str(fpath) in already_extracted:
+        if _canonical_path(fpath) in already_extracted:
             skipped_already_extracted += 1
             continue
         _throttle()

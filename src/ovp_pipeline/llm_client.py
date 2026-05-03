@@ -15,8 +15,11 @@ fall back to alias-only mode.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class _CallableLLMClient:
@@ -54,8 +57,9 @@ def get_litellm_client(vault_dir: Path | None = None) -> _CallableLLMClient | No
     if vault_dir is not None:
         try:
             load_env_file(Path(vault_dir))
-        except Exception:
-            # Don't fail client creation just because .env was missing.
+        except (FileNotFoundError, IsADirectoryError):
+            # .env genuinely missing or shadowed by a directory — fine,
+            # we'll fall back to whatever's already in the shell env.
             pass
 
     if not resolve_api_key():
@@ -63,7 +67,17 @@ def get_litellm_client(vault_dir: Path | None = None) -> _CallableLLMClient | No
 
     try:
         inner = LiteLLMClient()
-    except Exception:
+    except ValueError:
+        # LiteLLMClient raises ValueError specifically when api_key is
+        # absent (rare race after resolve_api_key succeeded but before
+        # construction) — caller's intended fallback path.
         return None
+    except Exception as exc:
+        # Anything else (network init, missing dep, bad config) is a
+        # real setup error.  Surface it loudly instead of silently
+        # falling back to alias-only mode — that's exactly the bug
+        # llm_client.py was created to prevent recurrence of.
+        logger.error("get_litellm_client: unexpected failure constructing client: %r", exc)
+        raise
 
     return _CallableLLMClient(inner)

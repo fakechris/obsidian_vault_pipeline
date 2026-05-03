@@ -108,12 +108,10 @@ class TestLLMClientFactory:
 
     def test_returns_none_without_api_key(self, temp_vault, monkeypatch):
         from ovp_pipeline.llm_client import get_litellm_client
-        # Strip every API key env var the resolver checks.
-        for env_name in (
-            "AUTO_VAULT_API_KEY", "SPEC_ORCH_LLM_API_KEY",
-            "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
-        ):
+        from ovp_pipeline.llm_defaults import API_KEY_FALLBACKS
+        # Strip every API key env var the resolver checks — pull the list
+        # from llm_defaults so this test stays in lockstep with the resolver.
+        for env_name in API_KEY_FALLBACKS:
             monkeypatch.delenv(env_name, raising=False)
         client = get_litellm_client(vault_dir=temp_vault)
         assert client is None
