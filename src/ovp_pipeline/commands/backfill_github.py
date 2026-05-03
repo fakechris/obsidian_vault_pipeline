@@ -173,16 +173,21 @@ def _backfill_projects(
     if not to_fetch:
         return 0, 0, 0, cached
 
+    # Pre-fetch all github_user entities once.  Without this, scoring
+    # 559 projects opens ~559 SQLite connections just to look up the
+    # owner_lift — measured ~50% of total runtime in profile traces.
+    user_authorities: dict[str, float | None] = {
+        u.identity_key: u.derived_authority
+        for u in store.list_by_type(_USER_TYPE)
+    }
+
     n_ok = n_nf = n_err = 0
     for i, (owner, repo, mentions) in enumerate(to_fetch, 1):
         identity = f"{owner}/{repo}"
         result = fetch_repo(owner, repo, token=token)
         if result.status == "ok" and result.payload is not None:
             owner_login = (result.payload.get("owner") or {}).get("login") or owner
-            owner_entity = store.get(_USER_TYPE, owner_login.lower())
-            owner_authority = (
-                owner_entity.derived_authority if owner_entity is not None else 0.0
-            ) or 0.0
+            owner_authority = user_authorities.get(owner_login.lower()) or 0.0
             authority, signals = derive_project_signals(
                 result.payload, owner_authority_0_75=owner_authority,
             )

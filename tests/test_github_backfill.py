@@ -304,6 +304,152 @@ class TestFetchUser:
         assert r.payload["followers"] == 100_000
 
 
+class TestBandConstants:
+    """Pin the named-constant tables so a future tune to one band
+    can't silently break another.  Same pattern as
+    test_twitter_backfill.TestBandConstants."""
+
+    def test_project_bands_monotonic_high_to_low(self):
+        from ovp_pipeline.entities.github_backfill import (
+            _PROJECT_AGE_BANDS,
+            _PROJECT_FORKS_BANDS,
+            _PROJECT_STARS_BANDS,
+        )
+        # First-match-wins requires high-to-low ordering.
+        for table in (_PROJECT_STARS_BANDS, _PROJECT_FORKS_BANDS,
+                      _PROJECT_AGE_BANDS):
+            thresholds = [t for t, _ in table]
+            assert thresholds == sorted(thresholds, reverse=True), \
+                f"non-monotonic: {table}"
+
+    def test_recency_bands_monotonic_low_to_high(self):
+        # Recency uses _band_lookup_max which expects ascending thresholds.
+        from ovp_pipeline.entities.github_backfill import _PROJECT_RECENCY_BANDS
+        thresholds = [t for t, _ in _PROJECT_RECENCY_BANDS]
+        assert thresholds == sorted(thresholds)
+
+    def test_user_bands_monotonic_high_to_low(self):
+        from ovp_pipeline.entities.github_backfill import (
+            _USER_AGE_BANDS,
+            _USER_FOLLOWERS_BANDS,
+            _USER_REPOS_BANDS,
+        )
+        for table in (_USER_FOLLOWERS_BANDS, _USER_REPOS_BANDS,
+                      _USER_AGE_BANDS):
+            thresholds = [t for t, _ in table]
+            assert thresholds == sorted(thresholds, reverse=True)
+
+    def test_band_lookup_picks_highest_match(self):
+        from ovp_pipeline.entities.github_backfill import (
+            _PROJECT_STARS_BANDS,
+            _band_lookup,
+        )
+        # 30_000 stars: between 10_000 (25 pts) and 50_000 (30 pts) — must return 25.
+        assert _band_lookup(30_000, _PROJECT_STARS_BANDS) == 25
+
+    def test_band_lookup_max_picks_smallest_match(self):
+        from ovp_pipeline.entities.github_backfill import (
+            _PROJECT_RECENCY_BANDS,
+            _band_lookup_max,
+        )
+        # days=100 → falls in the ≤180 band (10 points), not ≤30.
+        assert _band_lookup_max(100, _PROJECT_RECENCY_BANDS) == 10
+        # days=400 → only fits ≤365*3 (2 points).
+        assert _band_lookup_max(400, _PROJECT_RECENCY_BANDS) == 2
+        # days=∞ → no band matches → 0
+        assert _band_lookup_max(float("inf"), _PROJECT_RECENCY_BANDS) == 0
+
+    def test_band_lookup_zero_below_lowest(self):
+        from ovp_pipeline.entities.github_backfill import (
+            _PROJECT_STARS_BANDS,
+            _band_lookup,
+        )
+        assert _band_lookup(0, _PROJECT_STARS_BANDS) == 0
+
+
+class TestBackfillProjectsUsesPrefetchedUsers:
+    """The review-fix invariant: scoring N projects must NOT issue
+    N more SQLite connections to look up the owner.  Pin it so a
+    refactor can't silently regress."""
+
+    def test_owner_lookup_uses_prefetched_dict(self, tmp_path):
+        from ovp_pipeline.commands.backfill_github import _backfill_projects
+        from ovp_pipeline.entities.store import EntityStore
+
+        store = EntityStore(db_path=tmp_path / "k.db")
+        # Seed two known github_user entities (owners of the test repos).
+        store.upsert(
+            entity_type="github_user", identity_key="alice",
+            canonical_name="Alice", signals={"followers": 5000},
+            derived_authority=0.45, fetch_source="github_rest",
+        )
+        store.upsert(
+            entity_type="github_user", identity_key="bob",
+            canonical_name="Bob", signals={"followers": 100},
+            derived_authority=0.20, fetch_source="github_rest",
+        )
+
+        # Stub the fetch — never hit the real network.
+        repo_payloads = {
+            ("alice", "x"): {
+                "full_name": "alice/x", "stargazers_count": 5000,
+                "owner": {"login": "alice"},
+            },
+            ("bob", "y"): {
+                "full_name": "bob/y", "stargazers_count": 50,
+                "owner": {"login": "bob"},
+            },
+        }
+        from ovp_pipeline.commands import backfill_github as bg
+        from ovp_pipeline.entities.github_backfill import FetchResult
+
+        def fake_fetch(owner, repo, *, token=None):
+            payload = repo_payloads.get((owner, repo))
+            if payload is None:
+                return FetchResult(f"{owner}/{repo}", "project",
+                                   "not_found", None, "404")
+            return FetchResult(f"{owner}/{repo}", "project",
+                               "ok", payload, None)
+
+        # Track every store.get call so we can prove the loop doesn't
+        # re-hit the DB for owner lookups.
+        original_get = store.get
+        get_call_log: list[tuple[str, str]] = []
+
+        def logged_get(entity_type, identity_key):
+            get_call_log.append((entity_type, identity_key))
+            return original_get(entity_type, identity_key)
+
+        store.get = logged_get  # type: ignore[method-assign]
+
+        # Patch the names imported INTO commands.backfill_github —
+        # patching the source module wouldn't update the binding.
+        with patch.object(bg, "fetch_repo", side_effect=fake_fetch), \
+             patch.object(bg, "time"):
+            ok, nf, err, cached = _backfill_projects(
+                store=store,
+                repos=[("alice", "x", 1), ("bob", "y", 1)],
+                token=None, max_age_days=30, force=False, max_handles=None,
+            )
+        assert (ok, nf, err) == (2, 0, 0)
+
+        # The store.get calls inside the loop should ONLY be the
+        # cache-staleness checks for the project identity.  No
+        # per-project (_USER_TYPE, ...) calls.
+        user_lookups = [
+            (t, k) for t, k in get_call_log if t == "github_user"
+        ]
+        assert user_lookups == [], (
+            f"unexpected per-project user lookups: {user_lookups}"
+        )
+
+        # Owner authority IS still applied: alice's 0.45 should have
+        # produced a non-zero owner_lift in alice/x's signals.
+        alice_proj = store.get("github_project", "alice/x")
+        assert alice_proj is not None
+        assert alice_proj.signals["weight_breakdown"]["owner_lift"] > 0
+
+
 def test_price_constant_is_zero():
     # GitHub REST is free; if we ever switch to a paid mirror this
     # test is the canary.
