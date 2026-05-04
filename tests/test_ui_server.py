@@ -1804,7 +1804,7 @@ def test_ui_server_clusters_endpoint_returns_payload(temp_vault):
     assert payload["screen"] == "graph/clusters"
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["count"] >= 1
-    assert payload["items"][0]["cluster_kind"] == "relation_component"
+    assert payload["items"][0]["cluster_kind"] == "louvain_community"
     assert payload["items"][0]["priority_band"]
     assert payload["items"][0]["priority_reason"]
     assert payload["items"][0]["display_title"]

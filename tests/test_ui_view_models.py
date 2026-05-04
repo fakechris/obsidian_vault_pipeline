@@ -704,7 +704,7 @@ Delta extends Gamma.
 
     assert payload["screen"] == "graph/clusters"
     assert payload["count"] >= 2
-    assert payload["cluster_kind_counts"] == {"relation_component": payload["count"]}
+    assert payload["cluster_kind_counts"] == {"louvain_community": payload["count"]}
     assert payload["items"][0]["center_object_path"].startswith("/object?id=")
     assert payload["items"][0]["member_count"] >= 2
     assert payload["items"][0]["members"][0]["object_id"]
