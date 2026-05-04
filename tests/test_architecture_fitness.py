@@ -205,6 +205,7 @@ SQLITE_ALLOWED_MODULES = {
     "synthesis/community_crystal",
     "synthesis/contradiction_crystal",
     "synthesis/crystal_scoring",
+    "synthesis/curated_atlas",
     "synthesis/_shared",
     "synthesis/_versioning",
     "ui/view_models",
