@@ -180,6 +180,26 @@ class TestCrystalFilename:
 
 
 class TestRenderCrystalMarkdown:
+    def test_related_notes_section_present(self):
+        # ``## 相关笔记`` is machine-appended; lists every
+        # source_object_id as ``[[slug]]`` so the backlink graph
+        # is independent of LLM citation behaviour.
+        c = ContradictionCrystal(
+            pack="t", contradiction_id="contradiction::xx",
+            subject_key="x", body_md="## 争议核心\n\ntext",
+            positive_claim_ids=("a::aa",),
+            negative_claim_ids=("b::bb",),
+            source_object_ids=("a", "b"),
+            synthesized_at="2026-05-04T01:00:00.000000+00:00",
+            llm_model="m", prompt_version=CONTRADICTION_PROMPT_VERSION,
+        )
+        md = render_crystal_markdown(c)
+        assert "## 相关笔记" in md
+        assert "[[a]]" in md
+        assert "[[b]]" in md
+        # Section comes AFTER the body.
+        assert md.index("## 争议核心") < md.index("## 相关笔记")
+
     def test_frontmatter_carries_lineage(self):
         c = ContradictionCrystal(
             pack="research-tech",

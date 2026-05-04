@@ -322,8 +322,27 @@ def _crystal_filename(contradiction_id: str) -> str:
     return _safe_id(contradiction_id) + ".md"
 
 
+def _related_notes_section(slugs: tuple[str, ...]) -> str:
+    """Machine-generated ``## 相关笔记`` section appended to every
+    contradiction crystal.  Same rationale as the community crystal
+    helper — keeps the source-note backlink graph deterministic
+    instead of relying on the LLM to consistently emit ``[[slug]]``
+    inside prose.
+    """
+    lines = ["## 相关笔记", ""]
+    for slug in slugs:
+        lines.append(f"- [[{slug}]]")
+    return "\n".join(lines)
+
+
 def render_crystal_markdown(crystal: ContradictionCrystal) -> str:
-    return _frontmatter(crystal) + crystal.body_md.rstrip() + "\n"
+    return (
+        _frontmatter(crystal)
+        + crystal.body_md.rstrip()
+        + "\n\n"
+        + _related_notes_section(crystal.source_object_ids)
+        + "\n"
+    )
 
 
 # ----- Main entry point -----------------------------------------------
