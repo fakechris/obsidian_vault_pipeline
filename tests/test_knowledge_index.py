@@ -1007,6 +1007,38 @@ date: 2026-04-07
     assert row[3]
 
 
+def test_rebuild_knowledge_index_invokes_crystal_scoring_without_attribute_error(
+    temp_vault, caplog,
+):
+    """Pre-fix: ``rebuild_knowledge_index`` called the M14 BL-045
+    score rebuild with ``layout.vault_root`` — an attribute that
+    doesn't exist on ``VaultLayout``.  The exception was swallowed
+    by the best-effort ``except`` so production silently dropped
+    every score rebuild.  This test pins the call shape so the
+    same regression can't recur."""
+    import logging
+    from ovp_pipeline.knowledge_index import ensure_knowledge_db_current
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "x.md"
+    note.write_text(
+        "---\nnote_id: x\ntitle: X\ntype: evergreen\ndate: 2026-04-07\n"
+        "---\n\n# X\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.WARNING, logger="ovp_pipeline.knowledge_index"):
+        ensure_knowledge_db_current(temp_vault)
+    # No "skipped" warning fired — the integration call site is
+    # passing the right attribute so the helper completes cleanly.
+    skipped = [
+        r.getMessage() for r in caplog.records
+        if "crystal_scores rebuild skipped" in r.getMessage()
+    ]
+    assert skipped == [], (
+        "crystal scoring failed during knowledge_index rebuild: "
+        + " | ".join(skipped)
+    )
+
+
 def test_ensure_knowledge_db_current_rebuilds_when_authority_schema_version_advances(temp_vault):
     from ovp_pipeline.knowledge_index import ensure_knowledge_db_current
     from ovp_pipeline.projection_lifecycle import list_projection_repair_markers

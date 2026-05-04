@@ -1181,7 +1181,7 @@ def rebuild_knowledge_index(
             try:
                 from .synthesis.crystal_scoring import rebuild_crystal_scores
                 rebuild_crystal_scores(
-                    conn, vault_dir=layout.vault_root, pack=truth_pack,
+                    conn, vault_dir=layout.vault_dir, pack=truth_pack,
                 )
             except Exception as exc:
                 # Score rebuild is best-effort — never block the
