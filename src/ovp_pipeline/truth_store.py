@@ -160,6 +160,20 @@ CREATE TABLE reuse_events (
 CREATE INDEX idx_reuse_events_pack_surface ON reuse_events(pack, surface);
 CREATE INDEX idx_reuse_events_object       ON reuse_events(pack, object_id);
 CREATE INDEX idx_reuse_events_ts           ON reuse_events(ts);
+
+CREATE TABLE community_crystals (
+  pack TEXT NOT NULL,
+  cluster_id TEXT NOT NULL,
+  body_md TEXT NOT NULL,
+  source_evergreen_slugs_json TEXT NOT NULL,
+  synthesized_at TEXT NOT NULL,
+  llm_model TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  PRIMARY KEY (pack, cluster_id, synthesized_at)
+);
+
+CREATE INDEX idx_community_crystals_pack_cluster
+  ON community_crystals(pack, cluster_id);
 """
 
 CONTRADICTION_HEURISTIC_NOTE = (
