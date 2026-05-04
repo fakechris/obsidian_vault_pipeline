@@ -138,13 +138,20 @@ class EntityStore:
         doesn't exist yet (fresh vault) — read paths treat that as
         "no entities" rather than "create the schema for me".
         """
-        if not Path(self.db_path).exists():
+        path = Path(self.db_path)
+        if not path.exists():
+            return None
+        # ``Path.as_uri()`` is required for cross-platform safety:
+        # raw f-strings would break on Windows backslashes and on
+        # paths with spaces or '#' chars.  ``as_uri()`` requires the
+        # path be absolute, so resolve first — relative paths come
+        # in legitimately when callers use ``Path("knowledge.db")``.
+        try:
+            uri = f"{path.resolve().as_uri()}?mode=ro"
+        except ValueError:
             return None
         try:
-            conn = sqlite3.connect(
-                f"file:{self.db_path}?mode=ro",
-                uri=True,
-            )
+            conn = sqlite3.connect(uri, uri=True)
         except sqlite3.OperationalError:
             return None
         conn.row_factory = sqlite3.Row
@@ -186,6 +193,12 @@ class EntityStore:
         """
         if not Path(self.db_path).exists():
             return False
+        # ``delete`` is a write path: ensure the schema exists before
+        # trying to query the entities table.  Without this an
+        # existing-but-unitialized DB file (e.g., touched by some
+        # other tool, or partially-written) would raise
+        # OperationalError on the SELECT below.
+        init_schema(self.db_path)
         conn = sqlite3.connect(self.db_path)
         try:
             row = conn.execute(

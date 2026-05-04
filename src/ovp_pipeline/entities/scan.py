@@ -49,8 +49,13 @@ _GH_REPO_RE = re.compile(
 # segment after.  Catches profile-only mentions that the repo regex
 # misses (e.g. ``Visit https://github.com/karpathy``), which would
 # otherwise be invisible to backfill_github's user pass.
+# Note: the terminator class includes ``.,`` — sentence delimiters
+# would otherwise prevent a match at end-of-clause prose like
+# ``Visit github.com/karpathy.`` or ``..., github.com/karpathy,``.
+# Crucially the class still excludes ``/`` so we don't overlap with
+# the owner/repo regex.
 _GH_OWNER_RE = re.compile(
-    r"github\.com/([\w.-]+)(?=[?#)\]\s\"'`>]|$)",
+    r"github\.com/([\w.-]+?)(?=[?#)\],.\s\"'`>]|$)",
     re.IGNORECASE,
 )
 
@@ -163,10 +168,7 @@ def scan_github_mentions(vault_dir: Path) -> list[GitHubMention]:
 
     for path, text in _iter_relevant_files(vault_dir, ("github.com",)):
         seen_repos_in_file: set[tuple[str, str]] = set()
-        # First pass: owner/repo URLs.  We track which owners already
-        # got a repo hit on this page so the profile-only regex below
-        # doesn't double-count them.
-        owners_with_repo: set[str] = set()
+        # First pass: owner/repo URLs.
         for m in _GH_REPO_RE.finditer(text):
             owner = m.group(1).lower()
             if owner in _GH_NON_REPO_OWNERS:
@@ -176,7 +178,6 @@ def scan_github_mentions(vault_dir: Path) -> list[GitHubMention]:
                 repo = repo[:-4]
             repo_total[(owner, repo)] += 1
             seen_repos_in_file.add((owner, repo))
-            owners_with_repo.add(owner)
         for key in seen_repos_in_file:
             repo_files.setdefault(key, set()).add(path)
 

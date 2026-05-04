@@ -8,6 +8,7 @@ invariant exists.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -322,6 +323,106 @@ excluded_hosts:
         assert sig is not None
         assert sig.value == 0.45
         assert sig.raw["excluded"] is True
+
+
+class TestScanGithubOwnerEndOfSentence:
+    """Issue: ``_GH_OWNER_RE`` lookahead missed sentence delimiters
+    (``.`` and ``,``), so a profile URL at end-of-clause prose
+    (``Visit github.com/karpathy.``) silently captured the trailing
+    period as part of the owner.  Fix: terminator class now includes
+    them, and the capture is non-greedy so it backtracks off the
+    delimiter.
+    """
+
+    def test_trailing_period_does_not_attach_to_owner(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text(
+            "Visit https://github.com/karpathy. Or follow him on X.",
+            encoding="utf-8",
+        )
+        result = scan_github_mentions(tmp_path)
+        owner_only = [m for m in result if m.repo is None]
+        owners = {m.owner for m in owner_only}
+        assert "karpathy" in owners
+        # The bug was capturing "karpathy." (with period).  Make sure
+        # the period is gone from the captured owner.
+        assert "karpathy." not in owners
+
+    def test_trailing_comma_does_not_attach_to_owner(self, tmp_path):
+        f = tmp_path / "note.md"
+        f.write_text(
+            "See https://github.com/karpathy, then https://github.com/dotey.",
+            encoding="utf-8",
+        )
+        result = scan_github_mentions(tmp_path)
+        owners = {m.owner for m in result if m.repo is None}
+        assert "karpathy" in owners
+        assert "dotey" in owners
+
+    def test_owner_regex_does_not_match_repo_urls(self, tmp_path):
+        # The repo URL must NEVER be picked up by the owner-only
+        # regex; otherwise we'd double-count owners that already have
+        # a repo mention on the same page.
+        f = tmp_path / "note.md"
+        f.write_text(
+            "Just https://github.com/karpathy/nanoGPT here, no profile URL.",
+            encoding="utf-8",
+        )
+        result = scan_github_mentions(tmp_path)
+        owner_only = [m for m in result if m.repo is None]
+        # No bare profile URL on this page → no owner-only mention.
+        assert owner_only == []
+
+
+class TestStoreDeleteSchemaSafe:
+    """Issue: ``delete`` was a write path that didn't call
+    ``init_schema``, contradicting the class docstring's "all writes
+    init the schema" contract.  An existing-but-uninitialized DB
+    file (touched by another tool, or partially written) would raise
+    OperationalError.  Fix: call init_schema at the top of delete.
+    """
+
+    def test_delete_on_empty_db_does_not_raise(self, tmp_path):
+        db = tmp_path / "exists-but-empty.db"
+        # Create the file with NO schema (e.g., another tool did this).
+        db.touch()
+        store = EntityStore(db_path=db)
+        # Pre-fix this raised sqlite3.OperationalError ("no such table").
+        # Post-fix it returns False cleanly.
+        assert store.delete("twitter_author", "x") is False
+
+
+class TestStoreReadOnlyURIIsPlatformSafe:
+    """Issue: hardcoded ``f"file:{path}?mode=ro"`` URI breaks on paths
+    with spaces, ``#``, or Windows backslashes.  Fix: use
+    ``Path.as_uri()`` for proper URL-encoding + absolute-path safety.
+    """
+
+    def test_path_with_spaces(self, tmp_path):
+        # Create a path with a space — a common case on macOS.
+        weird = tmp_path / "vault with spaces" / "knowledge.db"
+        store = EntityStore(db_path=weird)
+        # First write to create the DB at this weird path.
+        store.upsert(
+            entity_type="twitter_author", identity_key="x",
+            canonical_name="X", signals={}, derived_authority=0.5,
+            fetch_source="t",
+        )
+        # Read must not crash on the URI quoting of the space.
+        assert store.get("twitter_author", "x") is not None
+
+    def test_relative_path_resolved(self, tmp_path, monkeypatch):
+        # If a caller constructs Path("knowledge.db") (relative), the
+        # store must resolve it before generating the URI.
+        monkeypatch.chdir(tmp_path)
+        store = EntityStore(db_path=Path("knowledge.db"))
+        store.upsert(
+            entity_type="twitter_author", identity_key="rel",
+            canonical_name="Rel", signals={}, derived_authority=0.5,
+            fetch_source="t",
+        )
+        # Read via the relative path should still work.
+        assert store.get("twitter_author", "rel") is not None
 
 
 class TestScanGithubOwnerOnly:
