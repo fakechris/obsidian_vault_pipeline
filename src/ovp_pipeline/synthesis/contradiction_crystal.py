@@ -337,6 +337,7 @@ def synthesize_contradiction_crystals(
     pack_name: str = "research-tech",
     only_contradiction_ids: set[str] | None = None,
     limit: int | None = None,
+    skip_existing: bool = False,
     dry_run: bool = False,
     llm_model_label: str = "anthropic/MiniMax-M2.7-highspeed",
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -349,6 +350,11 @@ def synthesize_contradiction_crystals(
     targeted objects subset, then reuses the same connection for
     per-row INSERTs (committed individually for incremental
     durability on long batches).
+
+    ``skip_existing=True`` skips contradictions that already have at
+    least one row in ``contradiction_crystals``.  Designed for
+    resuming a long batch after interruption — see the matching
+    note in ``community_crystal.synthesize_community_crystals``.
     """
     crystal_dir = (vault_dir / CRYSTAL_DIR_REL).resolve()
     if not dry_run:
@@ -361,6 +367,18 @@ def synthesize_contradiction_crystals(
             only_contradiction_ids=only_contradiction_ids,
             limit=limit,
         )
+
+        if skip_existing:
+            existing = {
+                row[0] for row in conn.execute(
+                    "SELECT DISTINCT contradiction_id "
+                    "FROM contradiction_crystals WHERE pack = ?",
+                    (pack_name,),
+                )
+            }
+            contradictions = [
+                c for c in contradictions if c[0] not in existing
+            ]
 
         # Decode every contradiction's claim IDs up front so we can
         # batch the claims + objects lookups.  Skipping malformed

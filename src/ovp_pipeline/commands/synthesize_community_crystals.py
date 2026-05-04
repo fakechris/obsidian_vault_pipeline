@@ -54,6 +54,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Synthesize only the named cluster_id(s).  Can be repeated.",
     )
     parser.add_argument(
+        "--skip-existing", action="store_true",
+        help="Skip communities that already have at least one row in "
+             "the community_crystals table.  Use to resume a long "
+             "batch after interruption without re-paying LLM cost on "
+             "already-completed crystals.",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Run the LLM and report what would be written, "
              "but skip the markdown + DB writes.",
@@ -96,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         limit_communities=args.limit_communities,
         only_cluster_ids=only,
+        skip_existing=args.skip_existing,
         dry_run=args.dry_run,
     )
 
