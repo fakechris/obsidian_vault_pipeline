@@ -200,6 +200,7 @@ SQLITE_ALLOWED_MODULES = {
     "relation_promotion",
     "reuse_emitter",
     "synthesis/community_crystal",
+    "synthesis/contradiction_crystal",
     "ui/view_models",
 }
 

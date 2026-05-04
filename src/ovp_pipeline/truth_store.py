@@ -174,6 +174,23 @@ CREATE TABLE community_crystals (
 
 CREATE INDEX idx_community_crystals_pack_cluster
   ON community_crystals(pack, cluster_id);
+
+CREATE TABLE contradiction_crystals (
+  pack TEXT NOT NULL,
+  contradiction_id TEXT NOT NULL,
+  subject_key TEXT NOT NULL,
+  body_md TEXT NOT NULL,
+  positive_claim_ids_json TEXT NOT NULL,
+  negative_claim_ids_json TEXT NOT NULL,
+  source_object_ids_json TEXT NOT NULL,
+  synthesized_at TEXT NOT NULL,
+  llm_model TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  PRIMARY KEY (pack, contradiction_id, synthesized_at)
+);
+
+CREATE INDEX idx_contradiction_crystals_pack_id
+  ON contradiction_crystals(pack, contradiction_id);
 """
 
 CONTRADICTION_HEURISTIC_NOTE = (
