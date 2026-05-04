@@ -371,6 +371,125 @@ class TestBuildAliasIndex:
 # ---------------------------------------------------------------------------
 
 
+class TestCanonicalSlugSafety:
+    """The canonical_handle becomes both a markdown filename
+    (``10-Knowledge/Entity/<handle>.md``) and a wikilink target
+    (``[[<handle>]]``).  An attacker-controlled or malformed
+    authors.jsonl could otherwise inject path-traversal or break
+    wikilink syntax.  ``collect_entity_aliases`` filters out
+    unsafe handles at the boundary."""
+
+    def test_drops_path_traversal_canonical(self, tmp_path):
+        jsonl = tmp_path / "60-Logs" / "authors.jsonl"
+        _write_jsonl(
+            jsonl,
+            {"handle": "../../../etc/passwd", "authority": 0.9},
+            {"handle": "karpathy", "authority": 0.95},
+        )
+        out = collect_entity_aliases(
+            vault_dir=tmp_path,
+            entity_store=EntityStore(
+                db_path=tmp_path / "60-Logs" / "knowledge.db",
+            ),
+            authors_jsonl=jsonl,
+            author_overrides_yaml=tmp_path / "missing.yaml",
+        )
+        canonicals = {a.canonical_handle for a in out}
+        assert "karpathy" in canonicals
+        # The malicious handle is gone — would have escaped the
+        # entity stub directory if used as `<canonical>.md`.
+        assert "../../../etc/passwd" not in canonicals
+
+    def test_drops_wikilink_breaking_chars(self, tmp_path):
+        # `|`, `[`, `]`, `#`, `/` would break wikilink rendering
+        # (`[[handle]]`) or yield ambiguous filenames.
+        jsonl = tmp_path / "60-Logs" / "authors.jsonl"
+        _write_jsonl(
+            jsonl,
+            {"handle": "evil|alias"},
+            {"handle": "evil[name]"},
+            {"handle": "ev/il"},
+            {"handle": "evil#anchor"},
+            {"handle": "valid_one"},
+        )
+        out = collect_entity_aliases(
+            vault_dir=tmp_path,
+            entity_store=EntityStore(
+                db_path=tmp_path / "60-Logs" / "knowledge.db",
+            ),
+            authors_jsonl=jsonl,
+            author_overrides_yaml=tmp_path / "missing.yaml",
+        )
+        canonicals = {a.canonical_handle for a in out}
+        assert canonicals == {"valid_one"}
+
+    def test_accepts_real_world_handle_shapes(self, tmp_path):
+        # Twitter handles are alnum + underscore; github logins can
+        # carry hyphens; curated whitelist allows '.' (e.g.
+        # ``simon.willison``).  All must pass.
+        jsonl = tmp_path / "60-Logs" / "authors.jsonl"
+        _write_jsonl(
+            jsonl,
+            {"handle": "karpathy"},
+            {"handle": "op7418"},
+            {"handle": "simon-willison"},
+            {"handle": "simon.willison"},
+            {"handle": "user_name"},
+        )
+        out = collect_entity_aliases(
+            vault_dir=tmp_path,
+            entity_store=EntityStore(
+                db_path=tmp_path / "60-Logs" / "knowledge.db",
+            ),
+            authors_jsonl=jsonl,
+            author_overrides_yaml=tmp_path / "missing.yaml",
+        )
+        canonicals = {a.canonical_handle for a in out}
+        assert {"karpathy", "op7418", "simon-willison",
+                "simon.willison", "user_name"} <= canonicals
+
+
+class TestBuildAliasIndexCollisionLogging:
+    """The ambiguity warning must fire whenever two sources disagree
+    on canonical_handle for the same alias, regardless of which row
+    wins.  Pre-fix the warning only fired on replacement — a curated
+    JSONL handle that beat a conflicting entity row was silently
+    accepted, hiding the conflict from operators."""
+
+    def test_logs_when_winner_already_set(self, tmp_path, caplog):
+        import logging
+
+        # Order matters: a higher-precedence row is added FIRST so the
+        # later (lower-precedence) row never replaces it.  Pre-fix
+        # the warning was inside the replacement branch and never
+        # fired in this scenario.
+        from ovp_pipeline.entities.aliases import EntityAlias
+
+        rows = [
+            EntityAlias(
+                canonical_handle="winner",
+                canonical_entity_type="whitelist",
+                alias="shared", alias_kind=KIND_PRIMARY,
+                authority=0.9, source=SOURCE_WHITELIST_YAML,
+            ),
+            EntityAlias(
+                canonical_handle="loser",
+                canonical_entity_type="twitter_author",
+                alias="shared", alias_kind=KIND_PRIMARY,
+                authority=0.8, source=SOURCE_ENTITY_TWITTER,
+            ),
+        ]
+        with caplog.at_level(logging.WARNING,
+                             logger="ovp_pipeline.entities.aliases"):
+            index = build_alias_index(rows)
+        # Winner (yaml) is kept.
+        assert index["shared"].canonical_handle == "winner"
+        # Warning fired once with both sides + the winner identified.
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("ambiguously" in m and "winner" in m and "loser" in m
+                   for m in msgs)
+
+
 class TestEndToEnd:
     def test_full_union_includes_all_four_sources(self, tmp_path):
         # JSONL

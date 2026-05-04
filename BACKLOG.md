@@ -30,10 +30,10 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M9 Pack As Domain Ontology | Next | pack-defined object kind specs, typed relation constraints, schema registry, domain-specific extraction profiles |
 | M10 Operational Knowledge Layer | Later | action types on objects, permission + contract, cross-entity aggregation, decision memory |
 | M11 Source Authority And Cross-Source Identity | Done | typed source-authority providers, entity layer, runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
-| M12 Extraction-Time Entity Prime And Auto-Wikilink | Next | entity_aliases view, LLM extractor primed with known entities, automatic wikilink generation (BL-038/039/040) |
+| M12 Extraction-Time Entity Prime And Auto-Wikilink | Done | entity_aliases view, LLM extractor primed with known entities, auto-wikilink CLI (BL-038/039/040, PRs #126–#128) |
 | M13 Synthesis Layer (Crystal) | Next | Louvain communities + LLM-synthesized crystals + contradiction crystals + append-only versioning (BL-041/042/043/044) |
 
-## Recently Shipped (PRs #98–#124)
+## Recently Shipped (PRs #98–#128)
 
 | PR | What shipped |
 | --- | --- |
@@ -55,6 +55,9 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | #122 | `ovp-refresh-source-authority` chained entity refresh + launchd plist (PR-E5) |
 | #123 | `person` → `person + organization` split (PR-F1) — 54 → 37 person + 17 organization on real vault |
 | #124 | 12 entity-layer review fixes: read-side write side effects, identity merge backlinks, lock-steal race, append-only history, excluded-host signal, GitHub bare profile URLs, source_coverage entity-aware unknowns, score_sources --domains-only honors overrides |
+| #126 | `entity_aliases` view + `ovp-entity-aliases` CLI (BL-038, M12): unified read surface across authors.jsonl, author_overrides.yaml, entities table, github_user back-link |
+| #127 | Extraction-time entity prime in `auto_evergreen_extractor` (BL-039, M12): top-N canonicals injected into LLM user prompt so name variants collapse to one handle |
+| #128 | `ovp-link-entities` auto-wikilink CLI (BL-040, M12): scans evergreen prose, inserts `[[canonical_handle]]`, generates `10-Knowledge/Entity/<handle>.md` stubs; PreparedMatcher for batch reuse |
 
 ## Active Backlog
 
@@ -81,9 +84,9 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-035 | P1 | Later | Action types on objects: typed operations (review, decide, verify) with preconditions, postconditions, audit trail | M10 |
 | BL-036 | P2 | Later | Cross-entity aggregation: typed-mention index, property aggregation by kind | M10 |
 | BL-037 | P1 | Next | Body-level semantic dedup: use page_embeddings cosine similarity to detect paraphrastic clones (same concept, different slug names); slug-trigram-Jaccard cannot reach these | M5b, OVP_FIX_PLAN |
-| BL-038 | P0 | Next | entity_aliases view: union of `(canonical_handle, alias)` pairs from authors.jsonl + author_overrides.yaml + entities.{twitter_author,person,organization,github_user}.signals.aliases. Single read surface for the next two items. | M12 |
-| BL-039 | P0 | Next | Extraction-time entity prime: feed top-N entity_aliases entries into the auto_evergreen_extractor system prompt; LLM is told "if you see these, use the canonical handle, don't invent a new one". Resolves Karpathy / Andrej / @karpathy / 安德烈 → one entity. | M12 |
-| BL-040 | P1 | Next | Auto-wikilink: scan evergreen body for entity_aliases hits; auto-insert `[[canonical_handle]]` wikilinks; generate `10-Knowledge/Entity/<handle>.md` stubs for canonical entities that don't have a markdown page yet. | M12 |
+| BL-038 | P0 | Done | entity_aliases view + `ovp-entity-aliases` CLI (PR #126). Single read surface for BL-039/040. | M12 |
+| BL-039 | P0 | Done | Extraction-time entity prime in `auto_evergreen_extractor` (PR #127). Top-N entity_aliases injected into the LLM user prompt so name variants resolve to one canonical handle. | M12 |
+| BL-040 | P1 | Done | `ovp-link-entities` auto-wikilink CLI (PR #128). Walks `10-Knowledge/Evergreen/`, replaces alias hits with `[[canonical_handle]]`, generates `10-Knowledge/Entity/<handle>.md` stubs. | M12 |
 | BL-041 | P1 | Next | Louvain community detection over `relations` graph — replaces (or augments) the current 312 mechanical `graph_clusters` with semantically-meaningful communities. Closes the gap with NM 0.8's 41 communities. | M13 |
 | BL-042 | P0 | Next | Crystal MVP — for each Louvain community: pick top-K evergreens by authority, LLM-synthesize a single crystal markdown (frontmatter + body) into `40-Resources/Crystals/<community>.md`, persist lineage in a `crystals` table (community_id, source_evergreen_slugs, synthesized_at, llm_model, prompt_version). MiniMax-M2.7-highspeed for cost. | M13 |
 | BL-043 | P1 | Next | Contradiction crystals — for every cluster of evergreens flagged in the existing `contradictions` table, synthesize an "open question" crystal that lays out the X-vs-Y positions explicitly. Cheap LLM cost; very high signal. | M13 |

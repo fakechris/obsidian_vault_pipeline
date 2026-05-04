@@ -42,6 +42,7 @@ display names like ``歸藏`` and ``姚金刚`` round-trip cleanly.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +54,8 @@ from .aliases import (
     KIND_PRIMARY,
     EntityAlias,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Which alias_kinds are safe to auto-link.  ``KIND_DISPLAY_NAME`` is
@@ -148,18 +151,29 @@ def _is_in_skip(pos: int, skip: list[tuple[int, int]]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _is_ascii(s: str) -> bool:
+    return all(ord(c) < 128 for c in s)
+
+
 def build_alias_pattern(alias_index: dict[str, EntityAlias]) -> re.Pattern[str]:
     """Compile a single regex covering every alias.
 
     Sorted longest-first so the regex engine's left-to-right
     alternation prefers the most specific match.  Word-boundary
-    behavior:
+    behaviour is split by alias script:
 
-      * left side — must NOT be preceded by a word character or ``@``
-        (so ``foo@karpathy`` doesn't match ``karpathy``, but
-        ``@karpathy`` standalone does)
-      * right side — must NOT be followed by a word character (so
-        ``karpathys`` doesn't match ``karpathy``)
+      * **ASCII aliases** — Unicode-aware ``\\w`` boundary on both sides.
+        ``foo@karpathy`` doesn't match ``karpathy`` (left side is
+        a word char), ``karpathys`` doesn't match ``karpathy``
+        (right side is a word char).
+
+      * **CJK / non-ASCII aliases** — ASCII-only boundary on both
+        sides.  Python's ``\\w`` treats CJK letters as word chars,
+        which would block the common case of CJK prose where the
+        alias has no whitespace neighbours (``我觉得歸藏写过这个``
+        — ``得`` is ``\\w``, so ``(?<!\\w)`` would fail).  The
+        ASCII-only boundary still rejects ``karpathy歸藏`` (``y``
+        is ASCII alpha) but accepts the natural CJK case.
 
     Returns a sentinel regex that never matches (alternation of
     nothing) when the index is empty.
@@ -167,11 +181,22 @@ def build_alias_pattern(alias_index: dict[str, EntityAlias]) -> re.Pattern[str]:
     if not alias_index:
         return re.compile(r"(?!x)x")        # never matches
     parts = sorted(alias_index.keys(), key=len, reverse=True)
-    escaped = [re.escape(p) for p in parts]
-    pattern = (
-        r"(?<![\w@])(?:" + "|".join(escaped) + r")(?!\w)"
-    )
-    return re.compile(pattern, re.IGNORECASE)
+    ascii_parts = [p for p in parts if _is_ascii(p)]
+    cjk_parts = [p for p in parts if not _is_ascii(p)]
+    branches: list[str] = []
+    if ascii_parts:
+        branches.append(
+            r"(?<![\w@])(?:"
+            + "|".join(re.escape(p) for p in ascii_parts)
+            + r")(?!\w)"
+        )
+    if cjk_parts:
+        branches.append(
+            r"(?<![A-Za-z0-9_@])(?:"
+            + "|".join(re.escape(p) for p in cjk_parts)
+            + r")(?![A-Za-z0-9_])"
+        )
+    return re.compile("|".join(branches), re.IGNORECASE)
 
 
 def _normalize_for_lookup(matched: str) -> str:
@@ -368,9 +393,25 @@ def ensure_entity_stub_files(
     entity_dir = vault_dir / _ENTITY_STUB_DIR
     if not dry_run:
         entity_dir.mkdir(parents=True, exist_ok=True)
+    # Resolve once for the path-escape guard below.  ``parents=True``
+    # makes mkdir succeed even if the dir already exists; resolve()
+    # on a missing dir works on every platform we ship to.
+    entity_dir_resolved = entity_dir.resolve()
     created: list[Path] = []
     for canonical, alias in canonicals.items():
         path = entity_dir / f"{canonical}.md"
+        # Defense in depth: collect_entity_aliases already filters
+        # canonical_handle through a slug allowlist, but if a future
+        # caller wires this function up with a different source we
+        # still refuse to write outside the entity stub directory.
+        try:
+            path.resolve().relative_to(entity_dir_resolved)
+        except ValueError:
+            logger.warning(
+                "refusing to write entity stub outside %s: canonical=%r",
+                entity_dir_resolved, canonical,
+            )
+            continue
         if path.exists():
             continue
         created.append(path)

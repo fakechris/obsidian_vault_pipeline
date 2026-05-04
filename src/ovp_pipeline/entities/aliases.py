@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,6 +74,24 @@ _LOG_TRUNCATION_CHARS = 80
 # Fallback precedence rank when a source label isn't in the table.
 # Higher than every real entry so unknown sources lose ties cleanly.
 _FALLBACK_PRECEDENCE = 99
+
+# Allowlist for canonical_handle.  The handle is used as a markdown
+# filename (`10-Knowledge/Entity/<handle>.md`) AND as a wikilink
+# target (`[[<handle>]]`), so it must be safe in both contexts.
+# Reject anything that could escape the entity stub directory or
+# break wikilink syntax: `/`, `\`, `..`, `|`, `[`, `]`, `#`, whitespace.
+# Real handles (twitter / github / curated whitelist) all fit this
+# pattern; rejecting outliers is a feature, not a regression.
+_CANONICAL_SLUG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+_CANONICAL_SLUG_MAX_LEN = 64
+
+
+def _is_safe_canonical_slug(s: str) -> bool:
+    if not s or len(s) > _CANONICAL_SLUG_MAX_LEN:
+        return False
+    if ".." in s:
+        return False
+    return bool(_CANONICAL_SLUG_RE.match(s))
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,7 +384,24 @@ def collect_entity_aliases(
     out.extend(_load_jsonl_whitelist(authors_jsonl))
     out.extend(_load_yaml_overrides(author_overrides_yaml))
     out.extend(_load_entities(entity_store))
-    return out
+
+    # Drop rows whose canonical_handle would be unsafe to use as a
+    # filename or wikilink target.  We log dropped handles once each
+    # so an operator with a malformed authors.jsonl can spot it.
+    safe: list[EntityAlias] = []
+    rejected_handles: set[str] = set()
+    for row in out:
+        if _is_safe_canonical_slug(row.canonical_handle):
+            safe.append(row)
+            continue
+        if row.canonical_handle not in rejected_handles:
+            logger.warning(
+                "rejecting canonical_handle %r from %s: not a safe "
+                "filename/wikilink slug",
+                row.canonical_handle, row.source,
+            )
+            rejected_handles.add(row.canonical_handle)
+    return safe
 
 
 # Precedence for collision resolution: lower number = higher priority.
@@ -408,15 +444,20 @@ def build_alias_index(aliases: list[EntityAlias]) -> dict[str, EntityAlias]:
         if existing is None:
             by_alias[a.alias] = a
             continue
+        # Log every divergent canonical, regardless of which row wins.
+        # Pre-fix the warning only fired on replacement — a curated
+        # JSONL handle that beat a conflicting entity row was
+        # silently accepted, hiding a real ambiguity from operators.
+        if a.canonical_handle != existing.canonical_handle:
+            winner = a if _precedence(a) < _precedence(existing) else existing
+            logger.warning(
+                "alias %r resolves ambiguously: %s (%s, auth=%s) vs "
+                "%s (%s, auth=%s) — using %s",
+                a.alias,
+                a.canonical_handle, a.source, a.authority,
+                existing.canonical_handle, existing.source, existing.authority,
+                winner.canonical_handle,
+            )
         if _precedence(a) < _precedence(existing):
-            if a.canonical_handle != existing.canonical_handle:
-                logger.warning(
-                    "alias %r resolves ambiguously: %s (%s, auth=%s) vs "
-                    "%s (%s, auth=%s) — using %s",
-                    a.alias,
-                    a.canonical_handle, a.source, a.authority,
-                    existing.canonical_handle, existing.source, existing.authority,
-                    a.canonical_handle,
-                )
             by_alias[a.alias] = a
     return by_alias
