@@ -70,36 +70,25 @@ def _list_contradiction_chains(
     return [(r[0], r[1], r[2], r[3]) for r in rows]
 
 
-def _list_community_versions(
-    conn: sqlite3.Connection, pack: str, cluster_id: str,
-) -> list[tuple[str, str]]:
-    """Return ``[(synthesized_at, superseded_by_synthesized_at), ...]``
-    in chronological order."""
-    rows = conn.execute(
-        """
-        SELECT synthesized_at, superseded_by_synthesized_at
-          FROM community_crystals
-         WHERE pack = ? AND cluster_id = ?
-         ORDER BY synthesized_at
-        """,
-        (pack, cluster_id),
-    ).fetchall()
-    return [(r[0], r[1]) for r in rows]
+def _bulk_versions(
+    conn: sqlite3.Connection, *, table: str, key_column: str, pack: str,
+) -> dict[str, list[tuple[str, str]]]:
+    """One query for ALL chains' versions in a kind.
 
-
-def _list_contradiction_versions(
-    conn: sqlite3.Connection, pack: str, contradiction_id: str,
-) -> list[tuple[str, str]]:
-    rows = conn.execute(
-        """
-        SELECT synthesized_at, superseded_by_synthesized_at
-          FROM contradiction_crystals
-         WHERE pack = ? AND contradiction_id = ?
-         ORDER BY synthesized_at
-        """,
-        (pack, contradiction_id),
-    ).fetchall()
-    return [(r[0], r[1]) for r in rows]
+    Returns ``{chain_id: [(synthesized_at, superseded_by), ...]}``
+    with each chain's list in chronological order.  Replaces the
+    pre-fix per-chain query loop (N+1 against a 300-chain vault).
+    """
+    sql = (
+        f"SELECT {key_column}, synthesized_at, superseded_by_synthesized_at"
+        f" FROM {table}"
+        f" WHERE pack = ?"
+        f" ORDER BY {key_column}, synthesized_at"
+    )
+    out: dict[str, list[tuple[str, str]]] = {}
+    for chain_id, synth_at, super_at in conn.execute(sql, (pack,)):
+        out.setdefault(chain_id, []).append((synth_at, super_at))
+    return out
 
 
 def _print_chains(
@@ -175,38 +164,60 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    # Two crystal kinds, same listing shape — config drives the
+    # iteration so the print/fetch logic isn't duplicated.
+    kind_specs = [
+        {
+            "kind": _KIND_COMMUNITY,
+            "title": f"Community crystals ({args.pack})",
+            "table": "community_crystals",
+            "key_column": "cluster_id",
+            "id_col_name": "cluster_id",
+            "label_col_name": "label",
+            "version_title": "cluster",
+            "list_chains": _list_community_chains,
+        },
+        {
+            "kind": _KIND_CONTRADICTION,
+            "title": f"Contradiction crystals ({args.pack})",
+            "table": "contradiction_crystals",
+            "key_column": "contradiction_id",
+            "id_col_name": "contradiction_id",
+            "label_col_name": "subject_key",
+            "version_title": "contradiction",
+            "list_chains": _list_contradiction_chains,
+        },
+    ]
+
     conn = sqlite3.connect(layout.knowledge_db)
     try:
-        if args.kind in (_KIND_COMMUNITY, _KIND_ALL):
-            chains = _list_community_chains(conn, args.pack)
+        for spec in kind_specs:
+            if args.kind not in (spec["kind"], _KIND_ALL):
+                continue
+            chains = spec["list_chains"](conn, args.pack)
             _print_chains(
-                title=f"Community crystals ({args.pack})",
-                id_col_name="cluster_id",
-                label_col_name="label",
+                title=spec["title"],
+                id_col_name=spec["id_col_name"],
+                label_col_name=spec["label_col_name"],
                 chains=chains,
             )
-            if args.show_chain:
+            if args.show_chain and chains:
+                # One bulk query for ALL chains in this kind, grouped
+                # in Python.  Pre-fix this loop fired one query per
+                # chain (N+1 against a 300-chain vault).
+                versions_by_id = _bulk_versions(
+                    conn,
+                    table=spec["table"],
+                    key_column=spec["key_column"],
+                    pack=args.pack,
+                )
                 for cid, _label, _n, _latest in chains:
-                    versions = _list_community_versions(conn, args.pack, cid)
-                    _print_versions(title="cluster", chain_id=cid,
-                                    versions=versions)
-                if chains:
-                    print()
-        if args.kind in (_KIND_CONTRADICTION, _KIND_ALL):
-            chains = _list_contradiction_chains(conn, args.pack)
-            _print_chains(
-                title=f"Contradiction crystals ({args.pack})",
-                id_col_name="contradiction_id",
-                label_col_name="subject_key",
-                chains=chains,
-            )
-            if args.show_chain:
-                for cid, _label, _n, _latest in chains:
-                    versions = _list_contradiction_versions(conn, args.pack, cid)
-                    _print_versions(title="contradiction", chain_id=cid,
-                                    versions=versions)
-                if chains:
-                    print()
+                    _print_versions(
+                        title=spec["version_title"],
+                        chain_id=cid,
+                        versions=versions_by_id.get(cid, []),
+                    )
+                print()
     finally:
         conn.close()
     return 0

@@ -462,6 +462,47 @@ class TestListCrystalsCli:
         # row's supersede pointer.
         assert "→ " in out
 
+    def test_bulk_versions_groups_by_chain_id(self, tmp_path):
+        # Pin the bulk-fetch invariant directly: one SELECT returns
+        # all chains' versions, grouped in Python.  Pre-fix the CLI
+        # fired one query per chain (N+1).
+        from ovp_pipeline.commands.list_crystals import _bulk_versions
+
+        vault, db = _seed_community_vault(tmp_path)
+        # Add a second cluster with one version, plus a 2-version
+        # chain on the seeded cluster.
+        llm = _CountingLLM()
+        synthesize_community_crystals(
+            vault_dir=vault, llm_client=llm, db_path=db,
+        )
+        time.sleep(1)
+        synthesize_community_crystals(
+            vault_dir=vault, llm_client=llm, db_path=db,
+        )
+        conn = sqlite3.connect(db)
+        # Seed a singleton chain on a different cluster_id.
+        conn.execute(
+            "INSERT INTO community_crystals (pack, cluster_id, body_md, "
+            "source_evergreen_slugs_json, synthesized_at, llm_model, "
+            "prompt_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("research-tech", "cluster::single", "v1", "[]",
+             "2026-05-04T10:00:00+00:00", "m", "v1"),
+        )
+        conn.commit()
+
+        out = _bulk_versions(
+            conn, table="community_crystals",
+            key_column="cluster_id", pack="research-tech",
+        )
+        conn.close()
+        # Two chains, one with 2 versions, one with 1.
+        assert set(out.keys()) == {"cluster::ver01", "cluster::single"}
+        assert len(out["cluster::ver01"]) == 2
+        assert len(out["cluster::single"]) == 1
+        # Within a chain, versions ordered chronologically.
+        ver01_synth_ats = [s for s, _ in out["cluster::ver01"]]
+        assert ver01_synth_ats == sorted(ver01_synth_ats)
+
 
 class TestContradictionCrystalVersioning:
     def test_v1_then_v2_flips_pointer_and_archives(self, tmp_path):

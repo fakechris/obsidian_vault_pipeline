@@ -21,6 +21,7 @@ focused on prompt + LLM call logic.
 from __future__ import annotations
 
 import logging
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -92,7 +93,12 @@ def supersede_and_archive_previous(
         try:
             archive_subdir.mkdir(parents=True, exist_ok=True)
             archive_path = archive_subdir / _safe_archive_filename(prior)
-            live_path.rename(archive_path)
+            # ``shutil.move`` instead of ``Path.rename`` — falls back
+            # to copy+delete when the source and destination live on
+            # different filesystems (e.g., archive symlinked to a
+            # NAS or separate volume).  ``Path.rename`` would raise
+            # ``OSError: Invalid cross-device link`` in that case.
+            shutil.move(str(live_path), str(archive_path))
         except OSError as exc:
             logger.warning(
                 "failed to archive %s → %s: %s — leaving live file in place",
