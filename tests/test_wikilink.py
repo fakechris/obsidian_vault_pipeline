@@ -289,6 +289,51 @@ class TestApplyWikilinks:
         assert "[[op7418|歸藏]]" in result.text
         assert result.n_replaced == 1
 
+    def test_cjk_alias_matches_inside_cjk_prose(self):
+        # CJK prose has no whitespace boundary — Python's ``\w`` would
+        # treat ``得`` as a word char, blocking the match.  The
+        # CJK-specific ASCII-only boundary lets these match.
+        from ovp_pipeline.entities.aliases import KIND_EXPLICIT_ALIAS
+
+        index = _build_index(
+            _alias("op7418", "op7418"),
+            _alias("op7418", "歸藏", kind=KIND_EXPLICIT_ALIAS),
+        )
+        # No whitespace before or after the alias.
+        r1 = apply_wikilinks("我觉得歸藏写过这个", index)
+        assert "[[op7418|歸藏]]" in r1.text
+        # Surrounded by other CJK chars.
+        r2 = apply_wikilinks("看到歸藏的文章", index)
+        assert "[[op7418|歸藏]]" in r2.text
+
+    def test_cjk_alias_blocked_by_ascii_word_char(self):
+        # A CJK alias next to an ASCII letter is still rejected — the
+        # ``user歸藏`` case is almost certainly NOT a mention of the
+        # entity.  The CJK boundary uses ASCII-only word chars on
+        # both sides for exactly this reason.
+        from ovp_pipeline.entities.aliases import KIND_EXPLICIT_ALIAS
+
+        index = _build_index(
+            _alias("op7418", "歸藏", kind=KIND_EXPLICIT_ALIAS),
+        )
+        result = apply_wikilinks("user歸藏 inline", index)
+        assert "[[" not in result.text
+        assert result.n_replaced == 0
+
+    def test_ascii_alias_still_blocks_plural(self):
+        # The CJK split must NOT regress the ASCII boundary — adding
+        # any CJK alias to the index shouldn't relax the ASCII rule.
+        from ovp_pipeline.entities.aliases import KIND_EXPLICIT_ALIAS
+
+        index = _build_index(
+            _alias("karpathy", "karpathy"),
+            _alias("op7418", "歸藏", kind=KIND_EXPLICIT_ALIAS),
+        )
+        # ``karpathys`` must NOT match ``karpathy``; both branches
+        # of the new alternation must compose correctly.
+        result = apply_wikilinks("the karpathys talk", index)
+        assert "[[" not in result.text
+
 
 # ---------------------------------------------------------------------------
 # Stub generation
@@ -348,6 +393,24 @@ class TestEnsureEntityStubFiles:
             encoding="utf-8",
         )
         assert "authority:" not in body
+
+    def test_refuses_to_write_outside_entity_dir(self, tmp_path):
+        # Defense-in-depth: collect_entity_aliases is the primary
+        # filter, but if a future caller wires ensure_entity_stub_files
+        # up with an unfiltered dict, a path-traversal canonical must
+        # still NOT escape the entity stub directory.
+        rep = {
+            "../../../escaped": _alias(
+                "../../../escaped", "escaped",
+            ),
+            "karpathy": _alias("karpathy", "karpathy"),
+        }
+        created = ensure_entity_stub_files(tmp_path, rep)
+        # Only the safe handle was written.
+        assert len(created) == 1
+        assert created[0].name == "karpathy.md"
+        # No file was created outside the entity stub dir.
+        assert not (tmp_path.parent.parent / "escaped.md").exists()
 
 
 class TestPreparedMatcher:

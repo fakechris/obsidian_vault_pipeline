@@ -48,7 +48,7 @@ Three target tiers:
 | **M9 Pack As Domain Ontology** | **Next** | pack-defined object kind specs, typed relation constraints, schema registry, domain-specific extraction profiles |
 | **M10 Operational Knowledge Layer** | **Later** | action types on objects, permission + contract, cross-entity aggregation, decision memory |
 | **M11 Source Authority And Cross-Source Identity** | **Done** | typed source-authority providers (D1/D2/D3), entity layer (twitter_author / github_project / github_user / person / organization), runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
-| **M12 Extraction-Time Entity Prime And Auto-Wikilink** | **Next** | entity_aliases view, LLM extractor primed with known entities, automatic wikilink generation in evergreen body — closes the loop from "we know who Karpathy is" to "the next ingest run uses that knowledge" (BL-038, BL-039, BL-040) |
+| **M12 Extraction-Time Entity Prime And Auto-Wikilink** | **Done** | entity_aliases view (PR #126), LLM extractor primed with known entities (PR #127), `ovp-link-entities` auto-wikilink CLI (PR #128) — closes the loop from "we know who Karpathy is" to "the next ingest run uses that knowledge" (BL-038, BL-039, BL-040) |
 | **M13 Synthesis Layer (Crystal)** | **Next** | Louvain community detection over relations graph, LLM-synthesized crystals persisted to `40-Resources/Crystals/` with explicit lineage, contradiction crystals, append-only versioning — closes the gap with NM 0.8's synthesis tier (BL-041, BL-042, BL-043, BL-044) |
 
 ## Active Backlog Alignment
