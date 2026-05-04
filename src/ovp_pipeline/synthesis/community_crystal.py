@@ -294,6 +294,7 @@ def synthesize_community_crystals(
     top_k: int = DEFAULT_TOP_K_EVERGREENS,
     limit_communities: int | None = None,
     only_cluster_ids: set[str] | None = None,
+    skip_existing: bool = False,
     dry_run: bool = False,
     llm_model_label: str = "anthropic/MiniMax-M2.7-highspeed",
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -304,6 +305,13 @@ def synthesize_community_crystals(
     in dry-run).  Failures on a single community log a warning and
     skip — they don't sink the batch, which matters when the LLM
     occasionally times out on 1 of 30 communities.
+
+    ``skip_existing=True`` skips communities that already have at
+    least one row in ``community_crystals``.  Designed for resuming
+    a long batch after Ctrl-C / crash / network blip — re-running
+    with the flag picks up exactly where the prior run stopped
+    instead of synthesizing v2 of every already-completed crystal
+    (which would waste LLM budget).
     """
     crystal_dir = (vault_dir / CRYSTAL_DIR_REL).resolve()
     if not dry_run:
@@ -321,6 +329,21 @@ def synthesize_community_crystals(
             only_cluster_ids=only_cluster_ids,
             limit_communities=limit_communities,
         )
+
+        if skip_existing:
+            # One query for the set of cluster_ids that already have
+            # at least one row in community_crystals.  Filter the
+            # cluster list before any LLM cost is incurred.
+            existing = {
+                row[0] for row in conn.execute(
+                    "SELECT DISTINCT cluster_id FROM community_crystals "
+                    "WHERE pack = ?",
+                    (pack_name,),
+                )
+            }
+            cluster_rows = [
+                row for row in cluster_rows if row[0] not in existing
+            ]
 
         # Decode + cap members up front so we know the exact set of
         # object_ids the loop will consume.  That set drives the

@@ -48,6 +48,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Synthesize only the named contradiction_id(s).  Can be repeated.",
     )
     parser.add_argument(
+        "--skip-existing", action="store_true",
+        help="Skip contradictions that already have at least one row "
+             "in the contradiction_crystals table.  Use to resume a "
+             "long batch after interruption.",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Run the LLM and report what would be written, "
              "but skip the markdown + DB writes.",
@@ -89,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         pack_name=args.pack,
         only_contradiction_ids=only,
         limit=args.limit,
+        skip_existing=args.skip_existing,
         dry_run=args.dry_run,
     )
 

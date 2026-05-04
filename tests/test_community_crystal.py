@@ -437,6 +437,44 @@ class TestSynthesizeEndToEnd:
         # LLM was not called — we short-circuit before constructing the prompt.
         assert llm.calls == []
 
+    def test_skip_existing_resumes_without_resynthesizing(self, tmp_path):
+        # Resume invariant: a long batch interrupted halfway must
+        # be re-runnable WITHOUT paying LLM cost on the communities
+        # already done.  ``--skip-existing`` filters those out
+        # before the LLM is called.
+        vault, db = _seed_vault(
+            tmp_path,
+            clusters=[
+                ("cluster::done01", "C1", ["a"]),
+                ("cluster::done02", "C2", ["b"]),
+                ("cluster::todo01", "C3", ["c"]),
+            ],
+            objects=[
+                ("a", "A", "body a"),
+                ("b", "B", "body b"),
+                ("c", "C", "body c"),
+            ],
+        )
+        # Pre-seed two communities as "already synthesized" via the
+        # public synthesis path.
+        llm = _StubLLM()
+        synthesize_community_crystals(
+            vault_dir=vault, llm_client=llm, db_path=db,
+            only_cluster_ids={"cluster::done01", "cluster::done02"},
+        )
+        assert len(llm.calls) == 2
+
+        # Re-run with skip_existing — only the third community should
+        # incur an LLM call.
+        crystals = synthesize_community_crystals(
+            vault_dir=vault, llm_client=llm, db_path=db,
+            skip_existing=True,
+        )
+        # 1 new crystal, total LLM calls now 3 (not 5).
+        assert len(crystals) == 1
+        assert crystals[0].cluster_id == "cluster::todo01"
+        assert len(llm.calls) == 3
+
     def test_evergreen_path_outside_vault_is_skipped(self, tmp_path):
         # ``canonical_path`` comes from knowledge.db (derived state).
         # A corrupted/stale row could carry a path that escapes the

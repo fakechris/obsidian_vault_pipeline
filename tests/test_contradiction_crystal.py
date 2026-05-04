@@ -450,6 +450,39 @@ class TestSynthesizeEndToEnd:
         assert crystals == []
         assert llm.calls == []
 
+    def test_skip_existing_resumes_without_resynthesizing(self, tmp_path):
+        # Resume invariant for contradiction crystals — see the
+        # matching note in test_community_crystal.py.
+        vault, db = _seed(
+            tmp_path,
+            objects=[("a", "A", "body"), ("b", "B", "body")],
+            claims=[
+                ("a::aa", "a", "page_summary", "X"),
+                ("b::bb", "b", "page_summary", "not X"),
+            ],
+            contradictions=[
+                ("contradiction::done", "x",
+                 ["a::aa"], ["b::bb"], "open"),
+                ("contradiction::todo", "y",
+                 ["a::aa"], ["b::bb"], "open"),
+            ],
+        )
+        llm = _StubLLM()
+        synthesize_contradiction_crystals(
+            vault_dir=vault, llm_client=llm, db_path=db,
+            only_contradiction_ids={"contradiction::done"},
+        )
+        assert len(llm.calls) == 1
+
+        # Re-run with skip_existing.
+        crystals = synthesize_contradiction_crystals(
+            vault_dir=vault, llm_client=llm, db_path=db,
+            skip_existing=True,
+        )
+        assert len(crystals) == 1
+        assert crystals[0].contradiction_id == "contradiction::todo"
+        assert len(llm.calls) == 2
+
     def test_skips_when_only_one_side_resolves(self, tmp_path):
         # A contradiction is by definition two-sided.  If positives
         # resolve but negatives don't (stale claim refs), the
