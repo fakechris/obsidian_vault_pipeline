@@ -31,6 +31,14 @@ from ..entities.aliases import (
 from ..entities.store import EntityStore
 
 
+# Display caps — kept as named constants so a future tweak (or a
+# CLI flag, when one becomes necessary) can override them in one
+# place instead of grep-replacing inline magic numbers.
+_TOP_CANONICALS_DISPLAY_LIMIT = 20
+_ALIAS_SAMPLE_DISPLAY_LIMIT = 5
+_COLLISION_DISPLAY_LIMIT = 50
+
+
 def _human_summary(aliases: list[EntityAlias]) -> None:
     by_type: dict[str, int] = defaultdict(int)
     by_canonical: dict[str, list[EntityAlias]] = defaultdict(list)
@@ -46,13 +54,15 @@ def _human_summary(aliases: list[EntityAlias]) -> None:
         print(f"  {t:<22} {n:>5}")
     print()
 
-    # Top-20 canonicals by alias count — these are the entities the
+    # Top canonicals by alias count — these are the entities the
     # extraction-time prime (PR-G2) will benefit from most.
-    top = sorted(by_canonical.items(), key=lambda kv: -len(kv[1]))[:20]
-    print("top 20 canonicals by alias count:")
+    top = sorted(
+        by_canonical.items(), key=lambda kv: -len(kv[1]),
+    )[:_TOP_CANONICALS_DISPLAY_LIMIT]
+    print(f"top {_TOP_CANONICALS_DISPLAY_LIMIT} canonicals by alias count:")
     for handle, rows in top:
         kinds = sorted({r.alias_kind for r in rows})
-        sample = sorted({r.alias for r in rows})[:5]
+        sample = sorted({r.alias for r in rows})[:_ALIAS_SAMPLE_DISPLAY_LIMIT]
         print(f"  {handle:<25} {len(rows):>3} aliases  "
               f"kinds={kinds}  sample={sample}")
 
@@ -102,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
             ))
         else:
             print(f"alias collisions: {len(collisions)}")
-            for k, v in sorted(collisions.items())[:50]:
+            for k, v in sorted(collisions.items())[:_COLLISION_DISPLAY_LIMIT]:
                 pointers = sorted({
                     f"{r.canonical_handle}({r.source})" for r in v
                 })

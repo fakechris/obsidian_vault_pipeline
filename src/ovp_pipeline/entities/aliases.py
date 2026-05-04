@@ -45,7 +45,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from .store import EntityStore
+from .store import Entity, EntityStore
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,13 @@ KIND_AT_HANDLE = "at_handle"        # @karpathy form
 KIND_DISPLAY_NAME = "display_name"  # "Andrej Karpathy"
 KIND_EXPLICIT_ALIAS = "explicit_alias"  # row.aliases[i] from yaml/jsonl
 KIND_GITHUB_LOGIN = "github_login"  # github_user.identity_key
+
+# Truncation limit for malformed-line warning messages — full lines
+# can be huge JSON blobs; 80 chars is enough to identify the line.
+_LOG_TRUNCATION_CHARS = 80
+# Fallback precedence rank when a source label isn't in the table.
+# Higher than every real entry so unknown sources lose ties cleanly.
+_FALLBACK_PRECEDENCE = 99
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,52 +118,68 @@ def _load_jsonl_whitelist(path: Path) -> list[EntityAlias]:
     if not path.exists():
         return []
     out: list[EntityAlias] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError as exc:
-            logger.warning("authors.jsonl parse error on %r: %s", line[:80], exc)
-            continue
-        handle = _normalize_alias(rec.get("handle"))
-        if not handle:
-            continue
-        try:
-            authority = float(rec.get("authority")) if rec.get("authority") is not None else None
-        except (TypeError, ValueError):
-            authority = None
-        out.append(EntityAlias(
-            canonical_handle=handle,
-            canonical_entity_type="whitelist",
-            alias=handle,
-            alias_kind=KIND_PRIMARY,
-            authority=authority,
-            source=SOURCE_WHITELIST_JSONL,
-        ))
-        out.append(EntityAlias(
-            canonical_handle=handle,
-            canonical_entity_type="whitelist",
-            alias=f"@{handle}",
-            alias_kind=KIND_AT_HANDLE,
-            authority=authority,
-            source=SOURCE_WHITELIST_JSONL,
-        ))
-        for raw in (rec.get("aliases") or []):
-            if not isinstance(raw, str):
+    # Stream the file line-by-line.  Authors files can grow to a few
+    # MB on busy vaults; loading + splitlines doubles peak memory
+    # for no benefit.
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
                 continue
-            alias = _normalize_alias(raw)
-            if not alias or alias == handle:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "authors.jsonl parse error on %r: %s",
+                    line[:_LOG_TRUNCATION_CHARS], exc,
+                )
                 continue
+            handle_raw = rec.get("handle")
+            if not isinstance(handle_raw, str):
+                continue
+            handle = _normalize_alias(handle_raw)
+            if not handle:
+                continue
+            try:
+                authority = (
+                    float(rec.get("authority"))
+                    if rec.get("authority") is not None else None
+                )
+            except (TypeError, ValueError):
+                authority = None
             out.append(EntityAlias(
                 canonical_handle=handle,
                 canonical_entity_type="whitelist",
-                alias=alias,
-                alias_kind=KIND_EXPLICIT_ALIAS,
+                alias=handle,
+                alias_kind=KIND_PRIMARY,
                 authority=authority,
                 source=SOURCE_WHITELIST_JSONL,
             ))
+            out.append(EntityAlias(
+                canonical_handle=handle,
+                canonical_entity_type="whitelist",
+                alias=f"@{handle}",
+                alias_kind=KIND_AT_HANDLE,
+                authority=authority,
+                source=SOURCE_WHITELIST_JSONL,
+            ))
+            aliases_raw = rec.get("aliases")
+            if not isinstance(aliases_raw, list):
+                continue
+            for raw in aliases_raw:
+                if not isinstance(raw, str):
+                    continue
+                alias = _normalize_alias(raw)
+                if not alias or alias == handle:
+                    continue
+                out.append(EntityAlias(
+                    canonical_handle=handle,
+                    canonical_entity_type="whitelist",
+                    alias=alias,
+                    alias_kind=KIND_EXPLICIT_ALIAS,
+                    authority=authority,
+                    source=SOURCE_WHITELIST_JSONL,
+                ))
     return out
 
 
@@ -211,7 +234,7 @@ def _load_yaml_overrides(path: Path) -> list[EntityAlias]:
 
 
 def _emit_entity_aliases(
-    entity, *, source_label: str, entity_type: str,
+    entity: Entity, *, source_label: str, entity_type: str,
 ) -> list[EntityAlias]:
     """Yield EntityAlias rows for one ``entities`` table row.
 
@@ -363,7 +386,7 @@ def _precedence(alias: EntityAlias) -> tuple[int, float]:
     authority wins, so we negate it.
     """
     return (
-        _SOURCE_PRECEDENCE.get(alias.source, 99),
+        _SOURCE_PRECEDENCE.get(alias.source, _FALLBACK_PRECEDENCE),
         -(alias.authority or 0.0),
     )
 

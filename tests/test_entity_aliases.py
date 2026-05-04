@@ -99,6 +99,50 @@ class TestWhitelistJsonlSource:
         explicit_strs = {a.alias for a in explicit}
         assert explicit_strs == {"andrej", "andrej karpathy"}
 
+    def test_skips_records_with_non_string_handle(self, tmp_path):
+        # Defensive: a malformed JSONL row with handle as int / null
+        # should be silently skipped, not crash the loader.
+        jsonl = tmp_path / "60-Logs" / "authors.jsonl"
+        jsonl.parent.mkdir(parents=True)
+        jsonl.write_text(
+            '{"handle": 12345, "authority": 0.5}\n'
+            '{"handle": null, "authority": 0.5}\n'
+            '{"handle": "good", "authority": 0.9}\n',
+            encoding="utf-8",
+        )
+        store = EntityStore(db_path=tmp_path / "60-Logs" / "knowledge.db")
+        out = collect_entity_aliases(
+            vault_dir=tmp_path, entity_store=store,
+            authors_jsonl=jsonl,
+            author_overrides_yaml=tmp_path / "missing.yaml",
+        )
+        canonicals = {a.canonical_handle for a in out}
+        assert "good" in canonicals
+        # Numeric / null handles never produced canonicals.
+        assert 12345 not in canonicals
+        assert "" not in canonicals
+
+    def test_skips_aliases_when_not_a_list(self, tmp_path):
+        # Defensive: aliases field as int / dict instead of list
+        # must not raise TypeError on iteration.
+        jsonl = tmp_path / "60-Logs" / "authors.jsonl"
+        jsonl.parent.mkdir(parents=True)
+        jsonl.write_text(
+            '{"handle": "alice", "aliases": 42, "authority": 0.5}\n'
+            '{"handle": "bob", "aliases": {"name": "Bob"}, "authority": 0.5}\n',
+            encoding="utf-8",
+        )
+        store = EntityStore(db_path=tmp_path / "60-Logs" / "knowledge.db")
+        out = collect_entity_aliases(
+            vault_dir=tmp_path, entity_store=store,
+            authors_jsonl=jsonl,
+            author_overrides_yaml=tmp_path / "missing.yaml",
+        )
+        # Both records still contribute their primary + at_handle rows
+        # (aliases just got dropped).
+        canonicals = {a.canonical_handle for a in out}
+        assert {"alice", "bob"} <= canonicals
+
     def test_skips_blank_lines_and_comments(self, tmp_path):
         jsonl = tmp_path / "60-Logs" / "authors.jsonl"
         jsonl.parent.mkdir(parents=True)
