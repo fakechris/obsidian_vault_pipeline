@@ -127,11 +127,23 @@ def resolve_github_user_authority(
         return ResolveResult(None, "none", None)
 
     # Canonical-identity merge takes precedence here too — if karpathy
-    # was merged to a person entity via his twitter handle, or
-    # langchain-ai was merged to an organization entity, we want
-    # that view.  Look up via the github_user's twitter_username field.
+    # was merged to a person entity, or langchain-ai was merged to an
+    # organization entity, we want that view.
+    #
+    # Two ways to reach the canonical entity:
+    #
+    #   (a) The back-link written by ``apply_merge`` — works for ALL
+    #       merge methods (self_reported / exact_handle / fuzzy).
+    #   (b) Falling back to ``github_user.signals.twitter_username`` —
+    #       works only when the user self-reported their Twitter
+    #       handle.  Kept as a belt-and-suspenders for pre-fix data
+    #       that was migrated before the back-link writes shipped.
     gh = store.get("github_user", norm)
     if gh is not None and gh.derived_authority is not None:
+        backlink = _resolve_via_backlink(store, gh)
+        if backlink is not None:
+            return backlink
+
         tw_username = _normalize(gh.signals.get("twitter_username"))
         if tw_username:
             for canonical_type in _CANONICAL_TYPES:
@@ -144,3 +156,25 @@ def resolve_github_user_authority(
         return ResolveResult(gh.derived_authority, "github_user", gh)
 
     return ResolveResult(None, "none", None)
+
+
+def _resolve_via_backlink(
+    store: EntityStore, side: Entity,
+) -> ResolveResult | None:
+    """If ``side.signals`` carries a ``canonical_handle`` back-link
+    (written by ``identity_merge.apply_merge``), load that canonical
+    entity and return its authority.
+
+    Returns ``None`` when the back-link is missing or the linked
+    entity can't be loaded (e.g. deleted between writes).
+    """
+    canonical_type = side.signals.get("canonical_entity_type")
+    canonical_key = _normalize(side.signals.get("canonical_handle"))
+    if canonical_type not in _CANONICAL_TYPES or not canonical_key:
+        return None
+    canonical = store.get(canonical_type, canonical_key)
+    if canonical is None or canonical.derived_authority is None:
+        return None
+    return ResolveResult(
+        canonical.derived_authority, canonical_type, canonical,
+    )

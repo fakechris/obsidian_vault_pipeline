@@ -115,36 +115,90 @@ def _row_to_entity(row: sqlite3.Row) -> Entity:
 
 @dataclass
 class EntityStore:
-    """Thin DAO over the ``entities`` + ``entity_signals_history`` tables."""
+    """Thin DAO over the ``entities`` + ``entity_signals_history`` tables.
+
+    Read paths (``get``, ``list_by_type``, ``history``) are *side-effect
+    free*: they will NOT create the SQLite file, NOT initialize the
+    schema, and silently return empty results when ``db_path`` doesn't
+    exist.  This matters for source-signal providers that consult the
+    entity table as a fast path during ingestion: a fresh vault must
+    not gain a knowledge.db just because we tried to score a URL.
+
+    Write paths (``upsert``, ``upsert_many``, ``delete``) call
+    ``init_schema`` at the top so a first-write to a fresh DB still
+    sets up the tables.  Idempotent.
+    """
 
     db_path: Path
 
-    def __post_init__(self) -> None:
-        init_schema(self.db_path)
-
     # ---- read ----------------------------------------------------------
 
-    def get(self, entity_type: str, identity_key: str) -> Entity | None:
-        conn = sqlite3.connect(self.db_path)
+    def _open_read(self) -> sqlite3.Connection | None:
+        """Open a read-only connection.  Returns ``None`` if the DB file
+        doesn't exist yet (fresh vault) — read paths treat that as
+        "no entities" rather than "create the schema for me".
+        """
+        path = Path(self.db_path)
+        if not path.exists():
+            return None
+        # ``Path.as_uri()`` is required for cross-platform safety:
+        # raw f-strings would break on Windows backslashes and on
+        # paths with spaces or '#' chars.  ``as_uri()`` requires the
+        # path be absolute, so resolve first — relative paths come
+        # in legitimately when callers use ``Path("knowledge.db")``.
         try:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT * FROM entities WHERE entity_type=? AND identity_key=?",
-                (entity_type, identity_key),
-            ).fetchone()
+            uri = f"{path.resolve().as_uri()}?mode=ro"
+        except ValueError:
+            return None
+        try:
+            conn = sqlite3.connect(uri, uri=True)
+        except sqlite3.OperationalError:
+            return None
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def get(self, entity_type: str, identity_key: str) -> Entity | None:
+        conn = self._open_read()
+        if conn is None:
+            return None
+        try:
+            try:
+                row = conn.execute(
+                    "SELECT * FROM entities WHERE entity_type=? AND identity_key=?",
+                    (entity_type, identity_key),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                # Schema not initialized yet — same shape as no-entity.
+                return None
             return _row_to_entity(row) if row else None
         finally:
             conn.close()
 
     def delete(self, entity_type: str, identity_key: str) -> bool:
-        """Remove an entity + its history rows.
+        """Remove the latest-snapshot row for an entity.
 
         Returns True if a row was deleted, False if the entity wasn't
         present.  Used by identity_merge's reclassification when a
         ``person`` should be re-filed as ``organization`` (or vice
         versa) — the unique constraint on (entity_type, identity_key)
         means we can't just upsert across types.
+
+        **Preserves ``entity_signals_history`` rows.**  The history
+        table is documented as an append-only audit trail at the top
+        of this module.  Deleting it would lose the "what did we know
+        about langchain when we still classified it as a person"
+        record.  The orphan history rows still query cleanly via
+        ``history(entity_id)`` and serve as a forensic trail for
+        future migrations.
         """
+        if not Path(self.db_path).exists():
+            return False
+        # ``delete`` is a write path: ensure the schema exists before
+        # trying to query the entities table.  Without this an
+        # existing-but-unitialized DB file (e.g., touched by some
+        # other tool, or partially-written) would raise
+        # OperationalError on the SELECT below.
+        init_schema(self.db_path)
         conn = sqlite3.connect(self.db_path)
         try:
             row = conn.execute(
@@ -155,10 +209,9 @@ class EntityStore:
             if row is None:
                 return False
             entity_id = row[0]
-            conn.execute(
-                "DELETE FROM entity_signals_history WHERE entity_id=?",
-                (entity_id,),
-            )
+            # NOTE: history rows for this entity_id are deliberately
+            # preserved — see docstring above for the append-only
+            # invariant rationale.
             conn.execute(
                 "DELETE FROM entities WHERE entity_id=?",
                 (entity_id,),
@@ -171,16 +224,20 @@ class EntityStore:
     def list_by_type(
         self, entity_type: str, *, limit: int | None = None,
     ) -> list[Entity]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._open_read()
+        if conn is None:
+            return []
         try:
-            conn.row_factory = sqlite3.Row
             sql = (
                 "SELECT * FROM entities WHERE entity_type=? "
                 "ORDER BY derived_authority DESC NULLS LAST"
             )
             if limit is not None:
                 sql += f" LIMIT {int(limit)}"
-            rows = conn.execute(sql, (entity_type,)).fetchall()
+            try:
+                rows = conn.execute(sql, (entity_type,)).fetchall()
+            except sqlite3.OperationalError:
+                return []
             return [_row_to_entity(r) for r in rows]
         finally:
             conn.close()
@@ -189,16 +246,21 @@ class EntityStore:
         self, entity_id: int, *, limit: int = 50,
     ) -> Iterator[tuple[str, dict[str, Any], str]]:
         """Yield (observed_at, signals_dict, fetch_source) most-recent first."""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._open_read()
+        if conn is None:
+            return
         try:
             # Tiebreak on history_id DESC so two rows that share an
             # observed_at to the second still come back newest-first.
-            rows = conn.execute(
-                "SELECT observed_at, signals_json, fetch_source "
-                "FROM entity_signals_history WHERE entity_id=? "
-                "ORDER BY observed_at DESC, history_id DESC LIMIT ?",
-                (entity_id, limit),
-            ).fetchall()
+            try:
+                rows = conn.execute(
+                    "SELECT observed_at, signals_json, fetch_source "
+                    "FROM entity_signals_history WHERE entity_id=? "
+                    "ORDER BY observed_at DESC, history_id DESC LIMIT ?",
+                    (entity_id, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return
             for observed_at, signals_json, fetch_source in rows:
                 try:
                     signals = json.loads(signals_json) if signals_json else {}
@@ -266,7 +328,12 @@ class EntityStore:
         derived_authority: float | None,
         fetch_source: str,
     ) -> Entity:
-        """Insert or update a single entity, plus append a history row."""
+        """Insert or update a single entity, plus append a history row.
+
+        Schema is initialized lazily on first write, not on instance
+        construction — keeps the read paths side-effect free.
+        """
+        init_schema(self.db_path)
         conn = sqlite3.connect(self.db_path)
         try:
             entity = self._upsert_in(
@@ -290,6 +357,7 @@ class EntityStore:
         one fsync at the end vs N), and the whole batch is committed
         atomically: a mid-batch failure rolls back, no partial state.
         """
+        init_schema(self.db_path)
         conn = sqlite3.connect(self.db_path)
         out: list[Entity] = []
         try:

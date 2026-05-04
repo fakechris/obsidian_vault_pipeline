@@ -165,21 +165,63 @@ def collect_host_stats(
 
 
 def collect_unrecognized_x_handles(
-    vault_dir: Path, *, known_authors: set[str],
+    vault_dir: Path,
+    *,
+    known_authors: set[str],
+    entity_resolved: set[str] | None = None,
 ) -> list[tuple[str, int]]:
-    """List X handles in source URLs that aren't already in authors.jsonl.
+    """List X handles in source URLs that aren't already curated.
+
+    Curation has two layers (PR-E3+):
+      * ``known_authors`` — explicit whitelist (``authors.jsonl`` +
+        ``author_overrides.yaml``).  Wins by definition.
+      * ``entity_resolved`` — handles that the entity table can map
+        to a person/organization/twitter_author with non-None
+        derived_authority.  When passed, those handles are treated
+        as "already known" too, so the dashboard surfaces only
+        truly-unresolved long-tail handles.
+
+    Pass ``entity_resolved=None`` to keep the pre-PR-F1 behavior
+    (only the curated whitelist counts as known).
 
     Returns ``[(handle, count_of_sources)]`` descending by count.
     """
     db_path = vault_dir / "60-Logs" / "knowledge.db"
     authorities = _query_source_authorities(db_path)
     handle_counts: dict[str, int] = defaultdict(int)
+    resolved = entity_resolved or set()
     for source_id, _ in authorities:
         handle = extract_x_handle(source_id)
-        if handle is None or handle in known_authors:
+        if handle is None:
+            continue
+        if handle in known_authors or handle in resolved:
             continue
         handle_counts[handle] += 1
     return sorted(handle_counts.items(), key=lambda kv: -kv[1])
+
+
+def _load_entity_resolved_handles(vault_dir: Path) -> set[str]:
+    """Return the set of X handles that the entity table can resolve
+    to a non-None ``derived_authority`` (twitter_author, person, or
+    organization).  These handles aren't on the curated whitelist
+    but ARE recognized by the runtime resolver — so flagging them as
+    "unknown" in the discovery dashboard is misleading.
+    """
+    db_path = vault_dir / "60-Logs" / "knowledge.db"
+    if not db_path.exists():
+        return set()
+    # Lazy import — avoids pulling entities/* into source_coverage's
+    # import graph for users who never wired the entity layer.
+    from ..entities.store import EntityStore
+
+    store = EntityStore(db_path=db_path)
+    out: set[str] = set()
+    for entity_type in ("twitter_author", "person", "organization"):
+        for e in store.list_by_type(entity_type):
+            if e.derived_authority is None:
+                continue
+            out.add(e.identity_key.lower())
+    return out
 
 
 def _load_known_authors(vault_dir: Path) -> set[str]:
@@ -269,8 +311,14 @@ def main(argv: list[str] | None = None) -> int:
         host_stats = [s for s in host_stats if s.authoritative_count == 0]
 
     known_authors = _load_known_authors(vault)
+    # Treat entity-resolved handles as "already curated" — they're
+    # picked up at runtime by the AuthorRulesProvider entity-fallback
+    # (PR-E3) and therefore aren't actually unrecognized.
+    entity_resolved = _load_entity_resolved_handles(vault)
     unknown_handles = collect_unrecognized_x_handles(
-        vault, known_authors=known_authors,
+        vault,
+        known_authors=known_authors,
+        entity_resolved=entity_resolved,
     )
 
     if args.triage:

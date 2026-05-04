@@ -33,35 +33,34 @@ import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from ..layer_schemas import parse_frontmatter
 from ..source_authority import (
-    AuthorityScore,
     default_providers,
     ensure_schema,
     score_source,
     serialize_audit_record,
     upsert_score,
 )
-from ..source_signals import (
-    ArxivSignalProvider,
-    AuthorRulesProvider,
-    DomainRulesProvider,
-    GitHubSignalProvider,
-    SignalProvider,
-    SubstackSignalProvider,
-    TwitterSignalProvider,
-)
+from ..source_signals import SignalProvider
 
 
 def _build_providers(vault_dir: Path, *, domains_only: bool) -> list[SignalProvider]:
+    """Construct the provider stack.
+
+    For ``--domains-only`` we reuse ``default_providers`` and FILTER OUT
+    the network-bound providers (GitHub / Twitter / Substack / arXiv)
+    instead of hand-building a stripped pair.  Hand-building was
+    silently dropping the user's ``domain_overrides.yaml`` /
+    ``author_overrides.yaml`` / entity-store wiring, so a domain that
+    was upgraded to canonical via overrides would score the unknown-host
+    default 0.45 in offline mode.
+    """
+    providers = default_providers(vault_dir)
     if domains_only:
-        return [
-            DomainRulesProvider(),
-            AuthorRulesProvider(authors_path=vault_dir / "60-Logs" / "authors.jsonl"),
-        ]
-    return default_providers(vault_dir)
+        offline_provider_names = {"domain_rules", "author_rules"}
+        providers = [p for p in providers if p.name in offline_provider_names]
+    return providers
 
 
 def _iter_sources(vault_dir: Path, *, since: datetime | None):

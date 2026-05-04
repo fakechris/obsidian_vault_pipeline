@@ -313,13 +313,53 @@ def apply_merge(
     if stale is not None:
         store.delete(other_type, canonical_key)
 
-    return store.upsert(
+    canonical = store.upsert(
         entity_type=canonical_type,
         identity_key=canonical_key,
         canonical_name=canonical_name,
         signals=signals,
         derived_authority=derived,
         fetch_source="identity_merge",
+    )
+
+    # Back-link: write the canonical entity's identity_key + type into
+    # the source github_user / twitter_author rows so the resolver can
+    # find the merged authority no matter which side it starts from.
+    # Pre-fix, ``resolve_github_user_authority`` only used
+    # ``twitter_username`` to reach the canonical entity, which meant
+    # exact_handle and fuzzy merges (where we don't know
+    # twitter_username) silently fell back to the bare github score.
+    _write_canonical_backlink(store, gh, canonical_type, canonical_key)
+    _write_canonical_backlink(store, tw, canonical_type, canonical_key)
+    return canonical
+
+
+def _write_canonical_backlink(
+    store: EntityStore,
+    side: Entity,
+    canonical_type: str,
+    canonical_key: str,
+) -> None:
+    """Mutate the platform-specific entity to point back at its canonical.
+
+    Writes ``signals.canonical_entity_type`` + ``signals.canonical_handle``
+    so the resolver — given a github_user (or twitter_author) — can
+    reach the merged person/organization without having to walk a
+    ``twitter_username`` field that exists only on self_reported merges.
+    """
+    new_signals = dict(side.signals)
+    if (new_signals.get("canonical_entity_type") == canonical_type
+            and new_signals.get("canonical_handle") == canonical_key):
+        return  # already linked, no-op
+    new_signals["canonical_entity_type"] = canonical_type
+    new_signals["canonical_handle"] = canonical_key
+    store.upsert(
+        entity_type=side.entity_type,
+        identity_key=side.identity_key,
+        canonical_name=side.canonical_name,
+        signals=new_signals,
+        derived_authority=side.derived_authority,
+        fetch_source=side.fetch_source,
     )
 
 

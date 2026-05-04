@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .base import Signal, SignalProvider
+from .base import Signal
 from .overrides import DomainOverrides
 from .url_utils import normalize_host
 
@@ -152,9 +152,20 @@ class DomainRulesProvider:
 
         overrides = self._load_overrides()
 
-        # 0. Excluded hosts — return None so the orchestrator falls back to default
+        # 0. Excluded hosts — return a tagged Signal instead of None.
+        # Returning None would have meant the audit log shows nothing
+        # for an exclusion, contradicting the overrides.py contract
+        # ("Returns Signal value=0.45 default but flags the source as
+        # excluded: true in audit log").  The combination rule still
+        # treats this as a neutral floor so the source isn't
+        # *promoted* by the exclusion — it's just visibly recorded.
         if host in overrides.excluded_hosts:
-            return None
+            return Signal(
+                provider=self.name,
+                value=_DEFAULT_AUTHORITY,
+                raw={"host": host, "bucket": "excluded", "excluded": True,
+                     "source": "override"},
+            )
 
         # 0a. User overrides win over hardcoded tables for any host
         if host in overrides.domains:

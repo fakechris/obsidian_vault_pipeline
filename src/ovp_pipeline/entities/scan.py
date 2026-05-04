@@ -45,6 +45,20 @@ _GH_REPO_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Bare GitHub profile URL — ``github.com/<owner>`` with NO ``/<repo>``
+# segment after.  Catches profile-only mentions that the repo regex
+# misses (e.g. ``Visit https://github.com/karpathy``), which would
+# otherwise be invisible to backfill_github's user pass.
+# Note: the terminator class includes ``.,`` — sentence delimiters
+# would otherwise prevent a match at end-of-clause prose like
+# ``Visit github.com/karpathy.`` or ``..., github.com/karpathy,``.
+# Crucially the class still excludes ``/`` so we don't overlap with
+# the owner/repo regex.
+_GH_OWNER_RE = re.compile(
+    r"github\.com/([\w.-]+?)(?=[?#)\],.\s\"'`>]|$)",
+    re.IGNORECASE,
+)
+
 # Path segments that look like ``<owner>/<repo>`` to the regex but are
 # really top-level GitHub features.  Drop them.
 _GH_NON_REPO_OWNERS = frozenset({
@@ -138,16 +152,23 @@ def scan_twitter_handles(vault_dir: Path) -> list[HandleMention]:
 
 
 def scan_github_mentions(vault_dir: Path) -> list[GitHubMention]:
-    """Return repo+owner mentions sorted descending by mention_count.
+    """Return repo + owner mentions sorted descending by mention_count.
 
-    A ``repo=None`` row means "we only saw owner-level URLs"; a row
-    with a repo also exists for the same owner if both kinds appear.
+    Includes:
+      * (owner, repo) entries for every ``github.com/<owner>/<repo>`` URL
+      * (owner, None) entries for every bare ``github.com/<owner>``
+        profile URL (review-fix: previously missed, so a vault note
+        like "Visit https://github.com/karpathy" never triggered a
+        backfill of karpathy's github_user entity)
     """
     repo_total: Counter[tuple[str, str]] = Counter()
     repo_files: dict[tuple[str, str], set[Path]] = {}
+    owner_only_total: Counter[str] = Counter()
+    owner_only_files: dict[str, set[Path]] = {}
 
     for path, text in _iter_relevant_files(vault_dir, ("github.com",)):
         seen_repos_in_file: set[tuple[str, str]] = set()
+        # First pass: owner/repo URLs.
         for m in _GH_REPO_RE.finditer(text):
             owner = m.group(1).lower()
             if owner in _GH_NON_REPO_OWNERS:
@@ -160,7 +181,20 @@ def scan_github_mentions(vault_dir: Path) -> list[GitHubMention]:
         for key in seen_repos_in_file:
             repo_files.setdefault(key, set()).add(path)
 
-    return [
+        # Second pass: profile-only URLs (no /<repo> after owner).  We
+        # detect them via a separate regex with a tighter terminator
+        # (no ``/`` allowed) so they don't overlap the repo regex.
+        seen_owners_in_file: set[str] = set()
+        for m in _GH_OWNER_RE.finditer(text):
+            owner = m.group(1).lower()
+            if owner in _GH_NON_REPO_OWNERS:
+                continue
+            owner_only_total[owner] += 1
+            seen_owners_in_file.add(owner)
+        for owner in seen_owners_in_file:
+            owner_only_files.setdefault(owner, set()).add(path)
+
+    out: list[GitHubMention] = [
         GitHubMention(
             owner=owner,
             repo=repo,
@@ -169,3 +203,15 @@ def scan_github_mentions(vault_dir: Path) -> list[GitHubMention]:
         )
         for (owner, repo), c in repo_total.most_common()
     ]
+    # Append owner-only rows.  An owner that only ever appeared via
+    # bare profile URLs gets a ``repo=None`` row; if the same owner
+    # also appeared with a repo, both rows coexist (consumers can
+    # union the counts).
+    for owner, c in owner_only_total.most_common():
+        out.append(GitHubMention(
+            owner=owner,
+            repo=None,
+            mention_count=c,
+            file_count=len(owner_only_files.get(owner, ())),
+        ))
+    return out

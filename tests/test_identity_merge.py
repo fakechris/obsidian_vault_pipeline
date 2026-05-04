@@ -434,9 +434,23 @@ class TestStoreDelete:
         ok = store.delete(TWITTER_TYPE, "ghost")
         assert ok is True
         assert store.get(TWITTER_TYPE, "ghost") is None
-        # History rows for that entity_id are gone too.
+
+    def test_delete_preserves_history(self, tmp_path):
+        # Append-only contract on entity_signals_history (per the
+        # store.py module docstring).  ``delete`` removes the
+        # latest-snapshot row but the audit trail must persist —
+        # otherwise PR-F1's person → organization migration silently
+        # erases what we used to know about langchain back when we
+        # mis-classified it as a person.
+        store = EntityStore(db_path=tmp_path / "k.db")
+        _make_tw(store, "ghost", authority=0.4)
+        e = store.get(TWITTER_TYPE, "ghost")
+        assert e is not None
+        store.delete(TWITTER_TYPE, "ghost")
+        # Entity row gone, but history rows kept (forensic trail).
         rows = list(store.history(e.entity_id))
-        assert rows == []
+        assert len(rows) == 1
+        assert rows[0][2] == "twitterapi.io"   # fetch_source preserved
 
     def test_delete_nonexistent_returns_false(self, tmp_path):
         store = EntityStore(db_path=tmp_path / "k.db")

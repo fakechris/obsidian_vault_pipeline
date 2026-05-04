@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-from .base import Signal, SignalProvider
+from .base import Signal
 
 _SUBSTACK_RE = re.compile(
     r"^https?://(?P<handle>[\w-]+)\.substack\.com/(?:p/[\w-]+/?)?$"

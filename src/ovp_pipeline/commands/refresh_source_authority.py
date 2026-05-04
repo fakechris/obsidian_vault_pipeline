@@ -125,9 +125,20 @@ def _exclusive_lock(lock_path: Path) -> Iterator[None]:
                 f"another refresh is running (pid {existing_pid}); "
                 f"remove {lock_path} after confirming it crashed",
             )
-        # Stale — overwrite.
+        # Stale — overwrite, but guard against the steal race: two
+        # concurrent refreshes might both observe the stale lock,
+        # both unlink it, and both try to recreate.  The second
+        # ``os.open`` then races; we must catch the FileExistsError
+        # and treat it as "the other process won the steal" so we
+        # bail cleanly instead of crashing.
         lock_path.unlink(missing_ok=True)
-        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            raise SystemExit(
+                f"lost the lock-steal race against another refresh; "
+                f"the other process now owns {lock_path}",
+            )
     try:
         os.write(fd, str(os.getpid()).encode("utf-8"))
         os.close(fd)
@@ -182,6 +193,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-twitter", action="store_true")
     parser.add_argument("--skip-github", action="store_true")
     parser.add_argument("--skip-merge", action="store_true")
+    parser.add_argument("--migrate-existing", action="store_true",
+                        help="Forwarded to ovp-merge-identities — runs the "
+                             "person → organization reclassification on "
+                             "pre-PR-F1 rows.  Idempotent; safe to leave on.")
     parser.add_argument("--strict", action="store_true",
                         help="Exit non-zero if any step failed (default: keep "
                              "running, surface failures in the status JSON)")
@@ -230,9 +245,12 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         if not args.skip_merge:
+            merge_args = ["--vault-dir", str(vault)]
+            if args.migrate_existing:
+                merge_args.append("--migrate-existing")
             _run_step(
                 "identity_merge", merge_identities,
-                args=["--vault-dir", str(vault)],
+                args=merge_args,
                 capture=capture,
             )
 

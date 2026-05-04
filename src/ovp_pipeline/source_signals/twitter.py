@@ -55,9 +55,8 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
 
-from .base import Signal, SignalProvider
+from .base import Signal
 
 logger = logging.getLogger(__name__)
 
