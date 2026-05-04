@@ -1,846 +1,203 @@
-# OVP Architecture
+# OVP 架构
 
-> 语言： [English](ARCHITECTURE.md) | 简体中文
+> 文档索引: [README](./README.zh-CN.md) | **ARCHITECTURE** | [RUNTIME](./RUNTIME.md) | [PACKS](./PACKS.md) | [PRODUCT_SURFACES](./PRODUCT_SURFACES.md) | [GLOSSARY](./GLOSSARY.md)
+>
+> 语言: 中文 | [English](./ARCHITECTURE.md)
+>
+> **本文件解释:** 持久知识存放在哪里、什么是可重建的、治理控制面控制什么。
+> **本文件不解释:** 产品路线图、UI 细节、Pack 开发、命令执行流程、Backlog 状态。每一项都在文档索引顶端的对应文件里。
 
-**状态：** Review draft v2
-**更新时间：** 2026-04-29
+---
 
-这份文档的目的不是再发明一套新分层，而是把 OVP 已经出现过的几套说法放回各自的位置，避免产品叙事、运行流程、代码所有权、知识状态语义、存储可信边界混在一起。
+## 一句话
 
-核心规则：
+OVP 把外部 **来源 (Sources)** 转成可审阅的 **候选 (Candidates)**,把通过审阅的内容提升为 **正式知识状态 (Canonical State)**,从中构建可重建的 **投影 (Projections)**,再通过 **使用界面 (Access Surfaces)** 把这些投影暴露出去。**治理控制面 (Governance Control Plane)** 控制每一次写入、提升、修复和审计边界。
 
-> OVP 只有一个主架构：四层持久架构。
-> 其它说法都是不同截面，不是并列架构。
+## 六个核心词
 
-## 0. 总览
+整个架构只有六个一级词。其它所有概念(Crystal、Atlas、KSR、Capture/Compile/Reuse、各种运行阶段等等)要么是这六个的一种,要么放在 [词汇表](./GLOSSARY.md) 里。
 
-OVP 现在使用多套词汇，但它们解释的是不同问题。
+| 词 | 来源 | 可变性 | 是否定义真相? |
+| --- | --- | --- | --- |
+| **Source** | 外部(网页、论文、repo、剪藏) | 原文不可改;可附加元数据 | 否 |
+| **Candidate** | 系统提出(LLM、解析器、agent) | 可改、可拒、可合并 | 否 |
+| **Canonical State** | 经过 promotion 接受 | 通过 Governance + 审计可修订 | **是** |
+| **Projection** | 从 Canonical State 派生 | 可自由删除并重建 | 否 |
+| **Access Surface** | UI / 搜索 / 图 / 简报 / 导出 / MCP | 主要是读;写必须经 Governance | 否 |
+| **Governance** | 控制面(横切) | 配置规则,本身不持有知识 | 控制 |
 
-| 说法 | 解释什么 | 后续定位 |
-| --- | --- | --- |
-| Capture -> Compile -> Reuse | 产品叙事：用户为什么需要 OVP | 产品截面 |
-| Ingest -> Interpret -> Absorb -> Refine -> Canonical -> Derived | 执行流程：pipeline 怎么跑 | 执行截面 |
-| Core Platform / Domain Pack / Workflow Profile | 所有权：core、pack、profile 各负责什么 | 所有权截面 |
-| Canonical Knowledge / Derived Indexes / Context Assembly / Governance | 持久架构：真相、投影、访问、治理分别在哪里 | 主架构 |
-| KSR: source -> observation -> claim -> evidence -> validity -> projection -> permission | 长期知识状态怎么表达 | 语义词汇表 |
-| Authority / Derived state / Projection lifecycle | 存储可信边界和投影修复机制 | 存储/控制截面 |
-
-统一口径：
-
-```text
-四层模型管架构。
-六层 pipeline 管执行。
-Core/Pack/Profile 管所有权。
-KSR 管知识状态语言。
-Capture/Compile/Reuse 管产品叙事。
-Authority/Derived/Projection lifecycle 管存储可信和修复。
-```
-
-总映射表：
-
-| 主架构层 | 产品叙事 | 六层执行 | 所有权模型 | KSR 语义 | 存储可信 |
-| --- | --- | --- | --- | --- | --- |
-| Layer 1 Canonical Knowledge | Capture / Compile | Interpret / Absorb / Refine / Canonical | Core + Pack semantics | source / observation / claim / evidence / validity | Authority |
-| Layer 2 Derived Indexes / Views | Reuse substrate | Derived | Core projection infra + pack projection semantics | projection | Derived state |
-| Layer 3 Context Assembly / Access | Reuse surface | Derived output / access commands | Core shell + pack view recipes | projection | Access projection |
-| Layer 4 Governance / Control Plane | Compile gate / Reuse feedback | Absorb / Refine / Canonical / Derived controls | Core governance primitives + pack policies + profile routing | validity / permission | Projection lifecycle + audit |
-
-## 1. 主架构：四层持久架构
-
-所有关于“状态归属、可信边界、投影、访问、治理”的长期架构决策，都应该落到这四层里。
+## 数据流
 
 ```text
-Layer 1: Canonical Knowledge
-  OVP 长期相信和维护的知识状态。
+Inputs / Sources                          (外部,不可改)
+        |
+        v
+Candidates                                (系统提出,等待审阅)
+        |        ^
+        |        |  promotion / 审阅 / 验证 / 审计
+        v        |
+Canonical State                           (已接受,有证据,长期持久)
+        |
+        v
+Projections                               (knowledge.db、graph、search、crystals)
+        |
+        v
+Access Surfaces                           (reader / ops / search / briefing / MCP / export)
 
-Layer 2: Derived Indexes / Views
-  从 Layer 1 派生出来的可重建索引、图谱、查询和检查视图。
 
-Layer 3: Context Assembly / Access
-  把持久知识组装成 reader、operator、query、export、briefing、agent context 等可用界面。
-
-Layer 4: Governance / Control Plane
-  横向控制 promotion、review、verification、routing、repair、audit 和 workflow 边界。
+Governance Control Plane (横切)
+        promotion · 审阅 · 验证 · 修复 · 权限 · 审计
 ```
 
-Layer 4 不是 Layer 1 的上游，也不是 pipeline 的最后一步。它是 cross-cutting control plane。
-
-```text
-+--------------------------------------------------------------------+
-| Layer 4: Governance / Control Plane                                |
-|                                                                    |
-|  Policy  Promotion  Review  Verification  Dispatch  Repair  Audit  |
-|                                                                    |
-|  +------------------+     +------------------+     +-------------+ |
-|  | Layer 1          | --> | Layer 2          | --> | Layer 3     | |
-|  | Canonical        |     | Derived          |     | Access /    | |
-|  | Knowledge        |     | Indexes / Views  |     | Context     | |
-|  +------------------+     +------------------+     +-------------+ |
-|                                                                    |
-+--------------------------------------------------------------------+
-```
-
-### Layer 4 子轴
-
-Layer 4 不能变成“什么都往里塞”的 junk drawer。它内部至少拆成七个子轴：
-
-| 子轴 | 负责什么 | 例子 |
-| --- | --- | --- |
-| Policy | 什么可以被写入、promote、自动处理 | promotion rules, who-can-write, high-risk gate |
-| Promotion | Policy + Review 的交集，把 candidate / derived proposal 变成 accepted state | `promote_candidates.py`, `promotion_policy.py`, `promotion_audit.py`, `relation_promotion.py`, `workspace_promotion.py` |
-| Review | 人工审阅和队列生命周期 | candidate review, contradiction review, stale summary review |
-| Verification | evidence、hash、freshness、replay 的验证 | evidence status, content hash check, review state replay |
-| Routing / Dispatch | workflow 走向、任务派发和歧义分流 | workflow profile routing, ambiguity dispatch, source routing preview JSON |
-| Repair | projection lifecycle 和 rebuild 控制 | metadata repair marker, full rebuild marker, semantic reindex marker |
-| Audit | 责任链和不可变事件记录 | audit JSONL, promotion event, review event |
-
-Promotion 不是新 layer。它是 Policy 判断候选是否可进入 canonical、Review/Audit 记录接受过程的门禁动作。
-
-后续说“Layer 4 控制某件事”时，应尽量指出属于哪个子轴。文档里避免把 Layer 4 routing 叫 Resolver；Resolver 这个词保留给 identity / concept resolver 语义，例如 `concept_resolver.py`。
-
-## 2. Layer 1: Canonical Knowledge
-
-Layer 1 是 OVP 的长期可信边界。
-
-它回答这些问题：
-
-- 哪些知识对象真实存在？
-- 这些对象的稳定 identity 是什么？
-- 哪些 factual claim 被接受？
-- 每个 factual claim 的 evidence 在哪里？
-- 能不能追溯到原始 source 或明确用户归因？
-- 哪些写入经过 review、promotion、verification？
-- Derived state 丢了以后，能不能从这里重新推导？
-
-当前 OVP 的 Authority 是：
-
-- vault Markdown
-- concept registry / alias registry
-- source note / deep dive / evergreen note
-- evidence quote / locator / content hash
-- audit JSONL / promotion event / verification event
-- review 之后的 accepted state
-
-Layer 1 不是“数据库里的一切”。OVP 的 Layer 1 应该是 file-native、evidence-backed、user-owned 的。
-
-明确边界：
-
-- `knowledge.db` 不是 Layer 1。
-- `truth_store.py` 不是 Layer 1。
-- `truth_store.py` 定义的是 projection schema，用来把 Layer 1 投影成可查询 rows。
-- candidate queue / review queue 不是 Layer 1，除非经过 review/promotion。
-- LLM 输出不是 Layer 1，除非经过明确的吸收、审阅或 promotion 路径。
-
-Layer 1 可以慢，但必须：
-
-- 可读
-- 可 diff
-- 可备份
-- 可迁移
-- 可审计
-- 可 replay
-
-## 3. Layer 2: Derived Indexes / Views
-
-Layer 2 是从 Layer 1 计算出来的可重建状态。
-
-它回答这些问题：
-
-- UI 怎么快速列出 objects？
-- query 怎么快速搜？
-- graph 怎么快速画？
-- contradiction 怎么快速查？
-- briefing / dashboard / context pack 怎么快速组装？
-- MCP / prompt assembler 应该读哪个本地运行时 store？
-
-当前 OVP 的 Derived state 主要是：
-
-- `knowledge.db`
-- truth projection rows:
-  - `objects`
-  - `claims`
-  - `claim_evidence`
-  - `relations`
-  - `contradictions`
-- graph projection rows:
-  - `graph_edges`
-  - `graph_clusters`
-- access/query rows:
-  - `compiled_summaries`
-  - `reuse_events`
-  - search/query payload
-- generated views:
-  - Atlas
-  - MOC
-  - graph views
-  - lint outputs
-  - daily delta
-
-Layer 2 可以：
-
-- 做索引
-- 做聚合
-- 做缓存
-- 做 denormalization
-- 为 UI/query/graph 优化 schema
-- 被删除后重建
-
-Layer 2 不能：
-
-- 自己决定什么是真相
-- 反向覆盖 Layer 1
-- 把 semantic search result 直接升级成 canonical identity
-- 把 projection row 当成 source of truth
-
-命名纪律：
-
-- 说 `truth projection`，不要说 `truth source`。
-- 说 `graph projection`，不要说 `canonical graph truth`。
-- 说 `search projection`，不要说 `semantic truth`。
-- 说 `knowledge.db derived store`，不要说 `knowledge.db authority`。
-
-## 4. Layer 3: Context Assembly / Access
-
-Layer 3 把持久知识变成用户、agent、operator 能使用的界面和上下文。
-
-它回答这些问题：
-
-- 用户打开产品时应该先看到什么？
-- reader page 怎么组织？
-- object page 显示哪些 claim/evidence/relation？
-- graph page 是空间地图还是 debug report？
-- search result 怎么解释来源？
-- briefing/context pack/prompt 怎么组装？
-- operator 应该在哪里 review 和维护？
-
-当前 OVP 的 Layer 3 surface 包括（非穷举，按用户/agent 可触达面列出）：
-
-- `ovp-ui`
-- reader atlas / future reader home
-- object pages
-- graph page
-- `ovp-query`
-- `ovp-export`
-- `ovp-truth`
-- `ovp-mcp` / MCP read tools
-- `ovp-build-crystals`
-- `ovp-working-memory`
-- `ovp-link-suggest`
-- briefing
-- signals/actions
-- context packs
-- prompt assembly
-
-Layer 3 通常为了速度读取 Layer 2，但必须能追溯到 Layer 1。
-
-明确边界：
-
-- search result 是 access，不是 authority。
-- briefing 是 access，不是 authority。
-- reader page 是 projection，不是独立真相源。
-- context pack 是 projection，不是 agent memory authority。
-- dashboard 是 projection，不是 workflow truth 本身。
-- Layer 3 不能把展示内容静默 promotion 到 Layer 1。
-
-LearnBuffett 给 OVP 的启发属于 Layer 3：
-
-- readable object pages
-- backlink/mention rail
-- spatial graph map
-- reader-first home
-- operator surfaces 放到 `/ops`
-
-这不是改变 Layer 1 的 truth model，而是改变 Layer 3 的产品形态。
-
-## 5. Layer 4: Governance / Control Plane
-
-Layer 4 是 OVP 的控制面。
-
-它回答这些问题：
-
-- candidate 能不能进 canonical？
-- factual claim 是否需要 review？
-- evidence 是否 stale / broken / verified？
-- source 应该走哪条 workflow？
-- ambiguity 应该派发到哪条处理路径？
-- 哪些 agent/user 可以写哪些状态？
-- projection 是 stale、repairable，还是必须 rebuild？
-- workflow item 能否 claim、lease、retry、close、supersede？
+Governance **不是** 数据流上的"第四步"。它横跨所有四个状态,控制每一次提升 Candidate、修复 Projection、或者 Surface 触及 Canonical State 的写操作。
 
-当前 OVP 的 Layer 4 组件包括：
+---
 
-- promotion policies
-- review queues
-- contradiction review
-- stale-summary review
-- evidence verification / replay
-- relation promotion replay
-- action queue
-- focused action handlers
-- signals/actions
-- doctor checks
-- projection repair marker lifecycle
-- pack contracts
-- workflow/profile routing
+## 词条: Source(来源)
 
-明确边界：
+**含义:** 用户带来的或外部抓取的原始材料 — 剪藏文章、PDF 论文、GitHub repo 快照、Pinboard 条目、手写笔记。
 
-- governance rule 应该显式、可测试。
-- agent output 不能静默变成 accepted truth。
-- review state 必须能跨 derived rebuild 保留。
-- projection repair 和普通 access 要分开治理。
-- resolver / routing / permission 不能散落在 prompt 里。
-- audit ledger 与 feed UI state 是两类状态，不能混用。
+**存储位置:** `50-Inbox/03-Processed/<YYYY-MM>/`、`60-Logs/raw_data/`、`aliases.json`、内容哈希。
 
-## 6. 截面 1: 产品叙事
+**由谁产生:** `ovp-article` / `ovp-paper` / `ovp-github` / `ovp-clippings` 以及用户手动粘贴 markdown。
 
-产品叙事是：
+**能删除吗?** 处理后副本可归档,文件系统上的原始记录是 Inputs 的来源。
 
-```text
-Capture -> Compile -> Reuse
-```
+**能定义真相吗?** 否。Source 是 *原始输入*,真相需要"证据 + 接受"。
 
-它用来解释 OVP 给用户带来的价值。
+**失败模式:** 原文丢失、改名、编码无法解析。
 
-| Product verb | 含义 | 主要对应层 |
-| --- | --- | --- |
-| Capture | 接收文章、clipping、paper、repo、网页、笔记，并保留 source lifecycle | Layer 1 input + Layer 4 Routing |
-| Compile | 把资料编译成 candidate、object、claim、evidence、relation | Layer 1 + Layer 4 Policy/Review |
-| Reuse | 把已编译知识用于 reader page、graph、search、briefing、prompt、context pack | Layer 2 + Layer 3 |
+**如何修复:** 从源头重新摄取、重新计算内容哈希、手动重新关联元数据。
 
-适用场景：
+**测试:** 一个 Source 的 `(content_hash, ingestion_timestamp)` 唯一标识它;同一 URL 重新摄取(内容未变)必须幂等。
 
-- README
-- 产品定位
-- roadmap narrative
-- 给用户解释 OVP 是什么
+## 词条: Candidate(候选)
 
-不适用场景：
+**含义:** 系统提出但 *尚未被接受* 的内部状态。包括建议的 object、claim、relation、entity 合并。
 
-- 代码所有权
-- 数据可信边界
-- pipeline stage 命名
+**存储位置:** `60-Logs/knowledge.db` 的 candidate 表;`_Candidates/` 目录里 promotion 前的 evergreen 草稿 frontmatter。
 
-重要说明：
+**由谁产生:** `auto_evergreen_extractor`、语义关系抽取器、LLM 身份合并提议器、歧义路由。**永远是从一个 Source 或另一个 Candidate 派生,从不凭空生成。**
 
-Capture/Compile/Reuse 主要是产品叙事，但它有两个明确架构钩子：
+**能删除吗?** 可以。被拒绝的 Candidate 直接丢弃是正常流程。
 
-- Compile 对应 Layer 4 Policy / Review 的 promotion gate。
-- Reuse 对应 Layer 3 access surface 和 context assembly 选择。
+**能定义真相吗?** 否。必须经过 promotion 才能进入 Canonical State。
 
-写代码时不应依赖这三个 verb 做模块边界，但产品话术和 roadmap 会使用它们。
+**能写入 Canonical State 吗?** 不能,除非通过 Governance promotion。
 
-## 7. 截面 2: 运行流程
+**失败模式:** 过期(源文已变)、孤儿(源被删)、重复、被拒但无审计记录。
 
-执行流程是：
+**如何修复:** 从当前 Source 重新抽取、标为被取代、走审阅流程。
 
-```text
-Ingest -> Interpret -> Absorb -> Refine -> Canonical -> Derived
-```
+**测试:** Canonical State 的每一行都必须能通过审计链回溯到一个或多个被接受的 Candidate。
 
-它用来解释 pipeline 怎么跑。
+## 词条: Canonical State(正式知识状态)
 
-| Runtime stage | 职责 | 主要接触层 |
-| --- | --- | --- |
-| Ingest | 采集并规范化输入 | Layer 1 input + Layer 4 Routing |
-| Interpret | 生成 deep dive 和结构化中间材料 | Layer 1 candidate input |
-| Absorb | 把解释材料纳入知识生命周期 | Layer 1 + Layer 4 Policy/Review |
-| Refine | cleanup / breakdown / normalize 现有知识 | Layer 1 + Layer 4 Policy/Verification |
-| Canonical | 维护 registry / alias / Atlas / MOC consistency | Layer 1 + Layer 4 Verification |
-| Derived | 生成 query / graph / lint / UI / access projections | Layer 2 + Layer 3 + Layer 4 Repair |
+**含义:** 有证据支撑、用户拥有、经过接受流程的长期知识状态。OVP 的信任边界。
 
-适用场景：
+**存储位置:** Vault Markdown(`10-Knowledge/Evergreen/**`、`10-Knowledge/Entity/**`、`40-Resources/`)、concept/alias registry、evidence chains、audit log。
 
-- command docs
-- processor contracts
-- stage handlers
-- workflow execution
-- `ovp --full` / `ovp --incremental`
+**由谁产生:** Governance promotion;用户直接编辑 vault markdown(带审计 hook)。
 
-不适用场景：
+**能删除吗?** 仅通过 Governance 显式删除并审计;从不静默删除。
 
-- 持久状态归属
-- source of truth 判断
+**能定义真相吗?** **可以。** 这就是 OVP 架构里"真相"的定义。
 
-重要说明：
+**失败模式:** 冲突的 claim 未解决、缺失证据、孤儿身份合并、损坏的 markdown。
 
-`Canonical` runtime stage 不等于整个 Layer 1。它只是维护 Layer 1 的一个执行阶段。
+**如何修复:** 审阅队列、矛盾解决、证据重新关联、带审计的手动修正。
 
-`Derived` runtime stage 不等于所有 Layer 2/3。它只是刷新 projection 的执行阶段。
+**测试:** 删掉所有 Projection → 从 Canonical State 重建 → 所有 Projection 都能恢复。**如果某个 Projection 重建不出来,说明那一层承载了本应在 Canonical State 的真相 — 这是架构 bug。**
 
-## 8. 截面 3: 所有权模型
+## 词条: Projection(投影)
 
-所有权模型是：
+**含义:** 从 Canonical State 派生计算出来的状态。索引、图、搜索表、合成的 crystal、view-model JSON。
 
-```text
-Core Platform / Domain Pack / Workflow Profile
-```
+**存储位置:** `60-Logs/knowledge.db`、`40-Resources/Crystals/`、runtime-state JSON、`compiled_views/`。
 
-它用来决定代码、语义、运行路径分别放在哪里。
+**由谁产生:** `ovp-knowledge-index`、`ovp-build-views`、`ovp-synthesize-community-crystals`、各种运行时投影器。
 
-| Ownership unit | 负责 | 不负责 |
-| --- | --- | --- |
-| Core Platform | runtime framework、identity helpers、audit、projection infrastructure、UI shell、command shell、registries | domain-specific object meaning |
-| Domain Pack | object kinds、relation vocabulary、extraction semantics、promotion policy、view recipes | global execution engine |
-| Workflow Profile | 哪些 stage 跑、顺序是什么、使用哪个 pack/profile setting | 新领域语义 |
+**能删除吗?** 可以。删除 Projection 是正常操作,重建就是答案。
 
-适用场景：
+**能定义真相吗?** 否。Projection 永远是派生视图,从不权威。
 
-- 新能力应该进 core 还是 pack
-- pack manifest 怎么扩展
-- workflow profile 是否应该变复杂
-- domain semantics 是否应该硬编码
+**能写入 Canonical State 吗?** 不能,除非通过 Governance(例如 Projection 发现的矛盾要进入审阅队列,而不是直接写 Canonical State)。
 
-不适用场景：
+**失败模式:** 过期(Canonical State 变了 Projection 没跟上)、schema 不匹配、丢失。
 
-- 判断哪个数据是 authority
-- 判断 projection 是否可丢
+**如何修复:** 从 Canonical State 重建。每个 Projection 必须有一条确定的重建路径;没有就是 bug。
 
-关键边界：
+**测试:** `rm -rf` 投影存储 → 跑 `ovp-knowledge-index` → audit / reuse 状态都保住 → 没丢真相。
 
-- pack 可以定义语义。
-- pack 不能绕过 audit。
-- pack 不能把 semantic retrieval 变成 canonical identity。
-- profile 只能选择运行路径，不能承担所有 domain semantics。
+## 词条: Access Surface(使用界面)
 
-## 9. 截面 4: KSR 语义词汇表
+**含义:** 人或 agent 看到并操作的入口。UI 路由、MCP 工具、读类 CLI、搜索结果、简报、导出的 context pack。
 
-KSR 词汇是：
+**存储位置:** `commands/ui_server.py`(HTTP 路由)、`commands/mcp.py`、`40-Resources/` 的导出、briefing JSON。
 
-```text
-source -> observation -> claim -> evidence -> validity -> projection -> permission
-```
+**由谁产生:** 在 Projection 之上的只读组合。
 
-它用来描述长期知识状态。
+**能写入 Canonical State 吗?** **不能。** 想改 Canonical State 的 Surface 必须经过 Governance —— 例如 MCP 的"批准 candidate"工具发出的是 Governance promotion 事件,不是直接写。
 
-| KSR term | 含义 | 主要对应层 |
-| --- | --- | --- |
-| source | 原始材料或捕获输入 | Layer 1 input |
-| observation | 从 source 中观察/抽取出的事实片段 | Layer 1 candidate |
-| claim | 关于对象的结构化陈述 | Layer 1 |
-| evidence | quote、locator、hash、source context、user attribution、derived chain | Layer 1 |
-| validity | review status、freshness、conflict、confidence | Layer 1 + Layer 4 |
-| projection | 物化视图或访问产物 | Layer 2 + Layer 3 |
-| permission | 谁能读、写、promote、route | Layer 4 |
+**失败模式:** 显示过期 Projection、绕过 Governance、把 Candidate 当 Canonical State 显示。
 
-当前实现说明：`evidence.py` 已经是一等模块；`claim` / `validity` 目前主要以 `truth_store.py` / `truth_api.py` 的 projection row 和 schema 形态存在。Layer 1 的 claim 表达仍由 markdown + registry + audit JSONL 承载；未来可以把 claim / validity 提升为更显式的 artifact contract。
+**如何修复:** 重建 Projection;改写 Surface 让写操作走 Governance;在 UI 显式标注 Candidate 状态。
 
-适用场景：
+**测试:** 关掉所有 Surface → Canonical State 不变。(Surface 是纯消费者,缺失它们不能丢失真相。)
 
-- schema 设计
-- evidence span
-- claim lifecycle
-- permission layer
-- review policy
-- backlog task 命名
+## 词条: Governance(治理控制面)
 
-不适用场景：
+**含义:** 拥有"任何进入或修改 Canonical State"的转换的控制面。
 
-- 系统主架构分层
-- command execution stage
-- core/pack/profile ownership
+**存储位置:** `promotion_policy.py`、`relation_promotion.py`、`commands/promote*`、audit JSONL log、审阅队列、projection-lifecycle marker。
 
-KSR 是知识状态语言，不是另一套系统架构。
+**子轴:** Policy · Promotion · Review · Verification · Routing · Repair · Audit。每个子轴是独立的 concern;不要把它们打包成"Governance 这一层"。
 
-## 10. 截面 5: 存储可信和投影生命周期
+**能持有知识吗?** 不能。Governance 配置规则、运行 gate、发出审计事件。被 gate 的知识仍存放在 Candidate / Canonical State。
 
-存储可信截面是：
+**失败模式:** 静默 promotion(无审计)、缺审阅队列、没有重建记录的 repair、模糊的路由。
 
-```text
-Authority
-Derived state
-Projection lifecycle
-```
+**如何修复:** 拿审计日志重放 Canonical State;对账审阅队列;确保每次 promotion 都有审计事件。
 
-它是四层架构里关于“谁可信、谁可丢、坏了怎么修”的窄切面。
+**测试:** 在 Canonical State 里随便挑一行 → 审计日志要能回答 *谁提升了它、何时、来自哪个 Candidate、依据哪条证据*。如果答不出来,Governance 就有漏洞。
 
-| Storage/control term | 对应 | 含义 |
-| --- | --- | --- |
-| Authority | Layer 1 + Layer 4 的 audit/review 部分 | durable truth boundary |
-| Derived state | Layer 2 + Layer 3 的 access caches | rebuildable projections |
-| Projection lifecycle | Layer 4 Repair 管理 Layer 2/3 | repair / rebuild / reindex / hot-path safety |
+---
 
-### Authority
+## 迁移说明
 
-OVP 的 Authority 是：
+旧版 OVP 文档和代码使用以下旧词;新架构词汇取代它们。
 
-```text
-vault markdown + registry + evidence/audit JSONL
-```
-
-它是长期可信、用户可读、可迁移、可审计的状态。
-
-### Derived State
-
-OVP 的 Derived state 是：
-
-```text
-knowledge.db truth/search/graph/access projections
-```
-
-它用于快速查询、展示、组装和检查。
-
-### Projection Lifecycle
-
-Projection lifecycle 负责判断投影坏了以后怎么修。
-
-Lifecycle kinds 现在就预留，不锁具体 backend：
-
-```text
-metadata_only
-  只修 derived metadata，不跑 LLM，不全量 rebuild
-
-full_rebuild
-  从 Authority 重建 knowledge.db projection
-
-semantic_reindex
-  重算昂贵语义索引。当前可以 optional / not implemented，但 schema 必须预留。
-```
-
-Marker 应该是结构化对象，而不是一个裸文件名。
-
-```python
-class ProjectionRepairMarker:
-    kind: Literal["metadata_only", "full_rebuild", "semantic_reindex"]
-    scope: ProjectionScope
-    reason: str
-    created_at: datetime
-    caused_by: str
-
-    authority_schema_version: int
-    projection_schema_version: int
-
-    superseded_by: Optional[str]
-    claimed_by: Optional[str]
-    claim_lease_until: Optional[datetime]
-
-
-class ProjectionScope:
-    pack: Optional[str]
-    profile: Optional[str]
-    projection_kind: Optional[str]
-    source_ids: list[str]
-    object_ids: list[str]
-    space_id: Optional[str]
-```
-
-Operational rules:
-
-- 后写入的更宽 marker 可以 supersede 更窄 marker。
-- `full_rebuild` 可以 supersede `metadata_only`。
-- `semantic_reindex` 不应隐式 supersede `full_rebuild`，除非 resolver 明确判定两者 scope 等价。
-- `claimed_by` 和 `claim_lease_until` 防止两个 worker 同时处理同一个 marker。
-- 如果 marker 的 `authority_schema_version` 小于当前 Authority schema version，resolver 必须提升到 `full_rebuild`。
-- 如果 projection backend 支持 partial rebuild，scope 必须被用于限制 rebuild 范围。
-
-当前实现：
-
-- `projection_lifecycle.py` 将 projection repair marker events 记录在 `60-Logs/projection-repair.jsonl`。
-- marker event log 通过 `written`、`superseded`、`claimed`、`closed` events replay 出当前 marker state。
-- `ensure_knowledge_db_current()` 在 `knowledge.db` 缺失或 legacy schema 不兼容时，会写入并关闭一个 `full_rebuild` marker。
-- `.ovp/schema_version` 持久化当前 vault 的 Authority schema version。
-- `knowledge.db.projection_metadata` 记录 derived store 是由哪个 Authority schema version 和 projection schema version 构建出来的。
-- `ensure_knowledge_db_current()` 会比较这些 version；当 Authority 或 projection schema metadata 新于当前 derived store 时，写入 `full_rebuild` marker 并重建。
-
-## 11. Canonical Scenarios
-
-抽象分层必须能落到真实路径。下面的 scenarios 是架构咬合面的参考。
-
-### 场景 A: 用户剪藏一篇文章
-
-```text
-1. Capture handler 接收文章或 clipping
-   - 产品截面: Capture
-   - 运行截面: Ingest
-   - 架构层: Layer 1 input
-   - Layer 4: Routing 决定进入哪条 workflow
-
-1a. `ovp-absorb --dry-run --json` 可以输出 `source_lifecycle.routing_preview`
-   - Layer 4: Routing / Dispatch 在 mutation 前解释计划路由
-   - preview 不移动文件、不初始化 LLM、不创建 derived state
-
-2. Ingest stage normalize 文件和 source metadata
-   - 写入 source note / raw material
-   - 不直接产生 accepted factual claim
-
-3. Interpret 生成 deep dive 或 structured observation
-   - 架构层: Layer 1 candidate
-   - KSR: observation
-
-4. Layer 4 Policy / Review 判断哪些内容可进入 accepted state
-   - promotion gate
-   - evidence completeness check
-   - high-risk gate if applicable
-
-5. Accepted artifact 落地到 vault markdown / registry / audit event
-   - 架构层: Layer 1 Canonical Knowledge
-   - KSR: claim / evidence / validity
-
-6. Derived stage 刷新 knowledge.db
-   - 架构层: Layer 2 Derived Indexes / Views
-   - 产生 objects / claims / evidence / relations / graph rows
-
-7. Reader/UI/search/graph 展示新内容
-   - 架构层: Layer 3 Context Assembly / Access
-   - 展示内容必须能回溯到 Layer 1 evidence
-```
-
-### 场景 B: `knowledge.db` 被删除或损坏
-
-```text
-1. doctor / startup check 发现 derived store 缺失或不可用
-   - 架构层: Layer 4 Verification
-
-2. repair controller 写入 ProjectionRepairMarker(kind="full_rebuild")
-   - 架构层: Layer 4 Repair
-   - reason 记录具体原因
-   - caused_by 记录 doctor_check / startup_check / user_override
-
-3. rebuild worker claim marker
-   - claimed_by + claim_lease_until 防止重复处理
-
-4. Derived stage 从 Authority 重建 knowledge.db
-   - 架构层: Layer 2
-   - 不重新决定 truth
-
-5. review/audit state replay
-   - audit ledger 是 Layer 1/4
-   - review_status / verification status 必须 replay 到 Layer 2 projection
-
-6. rebuild 成功后清理或 supersede marker
-   - 架构层: Layer 4 Repair / Audit
-
-7. Layer 3 surfaces 恢复读取
-   - UI/search/graph 不应在用户请求路径里偷偷触发重活
-```
-
-### 场景 C: Query 或 agent 发现一个新关系
-
-```text
-1. Query/agent 从 Layer 3 access surface 读到上下文
-   - search result / context pack 不是 authority
-
-2. agent 生成 proposed relation
-   - 架构层: Layer 1 candidate
-   - KSR: observation / candidate claim
-
-3. proposal 写入 review queue
-   - 架构层: Layer 4 Review
-   - 不允许直接写 accepted relation
-
-4. reviewer 或 policy 决定 accept / reject / request evidence
-   - 架构层: Layer 4 Policy + Review
-
-5. accept 后写入 Layer 1 authority + audit event
-   - factual relation 必须有 evidence
-
-6. Derived stage materialize relation / graph edge
-   - 架构层: Layer 2
-
-7. graph/object page 显示新关系
-   - 架构层: Layer 3
-```
-
-## 12. Architectural Invariants
-
-这些 invariants 是架构契约。违反即 bug，除非 PR 明确说明例外和替代约束。
-
-| ID | Invariant | 可机械检查方向 |
-| --- | --- | --- |
-| I-1 | 任何 accepted factual claim 必须有可解析 evidence。结构性状态不适用本条。 | evidence completeness check |
-| I-2 | Layer 2 删除后，必须能从 Layer 1 + projection schema 确定性重建。 | rebuild test |
-| I-3a | Audit ledger 是 append-only；任何状态变化必须 emit 新 event。 | append-only audit check |
-| I-3b | Feed UI 上的 resolved/retry/dismissed patch 必须对应 audit ledger append event。 | feed projection check |
-| I-3c | 删除 Feed UI projection 后，必须能从 audit ledger 重建当前 feed state。 | feed replay test |
-| I-4 | Layer 3 对 Layer 1 状态的写入，必须经过 Layer 4 governance API。 | code review + runtime audit |
-| I-4b | Layer 3 模块不应直接 import Layer 1 mutation symbols；只能 import read-only views。 | import lint |
-| I-5 | review_status / verification status 在 derived rebuild 前后必须保持。 | replay/rebuild test |
-| I-6 | 命名纪律必须被 lint 或 review checklist 强制执行。 | naming lint |
-| I-7 | Projection repair 不能隐式触发 LLM、raw source scan、semantic reindex。 | hot-path test |
-| I-8 | semantic search result 不能自动成为 canonical identity。 | promotion boundary test |
-
-### I-1: Factual Evidence
-
-Accepted factual claim 指“关于 OVP 之外世界的断言”。它必须至少有一个 evidence_kind，且值为以下之一：
-
-- `source_quote`
-  - vault 文件指针
-  - offset 或 locator
-  - content_hash
-- `user_attribution`
-  - user_id
-  - signed audit record
-  - 表示用户手工录入本身就是 evidence
-- `derived_chain`
-  - 引用其它 claim_id
-  - 链条最终必须落到 `source_quote` 或 `user_attribution`
-
-结构性状态不属于 factual claim，豁免本条：
-
-- registry alias
-- routing decision
-- workflow status
-- pack contract decision
-- projection marker
-- review queue status
-
-## 13. Architectural Fitness Functions
-
-每条重要 invariant 都应该能变成 CI、doctor、pre-commit 或 rebuild test。
-
-| Invariant | Check | 建议实现位置 |
-| --- | --- | --- |
-| I-1 | `verify_evidence_complete.py` | `ovp doctor` |
-| I-2 | `verify_projection_rebuild.py` | rebuild integration test |
-| I-3a | `verify_audit_jsonl_append_only.py` | pre-commit / CI |
-| I-3b | `verify_feed_patch_has_audit_event.py` | `ovp doctor` |
-| I-3c | `verify_feed_replay.py` | rebuild test |
-| I-4 | runtime write audit: Layer 3 write must call governance API | runtime audit / tests |
-| I-4b | `import_linter.toml` or ruff rule for forbidden mutation imports | CI lint |
-| I-5 | `verify_review_state_replay.py` | rebuild test |
-| I-6 | `naming_lint.py` scanning banned architecture phrases | CI lint |
-| I-7 | `verify_hot_path_no_heavy_work.py` | UI/search test |
-| I-8 | `verify_semantic_search_no_promotion.py` | promotion boundary test |
-
-Fitness functions should be introduced incrementally. The architecture doc defines the target; implementation can land in separate PRs.
-
-## 14. Schema Versioning And Projection Compatibility
-
-Layer 1 schema and Layer 2 projection schema will evolve. This must be explicit.
-
-Suggested rules:
-
-- Authority schema version 记录在 vault root 的 `.ovp/schema_version`。
-- Projection schema version 记录在 `knowledge.db` 的 `projection_metadata`。
-- Every derived projection should record which Authority schema version and projection schema version it was built from.
-- Startup/doctor checks compare current versions against projection versions.
-- If current Authority schema version is newer than the marker or projection version, write or promote to `ProjectionRepairMarker(kind="full_rebuild")`.
-- Schema migrations should be monotonic and explicit.
-- Projection rebuild must not erase Layer 1/4 review or audit state.
-
-Version compatibility connects schema migration with projection lifecycle:
-
-```text
-Authority schema changed
-  -> projection compatibility check
-  -> full_rebuild marker if needed
-  -> derived rebuild
-  -> audit/review replay
-  -> marker resolved
-```
-
-Do not rely on ad hoc "just rerun the pipeline" behavior for schema changes.
-
-## 15. 命名纪律
-
-为了避免继续混乱，后续文档和代码注释应遵守这些命名规则。
-
-1. 不要把 `knowledge.db` 叫 source of truth。
-   - 正确：`knowledge.db` 是 derived store。
-   - 正确：`knowledge.db` 包含 truth projections。
-
-2. 不要把 `truth_store.py` 叫 Authority。
-   - 正确：`truth_store.py` 定义 projection schema。
-
-3. 不要把 semantic search result 叫 canonical identity。
-   - 正确：semantic search 是 access/search projection。
-
-4. 不要把 reader page / dashboard / briefing 叫 truth。
-   - 正确：它们是 Layer 3 projections。
-
-5. 不要用 Capture/Compile/Reuse 判断代码归属。
-   - 正确：代码归属用 Core/Pack/Profile。
-
-6. 不要用六层 runtime model 判断持久状态所有权。
-   - 正确：状态所有权用四层主架构。
-
-7. 不要把 KSR task list 当完整架构。
-   - 正确：KSR 是知识状态词汇和 backlog 语义输入。
-
-8. 不要让 derived rebuild 擦掉 review/audit 决策。
-   - 正确：review/audit state 属于 Layer 1/4，应 replay 到 Layer 2。
-
-9. 不要让 projection repair 隐式触发昂贵流程。
-   - 正确：lightweight repair、full rebuild、semantic reindex 必须分开。
-
-## 16. 当前现状
-
-已经比较强的部分：
-
-- 六层 execution pipeline 已经存在并能跑。
-- Core/Pack/Profile 已经是真实 ownership model。
-- `research-tech` 已经是 reference pack。
-- `knowledge.db` 已经承载较多 derived projections。
-- truth API、object browsing、signals/actions、contradictions、graph、query、UI 已经存在。
-- audit/replay 概念已经在 evidence、relation promotion 等路径里出现。
-
-仍然太隐式的部分：
-
-- canonical artifact contract 仍需继续一等公民化；derived evidence rows 已有第一版 line/char span schema，但 factual evidence_kind enforcement 和 claim lifecycle 字段仍需加强。
-- Layer 4 子轴还没有完全反映到代码结构。
-- projection labels 已经贯穿核心 access payload 和 materialized reader artifacts；doctor/export enforcement 以及未来新增 surface 还需要持续消费这些标注。
-- projection lifecycle marker 已有结构化 kind/scope/reason、supersession、claim lease，并已接入 `knowledge.db` rebuild 路径。
-- dashboard/search hot path、workflow wiring、source routing preview、evidence span backfill 和 candidate risk 已经有第一批 fitness checks；更深的 evidence completeness、projection replay、import-boundary checks 仍未完成。
-- context assembly recipes 还需要收束。
-- governance / resolver contracts 还需要显式化。
-- schema versioning 已接入 `knowledge.db` projection lifecycle：Authority/projection version metadata 已持久化，stale metadata 会触发 full rebuild marker。
-- fitness functions 只落地了第一批，仍需扩展到 CI/doctor/pre-commit 的完整契约。
-- working memory 是第一版带 budget 的 context-pack projection：会记录 context budget metadata，并为选入的 canonical objects 写入 `working_memory` reuse events。
-- OVP Prime 会把带 budget 的 context pack 物化成 `60-Logs/session-snapshots/<session_id>.md` 和 `latest.md`，并为注入会话的 selected objects 写入 `ovp_prime` reuse events。
-- runtime state 现在是一层派生的 operational projection 和读取 surface：`ovp-runtime-state` 写出 `60-Logs/runtime-state/current.{json,md}`，`/ops` 和 `ovp doctor` 消费同一份 health projection，`GET /api/runtime-state` 优先读取已物化的 `current.json`，`POST /api/runtime-state` 刷新并写入这份 projection。runtime-state refresh 会流式读取 event log，并限制 workflow-action 展示行数，同时保留聚合计数。它也会追踪 workflow action queue health；workflow action 继续使用现有 action worker lock 加 stale-running attention，不在多 worker 调度出现前抽象成通用 lease。
-- reader-first home 已经成为默认入口；object page 已有 reader profile、source rail 和按 kind 区分的 reader lens；`/graph` 已有第一版 spatial map projection；`/search` 已按 kind、summary、evidence count、match reason 组织 reader results。
-
-## 17. 近期架构动作
-
-不要再新增一套架构模型。近期应该做的是把现有四层模型工程化。
-
-优先顺序：
-
-1. 新增 access surface 时必须继续带 projection metadata，并补 doctor/export checks 验证标注存在。
-2. 在扩大自动 promotion 前，补更严格的 factual evidence completeness checks。
-3. 扩展 doctor/export checks，同时验证 projection marker replay 和 projection labels。
-4. 未来新增 projection backend 前，先沿用同一套 metadata contract，再加 semantic reindex worker；projection-repair marker 的状态转移必须继续在 marker log file lock 下完成。
-5. 只有 action processing 超出现有 single-worker lock 模型时，才新增通用 workflow lease；runtime state 必须保持为 projection，不能变成 Authority。
-6. 把 routing、promotion、review、permission 从 prompt/散落代码中收束为显式 governance/dispatch contract。
-7. 预留 semantic_reindex lifecycle kind，但不提前锁定 LanceDB 或其它 backend。
-
-## Appendix: Backlog Mapping
-
-这份文档本身不应依赖 backlog ID 才成立。下面只是当前实现映射，后续可迁到 `BACKLOG.md` 或单独 open-items 文档。
-
-| 架构工作 | 当前 backlog/task 对应 |
+| 旧词 | 新词 |
 | --- | --- |
-| Projection marking | `BL-002`, `KSR-002` PR #78 已交付 |
-| Dashboard/search hot-path audit | `BL-003`, `KSR-015` PR #77 已交付 |
-| Workflow wiring eval suite | `BL-004`, `KSR-026` PR #77 已交付 |
-| Article routing preview | `BL-005`, `KSR-014` 已在 PR #81 交付 |
-| Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` 已在 PR #82 交付 |
-| Candidate risk layering | `BL-007`, `KSR-003` 已在 PR #82 交付 |
-| Reader-first access surfaces | `BL-001`；`BL-008`、`BL-009` 已通过 PR #79 和 PR #83 交付；`BL-010` 已在 PR #80 交付 |
-| Reader-oriented search | `BL-011` 已在 PR #84 交付 |
-| Trusted reuse / context-pack loop | `BL-012`、`BL-013` 第一版已在 PR #89 和 PR #90 交付 |
-| Operational runtime graph / observability | `BL-014` 第一片 runtime-state 在 PR #91 落地；`/ops` / doctor / API wiring 在 PR #92；M5 closeout slice 收口 action queue health |
-| Projection repair lifecycle | `BL-020` 已在 PR #87 落地 |
-| Schema versioning and migration trigger | `BL-021` 已在 PR #87 和 PR #88 中补完 |
+| Authority(架构含义) | Canonical State | <!-- lint-allow: migration table -->
+| Layer 1 / Layer 1 Canonical Knowledge | Canonical State | <!-- lint-allow: migration table -->
+| Layer 2 / Derived Indexes / Derived state | Projections | <!-- lint-allow: migration table -->
+| Layer 3 / Context Assembly / Access | Access Surfaces | <!-- lint-allow: migration table -->
+| Layer 4 | Governance Control Plane(子轴显式命名) | <!-- lint-allow: migration table -->
+| 运行阶段 `Canonical` | 运行阶段 `Normalize`(见 [RUNTIME](./RUNTIME.md)) |
+| `source_authority` 表(代码) | 暂保留;迁移到 `source_credibility_score` 是低优先级。**`source_authority` 衡量的是"信源可信度",和 Canonical State 无关。** |
 
-## Bottom Line
+`Authority` 在新架构里不再代表"状态";`source_authority` 表保留原意("这个信源有多可信"),不指代架构的真相边界。
 
-以后解释 OVP 架构时，统一用这句话：
+---
 
-```text
-四层模型是主架构。
-其它都是截面。
-```
+## 不在本文件里的内容
 
-完整版本：
+- **运行阶段**(Ingest / Interpret / Absorb / Refine / Normalize / Derive)— 见 [RUNTIME](./RUNTIME.md)。
+- **Pack 模型**(Core / Domain Pack / Workflow Profile,pack 发现,schema)— 见 [PACKS](./PACKS.md)。
+- **UI / MCP / CLI Surface 细节** — 见 [PRODUCT_SURFACES](./PRODUCT_SURFACES.md)。
+- **来自旧文档的其它词汇**(Capture/Compile/Reuse、KSR、Crystal、Atlas、Briefing、Working Memory、Context Pack、Runtime State、Synthesis Layer)— 见 [GLOSSARY](./GLOSSARY.md)。它们都是上面六个核心词的某种 *kind*,不是并列的架构概念。
 
-```text
-Four-layer architecture controls state ownership.
-Six-layer pipeline controls execution.
-Core/Pack/Profile controls code and semantic ownership.
-KSR controls knowledge-state vocabulary.
-Capture/Compile/Reuse controls product narrative.
-Authority/Derived/Projection lifecycle controls storage trust and repair.
-```
+## 怎样新增一个词
 
-这能保留已有概念的价值，同时避免它们互相抢“主架构”的位置。
+只有当你能填出"机械模板"里全部七项时,新词才属于本文件。如果你答不出:
+
+- **它存在哪里?**
+- **谁产生它?**
+- **能删除吗?**
+- **能定义真相吗?**
+- **失败模式是什么?**
+- **怎么修复?**
+- **什么测试守住边界?**
+
+…那它不是架构词。它属于 `GLOSSARY.md`、`PRODUCT_SURFACES.md` 或 `RUNTIME.md`。首页词汇预算锁死在六个。

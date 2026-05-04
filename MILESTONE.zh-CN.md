@@ -44,7 +44,7 @@ OVP 正在从个人 Zettelkasten 演进为：
 | M5a Quality And Dedup Hardening | Done | concept dedup pipeline 集成（scope_slugs）、promote semantic guard (trigram-Jaccard)、历史数据清理 (71→61 Evergreens)、`find_similar_slugs` 工具 (PR #101) |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer、claim lifecycle、conflict detection、policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor、query feedback、routines、notebook/raw-source mode |
-| **M8 Type Unification And Extraction Quality** | **Active** | 统一 object kind 分类体系、Layer 1 `entity_type` frontmatter、body-size-aware extraction (P3)、quote-grounding (P4)、single-pass LLM 重构 (P5)、历史回填 |
+| **M8 Type Unification And Extraction Quality** | **Active** | 统一 object kind 分类体系、Canonical-State `entity_type` frontmatter、body-size-aware extraction (P3)、quote-grounding (P4)、single-pass LLM 重构 (P5)、历史回填 |
 | **M9 Pack As Domain Ontology** | **Next** | Pack 定义 object kind specs、typed relation constraints、schema registry、domain-specific extraction profiles |
 | **M10 Operational Knowledge Layer** | **Later** | object 上的 action types、permission + contract、跨实体聚合、decision memory |
 

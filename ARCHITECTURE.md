@@ -1,712 +1,203 @@
 # OVP Architecture
 
-> Language: English | [简体中文](ARCHITECTURE.zh-CN.md)
+> Architecture index: [README](./README.md) | **ARCHITECTURE** | [RUNTIME](./RUNTIME.md) | [PACKS](./PACKS.md) | [PRODUCT_SURFACES](./PRODUCT_SURFACES.md) | [GLOSSARY](./GLOSSARY.md)
+>
+> Language: English | [简体中文](./ARCHITECTURE.zh-CN.md)
+>
+> **This file explains:** where durable knowledge lives, what is rebuildable from it, and what the Governance Control Plane controls.
+> **This file does not explain:** product roadmap, UI details, pack authoring, command execution, or backlog status. Each lives in the doc named at the top.
 
-**Status:** Review draft v2
-**Updated:** 2026-04-29
+---
 
-This document does not introduce another competing layer model. It puts the terms already used in OVP back into their proper places so product narrative, runtime flow, code ownership, knowledge-state semantics, and storage trust boundaries do not collapse into one ambiguous architecture.
+## One sentence
 
-Core rule:
+OVP turns external **Sources** into reviewable **Candidates**, promotes accepted knowledge into **Canonical State**, builds rebuildable **Projections** from it, and exposes those projections through **Access Surfaces**. The **Governance Control Plane** controls every write, promotion, repair, and audit boundary.
 
-> OVP has one primary architecture: the four-layer persistent architecture.
-> All other vocabularies are perspectives over that architecture, not parallel architectures.
+## The six core terms
 
-## 0. Overview
+The architecture has exactly six first-class words. Every other concept (Crystal, Atlas, KSR, Capture/Compile/Reuse, runtime stages, etc.) is either a kind of one of these or lives in the [glossary](./GLOSSARY.md).
 
-OVP uses several vocabularies because they answer different questions.
+| Term | Origin | Mutability | Defines truth? |
+| --- | --- | --- | --- |
+| **Source** | external (web, paper, repo, clip) | original immutable; metadata appendable | no |
+| **Candidate** | system-proposed (LLM, parser, agent) | mutable, rejectable, mergeable | no |
+| **Canonical State** | accepted via promotion | revisable through Governance + audit | **yes** |
+| **Projection** | derived from Canonical State | freely rebuildable | no |
+| **Access Surface** | UI / search / graph / briefing / export / MCP | read-mostly; writes go via Governance | no |
+| **Governance** | control plane (cross-cutting) | configures rules, never holds knowledge | controls |
 
-| Vocabulary | What it explains | Position |
-| --- | --- | --- |
-| Capture -> Compile -> Reuse | Product narrative: why a user needs OVP | Product perspective |
-| Ingest -> Interpret -> Absorb -> Refine -> Canonical -> Derived | Execution flow: how the pipeline runs | Runtime perspective |
-| Core Platform / Domain Pack / Workflow Profile | Ownership: what core, packs, and profiles own | Ownership perspective |
-| Canonical Knowledge / Derived Indexes / Context Assembly / Governance | Persistent architecture: truth, projection, access, and control boundaries | Primary architecture |
-| KSR: source -> observation -> claim -> evidence -> validity -> projection -> permission | Long-term knowledge-state semantics | Semantic vocabulary |
-| Authority / Derived state / Projection lifecycle | Storage trust boundary and projection repair mechanism | Storage/control perspective |
-
-Canonical wording:
-
-```text
-The four-layer model governs architecture.
-The six-stage pipeline governs execution.
-Core/Pack/Profile governs ownership.
-KSR governs knowledge-state language.
-Capture/Compile/Reuse governs product narrative.
-Authority/Derived/Projection lifecycle governs storage trust and repair.
-```
-
-Mapping table:
-
-| Primary layer | Product narrative | Six-stage runtime | Ownership model | KSR semantics | Storage trust |
-| --- | --- | --- | --- | --- | --- |
-| Layer 1 Canonical Knowledge | Capture / Compile | Interpret / Absorb / Refine / Canonical | Core + pack semantics | source / observation / claim / evidence / validity | Authority |
-| Layer 2 Derived Indexes / Views | Reuse substrate | Derived | Core projection infra + pack projection semantics | projection | Derived state |
-| Layer 3 Context Assembly / Access | Reuse surface | Derived output / access commands | Core shell + pack view recipes | projection | Access projection |
-| Layer 4 Governance / Control Plane | Compile gate / Reuse feedback | Absorb / Refine / Canonical / Derived controls | Core governance primitives + pack policies + profile routing | validity / permission | Projection lifecycle + audit |
-
-## 1. Primary Architecture: Four Persistent Layers
-
-All long-lived decisions about state ownership, trust boundaries, projections, access, and governance should land in these four layers.
+## Flow
 
 ```text
-Layer 1: Canonical Knowledge
-  The long-lived knowledge state OVP trusts and maintains.
+Inputs / Sources                          (external, immutable)
+        |
+        v
+Candidates                                (system-proposed, awaiting review)
+        |        ^
+        |        |  promotion, review, verification, audit
+        v        |
+Canonical State                           (accepted, evidence-backed, long-term)
+        |
+        v
+Projections                               (knowledge.db, graph, search, crystals)
+        |
+        v
+Access Surfaces                           (reader, ops, search, briefing, MCP, export)
 
-Layer 2: Derived Indexes / Views
-  Rebuildable indexes, graphs, query stores, and diagnostic views derived from Layer 1.
 
-Layer 3: Context Assembly / Access
-  Reader, operator, query, export, briefing, and agent-context surfaces assembled from persistent knowledge.
-
-Layer 4: Governance / Control Plane
-  Cross-cutting control over promotion, review, verification, routing, repair, audit, and workflow boundaries.
+Governance Control Plane (cross-cutting)
+        promotion · review · verification · repair · permissions · audit
 ```
 
-Layer 4 is not upstream of Layer 1, and it is not the last pipeline step. It is a cross-cutting control plane.
-
-```text
-+--------------------------------------------------------------------+
-| Layer 4: Governance / Control Plane                                |
-|                                                                    |
-|  Policy  Promotion  Review  Verification  Dispatch  Repair  Audit  |
-|                                                                    |
-|  +------------------+     +------------------+     +-------------+ |
-|  | Layer 1          | --> | Layer 2          | --> | Layer 3     | |
-|  | Canonical        |     | Derived          |     | Access /    | |
-|  | Knowledge        |     | Indexes / Views  |     | Context     | |
-|  +------------------+     +------------------+     +-------------+ |
-|                                                                    |
-+--------------------------------------------------------------------+
-```
-
-### Layer 4 Subaxes
-
-Layer 4 must not become a junk drawer. It is split into at least seven subaxes:
-
-| Subaxis | Responsibility | Examples |
-| --- | --- | --- |
-| Policy | What may be written, promoted, or automated | promotion rules, who-can-write, high-risk gate |
-| Promotion | The Policy + Review intersection that turns a candidate or derived proposal into accepted state | `promote_candidates.py`, `promotion_policy.py`, `promotion_audit.py`, `relation_promotion.py`, `workspace_promotion.py` |
-| Review | Human review and queue lifecycle | candidate review, contradiction review, stale-summary review |
-| Verification | Evidence, hash, freshness, and replay checks | evidence status, content hash check, review-state replay |
-| Routing / Dispatch | Workflow path selection, task dispatch, and ambiguity routing | workflow profile routing, ambiguity dispatch, source routing preview JSON |
-| Repair | Projection lifecycle and rebuild control | metadata repair marker, full rebuild marker, semantic reindex marker |
-| Audit | Accountability chain and immutable event records | audit JSONL, promotion event, review event |
-
-Promotion is not a new layer. It is the gate where Policy decides whether a candidate can enter canonical state, while Review/Audit record the acceptance process.
-
-When saying "Layer 4 controls X", name the subaxis. Avoid using "Resolver" for Layer 4 routing in architecture prose; reserve resolver language for identity and concept resolution, such as `concept_resolver.py`.
-
-## 2. Layer 1: Canonical Knowledge
-
-Layer 1 is OVP's long-term trust boundary.
-
-It answers:
-
-- Which knowledge objects actually exist?
-- What is their stable identity?
-- Which factual claims have been accepted?
-- Where is the evidence for each factual claim?
-- Can the claim be traced to a source or explicit user attribution?
-- Which writes passed review, promotion, or verification?
-- If derived state is lost, can it be recomputed from here?
-
-Current OVP Authority consists of:
-
-- vault Markdown
-- concept registry / alias registry
-- source notes / deep-dive notes / evergreen notes
-- evidence quote / locator / content hash
-- audit JSONL / promotion event / verification event
-- accepted state after review
-
-Layer 1 is not "everything in the database". OVP Layer 1 should be file-native, evidence-backed, and user-owned.
-
-Boundaries:
-
-- `knowledge.db` is not Layer 1.
-- `truth_store.py` is not Layer 1.
-- `truth_store.py` defines projection schemas for queryable rows.
-- candidate queues and review queues are not Layer 1 until review/promotion accepts them.
-- LLM output is not Layer 1 unless it passes an explicit absorb, review, or promotion path.
-
-Layer 1 may be slower, but it must be readable, diffable, backup-friendly, migratable, auditable, and replayable.
-
-## 3. Layer 2: Derived Indexes / Views
-
-Layer 2 is rebuildable state computed from Layer 1.
-
-It answers:
-
-- How can the UI list objects quickly?
-- How can query/search run quickly?
-- How can graph views render quickly?
-- How can contradictions be queried quickly?
-- How can briefing, dashboard, and context packs assemble quickly?
-- Which local runtime store should MCP and prompt assembly read?
-
-Current derived state includes:
-
-- `knowledge.db`
-- truth projection rows:
-  - `objects`
-  - `claims`
-  - `claim_evidence`
-  - `relations`
-  - `contradictions`
-- graph projection rows:
-  - `graph_edges`
-  - `graph_clusters`
-- access/query rows:
-  - `compiled_summaries`
-  - `reuse_events`
-  - search/query payloads
-- generated views:
-  - Atlas
-  - MOC
-  - graph views
-  - lint outputs
-  - daily delta
-
-Layer 2 may index, aggregate, cache, denormalize, optimize schemas for UI/query/graph, and be deleted then rebuilt.
-
-Layer 2 must not decide truth, overwrite Layer 1, promote semantic search results into canonical identity, or treat projection rows as source of truth.
-
-Naming discipline:
-
-- Say `truth projection`, not `truth source`.
-- Say `graph projection`, not `canonical graph truth`.
-- Say `search projection`, not `semantic truth`.
-- Say `knowledge.db derived store`, not `knowledge.db authority`.
+Governance is **not** a fourth step in the flow. It sits across all four states, controlling every write that promotes a Candidate, repairs a Projection, or modifies a Surface that touches Canonical State.
 
-## 4. Layer 3: Context Assembly / Access
+---
 
-Layer 3 turns persistent knowledge into surfaces and context that users, agents, and operators can use.
+## Term: Source
 
-It answers:
+**Meaning:** External, user-attributable raw material — a clipped article, a paper PDF, a GitHub repo snapshot, a Pinboard entry, a hand-written note.
 
-- What should a user see first?
-- How should reader pages be organized?
-- Which claims, evidence, and relations should object pages show?
-- Is the graph page a spatial corpus map or a debug report?
-- How should search results explain provenance?
-- How should briefings, context packs, and prompts be assembled?
-- Where should operators review and maintain the system?
-
-Current Layer 3 surfaces include, non-exhaustively:
+**Stored at:** `50-Inbox/03-Processed/<YYYY-MM>/`, `60-Logs/raw_data/`, the original `aliases.json` and content-hash records.
 
-- `ovp-ui`
-- reader atlas / future reader home
-- object pages
-- graph page
-- `ovp-query`
-- `ovp-export`
-- `ovp-truth`
-- `ovp-mcp` / MCP read tools
-- `ovp-build-crystals`
-- `ovp-working-memory`
-- `ovp-link-suggest`
-- briefing
-- signals/actions
-- context packs
-- prompt assembly
+**Produced by:** `ovp-article` / `ovp-paper` / `ovp-github` / `ovp-clippings` and the user manually pasting markdown.
 
-Layer 3 normally reads Layer 2 for speed, but it must remain traceable to Layer 1.
+**Can be deleted?** The processed copy can be archived; the raw record on filesystem is the source of `Inputs`.
 
-Boundaries:
+**Can it define truth?** No. A Source is *raw input*. Truth requires evidence + acceptance.
 
-- search results are access, not authority.
-- briefings are access, not authority.
-- reader pages are projections, not independent truth stores.
-- context packs are projections, not agent-memory authority.
-- dashboards are projections, not workflow truth.
-- Layer 3 must not silently promote displayed content into Layer 1.
+**Failure mode:** Lost original; renamed; unparseable encoding.
 
-LearnBuffett's product inspiration belongs here: readable object pages, concept extraction display, backlink/source rails, and spatial graph views. This changes product shape, not the Layer 1 truth model.
+**Repair:** Re-ingest from origin; recompute content hash; hand re-attach metadata.
 
-## 5. Layer 4: Governance / Control Plane
+**Test:** A Source's content hash + ingestion timestamp uniquely identify it; re-ingesting an unchanged URL must be idempotent.
 
-Layer 4 is OVP's control plane.
+## Term: Candidate
 
-It answers:
+**Meaning:** System-proposed internal state that has *not yet been accepted*. Includes proposed objects, claims, relations, and entity merges.
 
-- Can a candidate enter canonical state?
-- Does a factual claim require review?
-- Is evidence stale, broken, or verified?
-- Which workflow should a source use?
-- Which path should handle an ambiguity?
-- Which users/agents may write which state?
-- Is a projection stale, repairable, or rebuild-only?
-- Can a workflow item be claimed, leased, retried, closed, or superseded?
+**Stored at:** `60-Logs/knowledge.db` candidate tables; pre-promotion frontmatter on `_Candidates/` evergreen drafts.
 
-Current Layer 4 components include:
+**Produced by:** `auto_evergreen_extractor`, semantic relation extractor, LLM identity-merge proposer, ambiguity router. **Always derived from a Source or another Candidate, never invented.**
 
-- promotion policies
-- review queues
-- contradiction review
-- stale-summary review
-- evidence verification / replay
-- relation promotion replay
-- action queue
-- focused action handlers
-- signals/actions
-- doctor checks
-- pack contracts
-- workflow/profile routing
-
-Boundaries:
-
-- governance rules should be explicit and testable.
-- agent output must not silently become accepted truth.
-- review state must survive derived rebuilds.
-- projection repair must be governed separately from ordinary access.
-
-## 6. Perspective 1: Capture -> Compile -> Reuse
-
-This is the product story, not the storage architecture.
-
-| Verb | User meaning | Architectural hook |
-| --- | --- | --- |
-| Capture | Bring material into OVP without losing provenance | Layer 1 source input + runtime ingest |
-| Compile | Turn material into candidates, objects, claims, evidence, and relations | Layer 1 + Layer 4 Policy/Review |
-| Reuse | Use compiled knowledge in reader pages, graph, search, briefings, prompts, and context packs | Layer 2 + Layer 3 |
-
-Capture/Compile/Reuse mainly explains OVP to users, but it has two architecture hooks:
-
-- Compile maps to Layer 4 Policy promotion gates.
-- Reuse maps to Layer 3 access surface and context assembly choices.
-
-Do not use these verbs as module boundaries in code. They are product and roadmap language.
-
-## 7. Perspective 2: Six-Stage Runtime
-
-The six-stage model explains pipeline execution order, not persistent ownership.
-
-| Runtime stage | What it does | Persistent layers touched |
-| --- | --- | --- |
-| Ingest | Normalize incoming material | Layer 1 source input |
-| Interpret | Produce extraction / interpretation | Layer 1 candidate |
-| Absorb | Decide how interpretation enters the vault | Layer 1 + Layer 4 |
-| Refine | Clean up or decompose existing notes | Layer 1 + Layer 4 |
-| Canonical | Update stable registry / Atlas / MOC state | Layer 1 |
-| Derived | Build query / graph / lint / UI / access projections | Layer 2 + Layer 3 + Layer 4 Repair |
-
-The runtime may be refactored without changing the persistent architecture. Do not confuse a stage with an ownership layer.
-
-## 8. Perspective 3: Core / Pack / Profile
-
-This perspective defines who owns behavior.
-
-| Owner | Owns | Must not own |
-| --- | --- | --- |
-| Core Platform | vault layout, runtime, CLI, registry framework, derived store, audit, plugin loading | domain semantics |
-| Domain Pack | object kinds, workflow profiles, extraction semantics, schemas, templates, lint/refine rules | core trust boundary |
-| Workflow Profile | executable DAG and routing defaults inside a pack | canonical identity or permission policy by itself |
-
-Rules:
-
-- core defines the frame.
-- pack defines semantics.
-- profile selects a path.
-- pack cannot bypass audit.
-- pack cannot turn semantic retrieval into canonical identity.
-- profile cannot carry all domain semantics.
-
-## 9. Perspective 4: KSR Semantic Vocabulary
-
-KSR vocabulary:
-
-```text
-source -> observation -> claim -> evidence -> validity -> projection -> permission
-```
-
-It describes long-term knowledge state.
-
-| KSR term | Meaning | Primary layer |
-| --- | --- | --- |
-| source | Original material or capture input | Layer 1 input |
-| observation | Fact fragment observed or extracted from a source | Layer 1 candidate |
-| claim | Structured statement about an object | Layer 1 |
-| evidence | quote, locator, hash, source context, user attribution, derived chain | Layer 1 |
-| validity | review status, freshness, conflict, confidence | Layer 1 + Layer 4 |
-| projection | materialized view or access artifact | Layer 2 + Layer 3 |
-| permission | who can read, write, promote, or route | Layer 4 |
-
-Current implementation note: `evidence.py` is already a first-class module. `claim` and `validity` currently exist mainly as projection rows and schemas in `truth_store.py` / `truth_api.py`. Layer 1 claim expression is still carried by markdown + registry + audit JSONL. Future work may promote claim/validity into more explicit artifact contracts.
-
-Use KSR for schema design, evidence spans, claim lifecycle, permission layers, review policy, and backlog task naming.
-
-## 10. Perspective 5: Authority / Derived State / Projection Lifecycle
-
-This perspective is narrower than the four-layer architecture. It focuses on storage trust and repair.
-
-```text
-+------------------------------------------------+
-| Authority                                      |
-| vault markdown + registry + evidence/audit     |
-+----------------------+-------------------------+
-                       |
-                       | derive / project
-                       v
-+------------------------------------------------+
-| Derived state                                  |
-| knowledge.db truth/search/graph/access rows    |
-+----------------------+-------------------------+
-                       |
-                       | detect drift / damage
-                       v
-+------------------------------------------------+
-| Projection lifecycle                           |
-| repair marker / rebuild marker / reindex marker|
-+------------------------------------------------+
-```
-
-| Layer | Maps to | Can be rebuilt? |
-| --- | --- | --- |
-| Authority | Layer 1 | No. It is the durable trust boundary. |
-| Derived state | Layer 2 + Layer 3 access caches | Yes. It is rebuildable projection state. |
-| Projection lifecycle | Layer 4 Repair + Verification | It controls repair/rebuild. |
-
-Current OVP mapping:
-
-```text
-Authority:
-  vault markdown
-  registry files
-  evidence locators / hashes
-  promotion and review audit JSONL
-
-Derived state:
-  knowledge.db
-  truth/search/graph/access projections
-  UI/search/query payloads
-
-Projection lifecycle:
-  lightweight repair marker
-  full rebuild marker
-  semantic reindex marker reserved for future heavy semantic projections
-```
-
-## 11. Projection Repair Markers
-
-Projection repair should be a structured state machine, not loose marker filenames.
-
-```python
-class ProjectionRepairMarker:
-    id: MarkerId
-    kind: Literal["metadata_only", "full_rebuild", "semantic_reindex"]
-    scope: Scope
-    reason: str
-    created_at: datetime
-    caused_by: str
-
-    authority_schema_version: int
-    projection_schema_version: int
-
-    superseded_by: Optional[MarkerId]
-    claimed_by: Optional[str]
-    claim_lease_until: Optional[datetime]
-```
-
-`scope` should be structured:
-
-```python
-class Scope:
-    pack: Optional[str]
-    profile: Optional[str]
-    projection_kind: Optional[str]
-    source_ids: list[str]
-    object_ids: list[str]
-    entity_types: list[str]
-```
-
-Lifecycle kinds:
+**Can be deleted?** Yes. Discarding a rejected candidate is normal flow.
 
-- `metadata_only`: copy or fix projection metadata without recomputing embeddings or heavy derived artifacts.
-- `full_rebuild`: rebuild the projection from Authority.
-- `semantic_reindex`: reserved now as a first-class lifecycle kind for future heavy semantic projections; it does not commit OVP to LanceDB or any specific backend.
+**Can it define truth?** No. A Candidate must pass promotion to enter Canonical State.
 
-Operational rules:
+**Can it write Canonical State?** No, except through Governance promotion.
 
-- a broader marker can supersede a narrower marker.
-- `claimed_by` and `claim_lease_until` prevent duplicate workers from handling the same marker.
-- if the current Authority schema version is newer than the marker or projection version, promote to `full_rebuild`.
+**Failure mode:** Stale (no longer matches its source); orphaned (source deleted); duplicate; rejected without audit trail.
 
-Current implementation:
+**Repair:** Re-extract from current Source; mark as superseded; apply review.
 
-- `projection_lifecycle.py` records projection repair marker events in `60-Logs/projection-repair.jsonl`.
-- The marker event log is append-oriented and reconstructs current marker state from `written`, `superseded`, `claimed`, and `closed` events.
-- `ensure_knowledge_db_current()` writes and closes a `full_rebuild` marker when `knowledge.db` is missing or has an incompatible legacy schema.
-- `.ovp/schema_version` persists the Authority schema version for the vault.
-- `knowledge.db.projection_metadata` records the Authority schema version and projection schema version used to build the derived store.
-- `ensure_knowledge_db_current()` compares those versions and writes a `full_rebuild` marker when Authority or projection schema metadata is newer than the current derived store.
+**Test:** Every Canonical State row must trace back to one or more accepted Candidates via the audit trail.
 
-## 12. Canonical Scenarios
+## Term: Canonical State
 
-### Scenario A: User Clips An Article
-
-```text
-1. Capture handler writes raw source note
-   - Runtime: Ingest
-   - Architecture: Layer 1 input
+**Meaning:** Evidence-backed, user-owned, accepted long-term knowledge. The OVP trust boundary.
 
-1a. `ovp-absorb --dry-run --json` can emit `source_lifecycle.routing_preview`
-   - Layer 4: Routing / Dispatch explains the planned source route before mutation
-   - The preview does not move files, initialize LLMs, or create derived state
+**Stored at:** vault Markdown (`10-Knowledge/Evergreen/**`, `10-Knowledge/Entity/**`, `40-Resources/`), concept and alias registries, evidence chains, audit log.
 
-2. Ingest normalizes source metadata
-   - Runtime: Ingest
-   - Does not create accepted factual claims
-
-3. Interpret creates candidates, observations, and possible claims
-   - Runtime: Interpret
-   - KSR: source / observation / candidate claim
-
-4. Promotion policy decides whether each candidate can auto-promote
-   - Architecture: Layer 4 Policy + Promotion
-
-5. Review records accept/reject when needed
-   - Architecture: Layer 4 Review + Audit
-
-6. Accepted state lands in markdown / registry / audit
-   - Architecture: Layer 1 Canonical Knowledge
-   - KSR: claim / evidence / validity
-
-7. Derived stage refreshes knowledge.db and graph rows
-   - Architecture: Layer 2 Derived Indexes / Views
-
-8. Reader/object/graph surfaces show the result
-   - Architecture: Layer 3 Context Assembly / Access
-```
-
-### Scenario B: `knowledge.db` Is Deleted Or Corrupted
-
-```text
-1. doctor / startup check detects missing or invalid derived store
-   - Architecture: Layer 4 Verification
-
-2. repair controller writes ProjectionRepairMarker(kind="full_rebuild")
-   - Architecture: Layer 4 Repair
-   - reason records the concrete cause
-   - caused_by records doctor_check / startup_check / user_override
-
-3. rebuild worker claims the marker
-   - claimed_by + claim_lease_until prevent duplicate work
-
-4. Derived stage rebuilds knowledge.db from Authority
-   - Architecture: Layer 2
-   - reads Layer 1 only
-
-5. Review/feed state is replayed from audit ledger
-   - Architecture: Layer 1 audit -> Layer 2/3 feed state
-
-6. marker is closed or superseded
-   - Architecture: Layer 4 Repair + Audit
-
-7. Layer 3 surfaces read the refreshed projections
-```
-
-### Scenario C: A New Relation Is Discovered
-
-```text
-1. Query/agent reads context from a Layer 3 access surface
+**Produced by:** Governance promotion of Candidates; user direct edits to vault markdown (with audit hooks).
 
-2. It proposes a new relation
-   - KSR: observation / candidate claim
-   - Not accepted truth yet
-
-3. Candidate risk layer scores evidence strength, identity ambiguity, sensitivity, and impact
-   - Architecture: Layer 4 Policy
-
-4. Low-risk relation may auto-promote; higher-risk relation goes to review
-   - Architecture: Layer 4 Promotion + Review
-
-5. Accepted relation writes evidence-backed canonical state
-   - Architecture: Layer 1
+**Can be deleted?** Only through Governance with explicit audit; deletion never happens silently.
 
-6. Graph projection refreshes
-   - Architecture: Layer 2
+**Can it define truth?** **Yes.** This is the architectural definition of truth in OVP.
 
-7. Reader graph and object pages show the relation
-   - Architecture: Layer 3
-```
-
-## 13. Architectural Invariants
-
-These rules are intended to be mechanically checkable. Violating them is a bug.
-
-| ID | Invariant | Check direction |
-| --- | --- | --- |
-| I-1 | Any accepted factual claim must have resolvable evidence. Structural state is exempt. | evidence completeness check |
-| I-2 | Layer 2 must be deterministically rebuildable from Layer 1 + schema. | rebuild test |
-| I-3a | Audit ledger is append-only; state changes must emit new events. | audit append-only check |
-| I-3b | Feed UI state patches must correspond to ledger append events. | feed event replay check |
-| I-3c | Deleting feed UI tables must not lose current feed state; it must replay from ledger. | replay test |
-| I-4 | Layer 3 writes to Layer 1 state must go through Layer 4 governance APIs. | code review + runtime audit |
-| I-4b | Layer 3 modules should not directly import Layer 1 mutation symbols; use read-only views unless explicitly justified. | import lint |
-| I-5 | review status must survive derived rebuild. | rebuild regression test |
-| I-6 | naming discipline must stay consistent across docs and code. | naming lint |
-
-### I-1: Factual Evidence
-
-Accepted factual claims are statements about the world outside OVP. They must have at least one `evidence_kind`:
-
-- `source_quote`
-  - vault file pointer
-  - offset or locator
-  - content hash
-- `user_attribution`
-  - user id
-  - signed audit record or equivalent append-only event
-- `derived_chain`
-  - referenced `claim_id`
-  - the chain must eventually resolve to `source_quote` or `user_attribution`
-
-Structural state is exempt:
-
-- registry aliases
-- routing state
-- workflow status
-- pack contract decisions
-- projection lifecycle markers
-
-### I-3: Audit Ledger Vs Feed UI State
-
-```text
-Audit ledger (Layer 1 append-only):
-  /audit/promotions.jsonl
-  /audit/reviews.jsonl
-  /audit/projection_repair.jsonl
-
-Derived feed UI state (Layer 2/3 mutable projection):
-  feed_events.status
-  feed_events.resolved_at
-  feed_events.retry_count
-```
-
-The UI may patch mutable projection state, but every visible status change must correspond to an append-only audit event.
-
-## 14. Architectural Fitness Functions
-
-Each invariant should have a CI, doctor, pre-commit, or rebuild check.
-
-| Invariant | Check | Likely implementation location |
-| --- | --- | --- |
-| I-1 | `verify_evidence_complete.py` | `ovp doctor` |
-| I-2 | rebuild `knowledge.db` from fixture vault | rebuild test |
-| I-3a | `verify_audit_jsonl_append_only.py` | pre-commit / CI |
-| I-3b | feed patch must resolve to audit event | unit test |
-| I-3c | replay feed state from audit ledger | rebuild test |
-| I-4 | runtime write audit: Layer 3 write must call governance API | runtime audit / tests |
-| I-4b | import-linter rule for direct mutation imports | CI lint |
-| I-5 | review state survives derived rebuild | rebuild test |
-| I-6 | naming lint for forbidden architecture phrases | CI lint |
-
-These checks should become backlog items rather than prose only.
-
-## 15. Schema Versioning
-
-Authority and derived projection schemas evolve separately.
-
-Rules:
-
-- Authority schema version lives at vault root in `.ovp/schema_version`.
-- Derived stores record which Authority schema version they were built from.
-- Derived projection schemas record their own version; `knowledge.db` stores this in `projection_metadata`.
-- Startup checks compare current Authority version, projection schema version, and marker versions.
-- If current Authority schema version is newer than the marker or projection version, write or promote to `ProjectionRepairMarker(kind="full_rebuild")`.
-- Avoid silent version jumps; migrations should be explicit and monotonic.
-
-Schema migration and projection lifecycle are connected. Migration should not be a separate hidden mechanism.
-
-## 16. Naming Discipline
-
-Do:
-
-1. Say `Authority` for vault markdown + registry + evidence/audit JSONL.
-2. Say `derived store` for `knowledge.db`.
-3. Say `truth projection` for queryable truth rows.
-4. Say `access surface` for UI/search/briefing/context.
-5. Say `promotion gate` for candidate -> accepted transition.
-6. Say `projection repair` for lightweight derived-store fix.
-7. Say `full rebuild` for total derived-store recomputation.
-8. Say `semantic reindex` for future heavy semantic projection refresh.
-9. Say `Routing / Dispatch` for Layer 4 workflow routing.
-
-Do not:
-
-1. Do not call `knowledge.db` the source of truth.
-2. Do not call `truth_store.py` Authority.
-3. Do not call generated Atlas/MOC/wiki pages canonical truth by default.
-4. Do not call LLM outputs accepted knowledge before promotion.
-5. Do not use `Resolver` for Layer 4 routing.
-
-Forbidden phrase handling:
-
-- Wrong: "`knowledge.db` is source of truth."
-  - Correct: "`knowledge.db` is the derived store."
-- Wrong: "`truth_store.py` owns truth."
-  - Correct: "`truth_store.py` owns truth projection schemas."
-- Wrong: "Dashboard state is workflow truth."
-  - Correct: "Dashboard state is a Layer 3 projection."
-- Wrong: "KSR is a new architecture."
-  - Correct: "KSR is the semantic vocabulary for long-term knowledge state."
-
-## 17. Current State
-
-Current implementation roughly maps as follows:
-
-| Area | Current implementation | Architectural reading |
-| --- | --- | --- |
-| Vault markdown | source notes, deep dives, evergreen, Atlas/MOC | mostly Layer 1, with some generated projection artifacts |
-| concept registry | `concept_registry.py`, aliases, identity helpers | Layer 1 identity support |
-| `truth_store.py` | SQLite schema and rows | Layer 2 projection schema |
-| `truth_api.py` | read/query interface | Layer 2/3 access |
-| `ovp-ui` | dashboard, object pages, graph, signals/actions | Layer 3 + some Layer 4 controls |
-| promotion modules | candidate/relation/workspace promotion | Layer 4 Promotion + Audit |
-| `projection_lifecycle.py` | structured projection repair marker log and leases | Layer 4 Repair + Verification |
-| source lifecycle routing preview | `ovp-absorb --dry-run --json` `source_lifecycle.routing_preview` | Layer 4 Routing / Dispatch |
-| doctor/lint | checks and repair hints | Layer 4 Verification + Repair |
-| packs | `research-tech`, `default-knowledge` | ownership perspective |
-
-Main gaps:
-
-- Layer 1 claim/evidence contracts now carry a first line/char span schema in derived evidence rows; factual evidence_kind enforcement and richer claim lifecycle fields still need hardening.
-- Layer 2 / Layer 3 projection labels now exist on core access payloads and materialized reader artifacts; doctor/export enforcement and future surfaces still need to consume them consistently.
-- Layer 4 fitness checks now cover the first hot-path, workflow-wiring, source routing preview, evidence span backfill, and candidate risk cases; deeper evidence completeness, projection replay, and import-boundary checks are still open.
-- Projection lifecycle markers now have structured schema, scope, lease, supersession, and `knowledge.db` rebuild integration.
-- Schema versioning is wired into projection lifecycle for `knowledge.db`: Authority and projection versions are persisted and stale metadata triggers a full rebuild marker.
-- Working memory is the first budgeted context-pack projection: it records context budget metadata and emits `working_memory` reuse events for selected canonical objects.
-- OVP Prime materializes that budgeted context pack into `60-Logs/session-snapshots/<session_id>.md` plus `latest.md`, and emits `ovp_prime` reuse events for the selected objects injected into a session.
-- Runtime state is now a derived operational projection and read surface: `ovp-runtime-state` writes `60-Logs/runtime-state/current.{json,md}`, `/ops` and `ovp doctor` consume the same health projection, `GET /api/runtime-state` prefers the materialized `current.json`, and `POST /api/runtime-state` refreshes that materialized projection. Runtime-state refreshes stream event logs and keep workflow-action display rows bounded while preserving aggregate counts. It also tracks workflow action queue health; workflow actions use the existing action worker lock plus stale-running attention instead of a generalized lease until multi-worker scheduling exists.
-- The reader-first home is now the default entry; object pages have reader profiles, source rails, and kind-specific reader lenses; `/graph` has a first spatial map projection; `/search` groups reader results by kind, summary, evidence count, and match reason.
-
-## 18. Near-Term Architecture Actions
-
-Recommended order:
-
-1. Keep projection metadata attached to new access surfaces and add doctor/export checks that verify the labels are present.
-2. Add stricter factual evidence completeness checks before expanding automatic promotion.
-3. Expand doctor/export checks to verify projection marker replay and projection labels together.
-4. Keep future projection backends on the same metadata contract before adding semantic reindex workers; projection-repair marker state transitions must remain under the marker log file lock.
-5. Add generalized workflow leases only when action processing moves beyond the current single-worker lock model; keep runtime state as a projection, not Authority.
-
-## Appendix: Backlog Mapping
-
-The architecture should not depend on backlog IDs to be valid. The table below is only the current implementation mapping and should be maintained in `BACKLOG.md`.
-
-| Architecture work | Current backlog/task mapping |
+**Failure mode:** Conflicting claims without resolution; missing evidence; orphaned identity merge; corrupted markdown.
+
+**Repair:** Review queue, contradiction resolution, evidence re-attachment, hand correction with audit.
+
+**Test:** Delete every Projection → rebuild from Canonical State → all Projections reconstructable. **If a Projection cannot be rebuilt, the Projection layer carried truth that should have been in Canonical State — that's an architectural bug.**
+
+## Term: Projection
+
+**Meaning:** Derived state computed from Canonical State. Indexes, graphs, search tables, synthesized crystals, view-model JSON.
+
+**Stored at:** `60-Logs/knowledge.db`, `40-Resources/Crystals/`, runtime-state JSON, materialized views in `compiled_views/`.
+
+**Produced by:** `ovp-knowledge-index`, `ovp-build-views`, `ovp-synthesize-community-crystals`, runtime projectors.
+
+**Can be deleted?** Yes. Deleting a projection is a normal operation; rebuild is the answer.
+
+**Can it define truth?** No. A Projection is a derived view, never authoritative.
+
+**Can it write Canonical State?** No, except through Governance (e.g., a Projection-discovered contradiction enters the Review queue, not Canonical State directly).
+
+**Failure mode:** Stale (Canonical State changed and the Projection lags), schema mismatch, missing.
+
+**Repair:** Rebuild from Canonical State. Every Projection has a deterministic rebuild path; if it doesn't, that's a bug.
+
+**Test:** `rm -rf` the Projection store → run `ovp-knowledge-index` → audit and reuse state preserved → no truth lost.
+
+## Term: Access Surface
+
+**Meaning:** What a human or agent sees and can act through. UI routes, MCP tools, CLI commands that read, search results, briefings, exported context packs.
+
+**Stored at:** `commands/ui_server.py` (HTTP routes), `commands/mcp.py`, `40-Resources/` exports, briefing JSON.
+
+**Produced by:** Read-mostly composition over Projections.
+
+**Can it write Canonical State?** **No.** A Surface that wants to change Canonical State must go through Governance — for example, an MCP tool that "approves" a candidate emits a Governance promotion event, not a direct write.
+
+**Failure mode:** Surface displays stale Projection; Surface skips Governance; Surface presents a Candidate as if it were Canonical.
+
+**Repair:** Rebuild Projection; rewrite Surface to route writes through Governance; mark Candidates explicitly in UI.
+
+**Test:** Disable every Access Surface → Canonical State unchanged. (Surfaces are pure consumers; their absence cannot lose truth.)
+
+## Term: Governance
+
+**Meaning:** The control plane that owns every transition into or modification of Canonical State.
+
+**Stored at:** `promotion_policy.py`, `relation_promotion.py`, `commands/promote*`, audit JSONL log, review queues, projection-lifecycle markers.
+
+**Subaxes:** Policy · Promotion · Review · Verification · Routing · Repair · Audit. Each subaxis is a separate concern; do not collapse them under "the Governance layer".
+
+**Can it hold knowledge?** No. Governance configures rules, runs gates, and emits audit events. The knowledge being gated lives in Candidates / Canonical State.
+
+**Failure mode:** Silent promotion (no audit), missing review queue, repair without rebuild record, ambiguous routing.
+
+**Repair:** Replay audit log against Canonical State; reconcile review queue; ensure every promotion has an audit event.
+
+**Test:** Pick any row in Canonical State → audit log answers *who promoted it, when, from which Candidate, against which evidence*. If the answer is missing, Governance has a hole.
+
+---
+
+## Migration note
+
+Older OVP docs and code use these legacy names; the new architecture vocabulary supersedes them.
+
+| Legacy term | Replacement |
 | --- | --- |
-| Projection marking | `BL-002`, `KSR-002` shipped in PR #78 |
-| Dashboard/search hot-path audit | `BL-003`, `KSR-015` shipped in PR #77 |
-| Workflow wiring eval suite | `BL-004`, `KSR-026` shipped in PR #77 |
-| Article routing preview | `BL-005`, `KSR-014` done in PR #81 |
-| Evidence span / factual evidence completeness | `BL-006`, `KSR-001`, `KSR-018` done in PR #82 |
-| Candidate risk layering | `BL-007`, `KSR-003` done in PR #82 |
-| Reader-first access surfaces | `BL-001`; `BL-008` and `BL-009` done through PR #79 and PR #83; `BL-010` done in PR #80 |
-| Reader-oriented search | `BL-011` done in PR #84 |
-| Trusted reuse / context-pack loop | `BL-012` and `BL-013` first implementation done in PR #89 plus PR #90 |
-| Operational runtime graph / observability | `BL-014` first runtime-state slice in PR #91; `/ops` / doctor / API wiring in PR #92; action queue health in the M5 closeout slice |
-| Projection repair lifecycle | `BL-020` done in PR #87 |
-| Schema versioning and migration trigger | `BL-021` done in PR #87 plus PR #88 |
+| Authority (architectural sense) | Canonical State | <!-- lint-allow: migration table -->
+| Layer 1 / Layer 1 Canonical Knowledge | Canonical State | <!-- lint-allow: migration table -->
+| Layer 2 / Derived Indexes / Derived state | Projections | <!-- lint-allow: migration table -->
+| Layer 3 / Context Assembly / Access | Access Surfaces | <!-- lint-allow: migration table -->
+| Layer 4 | Governance Control Plane (subaxes named explicitly) | <!-- lint-allow: migration table -->
+| Runtime stage `Canonical` | Runtime stage `Normalize` (see [RUNTIME](./RUNTIME.md)) |
+| `source_authority` table (code) | Stays for now; migration to `source_credibility_score` deferred. **`source_authority` measures source trustworthiness — it is unrelated to Canonical State.** |
+
+`Authority` no longer means a state in this architecture; the table named `source_authority` retains its original meaning ("how trustworthy is this source") and does not refer to the architecture's truth boundary.
+
+---
+
+## What is *not* in this file
+
+- **Pipeline stages** (Ingest / Interpret / Absorb / Refine / Normalize / Derive) — see [RUNTIME](./RUNTIME.md).
+- **Pack model** (Core / Domain Pack / Workflow Profile, pack discovery, schema) — see [PACKS](./PACKS.md).
+- **UI / MCP / CLI surfaces** — see [PRODUCT_SURFACES](./PRODUCT_SURFACES.md).
+- **Vocabulary collected from older docs** (Capture/Compile/Reuse, KSR, Crystal, Atlas, Briefing, Working Memory, Context Pack, Runtime State, Synthesis Layer) — see [GLOSSARY](./GLOSSARY.md). They are kinds of the six core terms above; they are not parallel architecture concepts.
+
+## How to add a new term
+
+A new word belongs in this file *only* if you can fill the mechanical template above. If you can't answer:
+
+- **Where is it stored?**
+- **Who produces it?**
+- **Can it be deleted?**
+- **Can it define truth?**
+- **What is the failure mode?**
+- **How is it repaired?**
+- **What test enforces the boundary?**
+
+… then it is not an architecture term. It belongs in `GLOSSARY.md`, `PRODUCT_SURFACES.md`, or `RUNTIME.md`. The first-page word budget is locked at six.
