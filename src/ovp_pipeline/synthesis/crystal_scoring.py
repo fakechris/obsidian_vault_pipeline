@@ -250,50 +250,31 @@ def _load_source_credibility(
     return {sid: float(auth) for sid, auth in rows}
 
 
-def _load_object_source_slugs(
+def _load_object_metadata(
     conn: sqlite3.Connection, pack: str, object_ids: set[str],
-) -> dict[str, str]:
-    """Map object_id → source_slug for a set of objects.  Used to
-    bridge crystal members → source credibility (which is keyed on
-    source_id, where source_id usually = source_slug)."""
+) -> dict[str, tuple[str, str]]:
+    """Single-query lookup for object_id → (source_slug, canonical_path).
+
+    Pre-fix the scoring rebuild ran two near-identical queries — one
+    for slug, one for path — over the same id set.  One round-trip
+    is enough; both columns come from the same row.  Chunked at
+    500 ids to stay below SQLite's parameter cap.
+    """
     if not object_ids:
         return {}
-    out: dict[str, str] = {}
+    out: dict[str, tuple[str, str]] = {}
     chunk = 500
     ids = sorted(object_ids)
     for start in range(0, len(ids), chunk):
         batch = ids[start:start + chunk]
         placeholders = ",".join("?" * len(batch))
         cur = conn.execute(
-            f"SELECT object_id, source_slug FROM objects "
+            f"SELECT object_id, source_slug, canonical_path FROM objects "
             f"WHERE pack = ? AND object_id IN ({placeholders})",
             (pack, *batch),
         )
-        for object_id, slug in cur:
-            out[object_id] = slug or ""
-    return out
-
-
-def _load_object_canonical_paths(
-    conn: sqlite3.Connection, pack: str, object_ids: set[str],
-) -> dict[str, str]:
-    """Map object_id → canonical_path for a set of objects.  Used by
-    the recency signal to look up filesystem mtime."""
-    if not object_ids:
-        return {}
-    out: dict[str, str] = {}
-    chunk = 500
-    ids = sorted(object_ids)
-    for start in range(0, len(ids), chunk):
-        batch = ids[start:start + chunk]
-        placeholders = ",".join("?" * len(batch))
-        cur = conn.execute(
-            f"SELECT object_id, canonical_path FROM objects "
-            f"WHERE pack = ? AND object_id IN ({placeholders})",
-            (pack, *batch),
-        )
-        for object_id, path in cur:
-            out[object_id] = path or ""
+        for object_id, slug, path in cur:
+            out[object_id] = (slug or "", path or "")
     return out
 
 
@@ -382,8 +363,11 @@ def rebuild_crystal_scores(
         all_object_ids.update(entry["members"])
     for entry in contradiction_index.values():
         all_object_ids.update(entry["source_object_ids"])
-    object_source_slugs = _load_object_source_slugs(conn, pack, all_object_ids)
-    object_paths = _load_object_canonical_paths(conn, pack, all_object_ids)
+    object_metadata = _load_object_metadata(conn, pack, all_object_ids)
+    object_source_slugs = {
+        oid: meta[0] for oid, meta in object_metadata.items()
+    }
+    object_paths = {oid: meta[1] for oid, meta in object_metadata.items()}
     object_mtimes = _evergreen_mtimes(vault_dir, object_paths)
 
     # Pre-compute per-pack maxima for normalization.
@@ -399,12 +383,25 @@ def rebuild_crystal_scores(
             total += source_credibility.get(slug, 0.0)
         return total
 
+    # Inverted index: object_id → set of contradiction indices it
+    # appears in.  Pre-fix ``_contradiction_count`` was
+    # O(N_crystals × N_contradictions) per scoring rebuild; this
+    # makes it O(N_members) per crystal which scales with vault
+    # size, not contradiction count.
+    object_to_contradictions: dict[str, set[int]] = {}
+    for idx, (pos, neg) in enumerate(open_contradictions):
+        for oid in pos | neg:
+            object_to_contradictions.setdefault(oid, set()).add(idx)
+
     def _contradiction_count(member_set: set[str]) -> int:
-        n = 0
-        for pos, neg in open_contradictions:
-            if pos & member_set or neg & member_set:
-                n += 1
-        return n
+        # Each contradiction is counted at most once even when it
+        # touches multiple members of the same crystal.
+        found: set[int] = set()
+        for oid in member_set:
+            indices = object_to_contradictions.get(oid)
+            if indices:
+                found.update(indices)
+        return len(found)
 
     # First pass: compute raw values.
     for cid, entry in community_index.items():

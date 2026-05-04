@@ -18,7 +18,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from ..runtime import VaultLayout
+from ..runtime import VaultLayout, knowledge_db_write_lock
 from ..synthesis.crystal_scoring import rebuild_crystal_scores
 
 
@@ -51,13 +51,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    conn = sqlite3.connect(layout.knowledge_db)
-    try:
-        scores = rebuild_crystal_scores(
-            conn, vault_dir=vault, pack=args.pack,
-        )
-    finally:
-        conn.close()
+    # Acquire the same advisory lock ``ovp-knowledge-index`` uses
+    # so the rebuild can't race a full index rebuild — both delete
+    # and re-insert ``crystal_scores`` rows.
+    with knowledge_db_write_lock(vault):
+        conn = sqlite3.connect(layout.knowledge_db)
+        try:
+            scores = rebuild_crystal_scores(
+                conn, vault_dir=vault, pack=args.pack,
+            )
+        finally:
+            conn.close()
 
     by_kind: dict[str, int] = {}
     for s in scores:
