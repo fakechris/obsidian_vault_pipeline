@@ -178,6 +178,54 @@ def _normalize_for_lookup(matched: str) -> str:
     return matched.strip().lstrip("@").lower()
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedMatcher:
+    """Pre-filtered + pre-compiled state for batch auto-wikilink runs.
+
+    ``apply_wikilinks`` filters the alias index and compiles the regex
+    on every call — fine for a one-shot, expensive when scanning
+    thousands of evergreens.  ``prepare_matcher`` builds the state
+    once; ``apply_prepared_matcher`` reuses it.
+    """
+
+    filtered_index: dict[str, EntityAlias]
+    pattern: re.Pattern[str]
+
+
+def _passes_length(alias: str, min_length: int) -> bool:
+    """Length floor with a CJK escape hatch: a 2-char Chinese name
+    like ``歸藏`` carries far more entropy than a 2-char English
+    bigram like ``ai``, so non-ASCII aliases bypass the floor."""
+    if len(alias) >= min_length:
+        return True
+    return any(ord(c) > 127 for c in alias)
+
+
+def prepare_matcher(
+    alias_index: dict[str, EntityAlias],
+    *,
+    kinds: frozenset[str] | set[str] | None = None,
+    min_length: int = DEFAULT_MIN_ALIAS_LENGTH,
+) -> PreparedMatcher:
+    """Pre-build the filter + regex once, for batch reuse.
+
+    ``ovp-link-entities`` walks ~7000 evergreens with ~929 canonicals;
+    re-filtering + re-compiling per file was a measurable cost.  Now
+    the CLI calls ``prepare_matcher`` once outside the loop and feeds
+    the result into ``apply_prepared_matcher`` per file.
+    """
+    if kinds is None:
+        kinds = DEFAULT_LINKABLE_KINDS
+    filtered = {
+        a: row for a, row in alias_index.items()
+        if row.alias_kind in kinds and _passes_length(a, min_length)
+    }
+    return PreparedMatcher(
+        filtered_index=filtered,
+        pattern=build_alias_pattern(filtered),
+    )
+
+
 def apply_wikilinks(
     text: str,
     alias_index: dict[str, EntityAlias],
@@ -203,31 +251,34 @@ def apply_wikilinks(
     of canonicals that got at least one link.  Idempotent on the
     rewritten output: running again is a no-op because the new
     wikilinks land in the skip regions.
+
+    Rebuilds the filter + regex on every call.  Batch callers
+    walking many files should use ``prepare_matcher`` +
+    ``apply_prepared_matcher`` to amortize the cost.
     """
     if not alias_index:
         return WikilinkResult(text=text, n_replaced=0, canonicals_used=set())
+    matcher = prepare_matcher(
+        alias_index, kinds=kinds, min_length=min_length,
+    )
+    return apply_prepared_matcher(text, matcher)
 
-    if kinds is None:
-        kinds = DEFAULT_LINKABLE_KINDS
 
-    def _passes_length(alias: str) -> bool:
-        """Length floor with a CJK escape hatch: a 2-char Chinese
-        name like ``歸藏`` carries far more entropy than a 2-char
-        English bigram like ``ai``, so non-ASCII aliases bypass
-        the floor."""
-        if len(alias) >= min_length:
-            return True
-        return any(ord(c) > 127 for c in alias)
+def apply_prepared_matcher(
+    text: str, matcher: PreparedMatcher,
+) -> WikilinkResult:
+    """Batch entry point: apply a pre-built matcher to one file.
 
-    filtered_index = {
-        a: row for a, row in alias_index.items()
-        if row.alias_kind in kinds and _passes_length(a)
-    }
-    if not filtered_index:
+    The matcher carries the filtered alias index + compiled regex,
+    both expensive to build.  Callers running over thousands of
+    files build the matcher once and call this per file.
+    """
+    if not matcher.filtered_index:
         return WikilinkResult(text=text, n_replaced=0, canonicals_used=set())
 
     skip = _find_skip_regions(text)
-    pattern = build_alias_pattern(filtered_index)
+    pattern = matcher.pattern
+    filtered_index = matcher.filtered_index
     n_replaced = 0
     used: set[str] = set()
 

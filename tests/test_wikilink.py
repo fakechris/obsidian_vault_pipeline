@@ -348,3 +348,58 @@ class TestEnsureEntityStubFiles:
             encoding="utf-8",
         )
         assert "authority:" not in body
+
+
+class TestPreparedMatcher:
+    """PR-128 review-fix invariant: ``prepare_matcher`` builds the
+    filter + compiled regex ONCE; ``apply_prepared_matcher`` reuses
+    them for batch runs.  Pre-fix the CLI's per-file ``apply_wikilinks``
+    re-did both on every iteration."""
+
+    def test_prepared_matcher_is_reusable(self):
+        from ovp_pipeline.entities.wikilink import (
+            PreparedMatcher,
+            apply_prepared_matcher,
+            prepare_matcher,
+        )
+
+        index = _build_index(_alias("karpathy", "karpathy"))
+        matcher = prepare_matcher(index)
+        assert isinstance(matcher, PreparedMatcher)
+        first = apply_prepared_matcher("see karpathy", matcher)
+        second = apply_prepared_matcher("karpathy again", matcher)
+        assert first.n_replaced == 1
+        assert second.n_replaced == 1
+
+    def test_prepared_matcher_filters_match_apply_wikilinks(self):
+        # Behavioral parity: prepare_matcher + apply_prepared_matcher
+        # must produce identical output to the one-shot apply_wikilinks
+        # path (otherwise batch callers diverge from interactive ones).
+        from ovp_pipeline.entities.aliases import KIND_DISPLAY_NAME
+        from ovp_pipeline.entities.wikilink import (
+            apply_prepared_matcher,
+            apply_wikilinks,
+            prepare_matcher,
+        )
+
+        index = _build_index(
+            _alias("karpathy", "karpathy"),
+            _alias("image1", "image", kind=KIND_DISPLAY_NAME),
+        )
+        text = "see karpathy and image processing"
+        one_shot = apply_wikilinks(text, index)
+        matcher = prepare_matcher(index)
+        batched = apply_prepared_matcher(text, matcher)
+        assert one_shot.text == batched.text
+        assert one_shot.n_replaced == batched.n_replaced
+
+    def test_empty_index_yields_empty_matcher(self):
+        from ovp_pipeline.entities.wikilink import (
+            apply_prepared_matcher,
+            prepare_matcher,
+        )
+
+        matcher = prepare_matcher({})
+        result = apply_prepared_matcher("any text", matcher)
+        assert result.n_replaced == 0
+        assert result.text == "any text"

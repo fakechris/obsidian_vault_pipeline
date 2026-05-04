@@ -37,8 +37,9 @@ from ..entities.aliases import KIND_DISPLAY_NAME
 from ..entities.wikilink import (
     DEFAULT_LINKABLE_KINDS,
     DEFAULT_MIN_ALIAS_LENGTH,
-    apply_wikilinks,
+    apply_prepared_matcher,
     ensure_entity_stub_files,
+    prepare_matcher,
 )
 
 
@@ -47,14 +48,27 @@ _DEFAULT_SCAN_REL = Path("10-Knowledge") / "Evergreen"
 
 def _iter_target_files(vault_dir: Path, scan_rel: list[Path]):
     """Yield every .md path under each ``scan_rel`` subtree, skipping
-    backup / cache dirs."""
+    backup / cache dirs.
+
+    The skip-parts check runs against the path **relative to the
+    vault root** — ``p.parts`` would otherwise compare against the
+    absolute path, so a vault placed inside a directory called
+    e.g. ``_backup`` would silently skip every file.
+    """
     skip_parts = frozenset({"__pycache__", "_backup", ".git"})
+    vault_root = vault_dir.resolve()
     for rel in scan_rel:
         root = vault_dir / rel
         if not root.is_dir():
             continue
         for p in root.rglob("*.md"):
-            if any(part in skip_parts for part in p.parts):
+            try:
+                rel_p = p.resolve().relative_to(vault_root)
+            except ValueError:
+                # Symlink / mount oddity placed the file outside the
+                # vault — be conservative and skip.
+                continue
+            if any(part in skip_parts for part in rel_p.parts):
                 continue
             yield p
 
@@ -125,6 +139,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- pass 1: rewrite evergreen bodies ----------------------------------
 
+    # Pre-build the matcher ONCE outside the file loop.  Inside
+    # ``apply_wikilinks`` the filter + regex compilation costs ~5ms;
+    # at 7000 evergreens that's 35s of redundant work.  ``prepare_matcher``
+    # does the work once.
+    matcher = prepare_matcher(
+        alias_index, kinds=kinds, min_length=args.min_alias_length,
+    )
+
     files_changed = 0
     total_replacements = 0
     canonicals_used: set[str] = set()
@@ -133,13 +155,13 @@ def main(argv: list[str] | None = None) -> int:
         files_seen += 1
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # UnicodeDecodeError is NOT an OSError subclass — it
+            # would crash the scan on a binary file or one with
+            # non-UTF8 encoding.  Skip + continue so a single bad
+            # file doesn't take down the whole vault walk.
             continue
-        result = apply_wikilinks(
-            text, alias_index,
-            kinds=kinds,
-            min_length=args.min_alias_length,
-        )
+        result = apply_prepared_matcher(text, matcher)
         if result.n_replaced == 0:
             continue
         files_changed += 1
