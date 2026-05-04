@@ -25,19 +25,29 @@ from pathlib import Path
 from typing import Iterable, Protocol
 
 from ..projection_labels import frontmatter_projection_fields
-from ._versioning import ARCHIVE_DIR_REL, supersede_and_archive_previous
+from ._shared import (
+    CRYSTAL_DIR_REL,
+    load_evergreen_bodies,
+    load_objects_subset,
+    strip_frontmatter,
+)
+from ._versioning import ARCHIVE_DIR_REL, commit_crystal_version
 
 logger = logging.getLogger(__name__)
+
+# Backwards-compat aliases for tests that imported the underscored
+# names before the helpers moved to ``_shared.py``.  External callers
+# should prefer the un-prefixed surface in ``_shared``.
+_strip_frontmatter = strip_frontmatter
+_load_evergreen_bodies = load_evergreen_bodies
+_load_objects_subset = load_objects_subset
 
 
 # ----- Constants ------------------------------------------------------
 
-# Output directory (relative to vault root) where the crystal markdowns
-# land.  Distinct from ``40-Resources/clusters/`` (existing cluster-
-# detail materializer output) and ``40-Resources/Briefings/`` (briefing
-# crystals) — community crystals are LLM-synthesized concept pages,
-# not deterministic detail dumps.
-CRYSTAL_DIR_REL: Path = Path("40-Resources") / "Crystals"
+# ``CRYSTAL_DIR_REL`` lives in ``_shared`` so contradiction crystals
+# can use the same output root without reaching into this module's
+# namespace.  Re-exported above via the import block.
 
 # Prompt version — bump when the system or user prompt changes
 # materially.  Persisted on every row so future analysis can
@@ -129,27 +139,8 @@ def _build_user_prompt(
     return "\n".join(parts)
 
 
-def _strip_frontmatter(text: str) -> str:
-    """Remove the YAML frontmatter block from an evergreen markdown.
-
-    Frontmatter is bounded by ``---`` on its own line at the very
-    start of the file and a closing ``---`` on its own line.  When
-    absent or malformed, return the text unchanged.
-
-    Stripping saves ~10 lines × top_k notes of LLM tokens per
-    crystal call — on a vault where every evergreen carries the
-    standard ``note_id / title / type / date / tags / aliases / area``
-    block, that's a meaningful slice of the prompt budget.
-    """
-    if not text.startswith("---"):
-        return text
-    # Find the closing fence after the opening one.  Search starts
-    # at index 3 to skip past the opening "---".
-    closer = text.find("\n---", 3)
-    if closer == -1:
-        return text
-    # Skip past the closing fence and any trailing newlines.
-    return text[closer + 4:].lstrip("\n")
+# ``_strip_frontmatter`` lives in ``_shared`` now — see the import
+# block at the top of this module.
 
 
 # ----- Member selection -----------------------------------------------
@@ -173,38 +164,8 @@ def _select_top_members(
     return sorted(member_object_ids)[:top_k]
 
 
-def _load_evergreen_bodies(
-    vault_dir: Path,
-    *,
-    member_object_ids: list[str],
-    objects_by_id: dict[str, tuple[str, str]],  # object_id -> (title, canonical_path)
-) -> list[tuple[str, str, str]]:
-    """Read the evergreen markdown bodies for ``member_object_ids``.
-
-    Skips missing files / read errors with a structured warning so
-    a single corrupt file doesn't sink the whole batch.
-    """
-    out: list[tuple[str, str, str]] = []
-    for object_id in member_object_ids:
-        title_path = objects_by_id.get(object_id)
-        if title_path is None:
-            logger.warning(
-                "object_id %r not found in objects table; skipping member",
-                object_id,
-            )
-            continue
-        title, canonical_path = title_path
-        full_path = vault_dir / canonical_path
-        try:
-            body = full_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            logger.warning(
-                "failed to read evergreen %s for crystal synthesis: %s",
-                full_path, exc,
-            )
-            continue
-        out.append((object_id, title, _strip_frontmatter(body)))
-    return out
+# ``_load_evergreen_bodies`` lives in ``_shared`` now — see the
+# import block at the top of this module.
 
 
 # ----- DB helpers -----------------------------------------------------
@@ -244,49 +205,19 @@ def _load_filtered_clusters(
     return [(r[0], r[1], r[2]) for r in cur]
 
 
-# SQLite caps parameterised IN clauses at ~999 items by default.  The
-# subset loader chunks below this floor so a vault with hundreds of
-# communities doesn't trip the limit.
-_OBJECTS_LOOKUP_CHUNK = 500
+# ``_load_objects_subset`` lives in ``_shared`` now — see the
+# import block at the top of this module.
 
 
-def _load_objects_subset(
-    conn: sqlite3.Connection,
-    pack: str,
-    object_ids: set[str],
-) -> dict[str, tuple[str, str]]:
-    """Targeted lookup — only the object_ids the synthesis loop will
-    actually consume.  Avoids loading all 7000 objects into memory
-    just to read the few hundred we need."""
-    if not object_ids:
-        return {}
-    out: dict[str, tuple[str, str]] = {}
-    ids_list = sorted(object_ids)
-    for start in range(0, len(ids_list), _OBJECTS_LOOKUP_CHUNK):
-        chunk = ids_list[start:start + _OBJECTS_LOOKUP_CHUNK]
-        placeholders = ",".join("?" * len(chunk))
-        cur = conn.execute(
-            f"SELECT object_id, title, canonical_path FROM objects "
-            f"WHERE pack = ? AND object_id IN ({placeholders})",
-            (pack, *chunk),
-        )
-        for object_id, title, canonical_path in cur:
-            out[object_id] = (title, canonical_path)
-    return out
-
-
-def _persist_crystal(
-    conn: sqlite3.Connection, crystal: CommunityCrystal,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO community_crystals
-            (pack, cluster_id, body_md, source_evergreen_slugs_json,
-             synthesized_at, llm_model, prompt_version)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        crystal.as_db_row(),
-    )
+# INSERT SQL passed to ``commit_crystal_version`` — the helper takes
+# table-specific INSERT verbatim because the shape of the row varies
+# per crystal kind.
+_INSERT_SQL = (
+    "INSERT INTO community_crystals"
+    " (pack, cluster_id, body_md, source_evergreen_slugs_json,"
+    "  synthesized_at, llm_model, prompt_version)"
+    " VALUES (?, ?, ?, ?, ?, ?, ?)"
+)
 
 
 # ----- Markdown rendering ---------------------------------------------
@@ -451,8 +382,17 @@ def synthesize_community_crystals(
                 cluster_id=cluster_id,
                 body_md=body_md,
                 source_evergreen_slugs=tuple(picked),
+                # Microsecond resolution so two synthesize calls in
+                # the same second don't collide on the (pack, key,
+                # synth_at) PK — pre-fix, a same-second re-synthesis
+                # would archive the prior live file then fail the
+                # INSERT, leaving live + DB diverged.  In production
+                # each LLM call takes 5-30s so collision was already
+                # very unlikely; microseconds make it impossible in
+                # practice and lets unit tests run back-to-back
+                # without ``time.sleep(1)`` between iterations.
                 synthesized_at=datetime.now(timezone.utc).isoformat(
-                    timespec="seconds",
+                    timespec="microseconds",
                 ),
                 llm_model=llm_model_label,
                 prompt_version=CRYSTAL_PROMPT_VERSION,
@@ -476,30 +416,27 @@ def synthesize_community_crystals(
                 )
                 continue
 
-            # BL-044: archive the prior current version (if any) and
-            # mark its DB row as superseded BEFORE overwriting the
-            # live markdown.  If supersede + INSERT happened in
-            # different orders, a crash between them would leave an
-            # orphaned live file or an unarchived history.
+            # BL-044: ``commit_crystal_version`` orchestrates the
+            # supersede UPDATE + INSERT in one DB transaction, then
+            # atomic-replaces the live markdown, then archives the
+            # prior content (best-effort).  See ``_versioning.py``
+            # for the full failure-mode rationale.
             archive_subdir = (
                 vault_dir / ARCHIVE_DIR_REL / _safe_id(cluster_id)
             )
-            supersede_and_archive_previous(
+            commit_crystal_version(
                 conn,
                 table="community_crystals",
                 key_column="cluster_id",
                 pack=pack_name,
                 key_value=cluster_id,
                 new_synthesized_at=crystal.synthesized_at,
+                insert_sql=_INSERT_SQL,
+                insert_params=crystal.as_db_row(),
+                new_markdown=render_crystal_markdown(crystal, label=label),
                 live_path=target,
                 archive_subdir=archive_subdir,
             )
-            target.write_text(
-                render_crystal_markdown(crystal, label=label),
-                encoding="utf-8",
-            )
-            _persist_crystal(conn, crystal)
-            conn.commit()
         return out
     finally:
         conn.close()

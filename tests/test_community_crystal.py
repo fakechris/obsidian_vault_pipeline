@@ -437,6 +437,36 @@ class TestSynthesizeEndToEnd:
         # LLM was not called — we short-circuit before constructing the prompt.
         assert llm.calls == []
 
+    def test_evergreen_path_outside_vault_is_skipped(self, tmp_path):
+        # ``canonical_path`` comes from knowledge.db (derived state).
+        # A corrupted/stale row could carry a path that escapes the
+        # vault root — feeding that into the LLM prompt would leak
+        # external content.  ``_shared.load_evergreen_bodies`` refuses
+        # to follow such paths.
+        from ovp_pipeline.synthesis._shared import load_evergreen_bodies
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        # Plant a file outside the vault that we should NOT read.
+        outside = tmp_path / "secret.md"
+        outside.write_text("SECRET", encoding="utf-8")
+        # Also a legitimate in-vault evergreen.
+        canonical_inside = "10-Knowledge/Evergreen/inside.md"
+        (vault / canonical_inside).parent.mkdir(parents=True, exist_ok=True)
+        (vault / canonical_inside).write_text("legit", encoding="utf-8")
+
+        objects_by_id = {
+            "inside": ("Inside", canonical_inside),
+            "evil": ("Evil", "../secret.md"),
+        }
+        out = load_evergreen_bodies(
+            vault, member_object_ids=["inside", "evil"],
+            objects_by_id=objects_by_id,
+        )
+        # Only the in-vault evergreen survives the guard.
+        ids = [oid for oid, _t, _b in out]
+        assert ids == ["inside"]
+
     def test_only_louvain_kind_is_synthesized(self, tmp_path):
         # A row with cluster_kind='relation_component' (legacy) must
         # not be picked up by the loader — it filters on kind.  Even

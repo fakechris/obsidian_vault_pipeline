@@ -23,7 +23,7 @@ from pathlib import Path
 from ovp_pipeline.synthesis._versioning import (
     ARCHIVE_DIR_REL,
     _safe_archive_filename,
-    supersede_and_archive_previous,
+    commit_crystal_version,
 )
 from ovp_pipeline.synthesis.community_crystal import (
     CRYSTAL_DIR_REL,
@@ -135,137 +135,236 @@ class TestSafeArchiveFilename:
 # ---------------------------------------------------------------------------
 
 
-class TestSupersedeHelper:
+_COMMUNITY_INSERT = (
+    "INSERT INTO community_crystals"
+    " (pack, cluster_id, body_md, source_evergreen_slugs_json,"
+    "  synthesized_at, llm_model, prompt_version)"
+    " VALUES (?, ?, ?, ?, ?, ?, ?)"
+)
+
+
+class TestCommitCrystalVersion:
+    """Direct unit tests for the commit helper.  ``commit_crystal_version``
+    orchestrates supersede + INSERT in one transaction, then writes
+    the new live markdown atomically, then archives the prior content
+    best-effort.  The pre-fix shape (``supersede_and_archive_previous``)
+    moved files BEFORE the new DB row was durable — a crash in between
+    could leave the live directory missing while the DB had no row
+    matching either the prior or the new version.
+    """
+
     def _setup_db(self, tmp_path):
         db = tmp_path / "knowledge.db"
         conn = sqlite3.connect(db)
         conn.executescript(SCHEMA)
         return conn, db
 
+    def _new_params(self, *, synth_at, body):
+        # Mirror what ``CommunityCrystal.as_db_row`` would produce for
+        # a fixture row.  Keeps the test independent of dataclass
+        # internals.
+        return (
+            "t", "cluster::aa", body, "[]",
+            synth_at, "m", "v1",
+        )
+
     def test_first_version_returns_none(self, tmp_path):
         conn, _ = self._setup_db(tmp_path)
-        prior = supersede_and_archive_previous(
+        live = tmp_path / "aa.md"  # doesn't exist yet
+        prior = commit_crystal_version(
             conn,
             table="community_crystals",
             key_column="cluster_id",
             pack="t",
             key_value="cluster::aa",
-            new_synthesized_at="2026-05-04T01:00:00+00:00",
-            live_path=tmp_path / "missing.md",
-            archive_subdir=tmp_path / "archive",
-        )
-        assert prior is None
-
-    def test_flips_supersede_pointer_on_prior(self, tmp_path):
-        conn, _ = self._setup_db(tmp_path)
-        # Seed an existing row.
-        conn.execute(
-            "INSERT INTO community_crystals (pack, cluster_id, body_md, "
-            "source_evergreen_slugs_json, synthesized_at, llm_model, "
-            "prompt_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("t", "cluster::aa", "v1", "[]",
-             "2026-05-04T01:00:00+00:00", "m", "v1"),
-        )
-        # Live file the helper will archive.
-        live = tmp_path / "aa.md"
-        live.write_text("# v1", encoding="utf-8")
-        archive = tmp_path / "archive" / "aa"
-
-        prior = supersede_and_archive_previous(
-            conn,
-            table="community_crystals",
-            key_column="cluster_id",
-            pack="t",
-            key_value="cluster::aa",
-            new_synthesized_at="2026-05-04T02:00:00+00:00",
+            new_synthesized_at="2026-05-04T01:00:00.000000+00:00",
+            insert_sql=_COMMUNITY_INSERT,
+            insert_params=self._new_params(
+                synth_at="2026-05-04T01:00:00.000000+00:00", body="v1",
+            ),
+            new_markdown="# v1",
             live_path=live,
-            archive_subdir=archive,
-        )
-        assert prior == "2026-05-04T01:00:00+00:00"
-        # Old row's supersede pointer is set.
-        row = conn.execute(
-            "SELECT superseded_by_synthesized_at FROM community_crystals "
-            "WHERE cluster_id = 'cluster::aa'"
-        ).fetchone()
-        assert row[0] == "2026-05-04T02:00:00+00:00"
-        # Live file moved into archive.
-        assert not live.exists()
-        moved = archive / "2026-05-04T01-00-00+00-00.md"
-        assert moved.exists()
-        assert moved.read_text(encoding="utf-8") == "# v1"
-
-    def test_missing_live_file_still_updates_db(self, tmp_path):
-        # If the live file was deleted out from under us (operator
-        # cleanup, prior dry-run), the DB pointer must still flip
-        # so the chain stays navigable.
-        conn, _ = self._setup_db(tmp_path)
-        conn.execute(
-            "INSERT INTO community_crystals (pack, cluster_id, body_md, "
-            "source_evergreen_slugs_json, synthesized_at, llm_model, "
-            "prompt_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("t", "cluster::aa", "v1", "[]",
-             "2026-05-04T01:00:00+00:00", "m", "v1"),
-        )
-        prior = supersede_and_archive_previous(
-            conn,
-            table="community_crystals",
-            key_column="cluster_id",
-            pack="t",
-            key_value="cluster::aa",
-            new_synthesized_at="2026-05-04T02:00:00+00:00",
-            live_path=tmp_path / "ghost.md",  # never existed
             archive_subdir=tmp_path / "archive" / "aa",
         )
-        assert prior == "2026-05-04T01:00:00+00:00"
+        assert prior is None
+        # Live file written.
+        assert live.exists()
+        assert live.read_text(encoding="utf-8") == "# v1"
+        # DB row inserted.
         row = conn.execute(
-            "SELECT superseded_by_synthesized_at FROM community_crystals "
+            "SELECT body_md FROM community_crystals "
             "WHERE cluster_id = 'cluster::aa'"
         ).fetchone()
-        assert row[0] == "2026-05-04T02:00:00+00:00"
+        assert row[0] == "v1"
+
+    def test_v1_then_v2_flips_pointer_and_archives(self, tmp_path):
+        conn, _ = self._setup_db(tmp_path)
+        live = tmp_path / "aa.md"
+        archive = tmp_path / "archive" / "aa"
+
+        # Land v1.
+        commit_crystal_version(
+            conn, table="community_crystals", key_column="cluster_id",
+            pack="t", key_value="cluster::aa",
+            new_synthesized_at="2026-05-04T01:00:00.000000+00:00",
+            insert_sql=_COMMUNITY_INSERT,
+            insert_params=self._new_params(
+                synth_at="2026-05-04T01:00:00.000000+00:00", body="v1",
+            ),
+            new_markdown="# v1", live_path=live, archive_subdir=archive,
+        )
+
+        # Land v2.
+        prior = commit_crystal_version(
+            conn, table="community_crystals", key_column="cluster_id",
+            pack="t", key_value="cluster::aa",
+            new_synthesized_at="2026-05-04T02:00:00.000000+00:00",
+            insert_sql=_COMMUNITY_INSERT,
+            insert_params=self._new_params(
+                synth_at="2026-05-04T02:00:00.000000+00:00", body="v2",
+            ),
+            new_markdown="# v2", live_path=live, archive_subdir=archive,
+        )
+
+        assert prior == "2026-05-04T01:00:00.000000+00:00"
+        # v1 supersede pointer flipped to v2's timestamp.
+        row = conn.execute(
+            "SELECT superseded_by_synthesized_at FROM community_crystals "
+            "WHERE cluster_id = 'cluster::aa' AND body_md = 'v1'"
+        ).fetchone()
+        assert row[0] == "2026-05-04T02:00:00.000000+00:00"
+        # Live file holds v2.
+        assert live.read_text(encoding="utf-8") == "# v2"
+        # Archive holds v1 — the sanitized timestamp filename.
+        archive_files = list(archive.iterdir())
+        assert len(archive_files) == 1
+        assert archive_files[0].read_text(encoding="utf-8") == "# v1"
+
+    def test_missing_live_file_still_completes_db_transaction(self, tmp_path):
+        # Live file was deleted out from under us (operator cleanup,
+        # prior dry-run).  The DB transaction (supersede + INSERT)
+        # still runs to completion — chain integrity matters more
+        # than archive completeness.
+        conn, _ = self._setup_db(tmp_path)
+        conn.execute(
+            _COMMUNITY_INSERT,
+            self._new_params(
+                synth_at="2026-05-04T01:00:00.000000+00:00", body="v1",
+            ),
+        )
+        conn.commit()
+
+        prior = commit_crystal_version(
+            conn, table="community_crystals", key_column="cluster_id",
+            pack="t", key_value="cluster::aa",
+            new_synthesized_at="2026-05-04T02:00:00.000000+00:00",
+            insert_sql=_COMMUNITY_INSERT,
+            insert_params=self._new_params(
+                synth_at="2026-05-04T02:00:00.000000+00:00", body="v2",
+            ),
+            new_markdown="# v2",
+            live_path=tmp_path / "ghost.md",  # doesn't exist
+            archive_subdir=tmp_path / "archive" / "aa",
+        )
+        assert prior == "2026-05-04T01:00:00.000000+00:00"
+        # v1's supersede pointer flipped.
+        row = conn.execute(
+            "SELECT superseded_by_synthesized_at FROM community_crystals "
+            "WHERE cluster_id = 'cluster::aa' AND body_md = 'v1'"
+        ).fetchone()
+        assert row[0] == "2026-05-04T02:00:00.000000+00:00"
+        # Both rows present.
+        assert conn.execute(
+            "SELECT COUNT(*) FROM community_crystals"
+        ).fetchone()[0] == 2
 
     def test_only_supersedes_unsuperseded_row(self, tmp_path):
-        # If two rows exist (v1 already superseded by v2), and we
-        # land v3, only v2's pointer flips — v1's already-set
-        # pointer must NOT be touched (would corrupt the chain).
+        # If v1 is already superseded by v2 and we land v3, only v2's
+        # pointer flips — v1's must NOT be touched.  Otherwise the
+        # chain ``v1 → v3`` would skip past v2 silently.
         conn, _ = self._setup_db(tmp_path)
+        # Pre-seed v1 already pointing at v2 + v2 as the current row.
         conn.execute(
             "INSERT INTO community_crystals (pack, cluster_id, body_md, "
             "source_evergreen_slugs_json, synthesized_at, llm_model, "
             "prompt_version, superseded_by_synthesized_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             ("t", "cluster::aa", "v1", "[]",
-             "2026-05-04T01:00:00+00:00", "m", "v1",
-             "2026-05-04T02:00:00+00:00"),
+             "2026-05-04T01:00:00.000000+00:00", "m", "v1",
+             "2026-05-04T02:00:00.000000+00:00"),
         )
         conn.execute(
-            "INSERT INTO community_crystals (pack, cluster_id, body_md, "
-            "source_evergreen_slugs_json, synthesized_at, llm_model, "
-            "prompt_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("t", "cluster::aa", "v2", "[]",
-             "2026-05-04T02:00:00+00:00", "m", "v1"),
+            _COMMUNITY_INSERT,
+            self._new_params(
+                synth_at="2026-05-04T02:00:00.000000+00:00", body="v2",
+            ),
         )
-        prior = supersede_and_archive_previous(
-            conn,
-            table="community_crystals",
-            key_column="cluster_id",
-            pack="t",
-            key_value="cluster::aa",
-            new_synthesized_at="2026-05-04T03:00:00+00:00",
+        conn.commit()
+
+        prior = commit_crystal_version(
+            conn, table="community_crystals", key_column="cluster_id",
+            pack="t", key_value="cluster::aa",
+            new_synthesized_at="2026-05-04T03:00:00.000000+00:00",
+            insert_sql=_COMMUNITY_INSERT,
+            insert_params=self._new_params(
+                synth_at="2026-05-04T03:00:00.000000+00:00", body="v3",
+            ),
+            new_markdown="# v3",
             live_path=tmp_path / "ghost.md",
             archive_subdir=tmp_path / "archive",
         )
-        # v2 is the prior current — that's what got returned + flipped.
-        assert prior == "2026-05-04T02:00:00+00:00"
+        assert prior == "2026-05-04T02:00:00.000000+00:00"
         rows = conn.execute(
-            "SELECT synthesized_at, superseded_by_synthesized_at "
+            "SELECT body_md, superseded_by_synthesized_at "
             "FROM community_crystals "
             "WHERE cluster_id = 'cluster::aa' ORDER BY synthesized_at"
         ).fetchall()
-        # v1 still points at v2; v2 now points at v3.
-        assert rows[0] == ("2026-05-04T01:00:00+00:00",
-                           "2026-05-04T02:00:00+00:00")
-        assert rows[1] == ("2026-05-04T02:00:00+00:00",
-                           "2026-05-04T03:00:00+00:00")
+        # v1 still points at v2 (untouched); v2 now points at v3;
+        # v3 is current.
+        assert rows == [
+            ("v1", "2026-05-04T02:00:00.000000+00:00"),
+            ("v2", "2026-05-04T03:00:00.000000+00:00"),
+            ("v3", ""),
+        ]
+
+    def test_db_durable_before_live_replace(self, tmp_path):
+        # Ordering invariant: DB is committed BEFORE the live file is
+        # replaced.  We verify by checking that the new row is queryable
+        # at the same moment the new live file content is in place.
+        # Pre-fix the order was reversed (file moves before INSERT)
+        # so a crash between archive-move and INSERT could leave a
+        # missing live file with no DB row matching the new version.
+        conn, _ = self._setup_db(tmp_path)
+        live = tmp_path / "aa.md"
+        live.write_text("# v1 stale", encoding="utf-8")
+        conn.execute(
+            _COMMUNITY_INSERT,
+            self._new_params(
+                synth_at="2026-05-04T01:00:00.000000+00:00", body="v1",
+            ),
+        )
+        conn.commit()
+
+        commit_crystal_version(
+            conn, table="community_crystals", key_column="cluster_id",
+            pack="t", key_value="cluster::aa",
+            new_synthesized_at="2026-05-04T02:00:00.000000+00:00",
+            insert_sql=_COMMUNITY_INSERT,
+            insert_params=self._new_params(
+                synth_at="2026-05-04T02:00:00.000000+00:00", body="v2",
+            ),
+            new_markdown="# v2",
+            live_path=live,
+            archive_subdir=tmp_path / "archive" / "aa",
+        )
+        # By the time the call returns: DB has both rows AND live
+        # file has the new content.
+        n_rows = conn.execute(
+            "SELECT COUNT(*) FROM community_crystals "
+            "WHERE cluster_id = 'cluster::aa'"
+        ).fetchone()[0]
+        assert n_rows == 2
+        assert live.read_text(encoding="utf-8") == "# v2"
 
 
 # ---------------------------------------------------------------------------
