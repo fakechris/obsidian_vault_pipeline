@@ -1,6 +1,6 @@
 # OVP Active Backlog
 
-**Updated:** 2026-05-01
+**Updated:** 2026-05-03
 **Status:** Active implementation backlog source
 
 This file is the single current backlog entry point for implementation sequencing. Completed items are archived in [docs/backlog-archive.md](docs/backlog-archive.md).
@@ -29,8 +29,11 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M8 Type Unification And Extraction Quality | Active | unified object kind taxonomy, Layer 1 entity_type, body-size-aware extraction, quote-grounding, single-pass LLM refactor |
 | M9 Pack As Domain Ontology | Next | pack-defined object kind specs, typed relation constraints, schema registry, domain-specific extraction profiles |
 | M10 Operational Knowledge Layer | Later | action types on objects, permission + contract, cross-entity aggregation, decision memory |
+| M11 Source Authority And Cross-Source Identity | Done | typed source-authority providers, entity layer, runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
+| M12 Extraction-Time Entity Prime And Auto-Wikilink | Next | entity_aliases view, LLM extractor primed with known entities, automatic wikilink generation (BL-038/039/040) |
+| M13 Synthesis Layer (Crystal) | Next | Louvain communities + LLM-synthesized crystals + contradiction crystals + append-only versioning (BL-041/042/043/044) |
 
-## Recently Shipped (PR #98 – #101)
+## Recently Shipped (PRs #98–#124)
 
 | PR | What shipped |
 | --- | --- |
@@ -38,6 +41,20 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | #99 | Scoped incremental quality checks |
 | #100 | Four-phase architecture refactor: JSONL read/write streaming, truth_api module boundary cleanup, ui_server route hardening (CSP/CSRF), projection lifecycle markers |
 | #101 | P0-P2 from OVP_FIX_PLAN: concept_dedup pipeline integration with scope_slugs, promote semantic guard (trigram-Jaccard), historical Evergreen data cleanup (71→61), find_similar_slugs utility |
+| #109 | Typed StepResult contracts — eliminate silent step-to-step fallbacks |
+| #110 | Missing llm_client.py + dedup backfill against extraction log |
+| #111 | Four pipeline guardrails — schema audit, kill silent imports, metrics, E2E |
+| #112 | Liberate evergreen extractor prompt from 3-5 cap + null-escape (PR-A) |
+| #113 | Source-authority subsystem PR-D1 + D2: domain rules, author whitelist, GitHub, arXiv |
+| #114 | Source-authority discovery + LLM-judge + yaml overrides (PR-D3) — `ovp-source-coverage`, `ovp-score-domain`, `domain_overrides.yaml`, `author_overrides.yaml` |
+| #115 | Twitter author entity layer + twitterapi.io backfill (PR-E1) — 521 entities, ~$0.10 |
+| #117 | `ovp-backup-db` — point-in-time snapshots of knowledge.db via SQLite online backup API |
+| #119 | GitHub project + user entity backfill (PR-E2) — 922 entities, $0; cross-platform `twitter_username` linkage harvested |
+| #120 | Source-authority scorer reads entity table + identity merge (PR-E3) — 54 self-reported person merges auto-applied |
+| #121 | GitHubSignalProvider entity-table fast path (PR-E4) — ingest-time scoring shortcuts to entity table, zero HTTP for backfilled repos |
+| #122 | `ovp-refresh-source-authority` chained entity refresh + launchd plist (PR-E5) |
+| #123 | `person` → `person + organization` split (PR-F1) — 54 → 37 person + 17 organization on real vault |
+| #124 | 12 entity-layer review fixes: read-side write side effects, identity merge backlinks, lock-steal race, append-only history, excluded-host signal, GitHub bare profile URLs, source_coverage entity-aware unknowns, score_sources --domains-only honors overrides |
 
 ## Active Backlog
 
@@ -64,6 +81,13 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-035 | P1 | Later | Action types on objects: typed operations (review, decide, verify) with preconditions, postconditions, audit trail | M10 |
 | BL-036 | P2 | Later | Cross-entity aggregation: typed-mention index, property aggregation by kind | M10 |
 | BL-037 | P1 | Next | Body-level semantic dedup: use page_embeddings cosine similarity to detect paraphrastic clones (same concept, different slug names); slug-trigram-Jaccard cannot reach these | M5b, OVP_FIX_PLAN |
+| BL-038 | P0 | Next | entity_aliases view: union of `(canonical_handle, alias)` pairs from authors.jsonl + author_overrides.yaml + entities.{twitter_author,person,organization,github_user}.signals.aliases. Single read surface for the next two items. | M12 |
+| BL-039 | P0 | Next | Extraction-time entity prime: feed top-N entity_aliases entries into the auto_evergreen_extractor system prompt; LLM is told "if you see these, use the canonical handle, don't invent a new one". Resolves Karpathy / Andrej / @karpathy / 安德烈 → one entity. | M12 |
+| BL-040 | P1 | Next | Auto-wikilink: scan evergreen body for entity_aliases hits; auto-insert `[[canonical_handle]]` wikilinks; generate `10-Knowledge/Entity/<handle>.md` stubs for canonical entities that don't have a markdown page yet. | M12 |
+| BL-041 | P1 | Next | Louvain community detection over `relations` graph — replaces (or augments) the current 312 mechanical `graph_clusters` with semantically-meaningful communities. Closes the gap with NM 0.8's 41 communities. | M13 |
+| BL-042 | P0 | Next | Crystal MVP — for each Louvain community: pick top-K evergreens by authority, LLM-synthesize a single crystal markdown (frontmatter + body) into `40-Resources/Crystals/<community>.md`, persist lineage in a `crystals` table (community_id, source_evergreen_slugs, synthesized_at, llm_model, prompt_version). MiniMax-M2.7-highspeed for cost. | M13 |
+| BL-043 | P1 | Next | Contradiction crystals — for every cluster of evergreens flagged in the existing `contradictions` table, synthesize an "open question" crystal that lays out the X-vs-Y positions explicitly. Cheap LLM cost; very high signal. | M13 |
+| BL-044 | P1 | Next | Crystal append-only versioning — when source evergreens change, generate a new crystal version; archive the old one to `70-Archive/Crystals/<community>/<timestamp>.md`; `crystals` table carries `superseded_by` pointer (mirrors NM 0.8's EVOLVES edge). | M13 |
 
 ## KSR Task Coverage
 
@@ -121,6 +145,32 @@ Make packs the carrier of domain ontology. Each pack defines its own object kind
 
 Add Palantir-style typed actions on objects, permission contracts, cross-entity aggregation, and decision memory. This is the "company second brain" operational layer. Evaluate need after Stage 2 ships.
 
+### Stage 1.5: Source Authority + Cross-Source Identity (M11, Done)
+
+Shipped through PRs #112–#124 in May 2026.  Three layers added on the read side without disturbing the existing pipeline:
+
+* **Source authority providers (PR-D1/D2/D3)** — typed `SignalProvider` Protocol; deterministic `domain_rules` + `author_rules` whitelist, `github_stars` + `arxiv` + `twitter` (stub) live signals, soft never-gating combination rule, yaml-overrides + LLM-judge for the long tail.
+* **Entity layer (PR-E1/E2/E3/E4/F1)** — `entities` + `entity_signals_history` SQLite tables holding `twitter_author`, `github_project`, `github_user`, `person`, `organization` rows.  twitterapi.io + GitHub REST backfills, identity merge with self-reported / exact-handle / fuzzy strategies, `person`/`organization` split driven by GitHub's `user.type`.  521 + 922 + 54 entities on the OVP vault, ~$0.10 one-shot.
+* **Operational glue (PRs #117/#122)** — `ovp-backup-db` (SQLite online backup), `ovp-refresh-source-authority` (chained refresh wrapper, lock-protected, status JSON, launchd plist).
+
+This is the foundation that lets M12 (extraction prime + auto-wikilink) close the loop from "we know who Karpathy is" to "the next ingest run uses that knowledge".
+
+### Stage 4: Synthesis Layer / Crystal (M13)
+
+OVP's L3 gap relative to NM 0.8.  NM has 240 LLM-synthesized crystals + 41 community summaries; OVP has only the mechanical 312-component `graph_clusters` and a single Atlas index page.  The plan:
+
+1. Replace mechanical components with Louvain community detection on the relations graph (BL-041).
+2. For each community, pick top-K evergreens by authority and LLM-synthesize a single markdown crystal into `40-Resources/Crystals/`; persist lineage in a `crystals` SQLite table (BL-042).
+3. Add contradiction crystals using the existing `contradictions` table as seed (BL-043).
+4. Append-only versioning so when source evergreens change, the new crystal version archives the old one (BL-044).
+
+Cost target: ~¥0.001/crystal × 80-150 crystals = a few cents per full re-synthesis.  MiniMax-M2.7-highspeed.
+
 ## Next Decision
 
-Execute M8 (BL-025 through BL-030). Then evaluate M9 scope based on real pack adoption.
+Two parallel execution lanes:
+
+1. **M8 lane**: Execute BL-025 through BL-030.  Then evaluate M9 scope based on real pack adoption.
+2. **M12 → M13 lane**: Execute BL-038 (entity_aliases) → BL-039 (extraction prime) → BL-040 (auto-wikilink), then BL-041 (Louvain) → BL-042 (Crystal MVP) → BL-043 (contradiction crystals) → BL-044 (versioning).
+
+These two lanes don't conflict — M8 lives in the extraction prompt + frontmatter schema, M12/M13 live in the entity layer + synthesis surface.  Schedule M12 work whenever an M8 LLM call would benefit from primed entity context.

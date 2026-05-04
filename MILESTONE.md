@@ -2,7 +2,7 @@
 
 > Language: English | [简体中文](MILESTONE.zh-CN.md)
 
-**Updated:** 2026-05-01
+**Updated:** 2026-05-03
 **Status:** Current milestone sequence and implementation direction
 
 This document is the stable milestone entry point. It summarizes the current product and engineering route; [BACKLOG.md](BACKLOG.md) remains the single active implementation queue.
@@ -47,6 +47,9 @@ Three target tiers:
 | **M8 Type Unification And Extraction Quality** | **Active** | unified object kind taxonomy, Layer 1 `entity_type` frontmatter, body-size-aware extraction (P3), quote-grounding (P4), single-pass LLM refactor (P5), historical backfill |
 | **M9 Pack As Domain Ontology** | **Next** | pack-defined object kind specs, typed relation constraints, schema registry, domain-specific extraction profiles |
 | **M10 Operational Knowledge Layer** | **Later** | action types on objects, permission + contract, cross-entity aggregation, decision memory |
+| **M11 Source Authority And Cross-Source Identity** | **Done** | typed source-authority providers (D1/D2/D3), entity layer (twitter_author / github_project / github_user / person / organization), runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
+| **M12 Extraction-Time Entity Prime And Auto-Wikilink** | **Next** | entity_aliases view, LLM extractor primed with known entities, automatic wikilink generation in evergreen body — closes the loop from "we know who Karpathy is" to "the next ingest run uses that knowledge" (BL-038, BL-039, BL-040) |
+| **M13 Synthesis Layer (Crystal)** | **Next** | Louvain community detection over relations graph, LLM-synthesized crystals persisted to `40-Resources/Crystals/` with explicit lineage, contradiction crystals, append-only versioning — closes the gap with NM 0.8's synthesis tier (BL-041, BL-042, BL-043, BL-044) |
 
 ## Active Backlog Alignment
 
@@ -74,10 +77,12 @@ Three target tiers:
 Recommended order:
 
 1. **M8 first**: execute `BL-025` (type unification) → `BL-026` (extraction output) → `BL-027` (P3) → `BL-028` (P4) → `BL-029` (P5) → `BL-030` (backfill).
-2. **M9 second**: `BL-031` through `BL-034` once M8 type system is stable.
-3. **M10 evaluate**: after M9 ships, decide scope based on real multi-pack adoption and company-brain use cases.
-4. `BL-015` (permissions) when permission and claim lifecycle become the active blocker.
-5. Keep workflow actions on the existing action worker lock; add generalized workflow leases only when multi-worker scheduling is introduced.
+2. **M12 second** (parallelizable with M8 once entity layer is stable): execute `BL-038` (entity_aliases view) → `BL-039` (extraction-time entity prime) → `BL-040` (auto-wikilink). This is the loop closer for the entity work shipped in M11 — without it the entity layer stays "data on disk", with it new evergreens auto-link to canonical entities.
+3. **M13 third** (after M12): `BL-041` (Louvain communities) → `BL-042` (Crystal MVP — community-clustered LLM synthesis) → `BL-043` (contradiction crystals) → `BL-044` (Crystal versioning). This adds the L3 synthesis layer OVP currently lacks (NM 0.8 has 240 crystals + community summaries; OVP has only the mechanical Atlas index).
+4. **M9 then**: `BL-031` through `BL-034` once M8 type system is stable.
+5. **M10 evaluate**: after M9 ships, decide scope based on real multi-pack adoption and company-brain use cases.
+6. `BL-015` (permissions) when permission and claim lifecycle become the active blocker.
+7. Keep workflow actions on the existing action worker lock; add generalized workflow leases only when multi-worker scheduling is introduced.
 
 ## Documentation Rules
 
