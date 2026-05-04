@@ -24,8 +24,12 @@ Capture → Compile → Reuse
 
 主文档：
 
-- [Architecture](ARCHITECTURE.md)（[简体中文](ARCHITECTURE.zh-CN.md)）
-- [Milestone](MILESTONE.md)（[简体中文](MILESTONE.zh-CN.md)）
+- [Architecture](ARCHITECTURE.zh-CN.md) — 持久知识模型(六个核心词;首页 250 行内)
+- [Runtime](RUNTIME.md) — 各运行阶段及对应 CLI
+- [Packs](PACKS.md) — Core / Domain Pack / Workflow Profile
+- [Product Surfaces](PRODUCT_SURFACES.md) — UI / MCP / CLI / 导出
+- [Glossary](GLOSSARY.md) — 其它所有术语,映射回六个核心词
+- [Milestone](MILESTONE.zh-CN.md)
 - [Active Backlog](BACKLOG.md)
 
 ## 这是什么
@@ -36,7 +40,7 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 - **Compile**：把资料编译成 deep dive、candidate、claim、evidence、relation、contradiction、registry 和 graph。
 - **Reuse**：把已编译知识投影成 reader atlas、object page、graph、briefing、search、context pack、writing prompt 和 operator workbench。
 
-内部仍保留六层工程模型（Ingest → Interpret → Absorb → Refine → Canonical → Derived），但产品叙事收敛为 Capture → Compile → Reuse。
+内部 runtime 执行六个阶段:Ingest → Interpret → Absorb → Refine → Normalize → Derive(详见 [RUNTIME](RUNTIME.md))。产品叙事收敛为 Capture → Compile → Reuse。状态模型 — Sources、Candidates、Canonical State、Projections、Access Surfaces,以及横切的 Governance 控制面 — 在 [ARCHITECTURE](ARCHITECTURE.zh-CN.md) 详述。
 
 当前版本已经把主要运行链路接入到日常工作流：
 
@@ -58,11 +62,11 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 现在这套设计的目标就是把这些问题拆开：
 
 - 用 Capture → Compile → Reuse 解释产品价值
-- 用 source → observation → claim → evidence → validity → projection → permission 解释长期知识状态
-- 用六层运行模型明确“什么是编排层、什么是真相层、什么是派生层”
-- 用 `research-tech` 把当前技术研究语义正式化
+- 用状态模型(Source / Candidate / Canonical State / Projection / Access Surface,加上横切的 Governance 控制面)明确信任边界,详见 [ARCHITECTURE](ARCHITECTURE.zh-CN.md)
+- 用六阶段运行流程(Ingest → Interpret → Absorb → Refine → Normalize → Derive)明确编排、身份归一化、投影重建,详见 [RUNTIME](RUNTIME.md)
+- 用 `research-tech` 作为第一个标准内置领域 pack
 - 用 `default-knowledge` 保留默认兼容层
-- 用 Pack API 让不同领域通过 pack 接入，而不是继续往 core 里硬编码特例
+- 用 Pack API 让不同领域通过 pack 接入,详见 [PACKS](PACKS.md)
 
 这意味着当前仓库已经不只是一个 Vault 自动化项目，而是一个：
 
@@ -72,8 +76,8 @@ Obsidian Vault Pipeline（OVP）不是一个“多脚本拼装包”，也不只
 
 - `research-tech` 是第一套显式内置标准 pack
 - `default-knowledge` 当前仍保留为默认兼容 pack
-- `knowledge.db` 是 derived store，不是 Authority
-- vault markdown + registry + evidence chain 才是长期可信边界
+- `knowledge.db` 是 Projection(可从 Canonical State 重建,从不权威)
+- vault markdown + registry + evidence chain 是 Canonical State(长期可信边界)
 
 ## 当前路线图
 
@@ -249,21 +253,21 @@ ovp --pack default-knowledge --profile full
 当前已经实现的硬边界：
 
 - pack 不能把 semantic retrieval 直接升级成 canonical identity
-- pack 不能把 `knowledge.db` 当 Authority
+- pack 不能把 `knowledge.db` 当 Canonical State
 - pack 不能绕过 audit/logging
-- 所有 derived state 都必须可重建
+- 所有 Projection 都必须可重建
 
 ## 真实运行模型
 
-### Authority Boundary
+### Canonical State 边界(完整定义见 [ARCHITECTURE](ARCHITECTURE.zh-CN.md))
 
-这套系统当前坚持以下边界：
+这套系统当前坚持以下边界:
 
-- **Authority**：Vault Markdown + concept registry
-- **derived views**：Atlas、MOC、graph、`knowledge.db`、lint、daily delta
-- **不是 Authority**：`knowledge.db`
+- **Canonical State**:Vault Markdown + concept registry + evidence + audit
+- **Projections**:Atlas、MOC、graph、`knowledge.db`、lint、daily delta、crystals
+- **不是 Canonical State**:`knowledge.db`
 
-`knowledge.db` 是借鉴 GBrain 思路加入的派生索引层，用来承载：
+`knowledge.db` 是借鉴 GBrain 思路加入的派生索引层,用来承载:
 
 - FTS 页面索引
 - 结构化链接
@@ -272,18 +276,18 @@ ovp --pack default-knowledge --profile full
 - deterministic section embeddings
 - 只读 query / serve 接口
 
-它可以被重建，不参与 canonical 身份决策。
+它可以被重建,不参与 Canonical State 的身份决策。
 
-### 六层职责
+### 六个运行阶段(完整说明见 [RUNTIME](RUNTIME.md))
 
-| 层 | 职责 | 代表命令 | 是否允许 LLM 直接做重大判断 |
+| 阶段 | 职责 | 代表命令 | 是否允许 LLM 直接做重大判断 |
 |---|---|---|---|
 | Ingest | 采集并规范化输入 | `ovp --step pinboard` `ovp --step clippings` `ovp-article` | 否 |
-| Interpret | 把输入变成深度解读 | `ovp-article` `ovp-github` `ovp-paper` | 是，但输出受格式约束 |
-| Absorb | 把解读编入概念生命周期 | `ovp-absorb` `ovp-evergreen` | 是，但要输出结构化结果 |
-| Refine | 对现有知识页做 cleanup / breakdown | `ovp-cleanup` `ovp-breakdown` | 是，但执行受控 |
-| Canonical | 维护 registry / alias / Atlas / MOC | `ovp-rebuild-registry` `ovp-moc` `ovp-promote-candidates` | 否 |
-| Derived | 派生检索、图谱和检查 | `ovp-knowledge-index` `ovp-graph` `ovp-lint` | 否 |
+| Interpret | 把输入变成深度解读 | `ovp-article` `ovp-github` `ovp-paper` | 是,但输出受格式约束 |
+| Absorb | 把解读编入概念生命周期 | `ovp-absorb` `ovp-evergreen` | 是,但要输出结构化结果 |
+| Refine | 对现有知识页做 cleanup / breakdown | `ovp-cleanup` `ovp-breakdown` | 是,但执行受控 |
+| Normalize | 维护 registry / alias / 身份合并 / 矛盾发现(原 Canonical 阶段) | `ovp-rebuild-registry` `ovp-merge-identities` `ovp-link-entities` `ovp-resolve-contradictions` | 否 |
+| Derive | 生成 Projection — 检索、图谱、crystal、检查 | `ovp-knowledge-index` `ovp-graph` `ovp-synthesize-community-crystals` `ovp-lint` | 否 |
 
 ## `ovp --full` 现在到底跑什么
 

@@ -44,7 +44,7 @@ Three target tiers:
 | M5a Quality And Dedup Hardening | Done | concept dedup pipeline integration with `scope_slugs`, promote semantic guard (trigram-Jaccard), historical data cleanup (71→61 Evergreens), `find_similar_slugs` utility (PR #101) |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
-| **M8 Type Unification And Extraction Quality** | **Active** | unified object kind taxonomy, Layer 1 `entity_type` frontmatter, body-size-aware extraction (P3), quote-grounding (P4), single-pass LLM refactor (P5), historical backfill |
+| **M8 Type Unification And Extraction Quality** | **Active** | unified object kind taxonomy, Canonical-State `entity_type` frontmatter, body-size-aware extraction (P3), quote-grounding (P4), single-pass LLM refactor (P5), historical backfill |
 | **M9 Pack As Domain Ontology** | **Next** | pack-defined object kind specs, typed relation constraints, schema registry, domain-specific extraction profiles |
 | **M10 Operational Knowledge Layer** | **Later** | action types on objects, permission + contract, cross-entity aggregation, decision memory |
 | **M11 Source Authority And Cross-Source Identity** | **Done** | typed source-authority providers (D1/D2/D3), entity layer (twitter_author / github_project / github_user / person / organization), runtime resolver, refresh wrapper, db backup (PRs #112–#124) |

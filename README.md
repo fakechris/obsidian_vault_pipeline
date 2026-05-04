@@ -26,9 +26,14 @@ Current document version: `v0.9.3`
 
 Primary docs:
 
-- [Architecture](ARCHITECTURE.md) ([简体中文](ARCHITECTURE.zh-CN.md))
+- [Architecture](ARCHITECTURE.md) — durable knowledge model (six core terms; 250-line cap)
+- [Runtime](RUNTIME.md) — pipeline stages and CLIs by stage
+- [Packs](PACKS.md) — Core / Domain Pack / Workflow Profile
+- [Product Surfaces](PRODUCT_SURFACES.md) — UI / MCP / CLI / export
+- [Glossary](GLOSSARY.md) — every other domain term, mapped back to the six core
 - [Milestone](MILESTONE.md) ([简体中文](MILESTONE.zh-CN.md))
 - [Active Backlog](BACKLOG.md)
+- 简体中文: [架构](ARCHITECTURE.zh-CN.md)
 
 ## What This Is
 
@@ -38,7 +43,7 @@ Obsidian Vault Pipeline is not a loose collection of scripts, and it is not only
 - **Compile** turns material into deep dives, candidates, claims, evidence, relations, contradictions, registry rows, and graph rows.
 - **Reuse** projects compiled knowledge into reader atlas pages, object pages, graph views, briefings, search, context packs, writing prompts, and the operator workbench.
 
-Internally the engineering model still uses six layers: Ingest -> Interpret -> Absorb -> Refine -> Canonical -> Derived. The product narrative is Capture -> Compile -> Reuse.
+Internally the runtime executes six pipeline stages: Ingest → Interpret → Absorb → Refine → Normalize → Derive (see [RUNTIME](RUNTIME.md)). The product narrative is Capture → Compile → Reuse. The state model — Sources, Candidates, Canonical State, Projections, Access Surfaces, with Governance as the cross-cutting control plane — is documented in [ARCHITECTURE](ARCHITECTURE.md).
 
 The current release wires those layers into the actual runtime:
 
@@ -59,12 +64,12 @@ This repository started as a set of Obsidian automation scripts, but that model 
 
 The current architecture is the direct answer to those failures:
 
-- Capture -> Compile -> Reuse explains the product value
-- source -> observation -> claim -> evidence -> validity -> projection -> permission explains the long-term knowledge state
-- the six-layer runtime makes orchestration, canonical state, and derived state explicit
-- `research-tech` makes the current engineering research semantics explicit
-- `default-knowledge` is being reduced to a default compatibility layer instead of carrying every domain semantic
-- Pack API turns future domains into installable packs rather than more hardcoded branches inside the runtime
+- Capture → Compile → Reuse explains the product value
+- The state model (Source / Candidate / Canonical State / Projection / Access Surface, with Governance as cross-cutting control) makes the trust boundary explicit; see [ARCHITECTURE](ARCHITECTURE.md)
+- The six-stage runtime makes orchestration, identity normalization, and projection rebuilds explicit; see [RUNTIME](RUNTIME.md)
+- `research-tech` is the first standard built-in domain pack
+- `default-knowledge` is retained as a compatibility pack for older vaults
+- The Pack API turns future domains into installable packs rather than hardcoded branches; see [PACKS](PACKS.md)
 
 So the project is no longer just a Vault automation repo. It is now:
 
@@ -74,8 +79,8 @@ with:
 
 - `research-tech` as the first explicit built-in standard pack
 - `default-knowledge` retained as the default compatibility pack
-- `knowledge.db` as a derived store, never Authority
-- vault markdown + registry + evidence chains as the long-term trust boundary
+- `knowledge.db` as a Projection (rebuildable from Canonical State, never authoritative)
+- vault markdown + registry + evidence chains as Canonical State (the long-term trust boundary)
 
 ## Current Roadmap
 
@@ -252,21 +257,21 @@ The minimum third-party loading chain is:
 Hard boundaries currently enforced by core:
 
 - a pack cannot turn semantic retrieval into canonical identity
-- a pack cannot treat `knowledge.db` as Authority
+- a pack cannot treat `knowledge.db` as Canonical State
 - a pack cannot bypass audit/logging
-- all derived state must remain rebuildable
+- all Projections must remain rebuildable
 
 ## Runtime Model
 
-### Authority Boundary
+### Canonical State Boundary (full definition: [ARCHITECTURE](ARCHITECTURE.md))
 
 The system keeps a hard boundary:
 
-- **Authority**: vault markdown + concept registry
-- **derived views**: Atlas, MOC, graph, `knowledge.db`, lint, daily delta
-- **not Authority**: `knowledge.db`
+- **Canonical State**: vault markdown + concept registry + evidence + audit
+- **Projections**: Atlas, MOC, graph, `knowledge.db`, lint, daily delta, crystals
+- **not Canonical State**: `knowledge.db`
 
-`knowledge.db` is the GBrain-inspired derived index layer. It stores:
+`knowledge.db` is a Projection. It stores:
 
 - page FTS
 - structured links
@@ -277,16 +282,16 @@ The system keeps a hard boundary:
 
 It is rebuildable and does not own canonical identity resolution.
 
-### The Six Layers
+### The Six Pipeline Stages (full description: [RUNTIME](RUNTIME.md))
 
-| Layer | Responsibility | Representative commands | Can the LLM make major decisions here? |
+| Stage | Responsibility | Representative commands | Can the LLM make major decisions here? |
 |---|---|---|---|
 | Ingest | Normalize incoming material | `ovp --step pinboard` `ovp --step clippings` `ovp-article` | No |
 | Interpret | Produce deep interpretations | `ovp-article` `ovp-github` `ovp-paper` | Yes, with constrained output |
 | Absorb | Compile interpretations into lifecycle actions | `ovp-absorb` `ovp-evergreen` | Yes, but only through structured results |
 | Refine | Cleanup and breakdown existing notes | `ovp-cleanup` `ovp-breakdown` | Yes, but execution is controlled |
-| Canonical | Maintain registry / aliases / Atlas / MOC | `ovp-rebuild-registry` `ovp-moc` `ovp-promote-candidates` | No |
-| Derived | Build retrieval / graph / lint views | `ovp-knowledge-index` `ovp-graph` `ovp-lint` | No |
+| Normalize | Maintain registry / aliases / identity merges / contradiction detection (formerly Canonical) | `ovp-rebuild-registry` `ovp-merge-identities` `ovp-link-entities` `ovp-resolve-contradictions` | No |
+| Derive | Build Projections — retrieval / graph / crystals / lint | `ovp-knowledge-index` `ovp-graph` `ovp-synthesize-community-crystals` `ovp-lint` | No |
 
 ## What `ovp --full` Actually Runs
 
@@ -558,8 +563,8 @@ HTTP_PROXY=http://127.0.0.1:7897
 ## Design Principles
 
 - identity consistency before feature growth
-- vault files + registry define canonical state
-- `knowledge.db` is derived retrieval, never a second Authority
+- vault files + registry define Canonical State
+- `knowledge.db` is a Projection, never an additional Canonical State
 - absorb is part of daily automation; refine is powerful and opt-in by default
 - Wiki, MOC, dashboard, briefing, graph, reader pages, and context packs are projections that carry explicit projection metadata and must trace back to source/evidence
 - reader-facing UI should explain knowledge first, then expose operator/debug detail

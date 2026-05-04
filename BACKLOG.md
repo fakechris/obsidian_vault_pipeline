@@ -26,7 +26,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M5b Slug-Level Dedup Apply | Done | concept_dedup apply at threshold 0.75 (non-default override; code default=0.82): 297 clusters, 334 duplicates archived to 70-Archive/dedup-merged/, vault reduced 7020→6686 Evergreens |
 | M6 Policy, Permission, And Knowledge Evolution | Later | permission layer, claim lifecycle, conflict detection, policy promotion |
 | M7 Semantic Extraction And Query Feedback Loop | Later | relation extractor, query feedback, routines, notebook/raw-source mode |
-| M8 Type Unification And Extraction Quality | Active | unified object kind taxonomy, Layer 1 entity_type, body-size-aware extraction, quote-grounding, single-pass LLM refactor |
+| M8 Type Unification And Extraction Quality | Active | unified object kind taxonomy, Canonical-State `entity_type` frontmatter, body-size-aware extraction, quote-grounding, single-pass LLM refactor |
 | M9 Pack As Domain Ontology | Next | pack-defined object kind specs, typed relation constraints, schema registry, domain-specific extraction profiles |
 | M10 Operational Knowledge Layer | Later | action types on objects, permission + contract, cross-entity aggregation, decision memory |
 | M11 Source Authority And Cross-Source Identity | Done | typed source-authority providers, entity layer, runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
@@ -68,7 +68,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 
 | ID | Priority | Status | Work item | Source links |
 | --- | --- | --- | --- | --- |
-| BL-025 | P0 | Active | Unified Object Kind Taxonomy: merge three type systems (concept_registry.kind, truth_store.object_kind, view_models labels) into one canonical set; add `entity_type` to Layer 1 frontmatter | M8 |
+| BL-025 | P0 | Active | Unified Object Kind Taxonomy: merge three type systems (concept_registry.kind, truth_store.object_kind, view_models labels) into one canonical set; add `entity_type` to Canonical State frontmatter | M8 |
 | BL-026 | P0 | Active | Extraction pipeline entity_type output: LLM prompt produces entity_type; promote writes to frontmatter + registry | M8 |
 | BL-027 | P1 | Active | Body-size-aware extraction (P3): auto_evergreen_extractor prompt includes article body length and bounded target count | M8, OVP_FIX_PLAN P3 |
 | BL-028 | P1 | Active | Quote-grounding requirement (P4): promote rejects candidates without source-grounded quotes | M8, OVP_FIX_PLAN P4 |
@@ -141,9 +141,9 @@ OVP is evolving from a personal Zettelkasten into a typed knowledge platform cap
 
 ### Stage 1: Type Unification + Quality (M8)
 
-Unify the three existing type systems (`concept_registry.kind`, `truth_store.object_kind`, `view_models._OBJECT_KIND_LABELS`) into one canonical taxonomy. Add `entity_type` to Layer 1 frontmatter so markdown remains the Authority for typing. Complete P3 (body-size-aware extraction), P4 (quote-grounding), and P5 (single-pass LLM refactor).
+Unify the three existing type systems (`concept_registry.kind`, `truth_store.object_kind`, `view_models._OBJECT_KIND_LABELS`) into one canonical taxonomy. Add `entity_type` to Canonical State frontmatter so vault markdown remains the trust boundary for typing. Complete P3 (body-size-aware extraction), P4 (quote-grounding), and P5 (single-pass LLM refactor).
 
-Key insight: OVP already has typed objects in Layer 2 (truth_store), typed relations (research_tech semantic_relations), and kind-specific UI (reader profiles). The gap is Layer 1 frontmatter and extraction pipeline output.
+Key insight: OVP already has typed objects in Projections (truth_store), typed relations (research_tech semantic_relations), and kind-specific UI (reader profiles). The gap is Canonical State frontmatter and extraction pipeline output.
 
 ### Stage 2: Pack As Domain Ontology (M9)
 
