@@ -229,6 +229,45 @@ TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Canonical State tables that the index rebuild does NOT recompute
+# from pages_index — they are independently materialized by LLM
+# synthesis (community_crystals + contradiction_crystals).  They must
+# be carried across a knowledge-index rebuild for ALL packs (no
+# ``exclude_pack`` filter), otherwise rebuilding silently wipes the
+# LLM-synthesized corpus and the user pays to regenerate it.
+#
+# ``crystal_scores`` is intentionally NOT in this list — it is a true
+# Projection over ``community_crystals``/``contradiction_crystals``
+# and is rebuilt deterministically by ``rebuild_crystal_scores`` later
+# in the index pipeline.  Preserving it here would only get
+# overwritten by the rebuild call.
+INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
+    "community_crystals": (
+        "pack",
+        "cluster_id",
+        "body_md",
+        "source_evergreen_slugs_json",
+        "synthesized_at",
+        "llm_model",
+        "prompt_version",
+        "superseded_by_synthesized_at",
+    ),
+    "contradiction_crystals": (
+        "pack",
+        "contradiction_id",
+        "subject_key",
+        "body_md",
+        "positive_claim_ids_json",
+        "negative_claim_ids_json",
+        "source_object_ids_json",
+        "synthesized_at",
+        "llm_model",
+        "prompt_version",
+        "superseded_by_synthesized_at",
+    ),
+}
+
+
 def _truth_pack_name(pack_name: str | None = None) -> str:
     return str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
 
@@ -314,6 +353,31 @@ def _preserve_existing_truth_rows(
                 rows,
             )
             preserved_packs.update(str(row[0]) for row in rows if row and row[0])
+
+        # INDEPENDENT_CANONICAL_TABLE_COLUMNS rows are LLM-synthesized
+        # (or scored against synthesized rows) — they cannot be
+        # recomputed by the rebuild, so they must be carried over for
+        # ALL packs, including the current one.  Without this, every
+        # ``ovp-knowledge-index`` run silently wipes the crystal corpus
+        # and the user has to pay LLM cost to regenerate.
+        for table_name, columns in INDEPENDENT_CANONICAL_TABLE_COLUMNS.items():
+            column_sql = ", ".join(columns)
+            try:
+                rows = source_conn.execute(
+                    f"SELECT {column_sql} FROM {table_name} ORDER BY pack",
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                error_text = str(exc).lower()
+                if "no such table" in error_text or "no such column" in error_text:
+                    continue
+                raise
+            if not rows:
+                continue
+            placeholders = ", ".join("?" for _ in columns)
+            dest_conn.executemany(
+                f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+                rows,
+            )
 
         try:
             metadata_rows = source_conn.execute(
