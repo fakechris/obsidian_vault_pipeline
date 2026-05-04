@@ -52,7 +52,7 @@ import logging
 import math
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -61,11 +61,25 @@ logger = logging.getLogger(__name__)
 # Empirical cap for community size.  The OVP vault top community
 # is 454; setting MAX a bit above that means the largest community
 # saturates near 1.0 without the log-scaling losing resolution at
-# the small end.
+# the small end.  After M14 BL-048 the splitter caps communities
+# at 50 members, so 500 is now well above the natural ceiling and
+# only matters as a defensive saturation bound.
 _SIZE_LOG_CAP = 500.0
 
 # Recency window in days; older evergreens get score 0.
 _RECENCY_WINDOW_DAYS = 365.0
+
+# M14 BL-049: rolling window for crystal-scoped ``reuse_events``.
+# Shorter than the evergreen-recency window because reuse signals
+# are intrinsically more volatile — a crystal that was opened 30
+# days ago doesn't carry the same "still hot" signal an evergreen
+# touched a year ago does.
+_REUSE_RECENCY_WINDOW_DAYS = 30.0
+
+# ``object_kind`` values that the reuse-event recency signal
+# attributes to crystals.  Surfaces emitting reuse events for a
+# crystal must use one of these labels for the signal to register.
+_CRYSTAL_REUSE_KINDS = ("community_crystal", "contradiction_crystal")
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +162,19 @@ def _contradiction_signal(
     """Normalize a per-crystal contradiction count against the per-
     pack max.  Crystals with zero open contradictions score 0;
     the most-contradicted crystal scores 1."""
+    if max_observed <= 0:
+        return 0.0
+    return max(0.0, min(1.0, raw_count / max_observed))
+
+
+def _reuse_recency_signal(
+    raw_count: int, max_observed: int,
+) -> float:
+    """Normalize a per-crystal reuse-event count against the per-pack
+    max within the rolling window.  Crystals with zero events score
+    0; the most-touched crystal scores 1.  Cold-start (no events at
+    all) → all crystals = 0, identical to the BL-045 v0 placeholder.
+    """
     if max_observed <= 0:
         return 0.0
     return max(0.0, min(1.0, raw_count / max_observed))
@@ -275,6 +302,56 @@ def _load_object_metadata(
         )
         for object_id, slug, path in cur:
             out[object_id] = (slug or "", path or "")
+    return out
+
+
+def _load_crystal_reuse_counts(
+    conn: sqlite3.Connection,
+    pack: str,
+    *,
+    now_iso: str,
+    window_days: float = _REUSE_RECENCY_WINDOW_DAYS,
+) -> dict[tuple[str, str], int]:
+    """Count crystal-scoped ``reuse_events`` in the rolling window.
+    Returns ``{(crystal_kind, crystal_id): count}`` where
+    ``crystal_kind`` matches the ``crystal_scores.crystal_kind`` form
+    (``'community'`` or ``'contradiction'``, NOT the
+    ``object_kind`` used in the events table which is
+    ``'community_crystal'`` / ``'contradiction_crystal'``).
+
+    No-op when the ``reuse_events`` table doesn't exist or carries
+    no crystal-tagged rows in window — returns an empty dict, which
+    means the recency signal stays at the cold-start zero across
+    the corpus until surfaces start emitting events.
+    """
+    # ts is stored as ISO-8601 text.  Lexicographic comparison on
+    # ISO strings is order-preserving for same-zone timestamps,
+    # which is what the rest of the codebase assumes.
+    cutoff_dt = datetime.fromisoformat(now_iso) - timedelta(days=window_days)
+    cutoff_iso = cutoff_dt.isoformat(timespec="seconds")
+    placeholders = ",".join("?" * len(_CRYSTAL_REUSE_KINDS))
+    try:
+        rows = conn.execute(
+            f"SELECT object_kind, object_id, COUNT(*) "
+            f"FROM reuse_events "
+            f"WHERE pack = ? AND object_kind IN ({placeholders}) "
+            f"  AND ts >= ? "
+            f"GROUP BY object_kind, object_id",
+            (pack, *_CRYSTAL_REUSE_KINDS, cutoff_iso),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    out: dict[tuple[str, str], int] = {}
+    for object_kind, object_id, n in rows:
+        # Map the event-side ``object_kind`` to the score-side
+        # ``crystal_kind`` shorthand.
+        if object_kind == "community_crystal":
+            kind = "community"
+        elif object_kind == "contradiction_crystal":
+            kind = "contradiction"
+        else:
+            continue
+        out[(kind, object_id)] = int(n)
     return out
 
 
@@ -430,6 +507,13 @@ def rebuild_crystal_scores(
     now_ts = datetime.now(timezone.utc).timestamp()
     out: list[CrystalScore] = []
 
+    # M14 BL-049: pull crystal-scoped reuse counts within the rolling
+    # 30-day window.  Cold start (no events at all) leaves every
+    # entry's count at zero, which produces the same all-zero
+    # behaviour as the BL-045 v0 placeholder.
+    reuse_counts = _load_crystal_reuse_counts(conn, pack, now_iso=now_iso)
+    max_reuse = max(reuse_counts.values(), default=0)
+
     for cid, entry in community_index.items():
         size = len(entry["members"])
         slug_set = set(entry["source_slugs"])
@@ -445,7 +529,9 @@ def rebuild_crystal_scores(
             contradiction_norm=_contradiction_signal(
                 raw_contradiction_counts[("community", cid)], max_contradictions,
             ),
-            reuse_recency_norm=0.0,  # BL-049 placeholder
+            reuse_recency_norm=_reuse_recency_signal(
+                reuse_counts.get(("community", cid), 0), max_reuse,
+            ),
             evergreen_recency_norm=_evergreen_recency_signal(
                 most_recent, now_utc=now_ts,
             ),
@@ -476,7 +562,9 @@ def rebuild_crystal_scores(
                 raw_contradiction_counts[("contradiction", cid)],
                 max_contradictions,
             ),
-            reuse_recency_norm=0.0,
+            reuse_recency_norm=_reuse_recency_signal(
+                reuse_counts.get(("contradiction", cid), 0), max_reuse,
+            ),
             evergreen_recency_norm=_evergreen_recency_signal(
                 most_recent, now_utc=now_ts,
             ),

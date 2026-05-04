@@ -29,6 +29,7 @@ from ovp_pipeline.synthesis.crystal_scoring import (
     _credibility_signal,
     _contradiction_signal,
     _evergreen_recency_signal,
+    _reuse_recency_signal,
     _size_signal,
     compute_score,
     rebuild_crystal_scores,
@@ -113,6 +114,19 @@ CREATE TABLE crystal_scores (
   computed_at TEXT NOT NULL,
   PRIMARY KEY (pack, crystal_kind, crystal_id)
 );
+CREATE TABLE reuse_events (
+  event_id TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  pack TEXT NOT NULL,
+  object_id TEXT NOT NULL DEFAULT '',
+  object_kind TEXT NOT NULL DEFAULT '',
+  surface TEXT NOT NULL,
+  consumer_ref TEXT NOT NULL DEFAULT '',
+  evidence_present INTEGER NOT NULL DEFAULT 0,
+  provenance_clean INTEGER NOT NULL DEFAULT 0,
+  trusted INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+);
 CREATE TABLE source_authority (
   source_id TEXT PRIMARY KEY,
   authority REAL NOT NULL,
@@ -173,6 +187,29 @@ class TestContradictionSignal:
     def test_zero_max_yields_zero(self):
         # No open contradictions in pack → all crystals score 0.
         assert _contradiction_signal(0, 0) == 0.0
+
+
+class TestReuseRecencySignal:
+    """BL-049 wires this signal to the ``reuse_events`` table.  In
+    M14 v0 the signal was fixed at zero — these tests pin both the
+    cold-start (zero) and once-data-flows (non-zero) paths."""
+
+    def test_zero_count_is_zero(self):
+        assert _reuse_recency_signal(0, 5) == 0.0
+
+    def test_max_observed_yields_one(self):
+        assert _reuse_recency_signal(5, 5) == 1.0
+
+    def test_zero_max_yields_zero(self):
+        # Cold start: nothing was reused → all crystals score 0.
+        assert _reuse_recency_signal(0, 0) == 0.0
+
+    def test_clamped_above_max(self):
+        assert _reuse_recency_signal(10, 5) == 1.0
+
+    def test_proportional_normalization(self):
+        # 2 reuses out of a per-pack max of 8 → 0.25.
+        assert _reuse_recency_signal(2, 8) == 0.25
 
 
 class TestEvergreenRecencySignal:
@@ -439,6 +476,136 @@ class TestRebuildEndToEnd:
         # All credibility_norm = 0 because no table → no signal.
         for s in scores:
             assert s.signals.credibility_norm == 0.0
+
+
+class TestReuseFeedbackLoop:
+    """BL-049: the ``reuse_recency_norm`` signal reads from the
+    ``reuse_events`` table.  Before this PR it was a forward-compat
+    placeholder fixed at 0; now it actually scales with how often
+    each crystal has been touched in the rolling 30-day window."""
+
+    def test_cold_start_signal_is_zero(self, tmp_path):
+        # No reuse_events rows → all crystals get reuse_recency_norm = 0.
+        # Same behaviour as the BL-045 v0 placeholder.
+        vault, db = _build_seeded_vault(tmp_path)
+        conn = sqlite3.connect(db)
+        try:
+            scores = rebuild_crystal_scores(
+                conn, vault_dir=vault, pack="research-tech",
+            )
+        finally:
+            conn.close()
+        for s in scores:
+            assert s.signals.reuse_recency_norm == 0.0
+
+    def test_in_window_event_lifts_signal(self, tmp_path):
+        # Seed a reuse_events row for one community within the
+        # 30-day window.  That crystal's reuse_recency_norm becomes
+        # 1.0 (the per-pack max with only one event); others stay 0.
+        vault, db = _build_seeded_vault(tmp_path)
+        conn = sqlite3.connect(db)
+        # Pick a real cluster_id from the seed.
+        cluster_id = conn.execute(
+            "SELECT cluster_id FROM community_crystals LIMIT 1"
+        ).fetchone()[0]
+        # ts within 30 days — use today.
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        conn.execute(
+            "INSERT INTO reuse_events "
+            "(event_id, ts, pack, object_id, object_kind, surface) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("e1", now_iso, "research-tech", cluster_id,
+             "community_crystal", "atlas"),
+        )
+        conn.commit()
+        try:
+            scores = rebuild_crystal_scores(
+                conn, vault_dir=vault, pack="research-tech",
+            )
+        finally:
+            conn.close()
+        by_id = {s.crystal_id: s for s in scores}
+        # The reused crystal lifts its signal to 1.0.
+        assert by_id[cluster_id].signals.reuse_recency_norm == 1.0
+        # Other crystals stay at zero.
+        for cid, s in by_id.items():
+            if cid == cluster_id:
+                continue
+            assert s.signals.reuse_recency_norm == 0.0
+
+    def test_old_event_outside_window_ignored(self, tmp_path):
+        # Event older than 30 days → doesn't count.
+        vault, db = _build_seeded_vault(tmp_path)
+        conn = sqlite3.connect(db)
+        cluster_id = conn.execute(
+            "SELECT cluster_id FROM community_crystals LIMIT 1"
+        ).fetchone()[0]
+        from datetime import datetime, timedelta, timezone
+        old_iso = (
+            datetime.now(timezone.utc) - timedelta(days=60)
+        ).isoformat(timespec="seconds")
+        conn.execute(
+            "INSERT INTO reuse_events "
+            "(event_id, ts, pack, object_id, object_kind, surface) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("eOld", old_iso, "research-tech", cluster_id,
+             "community_crystal", "atlas"),
+        )
+        conn.commit()
+        try:
+            scores = rebuild_crystal_scores(
+                conn, vault_dir=vault, pack="research-tech",
+            )
+        finally:
+            conn.close()
+        # 60-day-old event is outside the 30-day window → signal stays cold.
+        for s in scores:
+            assert s.signals.reuse_recency_norm == 0.0
+
+    def test_other_pack_events_dont_leak(self, tmp_path):
+        # Pack isolation: a reuse event in another pack must not
+        # affect this pack's crystal scores.
+        vault, db = _build_seeded_vault(tmp_path)
+        conn = sqlite3.connect(db)
+        cluster_id = conn.execute(
+            "SELECT cluster_id FROM community_crystals LIMIT 1"
+        ).fetchone()[0]
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        conn.execute(
+            "INSERT INTO reuse_events "
+            "(event_id, ts, pack, object_id, object_kind, surface) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("eOther", now_iso, "other-pack", cluster_id,
+             "community_crystal", "atlas"),
+        )
+        conn.commit()
+        try:
+            scores = rebuild_crystal_scores(
+                conn, vault_dir=vault, pack="research-tech",
+            )
+        finally:
+            conn.close()
+        for s in scores:
+            assert s.signals.reuse_recency_norm == 0.0
+
+    def test_missing_reuse_events_table_degrades_gracefully(self, tmp_path):
+        # Fresh DB without reuse_events → no crash; signal cold-starts at 0.
+        vault, db = _build_seeded_vault(tmp_path)
+        conn = sqlite3.connect(db)
+        conn.execute("DROP TABLE reuse_events")
+        conn.commit()
+        try:
+            scores = rebuild_crystal_scores(
+                conn, vault_dir=vault, pack="research-tech",
+            )
+        finally:
+            conn.close()
+        # Still produces scores; reuse signal is 0.
+        assert len(scores) == 3
+        for s in scores:
+            assert s.signals.reuse_recency_norm == 0.0
 
 
 class TestArchitectureBoundary:
