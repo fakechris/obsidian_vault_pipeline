@@ -229,6 +229,15 @@ class EvergreenExtractor:
 - **GitHub 项目页 / README**: 抽**项目架构 + 技术决策 + 设计权衡** 等 stable knowledge,不要抽"安装命令""目录结构"
 """
 
+    # PR-G2 (BL-039) — extraction-time entity prime.
+    # ``_ENTITY_PRIME_TOP_N`` caps how many canonicals from the
+    # entity_aliases view get injected into the user prompt.  100 is
+    # enough to cover 90% of the real-vault hit rate (top-N by
+    # authority) at ~1.5KB of prompt — adding more pays diminishing
+    # returns and risks crowding out the article content.
+    _ENTITY_PRIME_TOP_N = 100
+    _ENTITY_PRIME_ALIAS_CAP_PER_CANONICAL = 4
+
     def __init__(
         self,
         llm_client: LiteLLMClient,
@@ -238,6 +247,102 @@ class EvergreenExtractor:
         self.llm = llm_client
         self.logger = logger
         self.vault_dir = vault_dir
+        # Lazy + cached: built once per extractor instance on first
+        # extract_concepts call.  Empty string when there's no entity
+        # data — so the prompt block silently disappears on a fresh
+        # vault.
+        self._entity_prime_block: str | None = None
+
+    def _load_entity_prime_block(self) -> str:
+        """Render the top-N entity aliases into a compact prompt block.
+
+        Result is cached on ``self`` — callers in batch mode pay the
+        scan cost once for ~6700 evergreens.
+
+        Returns ``""`` (empty string, falsy) when the entity layer
+        is empty (fresh vault) or unavailable; the user prompt then
+        simply skips the block.
+        """
+        if self._entity_prime_block is not None:
+            return self._entity_prime_block
+        if self.vault_dir is None:
+            self._entity_prime_block = ""
+            return ""
+        try:
+            from .entities.aliases import (
+                KIND_PRIMARY,
+                build_alias_index,
+                collect_entity_aliases,
+            )
+            from .entities.store import EntityStore
+        except ImportError:
+            self._entity_prime_block = ""
+            return ""
+
+        try:
+            store = EntityStore(
+                db_path=self.vault_dir / "60-Logs" / "knowledge.db",
+            )
+            aliases = collect_entity_aliases(
+                vault_dir=self.vault_dir, entity_store=store,
+            )
+        except Exception as exc:  # noqa: BLE001 — defensive; never block extraction
+            self.logger.warning(
+                "entity prime unavailable: %s — extraction will run without it",
+                exc,
+            )
+            self._entity_prime_block = ""
+            return ""
+
+        if not aliases:
+            self._entity_prime_block = ""
+            return ""
+
+        # Group all alias rows by canonical_handle, keep best
+        # authority per group.
+        index = build_alias_index(aliases)
+        by_canonical: dict[str, dict[str, Any]] = {}
+        for a in index.values():
+            slot = by_canonical.setdefault(a.canonical_handle, {
+                "handle": a.canonical_handle,
+                "type": a.canonical_entity_type,
+                "authority": a.authority,
+                "aliases": set(),
+            })
+            # Skip the primary form — it duplicates the handle itself.
+            if a.alias_kind != KIND_PRIMARY and a.alias != a.canonical_handle:
+                slot["aliases"].add(a.alias)
+            # Take the max authority observed across the group.
+            if a.authority is not None:
+                if slot["authority"] is None or a.authority > slot["authority"]:
+                    slot["authority"] = a.authority
+
+        ranked = sorted(
+            by_canonical.values(),
+            key=lambda r: (-(r["authority"] or 0.0), r["handle"]),
+        )[: self._ENTITY_PRIME_TOP_N]
+        if not ranked:
+            self._entity_prime_block = ""
+            return ""
+
+        lines = [
+            "",
+            "已知实体目录(下面列出的人/组织/项目在 vault 里已有 canonical handle，"
+            "如果文章提到他们，请直接用 canonical handle 命名 entity_type=person/"
+            "company/project 的笔记 slug，不要发明新名字):",
+        ]
+        for rec in ranked:
+            cap = self._ENTITY_PRIME_ALIAS_CAP_PER_CANONICAL
+            sample = sorted(rec["aliases"])[:cap]
+            if sample:
+                lines.append(
+                    f"- `{rec['handle']}` ({rec['type']}) — 也可写作: "
+                    f"{', '.join(sample)}"
+                )
+            else:
+                lines.append(f"- `{rec['handle']}` ({rec['type']})")
+        self._entity_prime_block = "\n".join(lines)
+        return self._entity_prime_block
 
     def _retrieve_related_for_extraction(
         self,
@@ -323,6 +428,12 @@ class EvergreenExtractor:
         retrieval_query = f"{file_path.stem}\n{content[:500]}".strip()
         related = self._retrieve_related_for_extraction(retrieval_query, registry=registry)
         related_block = self._format_related_block(related)
+        # PR-G2 (BL-039) — prime the LLM with the canonical handles
+        # already in the entity layer so it doesn't invent a new
+        # entity name for a person/org we already know about.
+        # ``Karpathy`` / ``Andrej`` / ``@karpathy`` should all
+        # collapse to slug ``karpathy`` rather than three new ones.
+        entity_prime_block = self._load_entity_prime_block()
 
         # Note: ``content[:6000]`` is intentional for PR-A scope — chunking
         # for >6KB articles lands in PR-B.  The system prompt now demands
@@ -339,6 +450,7 @@ class EvergreenExtractor:
 {content[:6000]}
 ```
 {related_block}
+{entity_prime_block}
 
 请按 JSON 格式输出 atomic unit 列表(不要 markdown 包装)。
 **抽得多好过抽得少**;短文 5-10 个,中等 8-20 个,长文 15-30+ 个。"""
