@@ -1003,7 +1003,7 @@ date: 2026-04-07
 
     assert row[0] == "knowledge_db"
     assert row[1] == 1
-    assert row[2] == 5
+    assert row[2] == 6
     assert row[3]
 
 
@@ -1037,7 +1037,7 @@ date: 2026-04-07
         "authority_schema_version_newer_than_projection",
     ]
     assert markers[-1].authority_schema_version == 2
-    assert markers[-1].projection_schema_version == 5
+    assert markers[-1].projection_schema_version == 6
     assert markers[-1].status == "closed"
     with sqlite3.connect(layout.knowledge_db) as conn:
         row = conn.execute(
@@ -1047,7 +1047,7 @@ date: 2026-04-07
             WHERE projection_kind = 'knowledge_db'
             """
         ).fetchone()
-    assert row == (2, 5)
+    assert row == (2, 6)
 
 
 def test_ensure_knowledge_db_current_rebuilds_when_projection_schema_version_advances(temp_vault):
@@ -1096,7 +1096,7 @@ date: 2026-04-07
             WHERE projection_kind = 'knowledge_db'
             """
         ).fetchone()
-    assert row == (1, 5)
+    assert row == (1, 6)
 
 
 def test_recent_audit_events_returns_newest_rows_first(temp_vault):

@@ -193,6 +193,28 @@ CREATE TABLE contradiction_crystals (
 
 CREATE INDEX idx_contradiction_crystals_pack_id
   ON contradiction_crystals(pack, contradiction_id);
+
+-- M14 BL-045: per-crystal score, derived from existing Projections
+-- + Canonical-State signals.  Drives the curated Atlas top-N
+-- ranking (BL-046).  Re-derived on every ``ovp-knowledge-index``
+-- run; ``crystal_scores`` is itself a Projection (deletable +
+-- rebuildable, never authoritative).
+CREATE TABLE crystal_scores (
+  pack TEXT NOT NULL,
+  crystal_kind TEXT NOT NULL,
+  crystal_id TEXT NOT NULL,
+  score REAL NOT NULL,
+  size_norm REAL NOT NULL DEFAULT 0,
+  credibility_norm REAL NOT NULL DEFAULT 0,
+  contradiction_norm REAL NOT NULL DEFAULT 0,
+  reuse_recency_norm REAL NOT NULL DEFAULT 0,
+  evergreen_recency_norm REAL NOT NULL DEFAULT 0,
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (pack, crystal_kind, crystal_id)
+);
+
+CREATE INDEX idx_crystal_scores_pack_score
+  ON crystal_scores(pack, score DESC);
 """
 
 CONTRADICTION_HEURISTIC_NOTE = (

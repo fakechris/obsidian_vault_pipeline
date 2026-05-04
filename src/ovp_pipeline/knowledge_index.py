@@ -29,7 +29,7 @@ SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
 AUTHORITY_SCHEMA_VERSION = 1
 KNOWLEDGE_DB_PROJECTION_KIND = "knowledge_db"
-KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 5
+KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 6
 
 
 _FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
@@ -1173,6 +1173,23 @@ def rebuild_knowledge_index(
             )
 
             page_metrics_indexed = _rebuild_page_metrics(conn)
+
+            # M14 BL-045: rebuild crystal_scores Projection.  Lazy
+            # import to avoid a sqlite3-only module pulling synthesis
+            # dependencies into knowledge_index startup.  No-op when
+            # there are no community/contradiction crystals yet.
+            try:
+                from .synthesis.crystal_scoring import rebuild_crystal_scores
+                rebuild_crystal_scores(
+                    conn, vault_dir=layout.vault_root, pack=truth_pack,
+                )
+            except Exception as exc:
+                # Score rebuild is best-effort — never block the
+                # primary index rebuild on a scoring failure.  The
+                # next ``ovp-rescore-crystals`` run will catch up.
+                logger.warning(
+                    "crystal_scores rebuild skipped: %s", exc,
+                )
 
             conn.commit()
         except Exception:
