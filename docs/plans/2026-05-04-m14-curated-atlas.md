@@ -1,6 +1,6 @@
 # M14 — Curated Atlas (Crystal Read Model)
 
-> Status: **Plan**.  Drafted after the M13 substrate (PRs #130–#138) shipped 329 community crystals + 1 contradiction crystal on the OVP vault, and the M15 architecture-language cleanup (PR #139) settled the vocabulary.
+> Status: **Plan**.  Drafted after the M13 substrate (PRs #130–#136) shipped 329 community crystals + 1 contradiction crystal on the OVP vault, and the M15 architecture-language cleanup (PR #139) settled the vocabulary.
 >
 > M13 made the synthesis layer *exist*: every Louvain community has one LLM-synthesized crystal, every open contradiction has one open-question crystal.  M14 makes it *usable*: 329 crystals are too many for a user-facing entry; users need a curated 20–50 crystal surface, with the long tail accessible via search and facets.
 >
@@ -104,7 +104,7 @@ Candidates (in proposed weight order):
 4. **Reuse recency** (BL-049 adds the data): crystals opened/cited recently outrank stale ones.
 5. **Evergreen recency** (`objects.created_at` or filesystem mtime): communities that absorbed new evergreens recently.
 
-Weights: tentative `0.25 × size_norm + 0.30 × credibility_norm + 0.20 × contradiction + 0.15 × reuse_recency + 0.10 × evergreen_recency`. Each signal normalized to [0, 1].
+Weights: tentative `0.25 × size_norm + 0.30 × credibility_norm + 0.20 × contradiction_norm + 0.15 × reuse_recency_norm + 0.10 × evergreen_recency_norm`. Each signal normalized to [0, 1].
 
 ### Q3 — How does the long tail get accessed?
 

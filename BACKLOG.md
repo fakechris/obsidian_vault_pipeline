@@ -35,7 +35,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M14 Curated Atlas (Crystal Read Model) | Next | `crystal_scores` Projection + Curated Atlas Access Surface + long-tail FTS/facets + big-community splitter + reuse feedback (BL-045/046/047/048/049). See `docs/plans/2026-05-04-m14-curated-atlas.md` |
 | M15 Architecture Language Cleanup | Done | Six-term architecture contract (Source / Candidate / Canonical State / Projection / Access Surface / Governance), ARCHITECTURE.md rewrite, doc split into RUNTIME / PACKS / PRODUCT_SURFACES / GLOSSARY, doc lint with phased rollout (PR #139) |
 
-## Recently Shipped (PRs #98–#133)
+## Recently Shipped (PRs #98–#139)
 
 | PR | What shipped |
 | --- | --- |
