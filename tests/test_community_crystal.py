@@ -17,6 +17,7 @@ from ovp_pipeline.synthesis.community_crystal import (
     CommunityCrystal,
     _crystal_filename,
     _select_top_members,
+    _strip_frontmatter,
     render_crystal_markdown,
     synthesize_community_crystals,
 )
@@ -144,6 +145,56 @@ class TestSelectTopMembers:
 # ---------------------------------------------------------------------------
 
 
+class TestStripFrontmatter:
+    """Frontmatter on ~7000 evergreens × top_k notes per crystal call
+    is a meaningful slice of the prompt budget.  Pre-fix the loader
+    sent the whole file including frontmatter; post-fix only the
+    body content reaches the LLM."""
+
+    def test_strips_simple_frontmatter(self):
+        text = (
+            "---\n"
+            "note_id: x\n"
+            "title: X\n"
+            "---\n"
+            "body content"
+        )
+        assert _strip_frontmatter(text) == "body content"
+
+    def test_no_frontmatter_passes_through(self):
+        # File with no leading ``---`` returns unchanged.
+        text = "# Title\n\nbody"
+        assert _strip_frontmatter(text) == text
+
+    def test_unclosed_frontmatter_passes_through(self):
+        # Malformed input returns unchanged — better than dropping content.
+        text = "---\nnote_id: x\nbody never closed"
+        assert _strip_frontmatter(text) == text
+
+    def test_frontmatter_stripped_in_pipeline(self, tmp_path):
+        # End-to-end: the frontmatter on a seeded evergreen does NOT
+        # appear in the user prompt sent to the LLM.
+        vault, db = _seed_vault(
+            tmp_path,
+            clusters=[("cluster::xx", "C", ["a"])],
+            objects=[(
+                "a", "A",
+                "---\nnote_id: a\ntitle: A\n---\n实际正文内容\n",
+            )],
+        )
+        llm = _StubLLM()
+        synthesize_community_crystals(
+            vault_dir=vault, llm_client=llm, db_path=db,
+        )
+        # One LLM call.  The user prompt must contain the body but
+        # NOT the frontmatter keys.
+        assert len(llm.calls) == 1
+        _, user_prompt, _ = llm.calls[0]
+        assert "实际正文内容" in user_prompt
+        assert "note_id: a" not in user_prompt
+        assert "title: A" not in user_prompt
+
+
 class TestCrystalFilename:
     def test_strips_cluster_prefix(self):
         # The DB cluster_id format is `cluster::<sha1>`, but `:` is
@@ -185,6 +236,12 @@ class TestRenderCrystalMarkdown:
         assert "  - a" in md
         assert "  - b" in md
         assert "tags: [crystal, community]" in md
+        # Standard projection_* metadata is rendered, matching the
+        # convention shared with cluster_crystal / topic_view.
+        assert "projection_kind: compiled_wiki_projection" in md
+        assert "projection_surface: community_crystal" in md
+        assert "projection_owner_pack: research-tech" in md
+        assert "projection_generated_by: synthesize_community_crystals" in md
         # Body comes after the closing ---
         assert "## 概念核心" in md
 

@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Protocol
 
+from ..projection_labels import frontmatter_projection_fields
+
 logger = logging.getLogger(__name__)
 
 
@@ -126,6 +128,29 @@ def _build_user_prompt(
     return "\n".join(parts)
 
 
+def _strip_frontmatter(text: str) -> str:
+    """Remove the YAML frontmatter block from an evergreen markdown.
+
+    Frontmatter is bounded by ``---`` on its own line at the very
+    start of the file and a closing ``---`` on its own line.  When
+    absent or malformed, return the text unchanged.
+
+    Stripping saves ~10 lines × top_k notes of LLM tokens per
+    crystal call — on a vault where every evergreen carries the
+    standard ``note_id / title / type / date / tags / aliases / area``
+    block, that's a meaningful slice of the prompt budget.
+    """
+    if not text.startswith("---"):
+        return text
+    # Find the closing fence after the opening one.  Search starts
+    # at index 3 to skip past the opening "---".
+    closer = text.find("\n---", 3)
+    if closer == -1:
+        return text
+    # Skip past the closing fence and any trailing newlines.
+    return text[closer + 4:].lstrip("\n")
+
+
 # ----- Member selection -----------------------------------------------
 
 
@@ -177,39 +202,76 @@ def _load_evergreen_bodies(
                 full_path, exc,
             )
             continue
-        out.append((object_id, title, body))
+        out.append((object_id, title, _strip_frontmatter(body)))
     return out
 
 
 # ----- DB helpers -----------------------------------------------------
 
 
-def _load_clusters_for_pack(
-    conn: sqlite3.Connection, pack: str,
+def _load_filtered_clusters(
+    conn: sqlite3.Connection,
+    pack: str,
+    *,
+    only_cluster_ids: set[str] | None,
+    limit_communities: int | None,
 ) -> list[tuple[str, str, str]]:
-    """Return ``[(cluster_id, label, member_object_ids_json), ...]`` for
-    every Louvain community in ``pack``."""
-    rows = conn.execute(
-        """
-        SELECT cluster_id, label, member_object_ids_json
-          FROM graph_clusters
-         WHERE pack = ?
-           AND cluster_kind = 'louvain_community'
-         ORDER BY cluster_id
-        """,
-        (pack,),
-    ).fetchall()
-    return [(r[0], r[1], r[2]) for r in rows]
+    """Return ``[(cluster_id, label, member_object_ids_json), ...]``
+    for Louvain communities in ``pack``, with the caller's filters
+    pushed into SQL so we don't materialize the whole 312-row table
+    just to slice it.
+    """
+    sql_parts = [
+        "SELECT cluster_id, label, member_object_ids_json",
+        "  FROM graph_clusters",
+        " WHERE pack = ?",
+        "   AND cluster_kind = 'louvain_community'",
+    ]
+    params: list[object] = [pack]
+    if only_cluster_ids:
+        # Sorted ID list keeps the query plan stable and the
+        # parameter order matches subsequent debug logs.
+        ids = sorted(only_cluster_ids)
+        placeholders = ",".join("?" * len(ids))
+        sql_parts.append(f"   AND cluster_id IN ({placeholders})")
+        params.extend(ids)
+    sql_parts.append(" ORDER BY cluster_id")
+    if limit_communities is not None:
+        sql_parts.append(" LIMIT ?")
+        params.append(int(limit_communities))
+    cur = conn.execute("\n".join(sql_parts), tuple(params))
+    return [(r[0], r[1], r[2]) for r in cur]
 
 
-def _load_objects_index(
-    conn: sqlite3.Connection, pack: str,
+# SQLite caps parameterised IN clauses at ~999 items by default.  The
+# subset loader chunks below this floor so a vault with hundreds of
+# communities doesn't trip the limit.
+_OBJECTS_LOOKUP_CHUNK = 500
+
+
+def _load_objects_subset(
+    conn: sqlite3.Connection,
+    pack: str,
+    object_ids: set[str],
 ) -> dict[str, tuple[str, str]]:
-    rows = conn.execute(
-        "SELECT object_id, title, canonical_path FROM objects WHERE pack = ?",
-        (pack,),
-    ).fetchall()
-    return {r[0]: (r[1], r[2]) for r in rows}
+    """Targeted lookup — only the object_ids the synthesis loop will
+    actually consume.  Avoids loading all 7000 objects into memory
+    just to read the few hundred we need."""
+    if not object_ids:
+        return {}
+    out: dict[str, tuple[str, str]] = {}
+    ids_list = sorted(object_ids)
+    for start in range(0, len(ids_list), _OBJECTS_LOOKUP_CHUNK):
+        chunk = ids_list[start:start + _OBJECTS_LOOKUP_CHUNK]
+        placeholders = ",".join("?" * len(chunk))
+        cur = conn.execute(
+            f"SELECT object_id, title, canonical_path FROM objects "
+            f"WHERE pack = ? AND object_id IN ({placeholders})",
+            (pack, *chunk),
+        )
+        for object_id, title, canonical_path in cur:
+            out[object_id] = (title, canonical_path)
+    return out
 
 
 def _persist_crystal(
@@ -242,11 +304,24 @@ def _frontmatter(crystal: CommunityCrystal, *, label: str) -> str:
     ]
     for slug in crystal.source_evergreen_slugs:
         lines.append(f"  - {slug}")
-    lines.extend([
-        "tags: [crystal, community]",
-        "---",
-        "",
-    ])
+    lines.append("tags: [crystal, community]")
+    # Standard ``projection_*`` metadata so the crystal frontmatter
+    # is consistent with the other materialized projections
+    # (cluster_crystal, topic_view, briefing crystal).  These keys
+    # are governed by ``projection_labels.frontmatter_projection_fields``
+    # — bumping the schema version there propagates automatically.
+    lines.extend(frontmatter_projection_fields(
+        surface="community_crystal",
+        projection_kind="compiled_wiki_projection",
+        owner_pack=crystal.pack,
+        generated_by="synthesize_community_crystals",
+        derived_from=(
+            "knowledge.db.graph_clusters",
+            "knowledge.db.community_crystals",
+        ),
+        rebuild_policy="on_demand_or_refresh",
+    ))
+    lines.extend(["---", ""])
     return "\n".join(lines)
 
 
@@ -296,93 +371,109 @@ def synthesize_community_crystals(
     if not dry_run:
         crystal_dir.mkdir(parents=True, exist_ok=True)
 
+    # Single connection across the function — opened once for the
+    # filtered cluster fetch + targeted object lookup, reused for
+    # the per-row INSERT inside the synthesis loop with a commit
+    # after each row (incremental durability without the per-row
+    # connect+close handshake the original code paid for).
     conn = sqlite3.connect(db_path)
     try:
-        clusters = _load_clusters_for_pack(conn, pack_name)
-        objects_by_id = _load_objects_index(conn, pack_name)
+        cluster_rows = _load_filtered_clusters(
+            conn, pack_name,
+            only_cluster_ids=only_cluster_ids,
+            limit_communities=limit_communities,
+        )
+
+        # Decode + cap members up front so we know the exact set of
+        # object_ids the loop will consume.  That set drives the
+        # targeted ``_load_objects_subset`` query below — the OVP
+        # vault has ~7000 objects, only a few hundred land inside
+        # the top-K member slice.
+        decoded: list[tuple[str, str, list[str]]] = []  # (id, label, picked)
+        needed_object_ids: set[str] = set()
+        for cluster_id, label, members_json in cluster_rows:
+            try:
+                members = json.loads(members_json)
+            except (TypeError, json.JSONDecodeError):
+                logger.warning(
+                    "malformed member_object_ids_json for %s; skipping",
+                    cluster_id,
+                )
+                continue
+            picked = _select_top_members(members, top_k=top_k)
+            decoded.append((cluster_id, label, picked))
+            needed_object_ids.update(picked)
+
+        objects_by_id = _load_objects_subset(
+            conn, pack_name, needed_object_ids,
+        )
+
+        out: list[CommunityCrystal] = []
+        for cluster_id, label, picked in decoded:
+            evergreens = _load_evergreen_bodies(
+                vault_dir, member_object_ids=picked,
+                objects_by_id=objects_by_id,
+            )
+            if not evergreens:
+                logger.warning(
+                    "no readable evergreens for cluster %s; skipping",
+                    cluster_id,
+                )
+                continue
+            user_prompt = _build_user_prompt(label, evergreens)
+            try:
+                body_md = llm_client.call(
+                    _SYSTEM_PROMPT, user_prompt, max_tokens=max_tokens,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "LLM call failed for cluster %s: %s — skipping",
+                    cluster_id, exc,
+                )
+                continue
+            body_md = body_md.strip()
+            if not body_md:
+                logger.warning(
+                    "LLM returned empty body for cluster %s; skipping",
+                    cluster_id,
+                )
+                continue
+
+            crystal = CommunityCrystal(
+                pack=pack_name,
+                cluster_id=cluster_id,
+                body_md=body_md,
+                source_evergreen_slugs=tuple(picked),
+                synthesized_at=datetime.now(timezone.utc).isoformat(
+                    timespec="seconds",
+                ),
+                llm_model=llm_model_label,
+                prompt_version=CRYSTAL_PROMPT_VERSION,
+            )
+            out.append(crystal)
+
+            if dry_run:
+                continue
+
+            # Defense-in-depth: cluster_id is `cluster::<sha1>` by
+            # construction so it's already safe, but if a future
+            # pipeline upstream emits something funny we still
+            # refuse to write outside the crystal directory.
+            target = crystal_dir / _crystal_filename(cluster_id)
+            try:
+                target.resolve().relative_to(crystal_dir)
+            except ValueError:
+                logger.warning(
+                    "refusing to write crystal outside %s: cluster=%r",
+                    crystal_dir, cluster_id,
+                )
+                continue
+            target.write_text(
+                render_crystal_markdown(crystal, label=label),
+                encoding="utf-8",
+            )
+            _persist_crystal(conn, crystal)
+            conn.commit()
+        return out
     finally:
         conn.close()
-
-    if only_cluster_ids is not None:
-        clusters = [c for c in clusters if c[0] in only_cluster_ids]
-    if limit_communities is not None:
-        clusters = clusters[:limit_communities]
-
-    out: list[CommunityCrystal] = []
-    for cluster_id, label, members_json in clusters:
-        try:
-            members = json.loads(members_json)
-        except (TypeError, json.JSONDecodeError):
-            logger.warning("malformed member_object_ids_json for %s; skipping",
-                           cluster_id)
-            continue
-        picked = _select_top_members(members, top_k=top_k)
-        evergreens = _load_evergreen_bodies(
-            vault_dir, member_object_ids=picked,
-            objects_by_id=objects_by_id,
-        )
-        if not evergreens:
-            logger.warning(
-                "no readable evergreens for cluster %s; skipping", cluster_id,
-            )
-            continue
-        user_prompt = _build_user_prompt(label, evergreens)
-        try:
-            body_md = llm_client.call(
-                _SYSTEM_PROMPT, user_prompt, max_tokens=max_tokens,
-            )
-        except Exception as exc:
-            logger.warning(
-                "LLM call failed for cluster %s: %s — skipping",
-                cluster_id, exc,
-            )
-            continue
-        body_md = body_md.strip()
-        if not body_md:
-            logger.warning(
-                "LLM returned empty body for cluster %s; skipping", cluster_id,
-            )
-            continue
-
-        crystal = CommunityCrystal(
-            pack=pack_name,
-            cluster_id=cluster_id,
-            body_md=body_md,
-            source_evergreen_slugs=tuple(picked),
-            synthesized_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            llm_model=llm_model_label,
-            prompt_version=CRYSTAL_PROMPT_VERSION,
-        )
-        out.append(crystal)
-
-        if dry_run:
-            continue
-
-        # Defense-in-depth: cluster_id is `cluster::<sha1>` by
-        # construction so it's already safe, but if a future
-        # pipeline upstream emits something funny we still refuse
-        # to write outside the crystal directory.
-        target = crystal_dir / _crystal_filename(cluster_id)
-        try:
-            target.resolve().relative_to(crystal_dir)
-        except ValueError:
-            logger.warning(
-                "refusing to write crystal outside %s: cluster=%r",
-                crystal_dir, cluster_id,
-            )
-            continue
-        target.write_text(
-            render_crystal_markdown(crystal, label=label), encoding="utf-8",
-        )
-
-        # Persist DB row in its own connection so a long batch can
-        # commit incrementally — if the LLM call hangs midway, the
-        # crystals already produced stay safe.
-        conn_w = sqlite3.connect(db_path)
-        try:
-            _persist_crystal(conn_w, crystal)
-            conn_w.commit()
-        finally:
-            conn_w.close()
-
-    return out
