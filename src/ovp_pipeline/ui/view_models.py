@@ -4246,6 +4246,77 @@ def build_atlas_browser_payload(
     }
 
 
+CURATED_ATLAS_DEFAULT_TOP_N = 30
+CURATED_ATLAS_MAX_TOP_N = 100
+
+
+def build_curated_atlas_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    top_n: int | None = None,
+) -> dict[str, Any]:
+    from ..synthesis.curated_atlas import build_curated_atlas
+    from ..synthesis._shared import CRYSTAL_DIR_REL
+
+    requested_pack = pack_name or ""
+    pack = pack_name or PRIMARY_PACK_NAME
+    requested_top_n = top_n if top_n is not None else CURATED_ATLAS_DEFAULT_TOP_N
+    if requested_top_n < 1:
+        requested_top_n = 1
+    if requested_top_n > CURATED_ATLAS_MAX_TOP_N:
+        requested_top_n = CURATED_ATLAS_MAX_TOP_N
+
+    db_path = _db_path(vault_dir)
+    with sqlite3.connect(db_path) as conn:
+        atlas = build_curated_atlas(conn, pack=pack, top_n=requested_top_n)
+
+    entries: list[dict[str, Any]] = []
+    for entry in atlas.entries:
+        if entry.crystal_kind == "community" and entry.crystal_id.startswith("cluster::"):
+            safe_id = entry.crystal_id[len("cluster::"):]
+        elif entry.crystal_kind == "contradiction" and entry.crystal_id.startswith("contradiction::"):
+            safe_id = f"contradiction-{entry.crystal_id[len('contradiction::'):]}"
+        else:
+            safe_id = entry.crystal_id
+        note_rel = str(CRYSTAL_DIR_REL / f"{safe_id}.md")
+        entries.append(
+            {
+                "rank": entry.rank,
+                "crystal_kind": entry.crystal_kind,
+                "crystal_id": entry.crystal_id,
+                "safe_id": safe_id,
+                "label": entry.label,
+                "score": round(entry.score, 4),
+                "size_norm": round(entry.size_norm, 3),
+                "credibility_norm": round(entry.credibility_norm, 3),
+                "contradiction_norm": round(entry.contradiction_norm, 3),
+                "reuse_recency_norm": round(entry.reuse_recency_norm, 3),
+                "evergreen_recency_norm": round(entry.evergreen_recency_norm, 3),
+                "teaser": entry.teaser,
+                "source_slugs": list(entry.source_slugs),
+                "note_path": note_rel,
+                "note_href": _scoped_path(
+                    f"/note?path={quote(note_rel, safe='')}",
+                    pack_name=requested_pack,
+                ),
+            }
+        )
+
+    return {
+        "screen": "atlas/curated",
+        "requested_pack": requested_pack,
+        "pack": atlas.pack,
+        "top_n": atlas.top_n,
+        "total_chains": atlas.total_chains,
+        "entries": entries,
+        "count": len(entries),
+        "generated_at": atlas.generated_at,
+        "default_top_n": CURATED_ATLAS_DEFAULT_TOP_N,
+        "max_top_n": CURATED_ATLAS_MAX_TOP_N,
+    }
+
+
 def build_derivation_browser_payload(
     vault_dir: Path | str,
     *,

@@ -2515,11 +2515,13 @@ def _render_atlas_page(payload: dict) -> str:
         )
         or "<li>None</li>"
     )
+    curated_href = _shell_href("/atlas/curated", requested_pack)
     return _layout(
         "Atlas / MOC Browser",
         "".join(
             [
                 "<h1>Atlas / MOC Browser</h1>",
+                f"<p class='muted'>Looking for the curated reading entry instead? <a href='{escape(curated_href)}'>View curated top-N crystals →</a></p>",
                 "<form method='get' action='/atlas'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -2536,6 +2538,90 @@ def _render_atlas_page(payload: dict) -> str:
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
         ),
+        requested_pack=requested_pack,
+    )
+
+
+def _render_curated_atlas_page(payload: dict) -> str:
+    requested_pack = payload.get("requested_pack", "")
+    pack = payload.get("pack", "")
+    top_n = int(payload.get("top_n", 0) or 0)
+    total_chains = int(payload.get("total_chains", 0) or 0)
+    entries = payload.get("entries") or []
+    generated_at = payload.get("generated_at", "")
+    mechanical_href = _shell_href("/atlas", requested_pack)
+    api_href = _shell_href("/api/atlas/curated", requested_pack)
+
+    if not entries and total_chains == 0:
+        empty_note = (
+            "<section class='card'><p>No crystals scored yet. After running "
+            "<code>ovp-synthesize-community-crystals</code>, populate "
+            "<code>crystal_scores</code> with <code>ovp-knowledge-index</code> "
+            "(auto-rebuild) or <code>ovp-rescore-crystals</code> (ad-hoc).</p></section>"
+        )
+        body_html = empty_note
+    elif not entries:
+        body_html = (
+            "<section class='card'><p>The corpus is non-empty "
+            f"({total_chains} chains) but the top-{top_n} window came back empty. "
+            "Re-run <code>ovp-rescore-crystals</code> to refresh the Projection.</p></section>"
+        )
+    else:
+        item_html_parts = []
+        for entry in entries:
+            kind = str(entry.get("crystal_kind", ""))
+            kind_marker = "🌐" if kind == "community" else ("⚖️" if kind == "contradiction" else "•")
+            label = escape(str(entry.get("label", "(untitled)")))
+            score = float(entry.get("score", 0.0))
+            teaser = str(entry.get("teaser") or "")
+            note_href = str(entry.get("note_href") or "")
+            crystal_id = str(entry.get("crystal_id") or "")
+            breakdown = (
+                f"size {float(entry.get('size_norm', 0)):.2f} · "
+                f"credibility {float(entry.get('credibility_norm', 0)):.2f} · "
+                f"contradiction {float(entry.get('contradiction_norm', 0)):.2f} · "
+                f"reuse-recency {float(entry.get('reuse_recency_norm', 0)):.2f} · "
+                f"evergreen-recency {float(entry.get('evergreen_recency_norm', 0)):.2f}"
+            )
+            teaser_html = (
+                f"<p>{escape(teaser)}</p>" if teaser else "<p class='muted'><em>(no teaser available)</em></p>"
+            )
+            link_html = (
+                f"<a href='{escape(note_href)}'>{label}</a>" if note_href else label
+            )
+            item_html_parts.append(
+                "<li>"
+                f"<div><strong>{int(entry.get('rank', 0))}. {kind_marker} {link_html}</strong> "
+                f"<span class='pill'>score {score:.3f}</span> "
+                f"<span class='pill'>{escape(kind)}</span></div>"
+                f"{teaser_html}"
+                f"<div class='muted'>{escape(breakdown)}</div>"
+                f"<div class='muted'>crystal_id: <code>{escape(crystal_id)}</code></div>"
+                "</li>"
+            )
+        items_html = "".join(item_html_parts)
+        body_html = f"<section class='card'><ul class='list-tight'>{items_html}</ul></section>"
+
+    header_lines = [
+        "<h1>Curated Atlas</h1>",
+        f"<p class='muted'>Top {len(entries)} of {total_chains} crystal chains in pack "
+        f"<code>{escape(pack)}</code>, ranked by <code>crystal_scores</code>. "
+        f"Generated {escape(generated_at)}.</p>",
+        f"<p class='muted'><a href='{escape(mechanical_href)}'>← Back to mechanical Atlas</a> · "
+        f"<a href='{escape(api_href)}'>JSON</a></p>",
+        "<form method='get' action='/atlas/curated'>",
+        (
+            f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+            if requested_pack
+            else ""
+        ),
+        f"<label>top_n <input type='number' name='top_n' value='{top_n}' min='1' max='{int(payload.get('max_top_n', 100))}' /></label> ",
+        "<button type='submit'>Refresh</button>",
+        "</form>",
+    ]
+    return _layout(
+        "Curated Atlas",
+        "".join(header_lines) + body_html,
         requested_pack=requested_pack,
     )
 
