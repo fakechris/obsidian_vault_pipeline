@@ -223,7 +223,11 @@ _INSERT_SQL = (
 # ----- Markdown rendering ---------------------------------------------
 
 
-def _frontmatter(crystal: CommunityCrystal, *, label: str) -> str:
+def _frontmatter(
+    crystal: CommunityCrystal, *,
+    label: str,
+    community_total: int | None = None,
+) -> str:
     lines: list[str] = [
         "---",
         "type: community_crystal",
@@ -232,8 +236,15 @@ def _frontmatter(crystal: CommunityCrystal, *, label: str) -> str:
         f"synthesized_at: {crystal.synthesized_at}",
         f"llm_model: {crystal.llm_model}",
         f"prompt_version: {crystal.prompt_version}",
-        "source_evergreen_slugs:",
+        f"sample_size: {len(crystal.source_evergreen_slugs)}",
     ]
+    # Surface the full community size so consumers can detect that
+    # this crystal is a SAMPLED synthesis, not a full coverage.
+    # ``None`` means the caller didn't have the figure handy;
+    # operators who renderer in isolation may pass it later.
+    if community_total is not None:
+        lines.append(f"community_total: {community_total}")
+    lines.append("source_evergreen_slugs:")
     for slug in crystal.source_evergreen_slugs:
         lines.append(f"  - {slug}")
     lines.append("tags: [crystal, community]")
@@ -276,10 +287,56 @@ def _crystal_filename(cluster_id: str) -> str:
     return _safe_id(cluster_id) + ".md"
 
 
+def _sampling_disclosure(*, sample_size: int, community_total: int) -> str:
+    """One-line visible note that the crystal is a sampled synthesis.
+
+    Surfaces the under-coverage to the human reader — pre-fix the
+    sampling was only knowable by reading the prompt code or
+    counting source_evergreen_slugs.  Skipped when the sample
+    covers the whole community (no under-coverage to disclose).
+    """
+    return (
+        f"> **采样说明**: 本 crystal 基于该社区 {community_total} 个节点中"
+        f"按 object_id 排序的前 {sample_size} 个 evergreen 合成,"
+        f"长尾未覆盖。"
+    )
+
+
+def _related_notes_section(slugs: tuple[str, ...]) -> str:
+    """Machine-generated ``## 相关笔记`` section appended to every
+    crystal body.  Pre-fix wikilinks to source notes were optional
+    and the LLM dropped them ~30% of the time, breaking Obsidian
+    backlinks.  This section makes the source-note linkage
+    deterministic — the LLM can still cite naturally in prose,
+    but the backlink graph is no longer prompt-dependent.
+    """
+    lines = ["## 相关笔记", ""]
+    for slug in slugs:
+        lines.append(f"- [[{slug}]]")
+    return "\n".join(lines)
+
+
 def render_crystal_markdown(
-    crystal: CommunityCrystal, *, label: str,
+    crystal: CommunityCrystal, *,
+    label: str,
+    community_total: int | None = None,
 ) -> str:
-    return _frontmatter(crystal, label=label) + crystal.body_md.rstrip() + "\n"
+    parts: list[str] = [_frontmatter(
+        crystal, label=label, community_total=community_total,
+    )]
+    if (
+        community_total is not None
+        and community_total > len(crystal.source_evergreen_slugs)
+    ):
+        parts.append(_sampling_disclosure(
+            sample_size=len(crystal.source_evergreen_slugs),
+            community_total=community_total,
+        ))
+        parts.append("")  # blank line between disclosure and body
+    parts.append(crystal.body_md.rstrip())
+    parts.append("")  # blank line between body and related-notes
+    parts.append(_related_notes_section(crystal.source_evergreen_slugs))
+    return "\n".join(parts) + "\n"
 
 
 # ----- Main entry point -----------------------------------------------
@@ -350,7 +407,10 @@ def synthesize_community_crystals(
         # targeted ``_load_objects_subset`` query below — the OVP
         # vault has ~7000 objects, only a few hundred land inside
         # the top-K member slice.
-        decoded: list[tuple[str, str, list[str]]] = []  # (id, label, picked)
+        # ``community_total`` is the FULL community size (before the
+        # top_k cap) — surfaced to the renderer so the on-disk
+        # crystal carries an explicit sample-size disclosure.
+        decoded: list[tuple[str, str, list[str], int]] = []
         needed_object_ids: set[str] = set()
         for cluster_id, label, members_json in cluster_rows:
             try:
@@ -361,8 +421,9 @@ def synthesize_community_crystals(
                     cluster_id,
                 )
                 continue
+            community_total = len(members)
             picked = _select_top_members(members, top_k=top_k)
-            decoded.append((cluster_id, label, picked))
+            decoded.append((cluster_id, label, picked, community_total))
             needed_object_ids.update(picked)
 
         objects_by_id = _load_objects_subset(
@@ -370,7 +431,7 @@ def synthesize_community_crystals(
         )
 
         out: list[CommunityCrystal] = []
-        for cluster_id, label, picked in decoded:
+        for cluster_id, label, picked, community_total in decoded:
             evergreens = _load_evergreen_bodies(
                 vault_dir, member_object_ids=picked,
                 objects_by_id=objects_by_id,
@@ -456,7 +517,9 @@ def synthesize_community_crystals(
                 new_synthesized_at=crystal.synthesized_at,
                 insert_sql=_INSERT_SQL,
                 insert_params=crystal.as_db_row(),
-                new_markdown=render_crystal_markdown(crystal, label=label),
+                new_markdown=render_crystal_markdown(
+                    crystal, label=label, community_total=community_total,
+                ),
                 live_path=target,
                 archive_subdir=archive_subdir,
             )

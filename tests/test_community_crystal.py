@@ -146,6 +146,91 @@ class TestSelectTopMembers:
 # ---------------------------------------------------------------------------
 
 
+class TestRendererSamplingDisclosure:
+    """Renderer must surface BOTH machine-readable (frontmatter)
+    AND human-visible (body blockquote) sampling info when the
+    crystal covers only a fraction of its community.  The
+    blockquote tells the reader "this is a sampled synthesis"
+    without forcing them to count source slugs."""
+
+    def _crystal(self, slugs):
+        return CommunityCrystal(
+            pack="t", cluster_id="cluster::aa", body_md="## body\n\ntext",
+            source_evergreen_slugs=tuple(slugs),
+            synthesized_at="2026-05-04T01:00:00.000000+00:00",
+            llm_model="m", prompt_version=CRYSTAL_PROMPT_VERSION,
+        )
+
+    def test_visible_disclosure_appears_when_sampled(self):
+        # 8 sampled, 100 total → "本 crystal 基于该社区 100 个节点中..."
+        md = render_crystal_markdown(
+            self._crystal(["a", "b", "c", "d", "e", "f", "g", "h"]),
+            label="L", community_total=100,
+        )
+        assert "采样说明" in md
+        assert "100 个节点" in md
+        assert "前 8 个" in md
+        # And the frontmatter has the machine-readable fields.
+        assert "sample_size: 8" in md
+        assert "community_total: 100" in md
+
+    def test_disclosure_omitted_when_full_coverage(self):
+        # 3 sampled, 3 total → no disclosure (no under-coverage).
+        md = render_crystal_markdown(
+            self._crystal(["a", "b", "c"]),
+            label="L", community_total=3,
+        )
+        assert "采样说明" not in md
+        # Machine-readable still shows the explicit equality.
+        assert "sample_size: 3" in md
+        assert "community_total: 3" in md
+
+    def test_disclosure_omitted_when_total_unknown(self):
+        # community_total=None means caller didn't have the figure
+        # (e.g., rerender CLI on a row whose graph_clusters entry
+        # was deleted).  Don't make up a disclosure.
+        md = render_crystal_markdown(
+            self._crystal(["a", "b"]), label="L",
+        )
+        assert "采样说明" not in md
+        assert "community_total" not in md  # no frontmatter line either
+
+
+class TestRendererRelatedNotes:
+    """``## 相关笔记`` is machine-appended to every crystal — the
+    LLM may or may not cite source slugs in prose, but the
+    backlink graph stays deterministic."""
+
+    def test_section_present(self):
+        c = CommunityCrystal(
+            pack="t", cluster_id="cluster::aa",
+            body_md="## 概念核心\n\nbody",
+            source_evergreen_slugs=("a", "b", "c"),
+            synthesized_at="2026-05-04T01:00:00.000000+00:00",
+            llm_model="m", prompt_version=CRYSTAL_PROMPT_VERSION,
+        )
+        md = render_crystal_markdown(c, label="L")
+        assert "## 相关笔记" in md
+        # All three slugs as wikilinks.
+        assert "[[a]]" in md and "[[b]]" in md and "[[c]]" in md
+        # And the section appears AFTER the body (not before).
+        assert md.index("## 概念核心") < md.index("## 相关笔记")
+
+    def test_section_uses_source_evergreen_slugs_verbatim(self):
+        # No transformation — the slugs go in as-is so existing
+        # Obsidian wikilinks resolve.
+        c = CommunityCrystal(
+            pack="t", cluster_id="cluster::aa",
+            body_md="body",
+            source_evergreen_slugs=("foo-bar", "歸藏-test"),
+            synthesized_at="2026-05-04T01:00:00.000000+00:00",
+            llm_model="m", prompt_version=CRYSTAL_PROMPT_VERSION,
+        )
+        md = render_crystal_markdown(c, label="L")
+        assert "[[foo-bar]]" in md
+        assert "[[歸藏-test]]" in md
+
+
 class TestStripFrontmatter:
     """Frontmatter on ~7000 evergreens × top_k notes per crystal call
     is a meaningful slice of the prompt budget.  Pre-fix the loader
