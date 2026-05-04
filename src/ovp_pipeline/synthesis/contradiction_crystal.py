@@ -107,10 +107,16 @@ _SYSTEM_PROMPT = """\
 """
 
 
+# One side as a list of (object_id, title, claim_texts, body) — the
+# claim_texts are grouped so a single evergreen with multiple claims
+# on the same contradiction emits its body ONCE (not per claim).
+_PromptSide = list[tuple[str, str, list[str], str]]
+
+
 def _build_user_prompt(
     subject_key: str,
-    positives: list[tuple[str, str, str, str]],  # (object_id, title, claim_text, body)
-    negatives: list[tuple[str, str, str, str]],
+    positives: _PromptSide,
+    negatives: _PromptSide,
 ) -> str:
     parts: list[str] = [
         f"# Subject: {subject_key}",
@@ -123,27 +129,37 @@ def _build_user_prompt(
     ]
     if not positives:
         parts.append("(无)")
-    for object_id, title, claim_text, body in positives:
-        parts.append(f"### [[{object_id}]] — {title}")
-        parts.append(f"**Claim:** {claim_text}")
-        parts.append("")
-        if body:
-            parts.append(body.strip())
-        parts.append("")
+    parts.extend(_render_side(positives))
     parts.extend(["", "## 反面立场 (negatives)", ""])
     if not negatives:
         parts.append("(无)")
-    for object_id, title, claim_text, body in negatives:
-        parts.append(f"### [[{object_id}]] — {title}")
-        parts.append(f"**Claim:** {claim_text}")
-        parts.append("")
-        if body:
-            parts.append(body.strip())
-        parts.append("")
+    parts.extend(_render_side(negatives))
     return "\n".join(parts)
 
 
+def _render_side(side: _PromptSide) -> list[str]:
+    out: list[str] = []
+    for object_id, title, claim_texts, body in side:
+        out.append(f"### [[{object_id}]] — {title}")
+        if len(claim_texts) == 1:
+            out.append(f"**Claim:** {claim_texts[0]}")
+        else:
+            # Multiple claims on the same evergreen — list them
+            # under a single body to avoid repeating the body text.
+            out.append("**Claims:**")
+            for ct in claim_texts:
+                out.append(f"- {ct}")
+        out.append("")
+        if body:
+            out.append(body.strip())
+        out.append("")
+    return out
+
+
 # ----- DB helpers -----------------------------------------------------
+
+
+_CONTRADICTION_FILTER_CHUNK = 500
 
 
 def _load_open_contradictions(
@@ -159,25 +175,38 @@ def _load_open_contradictions(
     Resolved contradictions don't get crystals — once an operator
     has annotated the resolution, re-synthesizing an "open question"
     crystal would muddy the audit trail.
+
+    The ``IN`` clause is chunked at ``_CONTRADICTION_FILTER_CHUNK``
+    to stay under SQLite's 999-parameter cap when an operator
+    scripts many ``--contradiction-id`` flags.
     """
-    sql_parts = [
-        "SELECT contradiction_id, subject_key,",
-        "       positive_claim_ids_json, negative_claim_ids_json",
-        "  FROM contradictions",
-        " WHERE pack = ?",
-        "   AND status = 'open'",
-    ]
-    params: list[object] = [pack]
+    base_sql = (
+        "SELECT contradiction_id, subject_key,"
+        " positive_claim_ids_json, negative_claim_ids_json"
+        " FROM contradictions"
+        " WHERE pack = ? AND status = 'open'"
+    )
+    rows: list[tuple[str, str, str, str]] = []
     if only_contradiction_ids:
         ids = sorted(only_contradiction_ids)
-        placeholders = ",".join("?" * len(ids))
-        sql_parts.append(f"   AND contradiction_id IN ({placeholders})")
-        params.extend(ids)
-    sql_parts.append(" ORDER BY contradiction_id")
+        for start in range(0, len(ids), _CONTRADICTION_FILTER_CHUNK):
+            chunk = ids[start:start + _CONTRADICTION_FILTER_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            sql = f"{base_sql} AND contradiction_id IN ({placeholders})"
+            cur = conn.execute(sql, (pack, *chunk))
+            rows.extend((r[0], r[1], r[2], r[3]) for r in cur)
+        # Stable order across chunks; LIMIT applied in Python because
+        # it has to span the union, not a single chunk.
+        rows.sort(key=lambda r: r[0])
+        if limit is not None:
+            rows = rows[:int(limit)]
+        return rows
+    sql = f"{base_sql} ORDER BY contradiction_id"
+    params: list[object] = [pack]
     if limit is not None:
-        sql_parts.append(" LIMIT ?")
+        sql += " LIMIT ?"
         params.append(int(limit))
-    cur = conn.execute("\n".join(sql_parts), tuple(params))
+    cur = conn.execute(sql, tuple(params))
     return [(r[0], r[1], r[2], r[3]) for r in cur]
 
 
@@ -356,13 +385,26 @@ def synthesize_contradiction_crystals(
         claims_by_id = _load_claims_subset(conn, pack_name, all_claim_ids)
         objects_by_id = _load_objects_subset(conn, pack_name, all_object_ids)
 
+        # Read every needed evergreen body ONCE up front.  Two
+        # contradictions sharing a source object (or two sides of
+        # the same contradiction sharing one) used to read its
+        # markdown twice; now we load each file at most once and
+        # the per-side helper just looks up from the dict.
+        loaded = _load_evergreen_bodies(
+            vault_dir,
+            member_object_ids=sorted(all_object_ids),
+            objects_by_id=objects_by_id,
+        )
+        title_by_object: dict[str, str] = {oid: title for oid, title, _b in loaded}
+        body_by_object: dict[str, str] = {oid: body for oid, _t, body in loaded}
+
         out: list[ContradictionCrystal] = []
         for contradiction_id, subject, positives, negatives, obj_ids in decoded:
             pos_evergreens = _build_side(
-                positives, claims_by_id, objects_by_id, vault_dir,
+                positives, claims_by_id, title_by_object, body_by_object,
             )
             neg_evergreens = _build_side(
-                negatives, claims_by_id, objects_by_id, vault_dir,
+                negatives, claims_by_id, title_by_object, body_by_object,
             )
             if not pos_evergreens and not neg_evergreens:
                 logger.warning(
@@ -432,39 +474,39 @@ def synthesize_contradiction_crystals(
 def _build_side(
     claim_ids: list[str],
     claims_by_id: dict[str, str],
-    objects_by_id: dict[str, tuple[str, str]],
-    vault_dir: Path,
-) -> list[tuple[str, str, str, str]]:
-    """Compose ``(object_id, title, claim_text, body_md)`` for one
+    title_by_object: dict[str, str],
+    body_by_object: dict[str, str],
+) -> _PromptSide:
+    """Compose ``(object_id, title, [claim_texts], body_md)`` for one
     side of the contradiction.
 
-    Drops claims that the targeted lookups couldn't resolve (stale
-    references) — the LLM gets the side as it actually exists today,
-    not as it was when the contradiction row was first seeded.
+    Pure function — all I/O happens in the caller.  Two design
+    properties matter:
+
+    * **Group by object_id**: when one evergreen carries multiple
+      claims on the same contradiction, its body appears in the
+      prompt only once with the claims listed underneath.  Pre-fix
+      the body was repeated per claim, wasting prompt tokens.
+
+    * **Drop unresolved refs**: claims whose source object is
+      missing from ``title_by_object`` are skipped — the LLM gets
+      the side as it actually exists today, not as it was when
+      the contradiction row was first seeded.
     """
-    object_ids: list[str] = []
-    seen: set[str] = set()
-    for cid in claim_ids:
-        oid = _claim_id_to_object_id(cid)
-        if oid not in seen:
-            object_ids.append(oid)
-            seen.add(oid)
-    bodies = _load_evergreen_bodies(
-        vault_dir,
-        member_object_ids=object_ids,
-        objects_by_id=objects_by_id,
-    )
-    body_by_id = {oid: body for oid, _title, body in bodies}
-    title_by_id = {oid: title for oid, title, _body in bodies}
-    out: list[tuple[str, str, str, str]] = []
+    by_object: dict[str, list[str]] = {}
+    object_order: list[str] = []
     for cid in claim_ids:
         oid = _claim_id_to_object_id(cid)
         claim_text = claims_by_id.get(cid)
-        title = title_by_id.get(oid)
-        body = body_by_id.get(oid, "")
-        if claim_text is None or title is None:
-            # Skip — either the claim row or its source object is
-            # missing; better than emitting half a side to the LLM.
+        if claim_text is None:
             continue
-        out.append((oid, title, claim_text, body))
-    return out
+        if oid not in title_by_object:
+            continue
+        if oid not in by_object:
+            by_object[oid] = []
+            object_order.append(oid)
+        by_object[oid].append(claim_text)
+    return [
+        (oid, title_by_object[oid], by_object[oid], body_by_object.get(oid, ""))
+        for oid in object_order
+    ]
