@@ -121,6 +121,15 @@ def _graph_cluster_id(member_object_ids: list[str]) -> str:
 # graph_cluster_id stable across rebuilds.
 _LOUVAIN_SEED = 0
 
+# M14 BL-048: communities above this size are re-split via Louvain on
+# their internal sub-graph so the downstream community-crystal
+# synthesis covers a meaningful fraction of each cluster.  At
+# top_K=8 a 50-member community is 16% sampled (acceptable);
+# a 454-member community is 1.7% sampled (sampling-bias gap).
+# 50 is the M14 plan's default; raise it if the resulting sub-
+# communities feel under-cohesive.
+_SPLIT_THRESHOLD = 50
+
 
 def _detect_communities(
     edge_rows: dict[str, GraphEdgeRow],
@@ -133,6 +142,15 @@ def _detect_communities(
     Louvain maximises modularity, so a tightly-knit subgroup inside a
     single connected component becomes its own community — which is
     what users actually mean by "knowledge-base structure".
+
+    M14 BL-048: communities larger than ``_SPLIT_THRESHOLD`` get a
+    second Louvain pass on the sub-graph induced by their members.
+    Each sub-community then becomes its own ``graph_clusters`` row
+    (and downstream community_crystal) instead of one giant crystal
+    sampling 8 of 454 members at top_K.  The split is best-effort:
+    if the sub-graph has no internal structure or Louvain returns a
+    single sub-community equal to the input, the original community
+    is kept as-is.
 
     Returns sorted member lists for each community of size ≥ 2;
     isolated nodes and 1-member communities are dropped.
@@ -168,11 +186,47 @@ def _detect_communities(
     for community in communities:
         if len(community) < 2:
             continue
-        out.append(sorted(community))
+        for sub in _split_if_too_big(community, pair_weights):
+            out.append(sub)
     # Stable order so downstream cluster_id sequences don't drift
     # when Louvain returns equivalent partitions in different orders.
     out.sort(key=lambda members: members[0])
     return out
+
+
+def _split_if_too_big(
+    community: set[str] | frozenset[str] | list[str],
+    pair_weights: dict[tuple[str, str], float],
+) -> list[list[str]]:
+    """If a community exceeds ``_SPLIT_THRESHOLD`` members, run Louvain
+    on the sub-graph induced by edges among its members.  Returns the
+    resulting sub-community member lists, or ``[sorted(community)]``
+    when no useful split is possible.
+    """
+    members = set(community)
+    if len(members) <= _SPLIT_THRESHOLD:
+        return [sorted(members)]
+    sub_graph: nx.Graph = nx.Graph()
+    sub_graph.add_nodes_from(members)
+    for (src, tgt), weight in pair_weights.items():
+        if src in members and tgt in members:
+            sub_graph.add_edge(src, tgt, weight=weight)
+    if sub_graph.number_of_edges() == 0:
+        # Pure clique-of-isolates within this community — Louvain
+        # would ZeroDivisionError on the deg_sum² term.  Nothing
+        # to split structurally.
+        return [sorted(members)]
+    sub_communities = louvain_communities(
+        sub_graph, weight="weight", seed=_LOUVAIN_SEED,
+    )
+    sub_lists = [sorted(c) for c in sub_communities if len(c) >= 2]
+    # If Louvain returns a single sub-community equal to the input,
+    # the community has no internal structure to surface — keep it
+    # whole rather than emit a rename.  Same when no sub-community
+    # passes the size-≥-2 filter.
+    if len(sub_lists) <= 1:
+        return [sorted(members)]
+    return sub_lists
 
 
 def _build_graph_seeds(
