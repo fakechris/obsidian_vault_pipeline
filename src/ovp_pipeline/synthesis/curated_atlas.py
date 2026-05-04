@@ -113,14 +113,18 @@ def _extract_teaser(body_md: str, *, max_chars: int = 180) -> str:
         # Skip lines that are purely list items / wikilink dumps.
         if all(line.lstrip().startswith(("-", "*", "[[")) for line in para.splitlines()):
             continue
-        first = para.split("\n", 1)[0].strip()
-        if not first:
+        # Join the paragraph's lines into one logical span — a
+        # source markdown paragraph can wrap across multiple lines
+        # but represent a single sentence; pre-fix
+        # ``split("\n", 1)[0]`` truncated those mid-sentence.
+        para_text = " ".join(line.strip() for line in para.splitlines() if line.strip())
+        if not para_text:
             continue
-        match = _SENTENCE_END_RE.search(first)
+        match = _SENTENCE_END_RE.search(para_text)
         if match:
-            sentence = first[:match.end()].strip()
+            sentence = para_text[:match.end()].strip()
         else:
-            sentence = first
+            sentence = para_text
         if len(sentence) > max_chars:
             sentence = sentence[:max_chars - 1].rstrip() + "…"
         return sentence
@@ -135,8 +139,17 @@ def _load_top_n(
 ) -> list[dict]:
     """Return the top-N rows from ``crystal_scores`` joined with
     body + label.  One round-trip per kind because the body table
-    differs (community vs contradiction); union the results in
-    Python and re-sort.  ``top_n`` rows total across both kinds."""
+    differs (community vs contradiction); each kind already comes
+    back sorted + capped at ``top_n`` so Python only merges and
+    truncates the final union — no full-corpus load.
+
+    Fetching ``top_n`` per kind (rather than ``top_n // 2`` each)
+    is intentional: in a vault dominated by community crystals,
+    contradictions might be empty; conversely a vault with mostly
+    contradictions shouldn't lose communities.  Worst case, we
+    over-fetch by ``top_n`` rows — still a fixed ceiling, never
+    proportional to the corpus.
+    """
     rows: list[dict] = []
 
     # Community crystals join ``crystal_scores`` ↔ ``community_crystals``
@@ -156,8 +169,10 @@ def _load_top_n(
             ON gc.pack = cs.pack AND gc.cluster_id = cs.crystal_id
          WHERE cs.pack = ?
            AND cs.crystal_kind = 'community'
+         ORDER BY cs.score DESC
+         LIMIT ?
         """,
-        (pack,),
+        (pack, top_n),
     )
     for r in cur:
         rows.append({
@@ -183,8 +198,10 @@ def _load_top_n(
            AND cc.superseded_by_synthesized_at = ''
          WHERE cs.pack = ?
            AND cs.crystal_kind = 'contradiction'
+         ORDER BY cs.score DESC
+         LIMIT ?
         """,
-        (pack,),
+        (pack, top_n),
     )
     for r in cur:
         rows.append({
@@ -388,6 +405,7 @@ def write_curated_atlas(
     markdown = render_curated_atlas_markdown(atlas)
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_text(markdown, encoding="utf-8")
-    import os
-    os.replace(tmp, target)
+    # ``Path.replace`` is the idiomatic atomic-rename — same
+    # underlying ``os.replace`` semantics, no inline import.
+    tmp.replace(target)
     return atlas, target

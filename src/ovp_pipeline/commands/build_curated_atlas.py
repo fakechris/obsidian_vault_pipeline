@@ -75,15 +75,19 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
         )
 
+    # How many entries to preview in the CLI output.  Matches the
+    # rough screen-height limit of a terminal scan; keeps the
+    # summary one-pager readable.
+    _PREVIEW_LIMIT = 10
     if not args.quiet and atlas.entries:
         print("Top entries:")
-        for entry in atlas.entries[:10]:
+        for entry in atlas.entries[:_PREVIEW_LIMIT]:
             print(
                 f"  {entry.rank:>2}. {entry.score:.3f}  "
                 f"{entry.crystal_kind:>13}  {entry.label}"
             )
-        if len(atlas.entries) > 10:
-            print(f"  ... and {len(atlas.entries) - 10} more")
+        if len(atlas.entries) > _PREVIEW_LIMIT:
+            print(f"  ... and {len(atlas.entries) - _PREVIEW_LIMIT} more")
         print()
 
     verb = "would write" if args.dry_run else "wrote"
