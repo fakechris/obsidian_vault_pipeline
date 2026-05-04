@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from collections import defaultdict
 import hashlib
 import json
 import re
+from collections import defaultdict
 from pathlib import Path
+
+import networkx as nx
+from networkx.algorithms.community import louvain_communities
 
 from ...truth_store import (
     ClaimEvidenceRow,
@@ -112,6 +115,59 @@ def _graph_cluster_id(member_object_ids: list[str]) -> str:
     return f"cluster::{hashlib.sha1(fingerprint.encode('utf-8')).hexdigest()[:12]}"
 
 
+# Seed for Louvain so the same input graph yields the same partition
+# across runs.  The algorithm is order-sensitive without a seed; with
+# one fixed it becomes a pure function of the edge set, which keeps
+# graph_cluster_id stable across rebuilds.
+_LOUVAIN_SEED = 0
+
+
+def _detect_communities(
+    edge_rows: dict[str, GraphEdgeRow],
+    object_ids: list[str],
+) -> list[list[str]]:
+    """Run Louvain community detection on the relation+contradiction graph.
+
+    Pre-fix this was a connected-component BFS, which surfaced one
+    cluster per disconnected island regardless of internal density.
+    Louvain maximises modularity, so a tightly-knit subgroup inside a
+    single connected component becomes its own community — which is
+    what users actually mean by "knowledge-base structure".
+
+    Returns sorted member lists for each community of size ≥ 2;
+    isolated nodes and 1-member communities are dropped.
+    """
+    if not edge_rows:
+        # Louvain's modularity calculation divides by ``deg_sum²`` and
+        # raises ``ZeroDivisionError`` on an edgeless graph.  No edges
+        # means no communities of size ≥ 2 anyway, so short-circuit.
+        return []
+    graph: nx.Graph = nx.Graph()
+    graph.add_nodes_from(object_ids)
+    for edge in edge_rows.values():
+        # Louvain on a multigraph would double-count parallel edges;
+        # the edge_rows dict is already de-duped by edge_id, so a
+        # plain ``Graph`` is fine.  Last-write-wins on weight when
+        # the same pair is connected by multiple edge_kinds.
+        graph.add_edge(
+            edge.source_object_id,
+            edge.target_object_id,
+            weight=edge.weight,
+        )
+    communities = louvain_communities(
+        graph, weight="weight", seed=_LOUVAIN_SEED,
+    )
+    out: list[list[str]] = []
+    for community in communities:
+        if len(community) < 2:
+            continue
+        out.append(sorted(community))
+    # Stable order so downstream cluster_id sequences don't drift
+    # when Louvain returns equivalent partitions in different orders.
+    out.sort(key=lambda members: members[0])
+    return out
+
+
 def _build_graph_seeds(
     pack_name: str,
     *,
@@ -166,25 +222,11 @@ def _build_graph_seeds(
                 adjacency[ordered[0]].add(ordered[1])
                 adjacency[ordered[1]].add(ordered[0])
 
-    visited: set[str] = set()
     cluster_rows: list[GraphClusterRow] = []
-    for object_id in sorted(object_titles):
-        if object_id in visited:
-            continue
-        stack = [object_id]
-        component: list[str] = []
-        while stack:
-            current = stack.pop()
-            if current in visited:
-                continue
-            visited.add(current)
-            component.append(current)
-            stack.extend(sorted(adjacency.get(current, set()) - visited))
-        component = sorted(component)
-        if len(component) < 2:
-            continue
+    communities = _detect_communities(edge_rows, sorted(object_titles))
+    for members in communities:
         center_object_id = max(
-            component,
+            members,
             key=lambda candidate: (
                 len(adjacency.get(candidate, set())),
                 object_titles.get(candidate, ""),
@@ -194,12 +236,12 @@ def _build_graph_seeds(
         cluster_rows.append(
             GraphClusterRow(
                 pack=pack_name,
-                cluster_id=_graph_cluster_id(component),
-                cluster_kind="relation_component",
+                cluster_id=_graph_cluster_id(members),
+                cluster_kind="louvain_community",
                 label=object_titles.get(center_object_id, center_object_id),
                 center_object_id=center_object_id,
-                member_object_ids_json=json.dumps(component, ensure_ascii=False),
-                score=float(len(component)),
+                member_object_ids_json=json.dumps(members, ensure_ascii=False),
+                score=float(len(members)),
             )
         )
 

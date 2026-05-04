@@ -1389,7 +1389,7 @@ def test_truth_api_lists_research_graph_clusters(temp_vault):
 
     assert len(clusters) >= 1
     assert clusters[0]["pack"] == "research-tech"
-    assert clusters[0]["cluster_kind"] == "relation_component"
+    assert clusters[0]["cluster_kind"] == "louvain_community"
     assert "source-note" in clusters[0]["member_object_ids"]
     assert "target-note" in clusters[0]["member_object_ids"]
 

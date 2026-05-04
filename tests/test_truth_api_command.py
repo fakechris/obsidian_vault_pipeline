@@ -118,7 +118,7 @@ def test_truth_api_command_lists_graph_clusters(temp_vault, capsys):
 
     assert exit_code == 0
     assert len(payload["items"]) >= 1
-    assert payload["items"][0]["cluster_kind"] == "relation_component"
+    assert payload["items"][0]["cluster_kind"] == "louvain_community"
     assert "alpha" in payload["items"][0]["member_object_ids"]
 
 
