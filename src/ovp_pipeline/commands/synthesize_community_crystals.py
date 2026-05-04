@@ -26,7 +26,7 @@ from ..synthesis.community_crystal import (
     DEFAULT_TOP_K_EVERGREENS,
     synthesize_community_crystals,
 )
-from ..vault_paths import VaultLayout
+from ..runtime import VaultLayout
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -31,9 +31,9 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M10 Operational Knowledge Layer | Later | action types on objects, permission + contract, cross-entity aggregation, decision memory |
 | M11 Source Authority And Cross-Source Identity | Done | typed source-authority providers, entity layer, runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
 | M12 Extraction-Time Entity Prime And Auto-Wikilink | Done | entity_aliases view, LLM extractor primed with known entities, auto-wikilink CLI (BL-038/039/040, PRs #126–#128) |
-| M13 Synthesis Layer (Crystal) | Next | Louvain communities + LLM-synthesized crystals + contradiction crystals + append-only versioning (BL-041/042/043/044) |
+| M13 Synthesis Layer (Crystal) | Done | Louvain communities + LLM-synthesized community crystals + contradiction crystals + append-only versioning (BL-041/042/043/044, PRs #130-#133) |
 
-## Recently Shipped (PRs #98–#128)
+## Recently Shipped (PRs #98–#133)
 
 | PR | What shipped |
 | --- | --- |
@@ -58,6 +58,11 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | #126 | `entity_aliases` view + `ovp-entity-aliases` CLI (BL-038, M12): unified read surface across authors.jsonl, author_overrides.yaml, entities table, github_user back-link |
 | #127 | Extraction-time entity prime in `auto_evergreen_extractor` (BL-039, M12): top-N canonicals injected into LLM user prompt so name variants collapse to one handle |
 | #128 | `ovp-link-entities` auto-wikilink CLI (BL-040, M12): scans evergreen prose, inserts `[[canonical_handle]]`, generates `10-Knowledge/Entity/<handle>.md` stubs; PreparedMatcher for batch reuse |
+| #129 | M12 review-pass: path-traversal slug allowlist on canonical_handle; CJK alias boundary fix (ASCII-only boundary for non-ASCII aliases); collision-logging fires regardless of winner; M12 docs sync |
+| #130 | Louvain community detection (BL-041, M13): replaces connected-component clustering in `truth_projection.py`; `cluster_kind="louvain_community"`; deterministic seed |
+| #131 | Community Crystal MVP (BL-042, M13): `ovp-synthesize-community-crystals` + `community_crystals` table; MiniMax-M2.7-highspeed default; append-only PK |
+| #132 | Contradiction crystals (BL-043, M13): `ovp-synthesize-contradiction-crystals` + `contradiction_crystals` table; deliberately preserves tension as "open question" crystal; resolved contradictions skipped |
+| #133 | Crystal append-only versioning (BL-044, M13): `superseded_by_synthesized_at` on both crystal tables; archive helper moves prior live markdown to `70-Archive/Crystals/<safe-id>/<ts>.md`; `ovp-list-crystals` surfaces version chains |
 
 ## Active Backlog
 
@@ -90,7 +95,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-041 | P1 | Done | Louvain community detection replaces the connected-component clustering in `graph_clusters`.  Communities are now the default product output of the truth projection; `cluster_kind="louvain_community"` (internal label).  Wired into `_build_graph_seeds`, no separate CLI — runs on every `rebuild_knowledge_index`. | M13 |
 | BL-042 | P0 | Done | Community Crystal MVP — `ovp-synthesize-community-crystals` reads Louvain communities from `graph_clusters`, sends top-K member evergreens (deterministic order; authority weighting deferred to v2) to MiniMax-M2.7-highspeed, writes `40-Resources/Crystals/<sha>.md` and persists lineage in the new `community_crystals` table.  Append-only schema (PK includes `synthesized_at`) so BL-044 versioning lands without migration. | M13 |
 | BL-043 | P1 | Done | `ovp-synthesize-contradiction-crystals` reads `status='open'` rows from the `contradictions` table, sends each side's claim_text + source evergreen body to the LLM, and writes `40-Resources/Crystals/contradiction-<sha>.md` plus a `contradiction_crystals` lineage row.  System prompt is deliberately framed as "open question" — does not try to resolve, only to expose the tension.  Resolved contradictions are skipped. | M13 |
-| BL-044 | P1 | Next | Crystal append-only versioning — when source evergreens change, generate a new crystal version; archive the old one to `70-Archive/Crystals/<community>/<timestamp>.md`; `crystals` table carries `superseded_by` pointer (mirrors NM 0.8's EVOLVES edge). | M13 |
+| BL-044 | P1 | Done | Crystal append-only versioning — both `community_crystals` and `contradiction_crystals` carry `superseded_by_synthesized_at`; supersede helper flips the prior current row's pointer + archives its markdown to `70-Archive/Crystals/<safe-id>/<timestamp>.md` before the new row lands.  `ovp-list-crystals` surfaces the version chain. | M13 |
 
 ## KSR Task Coverage
 

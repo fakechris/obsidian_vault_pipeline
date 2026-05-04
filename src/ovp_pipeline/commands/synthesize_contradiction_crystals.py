@@ -25,7 +25,7 @@ from ..llm_client import get_litellm_client
 from ..synthesis.contradiction_crystal import (
     synthesize_contradiction_crystals,
 )
-from ..vault_paths import VaultLayout
+from ..runtime import VaultLayout
 
 
 def main(argv: list[str] | None = None) -> int:

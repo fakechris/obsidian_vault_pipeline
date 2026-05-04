@@ -51,6 +51,7 @@ CREATE TABLE community_crystals (
   synthesized_at TEXT NOT NULL,
   llm_model TEXT NOT NULL,
   prompt_version TEXT NOT NULL,
+  superseded_by_synthesized_at TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pack, cluster_id, synthesized_at)
 );
 """
