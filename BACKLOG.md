@@ -33,7 +33,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M12 Extraction-Time Entity Prime And Auto-Wikilink | Done | entity_aliases view, LLM extractor primed with known entities, auto-wikilink CLI (BL-038/039/040, PRs #126–#128) |
 | M13 Synthesis Layer (Crystal) | Done | Louvain communities + LLM-synthesized community crystals + contradiction crystals + append-only versioning (BL-041/042/043/044, PRs #130-#133) |
 
-## Recently Shipped (PRs #98–#133)
+## Recently Shipped (PRs #98–#136)
 
 | PR | What shipped |
 | --- | --- |
@@ -63,6 +63,10 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | #131 | Community Crystal MVP (BL-042, M13): `ovp-synthesize-community-crystals` + `community_crystals` table; MiniMax-M2.7-highspeed default; append-only PK |
 | #132 | Contradiction crystals (BL-043, M13): `ovp-synthesize-contradiction-crystals` + `contradiction_crystals` table; deliberately preserves tension as "open question" crystal; resolved contradictions skipped |
 | #133 | Crystal append-only versioning (BL-044, M13): `superseded_by_synthesized_at` on both crystal tables; archive helper moves prior live markdown to `70-Archive/Crystals/<safe-id>/<ts>.md`; `ovp-list-crystals` surfaces version chains |
+| #134 | M13 review-pass: microsecond synth_at PK collision fix; `commit_crystal_version` reorders DB-then-FS for atomicity; Louvain edge weight aggregation; contradiction one-sided guard; vault containment guard; `synthesis/_shared.py` decoupling |
+| #135 | `--skip-existing` flag on both crystal CLIs for resumable batches |
+| #136 | Renderer fixes: machine-appended `## 相关笔记` section + visible sampling disclosure for big communities + `ovp-rerender-crystals` CLI (no-LLM format refresh) |
+| (production rebuild, no PR) | Targeted M13 substrate landed on `~/Documents/ovp-vault`: schema 3→5, 329 Louvain communities, 329 community crystals + 1 contradiction crystal, 8 entity stubs, 107 wikilinks across 88 evergreens, 4 legacy briefing crystals archived to `70-Archive/Crystals/Legacy/`. ~$1.50 LLM cost, ~3h wall time |
 
 ## Active Backlog
 

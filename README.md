@@ -99,7 +99,7 @@ Current milestone sequence:
 | M10 Operational Knowledge Layer | Later | action types, permissions, cross-entity aggregation, decision memory |
 | M11 Source Authority And Cross-Source Identity | Done | typed source-authority providers, entity layer (twitter_author / github_project / github_user / person / organization), runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
 | M12 Extraction-Time Entity Prime And Auto-Wikilink | Done | entity_aliases view, LLM extractor primed with known entities, auto-wikilink CLI (PRs #126–#128) |
-| M13 Synthesis Layer (Crystal) | Done | Louvain communities + LLM-synthesized crystals + contradiction crystals + append-only versioning (PRs #130–#133, closes the L3 gap with NM 0.8) |
+| M13 Synthesis Layer (Crystal) | Done | Louvain communities + LLM-synthesized crystals + contradiction crystals + append-only versioning + sampling-aware renderer (PRs #130–#136); production substrate shipped on the OVP vault (329 community crystals, 1 contradiction crystal). Curated read model deferred to M15 → M14 sequence after architecture-language cleanup. |
 
 Recent major changes (PRs #98–#124):
 
