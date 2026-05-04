@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Protocol
 
 from ..projection_labels import frontmatter_projection_fields
+from ._versioning import ARCHIVE_DIR_REL, supersede_and_archive_previous
 from .community_crystal import (
     CRYSTAL_DIR_REL,
     _load_evergreen_bodies,
@@ -306,18 +307,22 @@ def _frontmatter(crystal: ContradictionCrystal) -> str:
     return "\n".join(lines)
 
 
-def _crystal_filename(contradiction_id: str) -> str:
-    """``contradiction::abc123def456`` → ``contradiction-abc123def456.md``.
+def _safe_id(contradiction_id: str) -> str:
+    """Strips the unportable ``::`` prefix and prefixes
+    ``contradiction-`` so the directory listing makes the kind
+    obvious at a glance (community crystals at ``<sha>.md`` vs
+    contradiction crystals at ``contradiction-<sha>.md``).
 
-    Strips the unportable ``::`` prefix and prefixes ``contradiction-``
-    so the directory listing makes the kind obvious at a glance
-    (community crystals at ``<sha>.md`` vs contradiction crystals at
-    ``contradiction-<sha>.md``).
+    Used both for the live filename (``<safe-id>.md``) and the
+    archive subdirectory (``70-Archive/Crystals/<safe-id>/...``).
     """
     if contradiction_id.startswith("contradiction::"):
-        sha = contradiction_id[len("contradiction::"):]
-        return f"contradiction-{sha}.md"
-    return f"contradiction-{contradiction_id}.md"
+        return f"contradiction-{contradiction_id[len('contradiction::'):]}"
+    return f"contradiction-{contradiction_id}"
+
+
+def _crystal_filename(contradiction_id: str) -> str:
+    return _safe_id(contradiction_id) + ".md"
 
 
 def render_crystal_markdown(crystal: ContradictionCrystal) -> str:
@@ -461,6 +466,22 @@ def synthesize_contradiction_crystals(
                     crystal_dir, contradiction_id,
                 )
                 continue
+
+            # BL-044: archive prior version + flip its supersede
+            # pointer before overwriting the live markdown.
+            archive_subdir = (
+                vault_dir / ARCHIVE_DIR_REL / _safe_id(contradiction_id)
+            )
+            supersede_and_archive_previous(
+                conn,
+                table="contradiction_crystals",
+                key_column="contradiction_id",
+                pack=pack_name,
+                key_value=contradiction_id,
+                new_synthesized_at=crystal.synthesized_at,
+                live_path=target,
+                archive_subdir=archive_subdir,
+            )
             target.write_text(
                 render_crystal_markdown(crystal), encoding="utf-8",
             )

@@ -199,8 +199,10 @@ SQLITE_ALLOWED_MODULES = {
     "promotion_policy",
     "relation_promotion",
     "reuse_emitter",
+    "commands/list_crystals",
     "synthesis/community_crystal",
     "synthesis/contradiction_crystal",
+    "synthesis/_versioning",
     "ui/view_models",
 }
 

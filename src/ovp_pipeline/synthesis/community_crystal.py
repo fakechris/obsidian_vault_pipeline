@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Iterable, Protocol
 
 from ..projection_labels import frontmatter_projection_fields
+from ._versioning import ARCHIVE_DIR_REL, supersede_and_archive_previous
 
 logger = logging.getLogger(__name__)
 
@@ -325,17 +326,23 @@ def _frontmatter(crystal: CommunityCrystal, *, label: str) -> str:
     return "\n".join(lines)
 
 
-def _crystal_filename(cluster_id: str) -> str:
-    """Convert ``cluster::abc123def456`` → ``abc123def456.md``.
-
-    Strips the ``cluster::`` prefix because ``:`` is not a portable
-    filename character (Windows refuses; macOS Finder rewrites it
+def _safe_id(cluster_id: str) -> str:
+    """Strip the ``cluster::`` prefix so the result is safe as a
+    filename (Windows refuses ``:``; macOS Finder rewrites it
     silently).  The remainder is a 12-char SHA1 digest, safe by
     construction.
+
+    Used both for the live filename (``<safe-id>.md``) and the
+    archive subdirectory (``70-Archive/Crystals/<safe-id>/...``) —
+    one source of truth for the safe form.
     """
     if cluster_id.startswith("cluster::"):
-        return cluster_id[len("cluster::"):] + ".md"
-    return cluster_id + ".md"
+        return cluster_id[len("cluster::"):]
+    return cluster_id
+
+
+def _crystal_filename(cluster_id: str) -> str:
+    return _safe_id(cluster_id) + ".md"
 
 
 def render_crystal_markdown(
@@ -468,6 +475,25 @@ def synthesize_community_crystals(
                     crystal_dir, cluster_id,
                 )
                 continue
+
+            # BL-044: archive the prior current version (if any) and
+            # mark its DB row as superseded BEFORE overwriting the
+            # live markdown.  If supersede + INSERT happened in
+            # different orders, a crash between them would leave an
+            # orphaned live file or an unarchived history.
+            archive_subdir = (
+                vault_dir / ARCHIVE_DIR_REL / _safe_id(cluster_id)
+            )
+            supersede_and_archive_previous(
+                conn,
+                table="community_crystals",
+                key_column="cluster_id",
+                pack=pack_name,
+                key_value=cluster_id,
+                new_synthesized_at=crystal.synthesized_at,
+                live_path=target,
+                archive_subdir=archive_subdir,
+            )
             target.write_text(
                 render_crystal_markdown(crystal, label=label),
                 encoding="utf-8",
