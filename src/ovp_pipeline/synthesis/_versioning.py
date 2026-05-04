@@ -2,26 +2,40 @@
 (BL-044, M13).
 
 The crystal tables are append-only by primary-key construction
-(``synthesized_at`` is part of the PK), but two pieces of bookkeeping
-have to fire whenever a new version lands:
+(``synthesized_at`` is part of the PK), but several pieces of
+bookkeeping must fire when a new version lands:
 
-1. The previously-current row's ``superseded_by_synthesized_at``
-   must be set so chain readers can navigate the version graph
-   without scanning the whole table.
+* The previously-current row's ``superseded_by_synthesized_at``
+  must be set so chain readers can navigate the version graph
+  without scanning the whole table.
 
-2. The old markdown file at the live path
-   (``40-Resources/Crystals/<id>.md``) must move to
-   ``70-Archive/Crystals/<safe-id>/<timestamp>.md`` so the live
-   directory only ever contains the latest snapshot.
+* The new live markdown file must replace the prior one at
+  ``40-Resources/Crystals/<safe-id>.md``.
 
-This module wraps both steps so the two synthesis modules stay
-focused on prompt + LLM call logic.
+* The prior live markdown should be archived to
+  ``70-Archive/Crystals/<safe-id>/<sanitized-ts>.md``.
+
+These steps span two systems (SQLite + filesystem) so they can't be
+made fully atomic, but ``commit_crystal_version`` orders them so
+the failure modes are recoverable:
+
+  1. **Snapshot prior live content** into memory (no FS mutation).
+  2. **DB transaction**: UPDATE prior row's supersede pointer +
+     INSERT new row, both committed together or both rolled back.
+  3. **Atomic-replace live file** via tempfile + ``os.replace``.
+  4. **Archive prior content** (best-effort — DB has the body_md,
+     so a missing archive is recoverable).
+
+The pre-PR-133-review version did the file moves BEFORE the new DB
+row was durable; a crash between archive-move and INSERT could
+leave the live directory empty with no DB row matching either
+the new or the archived version.
 """
 
 from __future__ import annotations
 
 import logging
-import shutil
+import os
 import sqlite3
 from pathlib import Path
 
@@ -35,15 +49,15 @@ ARCHIVE_DIR_REL: Path = Path("70-Archive") / "Crystals"
 
 
 def _safe_archive_filename(synthesized_at: str) -> str:
-    """ISO timestamps contain ``:`` which is unportable on Windows /
-    surfaced strangely by macOS Finder.  Replace with ``-`` for the
+    """ISO timestamps contain ``:`` (and microseconds add ``.``)
+    which are unportable on Windows.  Replace with ``-`` for the
     archive filename — the canonical timestamp survives in the
     file's frontmatter and the ``synthesized_at`` DB column.
     """
-    return synthesized_at.replace(":", "-") + ".md"
+    return synthesized_at.replace(":", "-").replace(".", "-") + ".md"
 
 
-def supersede_and_archive_previous(
+def commit_crystal_version(
     conn: sqlite3.Connection,
     *,
     table: str,
@@ -51,62 +65,92 @@ def supersede_and_archive_previous(
     pack: str,
     key_value: str,
     new_synthesized_at: str,
+    insert_sql: str,
+    insert_params: tuple,
+    new_markdown: str,
     live_path: Path,
     archive_subdir: Path,
 ) -> str | None:
-    """Mark the prior current version as superseded and archive its
-    markdown.  Returns the prior ``synthesized_at`` or ``None`` if
-    this is the first version.
+    """Commit one new crystal version with safe failure ordering.
 
-    The DB update happens unconditionally; the file move is
-    best-effort because the live markdown could be missing for
-    legitimate reasons (a prior dry-run, an operator deletion, a
-    fresh DB pointing at a vault that was never written to).  In
-    those cases we log + skip the move and leave the DB pointer
-    intact — version chain integrity matters more than file
-    accounting.
+    Returns the prior ``synthesized_at`` (the timestamp that this
+    version supersedes) or ``None`` if this is the first version.
+
+    Ordering guarantees:
+
+    * The DB transaction (supersede + INSERT) is durably committed
+      BEFORE any FS mutation.  A crash before commit leaves the
+      live file untouched and the prior row un-superseded.
+    * The new live markdown is written via tempfile +
+      ``os.replace`` for atomic replacement on a single filesystem.
+    * The archive write happens LAST.  A crash between
+      ``os.replace`` and the archive write loses the archive copy
+      but the prior body_md is still in the DB row, so it's
+      reconstructable.
+
+    See ``_versioning.py`` module docstring for the full rationale.
     """
+    # Step 1: snapshot live file content so we can archive it after
+    # the new version is durably persisted.  Read failure here is
+    # not fatal — we proceed without an archive copy and rely on
+    # the DB row's body_md for reconstruction.
+    saved_content: str | None = None
+    if live_path.exists():
+        try:
+            saved_content = live_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.warning(
+                "failed to snapshot %s for archive (will skip archive step): %s",
+                live_path, exc,
+            )
+
+    # Step 2: durable DB transaction.
     cur = conn.execute(
-        f"SELECT synthesized_at FROM {table} "  # noqa: S608  (table+col are static)
+        f"SELECT synthesized_at FROM {table} "  # noqa: S608  static identifiers
         f"WHERE pack = ? AND {key_column} = ? "
         f"  AND superseded_by_synthesized_at = '' "
         f"ORDER BY synthesized_at DESC LIMIT 1",
         (pack, key_value),
     )
     row = cur.fetchone()
-    if row is None:
-        return None
-    prior = row[0]
-    if prior == new_synthesized_at:
-        # Same-timestamp re-synthesis (only possible at sub-second
-        # granularity in tests).  The PK on (pack, key, synth_at)
-        # would reject the new INSERT anyway; leave the prior row
-        # alone rather than self-superseding.
-        return prior
-    conn.execute(
-        f"UPDATE {table} "  # noqa: S608  (table is static)
-        f"SET superseded_by_synthesized_at = ? "
-        f"WHERE pack = ? AND {key_column} = ? AND synthesized_at = ?",
-        (new_synthesized_at, pack, key_value, prior),
-    )
-    if live_path.exists():
+    prior_at: str | None = None
+    try:
+        if row is not None and row[0] != new_synthesized_at:
+            # Microsecond timestamp resolution makes same-ts collision
+            # impossible in production; the equality branch above only
+            # exists for defensive tests where two synthesize calls
+            # land on the exact same microsecond.  In that case we
+            # skip the supersede update; the INSERT below fails on
+            # the PK and the transaction rolls back cleanly.
+            prior_at = row[0]
+            conn.execute(
+                f"UPDATE {table} "  # noqa: S608  static identifiers
+                f"SET superseded_by_synthesized_at = ? "
+                f"WHERE pack = ? AND {key_column} = ? AND synthesized_at = ?",
+                (new_synthesized_at, pack, key_value, prior_at),
+            )
+        conn.execute(insert_sql, insert_params)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    # Step 3: atomic-replace the live file.
+    live_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = live_path.with_name(live_path.name + ".tmp")
+    tmp_path.write_text(new_markdown, encoding="utf-8")
+    os.replace(tmp_path, live_path)
+
+    # Step 4: archive the saved prior content (best-effort).
+    if prior_at is not None and saved_content is not None:
         try:
             archive_subdir.mkdir(parents=True, exist_ok=True)
-            archive_path = archive_subdir / _safe_archive_filename(prior)
-            # ``shutil.move`` instead of ``Path.rename`` — falls back
-            # to copy+delete when the source and destination live on
-            # different filesystems (e.g., archive symlinked to a
-            # NAS or separate volume).  ``Path.rename`` would raise
-            # ``OSError: Invalid cross-device link`` in that case.
-            shutil.move(str(live_path), str(archive_path))
+            archive_path = archive_subdir / _safe_archive_filename(prior_at)
+            archive_path.write_text(saved_content, encoding="utf-8")
         except OSError as exc:
             logger.warning(
-                "failed to archive %s → %s: %s — leaving live file in place",
-                live_path, archive_subdir, exc,
+                "failed to archive prior content to %s: %s — DB has body_md, "
+                "archive is recoverable",
+                archive_subdir, exc,
             )
-    else:
-        logger.info(
-            "no live markdown at %s to archive (DB pointer still updated)",
-            live_path,
-        )
-    return prior
+    return prior_at

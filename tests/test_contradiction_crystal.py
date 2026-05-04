@@ -431,13 +431,12 @@ class TestSynthesizeEndToEnd:
         assert llm.calls == 2  # Both attempted, both failed.
         assert crystals == []
 
-    def test_skips_when_claim_or_object_missing(self, tmp_path):
-        # Stale contradiction row pointing at a deleted claim — the
-        # row is processed but the missing side is skipped.  If both
-        # sides are missing we skip the whole contradiction.
+    def test_skips_when_both_sides_missing(self, tmp_path):
+        # Stale contradiction row pointing at deleted claims on both
+        # sides → both sides empty → skipped.
         vault, db = _seed(
             tmp_path,
-            objects=[],  # no evergreens at all
+            objects=[],
             claims=[],
             contradictions=[
                 ("contradiction::stale", "x",
@@ -448,7 +447,28 @@ class TestSynthesizeEndToEnd:
         crystals = synthesize_contradiction_crystals(
             vault_dir=vault, llm_client=llm, db_path=db,
         )
-        # No claims nor objects → both sides empty → skipped.
+        assert crystals == []
+        assert llm.calls == []
+
+    def test_skips_when_only_one_side_resolves(self, tmp_path):
+        # A contradiction is by definition two-sided.  If positives
+        # resolve but negatives don't (stale claim refs), the
+        # crystal would degrade into a one-sided "open question" —
+        # defeating the surface's purpose.  Skip instead.
+        vault, db = _seed(
+            tmp_path,
+            objects=[("a", "A", "body a")],
+            claims=[("a::pp", "a", "page_summary", "X is true")],
+            contradictions=[
+                # Positive resolves (a::pp); negative is a ghost.
+                ("contradiction::onesided", "x",
+                 ["a::pp"], ["ghost::nn"], "open"),
+            ],
+        )
+        llm = _StubLLM()
+        crystals = synthesize_contradiction_crystals(
+            vault_dir=vault, llm_client=llm, db_path=db,
+        )
         assert crystals == []
         assert llm.calls == []
 

@@ -202,6 +202,7 @@ SQLITE_ALLOWED_MODULES = {
     "commands/list_crystals",
     "synthesis/community_crystal",
     "synthesis/contradiction_crystal",
+    "synthesis/_shared",
     "synthesis/_versioning",
     "ui/view_models",
 }

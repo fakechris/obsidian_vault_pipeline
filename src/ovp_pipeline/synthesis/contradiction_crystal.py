@@ -35,12 +35,12 @@ from pathlib import Path
 from typing import Protocol
 
 from ..projection_labels import frontmatter_projection_fields
-from ._versioning import ARCHIVE_DIR_REL, supersede_and_archive_previous
-from .community_crystal import (
+from ._shared import (
     CRYSTAL_DIR_REL,
-    _load_evergreen_bodies,
-    _load_objects_subset,
+    load_evergreen_bodies,
+    load_objects_subset,
 )
+from ._versioning import ARCHIVE_DIR_REL, commit_crystal_version
 
 logger = logging.getLogger(__name__)
 
@@ -218,8 +218,8 @@ def _load_claims_subset(
 ) -> dict[str, str]:
     """Targeted lookup — claim_id → claim_text for the IDs we need.
 
-    Mirrors ``community_crystal._load_objects_subset`` chunking so we
-    stay below SQLite's 999-parameter cap on heavy contradictions.
+    Mirrors ``_shared.load_objects_subset`` chunking so we stay
+    below SQLite's 999-parameter cap on heavy contradictions.
     """
     if not claim_ids:
         return {}
@@ -239,20 +239,17 @@ def _load_claims_subset(
     return out
 
 
-def _persist_crystal(
-    conn: sqlite3.Connection, crystal: ContradictionCrystal,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO contradiction_crystals
-            (pack, contradiction_id, subject_key, body_md,
-             positive_claim_ids_json, negative_claim_ids_json,
-             source_object_ids_json, synthesized_at, llm_model,
-             prompt_version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        crystal.as_db_row(),
-    )
+# INSERT SQL passed to ``commit_crystal_version`` — the helper takes
+# table-specific INSERT verbatim because the row shape varies per
+# crystal kind.
+_INSERT_SQL = (
+    "INSERT INTO contradiction_crystals"
+    " (pack, contradiction_id, subject_key, body_md,"
+    "  positive_claim_ids_json, negative_claim_ids_json,"
+    "  source_object_ids_json, synthesized_at, llm_model,"
+    "  prompt_version)"
+    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
 
 
 # ----- Object IDs from claim IDs --------------------------------------
@@ -388,14 +385,14 @@ def synthesize_contradiction_crystals(
             all_object_ids.update(obj_ids)
 
         claims_by_id = _load_claims_subset(conn, pack_name, all_claim_ids)
-        objects_by_id = _load_objects_subset(conn, pack_name, all_object_ids)
+        objects_by_id = load_objects_subset(conn, pack_name, all_object_ids)
 
         # Read every needed evergreen body ONCE up front.  Two
         # contradictions sharing a source object (or two sides of
         # the same contradiction sharing one) used to read its
         # markdown twice; now we load each file at most once and
         # the per-side helper just looks up from the dict.
-        loaded = _load_evergreen_bodies(
+        loaded = load_evergreen_bodies(
             vault_dir,
             member_object_ids=sorted(all_object_ids),
             objects_by_id=objects_by_id,
@@ -411,10 +408,18 @@ def synthesize_contradiction_crystals(
             neg_evergreens = _build_side(
                 negatives, claims_by_id, title_by_object, body_by_object,
             )
-            if not pos_evergreens and not neg_evergreens:
+            if not pos_evergreens or not neg_evergreens:
+                # A contradiction crystal needs BOTH sides.  Pre-fix
+                # the guard only skipped when both were missing, so
+                # if positives resolved but negatives didn't (stale
+                # claim refs), the LLM was asked to produce an "open
+                # question" crystal from one side — defeating the
+                # whole point of the surface.
                 logger.warning(
-                    "no readable claims/evergreens for contradiction %s; skipping",
+                    "contradiction %s missing one side "
+                    "(pos=%d, neg=%d); skipping",
                     contradiction_id,
+                    len(pos_evergreens), len(neg_evergreens),
                 )
                 continue
             user_prompt = _build_user_prompt(
@@ -446,8 +451,10 @@ def synthesize_contradiction_crystals(
                 positive_claim_ids=tuple(positives),
                 negative_claim_ids=tuple(negatives),
                 source_object_ids=tuple(sorted(obj_ids)),
+                # Microsecond resolution — see the matching note in
+                # ``community_crystal.synthesize_community_crystals``.
                 synthesized_at=datetime.now(timezone.utc).isoformat(
-                    timespec="seconds",
+                    timespec="microseconds",
                 ),
                 llm_model=llm_model_label,
                 prompt_version=CONTRADICTION_PROMPT_VERSION,
@@ -467,26 +474,26 @@ def synthesize_contradiction_crystals(
                 )
                 continue
 
-            # BL-044: archive prior version + flip its supersede
-            # pointer before overwriting the live markdown.
+            # BL-044: ``commit_crystal_version`` orchestrates the
+            # supersede UPDATE + INSERT in one DB transaction, then
+            # atomic-replaces the live markdown, then archives the
+            # prior content (best-effort).
             archive_subdir = (
                 vault_dir / ARCHIVE_DIR_REL / _safe_id(contradiction_id)
             )
-            supersede_and_archive_previous(
+            commit_crystal_version(
                 conn,
                 table="contradiction_crystals",
                 key_column="contradiction_id",
                 pack=pack_name,
                 key_value=contradiction_id,
                 new_synthesized_at=crystal.synthesized_at,
+                insert_sql=_INSERT_SQL,
+                insert_params=crystal.as_db_row(),
+                new_markdown=render_crystal_markdown(crystal),
                 live_path=target,
                 archive_subdir=archive_subdir,
             )
-            target.write_text(
-                render_crystal_markdown(crystal), encoding="utf-8",
-            )
-            _persist_crystal(conn, crystal)
-            conn.commit()
         return out
     finally:
         conn.close()

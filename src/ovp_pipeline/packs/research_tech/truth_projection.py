@@ -142,18 +142,25 @@ def _detect_communities(
         # raises ``ZeroDivisionError`` on an edgeless graph.  No edges
         # means no communities of size ≥ 2 anyway, so short-circuit.
         return []
+    # Aggregate by unordered pair before adding to the graph.  A
+    # plain ``nx.Graph.add_edge`` is last-write-wins on the weight
+    # attribute, so a (relation, weight=1.0) edge and a
+    # (contradiction, weight=0.8) edge between the same pair would
+    # collapse to whichever was added last — usually down-weighting
+    # the stronger relation.  Sum captures the right intuition: two
+    # different kinds of evidence for the same connection should
+    # increase its modularity contribution, not erase one of them.
+    pair_weights: dict[tuple[str, str], float] = {}
+    for edge in edge_rows.values():
+        pair = tuple(sorted(  # type: ignore[assignment]
+            (edge.source_object_id, edge.target_object_id),
+        ))
+        pair_weights[pair] = pair_weights.get(pair, 0.0) + edge.weight
+
     graph: nx.Graph = nx.Graph()
     graph.add_nodes_from(object_ids)
-    for edge in edge_rows.values():
-        # Louvain on a multigraph would double-count parallel edges;
-        # the edge_rows dict is already de-duped by edge_id, so a
-        # plain ``Graph`` is fine.  Last-write-wins on weight when
-        # the same pair is connected by multiple edge_kinds.
-        graph.add_edge(
-            edge.source_object_id,
-            edge.target_object_id,
-            weight=edge.weight,
-        )
+    for (src, tgt), weight in pair_weights.items():
+        graph.add_edge(src, tgt, weight=weight)
     communities = louvain_communities(
         graph, weight="weight", seed=_LOUVAIN_SEED,
     )
