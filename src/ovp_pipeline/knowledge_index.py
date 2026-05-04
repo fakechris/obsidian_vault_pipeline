@@ -1191,6 +1191,22 @@ def rebuild_knowledge_index(
                     "crystal_scores rebuild skipped: %s", exc,
                 )
 
+            # M14 BL-047: append crystal bodies to page_fts so the
+            # existing ``/search`` Access Surface returns crystals
+            # alongside evergreen pages.  Best-effort — same
+            # rationale as the scoring rebuild.
+            try:
+                from .synthesis.crystal_fts import index_crystals_into_page_fts
+                n_fts = index_crystals_into_page_fts(conn, pack=truth_pack)
+                if n_fts:
+                    logger.debug(
+                        "indexed %d crystal bodies into page_fts", n_fts,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "crystal page_fts indexing skipped: %s", exc,
+                )
+
             conn.commit()
         except Exception:
             if conn is not None:
