@@ -33,7 +33,7 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M12 Extraction-Time Entity Prime And Auto-Wikilink | Next | entity_aliases view, LLM extractor primed with known entities, automatic wikilink generation (BL-038/039/040) |
 | M13 Synthesis Layer (Crystal) | Next | Louvain communities + LLM-synthesized crystals + contradiction crystals + append-only versioning (BL-041/042/043/044) |
 
-## Recently Shipped (PR #98 – #124)
+## Recently Shipped (PRs #98–#124)
 
 | PR | What shipped |
 | --- | --- |
@@ -151,7 +151,7 @@ Shipped through PRs #112–#124 in May 2026.  Three layers added on the read sid
 
 * **Source authority providers (PR-D1/D2/D3)** — typed `SignalProvider` Protocol; deterministic `domain_rules` + `author_rules` whitelist, `github_stars` + `arxiv` + `twitter` (stub) live signals, soft never-gating combination rule, yaml-overrides + LLM-judge for the long tail.
 * **Entity layer (PR-E1/E2/E3/E4/F1)** — `entities` + `entity_signals_history` SQLite tables holding `twitter_author`, `github_project`, `github_user`, `person`, `organization` rows.  twitterapi.io + GitHub REST backfills, identity merge with self-reported / exact-handle / fuzzy strategies, `person`/`organization` split driven by GitHub's `user.type`.  521 + 922 + 54 entities on the OVP vault, ~$0.10 one-shot.
-* **Operational glue (PR-#117/#122)** — `ovp-backup-db` (SQLite online backup), `ovp-refresh-source-authority` (chained refresh wrapper, lock-protected, status JSON, launchd plist).
+* **Operational glue (PRs #117/#122)** — `ovp-backup-db` (SQLite online backup), `ovp-refresh-source-authority` (chained refresh wrapper, lock-protected, status JSON, launchd plist).
 
 This is the foundation that lets M12 (extraction prime + auto-wikilink) close the loop from "we know who Karpathy is" to "the next ingest run uses that knowledge".
 

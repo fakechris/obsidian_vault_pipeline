@@ -108,7 +108,7 @@ Recent major changes (PRs #98–#124):
 - Typed StepResult contracts + 4 pipeline guardrails (#109–#111)
 - Liberate evergreen extractor prompt (#112) — no more 3-5 cap on atomic units per article
 - **Source authority subsystem** (#113/#114): typed SignalProvider Protocol, domain/author whitelists, GitHub/arXiv/Twitter/Substack signals, yaml overrides, LLM-judge for new domains
-- **Entity layer** (#115/#119/#120/#121/#123): twitter_author + github_project + github_user backfills (1443 entities total, ~$0.10 one-shot), identity merge with person/organization split, runtime resolver
+- **Entity layer** (#115/#119/#120/#121/#123): twitter_author + github_project + github_user backfills, identity merge with person/organization split, runtime resolver — 1497 entities total on the OVP vault (521 twitter + 922 github + 54 person/organization), ~$0.10 one-shot
 - **Operational glue** (#117/#122): `ovp-backup-db` SQLite online-backup snapshots, `ovp-refresh-source-authority` chained refresh + launchd plist
 - 12 entity-layer review fixes (#124): read-side write side effects, identity-merge backlinks, lock race, append-only history, GitHub bare profile URLs, etc.
 
