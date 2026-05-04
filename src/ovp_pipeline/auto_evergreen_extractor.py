@@ -280,16 +280,25 @@ class EvergreenExtractor:
             return ""
 
         try:
-            store = EntityStore(
-                db_path=self.vault_dir / "60-Logs" / "knowledge.db",
-            )
+            # Use VaultLayout so the knowledge.db path is consistent
+            # with every other reader/writer in the pipeline (avoids
+            # silent drift when the layout convention shifts).
+            layout = VaultLayout.from_vault(self.vault_dir)
+            store = EntityStore(db_path=layout.knowledge_db)
             aliases = collect_entity_aliases(
                 vault_dir=self.vault_dir, entity_store=store,
             )
         except Exception as exc:  # noqa: BLE001 — defensive; never block extraction
-            self.logger.warning(
-                "entity prime unavailable: %s — extraction will run without it",
-                exc,
+            # PipelineLogger uses structured event logging
+            # (``log(event_type, data)``), NOT stdlib's ``warning``.
+            # Calling ``.warning(...)`` would AttributeError at
+            # runtime and crash the whole extraction step.
+            self.logger.log(
+                "entity_prime_unavailable",
+                {
+                    "error": str(exc),
+                    "msg": "extraction will run without entity prime",
+                },
             )
             self._entity_prime_block = ""
             return ""

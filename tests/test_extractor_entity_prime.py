@@ -16,25 +16,18 @@ from ovp_pipeline.entities.store import EntityStore
 
 
 class _FakeLogger:
-    """Minimal stand-in for PipelineLogger so tests don't need the
-    real one (which expects vault paths + writes audit trails)."""
+    """Minimal stand-in for ``PipelineLogger`` — note that the real
+    class is a structured EVENT logger (``log(event_type, data)``),
+    NOT a stdlib-style logger.  Earlier versions of these tests
+    mocked a ``.warning()`` method that doesn't exist on the real
+    class, masking the bug review found in PR #127.
+    """
 
     def __init__(self):
-        self.warnings: list[str] = []
+        self.events: list[dict] = []
 
-    def warning(self, *args, **kwargs):
-        # PipelineLogger uses .warning(msg, *args) % style.  We only
-        # need it to not crash the path-under-test.
-        self.warnings.append(str(args))
-
-    def info(self, *args, **kwargs):
-        pass
-
-    def error(self, *args, **kwargs):
-        pass
-
-    def debug(self, *args, **kwargs):
-        pass
+    def log(self, event_type: str, data: dict):
+        self.events.append({"event_type": event_type, **data})
 
 
 def _build_extractor(vault_dir: Path) -> EvergreenExtractor:
@@ -201,7 +194,10 @@ class TestEntityPrimeResilience:
         ):
             block = extractor._load_entity_prime_block()
         assert block == ""
-        # The extractor's logger captured a warning so an operator
-        # can spot the issue.
-        assert any("entity prime" in w.lower()
-                   for w in extractor.logger.warnings)
+        # The extractor logged a structured event so the operator
+        # can spot the issue in the pipeline audit log.
+        events = extractor.logger.events
+        assert any(e["event_type"] == "entity_prime_unavailable" for e in events)
+        # The triggering exception text is preserved for debugging.
+        assert any("simulated DB corruption" in str(e.get("error", ""))
+                   for e in events)
