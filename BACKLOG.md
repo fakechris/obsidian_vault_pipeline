@@ -31,7 +31,9 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | M10 Operational Knowledge Layer | Later | action types on objects, permission + contract, cross-entity aggregation, decision memory |
 | M11 Source Authority And Cross-Source Identity | Done | typed source-authority providers, entity layer, runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
 | M12 Extraction-Time Entity Prime And Auto-Wikilink | Done | entity_aliases view, LLM extractor primed with known entities, auto-wikilink CLI (BL-038/039/040, PRs #126–#128) |
-| M13 Synthesis Layer (Crystal) | Done | Louvain communities + LLM-synthesized community crystals + contradiction crystals + append-only versioning (BL-041/042/043/044, PRs #130-#133) |
+| M13 Synthesis Layer (Crystal) | Done | Louvain communities + LLM-synthesized community crystals + contradiction crystals + append-only versioning + sampling-aware renderer (BL-041/042/043/044, PRs #130-#136) |
+| M14 Curated Atlas (Crystal Read Model) | Next | `crystal_scores` Projection + Curated Atlas Access Surface + long-tail FTS/facets + big-community splitter + reuse feedback (BL-045/046/047/048/049). See `docs/plans/2026-05-04-m14-curated-atlas.md` |
+| M15 Architecture Language Cleanup | Done | Six-term architecture contract (Source / Candidate / Canonical State / Projection / Access Surface / Governance), ARCHITECTURE.md rewrite, doc split into RUNTIME / PACKS / PRODUCT_SURFACES / GLOSSARY, doc lint with phased rollout (PR #139) |
 
 ## Recently Shipped (PRs #98–#133)
 
@@ -96,6 +98,11 @@ Rule: historical plans and vault research notes feed this file; they do not over
 | BL-042 | P0 | Done | Community Crystal MVP — `ovp-synthesize-community-crystals` reads Louvain communities from `graph_clusters`, sends top-K member evergreens (deterministic order; authority weighting deferred to v2) to MiniMax-M2.7-highspeed, writes `40-Resources/Crystals/<sha>.md` and persists lineage in the new `community_crystals` table.  Append-only schema (PK includes `synthesized_at`) so BL-044 versioning lands without migration. | M13 |
 | BL-043 | P1 | Done | `ovp-synthesize-contradiction-crystals` reads `status='open'` rows from the `contradictions` table, sends each side's claim_text + source evergreen body to the LLM, and writes `40-Resources/Crystals/contradiction-<sha>.md` plus a `contradiction_crystals` lineage row.  System prompt is deliberately framed as "open question" — does not try to resolve, only to expose the tension.  Resolved contradictions are skipped. | M13 |
 | BL-044 | P1 | Done | Crystal append-only versioning — both `community_crystals` and `contradiction_crystals` carry `superseded_by_synthesized_at`; supersede helper flips the prior current row's pointer + archives its markdown to `70-Archive/Crystals/<safe-id>/<timestamp>.md` before the new row lands.  `ovp-list-crystals` surfaces the version chain. | M13 |
+| BL-045 | P0 | Next | `crystal_scores` Projection: per-crystal score from community size + source-credibility sum + contradiction density + reuse recency + evergreen recency.  Persisted as a derived table; rebuilt by `ovp-knowledge-index`.  Schema-version bump triggers rebuild on existing DBs. | M14 |
+| BL-046 | P0 | Next | Curated Atlas Access Surface: top-N (default 30) crystals at `/atlas/curated` + `40-Resources/CuratedAtlas.md` markdown export.  Each entry: label + 1-line teaser + score reasoning + click-through to crystal markdown. | M14 |
+| BL-047 | P1 | Next | Long-tail facets: extend `page_fts` to index crystal bodies; tag facet from crystal tags; entity facet via `entity_aliases` join.  All Access Surface subroutes; no Canonical State writes. | M14 |
+| BL-048 | P1 | Next | Big-community splitter: communities above threshold (default 50 members) re-run Louvain on their internal sub-graph; each sub-community gets its own crystal.  Resolves the sampling-bias issue (top community = 454 members, sample = 8). | M14 |
+| BL-049 | P2 | Next | Reuse-feedback loop: extend `reuse_events` for crystal opens / citations / pins; feed into BL-045 score so the curated Atlas evolves with use.  Cold-start with weight 0; raise once data accumulates. | M14 |
 
 ## KSR Task Coverage
 
