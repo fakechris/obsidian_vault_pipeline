@@ -329,17 +329,21 @@ def process_single_repo(
     # Collision guard — refuse to silently overwrite a prior intake
     # of the same repo on the same date unless the caller asked for
     # it explicitly.  Done before tier probing so we don't burn
-    # external API budget on a destination we won't write to.
+    # external API budget on a destination we won't write to —
+    # this includes ``--dry-run`` so the dry-run report mirrors what
+    # a real run would actually do (gemini #164 review).
     safe_name = _build_output_filename(date, owner, repo)
     output_path = output_dir / safe_name
-    if not dry_run and not overwrite and output_path.exists():
+    if not overwrite and output_path.exists():
         print(
             f"  ⊘ Skipping {owner}/{repo}: {output_path.name} already "
             "exists (use --overwrite to refresh)"
         )
         result["status"] = "skipped_existing"
         result["output_file"] = str(output_path)
-        if logger:
+        # Audit events log only on real runs — a dry run shouldn't
+        # pollute pipeline.jsonl with simulated skip records.
+        if not dry_run and logger:
             logger.log("github_intake_skipped_existing", {
                 "url": url, "owner": owner, "repo": repo,
                 "output_file": str(output_path),

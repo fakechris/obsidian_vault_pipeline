@@ -450,6 +450,47 @@ class TestProcessSingleRepo:
         assert "refreshed body" in body
         assert "stale" not in body
 
+    def test_dry_run_also_respects_collision_guard(self, tmp_path):
+        """Gemini #164 review: a dry run on an already-processed
+        repo must short-circuit identically to a real run, otherwise
+        the dry-run report says "would process N repos" while the
+        real run would skip them, and we burn API budget probing
+        tiers we'd never write.  Audit-event emission stays off in
+        dry runs so simulated skips don't pollute pipeline.jsonl.
+        """
+        from unittest.mock import MagicMock
+        layout = self._init_vault(tmp_path)
+        out_dir = layout.processed_dir / "2026-04"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        existing = out_dir / "2026-04-28_o_r.md"
+        existing.write_text("prior", encoding="utf-8")
+
+        recorded_logs: list[tuple[str, dict]] = []
+        stub_logger = MagicMock()
+        stub_logger.log = lambda kind, payload: recorded_logs.append((kind, payload))
+
+        with patch(
+            "ovp_pipeline.auto_github_processor.enrich_github_source",
+        ) as enrich_mock:
+            result = process_single_repo(
+                url="https://github.com/o/r",
+                date="2026-04-28",
+                tags=[], description="",
+                output_dir=out_dir,
+                logger=stub_logger,
+                dry_run=True,
+            )
+        assert result["status"] == "skipped_existing"
+        # Tier probing did NOT run on dry run either — the report
+        # accurately reflects what a real run would do.
+        enrich_mock.assert_not_called()
+        # Audit log stays clean during dry runs.
+        assert not any(
+            kind == "github_intake_skipped_existing"
+            for kind, _ in recorded_logs
+        ), f"dry-run polluted the audit log: {recorded_logs}"
+
     @staticmethod
     def _init_vault(tmp_path: Path) -> VaultLayout:
         # Minimal vault skeleton VaultLayout expects
