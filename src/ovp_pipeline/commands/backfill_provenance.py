@@ -118,16 +118,27 @@ def _build_evergreen_to_source_from_audit(
     # the project lifetime — 50-Inbox / 20-Areas / 70-Archive).
     # Build a one-shot index by stem to avoid repeated rglob scans.
     logger.info("indexing vault source files by stem (one-shot)…")
-    source_index: dict[str, Path] = {}
+    # Reviewer PR #152 (gemini + coderabbit MAJOR): stem-only matching
+    # silently picks the first occurrence when the same filename
+    # exists in multiple folders (e.g. ``Inbox/Plan.md`` vs
+    # ``Archive/Plan.md``).  Use a ``str → list[Path]`` index, then
+    # disambiguate at lookup time.  Reader-shell + crystal directories
+    # are excluded by full-path containment with leading ``/`` so a
+    # vault root that happens to contain the substring "Evergreen"
+    # doesn't accidentally exclude everything.
+    SKIP_PREFIXES = ("/10-Knowledge/Evergreen/", "/10-Knowledge/Crystals/")
+    source_index: dict[str, list[Path]] = {}
     for md in vault_root.rglob("*.md"):
-        # Skip evergreens themselves to avoid mis-attribution loops
-        # if a deep-dive happens to share a stem with an evergreen.
-        if "10-Knowledge/Evergreen" in str(md):
+        path_str = str(md)
+        if any(prefix in path_str for prefix in SKIP_PREFIXES):
             continue
-        if "10-Knowledge/Crystals" in str(md):
-            continue
-        source_index.setdefault(md.stem, md)
-    logger.info("vault source-file index: %d unique stems", len(source_index))
+        source_index.setdefault(md.stem, []).append(md)
+    n_unique = sum(1 for v in source_index.values() if len(v) == 1)
+    n_collisions = sum(1 for v in source_index.values() if len(v) > 1)
+    logger.info(
+        "vault source-file index: %d unique stems, %d collisions",
+        n_unique, n_collisions,
+    )
 
     fm_cache: dict[str, dict[str, str]] = {}
 
@@ -135,7 +146,25 @@ def _build_evergreen_to_source_from_audit(
         if filename in fm_cache:
             return fm_cache[filename]
         stem = Path(filename).stem
-        path = source_index.get(stem)
+        candidates = source_index.get(stem) or []
+        # Stem-collision disambiguation: prefer a candidate whose
+        # parent dir name appears in the audit-log filename's date
+        # prefix (``2026-04`` etc.), then fall back to the first.
+        path: Path | None
+        if not candidates:
+            path = None
+        elif len(candidates) == 1:
+            path = candidates[0]
+        else:
+            target_date_prefix = filename[:7]  # "2026-04" from "2026-04-..."
+            scored = sorted(
+                candidates,
+                key=lambda p: (
+                    target_date_prefix not in str(p),  # False (=match) sorts first
+                    len(str(p)),  # shorter path wins ties
+                ),
+            )
+            path = scored[0]
         if path is None:
             fm_cache[filename] = {}
             return fm_cache[filename]

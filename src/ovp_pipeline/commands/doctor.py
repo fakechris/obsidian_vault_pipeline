@@ -191,12 +191,20 @@ def _provenance_health(db_path: Path) -> dict[str, object]:
         except sqlite3.OperationalError:
             return out
         try:
+            # Coderabbit PR #152 review fix: count by ``(pack,
+            # object_id)`` so multi-pack vaults (e.g. research-tech +
+            # default-knowledge) don't collapse identically-named
+            # objects across packs.
             (n_prov,) = conn.execute(
-                "SELECT COUNT(DISTINCT object_id) FROM provenance"
+                "SELECT COUNT(*) FROM ("
+                "  SELECT DISTINCT pack, object_id FROM provenance"
+                ")"
             ).fetchone()
             (n_with_url,) = conn.execute(
-                "SELECT COUNT(DISTINCT object_id) FROM provenance "
-                "WHERE source_url != ''"
+                "SELECT COUNT(*) FROM ("
+                "  SELECT DISTINCT pack, object_id FROM provenance"
+                "  WHERE source_url != ''"
+                ")"
             ).fetchone()
             (n_distinct,) = conn.execute(
                 "SELECT COUNT(DISTINCT source_url) FROM provenance "

@@ -226,21 +226,6 @@ TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "member_object_ids_json",
         "score",
     ),
-    # BL-055: provenance audit history is preserved across rebuilds
-    # so historical "stage=extract"/"stage=promote" rows survive even
-    # when the rebuild only writes new ``stage=ingest`` rows.  Other
-    # packs' provenance also carries through so cross-pack tools
-    # (e.g. doctor) see the full picture.
-    "provenance": (
-        "pack",
-        "object_id",
-        "source_url",
-        "source_fingerprint",
-        "derived_via_stage",
-        "derived_at",
-        "parent_object_id",
-        "metadata_json",
-    ),
 }
 
 
@@ -257,6 +242,24 @@ TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 # in the index pipeline.  Preserving it here would only get
 # overwritten by the rebuild call.
 INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
+    # BL-055: provenance audit history.  Pre-fix it lived in
+    # ``TRUTH_PROJECTION_TABLE_COLUMNS`` which excludes the current
+    # pack from preservation — so every rebuild wiped any
+    # ``stage='extract'``/``'promote'``/``'synthesize_*'`` rows for
+    # the current pack and only kept the fresh ``stage='ingest'``
+    # row this rebuild writes.  As an audit log, history needs to
+    # survive across rebuilds for ALL packs, including the current
+    # one — same treatment as ``community_crystals`` (BL-049).
+    "provenance": (
+        "pack",
+        "object_id",
+        "source_url",
+        "source_fingerprint",
+        "derived_via_stage",
+        "derived_at",
+        "parent_object_id",
+        "metadata_json",
+    ),
     "community_crystals": (
         "pack",
         "cluster_id",
@@ -1092,29 +1095,41 @@ def rebuild_knowledge_index(
                 """,
                 [row.to_row() for row in truth_projection.objects],
             )
-            # BL-055: provenance spine.  Every object with a non-empty
-            # source_url gets one ``stage='ingest'`` row.  Append-only
-            # PK includes ``derived_at`` so re-running rebuilds in the
-            # same wall-clock second is idempotent (UNIQUE conflict
-            # ignored), and runs across days accumulate audit history.
+            # BL-055: provenance spine.  Write one ``stage='ingest'``
+            # row per object that has a source_url — but only when no
+            # such row already exists for this (pack, object_id,
+            # source_url) tuple.  Preservation in
+            # ``INDEPENDENT_CANONICAL_TABLE_COLUMNS`` carries every
+            # historical row across rebuilds (gemini PR #152 review
+            # fix); the dedup guard here keeps rebuild-noise from
+            # accumulating duplicate ingest rows for objects whose
+            # source URL hasn't changed.
             now_iso = _utc_now_text()
             conn.executemany(
                 """
-                INSERT OR IGNORE INTO provenance
+                INSERT INTO provenance
                   (pack, object_id, source_url, source_fingerprint,
                    derived_via_stage, derived_at, parent_object_id,
                    metadata_json)
-                VALUES (?, ?, ?, ?, 'ingest', ?, NULL, '{}')
+                SELECT ?, ?, ?, ?, 'ingest', ?, NULL, '{}'
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM provenance
+                    WHERE pack = ?
+                      AND object_id = ?
+                      AND derived_via_stage = 'ingest'
+                      AND source_url = ?
+                 )
                 """,
                 [
                     (
                         row.pack,
                         row.object_id,
                         row.source_url,
-                        # Cheap stable fingerprint of the URL — same
-                        # 12-char SHA-256 prefix the extractor emits.
                         _source_fingerprint(row.source_url),
                         now_iso,
+                        row.pack,
+                        row.object_id,
+                        row.source_url,
                     )
                     for row in truth_projection.objects
                     if row.source_url

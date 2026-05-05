@@ -127,7 +127,17 @@ def _read_source_provenance(source_file: Path) -> dict[str, str]:
             raw_value = raw_value[1:-1]
         fm[key] = raw_value
 
-    source_url = str(fm.get("source") or fm.get("source_url") or "")
+    # gemini PR #152 review fix: match the URL-field priority that
+    # ``backfill_provenance.py`` uses, so the extractor and the
+    # backfill agree on which frontmatter field counts as the source
+    # URL.  Sources of GitHub projects use ``github:``, Twitter uses
+    # ``twitter:``, arXiv papers use ``arxiv:``.
+    source_url = ""
+    for key in ("source", "source_url", "url", "github", "twitter", "arxiv"):
+        candidate = str(fm.get(key) or "").strip()
+        if candidate:
+            source_url = candidate
+            break
     out["source_url"] = _yaml_escape(source_url)
     out["source_title"] = _yaml_escape(str(fm.get("title") or ""))
     out["source_published_at"] = _yaml_escape(str(fm.get("date") or ""))

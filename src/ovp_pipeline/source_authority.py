@@ -266,6 +266,18 @@ def replay_authority_log(
                 authority = record.get("authority")
                 if authority is None:
                     continue
+                # PR #152 review fix: a corrupt JSONL line with a
+                # non-numeric authority value used to abort the
+                # whole rebuild here.  Skip the bad row and keep going.
+                try:
+                    authority_value = float(authority)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "skipping source_authority audit record with "
+                        "non-numeric authority for %s: %r",
+                        source_id, authority,
+                    )
+                    continue
                 conn.execute(
                     "INSERT INTO source_authority(source_id, authority, "
                     "signals_json, scored_at, scorer_version) "
@@ -277,7 +289,7 @@ def replay_authority_log(
                     "scorer_version=excluded.scorer_version",
                     (
                         str(source_id),
-                        float(authority),
+                        authority_value,
                         json.dumps(
                             record.get("signals") or [],
                             ensure_ascii=False,
