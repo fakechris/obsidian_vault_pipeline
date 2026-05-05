@@ -1858,7 +1858,10 @@ def _render_reader_home(payload: dict) -> str:
     curated = payload.get("curated_atlas") or {}
     atlas_href = str(curated.get("atlas_href") or _shell_href("/atlas/curated", requested_pack))
     total_chains = int(curated.get("total_chains") or 0)
-    atlas_top_n = int(curated.get("top_n") or 0)
+    atlas_available = bool(curated.get("available", total_chains > 0))
+    # Show ``effective_top_n`` (= min(default, total)) so the body
+    # copy never headlines more chains than actually shipped.
+    atlas_top_n = int(curated.get("effective_top_n") or curated.get("top_n") or 0)
     recent_crystals = payload.get("recent_crystals") or []
     recent_days = int(payload.get("recent_days") or 7)
 
@@ -1931,12 +1934,19 @@ def _render_reader_home(payload: dict) -> str:
         f"vault — pack <code>{escape(pack)}</code>.</p>",
         f"<ul class='list-tight'>{top_topics_html}</ul>",
         "</section>",
-        "<section class='card'>",
-        "<h2>Curated Atlas</h2>",
-        f"<p>{atlas_top_n} most reusable ideas in your vault, "
-        f"ranked from {total_chains} synthesized chains.</p>",
-        f"<p><a href='{escape(atlas_href)}'>Open Curated Atlas →</a></p>",
-        "</section>",
+        # Curated Atlas card hidden when the corpus is empty —
+        # otherwise it headlines "30 ideas... ranked from 0 chains"
+        # which is just confusing.
+        (
+            "<section class='card'>"
+            "<h2>Curated Atlas</h2>"
+            f"<p>{atlas_top_n} most reusable ideas in your vault, "
+            f"ranked from {total_chains} synthesized chains.</p>"
+            f"<p><a href='{escape(atlas_href)}'>Open Curated Atlas →</a></p>"
+            "</section>"
+            if atlas_available
+            else ""
+        ),
         map_card,
         "<section class='card'>",
         f"<h2>Recent Crystals (last {recent_days} days)</h2>",

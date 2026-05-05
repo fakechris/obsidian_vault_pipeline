@@ -4322,21 +4322,20 @@ def build_reader_home_payload(
         from ..synthesis.curated_atlas import CuratedAtlas
         atlas = CuratedAtlas(
             pack=pack, top_n=READER_HOME_TOP_TOPICS_LIMIT,
-            total_chains=0, entries=tuple(),
+            total_chains=0, entries=(),
             generated_at="",
         )
 
-    def _safe_id(cluster_id: str) -> str:
-        return (cluster_id[len("cluster::"):]
-                if cluster_id.startswith("cluster::") else cluster_id)
+    def _safe_id(crystal_id: str, crystal_kind: str = "community") -> str:
+        if crystal_kind == "community" and crystal_id.startswith("cluster::"):
+            return crystal_id[len("cluster::"):]
+        if crystal_kind == "contradiction" and crystal_id.startswith("contradiction::"):
+            return f"contradiction-{crystal_id[len('contradiction::'):]}"
+        return crystal_id
 
     top_topics = []
     for entry in atlas.entries:
-        safe_id = _safe_id(entry.crystal_id) if entry.crystal_kind == "community" else (
-            f"contradiction-{entry.crystal_id[len('contradiction::'):]}"
-            if entry.crystal_id.startswith("contradiction::")
-            else entry.crystal_id
-        )
+        safe_id = _safe_id(entry.crystal_id, entry.crystal_kind)
         note_rel = str(CRYSTAL_DIR_REL / f"{safe_id}.md")
         top_topics.append({
             "rank": entry.rank,
@@ -4351,7 +4350,9 @@ def build_reader_home_payload(
 
     recent_crystals = []
     for cluster_id, synthesized_at, body_md, label in recent_rows:
-        safe_id = _safe_id(str(cluster_id))
+        # Recent-crystals query is community-only by design (it joins
+        # community_crystals + graph_clusters), so the kind is fixed.
+        safe_id = _safe_id(str(cluster_id), "community")
         note_rel = str(CRYSTAL_DIR_REL / f"{safe_id}.md")
         recent_crystals.append({
             "label": str(label or "(untitled)"),
@@ -4368,9 +4369,16 @@ def build_reader_home_payload(
         "requested_pack": requested_pack,
         "pack": atlas.pack,
         "top_topics": top_topics,
+        # ``curated_atlas`` payload: ``available`` flips off when the
+        # corpus is empty so the renderer can suppress the card
+        # instead of headlining "30 ideas... ranked from 0 chains".
+        # ``effective_top_n`` is ``min(default, total)`` so the body
+        # copy never claims more than actually shipped.
         "curated_atlas": {
+            "available": atlas.total_chains > 0,
             "total_chains": atlas.total_chains,
             "top_n": CURATED_ATLAS_DEFAULT_TOP_N,
+            "effective_top_n": min(CURATED_ATLAS_DEFAULT_TOP_N, atlas.total_chains),
             "atlas_href": _scoped_path("/atlas/curated", pack_name=requested_pack),
         },
         "recent_crystals": recent_crystals,

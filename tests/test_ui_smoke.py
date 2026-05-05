@@ -1006,8 +1006,11 @@ Thin note.
     assert 'href="/atlas/curated">Atlas</a>' in root_body
     assert 'href="/map">Map</a>' in root_body
     assert 'href="/ops">Workbench</a>' not in root_body
+    # Top Topics / Recent Crystals always render with empty-state
+    # hints; Curated Atlas card is only emitted when crystal_scores
+    # has rows (PR #150 review fix).  This smoke test seeds objects
+    # but no crystals, so the card stays hidden.
     assert "Top Topics" in root_body
-    assert "Curated Atlas" in root_body
     assert "Recent Crystals" in root_body
     assert "OVP Truth UI" not in root_body
     assert "Workflow Map" not in root_body

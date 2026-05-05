@@ -153,9 +153,10 @@ def test_ui_server_root_serves_reader_library_home(temp_vault):
     assert 'href="/ops">Workbench</a>' not in body
     # Cross-link to maintainer shell
     assert ">→ Maintenance</a>" in body
-    # New BL-050 sections
+    # New BL-050 sections.  Top Topics / Recent Crystals always
+    # render with empty-state hints; Curated Atlas card only
+    # appears when crystal_scores has rows (gemini PR #150 review).
     assert "Top Topics" in body
-    assert "Curated Atlas" in body
     assert "Recent Crystals" in body
     # Search box (inline form)
     assert "action='/search'" in body
@@ -253,9 +254,13 @@ def test_render_reader_home_hides_unavailable_map_for_non_research_pack():
             "requested_pack": "media-editorial",
             "pack": "media-editorial",
             "top_topics": [],
+            # ``available: True`` so the Curated Atlas card renders
+            # in this assertion-focused test even with no entries.
             "curated_atlas": {
+                "available": True,
                 "total_chains": 0,
                 "top_n": 30,
+                "effective_top_n": 0,
                 "atlas_href": "/atlas/curated?pack=media-editorial",
             },
             "recent_crystals": [],
