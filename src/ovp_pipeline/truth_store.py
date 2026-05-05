@@ -224,6 +224,31 @@ CREATE TABLE crystal_scores (
 
 CREATE INDEX idx_crystal_scores_pack_score
   ON crystal_scores(pack, score DESC);
+
+-- BL-055: provenance spine.  Every Canonical-State object that the
+-- system creates writes (or has populated for it) at least one row
+-- here.  Append-only on PK ``(pack, object_id, stage, derived_at)``.
+-- Read pattern for the hot path (scoring) stays denormalised on
+-- ``objects.source_url``; this table is the audit + multi-stage
+-- source of truth.  See docs/plans/2026-05-04-bl-055-provenance-spine.md.
+CREATE TABLE provenance (
+  pack TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  source_url TEXT NOT NULL DEFAULT '',
+  source_fingerprint TEXT NOT NULL DEFAULT '',
+  derived_via_stage TEXT NOT NULL,
+  derived_at TEXT NOT NULL,
+  parent_object_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (pack, object_id, derived_via_stage, derived_at)
+);
+
+CREATE INDEX idx_provenance_object
+  ON provenance(pack, object_id);
+CREATE INDEX idx_provenance_source
+  ON provenance(pack, source_url);
+CREATE INDEX idx_provenance_stage
+  ON provenance(pack, derived_via_stage);
 """
 
 CONTRADICTION_HEURISTIC_NOTE = (

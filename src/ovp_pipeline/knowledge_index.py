@@ -226,6 +226,21 @@ TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "member_object_ids_json",
         "score",
     ),
+    # BL-055: provenance audit history is preserved across rebuilds
+    # so historical "stage=extract"/"stage=promote" rows survive even
+    # when the rebuild only writes new ``stage=ingest`` rows.  Other
+    # packs' provenance also carries through so cross-pack tools
+    # (e.g. doctor) see the full picture.
+    "provenance": (
+        "pack",
+        "object_id",
+        "source_url",
+        "source_fingerprint",
+        "derived_via_stage",
+        "derived_at",
+        "parent_object_id",
+        "metadata_json",
+    ),
 }
 
 
@@ -270,6 +285,14 @@ INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 
 def _truth_pack_name(pack_name: str | None = None) -> str:
     return str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+
+
+def _source_fingerprint(source_url: str) -> str:
+    """BL-055: 12-char SHA-256 prefix of a source URL.  Same shape
+    the extractor writes so frontmatter and DB rows agree."""
+    if not source_url:
+        return ""
+    return hashlib.sha256(source_url.encode("utf-8")).hexdigest()[:12]
 
 
 def _utc_now_text() -> str:
@@ -1068,6 +1091,34 @@ def rebuild_knowledge_index(
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [row.to_row() for row in truth_projection.objects],
+            )
+            # BL-055: provenance spine.  Every object with a non-empty
+            # source_url gets one ``stage='ingest'`` row.  Append-only
+            # PK includes ``derived_at`` so re-running rebuilds in the
+            # same wall-clock second is idempotent (UNIQUE conflict
+            # ignored), and runs across days accumulate audit history.
+            now_iso = _utc_now_text()
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO provenance
+                  (pack, object_id, source_url, source_fingerprint,
+                   derived_via_stage, derived_at, parent_object_id,
+                   metadata_json)
+                VALUES (?, ?, ?, ?, 'ingest', ?, NULL, '{}')
+                """,
+                [
+                    (
+                        row.pack,
+                        row.object_id,
+                        row.source_url,
+                        # Cheap stable fingerprint of the URL — same
+                        # 12-char SHA-256 prefix the extractor emits.
+                        _source_fingerprint(row.source_url),
+                        now_iso,
+                    )
+                    for row in truth_projection.objects
+                    if row.source_url
+                ],
             )
             conn.executemany(
                 """
