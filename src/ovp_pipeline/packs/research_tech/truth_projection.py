@@ -219,14 +219,61 @@ def _split_if_too_big(
     sub_communities = louvain_communities(
         sub_graph, weight="weight", seed=_LOUVAIN_SEED,
     )
-    sub_lists = [sorted(c) for c in sub_communities if len(c) >= 2]
+    sized_sub_lists: list[list[str]] = []
+    singletons: list[str] = []
+    for sub_community in sub_communities:
+        sub_sorted = sorted(sub_community)
+        if len(sub_sorted) >= 2:
+            sized_sub_lists.append(sub_sorted)
+        else:
+            singletons.extend(sub_sorted)
     # If Louvain returns a single sub-community equal to the input,
     # the community has no internal structure to surface — keep it
     # whole rather than emit a rename.  Same when no sub-community
     # passes the size-≥-2 filter.
-    if len(sub_lists) <= 1:
+    if not sized_sub_lists or (
+        len(sized_sub_lists) == 1 and not singletons
+    ):
         return [sorted(members)]
-    return sub_lists
+    # Pre-fix: ``[sorted(c) for c in sub_communities if len(c) >= 2]``
+    # silently dropped every singleton, so a >50 parent community
+    # could lose 5–10 members from ``graph_clusters`` and any
+    # downstream ``community_total`` count would be off by that
+    # many.  Singletons by Louvain definition have no strong
+    # affinity to any sub-community, but they DO belong to the
+    # parent community — so we attach each one to whichever
+    # sized sub-community has the highest summed edge weight to it.
+    # Falls back to the first sized sub-community when the
+    # singleton has no internal edges at all (Louvain placed it
+    # alone for the modularity penalty, not the connectivity).
+    sub_member_index: dict[str, int] = {
+        member: idx
+        for idx, sub in enumerate(sized_sub_lists)
+        for member in sub
+    }
+    # Walk the induced sub-graph's incident edges instead of the full
+    # ``pair_weights`` dict so the cost is O(singletons × singleton_degree)
+    # rather than O(singletons × |pair_weights|).  ``sub_graph`` already
+    # holds only edges among parent-community members.
+    for singleton in singletons:
+        weight_per_sub: dict[int, float] = {}
+        for _src, neighbour, data in sub_graph.edges(singleton, data=True):
+            idx = sub_member_index.get(neighbour)
+            if idx is None:
+                continue
+            weight_per_sub[idx] = (
+                weight_per_sub.get(idx, 0.0) + data.get("weight", 1.0)
+            )
+        best_idx = (
+            max(weight_per_sub, key=weight_per_sub.get)
+            if weight_per_sub else 0
+        )
+        sized_sub_lists[best_idx].append(singleton)
+    # Sort once at the end — the loop above could append to the same
+    # list multiple times, and pre-fix it re-sorted on every singleton.
+    for sub in sized_sub_lists:
+        sub.sort()
+    return sized_sub_lists
 
 
 def _build_graph_seeds(

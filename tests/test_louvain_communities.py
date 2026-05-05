@@ -215,6 +215,67 @@ class TestDetectCommunities:
         if len(result) == 1:
             assert sorted(result[0]) == sorted(big)
 
+    def test_split_attaches_singletons_to_nearest_subcommunity(self):
+        """Pre-fix the splitter dropped any sub-Louvain singleton from
+        the output (``len(c) >= 2`` filter), so a >50-member parent
+        could lose a handful of members from ``graph_clusters`` and
+        downstream coverage / total counts would silently undercount.
+
+        New behaviour: each singleton attaches to whichever sized
+        sub-community has the most weighted edges to it.  The
+        sub-community count goes up by ≥1 over its members but every
+        original member appears somewhere in the output.
+        """
+        from ovp_pipeline.packs.research_tech.truth_projection import (
+            _split_if_too_big,
+        )
+
+        # Build a 60-node graph that Louvain will split into two
+        # tight sub-communities (a-half, b-half) plus a singleton ``s``
+        # that has weak ties to BOTH halves but is closer to the
+        # b-half.  Without singleton attach, ``s`` disappears from
+        # the output.
+        a_half = {f"a{i}" for i in range(28)}
+        b_half = {f"b{i}" for i in range(28)}
+        singleton = "s"
+        members = a_half | b_half | {singleton}
+        assert len(members) == 57  # > _SPLIT_THRESHOLD (50)
+
+        pair_weights: dict[tuple[str, str], float] = {}
+        # Strong intra-half edges so Louvain finds the two halves.
+        for halves in (a_half, b_half):
+            sorted_half = sorted(halves)
+            for i in range(len(sorted_half)):
+                for j in range(i + 1, len(sorted_half)):
+                    pair_weights[(sorted_half[i], sorted_half[j])] = 5.0
+        # Weak edges from ``s`` to both halves; the b-half edge is
+        # heavier so the singleton-attach must pick b-half.
+        pair_weights[("a0", singleton)] = 0.1
+        pair_weights[(singleton, "b0")] = 0.5
+        pair_weights[(singleton, "b1")] = 0.5
+
+        result = _split_if_too_big(members, pair_weights)
+
+        all_returned = {member for sub in result for member in sub}
+        assert singleton in all_returned, (
+            "singleton was dropped — pre-fix behaviour where "
+            "``len(c) >= 2`` filtered out sub-Louvain singletons"
+        )
+        assert all_returned == members, (
+            "every original member must appear in exactly one "
+            "sub-community"
+        )
+
+        # Singleton landed with the b-half (heavier weighted ties).
+        sub_with_singleton = next(sub for sub in result if singleton in sub)
+        b_overlap = len(set(sub_with_singleton) & b_half)
+        a_overlap = len(set(sub_with_singleton) & a_half)
+        assert b_overlap > a_overlap, (
+            "singleton should attach to the sub-community with "
+            "heavier weighted ties (b-half), got "
+            f"a_overlap={a_overlap} b_overlap={b_overlap}"
+        )
+
     def test_deterministic_with_seed(self):
         # Louvain is order-sensitive.  The fixed seed in the
         # production helper means the same edge set yields the same
