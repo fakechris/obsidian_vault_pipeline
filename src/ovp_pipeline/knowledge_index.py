@@ -162,7 +162,7 @@ from .embedding import (
     get_model_name,
 )
 TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug"),
+    "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug", "source_url"),
     "claims": ("pack", "claim_id", "object_id", "claim_kind", "claim_text", "confidence"),
     "claim_evidence": (
         "pack",
@@ -242,6 +242,24 @@ TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 # in the index pipeline.  Preserving it here would only get
 # overwritten by the rebuild call.
 INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
+    # BL-055: provenance audit history.  Pre-fix it lived in
+    # ``TRUTH_PROJECTION_TABLE_COLUMNS`` which excludes the current
+    # pack from preservation — so every rebuild wiped any
+    # ``stage='extract'``/``'promote'``/``'synthesize_*'`` rows for
+    # the current pack and only kept the fresh ``stage='ingest'``
+    # row this rebuild writes.  As an audit log, history needs to
+    # survive across rebuilds for ALL packs, including the current
+    # one — same treatment as ``community_crystals`` (BL-049).
+    "provenance": (
+        "pack",
+        "object_id",
+        "source_url",
+        "source_fingerprint",
+        "derived_via_stage",
+        "derived_at",
+        "parent_object_id",
+        "metadata_json",
+    ),
     "community_crystals": (
         "pack",
         "cluster_id",
@@ -270,6 +288,14 @@ INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
 
 def _truth_pack_name(pack_name: str | None = None) -> str:
     return str(pack_name or DEFAULT_WORKFLOW_PACK_NAME)
+
+
+def _source_fingerprint(source_url: str) -> str:
+    """BL-055: 12-char SHA-256 prefix of a source URL.  Same shape
+    the extractor writes so frontmatter and DB rows agree."""
+    if not source_url:
+        return ""
+    return hashlib.sha256(source_url.encode("utf-8")).hexdigest()[:12]
 
 
 def _utc_now_text() -> str:
@@ -969,6 +995,23 @@ def rebuild_knowledge_index(
         conn = None
         try:
             conn = _initialize_database(temp_db_path)
+            # BL-054: source_authority lives in its own module — make
+            # sure its schema lands and replay the JSONL audit log so
+            # ``credibility_norm`` has data to read.  Without this the
+            # table is wiped on every rebuild and crystal_scoring's
+            # credibility lookup silently returns 0 for every row.
+            from .source_authority import (
+                ensure_schema as _ensure_source_authority_schema,
+                replay_authority_log as _replay_source_authority_log,
+            )
+            _ensure_source_authority_schema(conn)
+            authority_log = layout.logs_dir / "source_authority.jsonl"
+            authority_rows = _replay_source_authority_log(conn, authority_log)
+            if authority_rows:
+                logger.debug(
+                    "source_authority replayed %d rows from %s",
+                    authority_rows, authority_log,
+                )
             _preserve_existing_truth_rows(layout.knowledge_db, conn, exclude_pack=truth_pack)
             page_rows = []
             timeline_rows = []
@@ -1047,10 +1090,50 @@ def rebuild_knowledge_index(
             )
             conn.executemany(
                 """
-                INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug, source_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [row.to_row() for row in truth_projection.objects],
+            )
+            # BL-055: provenance spine.  Write one ``stage='ingest'``
+            # row per object that has a source_url — but only when no
+            # such row already exists for this (pack, object_id,
+            # source_url) tuple.  Preservation in
+            # ``INDEPENDENT_CANONICAL_TABLE_COLUMNS`` carries every
+            # historical row across rebuilds (gemini PR #152 review
+            # fix); the dedup guard here keeps rebuild-noise from
+            # accumulating duplicate ingest rows for objects whose
+            # source URL hasn't changed.
+            now_iso = _utc_now_text()
+            conn.executemany(
+                """
+                INSERT INTO provenance
+                  (pack, object_id, source_url, source_fingerprint,
+                   derived_via_stage, derived_at, parent_object_id,
+                   metadata_json)
+                SELECT ?, ?, ?, ?, 'ingest', ?, NULL, '{}'
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM provenance
+                    WHERE pack = ?
+                      AND object_id = ?
+                      AND derived_via_stage = 'ingest'
+                      AND source_url = ?
+                 )
+                """,
+                [
+                    (
+                        row.pack,
+                        row.object_id,
+                        row.source_url,
+                        _source_fingerprint(row.source_url),
+                        now_iso,
+                        row.pack,
+                        row.object_id,
+                        row.source_url,
+                    )
+                    for row in truth_projection.objects
+                    if row.source_url
+                ],
             )
             conn.executemany(
                 """

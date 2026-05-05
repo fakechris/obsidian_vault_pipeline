@@ -30,6 +30,12 @@ CREATE TABLE objects (
   title TEXT NOT NULL,
   canonical_path TEXT NOT NULL,
   source_slug TEXT NOT NULL,
+  -- BL-054: URL of the source article that produced this object.
+  -- Populated from evergreen frontmatter ``source_url`` during
+  -- ``rebuild_knowledge_index``.  Empty for legacy rows that have
+  -- not yet been backfilled — those are scored as ``unknown source``
+  -- by the source-diversity signal, not as a unique source.
+  source_url TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pack, object_id)
 );
 
@@ -209,12 +215,40 @@ CREATE TABLE crystal_scores (
   contradiction_norm REAL NOT NULL DEFAULT 0,
   reuse_recency_norm REAL NOT NULL DEFAULT 0,
   evergreen_recency_norm REAL NOT NULL DEFAULT 0,
+  -- BL-054: unique-source coverage of the community.  Penalises
+  -- topics where many evergreens came from one source article.
+  source_diversity_norm REAL NOT NULL DEFAULT 0,
   computed_at TEXT NOT NULL,
   PRIMARY KEY (pack, crystal_kind, crystal_id)
 );
 
 CREATE INDEX idx_crystal_scores_pack_score
   ON crystal_scores(pack, score DESC);
+
+-- BL-055: provenance spine.  Every Canonical-State object that the
+-- system creates writes (or has populated for it) at least one row
+-- here.  Append-only on PK ``(pack, object_id, stage, derived_at)``.
+-- Read pattern for the hot path (scoring) stays denormalised on
+-- ``objects.source_url``; this table is the audit + multi-stage
+-- source of truth.  See docs/plans/2026-05-04-bl-055-provenance-spine.md.
+CREATE TABLE provenance (
+  pack TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  source_url TEXT NOT NULL DEFAULT '',
+  source_fingerprint TEXT NOT NULL DEFAULT '',
+  derived_via_stage TEXT NOT NULL,
+  derived_at TEXT NOT NULL,
+  parent_object_id TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (pack, object_id, derived_via_stage, derived_at)
+);
+
+CREATE INDEX idx_provenance_object
+  ON provenance(pack, object_id);
+CREATE INDEX idx_provenance_source
+  ON provenance(pack, source_url);
+CREATE INDEX idx_provenance_stage
+  ON provenance(pack, derived_via_stage);
 """
 
 CONTRADICTION_HEURISTIC_NOTE = (
@@ -292,8 +326,12 @@ class ObjectRow:
     title: str
     canonical_path: str
     source_slug: str
+    # BL-054: URL of the source article that produced this object.
+    # Populated from frontmatter ``source_url``; defaults to "" so
+    # legacy callers and pre-backfill rows still construct cleanly.
+    source_url: str = ""
 
-    def to_row(self) -> tuple[str, str, str, str, str, str]:
+    def to_row(self) -> tuple[str, str, str, str, str, str, str]:
         from .object_kinds import normalize_kind
 
         return (
@@ -303,6 +341,7 @@ class ObjectRow:
             self.title,
             self.canonical_path,
             self.source_slug,
+            self.source_url,
         )
 
 

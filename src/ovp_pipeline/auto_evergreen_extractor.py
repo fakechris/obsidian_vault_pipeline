@@ -72,6 +72,90 @@ VAULT_DIR = resolve_vault_dir()
 DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
 
 
+def _yaml_escape(value: str) -> str:
+    """Minimal YAML scalar escape for double-quoted strings."""
+    return str(value).replace('\\', '\\\\').replace('"', '\\"')
+
+
+def _read_source_provenance(source_file: Path) -> dict[str, str]:
+    """Pull source URL / title / authors / published_at / fingerprint
+    from a processed source article's frontmatter.  BL-054: keeps the
+    new evergreen's frontmatter populated so credibility + diversity
+    scoring stays honest.
+
+    Falls back to safe empty strings when frontmatter is missing or
+    malformed; downstream scoring treats empty source_url as
+    "unknown source", not as a unique source.
+    """
+    import hashlib
+
+    out = {
+        "source_url": "",
+        "source_title": "",
+        "source_authors_yaml": "[]",
+        "source_published_at": "",
+        "source_fingerprint": "",
+    }
+    try:
+        text = source_file.read_text(encoding="utf-8")
+    except OSError:
+        return out
+
+    if not text.startswith("---"):
+        return out
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return out
+
+    frontmatter_text = parts[1]
+    fm: dict[str, Any] = {}
+    for line in frontmatter_text.splitlines():
+        line = line.rstrip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, _, raw_value = line.partition(":")
+        key = key.strip()
+        raw_value = raw_value.strip()
+        # Strip wrapping quotes / list brackets — full YAML parse would
+        # be preferable but we want zero new dependencies in the hot
+        # extractor path.
+        if raw_value.startswith('"') and raw_value.endswith('"'):
+            raw_value = raw_value[1:-1]
+        elif raw_value.startswith("'") and raw_value.endswith("'"):
+            raw_value = raw_value[1:-1]
+        fm[key] = raw_value
+
+    # gemini PR #152 review fix: match the URL-field priority that
+    # ``backfill_provenance.py`` uses, so the extractor and the
+    # backfill agree on which frontmatter field counts as the source
+    # URL.  Sources of GitHub projects use ``github:``, Twitter uses
+    # ``twitter:``, arXiv papers use ``arxiv:``.
+    source_url = ""
+    for key in ("source", "source_url", "url", "github", "twitter", "arxiv"):
+        candidate = str(fm.get(key) or "").strip()
+        if candidate:
+            source_url = candidate
+            break
+    out["source_url"] = _yaml_escape(source_url)
+    out["source_title"] = _yaml_escape(str(fm.get("title") or ""))
+    out["source_published_at"] = _yaml_escape(str(fm.get("date") or ""))
+    author = str(fm.get("author") or "").strip()
+    if author:
+        out["source_authors_yaml"] = f'["{_yaml_escape(author)}"]'
+    if source_url:
+        # Stable fingerprint of the URL — collapses URL canonicalization
+        # quirks (trailing slash, query-param ordering) only minimally,
+        # but is deterministic and 12 chars cover ~10^14 sources before
+        # collision.  Full content hash is overkill for the dedup task
+        # the credibility loader cares about.
+        out["source_fingerprint"] = hashlib.sha256(
+            source_url.encode("utf-8")
+        ).hexdigest()[:12]
+    return out
+
+
 def load_env_file(vault_dir: Path) -> None:
     env_file = vault_dir / ".env"
     if not env_file.exists():
@@ -506,6 +590,13 @@ class EvergreenExtractor:
         normalized = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT
         entity_type = normalized if normalized in CORE_OBJECT_KINDS else KIND_CONCEPT
 
+        # BL-054: read provenance off the source article so the new
+        # evergreen's frontmatter carries it forward.  Future
+        # crystal_scoring (credibility + diversity) keys off these
+        # fields — leaving them empty silently breaks scoring for
+        # every evergreen this extractor produces.
+        source_provenance = _read_source_provenance(source_file)
+
         note = f"""---
 note_id: {note_id}
 title: "{title}"
@@ -514,6 +605,11 @@ entity_type: {entity_type}
 date: {datetime.now().strftime('%Y-%m-%d')}
 tags: [evergreen]
 aliases: ["{concept_name}"]
+source_url: "{source_provenance['source_url']}"
+source_title: "{source_provenance['source_title']}"
+source_authors: {source_provenance['source_authors_yaml']}
+source_published_at: "{source_provenance['source_published_at']}"
+source_fingerprint: "{source_provenance['source_fingerprint']}"
 ---
 
 # {title}

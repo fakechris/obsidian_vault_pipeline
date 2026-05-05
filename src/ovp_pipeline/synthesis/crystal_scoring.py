@@ -89,20 +89,30 @@ class ScoreSignals:
     contradiction_norm: float = 0.0
     reuse_recency_norm: float = 0.0
     evergreen_recency_norm: float = 0.0
+    # BL-054: unique-source coverage of the community.  ``min(1.0,
+    # unique_sources / TARGET)``.  Penalises one-article-dominated
+    # topics where 20 evergreens all came from a single deep-dive.
+    source_diversity_norm: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
 class ScoreWeights:
-    size: float = 0.25
-    credibility: float = 0.30
-    contradiction: float = 0.20
+    # BL-054: rebalanced.  ``credibility`` dropped from 0.30 to
+    # 0.20 because BL-054 also dedupes its sum by source URL — same
+    # pool of total signal, just less inflated.  ``source_diversity``
+    # is the new explicit signal at 0.20.
+    size: float = 0.20
+    credibility: float = 0.20
+    source_diversity: float = 0.20
+    contradiction: float = 0.15
     reuse_recency: float = 0.15
     evergreen_recency: float = 0.10
 
     def total(self) -> float:
         return (
-            self.size + self.credibility + self.contradiction
-            + self.reuse_recency + self.evergreen_recency
+            self.size + self.credibility + self.source_diversity
+            + self.contradiction + self.reuse_recency
+            + self.evergreen_recency
         )
 
 
@@ -128,6 +138,7 @@ def compute_score(signals: ScoreSignals, weights: ScoreWeights = DEFAULT_WEIGHTS
     return (
         weights.size * signals.size_norm
         + weights.credibility * signals.credibility_norm
+        + weights.source_diversity * signals.source_diversity_norm
         + weights.contradiction * signals.contradiction_norm
         + weights.reuse_recency * signals.reuse_recency_norm
         + weights.evergreen_recency * signals.evergreen_recency_norm
@@ -178,6 +189,37 @@ def _reuse_recency_signal(
     if max_observed <= 0:
         return 0.0
     return max(0.0, min(1.0, raw_count / max_observed))
+
+
+def _source_diversity_signal(
+    member_object_ids: list[str],
+    object_source_url: dict[str, str],
+) -> float:
+    """BL-054 v2: ``unique_sources / total_members`` (ratio).
+
+    Captures source concentration directly: a 20-member community
+    where all 20 evergreens trace back to one source article scores
+    0.05; a 20-member community with 20 unique sources scores 1.0.
+
+    Pre-fix this used ``min(1.0, unique / 3)`` (target-saturation)
+    which masked the very pattern the signal was meant to expose —
+    a 20-member community with 4 sources looked maximally diverse
+    despite 80% of evergreens coming from non-unique sources.
+
+    Empty source URLs are dropped — a backfill miss counts as
+    "unknown source", not as an extra unique source.  When the
+    community has zero attributable sources the signal is 0.
+    """
+    if not member_object_ids:
+        return 0.0
+    sources: set[str] = set()
+    for oid in member_object_ids:
+        url = object_source_url.get(oid)
+        if url:
+            sources.add(url)
+    if not sources:
+        return 0.0
+    return min(1.0, len(sources) / len(member_object_ids))
 
 
 def _evergreen_recency_signal(
@@ -279,29 +321,29 @@ def _load_source_credibility(
 
 def _load_object_metadata(
     conn: sqlite3.Connection, pack: str, object_ids: set[str],
-) -> dict[str, tuple[str, str]]:
-    """Single-query lookup for object_id → (source_slug, canonical_path).
+) -> dict[str, tuple[str, str, str]]:
+    """Single-query lookup for object_id → (source_slug, canonical_path, source_url).
 
-    Pre-fix the scoring rebuild ran two near-identical queries — one
-    for slug, one for path — over the same id set.  One round-trip
-    is enough; both columns come from the same row.  Chunked at
-    500 ids to stay below SQLite's parameter cap.
+    BL-054: ``source_url`` is the source-article URL (added column).
+    The credibility + diversity signals key off it.  Empty string for
+    legacy rows that have not been backfilled — those count as
+    "unknown source" in the diversity helper, not as a unique source.
     """
     if not object_ids:
         return {}
-    out: dict[str, tuple[str, str]] = {}
+    out: dict[str, tuple[str, str, str]] = {}
     chunk = 500
     ids = sorted(object_ids)
     for start in range(0, len(ids), chunk):
         batch = ids[start:start + chunk]
         placeholders = ",".join("?" * len(batch))
         cur = conn.execute(
-            f"SELECT object_id, source_slug, canonical_path FROM objects "
-            f"WHERE pack = ? AND object_id IN ({placeholders})",
+            f"SELECT object_id, source_slug, canonical_path, source_url "
+            f"FROM objects WHERE pack = ? AND object_id IN ({placeholders})",
             (pack, *batch),
         )
-        for object_id, slug, path in cur:
-            out[object_id] = (slug or "", path or "")
+        for object_id, slug, path, source_url in cur:
+            out[object_id] = (slug or "", path or "", source_url or "")
     return out
 
 
@@ -445,20 +487,30 @@ def rebuild_crystal_scores(
         oid: meta[0] for oid, meta in object_metadata.items()
     }
     object_paths = {oid: meta[1] for oid, meta in object_metadata.items()}
+    # BL-054: real source URL → key for credibility lookup + diversity
+    # signal.  Empty for legacy unbackfilled rows.
+    object_source_urls = {
+        oid: meta[2] for oid, meta in object_metadata.items()
+    }
     object_mtimes = _evergreen_mtimes(vault_dir, object_paths)
 
     # Pre-compute per-pack maxima for normalization.
     raw_credibility_sums: dict[tuple[str, str], float] = {}
     raw_contradiction_counts: dict[tuple[str, str], int] = {}
 
-    def _credibility_sum(slugs_or_ids: list[str]) -> float:
-        total = 0.0
-        for oid in slugs_or_ids:
-            slug = object_source_slugs.get(oid, "")
-            if not slug:
-                continue
-            total += source_credibility.get(slug, 0.0)
-        return total
+    def _credibility_sum(member_object_ids: list[str]) -> float:
+        # BL-054: dedupe by source URL before summing — the same
+        # source contributing 20 evergreens to one community used to
+        # vote 20 times for its own credibility.  Now it votes once.
+        # Empty source_url is dropped (legacy unbackfilled rows).
+        sources: set[str] = set()
+        for oid in member_object_ids:
+            url = object_source_urls.get(oid, "")
+            if url:
+                sources.add(url)
+        return sum(
+            source_credibility.get(url, 0.0) for url in sources
+        )
 
     # Inverted index: object_id → set of contradiction indices it
     # appears in.  Pre-fix ``_contradiction_count`` was
@@ -535,6 +587,12 @@ def rebuild_crystal_scores(
             evergreen_recency_norm=_evergreen_recency_signal(
                 most_recent, now_utc=now_ts,
             ),
+            # BL-054: diversity over the FULL community (not just the
+            # sampled slugs) so the signal reflects the topic, not the
+            # sampling top-K.
+            source_diversity_norm=_source_diversity_signal(
+                entry["members"], object_source_urls,
+            ),
         )
         out.append(CrystalScore(
             pack=pack, crystal_kind="community", crystal_id=cid,
@@ -568,6 +626,9 @@ def rebuild_crystal_scores(
             evergreen_recency_norm=_evergreen_recency_signal(
                 most_recent, now_utc=now_ts,
             ),
+            source_diversity_norm=_source_diversity_signal(
+                sources, object_source_urls,
+            ),
         )
         out.append(CrystalScore(
             pack=pack, crystal_kind="contradiction", crystal_id=cid,
@@ -584,8 +645,9 @@ def rebuild_crystal_scores(
                 (pack, crystal_kind, crystal_id, score,
                  size_norm, credibility_norm, contradiction_norm,
                  reuse_recency_norm, evergreen_recency_norm,
+                 source_diversity_norm,
                  computed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -594,6 +656,7 @@ def rebuild_crystal_scores(
                     s.signals.contradiction_norm,
                     s.signals.reuse_recency_norm,
                     s.signals.evergreen_recency_norm,
+                    s.signals.source_diversity_norm,
                     s.computed_at,
                 )
                 for s in out

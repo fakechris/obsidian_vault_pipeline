@@ -199,6 +199,7 @@ SQLITE_ALLOWED_MODULES = {
     "promotion_policy",
     "relation_promotion",
     "reuse_emitter",
+    "commands/backfill_provenance",
     "commands/list_crystals",
     "commands/rerender_crystals",
     "commands/rescore_crystals",

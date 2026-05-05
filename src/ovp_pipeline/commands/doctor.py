@@ -143,7 +143,7 @@ def _vault_payload(vault_dir: Path | None) -> dict[str, object] | None:
     if vault_dir is None:
         return None
     layout = VaultLayout.from_vault(vault_dir)
-    return {
+    payload: dict[str, object] = {
         "vault_dir": str(layout.vault_dir),
         "raw_count": _count_markdown(layout.raw_dir),
         "clippings_count": _count_markdown(layout.clippings_dir),
@@ -153,6 +153,91 @@ def _vault_payload(vault_dir: Path | None) -> dict[str, object] | None:
         "evergreen_count": _count_markdown(layout.evergreen_dir),
         "knowledge_db_exists": layout.knowledge_db.exists(),
     }
+    payload["provenance"] = _provenance_health(layout.knowledge_db)
+    return payload
+
+
+def _provenance_health(db_path: Path) -> dict[str, object]:
+    """BL-055: snapshot the provenance spine.
+
+    * ``objects_total`` — every Canonical-State object in DB
+    * ``objects_with_provenance`` — has at least one provenance row
+    * ``objects_with_source_url`` — provenance row carries non-empty source_url
+    * ``orphan_objects`` — Canonical State objects with no provenance
+      and no parent reference (the spine's red flag)
+    * ``distinct_sources`` — vault-level source diversity
+    * ``stage_breakdown`` — count per ``derived_via_stage``
+    """
+    out: dict[str, object] = {
+        "schema_present": False,
+        "objects_total": 0,
+        "objects_with_provenance": 0,
+        "objects_with_source_url": 0,
+        "orphan_objects": 0,
+        "distinct_sources": 0,
+        "stage_breakdown": {},
+    }
+    if not db_path.exists():
+        return out
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(db_path)
+    except sqlite3.DatabaseError:
+        return out
+    try:
+        try:
+            (n_total,) = conn.execute("SELECT COUNT(*) FROM objects").fetchone()
+        except sqlite3.OperationalError:
+            return out
+        try:
+            # Coderabbit PR #152 review fix: count by ``(pack,
+            # object_id)`` so multi-pack vaults (e.g. research-tech +
+            # default-knowledge) don't collapse identically-named
+            # objects across packs.
+            (n_prov,) = conn.execute(
+                "SELECT COUNT(*) FROM ("
+                "  SELECT DISTINCT pack, object_id FROM provenance"
+                ")"
+            ).fetchone()
+            (n_with_url,) = conn.execute(
+                "SELECT COUNT(*) FROM ("
+                "  SELECT DISTINCT pack, object_id FROM provenance"
+                "  WHERE source_url != ''"
+                ")"
+            ).fetchone()
+            (n_distinct,) = conn.execute(
+                "SELECT COUNT(DISTINCT source_url) FROM provenance "
+                "WHERE source_url != ''"
+            ).fetchone()
+            (n_orphan,) = conn.execute(
+                "SELECT COUNT(*) FROM objects o "
+                "WHERE NOT EXISTS ("
+                "  SELECT 1 FROM provenance p "
+                "  WHERE p.pack=o.pack AND p.object_id=o.object_id"
+                ")"
+            ).fetchone()
+            stage_rows = conn.execute(
+                "SELECT derived_via_stage, COUNT(*) FROM provenance "
+                "GROUP BY derived_via_stage ORDER BY 2 DESC"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return out
+    finally:
+        conn.close()
+
+    out.update({
+        "schema_present": True,
+        "objects_total": int(n_total or 0),
+        "objects_with_provenance": int(n_prov or 0),
+        "objects_with_source_url": int(n_with_url or 0),
+        "orphan_objects": int(n_orphan or 0),
+        "distinct_sources": int(n_distinct or 0),
+        "stage_breakdown": {
+            str(stage): int(count) for stage, count in stage_rows
+        },
+    })
+    return out
 
 
 def _stage_handler_payload(spec: object) -> dict[str, object]:

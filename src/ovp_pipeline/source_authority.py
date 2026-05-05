@@ -218,6 +218,96 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA_SQL)
 
 
+def replay_authority_log(
+    conn: sqlite3.Connection, jsonl_path: Path,
+) -> int:
+    """Repopulate the ``source_authority`` table from the append-only
+    audit log.  BL-054: the table is wiped on every
+    ``rebuild_knowledge_index``; the JSONL is the durable source of
+    truth, so we replay it on every rebuild instead of relying on
+    ``preserve_existing_truth_rows``.  Returns the number of rows
+    written.
+
+    Each JSONL line is one ``AuthorityScore``-shaped record:
+
+    .. code-block:: json
+
+        {
+          "source_id": "https://example.com/article",
+          "authority": 0.55,
+          "signals": [...],
+          "scored_at": "2026-04-29T...",
+          "scorer_version": "v1"
+        }
+
+    The latest record per ``source_id`` wins on conflict (the audit log
+    is append-only, so iterating top-down and using ``ON CONFLICT DO
+    UPDATE`` collapses to the most recent score).
+    """
+    if not jsonl_path.exists():
+        return 0
+    written = 0
+    try:
+        with jsonl_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "skipping malformed source_authority audit line",
+                    )
+                    continue
+                source_id = record.get("source_id")
+                if not source_id:
+                    continue
+                authority = record.get("authority")
+                if authority is None:
+                    continue
+                # PR #152 review fix: a corrupt JSONL line with a
+                # non-numeric authority value used to abort the
+                # whole rebuild here.  Skip the bad row and keep going.
+                try:
+                    authority_value = float(authority)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "skipping source_authority audit record with "
+                        "non-numeric authority for %s: %r",
+                        source_id, authority,
+                    )
+                    continue
+                conn.execute(
+                    "INSERT INTO source_authority(source_id, authority, "
+                    "signals_json, scored_at, scorer_version) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(source_id) DO UPDATE SET "
+                    "authority=excluded.authority, "
+                    "signals_json=excluded.signals_json, "
+                    "scored_at=excluded.scored_at, "
+                    "scorer_version=excluded.scorer_version",
+                    (
+                        str(source_id),
+                        authority_value,
+                        json.dumps(
+                            record.get("signals") or [],
+                            ensure_ascii=False,
+                        ),
+                        str(record.get("scored_at") or ""),
+                        str(record.get("scorer_version") or ""),
+                    ),
+                )
+                written += 1
+    except OSError as exc:
+        logger.warning(
+            "could not read source_authority log %s: %s",
+            jsonl_path, exc,
+        )
+        return 0
+    return written
+
+
 def upsert_score(
     conn: sqlite3.Connection,
     score: AuthorityScore,
