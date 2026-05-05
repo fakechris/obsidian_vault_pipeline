@@ -116,6 +116,18 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
 )
 
 
+def _parse_optional_int(query: dict[str, list[str]], key: str) -> int | None:
+    """Read an optional integer query param.  Returns ``None`` for an
+    absent / empty / non-numeric value so the downstream payload
+    builder applies its own default."""
+    raw = query.get(key, [""])[0]
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
 
 def create_server(
     vault_dir: Path | str, *, host: str = "127.0.0.1", port: int = 8787
@@ -458,13 +470,11 @@ def create_server(
                         pack_name=pack_name, route_path="/atlas/curated", api=True
                     ):
                         return
-                    try:
-                        top_n = int(query.get("top_n", [""])[0]) if query.get("top_n", [""])[0] else None
-                    except ValueError:
-                        top_n = None
                     self._write_json(
                         build_curated_atlas_payload(
-                            resolved_vault, pack_name=pack_name, top_n=top_n,
+                            resolved_vault,
+                            pack_name=pack_name,
+                            top_n=_parse_optional_int(query, "top_n"),
                         )
                     )
                     return
@@ -474,12 +484,10 @@ def create_server(
                         pack_name=pack_name, route_path="/atlas/curated", api=False
                     ):
                         return
-                    try:
-                        top_n = int(query.get("top_n", [""])[0]) if query.get("top_n", [""])[0] else None
-                    except ValueError:
-                        top_n = None
                     payload = build_curated_atlas_payload(
-                        resolved_vault, pack_name=pack_name, top_n=top_n,
+                        resolved_vault,
+                        pack_name=pack_name,
+                        top_n=_parse_optional_int(query, "top_n"),
                     )
                     self._write_html(_render_curated_atlas_page(payload))
                     return

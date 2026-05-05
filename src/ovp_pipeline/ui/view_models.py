@@ -4262,10 +4262,7 @@ def build_curated_atlas_payload(
     requested_pack = pack_name or ""
     pack = pack_name or PRIMARY_PACK_NAME
     requested_top_n = top_n if top_n is not None else CURATED_ATLAS_DEFAULT_TOP_N
-    if requested_top_n < 1:
-        requested_top_n = 1
-    if requested_top_n > CURATED_ATLAS_MAX_TOP_N:
-        requested_top_n = CURATED_ATLAS_MAX_TOP_N
+    requested_top_n = max(1, min(requested_top_n, CURATED_ATLAS_MAX_TOP_N))
 
     db_path = _db_path(vault_dir)
     with sqlite3.connect(db_path) as conn:

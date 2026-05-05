@@ -2545,8 +2545,8 @@ def _render_atlas_page(payload: dict) -> str:
 def _render_curated_atlas_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     pack = payload.get("pack", "")
-    top_n = int(payload.get("top_n", 0) or 0)
-    total_chains = int(payload.get("total_chains", 0) or 0)
+    top_n = int(payload.get("top_n") or 0)
+    total_chains = int(payload.get("total_chains") or 0)
     entries = payload.get("entries") or []
     generated_at = payload.get("generated_at", "")
     mechanical_href = _shell_href("/atlas", requested_pack)
