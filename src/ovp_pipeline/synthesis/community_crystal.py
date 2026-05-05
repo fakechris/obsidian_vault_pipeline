@@ -522,6 +522,17 @@ def synthesize_community_crystals(
                 ),
                 live_path=target,
                 archive_subdir=archive_subdir,
+                # BL-056: stage emit.  The provenance row carries
+                # the LLM model + prompt version + sample size for
+                # this synthesis run so audit can answer "which
+                # MiniMax model produced this crystal".
+                provenance_stage="synthesize_community_crystal",
+                provenance_metadata={
+                    "llm_model": crystal.llm_model,
+                    "prompt_version": crystal.prompt_version,
+                    "sample_size": len(crystal.source_evergreen_slugs),
+                    "community_total": community_total,
+                },
             )
         return out
     finally:
