@@ -19,7 +19,10 @@ from ovp_pipeline.auto_article_processor import (
     TransactionManager as ArticleTxn,
 )
 from ovp_pipeline.auto_evergreen_extractor import LiteLLMClient as EvergreenLiteLLMClient
-from ovp_pipeline.auto_github_processor import LiteLLMClient as GithubLiteLLMClient
+# BL-066 (2026-05-05): auto_github_processor no longer calls any LLM —
+# github intake is now a deterministic DeepWiki/GitIngest/README chain.
+# parse_github_url moved to github_enrichment but is re-exported.
+from ovp_pipeline.github_enrichment import EnrichedSource
 from ovp_pipeline.auto_github_processor import parse_github_url
 from ovp_pipeline.auto_paper_processor import LiteLLMClient as PaperLiteLLMClient, process_single_paper
 from ovp_pipeline.lint_checker import KnowledgeLinter
@@ -633,11 +636,10 @@ def test_processors_default_to_auto_vault_model_env(monkeypatch):
 
     article_client = ArticleLiteLLMClient()
     paper_client = PaperLiteLLMClient()
-    github_client = GithubLiteLLMClient()
+    # BL-066: github processor no longer instantiates an LLM client.
 
     assert article_client.model == "anthropic/MiniMax-M2.7-highspeed"
     assert paper_client.model == "anthropic/MiniMax-M2.7-highspeed"
-    assert github_client.model == "anthropic/MiniMax-M2.7-highspeed"
 
 
 def test_article_processor_defaults_api_base_from_shared_resolver(monkeypatch):
@@ -659,15 +661,19 @@ def test_processors_fall_back_to_minimax_api_key_env(monkeypatch):
     monkeypatch.setenv("AUTO_VAULT_API_BASE", "https://api.minimaxi.com/anthropic")
 
     paper_client = PaperLiteLLMClient()
-    github_client = GithubLiteLLMClient()
     article_client = ArticleLiteLLMClient()
+    # BL-066: github processor no longer instantiates an LLM client.
 
     assert paper_client._api_key == "minimax-key"
-    assert github_client._api_key == "minimax-key"
     assert article_client._api_key == "minimax-key"
 
 
-def test_github_cli_does_not_override_auto_vault_model_when_flag_is_omitted(temp_vault, monkeypatch):
+def test_github_main_runs_enrichment_on_process_single(temp_vault, monkeypatch):
+    """BL-066 replaces the old --model / LiteLLMClient path with a
+    deterministic enrichment chain.  This test pins the new shape:
+    main() reads the pinboard stub, calls enrich_github_source,
+    writes to 50-Inbox/03-Processed, and archives the stub.
+    """
     pinboard_file = temp_vault / "50-Inbox" / "02-Pinboard" / "2026-04-07_example.md"
     pinboard_file.parent.mkdir(parents=True, exist_ok=True)
     pinboard_file.write_text(
@@ -681,23 +687,19 @@ tags: [tool]
         encoding="utf-8",
     )
 
-    captured: dict[str, object] = {}
+    enrich_calls: list[tuple[str, str]] = []
 
-    class StubLLM:
-        def __init__(self, *, model=None, api_type="anthropic", api_key=None, api_base=None):
-            captured["model"] = model
-            self.model = "stub-model"
-            self.total_calls = 0
+    def fake_enrich(owner: str, repo: str) -> EnrichedSource:
+        enrich_calls.append((owner, repo))
+        return EnrichedSource(
+            owner=owner, repo=repo, tier="readme",
+            body="# stub README body for test\n",
+            metadata={"tier": "readme", "github_stars": 0},
+        )
 
-    monkeypatch.setattr(github_module, "LiteLLMClient", StubLLM)
+    monkeypatch.setattr(github_module, "enrich_github_source", fake_enrich)
     monkeypatch.setattr(
-        github_module,
-        "process_single_repo",
-        lambda **kwargs: {"status": "completed", "tokens_used": 0},
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
+        sys, "argv",
         [
             "auto_github_processor.py",
             "--process-single",
@@ -708,9 +710,21 @@ tags: [tool]
     )
 
     assert github_module.main() == 0
-    assert captured["model"] is None
+    # Enrichment was invoked once for the right repo
+    assert enrich_calls == [("example", "repo")]
+    # Pinboard stub was archived (lifecycle handler still runs)
     assert not pinboard_file.exists()
     assert len(list((temp_vault / "70-Archive" / "Pinboard").glob("*/2026-04-07_example.md"))) == 1
+    # Output landed in 03-Processed, not 20-Areas/Tools/Topics
+    processed_files = list(
+        (temp_vault / "50-Inbox" / "03-Processed").rglob("2026-04-07_example_repo.md")
+    )
+    assert len(processed_files) == 1
+    body = processed_files[0].read_text(encoding="utf-8")
+    assert "source_type: github-project" in body
+    assert "source_tier: readme" in body
+    # No deep-dive file was created
+    assert not list((temp_vault / "20-Areas").rglob("*example*_深度解读.md"))
 
 
 def test_paper_cli_does_not_override_auto_vault_model_when_flag_is_omitted(temp_vault, monkeypatch):
@@ -783,7 +797,7 @@ def test_article_cli_summary_handles_results_without_queued_total(temp_vault, mo
 @pytest.mark.parametrize(("client_class", "patch_mode"), [
     (ArticleLiteLLMClient, "article"),
     (PaperLiteLLMClient, "module"),
-    (GithubLiteLLMClient, "module"),
+    # BL-066: github processor has no LiteLLMClient; covered by other tests.
 ])
 def test_litellm_clients_retry_transient_failures(monkeypatch, client_class, patch_mode):
     monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
@@ -828,7 +842,7 @@ def test_litellm_clients_retry_transient_failures(monkeypatch, client_class, pat
 @pytest.mark.parametrize(("client_class", "patch_mode"), [
     (ArticleLiteLLMClient, "article"),
     (PaperLiteLLMClient, "module"),
-    (GithubLiteLLMClient, "module"),
+    # BL-066: github processor has no LiteLLMClient; covered by other tests.
 ])
 def test_litellm_clients_pass_explicit_completion_timeout(monkeypatch, client_class, patch_mode):
     monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")

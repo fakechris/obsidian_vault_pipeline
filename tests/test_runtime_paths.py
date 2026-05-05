@@ -178,7 +178,10 @@ def test_specialized_processors_derive_default_outputs_from_vault(tmp_path):
     paper_dir = paper_output_dir(vault)
 
     assert github_dir.is_absolute()
-    assert github_dir.parts[-3:-1] == ("Tools", "Topics")
+    # BL-066: github intake no longer produces deep-dives; output now
+    # lands in 50-Inbox/03-Processed/<YYYY-MM>/ alongside other
+    # processed sources.  Was ``20-Areas/Tools/Topics/<YYYY-MM>/``.
+    assert github_dir.parts[-3:-1] == ("50-Inbox", "03-Processed")
     assert paper_dir == (vault / "20-Areas" / "AI-Research" / "Papers").resolve()
 
 
