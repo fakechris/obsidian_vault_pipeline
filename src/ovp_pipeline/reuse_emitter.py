@@ -319,12 +319,14 @@ def emit_crystal_reuse_events(
     production regardless of actual user activity.
 
     ``crystals`` is an iterable of ``(crystal_kind, crystal_id)``
-    tuples where ``crystal_kind`` is one of the
-    ``_CRYSTAL_REUSE_KINDS`` values
-    (``community_crystal`` / ``contradiction_crystal``).  We
-    write the event directly without any objects-table resolution
-    so this function works even before any of the
-    ``crystal_scoring`` plumbing has run.
+    tuples where ``crystal_kind`` is one of the values in the
+    function-local ``valid_kinds`` set (``community_crystal`` /
+    ``contradiction_crystal``).  These match the ``object_kind``
+    values ``crystal_scoring._reuse_recency_signal`` filters on
+    (see ``crystal_scoring._CRYSTAL_REUSE_KINDS``).  We write the
+    event directly without any objects-table resolution so this
+    function works even before any of the ``crystal_scoring``
+    plumbing has run.
 
     ``evidence_present`` and ``provenance_clean`` are pinned to
     1/1 — every crystal currently in the table is by definition

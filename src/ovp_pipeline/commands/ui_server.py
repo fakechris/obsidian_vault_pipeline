@@ -155,7 +155,7 @@ def _crystal_kind_and_id_from_note_path(relative_path: str) -> tuple[str, str] |
 
 
 def _maybe_emit_crystal_note_reuse(
-    vault_dir, relative_path: str, pack_name: str | None,
+    vault_dir: Path | str, relative_path: str, pack_name: str | None,
 ) -> None:
     """Best-effort: when a Reader ``/note?path=`` request resolves a
     synthesized-crystal markdown, write a ``reuse_events`` row so
