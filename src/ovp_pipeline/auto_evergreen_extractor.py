@@ -42,6 +42,26 @@ try:
 except ImportError:
     from promotion_backlinks import upsert_promotions_in_file  # type: ignore
 
+# Hoisted to module-scope (gemini PR #157 review): the v1 code imported
+# these symbols inline inside ``create_evergreen_note`` /
+# ``_unit_to_concept`` / ``process_file`` to break a circular-import
+# concern that no longer exists.  Top-level imports keep the
+# function bodies readable + match Python convention.
+try:
+    from .object_kinds import (
+        CORE_OBJECT_KINDS,
+        KIND_CONCEPT,
+        KIND_METHOD,
+        normalize_kind,
+    )
+except ImportError:
+    from object_kinds import (  # type: ignore
+        CORE_OBJECT_KINDS,
+        KIND_CONCEPT,
+        KIND_METHOD,
+        normalize_kind,
+    )
+
 try:
     from .llm_defaults import (
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
@@ -346,6 +366,29 @@ class EvergreenExtractor:
     _ENTITY_PRIME_TOP_N = 100
     _ENTITY_PRIME_ALIAS_CAP_PER_CANONICAL = 4
 
+    # BL-058 v2 prompt sizing.  These were inline magic numbers in the
+    # initial commit; gemini PR #157 review surfaced them as named
+    # constants so both the prompt-design discussion and any future
+    # tuning live in one place.
+    #
+    # ``_USER_PROMPT_BODY_CHARS``: how much of the source we hand to
+    # the LLM as the extraction subject.  6000 chars is enough for a
+    # typical tweet/blog/paper section to be visible in full;
+    # PR-B (BL-068) introduces chunk-and-aggregate for ≥6kb articles
+    # and will retire this single-window approach.
+    #
+    # ``_MAX_OUTPUT_TOKENS``: cap on the LLM response length.  v2 asks
+    # for 0-8 units at ~150 tokens each (JSON + content); 8000 leaves
+    # generous headroom and matches what we set in v1.
+    #
+    # ``_PARSE_ERROR_LOG_SNIPPET_CHARS``: how much of a malformed LLM
+    # response we keep in the audit log.  500 chars is enough to see
+    # the opening frame + diagnose schema drift without bloating
+    # pipeline.jsonl on a hot loop of failures.
+    _USER_PROMPT_BODY_CHARS = 6000
+    _MAX_OUTPUT_TOKENS = 8000
+    _PARSE_ERROR_LOG_SNIPPET_CHARS = 500
+
     def __init__(
         self,
         llm_client: LiteLLMClient,
@@ -553,16 +596,18 @@ class EvergreenExtractor:
         entity_prime_block = self._load_entity_prime_block()
 
         # BL-058 v2 prompt asks for 0-8 units (was "5-30+, more is better"),
-        # so 6000 chars and 8000 max_tokens still leave generous headroom.
-        # We pass the source body through so the LLM has somewhere to grep
-        # source_anchor strings out of.
+        # so the body window + token cap defined above (see
+        # ``_USER_PROMPT_BODY_CHARS`` / ``_MAX_OUTPUT_TOKENS``) leave
+        # generous headroom.  We pass the source body through so the
+        # LLM has somewhere to grep source_anchor strings out of.
+        body_chars = self._USER_PROMPT_BODY_CHARS
         user_prompt = f"""请从以下源文里抽取 CandidateUnit。
 
 文件: {file_path}
 
-内容(前 6000 字符):
+内容(前 {body_chars} 字符):
 ```
-{content[:6000]}
+{content[:body_chars]}
 ```
 {related_block}
 {entity_prime_block}
@@ -574,7 +619,7 @@ class EvergreenExtractor:
         result_text = self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
-            max_tokens=8000,
+            max_tokens=self._MAX_OUTPUT_TOKENS,
         )
 
         return self._parse_v2_response(result_text, file_path)
@@ -600,24 +645,47 @@ class EvergreenExtractor:
 
         Failure modes we handle:
           - markdown-fenced JSON (```json ... ```)
+          - LLM returning conversational filler before/after the JSON
+            (gemini PR #157 review): we look for the first balanced
+            ``{...}`` block instead of trusting the response to start
+            and end exactly at the JSON.
           - LLM returning a bare list (legacy v1 shape) — log a warning
             and treat as v2 with empty wrapper
           - JSON parse error — log raw text snippet and return []
           - dict with no ``units`` key — log and return []
         """
-        # Strip optional markdown fences
+        snippet_chars = self._PARSE_ERROR_LOG_SNIPPET_CHARS
+
+        # Strip markdown fences first (the common case where the LLM
+        # follows our "no markdown wrapping" instruction reliably).
         stripped = result_text.strip()
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
         stripped = re.sub(r"```\s*$", "", stripped)
         stripped = stripped.strip()
 
+        # Locate the first ``{`` … last ``}`` span as a fallback for
+        # responses that include conversational filler ("好的,这是 JSON:
+        # {...}").  ``re.DOTALL`` so the body can contain newlines.
+        # We don't try to count braces — if the LLM emits multiple
+        # top-level objects we accept the outer match (json.loads will
+        # then reject malformed concatenations).
+        json_match = re.search(r"\{.*\}", stripped, re.DOTALL)
+        if json_match is None:
+            self.logger.log("absorb_v2_parse_error", {
+                "source": str(file_path),
+                "error": "no JSON object found in response",
+                "raw_snippet": result_text[:snippet_chars],
+            })
+            return []
+        candidate = json_match.group()
+
         try:
-            parsed = json.loads(stripped)
+            parsed = json.loads(candidate)
         except json.JSONDecodeError as exc:
             self.logger.log("absorb_v2_parse_error", {
                 "source": str(file_path),
                 "error": str(exc),
-                "raw_snippet": result_text[:500],
+                "raw_snippet": result_text[:snippet_chars],
             })
             return []
 
@@ -699,7 +767,8 @@ class EvergreenExtractor:
         # ``method`` and ``procedure`` both land on KIND_METHOD; everything
         # else collapses to KIND_CONCEPT for now.  Future taxonomy expansion
         # (BL-058b) can give each unit_type its own entity_type.
-        from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, KIND_METHOD
+        # ``CORE_OBJECT_KINDS`` / ``KIND_CONCEPT`` / ``KIND_METHOD`` are
+        # imported at module top.
         if unit_type in {"method", "procedure"}:
             entity_type = KIND_METHOD
         else:
@@ -761,8 +830,8 @@ class EvergreenExtractor:
           - specifics: list of preserved-detail categories
           - absorbed_at: ISO-8601 UTC timestamp of this extraction
         """
-        from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
-
+        # ``CORE_OBJECT_KINDS`` / ``KIND_CONCEPT`` / ``normalize_kind``
+        # imported at module top (gemini PR #157 review).
         concept_name = concept.get("concept_name", "Untitled")
         note_id = canonicalize_note_id(concept_name)
         title = concept.get("title", concept_name.replace("-", " "))
@@ -783,7 +852,15 @@ class EvergreenExtractor:
         entity_type = normalized if normalized in CORE_OBJECT_KINDS else KIND_CONCEPT
 
         source_provenance = _read_source_provenance(source_file)
-        absorbed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Single ``now`` for both ``absorbed_at`` and ``date`` so they
+        # always agree.  gemini PR #157 review pointed out that the
+        # earlier ``datetime.now()`` for ``date`` was naive (local time)
+        # while ``absorbed_at`` was UTC — meaning a late-evening absorb
+        # could write a ``date`` one day ahead of ``absorbed_at``.
+        # UTC for both is the consistent fix.
+        now_utc = datetime.now(timezone.utc)
+        absorbed_at = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        date_iso = now_utc.strftime("%Y-%m-%d")
 
         # Build optional sections.  Empty arrays / strings → section is
         # omitted entirely (no empty headings, no orphan dashes).
@@ -818,7 +895,7 @@ unit_type: {unit_type}
 epistemic_role: {epistemic_role}
 extraction_prompt_version: v2
 absorbed_at: "{absorbed_at}"
-date: {datetime.now().strftime('%Y-%m-%d')}
+date: {date_iso}
 tags: [evergreen]
 aliases: ["{concept_name}"]
 source_url: "{source_provenance['source_url']}"
@@ -968,9 +1045,11 @@ class AutoEvergreenExtractor:
                 # 添加到candidate队列（而不是直接创建active Evergreen）
                 if registry:
                     try:
-                        from .identity import canonicalize_note_id
-                        from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
-
+                        # ``canonicalize_note_id`` and the object_kinds
+                        # symbols are imported at module top (PR #157
+                        # review).  Local re-imports were a leftover
+                        # from a circular-import workaround that no
+                        # longer applies.
                         canonical_slug = canonicalize_note_id(concept_name)
                         raw_kind = concept.get("entity_type", KIND_CONCEPT)
                         resolved_kind = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT

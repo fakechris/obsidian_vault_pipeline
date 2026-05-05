@@ -117,7 +117,35 @@ class TestV2ResponseParsing:
 
     def test_invalid_json_returns_empty(self, tmp_path):
         extractor = _make_extractor(tmp_path)
-        concepts = extractor._parse_v2_response("not valid json {", Path("/fake/x.md"))
+        concepts = extractor._parse_v2_response("not valid json", Path("/fake/x.md"))
+        assert concepts == []
+
+    def test_tolerates_conversational_filler_around_json(self, tmp_path):
+        """gemini PR #157 review fix: even though we instruct the LLM
+        not to wrap output in markdown, models occasionally emit
+        ``好的,这是 JSON 输出: {...}`` or ``Here is the result:\\n{...}``.
+        The parser must locate the JSON object inside the response
+        rather than fail on the surrounding prose."""
+        extractor = _make_extractor(tmp_path)
+        wrapped = (
+            "好的,这是按照你要求的 JSON:\n"
+            + json.dumps({
+                "units": [
+                    {"slug": "ok", "title": "Ok claim", "unit_type": "fact"}
+                ],
+                "skip_reason": "",
+            })
+            + "\n\n希望对你有帮助!"
+        )
+        concepts = extractor._parse_v2_response(wrapped, Path("/fake/x.md"))
+        assert len(concepts) == 1
+        assert concepts[0]["concept_name"] == "ok"
+
+    def test_no_json_object_in_response_returns_empty(self, tmp_path):
+        """When the LLM returns prose with no JSON at all, parser
+        should log + return [] (not crash)."""
+        extractor = _make_extractor(tmp_path)
+        concepts = extractor._parse_v2_response("Just a sentence with no json.", Path("/fake/x.md"))
         assert concepts == []
 
     def test_unit_missing_title_and_slug_is_dropped(self, tmp_path):
