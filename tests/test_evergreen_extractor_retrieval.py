@@ -166,69 +166,7 @@ def test_extract_concepts_omits_block_when_vault_dir_none(temp_vault, tmp_path):
     assert "已有概念目录" not in fake_llm.calls[0]["user_prompt"]
 
 
-def test_process_file_logs_evergreen_low_link_below_threshold(temp_vault, tmp_path):
-    """When the LLM ignores the ≥3 requirement, the audit log must record it
-    so the link-density watchdog can spot regressions."""
-    log_path = temp_vault / "60-Logs" / "pipeline.jsonl"
-    logger = PipelineLogger(log_path)
-    auto = AutoEvergreenExtractor(temp_vault, logger)
-
-    # Inject our fake LLM directly — bypass init_llm so we don't need litellm.
-    auto.extractor = EvergreenExtractor(
-        _FakeLLM(
-            [
-                {
-                    "concept_name": "underlinked-concept",
-                    "title": "Underlinked Concept",
-                    "one_sentence_def": "测试用概念。",
-                    "explanation": "测试。",
-                    "importance": "测试。",
-                    "related_concepts": ["only-one"],
-                }
-            ]
-        ),
-        logger,
-        vault_dir=temp_vault,
-    )
-
-    fake_path = tmp_path / "fake_deep_dive.md"
-    fake_path.write_text("body content", encoding="utf-8")
-    auto.process_file(fake_path, dry_run=True)
-
-    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
-    low_link_rows = [r for r in rows if r.get("event_type") == "evergreen_low_link"]
-    assert len(low_link_rows) == 1
-    assert low_link_rows[0]["concept"] == "underlinked-concept"
-    assert low_link_rows[0]["related_count"] == 1
-
-
-def test_process_file_does_not_log_when_threshold_met(temp_vault, tmp_path):
-    log_path = temp_vault / "60-Logs" / "pipeline.jsonl"
-    logger = PipelineLogger(log_path)
-    auto = AutoEvergreenExtractor(temp_vault, logger)
-    auto.extractor = EvergreenExtractor(
-        _FakeLLM(
-            [
-                {
-                    "concept_name": "well-linked-concept",
-                    "title": "Well-Linked Concept",
-                    "one_sentence_def": "测试用概念。",
-                    "explanation": "测试。",
-                    "importance": "测试。",
-                    "related_concepts": ["a", "b", "c"],
-                }
-            ]
-        ),
-        logger,
-        vault_dir=temp_vault,
-    )
-
-    fake_path = tmp_path / "fake_deep_dive.md"
-    fake_path.write_text("body content", encoding="utf-8")
-    auto.process_file(fake_path, dry_run=True)
-
-    if not log_path.exists():
-        return
-    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
-    low_link_rows = [r for r in rows if r.get("event_type") == "evergreen_low_link"]
-    assert low_link_rows == []
+# BL-058: ``evergreen_low_link`` audit event was dropped — v2 prompt
+# allows 0-5 related_concepts (宁缺勿滥), so missing links are no
+# longer a regression signal.  Two tests that asserted the event were
+# removed with this BL-058 migration.

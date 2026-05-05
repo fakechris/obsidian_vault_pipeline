@@ -42,6 +42,26 @@ try:
 except ImportError:
     from promotion_backlinks import upsert_promotions_in_file  # type: ignore
 
+# Hoisted to module-scope (gemini PR #157 review): the v1 code imported
+# these symbols inline inside ``create_evergreen_note`` /
+# ``_unit_to_concept`` / ``process_file`` to break a circular-import
+# concern that no longer exists.  Top-level imports keep the
+# function bodies readable + match Python convention.
+try:
+    from .object_kinds import (
+        CORE_OBJECT_KINDS,
+        KIND_CONCEPT,
+        KIND_METHOD,
+        normalize_kind,
+    )
+except ImportError:
+    from object_kinds import (  # type: ignore
+        CORE_OBJECT_KINDS,
+        KIND_CONCEPT,
+        KIND_METHOD,
+        normalize_kind,
+    )
+
 try:
     from .llm_defaults import (
         DEFAULT_LITELLM_TIMEOUT_SECONDS,
@@ -246,71 +266,95 @@ class LiteLLMClient:
 
 
 class EvergreenExtractor:
-    """Evergreen提取器"""
+    """Evergreen提取器 (BL-058: v2 CandidateUnit prompt).
 
-    SYSTEM_PROMPT = """你是知识提取专家。请从文章中提取**所有**有价值的原子知识单元(atomic knowledge units)。
+    The previous v1 prompt forced every output into 定义/详细解释/为什么重要
+    sections and instructed "抽得多比抽得少好" with floors of 5-30+ units.
+    The 2026-05-05 fidelity audit on 50 samples scored most of those
+    ``faithful_generic`` (claim is in source, but specifics were stripped).
+    The 6-source A/B experiment confirmed the v2 prompt produces dramatically
+    more specific units at half the volume and correctly returns
+    ``units=[]`` on low-value sources instead of fabricating units.
 
-## 数量目标(取决于原文长度和密度,不是硬上限)
+    Schema differences from v1:
+      - Output is wrapped: ``{source_value_summary, units[], skip_reason}``
+      - 10 unit_types (was 4): fact / method / procedure / tradeoff /
+        failure_mode / counterexample / case_detail / learning / decision / quote
+      - epistemic_role field (new): fact / interpretation / method / quote /
+        attributed_claim — separates "asserted by source" from "synthesised"
+      - source_anchor (new): verbatim phrase from source — mechanical
+        fidelity check, future tools can grep this back into the source body
+      - specifics (new): categorical chips (numbers / names / tradeoffs /
+        examples / edge_cases) — what kinds of source detail were preserved
+      - ``related_concepts`` is now optional (0-5, was forced ≥ 3)
+      - body content is free-form, NOT pre-structured
+    """
 
-- 短文(< 1k 词): 5-10 个
-- 中等(1-3k 词): 8-20 个
-- 长文(> 3k 词): 15-30+ 个
+    SYSTEM_PROMPT = """你的任务:从一篇源文里抽取对 vault 有价值的 CandidateUnit。
+你不是在总结源文,也不是在把源文改写成笔记。
+你是在找出源文中那些**保留了原文具体物**(数字、命名实体、方法步骤、工具名、反例、边界条件、对照选择)的可复用知识单元。
 
-不要预设上限。让原文的密度决定数量;有 N 个独立可表达的知识单元,就抽 N 个。
-**抽得多比抽得少好** —— 后续会自动去重。
+## 输出格式 (严格 JSON,不要 markdown 包装)
 
-## Evergreen 笔记标准
+{
+  "source_value_summary": "一句话概括这篇源文的可抽取价值。如果价值很低,直说。",
+  "units": [
+    {
+      "slug": "kebab-case-stable-id",
+      "title": "一句完整的陈述句,不是名词短语",
+      "unit_type": "fact|method|procedure|tradeoff|failure_mode|counterexample|case_detail|learning|decision|quote",
+      "epistemic_role": "fact|interpretation|method|quote|attributed_claim",
+      "content": "markdown,自包含,不需要回读源文也能理解",
+      "source_anchor": "源文中逐字出现的短语/数字/名称/API,作为这条单元的具体锚点",
+      "specifics": ["保留下来的具体物分类:numbers / names / tradeoffs / examples / edge_cases"],
+      "related_concepts": ["相关 wikilink slug,0-5 个,宁缺勿滥"]
+    }
+  ],
+  "skip_reason": "如果 units 是空,说明为什么:常识 / 重复 / 没具体物 / 全是观点没证据 / 等等"
+}
 
-1. **原子性**: 一个 atomic unit 一个笔记 —— 一个具体的事实/方法/洞察,不是一个主题
-2. **断言性**: 用**陈述句**命名,直接说出结论
-   - ✅ "Agents have crystallized intent, not diffuse attention"
-   - ✅ "Quarter Kelly: the only sane position sizing method"
-   - ✅ "Cache TTL keep-alive: periodic matching-prefix requests extend cache indefinitely"
-   - ❌ "Intention Layer"(只是主题名,不是断言)
-3. **永久性**: 时间无关的知识(版本号/Twitter 用户名/具体日期不入)
-4. **可链接**: 能跟其他原子单元连接
-5. **非元数据**: 不要把文件名、仓库目录、README/AGENTS.md/package.json、GitHub Action、URL 本身当成概念
+## 抽取规则,违反任何一条这条单元就不该存在:
 
-## unit_type 分类(显式标注)
+1. **自包含。** 读这条 unit 不需要回去看源文。如果核心信息是 "用 X 方法解决 Y" 而 X 是什么没说,这条是空壳。要么把 X 具体写进来,要么不写。
 
-每个原子单元必须标 `unit_type`,从以下 4 类选 1:
+2. **先选 unit_type,再写 content。形态必须匹配:**
+   - fact:单点事实 + 至少一个具体锚点(数字/命名物/场景)
+   - method:有名字的具体方法 + 操作要点 + 用什么工具/API
+   - procedure:编号步骤,每步有具体动作和命令/工具
+   - tradeoff:选 A 不选 B + 代价是什么 + 适用条件
+   - failure_mode:在什么条件下会出什么问题
+   - counterexample:与某个普遍说法不一致的具体例子
+   - case_detail:具体案例(谁/在哪/做了什么/结果如何)
+   - learning:观点 + 源文给出的依据(不能只有观点)
+   - decision:做了什么选择 + 备选 + 理由
+   - quote:值得逐字保留的原文(content 必须是逐字引用 + 你的简短标注)
 
-- **fact**: 客观事实/现象/数据(如"HTTP 402 was reserved but unused for 30 years")
-- **procedure**: 操作流程/方法/recipe(如"Quarter Kelly position sizing: bet at most 25% of optimal Kelly fraction")
-- **learning**: 经验/洞察/反直觉教训(如"Self-Improvement Requires Monitoring Layer Before Optimization")
-- **concept**: 命名抽象/定义(如"Context engineering: what model knows vs what to say to model")
+3. **不抽常识。** "X 是用于 Y 的方法" 这种 textbook 定义,默认跳过。只在源文给出 (a) 反例 (b) 数字数据 (c) 实现 tradeoff (d) 具体操作细节 之一时,这个主题才值得抽。
 
-## 输出格式(严格 JSON 数组,不要 markdown 包装)
+4. **Title 是观点,不是分类。**
+   ✗ "Skill Pack 生态" / "三层架构" / "Agent 记忆系统"
+   ✓ "Hudson 的 Swift skill 偏广度,Antoine 偏深度"
+   ✓ "把平台差异隔离在 schema 解析层,可让 view model 不变"
+   读 title 应能立刻知道这条主张什么。
 
-[
-  {
-    "concept_name": "concept-name-kebab-case",
-    "title": "Declarative claim sentence",
-    "entity_type": "concept",
-    "unit_type": "fact",
-    "one_sentence_def": "一句话定义(中文,保留技术术语英文)",
-    "explanation": "详细解释(2-4 句,中文)",
-    "importance": "为什么重要(1-2 句)",
-    "related_concepts": ["Related-1", "Related-2", "Related-3"]
-  }
-]
+5. **不要 enumeration shell。** "X 由 5 大来源组成" / "三层架构实现关注点分离" 这种**只列骨架不展开差异**的列表,不算保留 specifics。要么每项都展开它的独特点,要么不写这条 enumeration。
 
-## 字段约束
+6. **数量节制。** 0-8 单元。一篇短 tweet 可能 0-2;一篇长 paper 可能 5-8;**很少超过 8**。如果你写到第 6 条发现是在重复前面的意思,停。
 
-- `entity_type`: 10 个值之一 — concept, entity, person, company, tool, project, paper, event, framework, method
-- `unit_type`: 4 个值之一 — fact, procedure, learning, concept
-- `concept_name`: 稳定的 kebab-case slug,不含文件扩展名或 URL 片段
-- `title`: 陈述句标题(读标题就知道结论),不要复述文件名
-- `one_sentence_def`: 不能为空,完整定义句
-- `related_concepts`: 至少 3 个相关概念。如果 user prompt 给了"已有概念目录",优先从中复用 slug
+7. **跳过样板。** markdown 标题、转场段、礼貌话术、互动提示("如果你觉得有用请关注")、boilerplate 不抽。
 
-## 处理特殊文章
+8. **宁可 0 条,不要凑数。** 如果这篇源文主要是观点反复 / 没有具体方法和数据 / 全是泛泛而谈,返回 units=[],写 skip_reason。这是被允许且鼓励的输出。
 
-- **长 primer / 综述**(如 12k+ 词): 必须按章节展开,每个 section 至少抽 2-5 个 atomic unit
-- **量化/技术深度文章**: 公式/方法/参数都是好 atomic unit(如"Quarter Kelly", "BM25 + dense retrieval hybrid")
-- **中文技术文章**: 完全按英文同等粒度处理,不要因为是中文就少抽
-- **Twitter / Thread 风格**: 把每个核心 claim 当一个 unit,典型 8-15 个
-- **GitHub 项目页 / README**: 抽**项目架构 + 技术决策 + 设计权衡** 等 stable knowledge,不要抽"安装命令""目录结构"
+9. **每条 unit 的 content 必须包含至少一段源文中逐字出现的内容**(在 source_anchor 字段标出)。如果做不到,说明这条已经飘到太抽象的层次,不写。
+
+10. **epistemic_role 区分清楚:** fact = 源文当事实陈述的内容;interpretation = 作者/你对事实的解释,不是事实本身;quote = 逐字引用;method = 可执行的操作描述;attributed_claim = 作者引用别人说的。不要把 interpretation 伪装成 fact。
+
+11. **related_concepts** (可选, 0-5 个) 列出这条 unit 真正在概念上相关的其他知识 —— 不是相同 topic 的所有东西,是会让人想点过去的特定关联。如果 user prompt 给了"已有概念目录",优先复用其中的 slug;否则用 kebab-case。**没有强相关就给空列表,不要凑数。**
+
+## slug 字段
+- 稳定的 kebab-case 标识,不含 URL 片段或文件扩展名
+- 同一概念跨源应产生相同 slug(比如 "agentic-rl" 而非 "agentic-reinforcement-learning")
+- 中文标题对应的 slug 用拼音或英文翻译,简短优先
 """
 
     # PR-G2 (BL-039) — extraction-time entity prime.
@@ -321,6 +365,29 @@ class EvergreenExtractor:
     # returns and risks crowding out the article content.
     _ENTITY_PRIME_TOP_N = 100
     _ENTITY_PRIME_ALIAS_CAP_PER_CANONICAL = 4
+
+    # BL-058 v2 prompt sizing.  These were inline magic numbers in the
+    # initial commit; gemini PR #157 review surfaced them as named
+    # constants so both the prompt-design discussion and any future
+    # tuning live in one place.
+    #
+    # ``_USER_PROMPT_BODY_CHARS``: how much of the source we hand to
+    # the LLM as the extraction subject.  6000 chars is enough for a
+    # typical tweet/blog/paper section to be visible in full;
+    # PR-B (BL-068) introduces chunk-and-aggregate for ≥6kb articles
+    # and will retire this single-window approach.
+    #
+    # ``_MAX_OUTPUT_TOKENS``: cap on the LLM response length.  v2 asks
+    # for 0-8 units at ~150 tokens each (JSON + content); 8000 leaves
+    # generous headroom and matches what we set in v1.
+    #
+    # ``_PARSE_ERROR_LOG_SNIPPET_CHARS``: how much of a malformed LLM
+    # response we keep in the audit log.  500 chars is enough to see
+    # the opening frame + diagnose schema drift without bloating
+    # pipeline.jsonl on a hot loop of failures.
+    _USER_PROMPT_BODY_CHARS = 6000
+    _MAX_OUTPUT_TOKENS = 8000
+    _PARSE_ERROR_LOG_SNIPPET_CHARS = 500
 
     def __init__(
         self,
@@ -528,81 +595,307 @@ class EvergreenExtractor:
         # collapse to slug ``karpathy`` rather than three new ones.
         entity_prime_block = self._load_entity_prime_block()
 
-        # Note: ``content[:6000]`` is intentional for PR-A scope — chunking
-        # for >6KB articles lands in PR-B.  The system prompt now demands
-        # 5-30 atomic units (no ``3-5`` cap, no "return [] if information
-        # is insufficient" escape hatch), which on its own gets
-        # ``evergreen_count`` from ~0 to NM-comparable on the 6KB-or-less
-        # set.  PR-B will switch this to a chunk-and-aggregate loop.
-        user_prompt = f"""请从以下深度解读中提取所有有价值的原子知识单元(atomic knowledge units)。
+        # BL-058 v2 prompt asks for 0-8 units (was "5-30+, more is better"),
+        # so the body window + token cap defined above (see
+        # ``_USER_PROMPT_BODY_CHARS`` / ``_MAX_OUTPUT_TOKENS``) leave
+        # generous headroom.  We pass the source body through so the
+        # LLM has somewhere to grep source_anchor strings out of.
+        body_chars = self._USER_PROMPT_BODY_CHARS
+        user_prompt = f"""请从以下源文里抽取 CandidateUnit。
 
 文件: {file_path}
 
-内容（前6000字符）：
+内容(前 {body_chars} 字符):
 ```
-{content[:6000]}
+{content[:body_chars]}
 ```
 {related_block}
 {entity_prime_block}
 
-请按 JSON 格式输出 atomic unit 列表(不要 markdown 包装)。
-**抽得多好过抽得少**;短文 5-10 个,中等 8-20 个,长文 15-30+ 个。"""
+请按上面定义的 JSON 格式输出(不要 markdown 包装)。如果这篇源文没有
+具体可抽取的东西(只是观点反复 / 没有数字或案例 / 全部是常识),返回
+``{{"units": [], "skip_reason": "..."}}`` 是被鼓励的输出。"""
 
-        # Bumped max_tokens 4000 → 8000 because the new prompt typically
-        # asks for 8-30 units instead of 3-5.  At ~150 tokens/unit (JSON
-        # + explanation), 30 units ≈ 4500 tokens of output; 8000 leaves
-        # headroom for the dense long-form articles where the old 4000
-        # was already truncating the response.
         result_text = self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
-            max_tokens=8000,
+            max_tokens=self._MAX_OUTPUT_TOKENS,
         )
 
-        # 尝试解析JSON
-        try:
-            json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
-            if json_match:
-                concepts = json.loads(json_match.group())
-            else:
-                concepts = []
-        except json.JSONDecodeError:
-            concepts = []
+        return self._parse_v2_response(result_text, file_path)
 
+    def _parse_v2_response(self, result_text: str, file_path: Path) -> list[dict]:
+        """Parse the v2 JSON wrapper into the legacy concept-dict shape
+        that downstream ``process_file`` / ``create_evergreen_note``
+        consume.
+
+        Expected v2 wrapper::
+
+            {
+              "source_value_summary": str,
+              "units": [{slug, title, unit_type, epistemic_role,
+                         content, source_anchor, specifics,
+                         related_concepts}, ...],
+              "skip_reason": str
+            }
+
+        ``units=[]`` with a non-empty ``skip_reason`` is a valid (and
+        encouraged) response — we log it as ``absorb_skipped_source``
+        and return an empty list so the caller writes no evergreens.
+
+        Failure modes we handle:
+          - markdown-fenced JSON (```json ... ```)
+          - LLM returning conversational filler before/after the JSON
+            (gemini PR #157 review): we look for the first balanced
+            ``{...}`` block instead of trusting the response to start
+            and end exactly at the JSON.
+          - LLM returning a bare list (legacy v1 shape) — log a warning
+            and treat as v2 with empty wrapper
+          - JSON parse error — log raw text snippet and return []
+          - dict with no ``units`` key — log and return []
+        """
+        snippet_chars = self._PARSE_ERROR_LOG_SNIPPET_CHARS
+
+        # Strip markdown fences first (the common case where the LLM
+        # follows our "no markdown wrapping" instruction reliably).
+        stripped = result_text.strip()
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+        stripped = re.sub(r"```\s*$", "", stripped)
+        stripped = stripped.strip()
+
+        # Locate the first ``{`` … last ``}`` span as a fallback for
+        # responses that include conversational filler ("好的,这是 JSON:
+        # {...}").  ``re.DOTALL`` so the body can contain newlines.
+        # We don't try to count braces — if the LLM emits multiple
+        # top-level objects we accept the outer match (json.loads will
+        # then reject malformed concatenations).
+        json_match = re.search(r"\{.*\}", stripped, re.DOTALL)
+        if json_match is None:
+            self.logger.log("absorb_v2_parse_error", {
+                "source": str(file_path),
+                "error": "no JSON object found in response",
+                "raw_snippet": result_text[:snippet_chars],
+            })
+            return []
+        candidate = json_match.group()
+
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            self.logger.log("absorb_v2_parse_error", {
+                "source": str(file_path),
+                "error": str(exc),
+                "raw_snippet": result_text[:snippet_chars],
+            })
+            return []
+
+        if isinstance(parsed, list):
+            # LLM ignored the wrapper schema and returned a bare list.
+            # We don't silently accept this — the v1 fields (concept_name,
+            # one_sentence_def, importance, ...) won't be present, so the
+            # downstream renderer would produce a malformed evergreen.
+            self.logger.log("absorb_v2_schema_drift", {
+                "source": str(file_path),
+                "reason": "expected wrapped object, got list",
+                "list_length": len(parsed),
+            })
+            return []
+
+        if not isinstance(parsed, dict):
+            self.logger.log("absorb_v2_parse_error", {
+                "source": str(file_path),
+                "error": f"top-level type {type(parsed).__name__}, expected dict",
+            })
+            return []
+
+        units = parsed.get("units")
+        if not isinstance(units, list):
+            self.logger.log("absorb_v2_parse_error", {
+                "source": str(file_path),
+                "error": f"missing or non-list 'units' key",
+            })
+            return []
+
+        skip_reason = str(parsed.get("skip_reason") or "").strip()
+        source_value_summary = str(parsed.get("source_value_summary") or "").strip()
+        if not units:
+            # Empty units with skip_reason is the "encouraged skip" path.
+            # Empty units with no skip_reason is suspicious (model produced
+            # nothing AND said nothing) — we log both cases distinctly.
+            self.logger.log("absorb_skipped_source", {
+                "source": str(file_path),
+                "skip_reason": skip_reason or "(no reason given)",
+                "source_value_summary": source_value_summary,
+                "had_skip_reason": bool(skip_reason),
+            })
+            return []
+
+        # Convert each v2 unit to the legacy concept dict shape that
+        # ``process_file`` and ``create_evergreen_note`` already understand.
+        concepts: list[dict] = []
+        for unit in units:
+            if not isinstance(unit, dict):
+                continue
+            converted = self._unit_to_concept(unit)
+            if converted:
+                concepts.append(converted)
         return concepts
 
+    @staticmethod
+    def _unit_to_concept(unit: dict) -> dict | None:
+        """Convert one v2 ``CandidateUnit`` JSON to the legacy concept dict
+        shape.  Downstream code (``process_file``, ``create_evergreen_note``)
+        keys off this shape, so we keep the v1 keys present while adding the
+        new v2 keys alongside.
+
+        Returns ``None`` when the unit is too malformed to use (no title
+        AND no slug — we can't even name the file).
+        """
+        title = str(unit.get("title") or "").strip()
+        slug = str(unit.get("slug") or "").strip()
+        if not title and not slug:
+            return None
+        if not slug:
+            slug = canonicalize_note_id(title)
+        if not title:
+            title = slug.replace("-", " ").title()
+
+        unit_type = str(unit.get("unit_type") or "fact").strip().lower()
+        epistemic_role = str(unit.get("epistemic_role") or "").strip().lower()
+
+        # Map unit_type → entity_type (the existing object_kinds taxonomy).
+        # ``method`` and ``procedure`` both land on KIND_METHOD; everything
+        # else collapses to KIND_CONCEPT for now.  Future taxonomy expansion
+        # (BL-058b) can give each unit_type its own entity_type.
+        # ``CORE_OBJECT_KINDS`` / ``KIND_CONCEPT`` / ``KIND_METHOD`` are
+        # imported at module top.
+        if unit_type in {"method", "procedure"}:
+            entity_type = KIND_METHOD
+        else:
+            entity_type = KIND_CONCEPT
+        if entity_type not in CORE_OBJECT_KINDS:
+            entity_type = KIND_CONCEPT
+
+        related = unit.get("related_concepts")
+        if not isinstance(related, list):
+            related = []
+        related = [str(r).strip() for r in related if str(r).strip()]
+
+        specifics = unit.get("specifics")
+        if not isinstance(specifics, list):
+            specifics = []
+        specifics = [str(s).strip() for s in specifics if str(s).strip()]
+
+        return {
+            # legacy keys (preserved for downstream compatibility)
+            "concept_name": slug,
+            "title": title,
+            "entity_type": entity_type,
+            "unit_type": unit_type,
+            # v2 free-form content replaces one_sentence_def + explanation +
+            # importance.  Older fields kept empty so create_evergreen_note's
+            # backward-compat path doesn't crash.
+            "one_sentence_def": "",
+            "explanation": str(unit.get("content") or "").strip(),
+            "importance": "",
+            "related_concepts": related,
+            # v2-only fields
+            "epistemic_role": epistemic_role,
+            "source_anchor": str(unit.get("source_anchor") or "").strip(),
+            "specifics": specifics,
+        }
+
     def create_evergreen_note(self, concept: dict, source_file: Path) -> str:
-        """创建Evergreen笔记内容"""
+        """Render an Evergreen markdown file from a v2 CandidateUnit
+        dict (BL-058).
+
+        Body shape compared to v1:
+          - No forced ``定义 / 详细解释 / 为什么重要`` sections; ``content``
+            is whatever shape matches ``unit_type``.
+          - Source anchor block (verbatim quote) appears below the body
+            so the reviewer can mechanically check fidelity.
+          - ``## Related`` only renders when ``related_concepts`` is
+            non-empty (no empty section heading).
+          - Source backref is a plain link block at the bottom.
+
+        Frontmatter adds 6 v2-specific fields:
+          - extraction_prompt_version: v2
+          - unit_type: one of {fact, method, procedure, tradeoff,
+            failure_mode, counterexample, case_detail, learning,
+            decision, quote}
+          - epistemic_role: one of {fact, interpretation, method,
+            quote, attributed_claim}
+          - source_anchor: verbatim string from source — mechanical
+            fidelity check
+          - specifics: list of preserved-detail categories
+          - absorbed_at: ISO-8601 UTC timestamp of this extraction
+        """
+        # ``CORE_OBJECT_KINDS`` / ``KIND_CONCEPT`` / ``normalize_kind``
+        # imported at module top (gemini PR #157 review).
         concept_name = concept.get("concept_name", "Untitled")
         note_id = canonicalize_note_id(concept_name)
         title = concept.get("title", concept_name.replace("-", " "))
-        definition = concept.get("one_sentence_def", "")
-        explanation = concept.get("explanation", "")
-        importance = concept.get("importance", "")
-        related = concept.get("related_concepts", [])
-
-        # 构建相关链接
-        related_links = "\n".join([f"- [[{c}]]" for c in related if c])
-
-        from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
+        # v2: ``content`` is the free-form body the LLM produced.  We kept
+        # ``explanation`` as the dict key so legacy callers (process_file)
+        # don't need to know about the rename.
+        body_content = concept.get("explanation", "").strip()
+        related = concept.get("related_concepts") or []
+        related = [str(r).strip() for r in related if str(r).strip()]
+        unit_type = str(concept.get("unit_type") or "fact").strip().lower()
+        epistemic_role = str(concept.get("epistemic_role") or "").strip().lower()
+        source_anchor = str(concept.get("source_anchor") or "").strip()
+        specifics = concept.get("specifics") or []
+        specifics = [str(s).strip() for s in specifics if str(s).strip()]
 
         raw_kind = concept.get("entity_type", concept.get("kind", ""))
         normalized = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT
         entity_type = normalized if normalized in CORE_OBJECT_KINDS else KIND_CONCEPT
 
-        # BL-054: read provenance off the source article so the new
-        # evergreen's frontmatter carries it forward.  Future
-        # crystal_scoring (credibility + diversity) keys off these
-        # fields — leaving them empty silently breaks scoring for
-        # every evergreen this extractor produces.
         source_provenance = _read_source_provenance(source_file)
+        # Single ``now`` for both ``absorbed_at`` and ``date`` so they
+        # always agree.  gemini PR #157 review pointed out that the
+        # earlier ``datetime.now()`` for ``date`` was naive (local time)
+        # while ``absorbed_at`` was UTC — meaning a late-evening absorb
+        # could write a ``date`` one day ahead of ``absorbed_at``.
+        # UTC for both is the consistent fix.
+        now_utc = datetime.now(timezone.utc)
+        absorbed_at = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        date_iso = now_utc.strftime("%Y-%m-%d")
+
+        # Build optional sections.  Empty arrays / strings → section is
+        # omitted entirely (no empty headings, no orphan dashes).
+        anchor_block = ""
+        if source_anchor:
+            # Quote-escape the anchor itself so multi-line / quote-containing
+            # source text doesn't break the markdown blockquote.
+            safe_anchor = source_anchor.replace("\n", " ").strip()
+            anchor_block = f'\n> **Source anchor**: "{safe_anchor}"\n'
+
+        related_block = ""
+        if related:
+            links = "\n".join(f"- [[{c}]]" for c in related)
+            related_block = f"\n## Related\n\n{links}\n"
+
+        # YAML serialization of list fields — single-line array form.
+        related_yaml = (
+            "[" + ", ".join(_yaml_escape(c) for c in related) + "]"
+            if related else "[]"
+        )
+        specifics_yaml = (
+            "[" + ", ".join(_yaml_escape(s) for s in specifics) + "]"
+            if specifics else "[]"
+        )
 
         note = f"""---
 note_id: {note_id}
 title: "{title}"
 type: evergreen
 entity_type: {entity_type}
-date: {datetime.now().strftime('%Y-%m-%d')}
+unit_type: {unit_type}
+epistemic_role: {epistemic_role}
+extraction_prompt_version: v2
+absorbed_at: "{absorbed_at}"
+date: {date_iso}
 tags: [evergreen]
 aliases: ["{concept_name}"]
 source_url: "{source_provenance['source_url']}"
@@ -610,24 +903,17 @@ source_title: "{source_provenance['source_title']}"
 source_authors: {source_provenance['source_authors_yaml']}
 source_published_at: "{source_provenance['source_published_at']}"
 source_fingerprint: "{source_provenance['source_fingerprint']}"
+source_anchor: {_yaml_escape(source_anchor)}
+specifics: {specifics_yaml}
+related_concepts: {related_yaml}
 ---
 
 # {title}
 
-> **一句话定义**: {definition}
+{body_content}
+{anchor_block}{related_block}
+## Source
 
-## 📝 详细解释
-
-### 是什么？
-{explanation}
-
-### 为什么重要？
-{importance}
-
-## 🔗 关联概念
-{related_links}
-
-## 📚 来源与扩展阅读
 - [[{source_file.stem}]]
 """
 
@@ -736,13 +1022,12 @@ class AutoEvergreenExtractor:
                     "status": "pending"
                 }
 
-                related = concept.get("related_concepts") or []
-                if len(related) < 3:
-                    self.logger.log("evergreen_low_link", {
-                        "concept": concept_name,
-                        "source": str(file_path.name),
-                        "related_count": len(related),
-                    })
+                # BL-058: ``evergreen_low_link`` audit event used to fire
+                # when LLM produced < 3 related_concepts.  v2 prompt
+                # explicitly allows 0-5 (宁缺勿滥),so a missing link is
+                # no longer a regression signal.  The event is dropped
+                # rather than re-defined; downstream watchers that read
+                # the legacy event simply stop seeing it.
 
                 # 检查是否已存在（registry或文件系统）
                 if self.evergreen_exists(concept_name, registry=registry):
@@ -760,9 +1045,11 @@ class AutoEvergreenExtractor:
                 # 添加到candidate队列（而不是直接创建active Evergreen）
                 if registry:
                     try:
-                        from .identity import canonicalize_note_id
-                        from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
-
+                        # ``canonicalize_note_id`` and the object_kinds
+                        # symbols are imported at module top (PR #157
+                        # review).  Local re-imports were a leftover
+                        # from a circular-import workaround that no
+                        # longer applies.
                         canonical_slug = canonicalize_note_id(concept_name)
                         raw_kind = concept.get("entity_type", KIND_CONCEPT)
                         resolved_kind = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT

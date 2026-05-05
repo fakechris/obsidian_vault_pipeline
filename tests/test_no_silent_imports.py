@@ -30,7 +30,7 @@ def repo_root() -> Path:
 # Most of these are optional ``from dotenv import load_dotenv`` style
 # fallbacks where dotenv isn't a hard dependency.
 LEGACY_SILENT_IMPORTS = {
-    ("auto_evergreen_extractor.py", 163),      # dotenv optional (BL-054 added helpers above it)
+    ("auto_evergreen_extractor.py", 183),      # dotenv optional (BL-058 hoisted object_kinds import, line shifted)
     ("auto_article_processor.py", 113),         # dotenv optional
     ("auto_github_processor.py", 99),           # dotenv optional (BL-066 rewrote module, line shifted)
     ("auto_moc_updater.py", 51),                # dotenv optional
