@@ -197,14 +197,21 @@ def _build_frontmatter(
     tags: list[str],
     enriched: EnrichedSource,
     fetched_at: str,
+    extraction_status: str = "completed",
 ) -> str:
-    """Render frontmatter for the processed github markdown."""
+    """Render frontmatter for the processed github markdown.
+
+    ``extraction_status`` defaults to ``completed``; pass ``skipped``
+    when all enrichment tiers returned empty so the absorb scanner
+    skips this file (see _is_github_source_markdown's status filter).
+    """
     meta = enriched.metadata
     fields: list[tuple[str, Any]] = [
         ("title", title or f"{owner}/{repo}"),
         ("source", url),
         ("source_type", "github-project"),
         ("source_tier", enriched.tier),
+        ("extraction_status", extraction_status),
         ("github_owner", owner),
         ("github_repo", repo),
     ]
@@ -329,6 +336,9 @@ def process_single_repo(
     fetched_at = datetime.now(timezone.utc).isoformat()
     title = description.strip() if description else f"{owner}/{repo}"
 
+    has_body = bool(enriched.body.strip())
+    extraction_status = "completed" if has_body else "skipped"
+
     frontmatter = _build_frontmatter(
         title=title,
         url=url,
@@ -338,15 +348,18 @@ def process_single_repo(
         tags=tags,
         enriched=enriched,
         fetched_at=fetched_at,
+        extraction_status=extraction_status,
     )
     body_header = _build_body_header(enriched, url)
 
-    if enriched.body.strip():
+    if has_body:
         full_content = f"{frontmatter}\n\n{body_header}\n{enriched.body}\n"
         result_status = "completed"
     else:
         # All tiers returned empty body — still record the source, but
-        # mark as skipped so absorb won't try to extract from it.
+        # frontmatter ``extraction_status: skipped`` makes absorb's
+        # _is_github_source_markdown reject this file so it isn't
+        # treated as a candidate for evergreen extraction.
         full_content = (
             f"{frontmatter}\n\n{body_header}\n"
             "_All enrichment tiers returned empty content. "

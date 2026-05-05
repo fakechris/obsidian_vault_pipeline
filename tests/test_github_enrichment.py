@@ -58,6 +58,12 @@ class TestParseGithubURL:
         "https://example.com/owner/repo",
         "not-a-url",
         "",
+        # CodeRabbit finding: lstrip("www.") is a character-class
+        # strip that incorrectly accepted URLs like "wwwgithub.com"
+        # because it would strip the leading "www" as individual chars.
+        # removeprefix("www.") fixes this.
+        "https://wwwgithub.com/owner/repo",
+        "https://github.com.evil.com/owner/repo",
     ])
     def test_rejects_non_github(self, url):
         assert parse_github_url(url) is None
@@ -136,6 +142,56 @@ class TestEnrichmentChain:
             result = enrich_github_source("ghost", "ghost")
         assert result.tier == "readme"
         assert result.body == ""
+
+
+class TestFetchReadmeUsesDefaultBranch:
+    """CodeRabbit finding: README probe was hardcoded to main/master/develop
+    and missed repos with non-standard default branches.  Verify the new
+    implementation queries GitHub API for ``default_branch`` first.
+    """
+
+    def test_uses_api_default_branch_first(self):
+        from ovp_pipeline.github_enrichment import fetch_readme
+        from unittest.mock import patch
+
+        captured_urls: list[str] = []
+
+        def fake_get(url, timeout=10.0):
+            captured_urls.append(url)
+            if "api.github.com/repos/" in url:
+                return '{"default_branch": "trunk", "stargazers_count": 42}'
+            if "/trunk/README.md" in url:
+                return "# Real README from trunk\n\nbody"
+            return None
+
+        with patch("ovp_pipeline.github_enrichment._http_get", side_effect=fake_get):
+            body, stars = fetch_readme("o", "r")
+
+        assert "Real README from trunk" in body
+        assert stars == 42
+        # API call must precede branch probes
+        assert captured_urls[0].startswith("https://api.github.com/repos/")
+        # default_branch was used
+        assert any("/trunk/README.md" in u for u in captured_urls)
+
+    def test_falls_back_to_hardcoded_branches_when_api_fails(self):
+        """If the GitHub API returns None (rate-limited, blocked,
+        offline), we still try main/master/develop."""
+        from ovp_pipeline.github_enrichment import fetch_readme
+        from unittest.mock import patch
+
+        def fake_get(url, timeout=10.0):
+            if "api.github.com" in url:
+                return None  # API down
+            if "/main/README.md" in url:
+                return "# fallback worked"
+            return None
+
+        with patch("ovp_pipeline.github_enrichment._http_get", side_effect=fake_get):
+            body, stars = fetch_readme("o", "r")
+
+        assert "fallback worked" in body
+        assert stars == 0  # API gave us nothing
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +320,11 @@ class TestProcessSingleRepo:
     def test_empty_body_status_skipped(self, tmp_path):
         """When all 3 tiers return empty, the file is still written
         (frontmatter only) but status is 'skipped' so absorb won't
-        try to extract from a stub."""
+        try to extract from a stub.
+
+        Frontmatter MUST contain ``extraction_status: skipped`` so the
+        absorb scanner rejects it (CodeRabbit finding).
+        """
         layout = self._init_vault(tmp_path)
         out_dir = layout.processed_dir / "2026-04"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -287,6 +347,10 @@ class TestProcessSingleRepo:
             )
         assert result["status"] == "skipped"
         assert result["error"] == "empty_body"
+        # Frontmatter must explicitly mark this as skipped so absorb
+        # ignores it during evergreen extraction.
+        body = Path(result["output_file"]).read_text(encoding="utf-8")
+        assert "extraction_status: skipped" in body
 
     @staticmethod
     def _init_vault(tmp_path: Path) -> VaultLayout:
@@ -333,6 +397,40 @@ class TestAbsorbPicksUpGithubSources:
         assert _is_github_source_markdown(github_md) is True
         assert _is_github_source_markdown(article_md) is False
         assert _is_github_source_markdown(no_fm) is False
+
+    def test_skipped_extraction_status_rejects_file(self, tmp_path):
+        """CodeRabbit finding: github sources with empty enrichment
+        bodies write ``extraction_status: skipped`` to frontmatter.
+        ``_is_github_source_markdown`` must return False for those so
+        absorb doesn't try to extract from a stub."""
+        skipped_md = tmp_path / "skipped.md"
+        skipped_md.write_text(
+            "---\n"
+            "title: o/r\n"
+            "source: https://github.com/o/r\n"
+            "source_type: github-project\n"
+            "source_tier: readme\n"
+            "extraction_status: skipped\n"
+            "---\n\n"
+            "_All enrichment tiers returned empty content._\n",
+            encoding="utf-8",
+        )
+        completed_md = tmp_path / "completed.md"
+        completed_md.write_text(
+            "---\n"
+            "title: o/r\n"
+            "source: https://github.com/o/r\n"
+            "source_type: github-project\n"
+            "source_tier: deepwiki\n"
+            "extraction_status: completed\n"
+            "---\n\n"
+            "# real body\n",
+            encoding="utf-8",
+        )
+
+        # Skipped file is rejected; completed file is accepted.
+        assert _is_github_source_markdown(skipped_md) is False
+        assert _is_github_source_markdown(completed_md) is True
 
     def test_marker_must_be_in_frontmatter_not_body(self, tmp_path):
         """The marker check must NOT match if the literal text

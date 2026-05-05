@@ -381,36 +381,60 @@ def fetch_gitingest(owner: str, repo: str) -> Optional[tuple[str, dict]]:
 # ---------------------------------------------------------------------------
 
 
+_README_FILENAMES = (
+    "README.md", "readme.md", "Readme.md",
+    "README.markdown", "README.rst", "README.txt", "README",
+)
+_README_BRANCH_FALLBACKS = ("main", "master", "develop", "dev", "trunk")
+
+
 def fetch_readme(owner: str, repo: str) -> tuple[str, int]:
-    """Final fallback — same as the previous ``fetch_github_readme``.
+    """Final fallback — fetch README + stars.
+
+    Strategy:
+      1. Hit ``api.github.com/repos/{owner}/{repo}`` once to get
+         ``default_branch`` and ``stargazers_count`` in a single
+         request.  This handles non-standard branches that the old
+         hardcoded ``main/master/develop`` list missed.
+      2. Try each filename in ``_README_FILENAMES`` against the
+         default branch.
+      3. If that fails (rate-limited API, 404, etc.), fall back to
+         the historical branch+filename grid.
 
     Always returns a tuple; ``body`` may be empty if the repo has no
-    README on any default branch.
+    README anywhere we can find.
     """
-    body = ""
-    branches = ["main", "master", "develop"]
+    stars = 0
+    default_branch: Optional[str] = None
+    api_text = _http_get(
+        f"https://api.github.com/repos/{owner}/{repo}",
+        timeout=10.0,
+    )
+    if api_text:
+        try:
+            data = json.loads(api_text)
+            default_branch = data.get("default_branch")
+            stars = int(data.get("stargazers_count", 0) or 0)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+
+    # Build branch list: API-reported default first, then the hardcoded
+    # fallbacks (deduped, preserving order).
+    branches: list[str] = []
+    seen: set[str] = set()
+    for branch in (default_branch, *_README_BRANCH_FALLBACKS):
+        if branch and branch not in seen:
+            seen.add(branch)
+            branches.append(branch)
+
     for branch in branches:
-        for filename in ["README.md", "readme.md"]:
+        for filename in _README_FILENAMES:
             url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{filename}"
             text = _http_get(url, timeout=10.0)
             if text:
-                body = text
-                break
-        if body:
-            break
+                return text, stars
 
-    stars = 0
-    try:
-        api_text = _http_get(
-            f"https://api.github.com/repos/{owner}/{repo}",
-            timeout=10.0,
-        )
-        if api_text:
-            stars = int(json.loads(api_text).get("stargazers_count", 0) or 0)
-    except (json.JSONDecodeError, ValueError, TypeError):
-        pass
-
-    return body, stars
+    return "", stars
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +480,12 @@ def enrich_github_source(owner: str, repo: str) -> EnrichedSource:
 def parse_github_url(url: str) -> Optional[tuple[str, str]]:
     """Parse ``https://github.com/owner/repo`` into ``(owner, repo)``."""
     parsed = urlparse(url)
-    if parsed.netloc.lower().lstrip("www.") not in ("github.com",):
+    netloc = parsed.netloc.lower()
+    # ``str.lstrip(chars)`` strips a CHARACTER CLASS, not a prefix string —
+    # ``"wwwgithub.com".lstrip("www.")`` returns ``"github.com"`` and would
+    # incorrectly accept that as a github URL.  Use ``removeprefix`` so we
+    # only strip the literal ``www.`` prefix.
+    if netloc.removeprefix("www.") != "github.com":
         return None
     parts = [p for p in parsed.path.strip("/").split("/") if p]
     if len(parts) < 2:

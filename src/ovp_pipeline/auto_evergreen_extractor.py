@@ -958,17 +958,22 @@ def _reject_intake_source_target(layout: VaultLayout, path: Path) -> None:
 
 
 _GITHUB_SOURCE_FRONTMATTER_MARKER = "source_type: github-project"
+_GITHUB_SKIPPED_MARKER = "extraction_status: skipped"
 
 
 def _is_github_source_markdown(path: Path) -> bool:
     """Return True if ``path`` is a github-project source written by
-    auto_github_processor (BL-066).
+    auto_github_processor (BL-066) AND has a non-empty extracted body.
 
-    Detection is purely by frontmatter line — we don't parse YAML
-    because we read this on every absorb scan and want it cheap.  The
-    line ``source_type: github-project`` (with or without surrounding
-    quotes) appears in the frontmatter block written by
-    ``_build_frontmatter`` in auto_github_processor.
+    Detection is purely by frontmatter lines — we don't parse YAML
+    because we read this on every absorb scan and want it cheap.  Two
+    conditions must hold:
+
+    1. The marker ``source_type: github-project`` appears in the
+       frontmatter block (identifies the file as a BL-066 product).
+    2. The marker ``extraction_status: skipped`` does NOT appear —
+       skipped files exist as audit trail for empty-tier enrichments
+       and have no extractable body, so absorb must ignore them.
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -981,7 +986,11 @@ def _is_github_source_markdown(path: Path) -> bool:
     # text that happens to contain the marker.
     end = head.find("---", 3)
     fm_block = head[:end] if end > 0 else head
-    return _GITHUB_SOURCE_FRONTMATTER_MARKER in fm_block
+    if _GITHUB_SOURCE_FRONTMATTER_MARKER not in fm_block:
+        return False
+    if _GITHUB_SKIPPED_MARKER in fm_block:
+        return False
+    return True
 
 
 def _collect_processed_github_sources(
