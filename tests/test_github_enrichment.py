@@ -87,7 +87,11 @@ class TestEnrichmentChain:
                 "ovp_pipeline.github_enrichment.fetch_deepwiki",
                 return_value=("# DeepWiki body", {"deepwiki_section_count": 5, "deepwiki_last_indexed": "2026-01-20"}),
             ),
-            patch("ovp_pipeline.github_enrichment.fetch_readme", return_value=("# README", 42)),
+            patch(
+                "ovp_pipeline.github_enrichment.fetch_repo_metadata",
+                return_value=("main", 42),
+            ),
+            patch("ovp_pipeline.github_enrichment.fetch_readme") as readme_mock,
             patch("ovp_pipeline.github_enrichment.fetch_gitingest") as gitingest_mock,
         ):
             result = enrich_github_source("owner", "repo")
@@ -95,8 +99,11 @@ class TestEnrichmentChain:
         assert result.body == "# DeepWiki body"
         assert result.metadata["github_stars"] == 42
         assert result.metadata["deepwiki_last_indexed"] == "2026-01-20"
-        # Tier 2 must NOT be invoked when Tier 1 hits
+        # Tier 2 must NOT be invoked when Tier 1 hits.
         gitingest_mock.assert_not_called()
+        # Tier 3 must NOT run either — the bug we fixed.  Stars come
+        # from ``fetch_repo_metadata``, not ``fetch_readme``.
+        readme_mock.assert_not_called()
 
     def test_tier2_gitingest_when_deepwiki_misses(self):
         with (
@@ -105,26 +112,42 @@ class TestEnrichmentChain:
                 "ovp_pipeline.github_enrichment.fetch_gitingest",
                 return_value=("# GitIngest body", {"gitingest_commit": "abc123" + "0" * 34}),
             ),
-            patch("ovp_pipeline.github_enrichment.fetch_readme", return_value=("# README", 7)),
+            patch(
+                "ovp_pipeline.github_enrichment.fetch_repo_metadata",
+                return_value=("main", 7),
+            ),
+            patch("ovp_pipeline.github_enrichment.fetch_readme") as readme_mock,
         ):
             result = enrich_github_source("owner", "repo")
         assert result.tier == "gitingest"
         assert result.body == "# GitIngest body"
         assert result.metadata["github_stars"] == 7
+        # README probing must not run when Tier 2 hits.
+        readme_mock.assert_not_called()
 
     def test_tier3_readme_when_higher_fail(self):
         with (
             patch("ovp_pipeline.github_enrichment.fetch_deepwiki", return_value=None),
             patch("ovp_pipeline.github_enrichment.fetch_gitingest", return_value=None),
             patch(
+                "ovp_pipeline.github_enrichment.fetch_repo_metadata",
+                return_value=("trunk", 999),
+            ),
+            patch(
                 "ovp_pipeline.github_enrichment.fetch_readme",
                 return_value=("# Just the README\n\nbody", 999),
-            ),
+            ) as readme_mock,
         ):
             result = enrich_github_source("owner", "repo")
         assert result.tier == "readme"
         assert result.body == "# Just the README\n\nbody"
         assert result.metadata["github_stars"] == 999
+        # When Tier 3 runs, it must reuse the default_branch we
+        # already learned via fetch_repo_metadata so the API isn't
+        # hit twice.
+        readme_mock.assert_called_once_with(
+            "owner", "repo", default_branch="trunk",
+        )
 
     def test_all_tiers_fail_returns_empty_body(self):
         """Every tier returns empty/None — should still return a
@@ -137,7 +160,14 @@ class TestEnrichmentChain:
         with (
             patch("ovp_pipeline.github_enrichment.fetch_deepwiki", return_value=None),
             patch("ovp_pipeline.github_enrichment.fetch_gitingest", return_value=None),
-            patch("ovp_pipeline.github_enrichment.fetch_readme", return_value=("", 0)),
+            patch(
+                "ovp_pipeline.github_enrichment.fetch_repo_metadata",
+                return_value=(None, 0),
+            ),
+            patch(
+                "ovp_pipeline.github_enrichment.fetch_readme",
+                return_value=("", 0),
+            ),
         ):
             result = enrich_github_source("ghost", "ghost")
         assert result.tier == "readme"
@@ -351,6 +381,115 @@ class TestProcessSingleRepo:
         # ignores it during evergreen extraction.
         body = Path(result["output_file"]).read_text(encoding="utf-8")
         assert "extraction_status: skipped" in body
+
+    def test_existing_file_skipped_without_overwrite(self, tmp_path):
+        """Pre-fix, re-running intake on the same repo same day
+        silently overwrote ``50-Inbox/03-Processed/<YYYY-MM>/<date>_<owner>_<repo>.md``.
+        That risks losing a higher-tier extraction (DeepWiki later
+        became available, README later updated, …) without any
+        signal.  Default behaviour now: skip + audit event.
+        """
+        layout = self._init_vault(tmp_path)
+        out_dir = layout.processed_dir / "2026-04"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Pre-existing file — first run's content.
+        existing = out_dir / "2026-04-28_o_r.md"
+        existing.write_text(
+            "---\nfrom: previous run\n---\n\noriginal body\n",
+            encoding="utf-8",
+        )
+
+        with patch(
+            "ovp_pipeline.auto_github_processor.enrich_github_source",
+        ) as enrich_mock:
+            result = process_single_repo(
+                url="https://github.com/o/r",
+                date="2026-04-28",
+                tags=[],
+                description="",
+                output_dir=out_dir,
+                dry_run=False,
+            )
+        # Skipped without consuming external API budget.
+        assert result["status"] == "skipped_existing"
+        enrich_mock.assert_not_called()
+        # File contents preserved byte-for-byte.
+        assert existing.read_text(encoding="utf-8").startswith(
+            "---\nfrom: previous run"
+        )
+
+    def test_overwrite_flag_replaces_existing(self, tmp_path):
+        layout = self._init_vault(tmp_path)
+        out_dir = layout.processed_dir / "2026-04"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        existing = out_dir / "2026-04-28_o_r.md"
+        existing.write_text("stale", encoding="utf-8")
+
+        with patch(
+            "ovp_pipeline.auto_github_processor.enrich_github_source",
+            return_value=EnrichedSource(
+                owner="o", repo="r", tier="deepwiki",
+                body="# refreshed body",
+                metadata={"tier": "deepwiki", "github_stars": 1,
+                          "deepwiki_last_indexed": "2026-04-28"},
+            ),
+        ):
+            result = process_single_repo(
+                url="https://github.com/o/r",
+                date="2026-04-28",
+                tags=[],
+                description="",
+                output_dir=out_dir,
+                dry_run=False,
+                overwrite=True,
+            )
+        assert result["status"] == "completed"
+        body = existing.read_text(encoding="utf-8")
+        assert "refreshed body" in body
+        assert "stale" not in body
+
+    def test_dry_run_also_respects_collision_guard(self, tmp_path):
+        """Gemini #164 review: a dry run on an already-processed
+        repo must short-circuit identically to a real run, otherwise
+        the dry-run report says "would process N repos" while the
+        real run would skip them, and we burn API budget probing
+        tiers we'd never write.  Audit-event emission stays off in
+        dry runs so simulated skips don't pollute pipeline.jsonl.
+        """
+        from unittest.mock import MagicMock
+        layout = self._init_vault(tmp_path)
+        out_dir = layout.processed_dir / "2026-04"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        existing = out_dir / "2026-04-28_o_r.md"
+        existing.write_text("prior", encoding="utf-8")
+
+        recorded_logs: list[tuple[str, dict]] = []
+        stub_logger = MagicMock()
+        stub_logger.log = lambda kind, payload: recorded_logs.append((kind, payload))
+
+        with patch(
+            "ovp_pipeline.auto_github_processor.enrich_github_source",
+        ) as enrich_mock:
+            result = process_single_repo(
+                url="https://github.com/o/r",
+                date="2026-04-28",
+                tags=[], description="",
+                output_dir=out_dir,
+                logger=stub_logger,
+                dry_run=True,
+            )
+        assert result["status"] == "skipped_existing"
+        # Tier probing did NOT run on dry run either — the report
+        # accurately reflects what a real run would do.
+        enrich_mock.assert_not_called()
+        # Audit log stays clean during dry runs.
+        assert not any(
+            kind == "github_intake_skipped_existing"
+            for kind, _ in recorded_logs
+        ), f"dry-run polluted the audit log: {recorded_logs}"
 
     @staticmethod
     def _init_vault(tmp_path: Path) -> VaultLayout:

@@ -388,35 +388,64 @@ _README_FILENAMES = (
 _README_BRANCH_FALLBACKS = ("main", "master", "develop", "dev", "trunk")
 
 
-def fetch_readme(owner: str, repo: str) -> tuple[str, int]:
-    """Final fallback — fetch README + stars.
+def fetch_repo_metadata(owner: str, repo: str) -> tuple[Optional[str], int]:
+    """Cheap probe for ``default_branch`` and ``stargazers_count``.
 
-    Strategy:
-      1. Hit ``api.github.com/repos/{owner}/{repo}`` once to get
-         ``default_branch`` and ``stargazers_count`` in a single
-         request.  This handles non-standard branches that the old
-         hardcoded ``main/master/develop`` list missed.
-      2. Try each filename in ``_README_FILENAMES`` against the
-         default branch.
-      3. If that fails (rate-limited API, 404, etc.), fall back to
-         the historical branch+filename grid.
+    Single request to ``api.github.com/repos/{owner}/{repo}`` — no
+    raw README probing.  Used by ``enrich_github_source`` to pay
+    for the metadata once up front so Tier 1/2 can short-circuit
+    without ever touching the README path.
 
-    Always returns a tuple; ``body`` may be empty if the repo has no
-    README anywhere we can find.
+    Pre-fix, the only way to get ``stars`` was via ``fetch_readme``
+    which probed up to 7 README filenames × 5 branches.  That
+    meant DeepWiki-served repos still paid the full Tier-3
+    network cost just to fill in the stars frontmatter field.
+
+    Returns ``(default_branch, stars)``.  ``default_branch`` is
+    ``None`` when the API call fails (rate-limited, repo gone,
+    etc.) — callers should fall back to the hardcoded branch list.
     """
-    stars = 0
-    default_branch: Optional[str] = None
     api_text = _http_get(
         f"https://api.github.com/repos/{owner}/{repo}",
         timeout=10.0,
     )
-    if api_text:
-        try:
-            data = json.loads(api_text)
-            default_branch = data.get("default_branch")
-            stars = int(data.get("stargazers_count", 0) or 0)
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
+    if not api_text:
+        return None, 0
+    try:
+        data = json.loads(api_text)
+        return (
+            data.get("default_branch") or None,
+            int(data.get("stargazers_count", 0) or 0),
+        )
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None, 0
+
+
+def fetch_readme(
+    owner: str, repo: str,
+    *,
+    default_branch: Optional[str] = None,
+) -> tuple[str, int]:
+    """Final fallback — fetch README body.
+
+    Returns ``(body, stars)`` for backward compatibility, but
+    callers that already know the stars (via ``fetch_repo_metadata``)
+    can ignore the second tuple element.  ``default_branch`` lets
+    a caller skip the duplicate API roundtrip — when omitted, this
+    function fetches the metadata itself.
+
+    Strategy when ``default_branch`` is unknown:
+      1. Hit ``api.github.com/repos/{owner}/{repo}`` to get the
+         default branch and stars in one request.
+      2. Try each filename in ``_README_FILENAMES`` against the
+         default branch first, then the hardcoded fallback branches.
+
+    Always returns a tuple; ``body`` may be empty if the repo has
+    no README anywhere we can find.
+    """
+    stars = 0
+    if default_branch is None:
+        default_branch, stars = fetch_repo_metadata(owner, repo)
 
     # Build branch list: API-reported default first, then the hardcoded
     # fallbacks (deduped, preserving order).
@@ -450,9 +479,12 @@ def enrich_github_source(owner: str, repo: str) -> EnrichedSource:
     downstream callers should check ``len(body)`` before trying to
     extract knowledge from it.
     """
-    # Always fetch stars regardless of which tier wins — it's a stable
-    # frontmatter signal independent of body provenance.
-    _, stars = fetch_readme(owner, repo)  # extracts stars cheaply
+    # Stars + default_branch are stable signals independent of body
+    # provenance, but fetching them via ``fetch_readme`` would also
+    # probe up to 7 README files × 5 branches.  Pay the metadata
+    # cost once up front so Tier 1/2 hits don't drag the README
+    # network round-trips along for the ride.
+    default_branch, stars = fetch_repo_metadata(owner, repo)
 
     # Tier 1
     deepwiki_result = fetch_deepwiki(owner, repo)
@@ -468,8 +500,9 @@ def enrich_github_source(owner: str, repo: str) -> EnrichedSource:
         meta["github_stars"] = stars
         return EnrichedSource(owner=owner, repo=repo, tier="gitingest", body=body, metadata=meta)
 
-    # Tier 3 — README only
-    body, stars = fetch_readme(owner, repo)
+    # Tier 3 — README only.  Reuse the default_branch we already
+    # know to avoid a duplicate API hit.
+    body, _ = fetch_readme(owner, repo, default_branch=default_branch)
     return EnrichedSource(
         owner=owner, repo=repo, tier="readme",
         body=body,
