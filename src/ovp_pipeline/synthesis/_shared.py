@@ -41,9 +41,9 @@ def crystal_safe_id(crystal_kind: str, crystal_id: str) -> str:
       * ``community`` crystals: ``cluster::<digest>`` →
         ``<digest>`` (file lives at ``<safe-id>.md``).
       * ``contradiction`` crystals: ``contradiction::<digest>`` →
-        ``contradiction-<digest>`` (file lives at
-        ``contradiction-<safe-id>.md``, single-prefix convention so
-        the directory listing groups them).
+        ``contradiction-<digest>`` (the returned safe-id already
+        carries the ``contradiction-`` prefix, so the on-disk
+        filename is ``<safe-id>.md`` — single prefix, not double).
       * Anything else passes through unchanged — defensive default
         matches the historical behaviour of the duplicated helpers.
     """
