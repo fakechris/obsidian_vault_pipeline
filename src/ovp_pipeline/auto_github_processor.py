@@ -284,10 +284,12 @@ def process_single_repo(
     output_dir: Path,
     logger: PipelineLogger | None = None,
     dry_run: bool = False,
+    overwrite: bool = False,
 ) -> dict[str, Any]:
     """Enrich a single GitHub URL and write the processed markdown.
 
-    Returns a result dict with ``status`` ∈ {completed, skipped, error}.
+    Returns a result dict with ``status`` ∈ {completed, skipped, error,
+    skipped_existing, dry_run}.
 
     Behavioral changes from the pre-BL-066 implementation:
     - No LLM call (no ``llm_client`` parameter).
@@ -297,6 +299,15 @@ def process_single_repo(
     - On total enrichment failure (all 3 tiers empty), we still write
       a frontmatter-only stub so the source is tracked, but flag
       ``status=skipped`` and ``warning="empty_body"``.
+
+    ``overwrite``: when ``False`` (default) and the destination
+    file already exists, return immediately with
+    ``status=skipped_existing`` and emit a
+    ``github_intake_skipped_existing`` audit event.  Re-running
+    intake on the same repo same day used to silently overwrite
+    the prior file — a real risk when DeepWiki was unavailable on
+    the first attempt and a later run got better content (or vice
+    versa).  Set ``overwrite=True`` to deliberately replace.
     """
     result: dict[str, Any] = {
         "url": url,
@@ -314,6 +325,26 @@ def process_single_repo(
             logger.log("github_intake_error", {"url": url, "error": result["error"]})
         return result
     owner, repo = parsed
+
+    # Collision guard — refuse to silently overwrite a prior intake
+    # of the same repo on the same date unless the caller asked for
+    # it explicitly.  Done before tier probing so we don't burn
+    # external API budget on a destination we won't write to.
+    safe_name = _build_output_filename(date, owner, repo)
+    output_path = output_dir / safe_name
+    if not dry_run and not overwrite and output_path.exists():
+        print(
+            f"  ⊘ Skipping {owner}/{repo}: {output_path.name} already "
+            "exists (use --overwrite to refresh)"
+        )
+        result["status"] = "skipped_existing"
+        result["output_file"] = str(output_path)
+        if logger:
+            logger.log("github_intake_skipped_existing", {
+                "url": url, "owner": owner, "repo": repo,
+                "output_file": str(output_path),
+            })
+        return result
 
     print(f"  Enriching {owner}/{repo} (tier 1 → 2 → 3) …")
     try:
@@ -369,8 +400,9 @@ def process_single_repo(
         result["error"] = "empty_body"
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = _build_output_filename(date, owner, repo)
-    output_path = output_dir / safe_name
+    # ``output_path`` was computed earlier (see collision guard above);
+    # re-using the same value keeps the audit-event filename consistent
+    # with what the guard would have rejected.
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(full_content)
 
@@ -462,6 +494,14 @@ def main() -> int:
         help="输出目录（默认：<vault>/50-Inbox/03-Processed/YYYY-MM/）",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--overwrite", action="store_true",
+        help=(
+            "Replace an existing processed source instead of "
+            "skipping.  Without this flag, a second intake of the "
+            "same repo on the same date is a no-op."
+        ),
+    )
     parser.add_argument("--delay", "-d", type=float, default=1.0)
     args = parser.parse_args()
 
@@ -524,6 +564,7 @@ def main() -> int:
             output_dir=output_dir,
             logger=logger,
             dry_run=args.dry_run,
+            overwrite=args.overwrite,
         )
         maybe_archive_pinboard_process_single(
             layout,
@@ -541,7 +582,10 @@ def main() -> int:
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    by_status = {"completed": 0, "skipped": 0, "error": 0, "dry_run": 0}
+    by_status = {
+        "completed": 0, "skipped": 0, "skipped_existing": 0,
+        "error": 0, "dry_run": 0,
+    }
     by_tier = {"deepwiki": 0, "gitingest": 0, "readme": 0, None: 0}
     for r in results:
         by_status[r.get("status", "error")] = by_status.get(r.get("status", "error"), 0) + 1
