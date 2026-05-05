@@ -27,6 +27,54 @@ CRYSTAL_DIR_REL: Path = Path("40-Resources") / "Crystals"
 _OBJECTS_LOOKUP_CHUNK = 500
 
 
+def crystal_safe_id(crystal_kind: str, crystal_id: str) -> str:
+    """Translate a ``crystal_id`` into the on-disk filename stem.
+
+    Pre-fix this prefix-stripping logic was duplicated across
+    ``curated_atlas._crystal_safe_id``, ``community_crystal._safe_id``,
+    ``crystal_fts._community_safe_id`` / ``_contradiction_safe_id``,
+    and ``ui.view_models``'s inline ``_safe_id`` helper.  Single source
+    of truth here so a future rename of the ID format only edits one
+    file.
+
+    Conventions:
+      * ``community`` crystals: ``cluster::<digest>`` →
+        ``<digest>`` (file lives at ``<safe-id>.md``).
+      * ``contradiction`` crystals: ``contradiction::<digest>`` →
+        ``contradiction-<digest>`` (the returned safe-id already
+        carries the ``contradiction-`` prefix, so the on-disk
+        filename is ``<safe-id>.md`` — single prefix, not double).
+      * Anything else passes through unchanged — defensive default
+        matches the historical behaviour of the duplicated helpers.
+    """
+    if crystal_kind == "community" and crystal_id.startswith("cluster::"):
+        return crystal_id[len("cluster::"):]
+    if crystal_kind == "contradiction" and crystal_id.startswith("contradiction::"):
+        return f"contradiction-{crystal_id[len('contradiction::'):]}"
+    return crystal_id
+
+
+def related_notes_section(slugs: tuple[str, ...] | list[str]) -> str:
+    """Render the ``## 相关笔记`` block both crystal modules append
+    to their bodies.
+
+    Pre-fix this was duplicated between
+    ``community_crystal._related_notes_section`` and
+    ``contradiction_crystal._related_notes_section`` — identical
+    bodies, twice the surface area to keep in sync if the format
+    ever changes.
+
+    Source-note backlinks are deterministic by construction here
+    (the LLM used to drop them ~30% of the time when asked to cite
+    in prose), so the Obsidian backlink graph stays sane regardless
+    of prompt drift.
+    """
+    lines = ["## 相关笔记", ""]
+    for slug in slugs:
+        lines.append(f"- [[{slug}]]")
+    return "\n".join(lines)
+
+
 def strip_frontmatter(text: str) -> str:
     """Remove the YAML frontmatter block from an evergreen markdown.
 

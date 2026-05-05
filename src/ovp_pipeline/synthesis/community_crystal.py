@@ -27,20 +27,15 @@ from typing import Iterable, Protocol
 from ..projection_labels import frontmatter_projection_fields
 from ._shared import (
     CRYSTAL_DIR_REL,
+    crystal_safe_id,
     load_evergreen_bodies,
     load_objects_subset,
+    related_notes_section,
     strip_frontmatter,
 )
 from ._versioning import ARCHIVE_DIR_REL, commit_crystal_version
 
 logger = logging.getLogger(__name__)
-
-# Backwards-compat aliases for tests that imported the underscored
-# names before the helpers moved to ``_shared.py``.  External callers
-# should prefer the un-prefixed surface in ``_shared``.
-_strip_frontmatter = strip_frontmatter
-_load_evergreen_bodies = load_evergreen_bodies
-_load_objects_subset = load_objects_subset
 
 
 # ----- Constants ------------------------------------------------------
@@ -269,18 +264,13 @@ def _frontmatter(
 
 
 def _safe_id(cluster_id: str) -> str:
-    """Strip the ``cluster::`` prefix so the result is safe as a
-    filename (Windows refuses ``:``; macOS Finder rewrites it
-    silently).  The remainder is a 12-char SHA1 digest, safe by
-    construction.
+    """Thin shim over :func:`crystal_safe_id` for community crystals.
 
-    Used both for the live filename (``<safe-id>.md``) and the
-    archive subdirectory (``70-Archive/Crystals/<safe-id>/...``) —
-    one source of truth for the safe form.
+    Kept as a private helper so existing call sites stay readable —
+    the equivalent of ``crystal_safe_id("community", cluster_id)``
+    but with the kind already pinned.
     """
-    if cluster_id.startswith("cluster::"):
-        return cluster_id[len("cluster::"):]
-    return cluster_id
+    return crystal_safe_id("community", cluster_id)
 
 
 def _crystal_filename(cluster_id: str) -> str:
@@ -302,18 +292,10 @@ def _sampling_disclosure(*, sample_size: int, community_total: int) -> str:
     )
 
 
-def _related_notes_section(slugs: tuple[str, ...]) -> str:
-    """Machine-generated ``## 相关笔记`` section appended to every
-    crystal body.  Pre-fix wikilinks to source notes were optional
-    and the LLM dropped them ~30% of the time, breaking Obsidian
-    backlinks.  This section makes the source-note linkage
-    deterministic — the LLM can still cite naturally in prose,
-    but the backlink graph is no longer prompt-dependent.
-    """
-    lines = ["## 相关笔记", ""]
-    for slug in slugs:
-        lines.append(f"- [[{slug}]]")
-    return "\n".join(lines)
+# ``_related_notes_section`` lived here as a duplicate of
+# ``contradiction_crystal._related_notes_section``.  The shared
+# implementation lives in ``_shared.related_notes_section`` now;
+# call sites import that directly.
 
 
 def render_crystal_markdown(
@@ -335,7 +317,7 @@ def render_crystal_markdown(
         parts.append("")  # blank line between disclosure and body
     parts.append(crystal.body_md.rstrip())
     parts.append("")  # blank line between body and related-notes
-    parts.append(_related_notes_section(crystal.source_evergreen_slugs))
+    parts.append(related_notes_section(crystal.source_evergreen_slugs))
     return "\n".join(parts) + "\n"
 
 
@@ -426,13 +408,13 @@ def synthesize_community_crystals(
             decoded.append((cluster_id, label, picked, community_total))
             needed_object_ids.update(picked)
 
-        objects_by_id = _load_objects_subset(
+        objects_by_id = load_objects_subset(
             conn, pack_name, needed_object_ids,
         )
 
         out: list[CommunityCrystal] = []
         for cluster_id, label, picked, community_total in decoded:
-            evergreens = _load_evergreen_bodies(
+            evergreens = load_evergreen_bodies(
                 vault_dir, member_object_ids=picked,
                 objects_by_id=objects_by_id,
             )

@@ -53,7 +53,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 
-from ._shared import CRYSTAL_DIR_REL
+from ._shared import CRYSTAL_DIR_REL, crystal_safe_id
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +76,13 @@ _CONTRADICTION_NOTE_TYPE = "contradiction_crystal"
 
 
 def _community_safe_id(cluster_id: str) -> str:
-    if cluster_id.startswith("cluster::"):
-        return cluster_id[len("cluster::"):]
-    return cluster_id
+    return crystal_safe_id("community", cluster_id)
 
 
 def _contradiction_safe_id(contradiction_id: str) -> str:
+    # FTS slug uses the bare digest (no ``contradiction-`` filename
+    # prefix) so callers get ``contradiction:<digest>``, matching the
+    # historical surface that downstream UI code keys off.
     if contradiction_id.startswith("contradiction::"):
         return contradiction_id[len("contradiction::"):]
     return contradiction_id

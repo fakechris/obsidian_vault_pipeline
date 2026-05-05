@@ -11,13 +11,13 @@ import json
 import sqlite3
 from pathlib import Path
 
+from ovp_pipeline.synthesis._shared import strip_frontmatter as _strip_frontmatter
 from ovp_pipeline.synthesis.community_crystal import (
     CRYSTAL_DIR_REL,
     CRYSTAL_PROMPT_VERSION,
     CommunityCrystal,
     _crystal_filename,
     _select_top_members,
-    _strip_frontmatter,
     render_crystal_markdown,
     synthesize_community_crystals,
 )

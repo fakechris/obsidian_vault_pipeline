@@ -251,6 +251,35 @@ def create_server(
         def log_message(self, format: str, *args) -> None:  # pragma: no cover
             return
 
+        def _permanent_redirect(self, status: int, target: str) -> None:
+            """Send a permanent redirect with the standard headers.
+
+            The status-method-body contract here is load-bearing:
+
+              * ``301`` for GETs — browsers update bookmarks.
+              * ``308`` for POSTs — preserves method + body so a
+                form submission is reissued, not silently demoted
+                to a GET.
+
+            Pre-fix this 4-line response was copy-pasted across
+            three sites and a regression that swapped 308→301 on a
+            POST path would silently destroy form submissions.
+            ``Cache-Control: no-store`` is included on every
+            redirect so an upstream proxy can't shortcut the new
+            target.
+            """
+            self.send_response(status)
+            self.send_header("Location", target)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+        def _legacy_target(self, parsed) -> str:
+            """Compose ``/ops/<same>?<query>`` for a legacy path."""
+            target = "/ops" + parsed.path
+            if parsed.query:
+                target = f"{target}?{parsed.query}"
+            return target
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = parsed.path
@@ -259,13 +288,7 @@ def create_server(
             # BL-050: legacy maintainer paths → 301 to /ops/<same>.
             # Preserves any existing query string verbatim.
             if path in _LEGACY_MAINTAINER_PATHS:
-                target = "/ops" + path
-                if parsed.query:
-                    target = f"{target}?{parsed.query}"
-                self.send_response(301)
-                self.send_header("Location", target)
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
+                self._permanent_redirect(301, self._legacy_target(parsed))
                 return
 
             # BL-050: shell selection is decided by URL prefix.  The
@@ -600,10 +623,7 @@ def create_server(
                     target = "/api/topics" if path.startswith("/api/") else "/topics"
                     if parsed.query:
                         target = f"{target}?{parsed.query}"
-                    self.send_response(301)
-                    self.send_header("Location", target)
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
+                    self._permanent_redirect(301, target)
                     return
                 if path == "/api/topics":
                     pack_name = query.get("pack", [""])[0] or None
@@ -968,13 +988,7 @@ def create_server(
             # BL-050: legacy maintainer POST paths → 308 to preserve
             # method + body during the redirect (301 would force GET).
             if path in _LEGACY_MAINTAINER_PATHS:
-                target = "/ops" + path
-                if parsed.query:
-                    target = f"{target}?{parsed.query}"
-                self.send_response(308)
-                self.send_header("Location", target)
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
+                self._permanent_redirect(308, self._legacy_target(parsed))
                 return
 
             set_request_path(path)

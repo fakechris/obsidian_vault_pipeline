@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..projection_labels import frontmatter_projection_fields
+from ._shared import crystal_safe_id as _crystal_safe_id
 
 logger = logging.getLogger(__name__)
 
@@ -278,15 +279,9 @@ def build_curated_atlas(
 # ----- Markdown rendering -------------------------------------------------
 
 
-def _crystal_safe_id(kind: str, crystal_id: str) -> str:
-    """Translate a crystal_id into the on-disk filename prefix.
-    Mirrors ``community_crystal._safe_id`` / ``contradiction_crystal._safe_id``
-    without importing those modules (they own their own truth)."""
-    if kind == "community" and crystal_id.startswith("cluster::"):
-        return crystal_id[len("cluster::"):]
-    if kind == "contradiction" and crystal_id.startswith("contradiction::"):
-        return f"contradiction-{crystal_id[len('contradiction::'):]}"
-    return crystal_id
+# ``_crystal_safe_id`` is re-exported from ``_shared`` (pre-fix this
+# file held a copy of the same prefix-stripping logic — see
+# ``_shared.crystal_safe_id`` for the canonical home).
 
 
 def _crystal_wikilink(kind: str, crystal_id: str, *, label: str) -> str:
