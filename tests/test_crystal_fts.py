@@ -20,6 +20,15 @@ CREATE VIRTUAL TABLE page_fts USING fts5(
   body,
   tokenize='trigram'
 );
+CREATE TABLE pages_index (
+  slug TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  note_type TEXT NOT NULL,
+  path TEXT NOT NULL,
+  day_id TEXT NOT NULL,
+  frontmatter_json TEXT NOT NULL,
+  body TEXT NOT NULL
+);
 CREATE TABLE graph_clusters (
   pack TEXT NOT NULL, cluster_id TEXT NOT NULL, cluster_kind TEXT NOT NULL,
   label TEXT NOT NULL, center_object_id TEXT NOT NULL,
@@ -217,5 +226,91 @@ class TestIndexCrystalsIntoPageFts:
         )
         first = index_crystals_into_page_fts(conn, pack="t")
         conn.execute("DELETE FROM page_fts")
+        conn.execute("DELETE FROM pages_index")
         second = index_crystals_into_page_fts(conn, pack="t")
         assert first == second == 1
+
+
+class TestPagesIndexSync:
+    """Pre-fix the FTS pipeline wrote ``page_fts`` rows but no matching
+    ``pages_index`` rows.  ``/search`` joins both on ``slug`` so the
+    crystal hits got filtered out — search was effectively blind to
+    every crystal in the vault.  These tests pin the join contract.
+    """
+
+    def test_community_crystal_writes_pages_index_row(self):
+        conn = _seed_db()
+        _seed_community_crystal(
+            conn, cluster_id="cluster::abc12345",
+            label="AI alignment topic",
+            body="discusses Karpathy's view on alignment.",
+        )
+        index_crystals_into_page_fts(conn, pack="t")
+        rows = conn.execute(
+            "SELECT slug, title, note_type, path FROM pages_index"
+        ).fetchall()
+        assert rows == [(
+            "crystal:abc12345",
+            "[topic] AI alignment topic",
+            "community_crystal",
+            "40-Resources/Crystals/abc12345.md",
+        )]
+
+    def test_contradiction_crystal_writes_pages_index_row(self):
+        conn = _seed_db()
+        _seed_contradiction_crystal(
+            conn, contradiction_id="contradiction::xy789",
+            subject="memory: stored vs emergent",
+            body="The contradiction body.",
+        )
+        index_crystals_into_page_fts(conn, pack="t")
+        rows = conn.execute(
+            "SELECT slug, title, note_type, path FROM pages_index"
+        ).fetchall()
+        assert rows == [(
+            "contradiction:xy789",
+            "[open question] memory: stored vs emergent",
+            "contradiction_crystal",
+            "40-Resources/Crystals/contradiction-xy789.md",
+        )]
+
+    def test_search_join_finds_crystal_end_to_end(self):
+        # The original bug surface: ``/search`` does
+        # ``page_fts JOIN pages_index ON pages_index.slug = page_fts.slug``.
+        # Pre-fix this join dropped every crystal hit because pages_index
+        # had no row for ``crystal:<id>``.  This is a small replica of
+        # the production query that fails without the pages_index sync.
+        conn = _seed_db()
+        _seed_community_crystal(
+            conn, cluster_id="cluster::aaa",
+            label="agent harness",
+            body="The 12-layer harness lets LLMs build reliable systems.",
+        )
+        # Add an unrelated regular page so we can verify the join keeps
+        # both kinds discoverable.
+        conn.execute(
+            "INSERT INTO pages_index (slug, title, note_type, path, "
+            "day_id, frontmatter_json, body) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("evergreen-x", "evergreen X", "evergreen",
+             "10-Knowledge/Evergreen/evergreen-x.md",
+             "", "{}", "harness adjacent body"),
+        )
+        conn.execute(
+            "INSERT INTO page_fts (slug, title, body) VALUES (?, ?, ?)",
+            ("evergreen-x", "evergreen X", "harness adjacent body"),
+        )
+        index_crystals_into_page_fts(conn, pack="t")
+        hits = conn.execute(
+            """
+            SELECT pages_index.slug, pages_index.note_type
+              FROM page_fts
+              JOIN pages_index ON pages_index.slug = page_fts.slug
+             WHERE page_fts MATCH 'harness'
+             ORDER BY pages_index.slug
+            """
+        ).fetchall()
+        assert hits == [
+            ("crystal:aaa", "community_crystal"),
+            ("evergreen-x", "evergreen"),
+        ]
