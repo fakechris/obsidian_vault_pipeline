@@ -1,19 +1,50 @@
 #!/usr/bin/env python3
-"""
-Auto GitHub Processor - GitHub项目13节深度解读生成器
+"""auto_github_processor — GitHub project intake (BL-066).
 
-针对GitHub项目的特殊处理流程：
-1. 自动获取README和stars数
-2. 生成13节结构化深度解读
-3. 包含ASCII架构图和能力表格
-4. 自动归档到Tools/Topics/YYYY-MM/
+Replaces the previous "13-section deep-dive" LLM rewrite with a
+deterministic enrichment chain that fetches richer source material
+and writes it to ``50-Inbox/03-Processed/{YYYY-MM}/`` so absorb can
+read it directly.
+
+Pipeline integration:
+
+    pinboard_process step calls
+        ovp_pipeline.auto_github_processor --process-single <stub.md>
+
+    For each GitHub URL:
+
+        1. ``enrich_github_source(owner, repo)``
+           - Tier 1: DeepWiki (pre-rendered structured wiki)
+           - Tier 2: GitIngest (clone + concatenated docs)
+           - Tier 3: README from raw.githubusercontent.com
+        2. Write to ``50-Inbox/03-Processed/{YYYY-MM}/<date>_<owner>_<repo>.md``
+           with frontmatter:
+               source: https://github.com/<owner>/<repo>
+               source_type: github-project
+               source_tier: deepwiki | gitingest | readme
+               github_owner / github_repo / github_stars
+               source_fetched_at: <iso>
+               source_indexed_at: <DeepWiki last-indexed, if applicable>
+
+This step does NOT call any LLM — it is now pure intake.  Knowledge
+extraction happens later in absorb, which reads from the same
+``03-Processed/`` directory regardless of source type.
+
+Why we removed the 13-section deep-dive:
+    The 13-section template was an LLM-driven rewrite that forced
+    every repo into the same wiki shape (项目定位 / 技术架构 / 核心
+    能力 / etc.).  absorb would then re-flatten that wiki shape back
+    into atomic units — two LLM passes, both lossy and both
+    abstraction-inflating.  The fidelity audit on 2026-05-05 showed
+    most absorbed evergreens from this path were ``faithful_generic``
+    (the source had specifics, the deep-dive abstracted them away,
+    absorb amplified the loss).  Skipping the deep-dive entirely and
+    feeding richer raw material directly to absorb is strictly better.
 
 Usage:
-    python3 auto_github_processor.py --input github_urls.txt
-    python3 auto_github_processor.py --single https://github.com/owner/repo
-    python3 auto_github_processor.py --input urls.txt --dry-run
-
-输出: 20-Areas/Tools/Topics/YYYY-MM/YYYY-MM-DD_owner_repo_深度解读.md
+    python -m ovp_pipeline.auto_github_processor --single https://github.com/owner/repo
+    python -m ovp_pipeline.auto_github_processor --process-single <pinboard-stub.md>
+    python -m ovp_pipeline.auto_github_processor --input github_urls.txt
 """
 
 from __future__ import annotations
@@ -24,11 +55,9 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 try:
     from .runtime import VaultLayout, resolve_vault_dir
@@ -36,28 +65,17 @@ except ImportError:
     from runtime import VaultLayout, resolve_vault_dir  # type: ignore
 
 try:
-    from .llm_defaults import (
-        DEFAULT_LITELLM_TIMEOUT_SECONDS,
-        DEFAULT_MINIMAX_MODEL,
-        completion_with_litellm_policy,
-        normalize_model_for_api_base,
-        resolve_api_base,
-        resolve_api_key,
+    from .github_enrichment import (
+        EnrichedSource,
+        enrich_github_source,
+        parse_github_url,
     )
 except ImportError:
-    from llm_defaults import (  # type: ignore
-        DEFAULT_LITELLM_TIMEOUT_SECONDS,
-        DEFAULT_MINIMAX_MODEL,
-        completion_with_litellm_policy,
-        normalize_model_for_api_base,
-        resolve_api_base,
-        resolve_api_key,
+    from github_enrichment import (  # type: ignore
+        EnrichedSource,
+        enrich_github_source,
+        parse_github_url,
     )
-
-try:
-    from .markdown_generation import sanitize_generated_markdown
-except ImportError:
-    from markdown_generation import sanitize_generated_markdown  # type: ignore
 
 try:
     from .source_lifecycle import maybe_archive_pinboard_process_single
@@ -66,417 +84,388 @@ except ImportError:
 
 
 VAULT_DIR = resolve_vault_dir()
-DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
-
-# ========== 配置 ==========
-OUTPUT_DIR = DEFAULT_LAYOUT.month_topics_dir("Tools")
-LOG_FILE = DEFAULT_LAYOUT.pipeline_log
 
 
 def load_env_file(vault_dir: Path) -> None:
-    """Load environment variables from the resolved vault root if available."""
+    """Load environment variables from the vault root if present.
+
+    Kept for backward compatibility with callers that expect this
+    function — enrichment itself doesn't need any API keys, but
+    callers may set vault-scoped vars here.
+    """
     env_file = vault_dir / ".env"
     if not env_file.exists():
         return
-
     try:
         from dotenv import load_dotenv
-
         load_dotenv(dotenv_path=env_file, override=True)
     except ImportError:
         pass
 
 
 def build_default_output_dir(vault_dir: Path | str | None = None) -> Path:
-    """Return the default GitHub output directory for a vault."""
-    return VaultLayout.from_vault(vault_dir).month_topics_dir("Tools")
+    """Default output directory for processed GitHub source markdowns.
+
+    Was ``20-Areas/Tools/Topics/YYYY-MM`` (deep-dive layer); now
+    ``50-Inbox/03-Processed/YYYY-MM`` (raw intake layer, alongside
+    article-processor output).  The change is BL-066: github intake
+    no longer produces a "deep-dive" — the enriched body IS the
+    processed source.
+    """
+    layout = VaultLayout.from_vault(vault_dir)
+    month = datetime.now().strftime("%Y-%m")
+    return layout.processed_dir / month
 
 
-@dataclass
-class GitHubRepo:
-    url: str
-    owner: str
-    repo: str
-    date: str
-    tags: list[str]
-    description: str
-    readme_content: str = ""
-    stars: int = 0
+# ---------------------------------------------------------------------------
+# Logging (kept minimal — pipeline_log gets the structured event)
+# ---------------------------------------------------------------------------
 
 
 class PipelineLogger:
-    """统一日志记录"""
+    """Append-only JSONL logger for github intake events."""
 
     def __init__(self, log_file: Path):
         self.log_file = log_file
-        self.session_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()}"
+        self.session_id = (
+            f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()}"
+        )
 
-    def log(self, event_type: str, data: dict[str, Any]):
+    def log(self, event_type: str, data: dict[str, Any]) -> None:
         entry = {
             "timestamp": datetime.now().isoformat(),
             "session_id": self.session_id,
             "event_type": event_type,
-            **data
+            **data,
         }
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-class LiteLLMClient:
-    """LiteLLM client (参考spec-orch实现)"""
-
-    VALID_API_TYPES = ("anthropic", "openai")
-
-    def __init__(
-        self,
-        *,
-        model: str | None = None,
-        api_type: str = "anthropic",
-        api_key: str | None = None,
-        api_base: str | None = None,
-        temperature: float = 0.3,
-    ):
-        if api_type not in self.VALID_API_TYPES:
-            raise ValueError(f"api_type must be one of {self.VALID_API_TYPES}")
-        self.api_type = api_type
-        self._api_key = resolve_api_key(api_key)
-        self.api_base = resolve_api_base(api_base)
-        self.model = normalize_model_for_api_base(
-            model or os.environ.get("AUTO_VAULT_MODEL", DEFAULT_MINIMAX_MODEL),
-            api_type=api_type,
-            api_base=self.api_base,
-            default_model=DEFAULT_MINIMAX_MODEL,
-        )
-        self.temperature = temperature
-        self._total_calls = 0
-        self._total_tokens = 0
-
-        if not self._api_key:
-            raise ValueError("API key required. Set AUTO_VAULT_API_KEY or MINIMAX_API_KEY env var.")
-        try:
-            import litellm as litellm_module
-        except ImportError as exc:
-            raise ValueError("litellm is required. Install with: pip install litellm") from exc
-        self._litellm = litellm_module
-
-    def generate(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        max_tokens: int = 8000,
-    ) -> tuple[str, dict]:
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": self.temperature,
-            "max_tokens": max_tokens,
-            "timeout": DEFAULT_LITELLM_TIMEOUT_SECONDS,
-        }
-        if self._api_key:
-            kwargs["api_key"] = self._api_key
-        if self.api_base:
-            kwargs["api_base"] = self.api_base
-
-        response = completion_with_litellm_policy(self._litellm.completion, kwargs)
-        self._total_calls += 1
-
-        content = response.choices[0].message.content or ""
-        usage = getattr(response, "usage", {})
-        tokens = getattr(usage, "total_tokens", 0) or 0
-        self._total_tokens += tokens
-
-        metadata = {
-            "model": self.model,
-            "tokens": tokens,
-            "finish_reason": response.choices[0].finish_reason,
-        }
-        return content, metadata
-
-    @property
-    def total_calls(self) -> int:
-        return self._total_calls
-
-    @property
-    def total_tokens(self) -> int:
-        return self._total_tokens
+# ---------------------------------------------------------------------------
+# Filename / frontmatter helpers
+# ---------------------------------------------------------------------------
 
 
-class GitHubDepthProcessor:
-    """GitHub项目13节深度解读生成器"""
-
-    SYSTEM_PROMPT = """你是专业的技术文档分析师，负责为GitHub项目创建13节深度解读。
-
-## 13节结构
-
-1. **一句话概述** (One-sentence Summary)
-   - 项目的核心定位和价值主张
-
-2. **项目定位** (Project Positioning)
-   - 在生态系统中的位置
-   - 目标用户群体
-
-3. **README中文简介** (README Summary)
-   - 翻译并提炼README核心内容
-
-4. **核心能力** (Core Capabilities)
-   - 表格形式：能力/说明/证据来源/置信度(1-5)
-
-5. **技术架构** (Technical Architecture)
-   - ASCII图表展示架构层次
-   - 模块之间的关系
-
-6. **关键模块映射** (Module Mapping)
-   - 主要组件及其职责
-
-7. **运行与开发方式** (Usage & Development)
-   - 快速开始指南
-   - 开发环境搭建
-
-8. **外部接口** (External Interfaces)
-   - API设计概览
-   - 集成点
-
-9. **数据流/控制流** (Data & Control Flow)
-   - 关键流程的ASCII图表
-
-10. **技术栈判断** (Technology Stack)
-    - 主要语言和框架
-    - 依赖分析
-
-11. **成熟度与风险** (Maturity & Risks)
-    - 维护状态评估
-    - 潜在风险点
-
-12. **关联概念** (Related Concepts)
-    - [[双括号链接]]到其他笔记
-    - 相关技术栈
-
-13. **页脚** (Footer)
-    - 参考链接
-    - 更新日期
-
-## 输出格式要求
-
-1. YAML frontmatter必须包含：
-   - title: 项目名称
-   - github: 完整URL
-   - owner: 仓库所有者
-   - repo: 仓库名
-   - date: 处理日期
-   - type: github-project
-   - tags: [tool, ai, ...]
-   - stars: star数量
-
-2. 技术架构和数据流必须用ASCII图表
-
-3. 核心能力表格必须有置信度列(1-5)
-
-4. 不确定的信息标注"未知"或"未说明"
-
-5. 无README时基于名称推断，但标注低置信度
-"""
-
-    def __init__(self, llm_client: LiteLLMClient):
-        self.llm = llm_client
-
-    def generate_depth_doc(self, repo: GitHubRepo) -> tuple[str, dict]:
-        user_prompt = f"""为以下GitHub项目创建13节深度解读：
-
-项目URL: {repo.url}
-Owner: {repo.owner}
-Repo: {repo.repo}
-日期: {repo.date}
-Tags: {', '.join(repo.tags)}
-描述: {repo.description}
-Stars: {repo.stars if repo.stars else '未知'}
-
-README内容:
-```
-{repo.readme_content[:8000] if repo.readme_content else '未获取README'}
-```
-
-请严格按照13节结构输出完整Markdown（从--- frontmatter开始）。"""
-
-        content, metadata = self.llm.generate(
-            system_prompt=self.SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            max_tokens=8000,
-        )
-        return sanitize_generated_markdown(content), metadata
+_FILENAME_SAFE = re.compile(r"[^A-Za-z0-9_\-]+")
 
 
-def fetch_github_readme(owner: str, repo: str) -> tuple[str, int]:
-    """获取GitHub项目README和stars数"""
-    import requests
-    import json
-
-    readme_content = ""
-    stars = 0
-
-    # 尝试获取README
-    branches = ["main", "master", "develop"]
-    for branch in branches:
-        for filename in ["README.md", "readme.md"]:
-            url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{filename}"
-            try:
-                resp = requests.get(url, timeout=10)
-                if resp.status_code == 200:
-                    readme_content = resp.text
-                    break
-            except Exception:
-                continue
-        if readme_content:
-            break
-
-    # 获取stars数
-    try:
-        resp = requests.get(
-            f"https://api.github.com/repos/{owner}/{repo}",
-            headers={"Accept": "application/vnd.github.v3+json"},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            stars = resp.json().get("stargazers_count", 0)
-    except Exception:
-        pass
-
-    return readme_content, stars
+def _safe_segment(value: str) -> str:
+    """Make ``owner`` or ``repo`` safe for a filename without losing the
+    canonical github name.  Keep alphanumerics/underscore/hyphen, drop
+    everything else."""
+    out = _FILENAME_SAFE.sub("-", value).strip("-")
+    return out or "unknown"
 
 
-def parse_github_url(url: str) -> tuple[str, str] | None:
-    """解析GitHub URL提取owner和repo"""
-    parsed = urlparse(url)
-    if parsed.netloc not in ["github.com", "www.github.com"]:
-        return None
+def _build_output_filename(date: str, owner: str, repo: str) -> str:
+    """Match the article-processor convention: ``YYYY-MM-DD_<slug>.md``.
 
-    parts = parsed.path.strip("/").split("/")
-    if len(parts) < 2:
-        return None
+    No ``_深度解读`` suffix — this is a raw processed source, not a
+    deep-dive.  Frontmatter ``source_type: github-project`` is what
+    distinguishes it for absorb / index.
+    """
+    return f"{date}_{_safe_segment(owner)}_{_safe_segment(repo)}.md"
 
-    return parts[0], parts[1]
+
+def _yaml_escape(value: Any) -> str:
+    """Minimal YAML scalar escape — wrap in double-quotes when the
+    value contains characters that would confuse a YAML parser."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    s = str(value)
+    if not s:
+        return '""'
+    if any(c in s for c in ':#"\'\\\n[]{}'):
+        escaped = s.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return s
+
+
+def _build_frontmatter(
+    *,
+    title: str,
+    url: str,
+    owner: str,
+    repo: str,
+    date: str,
+    tags: list[str],
+    enriched: EnrichedSource,
+    fetched_at: str,
+) -> str:
+    """Render frontmatter for the processed github markdown."""
+    meta = enriched.metadata
+    fields: list[tuple[str, Any]] = [
+        ("title", title or f"{owner}/{repo}"),
+        ("source", url),
+        ("source_type", "github-project"),
+        ("source_tier", enriched.tier),
+        ("github_owner", owner),
+        ("github_repo", repo),
+    ]
+    if "github_stars" in meta:
+        fields.append(("github_stars", meta["github_stars"]))
+    fields.append(("source_fetched_at", fetched_at))
+
+    # Tier-specific metadata — flat, prefixed so they don't collide.
+    if enriched.tier == "deepwiki":
+        if meta.get("deepwiki_last_indexed"):
+            fields.append(("source_indexed_at", meta["deepwiki_last_indexed"]))
+        if meta.get("deepwiki_section_count") is not None:
+            fields.append(("deepwiki_section_count", meta["deepwiki_section_count"]))
+    elif enriched.tier == "gitingest":
+        if meta.get("gitingest_commit"):
+            fields.append(("gitingest_commit", meta["gitingest_commit"]))
+        if meta.get("gitingest_file_count") is not None:
+            fields.append(("gitingest_file_count", meta["gitingest_file_count"]))
+
+    fields.append(("date", date))
+    fields.append(("type", "raw"))
+    if tags:
+        fields.append(("tags", "[" + ", ".join(_yaml_escape(t) for t in tags) + "]"))
+
+    lines = ["---"]
+    for key, value in fields:
+        if key == "tags":
+            lines.append(f"{key}: {value}")
+        else:
+            lines.append(f"{key}: {_yaml_escape(value)}")
+    lines.append("---")
+    return "\n".join(lines)
+
+
+def _build_body_header(enriched: EnrichedSource, url: str) -> str:
+    """Short provenance preamble at the top of the body so a human
+    reader can see at a glance which tier this came from."""
+    lines = [
+        f"# {enriched.owner}/{enriched.repo}",
+        "",
+        f"_Source: [{url}]({url})_",
+        f"_Enrichment tier: **{enriched.tier}**_",
+    ]
+    meta = enriched.metadata
+    if enriched.tier == "deepwiki":
+        if meta.get("deepwiki_last_indexed"):
+            lines.append(f"_DeepWiki last indexed: {meta['deepwiki_last_indexed']}_")
+    elif enriched.tier == "gitingest":
+        if meta.get("gitingest_commit"):
+            lines.append(f"_GitIngest commit: `{meta['gitingest_commit'][:12]}`_")
+        if meta.get("gitingest_file_count"):
+            lines.append(f"_GitIngest files analyzed: {meta['gitingest_file_count']}_")
+    if "github_stars" in meta:
+        lines.append(f"_Stars: {meta['github_stars']}_")
+    lines.append("")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Core: process one URL
+# ---------------------------------------------------------------------------
 
 
 def process_single_repo(
+    *,
     url: str,
     date: str,
     tags: list[str],
     description: str,
-    llm_client: LiteLLMClient,
     output_dir: Path,
+    logger: PipelineLogger | None = None,
     dry_run: bool = False,
-) -> dict:
-    """处理单个GitHub项目"""
-    result = {
+) -> dict[str, Any]:
+    """Enrich a single GitHub URL and write the processed markdown.
+
+    Returns a result dict with ``status`` ∈ {completed, skipped, error}.
+
+    Behavioral changes from the pre-BL-066 implementation:
+    - No LLM call (no ``llm_client`` parameter).
+    - Output goes to ``50-Inbox/03-Processed/<YYYY-MM>/`` not
+      ``20-Areas/Tools/Topics/<YYYY-MM>/``.
+    - Filename has no ``_深度解读`` suffix.
+    - On total enrichment failure (all 3 tiers empty), we still write
+      a frontmatter-only stub so the source is tracked, but flag
+      ``status=skipped`` and ``warning="empty_body"``.
+    """
+    result: dict[str, Any] = {
         "url": url,
         "status": "pending",
         "output_file": None,
-        "tokens_used": 0,
+        "tier": None,
         "error": None,
     }
 
-    # 解析URL
     parsed = parse_github_url(url)
     if not parsed:
         result["status"] = "error"
         result["error"] = "Invalid GitHub URL"
+        if logger:
+            logger.log("github_intake_error", {"url": url, "error": result["error"]})
+        return result
+    owner, repo = parsed
+
+    print(f"  Enriching {owner}/{repo} (tier 1 → 2 → 3) …")
+    try:
+        enriched = enrich_github_source(owner, repo)
+    except Exception as exc:  # noqa: BLE001 — enrichment is best-effort
+        result["status"] = "error"
+        result["error"] = f"enrich_github_source failed: {exc}"
+        if logger:
+            logger.log("github_intake_error", {"url": url, "error": result["error"]})
         return result
 
-    owner, repo_name = parsed
+    result["tier"] = enriched.tier
+    print(f"  → tier: {enriched.tier}, body: {len(enriched.body)} chars")
 
-    # 获取README
-    print(f"  Fetching README for {owner}/{repo_name}...")
-    readme_content, stars = fetch_github_readme(owner, repo_name)
+    if dry_run:
+        result["status"] = "dry_run"
+        result["output_file"] = "(dry run)"
+        return result
 
-    repo = GitHubRepo(
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    title = description.strip() if description else f"{owner}/{repo}"
+
+    frontmatter = _build_frontmatter(
+        title=title,
         url=url,
         owner=owner,
-        repo=repo_name,
+        repo=repo,
         date=date,
         tags=tags,
-        description=description,
-        readme_content=readme_content,
-        stars=stars,
+        enriched=enriched,
+        fetched_at=fetched_at,
     )
+    body_header = _build_body_header(enriched, url)
 
-    # 生成深度解读
-    print(f"  Generating 13-section depth document...")
-    processor = GitHubDepthProcessor(llm_client)
+    if enriched.body.strip():
+        full_content = f"{frontmatter}\n\n{body_header}\n{enriched.body}\n"
+        result_status = "completed"
+    else:
+        # All tiers returned empty body — still record the source, but
+        # mark as skipped so absorb won't try to extract from it.
+        full_content = (
+            f"{frontmatter}\n\n{body_header}\n"
+            "_All enrichment tiers returned empty content. "
+            "This source has been recorded but contains no extractable body._\n"
+        )
+        result_status = "skipped"
+        result["error"] = "empty_body"
 
-    try:
-        content, metadata = processor.generate_depth_doc(repo)
-        result["tokens_used"] = metadata.get("tokens", 0)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = _build_output_filename(date, owner, repo)
+    output_path = output_dir / safe_name
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(full_content)
 
-        if dry_run:
-            result["status"] = "dry_run"
-            result["output_file"] = "(dry run)"
-            return result
+    result["status"] = result_status
+    result["output_file"] = str(output_path)
+    print(f"  ✓ Wrote: {output_path}")
 
-        # 写入文件
-        output_dir.mkdir(parents=True, exist_ok=True)
-        safe_name = f"{date}_{owner}_{repo_name}_深度解读.md"
-        output_path = output_dir / safe_name
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(content)
-
-        result["status"] = "completed"
-        result["output_file"] = str(output_path)
-        print(f"  ✓ Created: {output_path}")
-
-    except Exception as e:
-        result["status"] = "error"
-        result["error"] = str(e)
-        print(f"  ✗ Error: {e}")
-
+    if logger:
+        logger.log("github_intake_completed", {
+            "url": url,
+            "owner": owner,
+            "repo": repo,
+            "tier": enriched.tier,
+            "body_chars": len(enriched.body),
+            "output_file": str(output_path),
+            "status": result_status,
+        })
     return result
 
 
-def main():
-    parser = argparse.ArgumentParser(description="GitHub项目13节深度解读生成器")
-    parser.add_argument("--input", "-i", help="输入文件（每行一个GitHub URL）")
-    parser.add_argument("--single", "-s", help="单个GitHub URL")
-    parser.add_argument("--process-single", type=Path,
-                        help="处理单个 pinboard 书签文件，提取 URL 并深度解读")
-    parser.add_argument("--vault-dir", type=Path, default=None,
-                        help="Vault 根目录（默认: 当前工作目录）")
-    parser.add_argument("--output-dir", "-o", type=Path, default=None,
-                        help="输出目录（默认: <vault>/20-Areas/Tools/Topics/YYYY-MM）")
-    parser.add_argument("--model", "-m", default=None, help="LLM模型（默认读取 AUTO_VAULT_MODEL）")
-    parser.add_argument("--api-type", default="anthropic", choices=["anthropic", "openai"])
-    parser.add_argument("--api-key", help="API Key（或设置AUTO_VAULT_API_KEY环境变量）")
-    parser.add_argument("--api-base", help="API Base URL")
-    parser.add_argument("--dry-run", action="store_true", help="预览模式")
-    parser.add_argument("--delay", "-d", type=float, default=1.0, help="调用间隔（秒）")
+# ---------------------------------------------------------------------------
+# Pinboard stub parsing (used by --process-single)
+# ---------------------------------------------------------------------------
 
+
+def _parse_pinboard_stub(path: Path) -> dict[str, Any] | None:
+    """Read a pinboard-style stub and extract URL/title/date/tags.
+
+    The pinboard intake writes frontmatter like::
+
+        ---
+        title: "owner/repo"
+        source: https://github.com/owner/repo
+        date: 2026-04-28
+        tags: [github, agent]
+        ---
+
+    We do a light regex parse — the pinboard step writes deterministic
+    frontmatter so we don't need a full YAML parser here.
+    """
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    source_match = re.search(r"^source\s*:\s*(.+)$", content, re.MULTILINE)
+    if not source_match:
+        return None
+    title_match = re.search(r'^title\s*:\s*"?([^"\n]+?)"?\s*$', content, re.MULTILINE)
+    date_match = re.search(r"^date\s*:\s*(.+)$", content, re.MULTILINE)
+    tags_match = re.search(r"^tags\s*:\s*\[(.+?)\]", content, re.MULTILINE)
+
+    return {
+        "url": source_match.group(1).strip().strip('"'),
+        "title": title_match.group(1).strip() if title_match else "",
+        "date": (
+            date_match.group(1).strip() if date_match
+            else datetime.now().strftime("%Y-%m-%d")
+        ),
+        "tags": (
+            [t.strip().strip('"') for t in tags_match.group(1).split(",")]
+            if tags_match else []
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="ovp-github",
+        description=(
+            "GitHub source enrichment (DeepWiki → GitIngest → README). "
+            "Outputs to 50-Inbox/03-Processed/, NOT 20-Areas/Tools/Topics/."
+        ),
+    )
+    parser.add_argument("--input", "-i", help="文件路径，每行一个 GitHub URL")
+    parser.add_argument("--single", "-s", help="单个 GitHub URL")
+    parser.add_argument(
+        "--process-single", type=Path,
+        help="处理单个 pinboard 书签文件，提取 URL 并跑 enrichment",
+    )
+    parser.add_argument("--vault-dir", type=Path, default=None)
+    parser.add_argument(
+        "--output-dir", "-o", type=Path, default=None,
+        help="输出目录（默认：<vault>/50-Inbox/03-Processed/YYYY-MM/）",
+    )
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--delay", "-d", type=float, default=1.0)
     args = parser.parse_args()
 
     if not any([args.input, args.single, args.process_single]):
         parser.print_help()
-        sys.exit(1)
+        return 1
 
     layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
     load_env_file(layout.vault_dir)
-    args.output_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else build_default_output_dir(layout.vault_dir)
+    output_dir = (
+        Path(args.output_dir).expanduser().resolve()
+        if args.output_dir else build_default_output_dir(layout.vault_dir)
+    )
+    logger = PipelineLogger(layout.pipeline_log)
 
-    # 初始化LLM
-    try:
-        llm_client = LiteLLMClient(
-            model=args.model,
-            api_type=args.api_type,
-            api_key=args.api_key,
-            api_base=args.api_base,
-        )
-        print(f"✓ LLM Client: {llm_client.model}")
-    except ValueError as e:
-        print(f"✗ {e}")
-        sys.exit(1)
-
-    # 构建URL列表
-    urls_to_process = []
+    # Build URL list
+    urls_to_process: list[dict[str, Any]] = []
     if args.single:
         urls_to_process.append({
             "url": args.single,
@@ -496,36 +485,22 @@ def main():
                         "description": "",
                     })
     elif args.process_single:
-        # 从 pinboard 文件读取 frontmatter 提取 URL
-        import re
-        content = args.process_single.read_text(encoding="utf-8")
-        source_match = re.search(r'^source:\s*(.+)$', content, re.MULTILINE)
-        title_match = re.search(r'^title:\s*"?(.+?)"?\s*$', content, re.MULTILINE)
-        date_match = re.search(r'^date:\s*(.+)$', content, re.MULTILINE)
-        tags_match = re.search(r'^tags:\s*\[(.+?)\]', content, re.MULTILINE)
-
-        if not source_match:
+        stub = _parse_pinboard_stub(args.process_single)
+        if not stub:
             print(f"❌ 无法从文件提取 source URL: {args.process_single}")
-            sys.exit(1)
-
-        source = source_match.group(1).strip()
-        title = title_match.group(1).strip() if title_match else None
-        date = date_match.group(1).strip() if date_match else datetime.now().strftime("%Y-%m-%d")
-        tags = [t.strip() for t in tags_match.group(1).split(",")] if tags_match else []
-
+            return 1
         urls_to_process.append({
-            "url": source,
-            "date": date,
-            "tags": tags,
-            "description": title or "",
+            "url": stub["url"],
+            "date": stub["date"],
+            "tags": stub["tags"],
+            "description": stub["title"],
         })
 
-    print(f"\nProcessing {len(urls_to_process)} GitHub repositories...")
-    print(f"Output: {args.output_dir}")
+    print(f"\nProcessing {len(urls_to_process)} GitHub repositories…")
+    print(f"Output: {output_dir}")
     print("=" * 60)
 
-    # 处理
-    results = []
+    results: list[dict[str, Any]] = []
     for i, item in enumerate(urls_to_process, 1):
         print(f"\n[{i}/{len(urls_to_process)}] {item['url']}")
         result = process_single_repo(
@@ -533,36 +508,41 @@ def main():
             date=item["date"],
             tags=item["tags"],
             description=item["description"],
-            llm_client=llm_client,
-            output_dir=args.output_dir,
+            output_dir=output_dir,
+            logger=logger,
             dry_run=args.dry_run,
         )
         maybe_archive_pinboard_process_single(
             layout,
-            args.process_single if args.process_single and len(urls_to_process) == 1 else None,
+            (
+                args.process_single
+                if args.process_single and len(urls_to_process) == 1 else None
+            ),
             result,
             dry_run=args.dry_run,
         )
         results.append(result)
-
         if i < len(urls_to_process):
             time.sleep(args.delay)
 
-    # 汇总
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    successful = sum(1 for r in results if r["status"] == "completed")
-    failed = sum(1 for r in results if r["status"] == "error")
-    total_tokens = sum(r.get("tokens_used", 0) for r in results)
+    by_status = {"completed": 0, "skipped": 0, "error": 0, "dry_run": 0}
+    by_tier = {"deepwiki": 0, "gitingest": 0, "readme": 0, None: 0}
+    for r in results:
+        by_status[r.get("status", "error")] = by_status.get(r.get("status", "error"), 0) + 1
+        by_tier[r.get("tier")] = by_tier.get(r.get("tier"), 0) + 1
+    print(f"Total: {len(results)}")
+    for status, n in by_status.items():
+        if n:
+            print(f"  {status:10s}: {n}")
+    print("Tier breakdown:")
+    for tier in ("deepwiki", "gitingest", "readme"):
+        print(f"  {tier:10s}: {by_tier.get(tier, 0)}")
 
-    print(f"Total: {len(results)} | Success: {successful} | Failed: {failed}")
-    print(f"Total Tokens: {total_tokens:,}")
-    print(f"Total Calls: {llm_client.total_calls}")
-
-    return 0 if failed == 0 else 1
+    return 0 if by_status["error"] == 0 else 1
 
 
 if __name__ == "__main__":
-    import json
     sys.exit(main())

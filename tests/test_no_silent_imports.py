@@ -32,7 +32,7 @@ def repo_root() -> Path:
 LEGACY_SILENT_IMPORTS = {
     ("auto_evergreen_extractor.py", 163),      # dotenv optional (BL-054 added helpers above it)
     ("auto_article_processor.py", 113),         # dotenv optional
-    ("auto_github_processor.py", 82),           # dotenv optional
+    ("auto_github_processor.py", 99),           # dotenv optional (BL-066 rewrote module, line shifted)
     ("auto_moc_updater.py", 51),                # dotenv optional
     ("auto_paper_processor.py", 86),            # dotenv optional
     ("clippings_processor.py", 51),             # dotenv optional

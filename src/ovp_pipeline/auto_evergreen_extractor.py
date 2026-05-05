@@ -884,8 +884,11 @@ class AutoEvergreenExtractor:
         if not directory.exists():
             return []
 
-        # 只处理深度解读文件
+        # 处理深度解读文件 + BL-066 github-project 源(后者无 _深度解读 后缀)
         files = list(directory.glob("*_深度解读.md"))
+        for candidate in directory.glob("*.md"):
+            if candidate not in files and _is_github_source_markdown(candidate):
+                files.append(candidate)
 
         results = []
         for file_path in files:
@@ -954,6 +957,77 @@ def _reject_intake_source_target(layout: VaultLayout, path: Path) -> None:
             )
 
 
+_GITHUB_SOURCE_FRONTMATTER_MARKER = "source_type: github-project"
+
+
+def _is_github_source_markdown(path: Path) -> bool:
+    """Return True if ``path`` is a github-project source written by
+    auto_github_processor (BL-066).
+
+    Detection is purely by frontmatter line — we don't parse YAML
+    because we read this on every absorb scan and want it cheap.  The
+    line ``source_type: github-project`` (with or without surrounding
+    quotes) appears in the frontmatter block written by
+    ``_build_frontmatter`` in auto_github_processor.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            head = f.read(2048)
+    except (OSError, UnicodeDecodeError):
+        return False
+    if not head.startswith("---"):
+        return False
+    # Stop scanning at the closing fence — don't false-match on body
+    # text that happens to contain the marker.
+    end = head.find("---", 3)
+    fm_block = head[:end] if end > 0 else head
+    return _GITHUB_SOURCE_FRONTMATTER_MARKER in fm_block
+
+
+def _collect_processed_github_sources(
+    layout: VaultLayout,
+    *,
+    month_names: set[str] | None = None,
+    cutoff: datetime | None = None,
+) -> list[Path]:
+    """Scan ``50-Inbox/03-Processed/<YYYY-MM>/`` for github-source
+    markdowns (BL-066).  Used by the ``recent`` branch of
+    ``_collect_absorb_targets`` so github intakes flow into absorb on
+    the same schedule as deep-dives.
+
+    ``month_names`` filters which month dirs to scan; ``cutoff`` filters
+    by file mtime.  When both are None, returns all github sources
+    under processed_dir.
+    """
+    if not layout.processed_dir.exists():
+        return []
+    out: list[Path] = []
+    seen: set[str] = set()
+    for month_dir in sorted(layout.processed_dir.iterdir()):
+        if not month_dir.is_dir():
+            continue
+        if month_names is not None and month_dir.name not in month_names:
+            continue
+        for candidate in sorted(month_dir.glob("*.md")):
+            if cutoff is not None:
+                try:
+                    modified_at = datetime.fromtimestamp(
+                        candidate.stat().st_mtime, tz=timezone.utc,
+                    )
+                except OSError:
+                    continue
+                if modified_at < cutoff:
+                    continue
+            if not _is_github_source_markdown(candidate):
+                continue
+            key = str(candidate.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(candidate)
+    return out
+
+
 def _collect_absorb_targets(
     layout: VaultLayout,
     *,
@@ -968,7 +1042,14 @@ def _collect_absorb_targets(
         _reject_intake_source_target(layout, directory)
         if not directory.exists():
             return []
+        # Pick up both the legacy deep-dive layer and BL-066 github
+        # sources that landed in the same staging dir (e.g. when
+        # absorb is invoked with ``--directory 50-Inbox/03-Processed``
+        # directly).
         targets = sorted(directory.glob("*_深度解读.md"))
+        for candidate in sorted(directory.glob("*.md")):
+            if candidate not in targets and _is_github_source_markdown(candidate):
+                targets.append(candidate)
         for target in targets:
             _reject_intake_source_target(layout, target)
         return targets
@@ -1004,6 +1085,18 @@ def _collect_absorb_targets(
                         continue
                     seen.add(key)
                     ordered.append(candidate)
+        # BL-066: also pick up github-project sources from
+        # 50-Inbox/03-Processed/<YYYY-MM>/ written by the new github
+        # intake.  These land outside 20-Areas so the deep-dive scan
+        # above misses them.
+        for candidate in _collect_processed_github_sources(
+            layout, month_names=month_names, cutoff=cutoff,
+        ):
+            key = str(candidate.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(candidate)
         return ordered
     raise ValueError("one of file_path, directory, or recent must be provided")
 
