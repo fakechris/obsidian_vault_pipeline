@@ -35,6 +35,11 @@ from ovp_pipeline.commands.ui_server import (
 )
 
 
+# Generous request budget — these tests run against an in-process
+# HTTP server, so anything more than a few hundred ms is a hang.
+_REQUEST_TIMEOUT_SECONDS = 5
+
+
 # A subset of the 30+ legacy paths — enough to prove the table is
 # scanned, not all of them (the full sweep would just multiply
 # server-startup cost without adding signal).  Pick representatives
@@ -93,7 +98,7 @@ def _request_no_follow(
     """
     server, thread, port = _start_server(temp_vault)
     try:
-        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn = HTTPConnection("127.0.0.1", port, timeout=_REQUEST_TIMEOUT_SECONDS)
         encoded = body.encode("utf-8") if body else b""
         if method == "POST":
             conn.request(
@@ -239,16 +244,35 @@ class TestLegacyTableFullSweep:
         server, thread, port = _start_server(temp_vault)
         try:
             for legacy_path in sorted(_LEGACY_MAINTAINER_PATHS):
-                conn = HTTPConnection("127.0.0.1", port, timeout=5)
-                conn.request("GET", legacy_path)
-                response = conn.getresponse()
-                response.read()
+                # Context-manage the connection so an assertion failure
+                # mid-loop still releases the socket on the way out.
+                conn = HTTPConnection(
+                    "127.0.0.1", port, timeout=_REQUEST_TIMEOUT_SECONDS,
+                )
+                try:
+                    conn.request("GET", legacy_path)
+                    response = conn.getresponse()
+                    location = response.getheader("Location")
+                    response.read()
+                except (ConnectionResetError, OSError):
+                    # See _request_no_follow's note: BaseHTTPRequestHandler
+                    # closes the socket before the body fully drains.
+                    pass
+                finally:
+                    conn.close()
                 assert response.status == 301, (
                     f"GET {legacy_path}: expected 301, got "
                     f"{response.status}.  Either the path is missing "
                     "from the redirect handler or the table entry "
                     "is stale — keep both in sync."
                 )
-                conn.close()
+                # Also pin the destination so a future refactor can't
+                # land /candidates → /ops/elsewhere without a failing
+                # test.  The contract is dead-simple: prefix /ops, keep
+                # the rest of the path verbatim.
+                assert location == "/ops" + legacy_path, (
+                    f"GET {legacy_path}: expected redirect to "
+                    f"/ops{legacy_path}, got Location={location!r}"
+                )
         finally:
             _stop_server(server, thread)
