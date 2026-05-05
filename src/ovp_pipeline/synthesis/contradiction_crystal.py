@@ -530,6 +530,15 @@ def synthesize_contradiction_crystals(
                 new_markdown=render_crystal_markdown(crystal),
                 live_path=target,
                 archive_subdir=archive_subdir,
+                # BL-056: stage emit for the contradiction-crystal
+                # synthesis event.  Audits the model + prompt version
+                # used to render the open-question crystal.
+                provenance_stage="synthesize_contradiction_crystal",
+                provenance_metadata={
+                    "llm_model": crystal.llm_model,
+                    "prompt_version": crystal.prompt_version,
+                    "subject_key": crystal.subject_key,
+                },
             )
         return out
     finally:

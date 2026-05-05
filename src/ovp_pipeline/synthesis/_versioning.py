@@ -70,6 +70,8 @@ def commit_crystal_version(
     new_markdown: str,
     live_path: Path,
     archive_subdir: Path,
+    provenance_stage: str | None = None,
+    provenance_metadata: dict | None = None,
 ) -> str | None:
     """Commit one new crystal version with safe failure ordering.
 
@@ -104,6 +106,14 @@ def commit_crystal_version(
                 live_path, exc,
             )
 
+    # BL-056: stage emit hook.  The caller passes
+    # ``provenance_stage`` (e.g. ``synthesize_community_crystal`` /
+    # ``synthesize_contradiction_crystal``) — we write a row inside
+    # the same transaction as the crystal INSERT so the audit log
+    # is consistent with the live row state.  Best-effort: if the
+    # provenance schema is missing (legacy DB pre-BL-055) the helper
+    # logs and continues.
+
     # Step 2: durable DB transaction.
     cur = conn.execute(
         f"SELECT synthesized_at FROM {table} "  # noqa: S608  static identifiers
@@ -130,6 +140,21 @@ def commit_crystal_version(
                 (new_synthesized_at, pack, key_value, prior_at),
             )
         conn.execute(insert_sql, insert_params)
+        if provenance_stage:
+            from ..provenance import upsert_provenance
+            upsert_provenance(
+                conn,
+                pack=pack,
+                # Use the crystal-id-as-object-id convention: scoring
+                # already keys ``crystal_scores`` off
+                # ``(pack, crystal_kind, crystal_id)``.  Reusing
+                # ``key_value`` keeps the join readable.
+                object_id=key_value,
+                derived_via_stage=provenance_stage,
+                derived_at=new_synthesized_at,
+                parent_object_id=None,
+                metadata=provenance_metadata or {},
+            )
         conn.commit()
     except Exception:
         conn.rollback()

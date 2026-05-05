@@ -667,6 +667,56 @@ def list_candidate_concepts(
     }
 
 
+def _emit_promote_provenance(
+    vault_dir: Path,
+    *,
+    pack_name: str,
+    target_slug: str,
+    lifecycle_action: str,
+    source_slug: str,
+    note: str = "",
+) -> None:
+    """BL-056: write one ``stage='promote'`` (or ``'merge'``) row to
+    the provenance audit log.  Reads the freshly-rebuilt
+    ``objects.source_url`` for ``target_slug`` so the promote row is
+    consistent with the ingest row written by the rebuild.
+
+    Best-effort.  ``provenance.upsert_provenance`` itself swallows
+    schema-not-present errors; this helper only protects against
+    the DB connect failing entirely (e.g. file permission flakes).
+    """
+    import sqlite3
+
+    from .provenance import upsert_provenance
+    from .runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(vault_dir)
+    if not layout.knowledge_db.exists():
+        return
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        row = conn.execute(
+            "SELECT source_url FROM objects WHERE pack=? AND object_id=?",
+            (pack_name, target_slug),
+        ).fetchone()
+        source_url = (row or ("",))[0] or ""
+        metadata: dict[str, Any] = {
+            "lifecycle_action": lifecycle_action,
+            "candidate_slug": source_slug,
+        }
+        if note:
+            metadata["note"] = note
+        upsert_provenance(
+            conn,
+            pack=pack_name,
+            object_id=target_slug,
+            derived_via_stage="promote",
+            source_url=source_url,
+            parent_object_id=source_slug if source_slug != target_slug else None,
+            metadata=metadata,
+        )
+        conn.commit()
+
+
 def review_candidate_concept(
     vault_dir: Path | str,
     *,
@@ -717,6 +767,27 @@ def review_candidate_concept(
         except Exception as exc:
             knowledge_index_error = str(exc)
             rebuild_exception = exc
+
+    # BL-056: emit a ``stage='promote'`` (or ``'merge'``) provenance
+    # row for the resulting evergreen, in addition to the
+    # ``stage='ingest'`` row the rebuild already wrote.  Best-effort:
+    # provenance failure must not abort the review action's primary
+    # commit.
+    if knowledge_index_rebuilt and lifecycle_action in {"promote", "merge"}:
+        try:
+            _emit_promote_provenance(
+                resolved_vault,
+                pack_name=_truth_pack_name(pack_name),
+                target_slug=mutation.target_slug or normalized_slug,
+                lifecycle_action=lifecycle_action,
+                source_slug=normalized_slug,
+                note=note,
+            )
+        except Exception as exc:  # noqa: BLE001 — never block the review path
+            import logging
+            logging.getLogger(__name__).warning(
+                "provenance emit for promote/merge failed: %s", exc,
+            )
 
     status_by_action = {
         "promote": "promoted",
