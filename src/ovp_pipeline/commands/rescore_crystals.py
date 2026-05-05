@@ -60,6 +60,14 @@ def main(argv: list[str] | None = None) -> int:
             scores = rebuild_crystal_scores(
                 conn, vault_dir=vault, pack=args.pack,
             )
+            # ``rebuild_crystal_scores`` no longer commits — the
+            # caller owns the transaction so it can be safely composed
+            # inside ``rebuild_knowledge_index``.  This CLI is the
+            # standalone case so we commit here.
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

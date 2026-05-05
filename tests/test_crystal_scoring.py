@@ -389,6 +389,10 @@ class TestRebuildEndToEnd:
             rebuild_crystal_scores(
                 conn, vault_dir=vault, pack="research-tech",
             )
+            # The caller owns the transaction now (see crystal_scoring
+            # docstring): commit before closing so a fresh connection
+            # below can read what we just wrote.
+            conn.commit()
         finally:
             conn.close()
         conn = sqlite3.connect(db)
@@ -706,3 +710,67 @@ class TestArchitectureBoundary:
             assert s1.signals.contradiction_norm == s2.signals.contradiction_norm
             # Score within tolerance (only recency drifts).
             assert abs(s1.score - s2.score) < 1e-3
+
+
+class TestTransactionContract:
+    """Regression: ``rebuild_crystal_scores`` must NOT commit or
+    rollback on its own — the caller owns the transaction.
+
+    Pre-fix the function called ``conn.commit()`` on success and
+    ``conn.rollback()`` on failure.  When invoked inside
+    ``rebuild_knowledge_index``'s outer transaction (the production
+    path), a scoring failure would silently roll back unrelated
+    upstream writes (raw_data, audit_events, page_embeddings, …)
+    and the caller's ``except`` clause would swallow the error and
+    keep going, leaving the DB partially populated.
+    """
+
+    def test_uncommitted_writes_invisible_to_other_conn(self, tmp_path):
+        # rebuild_crystal_scores writes rows but does not commit.
+        # A separate connection must NOT see them.
+        vault, db = _build_seeded_vault(tmp_path)
+        conn1 = sqlite3.connect(db)
+        try:
+            scores = rebuild_crystal_scores(
+                conn1, vault_dir=vault, pack="research-tech",
+            )
+            assert len(scores) == 3
+            # Same-conn read sees pending writes.
+            same_conn_count = conn1.execute(
+                "SELECT COUNT(*) FROM crystal_scores"
+            ).fetchone()[0]
+            assert same_conn_count == 3
+            # Cross-conn read must not see uncommitted state.
+            conn2 = sqlite3.connect(db)
+            try:
+                cross_conn_count = conn2.execute(
+                    "SELECT COUNT(*) FROM crystal_scores"
+                ).fetchone()[0]
+            finally:
+                conn2.close()
+            assert cross_conn_count == 0, (
+                "rebuild_crystal_scores must not commit; the caller "
+                "owns the transaction so it can be safely composed "
+                "inside rebuild_knowledge_index's outer transaction."
+            )
+        finally:
+            conn1.close()
+
+    def test_caller_rollback_undoes_score_writes(self, tmp_path):
+        # If the caller rolls back, the score rows must vanish.
+        # Pre-fix the inner commit had already persisted them, so a
+        # caller rollback was a no-op — that's the bug class this
+        # test pins down.
+        vault, db = _build_seeded_vault(tmp_path)
+        conn = sqlite3.connect(db)
+        try:
+            rebuild_crystal_scores(
+                conn, vault_dir=vault, pack="research-tech",
+            )
+            conn.rollback()
+            n = conn.execute(
+                "SELECT COUNT(*) FROM crystal_scores"
+            ).fetchone()[0]
+            assert n == 0
+        finally:
+            conn.close()
