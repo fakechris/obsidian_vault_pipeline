@@ -92,7 +92,7 @@ def _seed_crystals(db_path):
 
 
 def test_rebuild_preserves_community_crystals(temp_vault):
-    rebuild_knowledge_index(temp_vault)
+    rebuild_knowledge_index(temp_vault, pack_name=PACK)
     db_path = VaultLayout.from_vault(temp_vault).knowledge_db
     _seed_crystals(db_path)
     with sqlite3.connect(db_path) as conn:
@@ -101,7 +101,7 @@ def test_rebuild_preserves_community_crystals(temp_vault):
         ).fetchone()[0]
     assert before == 1
 
-    rebuild_knowledge_index(temp_vault)
+    rebuild_knowledge_index(temp_vault, pack_name=PACK)
 
     with sqlite3.connect(db_path) as conn:
         after = conn.execute(
@@ -116,11 +116,11 @@ def test_rebuild_preserves_community_crystals(temp_vault):
 
 
 def test_rebuild_preserves_contradiction_crystals(temp_vault):
-    rebuild_knowledge_index(temp_vault)
+    rebuild_knowledge_index(temp_vault, pack_name=PACK)
     db_path = VaultLayout.from_vault(temp_vault).knowledge_db
     _seed_crystals(db_path)
 
-    rebuild_knowledge_index(temp_vault)
+    rebuild_knowledge_index(temp_vault, pack_name=PACK)
 
     with sqlite3.connect(db_path) as conn:
         n = conn.execute(

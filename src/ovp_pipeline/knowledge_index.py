@@ -332,52 +332,51 @@ def _preserve_existing_truth_rows(
         source_conn = sqlite3.connect(source_db_path)
     except sqlite3.DatabaseError:
         return
+    def _copy_table(
+        table_name: str,
+        columns: tuple[str, ...],
+        *,
+        where_excludes_current: bool,
+    ) -> list[tuple[Any, ...]]:
+        column_sql = ", ".join(columns)
+        if where_excludes_current:
+            sql = f"SELECT {column_sql} FROM {table_name} WHERE pack != ? ORDER BY pack"
+            params: tuple[Any, ...] = (exclude_pack,)
+        else:
+            sql = f"SELECT {column_sql} FROM {table_name} ORDER BY pack"
+            params = ()
+        try:
+            rows = source_conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError as exc:
+            error_text = str(exc).lower()
+            if "no such table" in error_text or "no such column" in error_text:
+                return []
+            raise
+        if not rows:
+            return []
+        placeholders = ", ".join("?" for _ in columns)
+        dest_conn.executemany(
+            f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
+            rows,
+        )
+        return rows
+
     try:
         for table_name, columns in TRUTH_PROJECTION_TABLE_COLUMNS.items():
-            column_sql = ", ".join(columns)
-            try:
-                rows = source_conn.execute(
-                    f"SELECT {column_sql} FROM {table_name} WHERE pack != ? ORDER BY pack",
-                    (exclude_pack,),
-                ).fetchall()
-            except sqlite3.OperationalError as exc:
-                error_text = str(exc).lower()
-                if "no such table" in error_text or "no such column" in error_text:
-                    continue
-                raise
-            if not rows:
-                continue
-            placeholders = ", ".join("?" for _ in columns)
-            dest_conn.executemany(
-                f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
-                rows,
-            )
+            rows = _copy_table(table_name, columns, where_excludes_current=True)
             preserved_packs.update(str(row[0]) for row in rows if row and row[0])
 
-        # INDEPENDENT_CANONICAL_TABLE_COLUMNS rows are LLM-synthesized
-        # (or scored against synthesized rows) — they cannot be
-        # recomputed by the rebuild, so they must be carried over for
-        # ALL packs, including the current one.  Without this, every
-        # ``ovp-knowledge-index`` run silently wipes the crystal corpus
-        # and the user has to pay LLM cost to regenerate.
+        # INDEPENDENT_CANONICAL_TABLE_COLUMNS rows are LLM-synthesized —
+        # they cannot be recomputed by the rebuild, so they must be
+        # carried over for ALL packs, including the current one.
+        # Without this, every ``ovp-knowledge-index`` run silently
+        # wipes the crystal corpus and the user has to pay LLM cost
+        # to regenerate.  Intentionally NOT updating ``preserved_packs``
+        # here: that set drives ``truth_projections`` metadata
+        # backfill, which only applies to packs that produce
+        # truth-projection rows; a crystal-only pack does not.
         for table_name, columns in INDEPENDENT_CANONICAL_TABLE_COLUMNS.items():
-            column_sql = ", ".join(columns)
-            try:
-                rows = source_conn.execute(
-                    f"SELECT {column_sql} FROM {table_name} ORDER BY pack",
-                ).fetchall()
-            except sqlite3.OperationalError as exc:
-                error_text = str(exc).lower()
-                if "no such table" in error_text or "no such column" in error_text:
-                    continue
-                raise
-            if not rows:
-                continue
-            placeholders = ", ".join("?" for _ in columns)
-            dest_conn.executemany(
-                f"INSERT INTO {table_name} ({column_sql}) VALUES ({placeholders})",
-                rows,
-            )
+            _copy_table(table_name, columns, where_excludes_current=False)
 
         try:
             metadata_rows = source_conn.execute(
