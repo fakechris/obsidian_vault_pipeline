@@ -11,9 +11,9 @@ read or write.
 Slug convention so existing wikilink behaviour stays sane:
 
 * community crystal:  slug = ``crystal:<safe-id>``,
-  title = ``[crystal] <label>``
+  title = ``[topic] <label>``
 * contradiction crystal: slug = ``contradiction:<safe-id>``,
-  title = ``[contradiction] <subject_key>``
+  title = ``[open question] <subject_key>``
 
 The prefix lets the search UI distinguish the rows visually; the
 ``<safe-id>`` after the colon matches the on-disk filename (
@@ -22,10 +22,18 @@ The prefix lets the search UI distinguish the rows visually; the
 can construct a click-through URL deterministically.
 
 This module is invoked from ``rebuild_knowledge_index`` AFTER the
-existing ``page_fts`` population block, so crystal rows are
-appended to the same FTS table the regular search already
-consults.  ``page_fts`` is rebuilt on every index rebuild, so
-this run is naturally idempotent.
+existing ``page_fts`` and ``pages_index`` population block, so
+crystal rows are appended to the same tables the regular search
+already consults.  Both tables are rebuilt on every index
+rebuild, so this run is naturally idempotent.
+
+Why we also write ``pages_index`` (BL-047 follow-up review):
+``/search`` joins ``page_fts`` to ``pages_index`` on slug — without
+matching ``pages_index`` rows for the ``crystal:`` and
+``contradiction:`` slugs, FTS hits are filtered out and never
+surface.  Writing the parallel ``pages_index`` row is the
+minimum-touch fix that keeps the FTS pipeline owning the slug
+convention without changing the on-disk file scanner.
 
 Out of BL-047 scope (deferred):
 
@@ -45,6 +53,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 
+from ._shared import CRYSTAL_DIR_REL
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,6 +67,13 @@ logger = logging.getLogger(__name__)
 _COMMUNITY_PREFIX = "crystal:"
 _CONTRADICTION_PREFIX = "contradiction:"
 
+# ``note_type`` values stored in ``pages_index`` for crystal rows.
+# Distinct from the file-scanner-emitted note types so the Reader
+# can render badges (or a /search filter) without slug-prefix
+# string-matching.
+_COMMUNITY_NOTE_TYPE = "community_crystal"
+_CONTRADICTION_NOTE_TYPE = "contradiction_crystal"
+
 
 def _community_safe_id(cluster_id: str) -> str:
     if cluster_id.startswith("cluster::"):
@@ -68,6 +85,18 @@ def _contradiction_safe_id(contradiction_id: str) -> str:
     if contradiction_id.startswith("contradiction::"):
         return contradiction_id[len("contradiction::"):]
     return contradiction_id
+
+
+def _community_path(safe_id: str) -> str:
+    return str(CRYSTAL_DIR_REL / f"{safe_id}.md")
+
+
+def _contradiction_path(safe_id: str) -> str:
+    # Contradiction crystals on disk live under the same dir but with
+    # a ``contradiction-`` filename prefix (see synthesis/_shared and
+    # synthesis/contradiction_crystal.py).  Mirror that convention so
+    # /note?path=... resolves to a real file.
+    return str(CRYSTAL_DIR_REL / f"contradiction-{safe_id}.md")
 
 
 def index_crystals_into_page_fts(
@@ -101,20 +130,38 @@ def index_crystals_into_page_fts(
         """,
         (pack,),
     )
-    rows = []
+    fts_rows: list[tuple[str, str, str]] = []
+    page_rows: list[tuple[str, str, str, str, str, str, str]] = []
     for cluster_id, label, body_md in cur:
-        slug = _COMMUNITY_PREFIX + _community_safe_id(cluster_id)
+        safe_id = _community_safe_id(cluster_id)
+        slug = _COMMUNITY_PREFIX + safe_id
         # BL-051: user-facing label says "topic", not "crystal".
         # Slug prefix (``crystal:``) stays as-is — it's a stable
         # identifier downstream code keys off.
         title = f"[topic] {label or '(untitled)'}"
-        rows.append((slug, title, body_md or ""))
-    if rows:
+        body = body_md or ""
+        fts_rows.append((slug, title, body))
+        page_rows.append((
+            slug, title, _COMMUNITY_NOTE_TYPE,
+            _community_path(safe_id), "", "{}", body,
+        ))
+    if fts_rows:
         conn.executemany(
             "INSERT INTO page_fts (slug, title, body) VALUES (?, ?, ?)",
-            rows,
+            fts_rows,
         )
-        inserted += len(rows)
+        # ``INSERT OR REPLACE`` so a re-run inside the same transaction
+        # (or a slug collision with a stray scanned page) is idempotent
+        # rather than crashing.  Crystals own their slug namespace
+        # (``crystal:`` / ``contradiction:``) so a real collision with
+        # a scanned page is impossible by construction.
+        conn.executemany(
+            "INSERT OR REPLACE INTO pages_index "
+            "(slug, title, note_type, path, day_id, frontmatter_json, body) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            page_rows,
+        )
+        inserted += len(fts_rows)
 
     # Contradiction crystals — current rows only.
     cur = conn.execute(
@@ -126,19 +173,31 @@ def index_crystals_into_page_fts(
         """,
         (pack,),
     )
-    rows = []
+    fts_rows = []
+    page_rows = []
     for contradiction_id, subject_key, body_md in cur:
-        slug = (_CONTRADICTION_PREFIX
-                + _contradiction_safe_id(contradiction_id))
+        safe_id = _contradiction_safe_id(contradiction_id)
+        slug = _CONTRADICTION_PREFIX + safe_id
         # BL-051: contradiction crystals surface as "open question" —
         # they're unresolved tensions, not settled topics.
         title = f"[open question] {subject_key or '(untitled)'}"
-        rows.append((slug, title, body_md or ""))
-    if rows:
+        body = body_md or ""
+        fts_rows.append((slug, title, body))
+        page_rows.append((
+            slug, title, _CONTRADICTION_NOTE_TYPE,
+            _contradiction_path(safe_id), "", "{}", body,
+        ))
+    if fts_rows:
         conn.executemany(
             "INSERT INTO page_fts (slug, title, body) VALUES (?, ?, ?)",
-            rows,
+            fts_rows,
         )
-        inserted += len(rows)
+        conn.executemany(
+            "INSERT OR REPLACE INTO pages_index "
+            "(slug, title, note_type, path, day_id, frontmatter_json, body) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            page_rows,
+        )
+        inserted += len(fts_rows)
 
     return inserted
