@@ -251,21 +251,28 @@ def _split_if_too_big(
         for idx, sub in enumerate(sized_sub_lists)
         for member in sub
     }
+    # Walk the induced sub-graph's incident edges instead of the full
+    # ``pair_weights`` dict so the cost is O(singletons × singleton_degree)
+    # rather than O(singletons × |pair_weights|).  ``sub_graph`` already
+    # holds only edges among parent-community members.
     for singleton in singletons:
         weight_per_sub: dict[int, float] = {}
-        for (src, tgt), weight in pair_weights.items():
-            if src == singleton and tgt in sub_member_index:
-                idx = sub_member_index[tgt]
-                weight_per_sub[idx] = weight_per_sub.get(idx, 0.0) + weight
-            elif tgt == singleton and src in sub_member_index:
-                idx = sub_member_index[src]
-                weight_per_sub[idx] = weight_per_sub.get(idx, 0.0) + weight
-        if weight_per_sub:
-            best_idx = max(weight_per_sub, key=weight_per_sub.get)
-        else:
-            best_idx = 0
+        for _src, neighbour, data in sub_graph.edges(singleton, data=True):
+            idx = sub_member_index.get(neighbour)
+            if idx is None:
+                continue
+            weight_per_sub[idx] = (
+                weight_per_sub.get(idx, 0.0) + data.get("weight", 1.0)
+            )
+        best_idx = (
+            max(weight_per_sub, key=weight_per_sub.get)
+            if weight_per_sub else 0
+        )
         sized_sub_lists[best_idx].append(singleton)
-        sized_sub_lists[best_idx].sort()
+    # Sort once at the end — the loop above could append to the same
+    # list multiple times, and pre-fix it re-sorted on every singleton.
+    for sub in sized_sub_lists:
+        sub.sort()
     return sized_sub_lists
 
 
