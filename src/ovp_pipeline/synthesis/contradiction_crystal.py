@@ -37,8 +37,10 @@ from typing import Protocol
 from ..projection_labels import frontmatter_projection_fields
 from ._shared import (
     CRYSTAL_DIR_REL,
+    crystal_safe_id,
     load_evergreen_bodies,
     load_objects_subset,
+    related_notes_section,
 )
 from ._versioning import ARCHIVE_DIR_REL, commit_crystal_version
 
@@ -305,16 +307,16 @@ def _frontmatter(crystal: ContradictionCrystal) -> str:
 
 
 def _safe_id(contradiction_id: str) -> str:
-    """Strips the unportable ``::`` prefix and prefixes
-    ``contradiction-`` so the directory listing makes the kind
-    obvious at a glance (community crystals at ``<sha>.md`` vs
-    contradiction crystals at ``contradiction-<sha>.md``).
-
-    Used both for the live filename (``<safe-id>.md``) and the
-    archive subdirectory (``70-Archive/Crystals/<safe-id>/...``).
+    """Thin shim over :func:`crystal_safe_id` for contradiction
+    crystals.  Single-prefix convention (``contradiction-<digest>``)
+    so the on-disk listing groups them next to community crystals
+    while staying visually distinct.
     """
     if contradiction_id.startswith("contradiction::"):
-        return f"contradiction-{contradiction_id[len('contradiction::'):]}"
+        return crystal_safe_id("contradiction", contradiction_id)
+    # Defensive: callers occasionally pass an already-stripped digest
+    # (e.g. archive subdirectory bookkeeping).  Preserve the historical
+    # prefixing behaviour so the archive layout doesn't shift.
     return f"contradiction-{contradiction_id}"
 
 
@@ -322,25 +324,12 @@ def _crystal_filename(contradiction_id: str) -> str:
     return _safe_id(contradiction_id) + ".md"
 
 
-def _related_notes_section(slugs: tuple[str, ...]) -> str:
-    """Machine-generated ``## 相关笔记`` section appended to every
-    contradiction crystal.  Same rationale as the community crystal
-    helper — keeps the source-note backlink graph deterministic
-    instead of relying on the LLM to consistently emit ``[[slug]]``
-    inside prose.
-    """
-    lines = ["## 相关笔记", ""]
-    for slug in slugs:
-        lines.append(f"- [[{slug}]]")
-    return "\n".join(lines)
-
-
 def render_crystal_markdown(crystal: ContradictionCrystal) -> str:
     return (
         _frontmatter(crystal)
         + crystal.body_md.rstrip()
         + "\n\n"
-        + _related_notes_section(crystal.source_object_ids)
+        + related_notes_section(crystal.source_object_ids)
         + "\n"
     )
 

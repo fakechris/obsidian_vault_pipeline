@@ -4350,16 +4350,15 @@ def build_reader_home_payload(
             generated_at="",
         )
 
-    def _safe_id(crystal_id: str, crystal_kind: str = "community") -> str:
-        if crystal_kind == "community" and crystal_id.startswith("cluster::"):
-            return crystal_id[len("cluster::"):]
-        if crystal_kind == "contradiction" and crystal_id.startswith("contradiction::"):
-            return f"contradiction-{crystal_id[len('contradiction::'):]}"
-        return crystal_id
+    # Single source of truth for crystal_id → on-disk safe-id is
+    # ``synthesis._shared.crystal_safe_id``.  Imported lazily here to
+    # avoid pulling synthesis dependencies into ``view_models``'s
+    # module-load path.
+    from ..synthesis._shared import crystal_safe_id
 
     top_topics = []
     for entry in atlas.entries:
-        safe_id = _safe_id(entry.crystal_id, entry.crystal_kind)
+        safe_id = crystal_safe_id(entry.crystal_kind, entry.crystal_id)
         note_rel = str(CRYSTAL_DIR_REL / f"{safe_id}.md")
         top_topics.append({
             "rank": entry.rank,
@@ -4376,7 +4375,7 @@ def build_reader_home_payload(
     for cluster_id, synthesized_at, body_md, label in recent_rows:
         # Recent-crystals query is community-only by design (it joins
         # community_crystals + graph_clusters), so the kind is fixed.
-        safe_id = _safe_id(str(cluster_id), "community")
+        safe_id = crystal_safe_id("community", str(cluster_id))
         note_rel = str(CRYSTAL_DIR_REL / f"{safe_id}.md")
         recent_crystals.append({
             "label": str(label or "(untitled)"),
@@ -4431,14 +4430,13 @@ def build_curated_atlas_payload(
     with sqlite3.connect(db_path) as conn:
         atlas = build_curated_atlas(conn, pack=pack, top_n=requested_top_n)
 
+    # Lazy import — same pattern as the adjacent
+    # ``build_reader_home_payload`` helper.
+    from ..synthesis._shared import crystal_safe_id
+
     entries: list[dict[str, Any]] = []
     for entry in atlas.entries:
-        if entry.crystal_kind == "community" and entry.crystal_id.startswith("cluster::"):
-            safe_id = entry.crystal_id[len("cluster::"):]
-        elif entry.crystal_kind == "contradiction" and entry.crystal_id.startswith("contradiction::"):
-            safe_id = f"contradiction-{entry.crystal_id[len('contradiction::'):]}"
-        else:
-            safe_id = entry.crystal_id
+        safe_id = crystal_safe_id(entry.crystal_kind, entry.crystal_id)
         note_rel = str(CRYSTAL_DIR_REL / f"{safe_id}.md")
         entries.append(
             {
