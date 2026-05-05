@@ -2330,6 +2330,7 @@ class EnhancedPipeline:
         completed_before: int = 0,
         failed_before: int = 0,
         staged_sources: dict[str, str] | None = None,
+        staging_dir: Path | None = None,
         record_item_ledger: bool = False,
     ):
         def _callback(event: dict[str, Any]) -> None:
@@ -2337,8 +2338,19 @@ class EnhancedPipeline:
             batch_done = int(event.get("files_done") or 0)
             batch_failed = int(event.get("files_failed") or 0)
             current_item = str(event.get("current_item") or event.get("file") or "").strip() or None
-            if record_item_ledger and current_item and staged_sources and current_item in staged_sources:
-                self._append_absorb_item_record(staged_sources[current_item], event)
+            # ``staged_sources`` is keyed by absolute staging path so two
+            # batch inputs with the same basename (e.g. two README.md
+            # files in different vault directories) don't collide.
+            # ``current_item`` from the absorb worker is a basename, so
+            # rejoin against the staging dir to get the lookup key.
+            staged_path_key: str | None = None
+            if current_item and staging_dir is not None:
+                staged_path_key = str(staging_dir / current_item)
+            if (
+                record_item_ledger and staged_path_key and staged_sources
+                and staged_path_key in staged_sources
+            ):
+                self._append_absorb_item_record(staged_sources[staged_path_key], event)
             work_units_done = completed_before + batch_done
             work_units_failed = failed_before + batch_failed
             progress_summary = (
@@ -2409,6 +2421,7 @@ class EnhancedPipeline:
                     completed_before=completed_before,
                     failed_before=failed_before,
                     staged_sources=staged_sources,
+                    staging_dir=directory if staged_sources else None,
                     record_item_ledger=record_item_ledger,
                 ),
             )
@@ -2448,12 +2461,17 @@ class EnhancedPipeline:
         # producing 0 mentions on every incremental run since PR #99
         # introduced staging.  See test_e2e_acceptance:
         # test_absorb_processed_files_are_vault_paths.
+        #
+        # ``staged_sources`` is keyed by absolute staging path (not
+        # basename) so two batch inputs sharing a basename — two
+        # ``README.md`` files in different vault directories, for
+        # example — round-trip back to the right vault path.
         if staged_sources:
             for item in results:
                 if isinstance(item, dict) and item.get("file"):
-                    name = Path(str(item["file"])).name
-                    if name in staged_sources:
-                        item["file"] = staged_sources[name]
+                    staged = str(item["file"])
+                    if staged in staged_sources:
+                        item["file"] = staged_sources[staged]
 
         promoted_slugs: list[str] = []
         processed_files: list[str] = []
@@ -2651,7 +2669,14 @@ class EnhancedPipeline:
                                     break
                                 counter += 1
                         used_targets.add(target)
-                        staged_sources[target.name] = str(source)
+                        # Key by absolute staging path so two inputs with
+                        # the same basename don't overwrite each other in
+                        # the dict.  The collision guard above already
+                        # gives them distinct ``-N`` filenames in staging,
+                        # but keying by full path makes the contract
+                        # explicit and survives any future change to
+                        # the rename logic.
+                        staged_sources[str(target)] = str(source)
                         try:
                             target.symlink_to(source)
                         except OSError:
