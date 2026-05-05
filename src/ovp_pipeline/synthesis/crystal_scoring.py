@@ -462,13 +462,22 @@ def rebuild_crystal_scores(
     Idempotent: re-running with no input changes produces identical
     scores.  Operates entirely on derived state — no Canonical State
     is read or written.
+
+    Transaction policy: this function does NOT commit or rollback.
+    The caller owns the transaction.  Earlier versions called
+    ``conn.commit()`` / ``conn.rollback()`` internally, which was a
+    bug when invoked from inside ``rebuild_knowledge_index``'s outer
+    transaction: a scoring failure would roll back unrelated index
+    work (raw_data, audit_events, page_embeddings, …) before the
+    caller's ``except`` clause swallowed the error and kept going.
+    The CLI (``ovp-rescore-crystals``) is responsible for committing
+    after this returns.
     """
     community_index = _load_community_index(conn, pack)
     contradiction_index = _load_contradiction_index(conn, pack)
     if not community_index and not contradiction_index:
         # Nothing to score; clear stale rows for this pack and return.
         conn.execute("DELETE FROM crystal_scores WHERE pack = ?", (pack,))
-        conn.commit()
         return []
 
     source_credibility = _load_source_credibility(conn)
@@ -636,34 +645,31 @@ def rebuild_crystal_scores(
             signals=signals, computed_at=now_iso,
         ))
 
-    # Single transaction for atomicity.
-    try:
-        conn.execute("DELETE FROM crystal_scores WHERE pack = ?", (pack,))
-        conn.executemany(
-            """
-            INSERT INTO crystal_scores
-                (pack, crystal_kind, crystal_id, score,
-                 size_norm, credibility_norm, contradiction_norm,
-                 reuse_recency_norm, evergreen_recency_norm,
-                 source_diversity_norm,
-                 computed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    s.pack, s.crystal_kind, s.crystal_id, s.score,
-                    s.signals.size_norm, s.signals.credibility_norm,
-                    s.signals.contradiction_norm,
-                    s.signals.reuse_recency_norm,
-                    s.signals.evergreen_recency_norm,
-                    s.signals.source_diversity_norm,
-                    s.computed_at,
-                )
-                for s in out
-            ],
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+    # DELETE+INSERT pair runs inside the caller's transaction.
+    # A failure here propagates the exception; if the caller has
+    # other pending writes it must decide rollback semantics.
+    conn.execute("DELETE FROM crystal_scores WHERE pack = ?", (pack,))
+    conn.executemany(
+        """
+        INSERT INTO crystal_scores
+            (pack, crystal_kind, crystal_id, score,
+             size_norm, credibility_norm, contradiction_norm,
+             reuse_recency_norm, evergreen_recency_norm,
+             source_diversity_norm,
+             computed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                s.pack, s.crystal_kind, s.crystal_id, s.score,
+                s.signals.size_norm, s.signals.credibility_norm,
+                s.signals.contradiction_norm,
+                s.signals.reuse_recency_norm,
+                s.signals.evergreen_recency_norm,
+                s.signals.source_diversity_norm,
+                s.computed_at,
+            )
+            for s in out
+        ],
+    )
     return out
