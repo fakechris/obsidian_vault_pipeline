@@ -25,6 +25,7 @@ from ..ui.view_models import (
     build_action_queue_payload,
     build_atlas_browser_payload,
     build_briefing_payload,
+    build_curated_atlas_payload,
     build_candidate_browser_payload,
     build_cluster_browser_payload,
     build_cluster_detail_payload,
@@ -70,6 +71,7 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_actions_page,
     _render_atlas_page,
     _render_briefing_page,
+    _render_curated_atlas_page,
     _render_candidate_items,
     _render_candidates_page,
     _render_cluster_detail_page,
@@ -113,6 +115,18 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     set_reader_mode,
 )
 
+
+def _parse_optional_int(query: dict[str, list[str]], key: str) -> int | None:
+    """Read an optional integer query param.  Returns ``None`` for an
+    absent / empty / non-numeric value so the downstream payload
+    builder applies its own default."""
+    raw = query.get(key, [""])[0]
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def create_server(
@@ -449,6 +463,33 @@ def create_server(
                         resolved_vault, pack_name=pack_name, query=q
                     )
                     self._write_html(_render_atlas_page(payload))
+                    return
+                if path == "/api/atlas/curated":
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/atlas/curated", api=True
+                    ):
+                        return
+                    self._write_json(
+                        build_curated_atlas_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            top_n=_parse_optional_int(query, "top_n"),
+                        )
+                    )
+                    return
+                if path == "/atlas/curated":
+                    pack_name = query.get("pack", [""])[0] or None
+                    if self._guard_research_route(
+                        pack_name=pack_name, route_path="/atlas/curated", api=False
+                    ):
+                        return
+                    payload = build_curated_atlas_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        top_n=_parse_optional_int(query, "top_n"),
+                    )
+                    self._write_html(_render_curated_atlas_page(payload))
                     return
                 if path == "/api/deep-dives":
                     q = query.get("q", [""])[0]
