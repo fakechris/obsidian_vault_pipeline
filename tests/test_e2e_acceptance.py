@@ -319,3 +319,85 @@ class TestPATCH1RegressionGuard:
             assert "absorb-qualified-" not in str(p), (
                 f"processed_files contains staging-dir path: {processed}"
             )
+
+    def test_absorb_handles_two_inputs_with_same_basename(
+        self, pipeline, temp_vault,
+    ):
+        """Two qualified files with the same basename in different
+        vault directories must round-trip back to their original
+        paths, not collapse onto one entry.
+
+        Pre-fix the staged_sources dict was keyed by basename, so a
+        second ``README.md`` overwrote the first.  After the staging
+        rename the second file lived at ``staging/README-2.md`` —
+        but the rewrite loop only matched ``README.md`` against the
+        dict and silently kept the staging path for the second
+        result, leaking another orphan path through to entity-extract.
+
+        Keying ``staged_sources`` by absolute staging path makes
+        both files round-trip cleanly even if every basename is
+        identical.
+        """
+        # Two source files with the SAME basename in different dirs.
+        dir_a = temp_vault / "20-Areas" / "AlphaTopic" / "Topics" / "2026-04"
+        dir_b = temp_vault / "20-Areas" / "BetaTopic" / "Topics" / "2026-04"
+        dir_a.mkdir(parents=True, exist_ok=True)
+        dir_b.mkdir(parents=True, exist_ok=True)
+        same_name = "shared_name_深度解读.md"
+        src_a = dir_a / same_name
+        src_b = dir_b / same_name
+        src_a.write_text(
+            "---\ntitle: A\ndate: 2026-04-09\n---\n\n# A body\n",
+            encoding="utf-8",
+        )
+        src_b.write_text(
+            "---\ntitle: B\ndate: 2026-04-09\n---\n\n# B body\n",
+            encoding="utf-8",
+        )
+
+        # Mock the inner workflow to echo back staging paths for
+        # whichever files showed up in the staging dir.
+        def fake_run_absorb_workflow(vault_dir, *, directory, **kwargs):
+            staged = sorted(p for p in directory.iterdir() if p.is_file())
+            return {
+                "mode": "absorb",
+                "summary": {
+                    "files_processed": len(staged),
+                    "concepts_promoted": len(staged),
+                    "errors": 0,
+                },
+                "results": [
+                    {
+                        "file": str(s),
+                        "concepts_extracted": 1,
+                        "candidates_added": 0,
+                        "concepts_promoted": 1,
+                        "concepts_created": 0,
+                        "concepts_skipped": 0,
+                        "concepts": [{
+                            "slug": canonicalize_note_id(s.stem),
+                            "status": "promoted_created",
+                        }],
+                    }
+                    for s in staged
+                ],
+                "source_scope": {},
+            }
+
+        with patch(
+            "ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow",
+            side_effect=fake_run_absorb_workflow,
+        ):
+            result = pipeline.step_absorb(
+                qualified_files=[str(src_a), str(src_b)],
+            )
+
+        assert isinstance(result, AbsorbStepResult)
+        # Both vault paths must come back, distinct, and pointing
+        # at the right files on disk.
+        processed = sorted(result.processed_files)
+        expected = sorted([str(src_a), str(src_b)])
+        assert processed == expected, (
+            f"basename collision dropped one of the inputs: "
+            f"got {processed!r}, expected {expected!r}"
+        )
