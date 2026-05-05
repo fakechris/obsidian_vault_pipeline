@@ -191,30 +191,24 @@ def _reuse_recency_signal(
     return max(0.0, min(1.0, raw_count / max_observed))
 
 
-_SOURCE_DIVERSITY_TARGET = 3
-"""BL-054: how many distinct sources count as "fully diverse".
-
-* 1 source  → 0.33  (single-article-dominated → strongly penalised)
-* 2 sources → 0.67
-* 3+ sources → 1.0  (saturated)
-
-Tuned for the median community size (~5-15 members after BL-048
-splitter): hitting 3 unique sources is achievable for a real
-multi-source convergence and unreachable for a one-article topic."""
-
-
 def _source_diversity_signal(
     member_object_ids: list[str],
     object_source_url: dict[str, str],
-    *,
-    target: int = _SOURCE_DIVERSITY_TARGET,
 ) -> float:
-    """BL-054: ``min(1.0, unique_sources / target)``.
+    """BL-054 v2: ``unique_sources / total_members`` (ratio).
+
+    Captures source concentration directly: a 20-member community
+    where all 20 evergreens trace back to one source article scores
+    0.05; a 20-member community with 20 unique sources scores 1.0.
+
+    Pre-fix this used ``min(1.0, unique / 3)`` (target-saturation)
+    which masked the very pattern the signal was meant to expose —
+    a 20-member community with 4 sources looked maximally diverse
+    despite 80% of evergreens coming from non-unique sources.
 
     Empty source URLs are dropped — a backfill miss counts as
     "unknown source", not as an extra unique source.  When the
-    community has zero attributable sources the signal is 0,
-    matching the cold-start behaviour of other normalised signals.
+    community has zero attributable sources the signal is 0.
     """
     if not member_object_ids:
         return 0.0
@@ -223,9 +217,9 @@ def _source_diversity_signal(
         url = object_source_url.get(oid)
         if url:
             sources.add(url)
-    if not sources or target <= 0:
+    if not sources:
         return 0.0
-    return min(1.0, len(sources) / target)
+    return min(1.0, len(sources) / len(member_object_ids))
 
 
 def _evergreen_recency_signal(

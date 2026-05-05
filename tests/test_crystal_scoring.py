@@ -375,7 +375,11 @@ class TestRebuildEndToEnd:
         assert by_id["cluster::small"].score < by_id["cluster::large"].score
         # Large's contradiction signal contributes (size_norm + contra)
         # while medium leans on credibility.  Both > small.
-        assert by_id["cluster::small"].score < 0.30
+        # BL-054 v2: diversity is now ratio-based, so a 1-member /
+        # 1-source community gets full diversity (correctly — it's
+        # only "fat-single" for many-member communities).  The
+        # ceiling shifted up accordingly.
+        assert by_id["cluster::small"].score < 0.40
         assert by_id["cluster::large"].score > 0.40
 
     def test_signals_persist_to_db(self, tmp_path):
