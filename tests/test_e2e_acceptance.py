@@ -215,3 +215,107 @@ class TestPATCH1RegressionGuard:
 
         r = pipeline.step_absorb(quality_score=2.0)
         assert r.promoted_slugs == []
+
+    def test_absorb_processed_files_are_vault_paths_not_staging(
+        self, pipeline, synthetic_deep_dive, temp_vault,
+    ):
+        """processed_files must contain real on-disk vault paths, not
+        the staging tempdir paths that the qualified_files code path
+        synthesizes inside ``with tempfile.TemporaryDirectory(...)``.
+
+        The 2026-05-04 incident: ``step_absorb`` staged each qualified
+        deep dive as a symlink under ``50-Inbox/.../absorb-qualified-XXX/``
+        and the inner ``run_absorb_workflow`` reported result["file"]
+        as that staging path.  After the ``with`` block exited the
+        tempdir was rm-rf'd, so processed_files contained dead paths
+        that ``step_entity_extract`` then silently skipped via its
+        ``if not fpath.exists(): continue`` guard.  The earlier
+        ``test_absorb_to_entity_extract_chain`` mocked
+        ``run_absorb_workflow`` directly with a canned payload using
+        ``str(synthetic_deep_dive)`` and therefore never exercised the
+        staging code path, missing this bug for ~3 days.
+
+        This test takes the real path: it patches the inner workflow
+        AT THE LEVEL run_absorb_workflow's progress_callback would
+        have been called from, returns a payload using the staging
+        path the orchestration would have created, and asserts that
+        step_absorb un-stages those paths back to the original
+        ``synthetic_deep_dive`` location before returning.
+        """
+        # The qualified_files path in step_absorb stages files into a
+        # tempfile.TemporaryDirectory under layout.logs_dir.  We inject
+        # a mock that observes the staging tempdir and returns a
+        # synthesized result whose ``file`` field IS the staging path
+        # — exactly what the real workflow does.
+        captured_staged_paths: list[str] = []
+
+        def fake_run_absorb_workflow(vault_dir, *, directory, **kwargs):
+            # The directory passed in IS the absorb-qualified-XXX tempdir.
+            # The synthetic_deep_dive was symlinked into it under its
+            # original basename.
+            staged = directory / synthetic_deep_dive.name
+            captured_staged_paths.append(str(staged))
+            return {
+                "mode": "absorb",
+                "summary": {
+                    "files_processed": 1, "concepts_promoted": 1,
+                    "errors": 0,
+                },
+                "results": [{
+                    "file": str(staged),  # STAGING path — the bug source
+                    "concepts_extracted": 1,
+                    "candidates_added": 0,
+                    "concepts_promoted": 1,
+                    "concepts_created": 0,
+                    "concepts_skipped": 0,
+                    "concepts": [{
+                        "slug": canonicalize_note_id(synthetic_deep_dive.stem),
+                        "status": "promoted_created",
+                    }],
+                }],
+                "source_scope": {},
+            }
+
+        with patch(
+            "ovp_pipeline.unified_pipeline_enhanced.run_absorb_workflow",
+            side_effect=fake_run_absorb_workflow,
+        ):
+            result = pipeline.step_absorb(
+                qualified_files=[str(synthetic_deep_dive)],
+            )
+
+        # Mock observed: the workflow saw the staging path
+        assert captured_staged_paths, "fake workflow was never invoked"
+        assert "absorb-qualified-" in captured_staged_paths[0], (
+            "staging dir name pattern changed — update this test"
+        )
+
+        # Result invariants — the bug we are guarding against:
+        assert isinstance(result, AbsorbStepResult)
+        assert result.success is True
+        assert result.processed_files, (
+            "step_absorb returned empty processed_files even though the "
+            "workflow saw the staged file — the orchestration is dropping "
+            "data between layers"
+        )
+        for processed in result.processed_files:
+            p = Path(processed)
+            # The path must EXIST after step_absorb returns (tempdir is
+            # gone by now, so any staging-dir leak shows up here).
+            assert p.exists(), (
+                f"processed_files contains non-existent path {processed!r} — "
+                f"this is the staging-path leak fixed in the 2026-05-05 "
+                f"incident retro.  Every entry in processed_files MUST "
+                f"resolve under the vault, not the staging tempdir."
+            )
+            # Must be under the vault, not under any tempdir.
+            try:
+                p.resolve().relative_to(temp_vault.resolve())
+            except ValueError:
+                pytest.fail(
+                    f"processed_files path {processed!r} is outside the "
+                    f"vault {temp_vault!r} — staging-path leaked again"
+                )
+            assert "absorb-qualified-" not in str(p), (
+                f"processed_files contains staging-dir path: {processed}"
+            )

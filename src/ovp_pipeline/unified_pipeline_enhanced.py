@@ -938,6 +938,20 @@ class EnhancedPipeline:
             return self._existing_files(files)
         if stage == "knowledge_index":
             return self._knowledge_index_source_files()
+        if stage == "absorb":
+            # Absorb's real input is whatever quality has marked qualified.
+            # We read that from the most-recent quality artifact when
+            # available so the artifact's input_digest matches what absorb
+            # actually consumed.  Falls through to [] when no quality
+            # artifact exists yet — that's strictly worse observability,
+            # not a runtime error.
+            artifact = self._load_quality_stage_artifact()
+            if artifact:
+                qualified = artifact.get("outputs", {}).get("qualified_files") or []
+                return self._existing_files(
+                    [Path(p) for p in qualified if isinstance(p, str)]
+                )
+            return []
         if stage == "entity_extract":
             return self._stage_input_files("absorb")
         if stage == "refine":
@@ -1327,6 +1341,13 @@ class EnhancedPipeline:
     def _count_output_files(self, step: str, before_counts: dict, cmd_result: dict) -> dict:
         """基于实际产出检测结果（替代依赖退出码）"""
         results = {"success": True, "produced": 0, "method": "filesystem"}
+        # Surface skip-reason from typed step results so the pipeline
+        # report can render ⚠ instead of ✅ for steps that bailed early
+        # (e.g. entity_extract returning skipped=True, reason='no_llm_client').
+        if cmd_result.get("skipped"):
+            results["skipped"] = True
+            if cmd_result.get("reason"):
+                results["reason"] = cmd_result.get("reason")
 
         if step == "clippings":
             # 检查迁移的文件数
@@ -2418,6 +2439,22 @@ class EnhancedPipeline:
                 "stderr": stderr,
             },
         )
+        # Rewrite each item["file"] from staging-dir path back to its
+        # original vault path BEFORE any consumer reads it.  The previous
+        # code emitted staging paths into processed_files; once
+        # ``step_absorb`` exited the ``with TemporaryDirectory`` block the
+        # paths were dead, and ``step_entity_extract`` silently skipped
+        # every file via its ``if not fpath.exists(): continue`` guard,
+        # producing 0 mentions on every incremental run since PR #99
+        # introduced staging.  See test_e2e_acceptance:
+        # test_absorb_processed_files_are_vault_paths.
+        if staged_sources:
+            for item in results:
+                if isinstance(item, dict) and item.get("file"):
+                    name = Path(str(item["file"])).name
+                    if name in staged_sources:
+                        item["file"] = staged_sources[name]
+
         promoted_slugs: list[str] = []
         processed_files: list[str] = []
         for item in results:
@@ -3266,8 +3303,21 @@ class EnhancedPipeline:
         lines.append("|------|------|------|")
 
         for step, result in results.items():
-            status = "✅ 成功" if result.get("success") else "❌ 失败"
-            if result.get("success"):
+            # Distinguish "ran and produced 0" from "skipped without
+            # running" — both used to render as ✅ 成功 with no detail,
+            # which masked entity_extract silently skipping every file
+            # for ~3 days starting 2026-05-02.  Skipped runs surface ⚠
+            # plus the reason from the typed step contract.
+            if result.get("success") and result.get("skipped"):
+                status = "⚠ 跳过"
+            elif result.get("success"):
+                status = "✅ 成功"
+            else:
+                status = "❌ 失败"
+            if result.get("success") and result.get("skipped"):
+                reason = result.get("reason") or result.get("skip_reason") or "(no reason)"
+                detail = f"未执行 — {reason}"
+            elif result.get("success"):
                 # 显示实际产出数字
                 output = result.get("output", "完成")
                 # 尝试显示更详细的数字
