@@ -142,6 +142,24 @@ class TestUpsertProvenance:
         finally:
             c.close()
 
+    def test_bad_metadata_does_not_raise(self, conn):
+        """gemini PR #153 review: a non-JSON-serialisable metadata
+        value (e.g. an open file handle, a custom object) used to
+        raise TypeError outside the try block and abort the
+        caller's transaction.  The helper now catches it."""
+        class _NotSerialisable:
+            pass
+
+        upsert_provenance(
+            conn, pack="t", object_id="alpha",
+            derived_via_stage="ingest",
+            derived_at="2026-05-04T12:00:00+00:00",
+            metadata={"unserialisable": _NotSerialisable()},
+        )
+        # The bad call is silently dropped; no row written, no raise.
+        n = conn.execute("SELECT COUNT(*) FROM provenance").fetchone()[0]
+        assert n == 0
+
 
 # ---------------------------------------------------------------------------
 # commit_crystal_version emits stage row inside the same transaction

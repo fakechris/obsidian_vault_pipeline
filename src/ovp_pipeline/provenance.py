@@ -69,8 +69,15 @@ def upsert_provenance(
     if not pack or not object_id or not derived_via_stage:
         return
     ts = derived_at or _utc_now_iso()
-    metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+    # gemini PR #153 review fix: ``json.dumps`` was outside the try
+    # block, so a non-serialisable metadata value would raise
+    # ``TypeError`` and abort the caller's transaction — violating
+    # the "never abort" contract documented above.  Move both the
+    # serialisation and the INSERT inside one try, with a broader
+    # final ``Exception`` handler so any unexpected failure (DB
+    # corruption, encoding, etc.) is logged + swallowed too.
     try:
+        metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
         conn.execute(
             """
             INSERT OR IGNORE INTO provenance
@@ -98,8 +105,19 @@ def upsert_provenance(
             "provenance write skipped (%s): %s", derived_via_stage, exc,
         )
     except sqlite3.DatabaseError as exc:
-        # Anything unexpected — log + swallow so the calling stage's
-        # primary commit isn't aborted.
         logger.warning(
-            "provenance write failed (%s): %s", derived_via_stage, exc,
+            "provenance write failed — DB error (%s): %s",
+            derived_via_stage, exc,
+        )
+    except (TypeError, ValueError) as exc:
+        # Non-serialisable metadata or similar.  Best-effort
+        # contract: log + swallow.
+        logger.warning(
+            "provenance write failed — bad metadata (%s): %s",
+            derived_via_stage, exc,
+        )
+    except Exception as exc:  # noqa: BLE001 — never abort caller
+        logger.warning(
+            "provenance write failed — unexpected (%s): %s",
+            derived_via_stage, exc,
         )
