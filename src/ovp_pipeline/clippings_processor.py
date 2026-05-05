@@ -246,16 +246,44 @@ class ClippingsProcessor:
         return filename.strip('-_')
 
     def scan_clippings(self) -> list[Path]:
-        """扫描Clippings目录"""
+        """Recursively scan ``Clippings/`` for ``.md`` files.
+
+        Pre-2026-05 the scan used non-recursive ``glob("*.md")`` which
+        silently ignored common subdirectory layouts such as
+        ``Clippings/Twitter/*.md`` (Pinboard's Twitter clip default
+        target).  18 Twitter clips sat unprocessed for weeks before
+        the gap was noticed during the BL-058 rollout.  ``rglob``
+        picks them up; the per-source-type signal (it came from a
+        Twitter subdir) is **not** preserved at this layer because
+        the source URL in frontmatter (``x.com/...``) is the
+        authoritative type signal — see ``source_authority.py``.
+        """
         if not self.clippings_dir.exists():
             return []
 
-        files = []
-        for f in self.clippings_dir.glob("*.md"):
-            if f.is_file():
-                files.append(f)
+        files: list[Path] = []
+        for f in self.clippings_dir.rglob("*.md"):
+            if not f.is_file():
+                continue
+            files.append(f)
 
         return sorted(files)
+
+    def _target_already_exists(self, new_name: str) -> bool:
+        """Avoid silently overwriting an existing file in 01-Raw or
+        03-Processed (any month).  Same basename across multiple
+        intake runs almost always means "user re-clipped the same
+        article" — we don't want to clobber the older copy without
+        explicit intent.
+        """
+        if (self.raw_dir / new_name).exists():
+            return True
+        processed = self.layout.processed_dir
+        if processed.exists():
+            for month in processed.iterdir():
+                if month.is_dir() and (month / new_name).exists():
+                    return True
+        return False
 
     def obsidian_move(self, source: Path, dest_dir: Path, new_name: str | None = None) -> bool:
         """使用obsidian move迁移文件（非mv）"""
@@ -324,6 +352,26 @@ class ClippingsProcessor:
             new_name = clipping_raw_name(file_path, self.sanitize_filename)
 
             file_info["new_name"] = new_name
+
+            # Dedupe guard: if the same basename already lives in
+            # 01-Raw (pending intake) or any 03-Processed/<YYYY-MM>/
+            # subdir, skip rather than silently overwrite.  This
+            # most commonly fires when a user re-clips the same
+            # article — we want the user to see the conflict, not
+            # lose the older copy.
+            if self._target_already_exists(new_name):
+                file_info["status"] = "skipped_collision"
+                file_info["reason"] = (
+                    f"{new_name} already present under 50-Inbox/01-Raw "
+                    f"or 50-Inbox/03-Processed; not overwriting"
+                )
+                results["skipped"] += 1
+                results["files"].append(file_info)
+                self.logger.log("clipping_collision_skipped", {
+                    "original": str(file_path.name),
+                    "new_name": new_name,
+                })
+                continue
 
             if dry_run:
                 file_info["status"] = "dry_run"
