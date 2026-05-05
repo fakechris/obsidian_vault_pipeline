@@ -44,6 +44,7 @@ CREATE TABLE objects (
   title TEXT NOT NULL,
   canonical_path TEXT NOT NULL,
   source_slug TEXT NOT NULL,
+  source_url TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pack, object_id)
 );
 CREATE TABLE claims (
@@ -111,6 +112,7 @@ CREATE TABLE crystal_scores (
   contradiction_norm REAL NOT NULL DEFAULT 0,
   reuse_recency_norm REAL NOT NULL DEFAULT 0,
   evergreen_recency_norm REAL NOT NULL DEFAULT 0,
+  source_diversity_norm REAL NOT NULL DEFAULT 0,
   computed_at TEXT NOT NULL,
   PRIMARY KEY (pack, crystal_kind, crystal_id)
 );
@@ -245,20 +247,21 @@ class TestComputeScore:
         signals = ScoreSignals(
             size_norm=1.0, credibility_norm=1.0, contradiction_norm=1.0,
             reuse_recency_norm=1.0, evergreen_recency_norm=1.0,
+            source_diversity_norm=1.0,
         )
         # When all signals are 1, score equals sum of weights.
         assert abs(compute_score(signals) - DEFAULT_WEIGHTS.total()) < 1e-6
 
     def test_weighted_combination(self):
-        # Hand-computed: 0.25 * 1.0 + 0.30 * 0.5 = 0.40
+        # BL-054: 0.20 * 1.0 + 0.20 * 0.5 = 0.30
         signals = ScoreSignals(size_norm=1.0, credibility_norm=0.5)
-        assert abs(compute_score(signals) - 0.40) < 1e-6
+        assert abs(compute_score(signals) - 0.30) < 1e-6
 
     def test_custom_weights(self):
         signals = ScoreSignals(size_norm=1.0)
         weights = ScoreWeights(
-            size=1.0, credibility=0, contradiction=0,
-            reuse_recency=0, evergreen_recency=0,
+            size=1.0, credibility=0, source_diversity=0,
+            contradiction=0, reuse_recency=0, evergreen_recency=0,
         )
         assert compute_score(signals, weights) == 1.0
 
@@ -297,8 +300,16 @@ def _build_seeded_vault(tmp_path: Path) -> tuple[Path, Path]:
             (vault / canonical).parent.mkdir(parents=True, exist_ok=True)
             (vault / canonical).write_text(f"body of {oid}", encoding="utf-8")
             conn.execute(
-                "INSERT INTO objects VALUES (?, ?, ?, ?, ?, ?)",
-                (pack, oid, "evergreen", oid, canonical, f"src-{oid}"),
+                "INSERT INTO objects VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    pack, oid, "evergreen", oid, canonical, f"src-{oid}",
+                    # BL-054: source_url is what credibility +
+                    # diversity now key off.  Using ``src-{oid}`` so
+                    # the existing source_authority seed lookup keeps
+                    # working (test seeds authority by ``src-X``
+                    # source_id, see TestRebuildEndToEnd).
+                    f"src-{oid}",
+                ),
             )
         conn.execute(
             "INSERT INTO graph_clusters VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -443,9 +454,12 @@ class TestRebuildEndToEnd:
         # Pre-seed a stale score row.
         conn.execute(
             "INSERT INTO crystal_scores VALUES "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ("research-tech", "community", "cluster::stale",
-             0.5, 0, 0, 0, 0, 0, "2026-01-01T00:00:00+00:00"),
+             0.5, 0, 0, 0, 0, 0,
+             # BL-054: source_diversity_norm
+             0,
+             "2026-01-01T00:00:00+00:00"),
         )
         conn.commit()
 

@@ -162,7 +162,7 @@ from .embedding import (
     get_model_name,
 )
 TRUTH_PROJECTION_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug"),
+    "objects": ("pack", "object_id", "object_kind", "title", "canonical_path", "source_slug", "source_url"),
     "claims": ("pack", "claim_id", "object_id", "claim_kind", "claim_text", "confidence"),
     "claim_evidence": (
         "pack",
@@ -969,6 +969,23 @@ def rebuild_knowledge_index(
         conn = None
         try:
             conn = _initialize_database(temp_db_path)
+            # BL-054: source_authority lives in its own module — make
+            # sure its schema lands and replay the JSONL audit log so
+            # ``credibility_norm`` has data to read.  Without this the
+            # table is wiped on every rebuild and crystal_scoring's
+            # credibility lookup silently returns 0 for every row.
+            from .source_authority import (
+                ensure_schema as _ensure_source_authority_schema,
+                replay_authority_log as _replay_source_authority_log,
+            )
+            _ensure_source_authority_schema(conn)
+            authority_log = layout.logs_dir / "source_authority.jsonl"
+            authority_rows = _replay_source_authority_log(conn, authority_log)
+            if authority_rows:
+                logger.debug(
+                    "source_authority replayed %d rows from %s",
+                    authority_rows, authority_log,
+                )
             _preserve_existing_truth_rows(layout.knowledge_db, conn, exclude_pack=truth_pack)
             page_rows = []
             timeline_rows = []
@@ -1047,8 +1064,8 @@ def rebuild_knowledge_index(
             )
             conn.executemany(
                 """
-                INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug, source_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [row.to_row() for row in truth_projection.objects],
             )

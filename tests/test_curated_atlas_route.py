@@ -33,6 +33,7 @@ SCHEMA = """
 CREATE TABLE objects (
   pack TEXT NOT NULL, object_id TEXT NOT NULL, object_kind TEXT NOT NULL,
   title TEXT NOT NULL, canonical_path TEXT NOT NULL, source_slug TEXT NOT NULL,
+  source_url TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pack, object_id)
 );
 CREATE TABLE graph_clusters (
@@ -64,6 +65,7 @@ CREATE TABLE crystal_scores (
   contradiction_norm REAL NOT NULL DEFAULT 0,
   reuse_recency_norm REAL NOT NULL DEFAULT 0,
   evergreen_recency_norm REAL NOT NULL DEFAULT 0,
+  source_diversity_norm REAL NOT NULL DEFAULT 0,
   computed_at TEXT NOT NULL,
   PRIMARY KEY (pack, crystal_kind, crystal_id)
 );
@@ -96,9 +98,11 @@ def _setup_vault(tmp_path: Path, *, seed: bool = True, pack: str = PACK) -> Path
                  "minimax-m2.7-highspeed", "v1", ""),
             )
             conn.execute(
-                "INSERT INTO crystal_scores VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO crystal_scores VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (pack, "community", "cluster::abc123", 0.812,
                  0.6, 0.7, 0.0, 0.0, 0.5,
+                 # BL-054: source_diversity_norm
+                 1.0,
                  "2026-05-04T12:00:00+00:00"),
             )
             conn.execute(
@@ -110,9 +114,11 @@ def _setup_vault(tmp_path: Path, *, seed: bool = True, pack: str = PACK) -> Path
                  "2026-05-04T12:01:00+00:00", "minimax-m2.7-highspeed", "v1", ""),
             )
             conn.execute(
-                "INSERT INTO crystal_scores VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO crystal_scores VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (pack, "contradiction", "contradiction::deadbeef", 0.654,
                  0.0, 0.5, 0.9, 0.0, 0.4,
+                 # BL-054: source_diversity_norm
+                 0.5,
                  "2026-05-04T12:01:00+00:00"),
             )
             conn.commit()

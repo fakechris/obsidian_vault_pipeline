@@ -36,6 +36,7 @@ SCHEMA = """
 CREATE TABLE objects (
   pack TEXT NOT NULL, object_id TEXT NOT NULL, object_kind TEXT NOT NULL,
   title TEXT NOT NULL, canonical_path TEXT NOT NULL, source_slug TEXT NOT NULL,
+  source_url TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pack, object_id)
 );
 CREATE TABLE graph_clusters (
@@ -67,6 +68,7 @@ CREATE TABLE crystal_scores (
   contradiction_norm REAL NOT NULL DEFAULT 0,
   reuse_recency_norm REAL NOT NULL DEFAULT 0,
   evergreen_recency_norm REAL NOT NULL DEFAULT 0,
+  source_diversity_norm REAL NOT NULL DEFAULT 0,
   computed_at TEXT NOT NULL,
   PRIMARY KEY (pack, crystal_kind, crystal_id)
 );
@@ -212,10 +214,11 @@ def _seed_minimal(tmp_path: Path) -> tuple[Path, Path]:
         conn.execute(
             "INSERT INTO crystal_scores (pack, crystal_kind, crystal_id, "
             "score, size_norm, credibility_norm, contradiction_norm, "
-            "reuse_recency_norm, evergreen_recency_norm, computed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "reuse_recency_norm, evergreen_recency_norm, "
+            "source_diversity_norm, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (pack, "community", cid, score,
-             0.5, 0.4, 0.3, 0.0, 0.6,
+             0.5, 0.4, 0.3, 0.0, 0.6, 1.0,
              "2026-05-04T12:00:00+00:00"),
         )
 
@@ -235,9 +238,11 @@ def _seed_minimal(tmp_path: Path) -> tuple[Path, Path]:
     )
     conn.execute(
         "INSERT INTO crystal_scores VALUES "
-        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (pack, "contradiction", "contradiction::xx", 0.65,
          0.4, 0.3, 1.0, 0.0, 0.5,
+         # BL-054: source_diversity_norm
+         0.7,
          "2026-05-04T12:00:00+00:00"),
     )
     conn.commit()

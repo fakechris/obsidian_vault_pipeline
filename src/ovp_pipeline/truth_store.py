@@ -30,6 +30,12 @@ CREATE TABLE objects (
   title TEXT NOT NULL,
   canonical_path TEXT NOT NULL,
   source_slug TEXT NOT NULL,
+  -- BL-054: URL of the source article that produced this object.
+  -- Populated from evergreen frontmatter ``source_url`` during
+  -- ``rebuild_knowledge_index``.  Empty for legacy rows that have
+  -- not yet been backfilled — those are scored as ``unknown source``
+  -- by the source-diversity signal, not as a unique source.
+  source_url TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (pack, object_id)
 );
 
@@ -209,6 +215,9 @@ CREATE TABLE crystal_scores (
   contradiction_norm REAL NOT NULL DEFAULT 0,
   reuse_recency_norm REAL NOT NULL DEFAULT 0,
   evergreen_recency_norm REAL NOT NULL DEFAULT 0,
+  -- BL-054: unique-source coverage of the community.  Penalises
+  -- topics where many evergreens came from one source article.
+  source_diversity_norm REAL NOT NULL DEFAULT 0,
   computed_at TEXT NOT NULL,
   PRIMARY KEY (pack, crystal_kind, crystal_id)
 );
@@ -292,8 +301,12 @@ class ObjectRow:
     title: str
     canonical_path: str
     source_slug: str
+    # BL-054: URL of the source article that produced this object.
+    # Populated from frontmatter ``source_url``; defaults to "" so
+    # legacy callers and pre-backfill rows still construct cleanly.
+    source_url: str = ""
 
-    def to_row(self) -> tuple[str, str, str, str, str, str]:
+    def to_row(self) -> tuple[str, str, str, str, str, str, str]:
         from .object_kinds import normalize_kind
 
         return (
@@ -303,6 +316,7 @@ class ObjectRow:
             self.title,
             self.canonical_path,
             self.source_slug,
+            self.source_url,
         )
 
 

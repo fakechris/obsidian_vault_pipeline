@@ -331,6 +331,11 @@ def build_truth_projection(
 
     for slug, title, note_type, path, _day_id, _frontmatter_json, body in page_rows:
         resolved_kind = note_type if note_type in CORE_OBJECT_KINDS else KIND_CONCEPT
+        # BL-054: pull source_url from frontmatter so credibility +
+        # diversity signals can key off it.  Empty when the evergreen
+        # has not been backfilled — the diversity helper treats that
+        # as "unknown source", not "another unique source".
+        resolved_source_url = ""
         if _frontmatter_json:
             try:
                 fm = json.loads(_frontmatter_json)
@@ -340,6 +345,9 @@ def build_truth_projection(
                         normalized = normalize_kind(et)
                         if normalized in CORE_OBJECT_KINDS:
                             resolved_kind = normalized
+                    su = fm.get("source_url", "")
+                    if isinstance(su, str):
+                        resolved_source_url = su
             except (json.JSONDecodeError, TypeError, ValueError):
                 pass
         objects.append(
@@ -350,6 +358,7 @@ def build_truth_projection(
                 title=title,
                 canonical_path=path,
                 source_slug=slug,
+                source_url=resolved_source_url,
             )
         )
         summary = _page_summary(body, fallback=title)
