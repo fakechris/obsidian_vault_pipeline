@@ -1,4 +1,8 @@
-"""Tests for the /atlas/curated HTTP surface (BL-046 follow-up).
+"""Tests for the /topics HTTP surface (BL-046 / BL-051).
+
+BL-051 renamed ``/atlas/curated`` → ``/topics`` (and the page title to
+"Featured Topics").  Old URLs still work via 301 redirect; this test
+file exercises the canonical path + asserts the new page strings.
 
 Covers:
 
@@ -167,13 +171,13 @@ class TestRenderer:
         vault = _setup_vault(tmp_path)
         payload = build_curated_atlas_payload(vault, pack_name=PACK)
         html = _render_curated_atlas_page(payload)
-        assert "Curated Atlas" in html
+        # BL-051 user-facing rename: page title is now "Featured Topics".
+        assert "Featured Topics" in html
         assert "Vector search" in html
         assert "score 0.812" in html
         assert "RAG vs long context" in html
-        # Back-link to mechanical Atlas + JSON link surfaced
-        assert "Back to mechanical Atlas" in html
-        assert "/api/atlas/curated" in html
+        # JSON link points at the canonical /api/topics route.
+        assert "/api/topics" in html
         # Score breakdown surfaced as muted line
         assert "size 0.60" in html
         assert "credibility 0.70" in html
@@ -182,8 +186,9 @@ class TestRenderer:
         vault = _setup_vault(tmp_path, seed=False)
         payload = build_curated_atlas_payload(vault, pack_name=PACK)
         html = _render_curated_atlas_page(payload)
-        assert "No crystals scored yet" in html
-        assert "ovp-rescore-crystals" in html
+        # Empty-state hint uses the new vocabulary.
+        assert "No topics synthesized yet" in html
+        assert "ovp-synthesize-community-crystals" in html
 
 
 class TestHttpRoute:
@@ -207,12 +212,12 @@ class TestHttpRoute:
         server.server_close()
         thread.join(timeout=5)
 
-    def test_api_atlas_curated_returns_json(self, tmp_path):
+    def test_api_topics_returns_json(self, tmp_path):
         vault = _setup_vault(tmp_path, pack=RESEARCH_PACK)
         server, thread, port, HTTPConnection = self._serve(vault)
         try:
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
-            conn.request("GET", f"/api/atlas/curated?pack={RESEARCH_PACK}")
+            conn.request("GET", f"/api/topics?pack={RESEARCH_PACK}")
             response = conn.getresponse()
             body = response.read().decode("utf-8")
             content_type = response.getheader("Content-Type") or ""
@@ -221,15 +226,17 @@ class TestHttpRoute:
         assert response.status == 200
         assert "application/json" in content_type
         payload = json.loads(body)
+        # Internal screen identifier kept ``atlas/curated`` for now —
+        # changing it would churn JS callers without user benefit.
         assert payload["screen"] == "atlas/curated"
         assert payload["count"] == 2
 
-    def test_atlas_curated_returns_html(self, tmp_path):
+    def test_topics_returns_html(self, tmp_path):
         vault = _setup_vault(tmp_path, pack=RESEARCH_PACK)
         server, thread, port, HTTPConnection = self._serve(vault)
         try:
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
-            conn.request("GET", f"/atlas/curated?pack={RESEARCH_PACK}")
+            conn.request("GET", f"/topics?pack={RESEARCH_PACK}")
             response = conn.getresponse()
             body = response.read().decode("utf-8")
             content_type = response.getheader("Content-Type") or ""
@@ -237,15 +244,42 @@ class TestHttpRoute:
             self._shutdown(server, thread)
         assert response.status == 200
         assert "text/html" in content_type
-        assert "Curated Atlas" in body
+        assert "Featured Topics" in body
         assert "Vector search" in body
+
+    def test_legacy_atlas_curated_redirects_to_topics(self, tmp_path):
+        """BL-051: ``/atlas/curated`` and ``/api/atlas/curated`` 301 to
+        the canonical paths so PR #148 bookmarks keep working."""
+        vault = _setup_vault(tmp_path, pack=RESEARCH_PACK)
+        server, thread, port, HTTPConnection = self._serve(vault)
+        try:
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            # Tell httplib not to auto-follow.
+            conn.request("GET", f"/atlas/curated?pack={RESEARCH_PACK}")
+            response = conn.getresponse()
+            location_html = response.getheader("Location") or ""
+            response.read()
+            status_html = response.status
+
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", f"/api/atlas/curated?pack={RESEARCH_PACK}")
+            response = conn.getresponse()
+            location_api = response.getheader("Location") or ""
+            response.read()
+            status_api = response.status
+        finally:
+            self._shutdown(server, thread)
+        assert status_html == 301
+        assert location_html == f"/topics?pack={RESEARCH_PACK}"
+        assert status_api == 301
+        assert location_api == f"/api/topics?pack={RESEARCH_PACK}"
 
     def test_unsupported_pack_returns_409(self, tmp_path):
         vault = _setup_vault(tmp_path)
         server, thread, port, HTTPConnection = self._serve(vault)
         try:
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
-            conn.request("GET", "/api/atlas/curated?pack=unknown-pack")
+            conn.request("GET", "/api/topics?pack=unknown-pack")
             response = conn.getresponse()
             response.read()
         finally:

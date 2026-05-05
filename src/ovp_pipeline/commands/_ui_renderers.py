@@ -118,7 +118,7 @@ def _reader_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = [
         ("Library", "/"),
         ("Search", "/search"),
-        ("Atlas", "/atlas/curated"),
+        ("Topics", "/topics"),
     ]
     if _shell_supports_research_nav(requested_pack):
         items.append(("Map", "/map"))
@@ -1845,119 +1845,9 @@ def _render_dashboard(payload: dict) -> str:
     )
 
 
-def _render_reader_home(payload: dict) -> str:
-    """BL-050 Reader-shell home.  No DB stat counts, no Workbench
-    card, no typed-object list.  Lead with search + crystal-derived
-    topics + curated atlas link + recent crystals."""
-    requested_pack = payload.get("requested_pack", "")
-    pack = payload.get("pack", "")
-    search_href = str(payload.get("search_href") or _shell_href("/search", requested_pack))
-    map_href = str(payload.get("map_href") or _shell_href("/map", requested_pack))
-    map_supported = bool(payload.get("map_supported"))
-    top_topics = payload.get("top_topics") or []
-    curated = payload.get("curated_atlas") or {}
-    atlas_href = str(curated.get("atlas_href") or _shell_href("/atlas/curated", requested_pack))
-    total_chains = int(curated.get("total_chains") or 0)
-    atlas_available = bool(curated.get("available", total_chains > 0))
-    # Show ``effective_top_n`` (= min(default, total)) so the body
-    # copy never headlines more chains than actually shipped.
-    atlas_top_n = int(curated.get("effective_top_n") or curated.get("top_n") or 0)
-    recent_crystals = payload.get("recent_crystals") or []
-    recent_days = int(payload.get("recent_days") or 7)
-
-    def _topic_li(item: dict) -> str:
-        href = escape(str(item.get("note_href") or ""))
-        label = escape(str(item.get("label") or "(untitled)"))
-        teaser = escape(str(item.get("teaser") or ""))
-        teaser_html = f"<div class='muted'>{teaser}</div>" if teaser else ""
-        rank = int(item.get("rank") or 0)
-        return (
-            "<li>"
-            f"<strong>{rank}.</strong> "
-            f"<a href='{href}'>{label}</a>"
-            f"{teaser_html}"
-            "</li>"
-        )
-
-    def _recent_li(item: dict) -> str:
-        href = escape(str(item.get("note_href") or ""))
-        label = escape(str(item.get("label") or "(untitled)"))
-        teaser = escape(str(item.get("teaser") or ""))
-        teaser_html = f"<div class='muted'>{teaser}</div>" if teaser else ""
-        return (
-            "<li>"
-            f"<a href='{href}'>{label}</a>"
-            f"{teaser_html}"
-            "</li>"
-        )
-
-    top_topics_html = (
-        "".join(_topic_li(item) for item in top_topics)
-        or "<li class='muted'>No crystals scored yet. Run "
-           "<code>ovp-synthesize-community-crystals</code> then "
-           "<code>ovp-knowledge-index</code> to populate.</li>"
-    )
-    recent_html = (
-        "".join(_recent_li(item) for item in recent_crystals)
-        or "<li class='muted'>No crystals synthesized in the last "
-           f"{recent_days} days.</li>"
-    )
-
-    map_card = (
-        "<section class='card'><h2>Knowledge Map</h2>"
-        "<p class='muted'>See how ideas connect — entities, concepts, "
-        "references woven into one graph.</p>"
-        f"<p><a href='{escape(map_href)}'>Open the Map →</a></p>"
-        "</section>"
-        if map_supported
-        else ""
-    )
-
-    body_parts: list[str] = [
-        "<section class='hero'>",
-        "<h1>Knowledge Library</h1>",
-        "<p class='muted'>Discover, read, and follow the ideas in this vault.</p>",
-        f"<form method='get' action='{escape(search_href)}' style='margin-top:0.8rem; display:flex; gap:0.6rem;'>",
-        (
-            f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
-            if requested_pack
-            else ""
-        ),
-        "<input type='text' name='q' placeholder='Search by title, topic, source…' "
-        "style='flex:1;' autofocus />",
-        "<button type='submit'>Search</button>",
-        "</form>",
-        "</section>",
-        "<section class='card'>",
-        "<h2>Top Topics</h2>",
-        "<p class='muted'>The highest-scoring synthesized ideas in your "
-        f"vault — pack <code>{escape(pack)}</code>.</p>",
-        f"<ul class='list-tight'>{top_topics_html}</ul>",
-        "</section>",
-        # Curated Atlas card hidden when the corpus is empty —
-        # otherwise it headlines "30 ideas... ranked from 0 chains"
-        # which is just confusing.
-        (
-            "<section class='card'>"
-            "<h2>Curated Atlas</h2>"
-            f"<p>{atlas_top_n} most reusable ideas in your vault, "
-            f"ranked from {total_chains} synthesized chains.</p>"
-            f"<p><a href='{escape(atlas_href)}'>Open Curated Atlas →</a></p>"
-            "</section>"
-            if atlas_available
-            else ""
-        ),
-        map_card,
-        "<section class='card'>",
-        f"<h2>Recent Crystals (last {recent_days} days)</h2>",
-        f"<ul class='list-tight'>{recent_html}</ul>",
-        "</section>",
-    ]
-    return _layout(
-        "Knowledge Library",
-        "".join(body_parts),
-        requested_pack=requested_pack,
-    )
+# BL-051: ``_render_reader_home`` lives in ``commands/reader_home.py``
+# now (file-size cap on this module) — re-exported for back-compat.
+from .reader_home import _render_reader_home  # noqa: E402,F401
 
 
 def _render_library_home(payload: dict) -> str:
@@ -2671,13 +2561,13 @@ def _render_atlas_page(payload: dict) -> str:
         )
         or "<li>None</li>"
     )
-    curated_href = _shell_href("/atlas/curated", requested_pack)
+    topics_href = _shell_href("/topics", requested_pack)
     return _layout(
         "Atlas / MOC Browser",
         "".join(
             [
                 "<h1>Atlas / MOC Browser</h1>",
-                f"<p class='muted'>Looking for the curated reading entry instead? <a href='{escape(curated_href)}'>View curated top-N crystals →</a></p>",
+                f"<p class='muted'>Looking for the reading entry instead? <a href='{escape(topics_href)}'>View Featured Topics →</a></p>",
                 "<form method='get' action='/atlas'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -2699,39 +2589,46 @@ def _render_atlas_page(payload: dict) -> str:
 
 
 def _render_curated_atlas_page(payload: dict) -> str:
+    """BL-051: rendered as **Featured Topics**.  The function name
+    keeps ``curated_atlas`` for internal consistency with
+    ``build_curated_atlas_payload`` and the ``crystal_scores``
+    Projection it reads — but every user-facing string says "Topic"."""
     requested_pack = payload.get("requested_pack", "")
     pack = payload.get("pack", "")
     top_n = int(payload.get("top_n") or 0)
     total_chains = int(payload.get("total_chains") or 0)
     entries = payload.get("entries") or []
     generated_at = payload.get("generated_at", "")
-    mechanical_href = _shell_href("/atlas", requested_pack)
-    api_href = _shell_href("/api/atlas/curated", requested_pack)
+    api_href = _shell_href("/api/topics", requested_pack)
 
     if not entries and total_chains == 0:
         empty_note = (
-            "<section class='card'><p>No crystals scored yet. After running "
-            "<code>ovp-synthesize-community-crystals</code>, populate "
-            "<code>crystal_scores</code> with <code>ovp-knowledge-index</code> "
-            "(auto-rebuild) or <code>ovp-rescore-crystals</code> (ad-hoc).</p></section>"
+            "<section class='card'><p>No topics synthesized yet. Run "
+            "<code>ovp-synthesize-community-crystals</code> to build the "
+            "topic corpus, then <code>ovp-knowledge-index</code> (or "
+            "<code>ovp-rescore-crystals</code>) to score it.</p></section>"
         )
         body_html = empty_note
     elif not entries:
         body_html = (
-            "<section class='card'><p>The corpus is non-empty "
-            f"({total_chains} chains) but the top-{top_n} window came back empty. "
+            "<section class='card'><p>The corpus has "
+            f"{total_chains} topics but the top-{top_n} window came back empty. "
             "Re-run <code>ovp-rescore-crystals</code> to refresh the Projection.</p></section>"
         )
     else:
         item_html_parts = []
         for entry in entries:
             kind = str(entry.get("crystal_kind", ""))
+            # 🌐 = synthesized topic, ⚖️ = open question (contradiction).
             kind_marker = "🌐" if kind == "community" else ("⚖️" if kind == "contradiction" else "•")
+            kind_label = (
+                "topic" if kind == "community" else
+                ("open question" if kind == "contradiction" else kind)
+            )
             label = escape(str(entry.get("label", "(untitled)")))
             score = float(entry.get("score", 0.0))
             teaser = str(entry.get("teaser") or "")
             note_href = str(entry.get("note_href") or "")
-            crystal_id = str(entry.get("crystal_id") or "")
             breakdown = (
                 f"size {float(entry.get('size_norm', 0)):.2f} · "
                 f"credibility {float(entry.get('credibility_norm', 0)):.2f} · "
@@ -2749,23 +2646,21 @@ def _render_curated_atlas_page(payload: dict) -> str:
                 "<li>"
                 f"<div><strong>{int(entry.get('rank', 0))}. {kind_marker} {link_html}</strong> "
                 f"<span class='pill'>score {score:.3f}</span> "
-                f"<span class='pill'>{escape(kind)}</span></div>"
+                f"<span class='pill'>{escape(kind_label)}</span></div>"
                 f"{teaser_html}"
                 f"<div class='muted'>{escape(breakdown)}</div>"
-                f"<div class='muted'>crystal_id: <code>{escape(crystal_id)}</code></div>"
                 "</li>"
             )
         items_html = "".join(item_html_parts)
         body_html = f"<section class='card'><ul class='list-tight'>{items_html}</ul></section>"
 
     header_lines = [
-        "<h1>Curated Atlas</h1>",
-        f"<p class='muted'>Top {len(entries)} of {total_chains} crystal chains in pack "
+        "<h1>Featured Topics</h1>",
+        f"<p class='muted'>Top {len(entries)} of {total_chains} synthesized topics in pack "
         f"<code>{escape(pack)}</code>, ranked by <code>crystal_scores</code>. "
         f"Generated {escape(generated_at)}.</p>",
-        f"<p class='muted'><a href='{escape(mechanical_href)}'>← Back to mechanical Atlas</a> · "
-        f"<a href='{escape(api_href)}'>JSON</a></p>",
-        "<form method='get' action='/atlas/curated'>",
+        f"<p class='muted'><a href='{escape(api_href)}'>JSON</a></p>",
+        "<form method='get' action='/topics'>",
         (
             f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
             if requested_pack
@@ -2776,7 +2671,7 @@ def _render_curated_atlas_page(payload: dict) -> str:
         "</form>",
     ]
     return _layout(
-        "Curated Atlas",
+        "Featured Topics",
         "".join(header_lines) + body_html,
         requested_pack=requested_pack,
     )
@@ -3021,11 +2916,48 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
     layout = payload["layout"]
+    summary = payload["map_summary"]
+    show_all = bool(summary.get("show_all"))
+    member_cap = int(summary.get("member_cap") or 0)
+    truncated = int(summary.get("truncated_clusters") or 0)
     limit_note = (
-        f" Showing the first {payload['map_summary']['limit']} graph neighborhoods in this map."
-        if payload["map_summary"].get("is_limited")
+        f" Showing the first {summary['limit']} graph neighborhoods in this map."
+        if summary.get("is_limited")
         else ""
     )
+    if not show_all and truncated:
+        cap_note = (
+            f" Each neighborhood is capped at {member_cap} member ideas — "
+            f"{truncated} have more hidden."
+        )
+    else:
+        cap_note = ""
+    show_all_qs = "&show_all=1" if "?" in action_path else "?show_all=1"
+    show_all_path = action_path
+    if not show_all and truncated:
+        # Append show_all=1 onto the same action; keep pack scope.
+        prefix = action_path
+        if requested_pack:
+            prefix = _shell_href(action_path, requested_pack)
+        sep = "&" if "?" in prefix else "?"
+        show_all_link = f"{prefix}{sep}show_all=1"
+        toggle_html = (
+            f"<p class='muted'>Showing a capped reading view. "
+            f"<a href='{escape(show_all_link)}'>Show all members →</a> "
+            "(slower, may overflow on big vaults)</p>"
+        )
+    elif show_all:
+        compact_link = (
+            _shell_href(action_path, requested_pack)
+            if requested_pack
+            else action_path
+        )
+        toggle_html = (
+            f"<p class='muted'>Showing every member node — "
+            f"<a href='{escape(compact_link)}'>back to compact view</a></p>"
+        )
+    else:
+        toggle_html = ""
     clusters = (
         "".join(
             "<li>"
@@ -3079,7 +3011,8 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
             [
                 "<h1>Knowledge Graph</h1>",
                 "<p class='muted'>A reader map of nearby concepts, claims, people, and sources in this vault."
-                f"{escape(limit_note)}</p>",
+                f"{escape(limit_note)}{escape(cap_note)}</p>",
+                toggle_html,
                 f"<form method='get' action='{escape(action_path)}'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -3100,6 +3033,14 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
                 "style='width:100%;height:auto;max-height:68vh;background:#fffdfa;border:1px solid #e7e1d8;border-radius:8px'>",
                 "<title>Knowledge graph map</title>",
                 "<desc>Interactive map of knowledge objects and their connections.</desc>",
+                # BL-051: labels overlap badly when every node renders one
+                # statically.  Hide labels by default, reveal on hover or
+                # focus.  Each node ``<a>`` carries an aria-label + svg
+                # ``<title>`` so accessibility tooling still has the name.
+                "<style>"
+                "#graph-map-canvas text { opacity: 0; transition: opacity 0.12s ease; pointer-events: none; }"
+                "#graph-map-canvas a:hover text, #graph-map-canvas a:focus text { opacity: 1; }"
+                "</style>",
                 edge_lines,
                 node_marks,
                 "</svg>",

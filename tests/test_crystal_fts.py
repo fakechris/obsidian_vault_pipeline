@@ -104,7 +104,10 @@ class TestIndexCrystalsIntoPageFts:
             "SELECT slug, title FROM page_fts"
         ).fetchall()
         assert rows == [
-            ("crystal:abc12345", "[crystal] AI alignment topic"),
+            # BL-051: user-facing title says "topic"; the slug
+            # prefix (``crystal:``) is left as the stable
+            # discriminator downstream code keys off.
+            ("crystal:abc12345", "[topic] AI alignment topic"),
         ]
 
     def test_inserts_contradiction_with_prefix(self):
@@ -120,7 +123,8 @@ class TestIndexCrystalsIntoPageFts:
             "SELECT slug, title FROM page_fts"
         ).fetchall()
         assert rows == [
-            ("contradiction:xy789", "[contradiction] memory: stored vs emergent"),
+            # BL-051: contradiction crystals surface as "open question".
+            ("contradiction:xy789", "[open question] memory: stored vs emergent"),
         ]
 
     def test_skips_superseded_rows(self):
@@ -172,7 +176,7 @@ class TestIndexCrystalsIntoPageFts:
 
     def test_handles_missing_label_gracefully(self):
         # Pre-fix a crystal with empty label could crash the title
-        # composition or produce ``[crystal] ``.  Should fall back.
+        # composition or produce ``[topic] ``.  Should fall back.
         conn = _seed_db()
         _seed_community_crystal(
             conn, cluster_id="cluster::nolabel",
@@ -182,7 +186,7 @@ class TestIndexCrystalsIntoPageFts:
         title = conn.execute(
             "SELECT title FROM page_fts"
         ).fetchone()[0]
-        assert title == "[crystal] (untitled)"
+        assert title == "[topic] (untitled)"
 
     def test_pack_isolation(self):
         # Inserting only the requested pack's crystals — other

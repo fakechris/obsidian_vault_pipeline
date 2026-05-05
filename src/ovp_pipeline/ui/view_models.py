@@ -62,6 +62,9 @@ DEFAULT_CANDIDATE_BROWSER_LIMIT = 25
 DEFAULT_EVENT_DOSSIER_LIMIT = 25
 DEFAULT_TRACEABILITY_BROWSER_LIMIT = 15
 DEFAULT_GRAPH_MAP_LIMIT = 24
+# BL-051: cap each cluster at 3 members in the visual map (~96 nodes
+# max with default 24 clusters).  ``?show_all=1`` lifts the cap.
+DEFAULT_GRAPH_MAP_MEMBER_CAP = 3
 GRAPH_MAP_WIDTH = 960
 GRAPH_MAP_HEIGHT = 640
 GRAPH_MAP_CLUSTER_ORBIT_X_FACTOR = 0.26
@@ -3226,6 +3229,8 @@ def build_graph_map_payload(
     pack_name: str | None = None,
     query: str | None = None,
     limit: int = DEFAULT_GRAPH_MAP_LIMIT,
+    show_all: bool = False,
+    member_cap: int = DEFAULT_GRAPH_MAP_MEMBER_CAP,
 ) -> dict[str, Any]:
     cluster_payload = build_cluster_browser_payload(
         vault_dir,
@@ -3234,6 +3239,15 @@ def build_graph_map_payload(
         limit=limit,
     )
     clusters = cluster_payload["items"]
+    # BL-051: cap each cluster's members in the visual map (full
+    # list still reachable via ``/ops/clusters`` and ``/ops/cluster``).
+    # ``show_all`` lifts the cap.
+    if not show_all and member_cap > 0:
+        for cluster in clusters:
+            members = cluster.get("members") or []
+            if len(members) > member_cap:
+                cluster["members"] = members[:member_cap]
+                cluster["truncated_member_count"] = len(members) - member_cap
     requested_pack = pack_name or cluster_payload.get("requested_pack", "")
     center_x = GRAPH_MAP_WIDTH / 2
     center_y = GRAPH_MAP_HEIGHT / 2
@@ -3387,6 +3401,13 @@ def build_graph_map_payload(
             "largest_cluster_size": cluster_payload["largest_cluster_size"],
             "is_limited": cluster_payload["is_limited"],
             "limit": limit,
+            # BL-051 visibility caps — surface to the renderer so the
+            # page can show the right banner + ``Show all`` toggle.
+            "show_all": show_all,
+            "member_cap": member_cap if not show_all else 0,
+            "truncated_clusters": sum(
+                1 for c in clusters if c.get("truncated_member_count")
+            ),
         },
         "model_notes": [
             "This spatial map is a reader projection over graph clusters and edges.",
@@ -4379,7 +4400,7 @@ def build_reader_home_payload(
             "total_chains": atlas.total_chains,
             "top_n": CURATED_ATLAS_DEFAULT_TOP_N,
             "effective_top_n": min(CURATED_ATLAS_DEFAULT_TOP_N, atlas.total_chains),
-            "atlas_href": _scoped_path("/atlas/curated", pack_name=requested_pack),
+            "atlas_href": _scoped_path("/topics", pack_name=requested_pack),
         },
         "recent_crystals": recent_crystals,
         "recent_days": READER_HOME_RECENT_DAYS,

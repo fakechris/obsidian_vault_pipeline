@@ -26,18 +26,29 @@ The local HTTP server reads from `knowledge.db` Projections + materialized views
 
 Each shell renders its own nav.  The only cross-link is a single corner pointer (`→ Maintenance` / `← Back to Library`).  Old top-level maintainer paths (`/candidates`, `/signals`, …) emit `301` to their `/ops/*` equivalents.
 
+### Vocabulary layering rule (BL-051)
+
+The Reader shell uses one user-facing word — **Topic** — for what
+internal storage calls a `community_crystal`.  Contradiction crystals
+surface as **open question**.  The internal names (DB tables,
+filesystem paths, CLI verbs, frontmatter `type:`) keep "crystal" for
+schema stability.  Reader-facing text must say **Topic**.  Maintainer
+docs that point at storage may say "crystal".  See [GLOSSARY](./GLOSSARY.md).
+
 ### Reader shell
 
 | Route | What it shows | Reads |
 | --- | --- | --- |
-| `/` | Reader home — search box, top topics (`crystal_scores` top 5), Curated Atlas card, Recent Crystals (last 7 days) | Projection: `crystal_scores` + `community_crystals` |
-| `/search` | FTS search across pages + crystals | Projection: `page_fts` |
-| `/atlas` | Atlas / MOC browser over knowledge graph | Projection: `graph_clusters` + label index |
-| `/atlas/curated` | Top-N curated reading entry from `crystal_scores` | Projection: `crystal_scores` + crystal bodies |
+| `/` | Reader home — search box, Top Topics (`crystal_scores` top 5 + "See all N featured topics →"), Recent Topics (last 7 days) | Projection: `crystal_scores` + `community_crystals` |
+| `/search` | FTS search across pages + topics + open questions | Projection: `page_fts` (titles prefixed `[topic]` / `[open question]`) |
+| `/topics` | **Featured Topics** — top-N reading entry ranked by `crystal_scores` | Projection: `crystal_scores` + crystal bodies |
+| `/atlas/curated` (legacy) | 301 → `/topics` | — |
+| `/api/topics`, `/api/atlas/curated` | JSON twin of `/topics`; the legacy path 301s | — |
+| `/atlas` | Legacy MOC browser over `graph_clusters` (power-user diagnostic; not in nav) | Projection: `graph_clusters` + label index |
 | `/object?id=<obj>` | Object lens with source/backlink rail | Projection: object detail |
-| `/note?path=<path>` | Note view (Evergreen, crystal markdown, source) | Projection: note detail |
-| `/topic?id=<obj>` | Topic overview around an anchor object | Projection: topic neighborhood |
-| `/map`, `/graph` | Visual knowledge map | Projection: `graph_edges` |
+| `/note?path=<path>` | Note view (Evergreen, topic markdown, source) | Projection: note detail |
+| `/topic?id=<obj>` | Topic overview around an anchor object (different surface from `/topics`) | Projection: topic neighborhood |
+| `/map`, `/graph` | Visual knowledge map (capped 3 members per cluster; `?show_all=1` lifts cap) | Projection: `graph_edges` |
 | `/explore?object_id=<obj>` | Three-pane reviewer surface (canvas + synth + agent timeline) | Projection: object pages + agent-decisions stream |
 
 ### Maintainer shell
