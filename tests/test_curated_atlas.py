@@ -328,6 +328,7 @@ class TestRenderCuratedAtlasMarkdown:
             label="L", score=0.5,
             size_norm=0.5, credibility_norm=0.5, contradiction_norm=0.5,
             reuse_recency_norm=0.0, evergreen_recency_norm=0.5,
+            source_diversity_norm=0.5,
             teaser="Teaser sentence.", source_slugs=("a",),
         )])
         md = render_curated_atlas_markdown(atlas)
@@ -348,6 +349,7 @@ class TestRenderCuratedAtlasMarkdown:
             score=0.789,
             size_norm=0.95, credibility_norm=0.78, contradiction_norm=0.50,
             reuse_recency_norm=0.0, evergreen_recency_norm=0.81,
+            source_diversity_norm=0.62,
             teaser="The teaser sentence.", source_slugs=("a", "b"),
         )])
         md = render_curated_atlas_markdown(atlas)
@@ -356,6 +358,12 @@ class TestRenderCuratedAtlasMarkdown:
         # Score breakdown line shows every signal value.
         assert "size 0.95" in md
         assert "credibility 0.78" in md
+        # BL-058 follow-up: source_diversity is a 20%-weighted signal
+        # in the default formula and must be visible in the
+        # human-readable explanation, otherwise the breakdown doesn't
+        # add up to ``score`` and the user has no way to ask "why is
+        # this topic ranked here".
+        assert "source-diversity 0.62" in md
         assert "contradiction 0.50" in md
         # Teaser appears in the body.
         assert "The teaser sentence." in md
@@ -369,6 +377,7 @@ class TestRenderCuratedAtlasMarkdown:
             label="Memory: stored vs emergent", score=0.65,
             size_norm=0.4, credibility_norm=0.3, contradiction_norm=1.0,
             reuse_recency_norm=0.0, evergreen_recency_norm=0.5,
+            source_diversity_norm=0.4,
             teaser="The contradiction teaser.",
             source_slugs=("a", "b"),
         )])

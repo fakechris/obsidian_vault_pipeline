@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -8,6 +9,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+
+logger = logging.getLogger(__name__)
 
 from ..assembly_recipe_registry import describe_assembly_recipe_contract
 from ..governance_registry import describe_governance_contract
@@ -4447,6 +4450,7 @@ def build_curated_atlas_payload(
                 "score": round(entry.score, 4),
                 "size_norm": round(entry.size_norm, 3),
                 "credibility_norm": round(entry.credibility_norm, 3),
+                "source_diversity_norm": round(entry.source_diversity_norm, 3),
                 "contradiction_norm": round(entry.contradiction_norm, 3),
                 "reuse_recency_norm": round(entry.reuse_recency_norm, 3),
                 "evergreen_recency_norm": round(entry.evergreen_recency_norm, 3),
@@ -4459,6 +4463,34 @@ def build_curated_atlas_payload(
                 ),
             }
         )
+
+    # Emit one reuse event per displayed crystal so the
+    # ``reuse_recency_norm`` signal in ``crystal_scoring`` actually
+    # has a producer.  Pre-fix the signal stayed cold-zero because no
+    # surface ever wrote ``reuse_events`` rows with
+    # ``object_kind in ('community_crystal', 'contradiction_crystal')``.
+    # Best-effort — a JSONL-append failure must not block the
+    # /topics page from rendering.
+    if entries:
+        try:
+            from ..reuse_emitter import emit_crystal_reuse_events
+            emit_crystal_reuse_events(
+                vault_dir,
+                pack=pack,
+                crystals=[
+                    (
+                        f"{entry['crystal_kind']}_crystal",
+                        str(entry["crystal_id"]),
+                    )
+                    for entry in entries
+                ],
+                surface="atlas",
+                consumer_ref=f"top_n={atlas.top_n}",
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort instrumentation
+            logger.warning(
+                "crystal reuse-event emission failed for /topics: %s", exc,
+            )
 
     return {
         "screen": "atlas/curated",

@@ -117,6 +117,77 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
 )
 
 
+_CRYSTAL_NOTE_PREFIX = "40-Resources/Crystals/"
+
+
+def _crystal_kind_and_id_from_note_path(relative_path: str) -> tuple[str, str] | None:
+    """Reverse-derive ``(crystal_kind, crystal_id)`` from a Reader
+    note path under ``40-Resources/Crystals/``.
+
+    File-name conventions (mirrors ``synthesis/_versioning.py`` +
+    ``synthesis/contradiction_crystal.py``):
+
+      * community crystal:    ``<safe-id>.md`` →
+            crystal_kind = ``community_crystal``,
+            crystal_id   = ``cluster::<safe-id>``
+      * contradiction crystal: ``contradiction-<safe-id>.md`` →
+            crystal_kind = ``contradiction_crystal``,
+            crystal_id   = ``contradiction::<safe-id>``
+
+    Returns ``None`` for anything else so the caller short-circuits
+    without writing a stray reuse event.
+    """
+    rel = relative_path.replace("\\", "/").lstrip("./")
+    if not rel.startswith(_CRYSTAL_NOTE_PREFIX):
+        return None
+    stem = rel[len(_CRYSTAL_NOTE_PREFIX):]
+    if not stem.endswith(".md"):
+        return None
+    stem = stem[:-len(".md")]
+    if not stem:
+        return None
+    if stem.startswith("contradiction-"):
+        safe_id = stem[len("contradiction-"):]
+        if not safe_id:
+            return None
+        return ("contradiction_crystal", f"contradiction::{safe_id}")
+    return ("community_crystal", f"cluster::{stem}")
+
+
+def _maybe_emit_crystal_note_reuse(
+    vault_dir, relative_path: str, pack_name: str | None,
+) -> None:
+    """Best-effort: when a Reader ``/note?path=`` request resolves a
+    synthesized-crystal markdown, write a ``reuse_events`` row so
+    ``crystal_scoring._reuse_recency_signal`` has a producer.
+
+    Pre-fix, the only producer for crystal-kind reuse events was
+    test-fixture seeds, so the ``reuse_recency_norm`` weight in the
+    default scoring formula contributed exactly zero in production
+    no matter how often a topic was opened.
+    """
+    derived = _crystal_kind_and_id_from_note_path(relative_path)
+    if derived is None:
+        return
+    try:
+        from ..reuse_emitter import emit_crystal_reuse_events
+        emit_crystal_reuse_events(
+            vault_dir,
+            pack=(pack_name or DEFAULT_PACK_NAME),
+            crystals=[derived],
+            surface="reader_note",
+            consumer_ref=relative_path,
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort instrumentation
+        # Log so a regression in the emitter doesn't get
+        # swallowed silently — see test_no_silent_imports.
+        print(
+            f"[ui_server] crystal reuse-event emission failed for "
+            f"/note?path={relative_path}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _parse_optional_int(query: dict[str, list[str]], key: str) -> int | None:
     """Read an optional integer query param.  Returns ``None`` for an
     absent / empty / non-numeric value so the downstream payload
@@ -754,6 +825,12 @@ def create_server(
                     _, markdown = _read_vault_note(resolved_vault, relative_path)
                     payload = build_note_page_payload(
                         resolved_vault, note_path=relative_path, pack_name=pack_name
+                    )
+                    # BL-058 follow-up: when the note is a synthesized
+                    # crystal, emit a reuse event so crystal_scoring's
+                    # ``reuse_recency_norm`` has a producer.  Best-effort.
+                    _maybe_emit_crystal_note_reuse(
+                        resolved_vault, relative_path, pack_name,
                     )
                     self._write_html(
                         _render_note_page(resolved_vault, relative_path, markdown, payload)

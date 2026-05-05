@@ -251,6 +251,46 @@ def test_emit_reuse_events_marks_untrusted_when_broken_link_recent(temp_vault):
     assert events[0]["trusted"] == 0
 
 
+def test_emit_crystal_reuse_events_writes_jsonl_with_crystal_kinds(temp_vault):
+    """BL-058 follow-up: ``crystal_scoring._reuse_recency_signal``
+    reads ``reuse_events`` rows with
+    ``object_kind in {community_crystal, contradiction_crystal}``
+    but no surface emitted any.  ``emit_crystal_reuse_events``
+    bypasses the objects-table resolver (crystals don't live there)
+    and writes the row directly so the signal has a real producer.
+    """
+    from ovp_pipeline.reuse_emitter import emit_crystal_reuse_events
+
+    events = emit_crystal_reuse_events(
+        temp_vault,
+        pack="research-tech",
+        crystals=[
+            ("community_crystal", "cluster::aaa"),
+            ("contradiction_crystal", "contradiction::bbb"),
+            # Duplicate — must be deduped to a single event.
+            ("community_crystal", "cluster::aaa"),
+            # Invalid kind — silently dropped.
+            ("not_a_crystal", "ignore"),
+            # Empty id — dropped.
+            ("community_crystal", ""),
+        ],
+        surface="atlas",
+        consumer_ref="top_n=30",
+    )
+    assert len(events) == 2
+    by_id = {e["object_id"]: e for e in events}
+    assert by_id["cluster::aaa"]["object_kind"] == "community_crystal"
+    assert by_id["contradiction::bbb"]["object_kind"] == "contradiction_crystal"
+    # ``trusted`` is pinned to 1 because every crystal in the table
+    # is by definition a synthesized artifact with full lineage.
+    for e in events:
+        assert e["evidence_present"] == 1
+        assert e["provenance_clean"] == 1
+        assert e["trusted"] == 1
+        assert e["surface"] == "atlas"
+        assert e["consumer_ref"] == "top_n=30"
+
+
 def test_extract_cited_slugs_orders_and_deduplicates():
     from ovp_pipeline.reuse_emitter import extract_cited_slugs
 
