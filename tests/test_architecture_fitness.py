@@ -258,7 +258,7 @@ def test_doctor_sqlite_bypass_count(repo_root):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/", "/search?q=alpha", "/objects"])
+@pytest.mark.parametrize("path", ["/", "/search?q=alpha", "/ops/objects"])
 def test_reader_routes_do_not_expose_operator_jargon(
     temp_vault,
     fetch_ui,

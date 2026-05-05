@@ -138,15 +138,15 @@ date: 2026-04-13
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        objects_status, objects_body = _get(port, "/objects")
+        objects_status, objects_body = _get(port, "/ops/objects")
         object_status, object_body = _get(port, "/object?id=alpha")
         topic_status, topic_body = _get(port, "/topic?id=alpha")
-        events_status, events_body = _get(port, "/events")
+        events_status, events_body = _get(port, "/ops/events")
         atlas_status, atlas_body = _get(port, "/atlas")
-        deep_dives_status, deep_dives_body = _get(port, "/deep-dives")
-        evolution_status, evolution_body = _get(port, "/evolution")
-        production_status, production_body = _get(port, "/production")
-        contradictions_status, contradictions_body = _get(port, "/contradictions")
+        deep_dives_status, deep_dives_body = _get(port, "/ops/deep-dives")
+        evolution_status, evolution_body = _get(port, "/ops/evolution")
+        production_status, production_body = _get(port, "/ops/production")
+        contradictions_status, contradictions_body = _get(port, "/ops/contradictions")
     finally:
         server.shutdown()
         server.server_close()
@@ -161,8 +161,8 @@ date: 2026-04-13
     assert "Relations" in object_body
     assert "Beta" in object_body
     assert '/topic?id=alpha' in object_body
-    assert '/events?q=alpha' in object_body
-    assert '/contradictions?q=alpha' in object_body
+    assert '/ops/events?q=alpha' in object_body
+    assert '/ops/contradictions?q=alpha' in object_body
     assert 'href="#claims"' in object_body
     assert "Source Slug" in object_body
     assert "Evergreen Markdown" in object_body
@@ -173,7 +173,7 @@ date: 2026-04-13
     assert "Evolution" in object_body
     assert "Review Context" in object_body
     assert "Open contradictions" in object_body
-    assert "/summaries?q=alpha" in object_body
+    assert "/ops/summaries?q=alpha" in object_body
     assert "Quick Maintenance" in object_body
     assert "Resolve Open Contradictions" in object_body
     assert f"/note?path={quote('10-Knowledge/Evergreen/Alpha.md', safe='')}" in object_body
@@ -184,14 +184,14 @@ date: 2026-04-13
     assert "Topic: Alpha" in topic_body
     assert "Neighbors" in topic_body
     assert '/object?id=alpha' in topic_body
-    assert '/events?q=alpha' in topic_body
+    assert '/ops/events?q=alpha' in topic_body
     assert "Center Summary" in topic_body
     assert "Atlas / MOC" in topic_body
     assert "Evolution" in topic_body
     assert "Review Context" in topic_body
     assert "Production Contribution" in topic_body
     assert "Missing source notes" in topic_body
-    assert "/summaries?q=alpha" in topic_body
+    assert "/ops/summaries?q=alpha" in topic_body
     assert "Quick Maintenance" in topic_body
     assert "Review scoped contradictions" in topic_body
 
@@ -208,7 +208,7 @@ date: 2026-04-13
     assert "Production Contribution" in events_body
     assert f"Showing the most recent {DEFAULT_EVENT_DOSSIER_LIMIT} timeline rows" in events_body
     assert "Top Source Notes" in events_body
-    assert "/summaries?q=alpha" in events_body
+    assert "/ops/summaries?q=alpha" in events_body
     assert "Quick Maintenance" in events_body
     assert "Review visible contradictions" in events_body
     assert "page_date -" not in events_body
@@ -229,7 +229,7 @@ date: 2026-04-13
     assert evolution_status == 200
     assert "Evolution Browser" in evolution_body
     assert "Candidate Links" in evolution_body
-    assert "/evolution/review" in evolution_body
+    assert "/ops/evolution/review" in evolution_body
     assert f"Showing the most recent {DEFAULT_TRACEABILITY_BROWSER_LIMIT} deep dives" in deep_dives_body
     assert "Source Deep Dive" in deep_dives_body
 
@@ -899,7 +899,7 @@ date: 2026-04-13
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/deep-dives")
+        status, body = _get(port, "/ops/deep-dives")
     finally:
         server.shutdown()
         server.server_close()
@@ -997,14 +997,21 @@ Thin note.
         thread.join(timeout=5)
 
     assert root_status == 200
+    # BL-050: Reader shell home — DB stats and typed-object lists
+    # have moved out, replaced by Top Topics / Curated Atlas /
+    # Recent Crystals.
     assert "Knowledge Library" in root_body
     assert 'href="/">Library</a>' in root_body
+    assert 'href="/search">Search</a>' in root_body
+    assert 'href="/atlas/curated">Atlas</a>' in root_body
     assert 'href="/map">Map</a>' in root_body
     assert 'href="/ops">Workbench</a>' not in root_body
-    assert "Recent Knowledge" in root_body
-    assert "Knowledge Map" in root_body
-    assert "Alpha" in root_body
-    assert "Thin Note" in root_body
+    # Top Topics / Recent Crystals always render with empty-state
+    # hints; Curated Atlas card is only emitted when crystal_scores
+    # has rows (PR #150 review fix).  This smoke test seeds objects
+    # but no crystals, so the card stays hidden.
+    assert "Top Topics" in root_body
+    assert "Recent Crystals" in root_body
     assert "OVP Truth UI" not in root_body
     assert "Workflow Map" not in root_body
 
@@ -1018,8 +1025,8 @@ Thin note.
     assert "Needs Attention Now" in ops_body
     assert "Alpha" in ops_body
     assert "Thin Note" in ops_body
-    assert "/summaries" in ops_body
-    assert "/evolution" in ops_body
+    assert "/ops/summaries" in ops_body
+    assert "/ops/evolution" in ops_body
     assert "Production Weak Points" in ops_body
     assert "Signals" in ops_body
 
@@ -1057,7 +1064,7 @@ Processed source note without downstream chain.
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/signals")
+        status, body = _get(port, "/ops/signals")
     finally:
         server.shutdown()
         server.server_close()
@@ -1108,7 +1115,7 @@ date: 2026-04-13
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/signals")
+        status, body = _get(port, "/ops/signals")
     finally:
         server.shutdown()
         server.server_close()
@@ -1142,7 +1149,7 @@ def test_ui_briefing_page_renders_briefing_snapshot(temp_vault):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/briefing")
+        status, body = _get(port, "/ops/briefing")
     finally:
         server.shutdown()
         server.server_close()
@@ -1184,7 +1191,7 @@ Processed source note without downstream chain.
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/actions")
+        status, body = _get(port, "/ops/actions")
     finally:
         server.shutdown()
         server.server_close()
@@ -1223,8 +1230,8 @@ Thin note.
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        contradictions_status, contradictions_body = _get(port, "/contradictions")
-        summaries_status, summaries_body = _get(port, "/summaries")
+        contradictions_status, contradictions_body = _get(port, "/ops/contradictions")
+        summaries_status, summaries_body = _get(port, "/ops/summaries")
     finally:
         server.shutdown()
         server.server_close()
@@ -1247,7 +1254,7 @@ def test_ui_objects_page_filters_by_query(temp_vault):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/objects?q=bet")
+        status, body = _get(port, "/ops/objects?q=bet")
     finally:
         server.shutdown()
         server.server_close()
@@ -1268,7 +1275,7 @@ def test_ui_contradictions_page_filters_by_status(temp_vault):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/contradictions?status=resolved")
+        status, body = _get(port, "/ops/contradictions?status=resolved")
     finally:
         server.shutdown()
         server.server_close()
@@ -1304,7 +1311,7 @@ Alpha supports local-first execution.
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/contradictions")
+        status, body = _get(port, "/ops/contradictions")
     finally:
         server.shutdown()
         server.server_close()
@@ -1323,7 +1330,7 @@ def test_ui_contradictions_page_filters_by_query(temp_vault):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/contradictions?q=alp")
+        status, body = _get(port, "/ops/contradictions?q=alp")
     finally:
         server.shutdown()
         server.server_close()
@@ -1349,7 +1356,7 @@ def test_ui_contradictions_page_can_resolve_item(temp_vault):
     try:
         status, _body, headers = _post(
             port,
-            "/contradictions/resolve",
+            "/ops/contradictions/resolve",
             {
                 "contradiction_id": contradiction_id,
                 "status": "resolved_keep_positive",
@@ -1357,7 +1364,7 @@ def test_ui_contradictions_page_can_resolve_item(temp_vault):
                 "rebuild_summaries": "1",
             },
         )
-        page_status, page_body = _get(port, "/contradictions?status=resolved")
+        page_status, page_body = _get(port, "/ops/contradictions?status=resolved")
         object_status, object_body = _get(port, "/object?id=alpha")
     finally:
         server.shutdown()
@@ -1365,7 +1372,7 @@ def test_ui_contradictions_page_can_resolve_item(temp_vault):
         thread.join(timeout=5)
 
     assert status == 303
-    assert headers["location"] == "/contradictions?status=resolved"
+    assert headers["location"] == "/ops/contradictions?status=resolved"
     assert page_status == 200
     assert "resolved_keep_positive" in page_body
     assert "Reviewed in browser" in page_body
@@ -1407,13 +1414,13 @@ Thin note.
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, before_body = _get(port, "/summaries")
+        status, before_body = _get(port, "/ops/summaries")
         rebuild_status, _body, headers = _post(
             port,
-            "/summaries/rebuild",
+            "/ops/summaries/rebuild",
             {"object_id": "thin-note"},
         )
-        after_status, after_body = _get(port, "/summaries")
+        after_status, after_body = _get(port, "/ops/summaries")
         object_status, object_body = _get(port, "/object?id=thin-note")
     finally:
         server.shutdown()
@@ -1424,7 +1431,7 @@ Thin note.
     assert "Stale Summaries" in before_body
     assert "thin-note" in before_body
     assert rebuild_status == 303
-    assert headers["location"] == "/summaries"
+    assert headers["location"] == "/ops/summaries"
     assert after_status == 200
     assert "Thin note." in after_body
     assert "No outgoing relations currently support this summary." in before_body
@@ -1442,7 +1449,7 @@ def test_ui_events_page_filters_by_query(temp_vault):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/events?q=beta")
+        status, body = _get(port, "/ops/events?q=beta")
     finally:
         server.shutdown()
         server.server_close()
@@ -1468,7 +1475,7 @@ def test_ui_events_page_handles_missing_evergreen_path(temp_vault):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/events?q=alpha")
+        status, body = _get(port, "/ops/events?q=alpha")
     finally:
         server.shutdown()
         server.server_close()
@@ -1542,7 +1549,7 @@ date: 2026-04-13
     thread.start()
     try:
         atlas_status, atlas_body = _get(port, "/atlas")
-        derivations_status, derivations_body = _get(port, "/deep-dives")
+        derivations_status, derivations_body = _get(port, "/ops/deep-dives")
     finally:
         server.shutdown()
         server.server_close()

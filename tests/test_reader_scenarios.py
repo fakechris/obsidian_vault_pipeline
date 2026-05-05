@@ -107,16 +107,22 @@ def test_reader_library_to_object_to_evidence(temp_vault):
         st, home = _get(port, "/")
         assert st == 200
         assert "Knowledge Library" in home
-        assert 'href="/ops"' not in home
+        # BL-050: Reader shell exposes a single cross-link to
+        # Maintenance, but no full Workbench card on the home.
         assert "Open Workbench" not in home
+        assert "→ Maintenance" in home
 
-        object_links = _extract_hrefs(home, "/object?")
-        assert object_links, "home page should contain at least one /object? link"
+        # Reader home no longer lists typed objects; reach an object
+        # via search instead so the rest of the chain still exercises.
+        object_links = _extract_hrefs(home, "/search")
+        assert object_links, "home page should expose a search entrypoint"
 
-        first_link = object_links[0]
+        # An object lens still has to avoid maintainer-flavored cards
+        # like Next Actions.  Pull a representative object_id from the
+        # seeded vault.
+        first_link = "/object?id=alpha"
         st, obj = _get(port, first_link)
         assert st == 200
-        assert 'href="/ops' not in obj
         assert "Next Actions" not in obj
 
         evidence_links = _extract_hrefs(obj, "/note?") + _extract_hrefs(obj, "/object?")
@@ -143,13 +149,17 @@ def test_reader_search_to_object(temp_vault):
         st, search = _get(port, "/search?q=Alpha")
         assert st == 200
         assert "Search" in search
-        assert 'href="/ops' not in search
+        # Reader page may carry a single cross-link to /ops, but
+        # never a deep link into the Maintainer subtree.
+        assert 'href="/ops/' not in search
 
         result_links = _extract_hrefs(search, "/object?")
         assert result_links, "search results should contain /object? links"
         st, obj = _get(port, result_links[0])
         assert st == 200
-        assert 'href="/ops' not in obj
+        # Object lens may surface targeted maintainer actions
+        # (e.g. "Review scoped contradictions") — reader purity is
+        # enforced on home/search/map listings, not deep-dive lenses.
     finally:
         server.shutdown()
         server.server_close()
@@ -170,13 +180,11 @@ def test_reader_graph_navigation(temp_vault):
         st, graph = _get(port, "/map")
         assert st == 200
         assert "Knowledge" in graph
-        assert 'href="/ops' not in graph
 
         obj_links = _extract_hrefs(graph, "/object?")
         assert obj_links, "/map page should contain at least one /object? link"
         st, obj = _get(port, obj_links[0])
         assert st == 200
-        assert 'href="/ops' not in obj
     finally:
         server.shutdown()
         server.server_close()
@@ -202,7 +210,7 @@ def test_reader_evidence_traceability(temp_vault):
         assert note_links, "object page should contain at least one /note? link"
         st, note = _get(port, note_links[0])
         assert st == 200
-        assert 'href="/ops' not in note
+        assert 'href="/ops/' not in note
     finally:
         server.shutdown()
         server.server_close()
@@ -210,10 +218,13 @@ def test_reader_evidence_traceability(temp_vault):
 
 
 # ---------------------------------------------------------------------------
-# Scenario 5: Operator mode toggle — reader ↔ operator
+# Scenario 5: Reader ↔ Maintainer cross-link (BL-050 hard split)
 # ---------------------------------------------------------------------------
 
-def test_reader_operator_mode_toggle(temp_vault):
+def test_reader_to_ops_cross_link(temp_vault):
+    """BL-050: ``?mode=operator`` is gone.  ``/`` always exposes a
+    one-way cross-link to ``/ops`` and ``/ops`` always exposes the
+    return cross-link.  Each shell renders its own nav."""
     _seed(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
     port = server.server_address[1]
@@ -222,14 +233,13 @@ def test_reader_operator_mode_toggle(temp_vault):
     try:
         st, reader = _get(port, "/")
         assert st == 200
-        assert 'href="/ops"' not in reader
-
-        st, operator = _get(port, "/?mode=operator")
-        assert st == 200
-        assert 'href="/ops' in operator
+        assert 'href="/ops"' in reader
+        assert "→ Maintenance" in reader
 
         st, ops = _get(port, "/ops")
         assert st == 200
+        assert 'href="/"' in ops
+        assert "← Back to Library" in ops
         assert "OVP Truth UI" in ops or "Workbench" in ops or "Objects Indexed" in ops
     finally:
         server.shutdown()

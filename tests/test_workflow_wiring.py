@@ -11,8 +11,12 @@ def test_root_and_ops_dispatch_to_distinct_reader_and_ops_surfaces(temp_vault, f
 
     assert root_status == 200
     assert ops_status == 200
+    # BL-050: Reader shell at / surfaces M14 reading substrate, not
+    # the legacy Library Items / Search Library cards.  Curated
+    # Atlas card only renders when crystal_scores has rows (PR #150
+    # review fix); the Top Topics section always renders.
     assert "Knowledge Library" in root_body
-    assert "Search Library" in root_body
+    assert "Top Topics" in root_body
     assert "OVP Truth UI" not in root_body
     assert "OVP Truth UI" in ops_body
     assert "Workflow Map" in ops_body
@@ -32,7 +36,7 @@ def test_candidate_review_route_uses_truth_api_governance_seam(
             "action": "promote",
             "mutation": {"action": "promote"},
             "knowledge_index_rebuilt": False,
-            "next_path": "/candidates",
+            "next_path": "/ops/candidates",
         }
 
     monkeypatch.setattr(ui_server, "review_candidate_concept", fake_review_candidate_concept)
@@ -110,7 +114,7 @@ def test_action_enqueue_route_uses_truth_api_action_queue_seam(
 
     def fake_enqueue(*args, **kwargs):
         calls.append(kwargs)
-        return {"status": "queued", "next_path": "/signals"}
+        return {"status": "queued", "next_path": "/ops/signals"}
 
     monkeypatch.setattr(ui_server, "enqueue_signal_action", fake_enqueue)
 
