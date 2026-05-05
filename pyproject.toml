@@ -107,6 +107,7 @@ ovp-clean-processing-backups = "ovp_pipeline.commands.cleanup_processing_backups
 ovp-breakdown = "ovp_pipeline.commands.breakdown:main"
 ovp-knowledge-index = "ovp_pipeline.commands.knowledge_index:main"
 ovp-rebuild-summaries = "ovp_pipeline.commands.rebuild_summaries:main"
+ovp-tag-legacy-evergreens = "ovp_pipeline.commands.tag_legacy_evergreens:main"
 ovp-watch-progress = "ovp_pipeline.commands.watch_progress:main"
 ovp-extract = "ovp_pipeline.commands.extract_profiles:main"
 ovp-extract-preview = "ovp_pipeline.commands.extract_preview:main"
