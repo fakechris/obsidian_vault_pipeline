@@ -42,7 +42,7 @@ LEGACY_SILENT_IMPORTS = {
     # We may tighten these in follow-up PRs but keep them here so the
     # ratchet test doesn't break.
     ("image_downloader.py", 213),
-    ("promote_candidates.py", 332),
+    ("promote_candidates.py", 627),  # BL-058a inserted v2 helpers, line shifted
     ("query_tool.py", 157),
     ("commands/backfill_entities.py", 214),     # pipeline.jsonl logger optional
     ("autopilot/daemon.py", 382),
