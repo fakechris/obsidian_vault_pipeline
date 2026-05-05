@@ -168,19 +168,28 @@ class PromptRegistry:
 
     @staticmethod
     def _parse(path: Path, expected_name: str, expected_version: str, text: str) -> Prompt:
-        if not text.startswith("---"):
+        # Frontmatter must open with a literal '---' line and close with
+        # another '---' line.  We split lines instead of using
+        # ``text.index("---", 3)`` because a YAML string value containing
+        # ``---`` (e.g. ``notes: "before --- after"``) would otherwise be
+        # mistaken for the closing fence and silently truncate metadata.
+        lines = text.splitlines(keepends=True)
+        if not lines or lines[0].strip() != "---":
             raise PromptRegistryError(
-                f"{path}: missing YAML frontmatter (file does not start with '---')"
+                f"{path}: missing YAML frontmatter (file must start with a '---' line)"
             )
-        try:
-            end = text.index("---", 3)
-        except ValueError as exc:
+        closing_idx: int | None = None
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                closing_idx = i
+                break
+        if closing_idx is None:
             raise PromptRegistryError(
                 f"{path}: missing closing '---' fence on frontmatter"
-            ) from exc
+            )
 
-        fm_text = text[3:end]
-        body = text[end + 3:].lstrip("\n")
+        fm_text = "".join(lines[1:closing_idx])
+        body = "".join(lines[closing_idx + 1:]).lstrip("\n")
 
         try:
             metadata = yaml.safe_load(fm_text) or {}

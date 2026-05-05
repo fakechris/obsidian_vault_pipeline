@@ -246,7 +246,7 @@ After the migration runs once:
 
 | File | Change |
 |---|---|
-| `auto_evergreen_extractor.py` | Replaced `SYSTEM_PROMPT` (~80 lines, 11 hard rules). New `_parse_v2_response` method handles wrapped JSON + skip_reason + bare-list rejection. New `_unit_to_concept` converts v2 unit dicts to legacy concept-dict shape so `process_file` doesn't need to change. `create_evergreen_note` rewritten — no forced sections, conditional `## Related` block, `Source anchor` blockquote. Dropped legacy `evergreen_low_link` audit (replaced by `absorb_skipped_source` + `absorb_v2_parse_error`). |
+| `auto_evergreen_extractor.py` | Replaced `SYSTEM_PROMPT` (~80 lines, 11 hard rules). New `_parse_v2_response` method handles wrapped JSON + skip_reason + bare-list rejection. New `_unit_to_concept` converts v2 unit dicts to legacy concept-dict shape so `process_file` doesn't need to change. `create_evergreen_note` rewritten — no forced sections, conditional `## Related` block, `Source anchor` blockquote. Dropped legacy `evergreen_low_link` audit (replaced by `absorb_skipped_source` + `absorb_parse_error`). |
 | `commands/tag_legacy_evergreens.py` | NEW. Idempotent + reversible migration script. |
 | `pyproject.toml` | Register `ovp-tag-legacy-evergreens` entry point. |
 | `tests/test_absorb_v2.py` | NEW. 20 tests covering parser / converter / body template / migration command. |
