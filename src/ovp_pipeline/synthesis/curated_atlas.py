@@ -71,6 +71,13 @@ class CuratedEntry:
     contradiction_norm: float
     reuse_recency_norm: float
     evergreen_recency_norm: float
+    # BL-054: source-diversity is a 0.20-weighted signal in the
+    # default scoring formula, but it was missing from the entry
+    # plumbing — the markdown breakdown / atlas HTML / /topics
+    # JSON all rendered "size + credibility + contradiction +
+    # reuse + recency" leaving a 20% gap in the displayed
+    # explanation that didn't add up to the final ``score``.
+    source_diversity_norm: float
     teaser: str
     source_slugs: tuple[str, ...]
 
@@ -159,7 +166,7 @@ def _load_top_n(
         SELECT cs.crystal_id, 'community' AS kind, gc.label,
                cs.score, cs.size_norm, cs.credibility_norm,
                cs.contradiction_norm, cs.reuse_recency_norm,
-               cs.evergreen_recency_norm,
+               cs.evergreen_recency_norm, cs.source_diversity_norm,
                cc.body_md, cc.source_evergreen_slugs_json
           FROM crystal_scores cs
           JOIN community_crystals cc
@@ -179,8 +186,8 @@ def _load_top_n(
             "crystal_id": r[0], "kind": r[1], "label": r[2],
             "score": r[3], "size_norm": r[4], "credibility_norm": r[5],
             "contradiction_norm": r[6], "reuse_recency_norm": r[7],
-            "evergreen_recency_norm": r[8],
-            "body_md": r[9], "source_slugs_json": r[10],
+            "evergreen_recency_norm": r[8], "source_diversity_norm": r[9],
+            "body_md": r[10], "source_slugs_json": r[11],
         })
 
     # Contradiction crystals — different body table; ``label`` is
@@ -190,7 +197,7 @@ def _load_top_n(
         SELECT cs.crystal_id, 'contradiction' AS kind, cc.subject_key,
                cs.score, cs.size_norm, cs.credibility_norm,
                cs.contradiction_norm, cs.reuse_recency_norm,
-               cs.evergreen_recency_norm,
+               cs.evergreen_recency_norm, cs.source_diversity_norm,
                cc.body_md, cc.source_object_ids_json
           FROM crystal_scores cs
           JOIN contradiction_crystals cc
@@ -208,8 +215,8 @@ def _load_top_n(
             "crystal_id": r[0], "kind": r[1], "label": r[2],
             "score": r[3], "size_norm": r[4], "credibility_norm": r[5],
             "contradiction_norm": r[6], "reuse_recency_norm": r[7],
-            "evergreen_recency_norm": r[8],
-            "body_md": r[9], "source_slugs_json": r[10],
+            "evergreen_recency_norm": r[8], "source_diversity_norm": r[9],
+            "body_md": r[10], "source_slugs_json": r[11],
         })
 
     rows.sort(key=lambda r: -r["score"])
@@ -255,6 +262,7 @@ def build_curated_atlas(
             contradiction_norm=float(row["contradiction_norm"]),
             reuse_recency_norm=float(row["reuse_recency_norm"]),
             evergreen_recency_norm=float(row["evergreen_recency_norm"]),
+            source_diversity_norm=float(row.get("source_diversity_norm", 0.0)),
             teaser=_extract_teaser(row["body_md"] or ""),
             source_slugs=slugs,
         ))
@@ -357,6 +365,7 @@ def render_curated_atlas_markdown(atlas: CuratedAtlas) -> str:
             f"- score breakdown: "
             f"size {entry.size_norm:.2f} · "
             f"credibility {entry.credibility_norm:.2f} · "
+            f"source-diversity {entry.source_diversity_norm:.2f} · "
             f"contradiction {entry.contradiction_norm:.2f} · "
             f"reuse-recency {entry.reuse_recency_norm:.2f} · "
             f"evergreen-recency {entry.evergreen_recency_norm:.2f}",

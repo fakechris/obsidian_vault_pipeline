@@ -298,6 +298,79 @@ def emit_reuse_events(
     return emitted
 
 
+def emit_crystal_reuse_events(
+    vault_dir: Path | str,
+    *,
+    pack: str,
+    crystals: Iterable[tuple[str, str]],
+    surface: str,
+    consumer_ref: str = "",
+    session_id: str | None = None,
+    extra_payload: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Emit reuse events for synthesized crystals.
+
+    Crystals don't live in the ``objects`` table — they live in
+    ``community_crystals`` / ``contradiction_crystals`` — so the
+    standard ``emit_reuse_events*`` resolvers can't reach them.
+    Without a producer, ``crystal_scoring._reuse_recency_signal``
+    permanently reads ``reuse_events`` rows that never get written
+    and the ``reuse_recency_norm`` signal stays cold-zero in
+    production regardless of actual user activity.
+
+    ``crystals`` is an iterable of ``(crystal_kind, crystal_id)``
+    tuples where ``crystal_kind`` is one of the values in the
+    function-local ``valid_kinds`` set (``community_crystal`` /
+    ``contradiction_crystal``).  These match the ``object_kind``
+    values ``crystal_scoring._reuse_recency_signal`` filters on
+    (see ``crystal_scoring._CRYSTAL_REUSE_KINDS``).  We write the
+    event directly without any objects-table resolution so this
+    function works even before any of the ``crystal_scoring``
+    plumbing has run.
+
+    ``evidence_present`` and ``provenance_clean`` are pinned to
+    1/1 — every crystal currently in the table is by definition
+    a "trusted" synthesis (LLM-produced from canonical objects with
+    full lineage) so the credibility-of-the-feedback signal is on
+    for the same reason a query that hits a green-circle evergreen
+    counts as trusted reuse.
+    """
+    valid_kinds = {"community_crystal", "contradiction_crystal"}
+    seen: set[tuple[str, str]] = set()
+    rows: list[tuple[str, str]] = []
+    for kind, crystal_id in crystals:
+        kind_str = str(kind or "")
+        id_str = str(crystal_id or "")
+        if kind_str not in valid_kinds or not id_str:
+            continue
+        key = (kind_str, id_str)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(key)
+    if not rows:
+        return []
+
+    emitted: list[dict[str, Any]] = []
+    for kind_str, id_str in rows:
+        emitted.append(
+            _write_event(
+                vault_dir,
+                pack=pack,
+                object_id=id_str,
+                object_kind=kind_str,
+                source_slug="",
+                surface=surface,
+                consumer_ref=consumer_ref,
+                evidence_present=True,
+                provenance_clean=True,
+                session_id=session_id,
+                extra_payload=extra_payload,
+            )
+        )
+    return emitted
+
+
 def emit_reuse_events_for_object_ids(
     vault_dir: Path | str,
     *,

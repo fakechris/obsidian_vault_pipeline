@@ -2632,6 +2632,7 @@ def _render_curated_atlas_page(payload: dict) -> str:
             breakdown = (
                 f"size {float(entry.get('size_norm', 0)):.2f} · "
                 f"credibility {float(entry.get('credibility_norm', 0)):.2f} · "
+                f"source-diversity {float(entry.get('source_diversity_norm', 0)):.2f} · "
                 f"contradiction {float(entry.get('contradiction_norm', 0)):.2f} · "
                 f"reuse-recency {float(entry.get('reuse_recency_norm', 0)):.2f} · "
                 f"evergreen-recency {float(entry.get('evergreen_recency_norm', 0)):.2f}"
