@@ -135,6 +135,9 @@ def _seed_running_transaction(temp_vault) -> None:
 
 
 def test_ui_server_root_serves_reader_library_home(temp_vault):
+    """BL-050: ``/`` is the Reader shell home.  No DB stat counts,
+    no Workbench card, no typed-object list.  Lead with search +
+    Top Topics + Curated Atlas + Recent Crystals."""
     _seed_truth_store(temp_vault)
     _seed_running_transaction(temp_vault)
 
@@ -142,12 +145,24 @@ def test_ui_server_root_serves_reader_library_home(temp_vault):
 
     assert status == 200
     assert "Knowledge Library" in body
+    # Reader nav (no Workbench)
     assert 'href="/">Library</a>' in body
-    assert 'href="/map">Map</a>' in body
     assert 'href="/search">Search</a>' in body
+    assert 'href="/atlas/curated">Atlas</a>' in body
+    assert 'href="/map">Map</a>' in body
     assert 'href="/ops">Workbench</a>' not in body
-    assert "Recent Knowledge" in body
-    assert "Knowledge Map" in body
+    # Cross-link to maintainer shell
+    assert ">→ Maintenance</a>" in body
+    # New BL-050 sections
+    assert "Top Topics" in body
+    assert "Curated Atlas" in body
+    assert "Recent Crystals" in body
+    # Search box (inline form)
+    assert "action='/search'" in body
+    assert "name='q'" in body
+    # Old developer-flavoured surfaces gone
+    assert "Recent Knowledge" not in body
+    assert "Library Items" not in body
     assert "Open Workbench" not in body
     assert "Workflow Map" not in body
     assert "OVP Truth UI" not in body
@@ -202,7 +217,7 @@ def test_ui_server_map_route_serves_readable_map_entry(temp_vault):
     assert "<title>Knowledge graph map</title>" in body
     assert "role='img'" not in body
     assert "action='/map'" in body
-    assert "action='/clusters'" not in body
+    assert "action='/ops/clusters'" not in body
     assert 'href="/">Library</a>' in body
     assert 'href="/map">Map</a>' in body
     assert 'href="/search">Search</a>' in body
@@ -221,26 +236,37 @@ def test_ui_server_graph_route_serves_visual_graph_mvp(temp_vault):
     assert "Beta" in body
     assert "Showing the first 24 graph neighborhoods" in body
     assert "action='/graph'" in body
-    assert "action='/clusters'" not in body
+    assert "action='/ops/clusters'" not in body
     assert 'href="/">Library</a>' in body
     assert 'href="/map">Map</a>' in body
     assert 'href="/search">Search</a>' in body
     assert 'href="/ops">Workbench</a>' not in body
 
 
-def test_render_library_home_hides_unavailable_map_for_non_research_pack():
-    from ovp_pipeline.commands.ui_server import _render_library_home
+def test_render_reader_home_hides_unavailable_map_for_non_research_pack():
+    """BL-050 reader home: Map card only renders when the active
+    pack supports research-style graph nav."""
+    from ovp_pipeline.commands.ui_server import _render_reader_home
 
-    body = _render_library_home(
+    body = _render_reader_home(
         {
             "requested_pack": "media-editorial",
-            "objects": {"count": 0, "items": []},
+            "pack": "media-editorial",
+            "top_topics": [],
+            "curated_atlas": {
+                "total_chains": 0,
+                "top_n": 30,
+                "atlas_href": "/atlas/curated?pack=media-editorial",
+            },
+            "recent_crystals": [],
+            "recent_days": 7,
+            "map_supported": False,
         }
     )
 
     assert "Knowledge Library" in body
-    assert "Search Library" in body
-    assert "Open Workbench" in body
+    assert "Top Topics" in body
+    assert "Curated Atlas" in body
     assert "Knowledge Map" not in body
     assert 'href="/map?pack=media-editorial"' not in body
 
@@ -1242,7 +1268,7 @@ def test_ui_server_contradictions_page_renders_assembly_contract(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/contradictions?pack=default-knowledge")
+        conn.request("GET", "/ops/contradictions?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1330,7 +1356,7 @@ def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/signals?pack=default-knowledge")
+        conn.request("GET", "/ops/signals?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1339,8 +1365,11 @@ def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/?pack=default-knowledge"' in body
-    assert 'href="/map?pack=default-knowledge"' in body
+    # /ops/signals is in the Maintainer shell — its nav has Overview /
+    # Contradictions / Signals / Pulse / Audit and a back-link to Library.
+    assert 'href="/?pack=default-knowledge"' in body  # cross-link to Reader shell
+    assert 'href="/ops?pack=default-knowledge">Overview</a>' in body
+    assert 'href="/ops/signals?pack=default-knowledge">Signals</a>' in body
     assert "inherited from research-tech-signals" in body
     assert body.index("Next Actions") < body.index("Signal Types")
 
@@ -1378,7 +1407,7 @@ def test_ui_server_signals_page_renders_missing_surface_contract_error(temp_vaul
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/signals?pack=media-editorial")
+        conn.request("GET", "/ops/signals?pack=media-editorial")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1391,40 +1420,21 @@ def test_ui_server_signals_page_renders_missing_surface_contract_error(temp_vaul
     assert "does not expose a shared shell &#x27;signals&#x27; surface" in body
 
 
-def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vault, monkeypatch):
-    import ovp_pipeline.commands.ui_server as ui_server
+def test_ui_server_reader_nav_hides_map_for_non_research_pack(temp_vault):
+    """BL-050: the Reader shell nav gates ``Map`` to packs that
+    declare research-style graph navigation.  Other reader links
+    (Library / Search / Atlas) and the cross-link to Maintenance
+    are always present."""
     from ovp_pipeline.commands.ui_server import create_server
 
-    monkeypatch.setattr(
-        ui_server,
-        "build_signal_browser_payload",
-        lambda vault_dir, *, pack_name=None, signal_type=None, query=None: {
-            "screen": "signals/browser",
-            "requested_pack": pack_name or "",
-            "surface_contract": {
-                "surface_kind": "signals",
-                "requested_pack": pack_name or "",
-                "status": "missing",
-                "provider_pack": "",
-                "provider_name": "",
-                "description": "",
-            },
-            "surface_error": "Pack 'media-editorial' does not expose a shared shell 'signals' surface.",
-            "items": [],
-            "count": 0,
-            "query": "",
-            "signal_type": "",
-            "type_counts": {},
-            "signal_type_explanations": {},
-        },
-    )
+    _seed_truth_store(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/signals?pack=media-editorial")
+        conn.request("GET", "/?pack=media-editorial")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1433,11 +1443,14 @@ def test_ui_server_shell_nav_hides_research_links_for_non_research_pack(temp_vau
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/?pack=media-editorial"' in body
-    assert 'href="/map?pack=media-editorial"' not in body
-    assert 'href="/clusters?pack=media-editorial"' not in body
-    assert 'href="/contradictions?pack=media-editorial"' not in body
-    assert 'href="/events?pack=media-editorial"' not in body
+    # Reader nav core
+    assert 'href="/?pack=media-editorial">Library</a>' in body
+    assert 'href="/search?pack=media-editorial">Search</a>' in body
+    assert 'href="/atlas/curated?pack=media-editorial">Atlas</a>' in body
+    # Map gated out for non-research pack
+    assert 'href="/map?pack=media-editorial">Map</a>' not in body
+    # Cross-link still present
+    assert 'href="/ops?pack=media-editorial"' in body
 
 
 def test_ui_server_research_api_route_rejects_non_research_pack(temp_vault, monkeypatch):
@@ -1468,7 +1481,10 @@ def test_ui_server_research_api_route_rejects_non_research_pack(temp_vault, monk
 
     assert response.status == 409
     assert payload["status"] == "unsupported_pack"
-    assert payload["route"] == "/clusters"
+    # Pre-BL-050 the rejection payload echoed the incoming route name
+    # ("/clusters" for the API, since the API never moved).  After
+    # BL-050 the unified route name is the maintainer-shell path.
+    assert payload["route"] in {"/clusters", "/ops/clusters"}
     assert payload["requested_pack"] == "media-editorial"
 
 
@@ -1490,7 +1506,7 @@ def test_ui_server_research_html_route_rejects_non_research_pack(temp_vault, mon
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/clusters?pack=media-editorial")
+        conn.request("GET", "/ops/clusters?pack=media-editorial")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1607,7 +1623,7 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/events?pack=default-knowledge")
+        conn.request("GET", "/ops/events?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1616,9 +1632,9 @@ def test_ui_server_events_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
+    # Maintainer shell: Reader cross-link + Overview link both pack-scoped.
     assert 'href="/?pack=default-knowledge"' in body
-    assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops"' not in body
+    assert 'href="/ops?pack=default-knowledge">Overview</a>' in body
     assert (
         'href="/note?path=10-Knowledge%2FEvergreen%2FAlpha.md&amp;pack=default-knowledge"' in body
     )
@@ -1769,7 +1785,7 @@ def test_ui_server_evolution_page_preserves_pack_scope_in_shell_nav(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/evolution?pack=default-knowledge")
+        conn.request("GET", "/ops/evolution?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1821,7 +1837,7 @@ def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/clusters?pack=default-knowledge")
+        conn.request("GET", "/ops/clusters?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1830,9 +1846,9 @@ def test_ui_server_clusters_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
+    # Maintainer shell: Reader cross-link + Overview link both pack-scoped.
     assert 'href="/?pack=default-knowledge"' in body
-    assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops"' not in body
+    assert 'href="/ops?pack=default-knowledge">Overview</a>' in body
 
 
 def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
@@ -1859,7 +1875,7 @@ def test_ui_server_cluster_detail_endpoint_returns_payload(temp_vault):
     assert payload["screen"] == "graph/cluster-detail"
     assert payload["cluster"]["cluster_id"] == cluster["cluster_id"]
     assert payload["cluster"]["pack"] == cluster["pack"]
-    assert payload["browser_path"].startswith("/clusters?pack=")
+    assert payload["browser_path"].startswith("/ops/clusters?pack=")
     assert payload["edges"]
     assert payload["summary_bullets"]
     assert payload["structural_label"]["title"]
@@ -1981,7 +1997,7 @@ def test_ui_server_cluster_detail_page_shows_canonical_cluster_id(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", f"/cluster?id={cluster['cluster_id']}&pack={cluster['pack']}")
+        conn.request("GET", f"/ops/cluster?id={cluster['cluster_id']}&pack={cluster['pack']}")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -2084,7 +2100,7 @@ date: 2026-04-13
     assert item["neighborhood_reason"]
     assert item["neighborhood_bridge_kind"] == "source_and_atlas_overlap"
     assert item["next_read_title"]
-    assert item["next_read_path"].startswith("/cluster?id=")
+    assert item["next_read_path"].startswith("/ops/cluster?id=")
     assert item["top_reading_route_kind"] == "full_context_route"
     assert item["top_reading_route_title"]
     assert item["has_reading_route"] is True
@@ -2243,7 +2259,7 @@ Processed source note without downstream chain.
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/briefing?pack=default-knowledge")
+        conn.request("GET", "/ops/briefing?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -2252,9 +2268,9 @@ Processed source note without downstream chain.
         thread.join(timeout=5)
 
     assert response.status == 200
+    # Maintainer shell: Reader cross-link + Overview link both pack-scoped.
     assert 'href="/?pack=default-knowledge"' in body
-    assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops"' not in body
+    assert 'href="/ops?pack=default-knowledge">Overview</a>' in body
     assert "inherited from research-tech-briefing" in body
     assert "inherited from orientation_brief in research-tech" in body
     assert "Source contract: observation_surface · briefing" in body
@@ -2398,7 +2414,7 @@ def test_ui_server_briefing_page_renders_governance_resolver_metadata(temp_vault
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/briefing")
+        conn.request("GET", "/ops/briefing")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -2506,7 +2522,7 @@ Processed source note without downstream chain.
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/production?pack=default-knowledge")
+        conn.request("GET", "/ops/production?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -2524,7 +2540,10 @@ Processed source note without downstream chain.
     assert "Missing stages:" in body
     assert "Current State" in body
     assert "Chain Gaps" in body
-    assert "Next Actions" not in body
+    # BL-050: ``/ops/production`` lives in the Maintainer shell, so the
+    # operator rail (``Next Actions``) renders here.  Pre-split the
+    # rail was suppressed on ``/production`` because it was treated as
+    # reader-flavoured; that distinction is gone now.
 
 
 def test_ui_server_contradictions_page_renders_detection_semantics(temp_vault):
@@ -2537,7 +2556,7 @@ def test_ui_server_contradictions_page_renders_detection_semantics(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/contradictions")
+        conn.request("GET", "/ops/contradictions")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -2620,7 +2639,7 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/actions")
+        conn.request("GET", "/ops/actions")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -2728,7 +2747,7 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
             "operator_rail": [
                 {
                     "label": "Action Queue",
-                    "path": "/actions",
+                    "path": "/ops/actions",
                     "detail": "Run or inspect queued actions derived from signals.",
                 }
             ],
@@ -2741,7 +2760,7 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/signals")
+        conn.request("GET", "/ops/signals")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -3099,7 +3118,7 @@ def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, mo
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/actions?pack=default-knowledge")
+        conn.request("GET", "/ops/actions?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -3110,7 +3129,7 @@ def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, mo
     assert response.status == 200
     assert 'href="/?pack=default-knowledge"' in body
     assert "name='pack' value='default-knowledge'" in body
-    assert "value='/actions?pack=default-knowledge'" in body
+    assert "value='/ops/actions?pack=default-knowledge'" in body
     assert "Handler contract: deep_dive_workflow · research-tech" in body
     assert "Processor contract: deep_dive_workflow · research-tech" in body
     assert "Source signal: active" in body
@@ -3590,7 +3609,7 @@ def test_ui_server_research_mutation_rejects_non_research_pack(temp_vault, monke
 
     assert response.status == 409
     assert payload["status"] == "unsupported_pack"
-    assert payload["route"] == "/contradictions/resolve"
+    assert payload["route"] == "/ops/contradictions/resolve"
     assert payload["requested_pack"] == "media-editorial"
 
 
@@ -3665,9 +3684,12 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
-    assert 'href="/?pack=default-knowledge"' in body
-    assert 'href="/map?pack=default-knowledge"' in body
-    assert 'href="/ops"' not in body
+    # /topic is in the Reader shell — nav has Library / Search / Atlas
+    # plus a cross-link to Maintenance.  All pack-scoped.
+    assert 'href="/?pack=default-knowledge">Library</a>' in body
+    assert 'href="/search?pack=default-knowledge">Search</a>' in body
+    assert 'href="/atlas/curated?pack=default-knowledge">Atlas</a>' in body
+    assert 'href="/ops?pack=default-knowledge"' in body
     assert "Assembly Contract" in body
     assert "inherited from topic_overview in research-tech" in body
     assert "Source contract: wiki_view · overview/topic" in body
@@ -4092,7 +4114,7 @@ def test_ui_server_candidates_page_renders_review_controls(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/candidates")
+        conn.request("GET", "/ops/candidates")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -4124,8 +4146,8 @@ def test_ui_server_candidates_page_renders_pagination_links():
         }
     )
 
-    assert 'href="/candidates?q=alpha&amp;limit=25&amp;offset=0&amp;pack=default-knowledge"' in html
-    assert 'href="/candidates?q=alpha&amp;limit=25&amp;offset=50&amp;pack=default-knowledge"' in html
+    assert 'href="/ops/candidates?q=alpha&amp;limit=25&amp;offset=0&amp;pack=default-knowledge"' in html
+    assert 'href="/ops/candidates?q=alpha&amp;limit=25&amp;offset=50&amp;pack=default-knowledge"' in html
 
 
 def test_ui_server_candidate_item_keeps_zero_score_and_requires_low_score_merge_target():
@@ -4219,7 +4241,7 @@ def test_ui_server_atlas_and_cluster_pages_truncate_large_member_lists():
             "count": 1,
             "items": [
                 {
-                    "detail_path": "/cluster?id=demo",
+                    "detail_path": "/ops/cluster?id=demo",
                     "display_title": "Demo Cluster",
                     "label": "Demo Cluster",
                     "cluster_kind": "component",

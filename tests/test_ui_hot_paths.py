@@ -61,7 +61,7 @@ def _forbid_raw_source_access(monkeypatch) -> None:
     [
         ("/", "Knowledge Library"),
         ("/ops", "OVP Truth UI"),
-        ("/objects", "Alpha"),
+        ("/ops/objects", "Alpha"),
         ("/api/objects", '"object_id": "alpha"'),
         ("/search?q=alpha", "Alpha"),
         ("/api/search?q=alpha", '"query": "alpha"'),

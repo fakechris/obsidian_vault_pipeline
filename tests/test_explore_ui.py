@@ -42,8 +42,8 @@ def test_render_explore_page_threads_object_id_into_canvas_and_synthesis() -> No
 def test_render_explore_page_falls_back_when_no_object_selected() -> None:
     html = _render_explore_page(object_id="")
     # Without an object id, both iframes default to /objects.
-    assert "id='pane-canvas' src='/objects'" in html
-    assert "id='pane-synth' src='/objects'" in html
+    assert "id='pane-canvas' src='/ops/objects'" in html
+    assert "id='pane-synth' src='/ops/objects'" in html
 
 
 def test_render_explore_fragment_targets_explore_stream() -> None:

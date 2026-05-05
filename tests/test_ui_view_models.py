@@ -104,9 +104,9 @@ def test_build_object_page_payload(temp_vault):
     assert payload["relation_count"] == 1
     assert payload["contradiction_count"] == 1
     assert payload["links"]["topic_path"] == "/topic?id=alpha"
-    assert payload["links"]["events_path"] == "/events?q=alpha"
-    assert payload["links"]["contradictions_path"] == "/contradictions?q=alpha"
-    assert payload["links"]["summaries_path"] == "/summaries?q=alpha"
+    assert payload["links"]["events_path"] == "/ops/events?q=alpha"
+    assert payload["links"]["contradictions_path"] == "/ops/contradictions?q=alpha"
+    assert payload["links"]["summaries_path"] == "/ops/summaries?q=alpha"
     assert payload["context"]["source_slug"] == "alpha"
     assert payload["assembly_contract"]["recipe_name"] == "object_brief"
     assert payload["assembly_contract"]["status"] == "declared"
@@ -149,8 +149,8 @@ def test_build_object_page_payload_preserves_requested_pack(temp_vault):
     assert payload["assembly_contract"]["source_provider_pack"] == "default-knowledge"
     assert payload["assembly_contract"]["source_provider_name"] == "object/page"
     assert payload["links"]["topic_path"] == "/topic?id=alpha&pack=default-knowledge"
-    assert payload["links"]["events_path"] == "/events?q=alpha&pack=default-knowledge"
-    assert payload["links"]["deep_dives_path"] == "/deep-dives?q=alpha&pack=default-knowledge"
+    assert payload["links"]["events_path"] == "/ops/events?q=alpha&pack=default-knowledge"
+    assert payload["links"]["deep_dives_path"] == "/ops/deep-dives?q=alpha&pack=default-knowledge"
     assert payload["relations"][0]["target_path"] == "/object?id=beta&pack=default-knowledge"
 
 
@@ -495,9 +495,9 @@ def test_build_topic_overview_payload(temp_vault):
         "where_to_go_next",
     ]
     assert payload["links"]["center_object_path"] == "/object?id=alpha"
-    assert payload["links"]["events_path"] == "/events?q=alpha"
+    assert payload["links"]["events_path"] == "/ops/events?q=alpha"
     assert payload["center_summary"] == "Alpha supports local-first execution."
-    assert payload["links"]["summaries_path"] == "/summaries?q=alpha"
+    assert payload["links"]["summaries_path"] == "/ops/summaries?q=alpha"
     assert payload["review_context"]["object_count"] == 2
     assert payload["review_context"]["open_contradiction_count"] == 1
     assert payload["review_history"] == []
@@ -518,7 +518,7 @@ def test_build_topic_overview_payload_preserves_requested_pack(temp_vault):
     assert payload["assembly_contract"]["source_provider_pack"] == "default-knowledge"
     assert payload["assembly_contract"]["source_provider_name"] == "overview/topic"
     assert payload["links"]["center_object_path"] == "/object?id=alpha&pack=default-knowledge"
-    assert payload["links"]["deep_dives_path"] == "/deep-dives?q=alpha&pack=default-knowledge"
+    assert payload["links"]["deep_dives_path"] == "/ops/deep-dives?q=alpha&pack=default-knowledge"
     assert payload["neighbors"][0]["object_path"] == "/object?id=beta&pack=default-knowledge"
 
 
@@ -643,8 +643,8 @@ def test_build_event_dossier_payload(temp_vault):
     assert "dated notes projected from indexed pages" in payload["model_notes"][0]
     assert payload["review_context"]["object_count"] == 3
     assert payload["review_context"]["open_contradiction_count"] == 1
-    assert payload["events"][0]["review_links"]["contradictions_path"] == "/contradictions?q=alpha"
-    assert payload["events"][0]["review_links"]["summaries_path"] == "/summaries?q=alpha"
+    assert payload["events"][0]["review_links"]["contradictions_path"] == "/ops/contradictions?q=alpha"
+    assert payload["events"][0]["review_links"]["summaries_path"] == "/ops/summaries?q=alpha"
     assert payload["review_history"] == []
     assert payload["scoped_open_contradiction_ids"]
 
@@ -834,7 +834,7 @@ date: 2026-04-10
     assert all(0 <= node["x"] <= payload["layout"]["width"] for node in payload["nodes"])
     assert all(0 <= node["y"] <= payload["layout"]["height"] for node in payload["nodes"])
     assert any(edge["source_object_id"] == "source-note" for edge in payload["edges"])
-    assert payload["clusters"][0]["detail_path"].startswith("/cluster?id=")
+    assert payload["clusters"][0]["detail_path"].startswith("/ops/cluster?id=")
     assert "pack=default-knowledge" in payload["clusters"][0]["detail_path"]
     assert "spatial" in payload["model_notes"][0].lower()
 
@@ -952,7 +952,7 @@ date: 2026-04-13
     assert item["neighborhood_reason"]
     assert item["neighborhood_bridge_kind"] == "source_and_atlas_overlap"
     assert item["next_read_title"]
-    assert item["next_read_path"].startswith("/cluster?id=")
+    assert item["next_read_path"].startswith("/ops/cluster?id=")
     assert item["top_reading_route_kind"] == "full_context_route"
     assert item["top_reading_route_title"]
     assert item["top_reading_route_reason"]
@@ -1019,7 +1019,7 @@ date: 2026-04-13
 
     assert payload["screen"] == "graph/cluster-detail"
     assert payload["cluster"]["cluster_id"] == cluster["cluster_id"]
-    assert payload["cluster"]["detail_path"].startswith("/cluster?id=")
+    assert payload["cluster"]["detail_path"].startswith("/ops/cluster?id=")
     assert "pack=" in payload["browser_path"]
     assert payload["cluster"]["center_object_path"].startswith("/object?id=")
     assert payload["cluster"]["member_links"][0]["path"].startswith("/object?id=")
@@ -1167,7 +1167,7 @@ date: 2026-04-13
     assert payload["related_clusters"][0]["bridge_kind"] == "source_and_atlas_overlap"
     assert payload["related_clusters"][0]["shared_source_count"] >= 1
     assert payload["related_clusters"][0]["shared_moc_count"] >= 1
-    assert payload["related_clusters"][0]["detail_path"].startswith("/cluster?id=")
+    assert payload["related_clusters"][0]["detail_path"].startswith("/ops/cluster?id=")
     assert payload["next_read_cluster"]["detail_path"] == payload["related_clusters"][0]["detail_path"]
     assert payload["next_read_cluster"]["display_title"]
     assert payload["next_read_cluster"]["bridge_kind"] == "source_and_atlas_overlap"
@@ -1179,7 +1179,7 @@ date: 2026-04-13
     assert payload["reading_routes"][0]["route_rank"] == 1
     assert payload["reading_routes"][0]["route_score"] >= payload["reading_routes"][-1]["route_score"]
     assert payload["reading_routes"][0]["route_reason"]
-    assert payload["reading_routes"][0]["detail_path"].startswith("/cluster?id=")
+    assert payload["reading_routes"][0]["detail_path"].startswith("/ops/cluster?id=")
 
 
 def test_build_event_dossier_payload_includes_provenance(temp_vault):
@@ -1517,7 +1517,7 @@ Thin note.
         "trace",
         "explore",
     ]
-    assert payload["workflow_groups"][0]["items"][0]["path"] == "/briefing"
+    assert payload["workflow_groups"][0]["items"][0]["path"] == "/ops/briefing"
     assert payload["objects"]["count"] == 4
     assert payload["contradictions"]["count"] == 1
     assert payload["events"]["count"] == 4
@@ -1554,9 +1554,9 @@ Processed source note without downstream chain.
 
     assert payload["requested_pack"] == "default-knowledge"
     assert payload["objects"]["items"][0]["object_path"] == "/object?id=alpha&pack=default-knowledge"
-    assert payload["signals"]["browser_path"] == "/signals?pack=default-knowledge"
-    assert payload["production"]["browser_path"] == "/production?pack=default-knowledge"
-    assert payload["workflow_groups"][0]["items"][0]["path"] == "/briefing?pack=default-knowledge"
+    assert payload["signals"]["browser_path"] == "/ops/signals?pack=default-knowledge"
+    assert payload["production"]["browser_path"] == "/ops/production?pack=default-knowledge"
+    assert payload["workflow_groups"][0]["items"][0]["path"] == "/ops/briefing?pack=default-knowledge"
     production_gap = next(item for item in payload["priorities"] if item["kind"] == "production_gap")
     assert production_gap["path"].endswith("&pack=default-knowledge")
     assert payload["signals"]["surface_contract"]["status"] == "inherited"
@@ -1946,13 +1946,13 @@ def test_build_briefing_payload_recomputes_value_check_for_productive_override(
                     "signal_type": "source_needs_deep_dive",
                     "title": "Productive signal",
                     "detail": "Action produced a deep dive.",
-                    "source_path": "/signals",
+                    "source_path": "/ops/signals",
                     "note_paths": ["50-Inbox/03-Processed/Productive.md"],
                     "object_ids": ["productive-object"],
                     "recommended_action": {
                         "label": "Inspect action",
-                        "path": "/actions",
-                        "queue_path": "/actions",
+                        "path": "/ops/actions",
+                        "queue_path": "/ops/actions",
                         "queue_status": "succeeded",
                     },
                     "impact_summary": {

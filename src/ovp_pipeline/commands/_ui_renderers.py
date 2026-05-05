@@ -36,19 +36,24 @@ _EVOLUTION_LINK_TYPES = ["challenges", "replaces", "enriches", "confirms"]
 
 _request_ctx = threading.local()
 
-OPERATOR_ROUTES = frozenset({
-    "/ops", "/actions", "/pulse", "/explore", "/signals",
-    "/contradictions", "/summaries", "/candidates",
-})
+
+# BL-050: shell selection.  Reader shell renders at ``/`` and any
+# top-level reader-tree path; Maintainer shell renders under ``/ops``.
+# The HTTP handler stores the current request path before dispatch so
+# ``_layout()`` can pick the right shell + nav without each renderer
+# threading a ``shell=`` parameter.
+def set_request_path(path: str) -> None:
+    """Set per-request URL path (called by the HTTP handler)."""
+    _request_ctx.path = path
 
 
-def set_reader_mode(mode: bool) -> None:
-    """Set per-request reader/operator mode (called by the HTTP handler)."""
-    _request_ctx.reader_mode = mode
+def _current_request_path() -> str:
+    return getattr(_request_ctx, "path", "")
 
 
-def _is_reader_mode() -> bool:
-    return getattr(_request_ctx, "reader_mode", False)
+def _is_ops_path(path: str) -> bool:
+    """Return True iff ``path`` belongs to the Maintainer shell."""
+    return path == "/ops" or path.startswith("/ops/")
 
 
 def _safe_redirect_path(location: str, *, fallback: str = "/") -> str:
@@ -107,18 +112,42 @@ def _shell_supports_research_nav(requested_pack: str = "") -> bool:
         return False
 
 
-def _shell_nav_items(
-    requested_pack: str = "", *, reader_mode: bool = False
-) -> list[tuple[str, str]]:
+def _reader_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
+    """Reader shell nav.  Strictly reading-focused — no maintainer
+    routes.  ``Map`` only when the pack supports research nav."""
     items: list[tuple[str, str]] = [
         ("Library", "/"),
         ("Search", "/search"),
+        ("Atlas", "/atlas/curated"),
     ]
     if _shell_supports_research_nav(requested_pack):
-        items.insert(1, ("Map", "/map"))
-    if not reader_mode:
-        items.append(("Workbench", "/ops"))
+        items.append(("Map", "/map"))
     return items
+
+
+def _ops_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
+    """Maintainer shell nav.  Each item is a real landing page; the
+    dashboard at ``/ops`` aggregates the long tail of fragments
+    (candidates / actions queue / runtime cards) so they don't need
+    their own top-level link yet."""
+    return [
+        ("Overview", "/ops"),
+        ("Contradictions", "/ops/contradictions"),
+        ("Signals", "/ops/signals"),
+        ("Pulse", "/ops/pulse"),
+        ("Audit", "/ops/events"),
+    ]
+
+
+# Kept as a thin alias so existing renderers that import the symbol
+# don't break during the migration; they always use the active-shell
+# variant.  Removing the alias is a follow-up.
+def _shell_nav_items(
+    requested_pack: str = "", *, reader_mode: bool = True
+) -> list[tuple[str, str]]:
+    if reader_mode:
+        return _reader_nav_items(requested_pack)
+    return _ops_nav_items(requested_pack)
 
 
 def _build_runtime_home_payload_from_query(
@@ -131,9 +160,22 @@ def _build_runtime_home_payload_from_query(
 def _layout(
     title: str, body: str, *, requested_pack: str = "", auto_refresh_seconds: int | None = None
 ) -> str:
+    is_ops_shell = _is_ops_path(_current_request_path())
+    if is_ops_shell:
+        nav_pairs = _ops_nav_items(requested_pack)
+        cross_link_label = "← Back to Library"
+        cross_link_href = _shell_href("/", requested_pack)
+    else:
+        nav_pairs = _reader_nav_items(requested_pack)
+        cross_link_label = "→ Maintenance"
+        cross_link_href = _shell_href("/ops", requested_pack)
     nav_items = "".join(
         f'<a href="{escape(_shell_href(path, requested_pack))}">{escape(label)}</a>'
-        for label, path in _shell_nav_items(requested_pack, reader_mode=_is_reader_mode())
+        for label, path in nav_pairs
+    )
+    cross_link = (
+        f'<a href="{escape(cross_link_href)}" class="cross-link">'
+        f'{escape(cross_link_label)}</a>'
     )
     refresh_meta = (
         f'    <meta http-equiv="refresh" content="{int(auto_refresh_seconds)}" />\n'
@@ -188,6 +230,9 @@ def _layout(
       .subnav {{ display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.9rem; margin-bottom: 1rem; }}
       .subnav a {{ color: var(--muted); text-decoration: none; padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }}
       .subnav a:hover {{ color: var(--accent); border-color: var(--accent-soft); }}
+      .cross-link {{ font-size: 0.85rem; font-weight: 500; color: var(--muted); margin-left: auto; }}
+      .cross-link:hover {{ color: var(--accent); }}
+      nav {{ align-items: baseline; }}
       .list-tight li {{ margin-bottom: 0.4rem; }}
       .section-stack {{ display: grid; gap: 1rem; }}
       .meta-list {{ display: grid; gap: 0.6rem; margin: 0; }}
@@ -202,6 +247,7 @@ def _layout(
         <div class="shell-head">
           <nav>
             {nav_items}
+            {cross_link}
           </nav>
         </div>
         <div class="shell-body">
@@ -684,7 +730,8 @@ def _render_runtime_state_card(runtime_state: dict[str, object] | None) -> str:
 
 
 def _render_operator_rail(payload: dict) -> str:
-    if _is_reader_mode():
+    # Operator rail is a maintainer-only widget; suppress in Reader shell.
+    if not _is_ops_path(_current_request_path()):
         return ""
     items = payload.get("operator_rail")
     if not isinstance(items, list) or not items:
@@ -1396,7 +1443,7 @@ def _render_evolution_review_form(
     link_type = str(item.get("link_type") or "")
     return "".join(
         [
-            "<form method='post' action='/evolution/review' class='link-row'>",
+            "<form method='post' action='/ops/evolution/review' class='link-row'>",
             f"<input type='hidden' name='evolution_id' value='{escape(str(item['evolution_id']))}' />",
             (
                 f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -1678,7 +1725,7 @@ def _render_dashboard(payload: dict) -> str:
         payload["evolution"]["items"],
         compact=False,
         requested_pack=requested_pack,
-        next_path=_shell_href("/evolution", requested_pack),
+        next_path=_shell_href("/ops/evolution", requested_pack),
     )
     production_gap_items = (
         "".join(
@@ -1739,7 +1786,7 @@ def _render_dashboard(payload: dict) -> str:
     if research_overview_supported:
         left_sections.extend(
             [
-                f"<section class='card'><h2><a href='{escape(_shell_href('/evolution', requested_pack))}'>Evolution</a></h2>{evolution_items}</section>",
+                f"<section class='card'><h2><a href='{escape(_shell_href('/ops/evolution', requested_pack))}'>Evolution</a></h2>{evolution_items}</section>",
                 f"<section class='card'><h2><a href='{escape(payload['events']['browser_path'])}'>Recent Events</a></h2><ul class='list-tight'>{event_items}</ul></section>",
                 f"<section class='card'><h2><a href='{escape(payload['stale_summaries']['browser_path'])}'>Stale Summaries</a></h2><ul class='list-tight'>{stale_summary_items}</ul></section>",
             ]
@@ -1798,6 +1845,111 @@ def _render_dashboard(payload: dict) -> str:
     )
 
 
+def _render_reader_home(payload: dict) -> str:
+    """BL-050 Reader-shell home.  No DB stat counts, no Workbench
+    card, no typed-object list.  Lead with search + crystal-derived
+    topics + curated atlas link + recent crystals."""
+    requested_pack = payload.get("requested_pack", "")
+    pack = payload.get("pack", "")
+    search_href = str(payload.get("search_href") or _shell_href("/search", requested_pack))
+    map_href = str(payload.get("map_href") or _shell_href("/map", requested_pack))
+    map_supported = bool(payload.get("map_supported"))
+    top_topics = payload.get("top_topics") or []
+    curated = payload.get("curated_atlas") or {}
+    atlas_href = str(curated.get("atlas_href") or _shell_href("/atlas/curated", requested_pack))
+    total_chains = int(curated.get("total_chains") or 0)
+    atlas_top_n = int(curated.get("top_n") or 0)
+    recent_crystals = payload.get("recent_crystals") or []
+    recent_days = int(payload.get("recent_days") or 7)
+
+    def _topic_li(item: dict) -> str:
+        href = escape(str(item.get("note_href") or ""))
+        label = escape(str(item.get("label") or "(untitled)"))
+        teaser = escape(str(item.get("teaser") or ""))
+        teaser_html = f"<div class='muted'>{teaser}</div>" if teaser else ""
+        rank = int(item.get("rank") or 0)
+        return (
+            "<li>"
+            f"<strong>{rank}.</strong> "
+            f"<a href='{href}'>{label}</a>"
+            f"{teaser_html}"
+            "</li>"
+        )
+
+    def _recent_li(item: dict) -> str:
+        href = escape(str(item.get("note_href") or ""))
+        label = escape(str(item.get("label") or "(untitled)"))
+        teaser = escape(str(item.get("teaser") or ""))
+        teaser_html = f"<div class='muted'>{teaser}</div>" if teaser else ""
+        return (
+            "<li>"
+            f"<a href='{href}'>{label}</a>"
+            f"{teaser_html}"
+            "</li>"
+        )
+
+    top_topics_html = (
+        "".join(_topic_li(item) for item in top_topics)
+        or "<li class='muted'>No crystals scored yet. Run "
+           "<code>ovp-synthesize-community-crystals</code> then "
+           "<code>ovp-knowledge-index</code> to populate.</li>"
+    )
+    recent_html = (
+        "".join(_recent_li(item) for item in recent_crystals)
+        or "<li class='muted'>No crystals synthesized in the last "
+           f"{recent_days} days.</li>"
+    )
+
+    map_card = (
+        "<section class='card'><h2>Knowledge Map</h2>"
+        "<p class='muted'>See how ideas connect — entities, concepts, "
+        "references woven into one graph.</p>"
+        f"<p><a href='{escape(map_href)}'>Open the Map →</a></p>"
+        "</section>"
+        if map_supported
+        else ""
+    )
+
+    body_parts: list[str] = [
+        "<section class='hero'>",
+        "<h1>Knowledge Library</h1>",
+        "<p class='muted'>Discover, read, and follow the ideas in this vault.</p>",
+        f"<form method='get' action='{escape(search_href)}' style='margin-top:0.8rem; display:flex; gap:0.6rem;'>",
+        (
+            f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+            if requested_pack
+            else ""
+        ),
+        "<input type='text' name='q' placeholder='Search by title, topic, source…' "
+        "style='flex:1;' autofocus />",
+        "<button type='submit'>Search</button>",
+        "</form>",
+        "</section>",
+        "<section class='card'>",
+        "<h2>Top Topics</h2>",
+        "<p class='muted'>The highest-scoring synthesized ideas in your "
+        f"vault — pack <code>{escape(pack)}</code>.</p>",
+        f"<ul class='list-tight'>{top_topics_html}</ul>",
+        "</section>",
+        "<section class='card'>",
+        "<h2>Curated Atlas</h2>",
+        f"<p>{atlas_top_n} most reusable ideas in your vault, "
+        f"ranked from {total_chains} synthesized chains.</p>",
+        f"<p><a href='{escape(atlas_href)}'>Open Curated Atlas →</a></p>",
+        "</section>",
+        map_card,
+        "<section class='card'>",
+        f"<h2>Recent Crystals (last {recent_days} days)</h2>",
+        f"<ul class='list-tight'>{recent_html}</ul>",
+        "</section>",
+    ]
+    return _layout(
+        "Knowledge Library",
+        "".join(body_parts),
+        requested_pack=requested_pack,
+    )
+
+
 def _render_library_home(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
     object_items = (
@@ -1816,16 +1968,10 @@ def _render_library_home(payload: dict) -> str:
         if _shell_supports_research_nav(requested_pack)
         else ""
     )
-    workbench_card = (
-        ""
-        if _is_reader_mode()
-        else (
-            "<section class='card'><h2>Open Workbench</h2>"
-            "<p class='muted'>Use the workbench when you need to fix items or check recent activity.</p>"
-            f"<p><a href='{escape(workbench_path)}'>Open Workbench</a></p>"
-            "</section>"
-        )
-    )
+    # ``/`` is part of the Reader shell after BL-050 — never show the
+    # Workbench card here.  Maintainer entry is the cross-shell link
+    # rendered by ``_layout``.
+    workbench_card = ""
     body = "".join(
         [
             "<section class='hero'>",
@@ -1860,7 +2006,7 @@ def _render_objects_index(payload: dict) -> str:
         "Objects",
         (
             "<h1>Objects</h1>"
-            + "<form method='get' action='/objects'>"
+            + "<form method='get' action='/ops/objects'>"
             + (
                 f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                 if requested_pack
@@ -2066,7 +2212,7 @@ def _render_object_page(payload: dict) -> str:
         for item in section_nav_items
     )
     contradiction_form = (
-        "<form method='post' action='/contradictions/resolve' class='link-row'>"
+        "<form method='post' action='/ops/contradictions/resolve' class='link-row'>"
         + "".join(
             f"<input type='hidden' name='contradiction_id' value='{escape(contradiction_id)}' />"
             for contradiction_id in payload["open_contradiction_ids"]
@@ -2086,7 +2232,7 @@ def _render_object_page(payload: dict) -> str:
         else "<p class='muted'>No open contradictions on this object.</p>"
     )
     summary_form = (
-        "<form method='post' action='/summaries/rebuild' class='link-row'>"
+        "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
         + f"<input type='hidden' name='object_id' value='{escape(payload['object']['object_id'])}' />"
         + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<button type='submit'>Rebuild This Summary</button>"
@@ -2245,7 +2391,7 @@ def _render_topic_page(payload: dict) -> str:
         for item in payload.get("section_nav", [])
     )
     summary_form = (
-        "<form method='post' action='/summaries/rebuild' class='link-row'>"
+        "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
         + "".join(
             f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
             for object_id in payload["scoped_stale_summary_ids"]
@@ -2414,7 +2560,7 @@ def _render_events_page(payload: dict) -> str:
         or "<li>None</li>"
     )
     summary_form = (
-        "<form method='post' action='/summaries/rebuild' class='link-row'>"
+        "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
         + "".join(
             f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
             for object_id in payload["scoped_stale_summary_ids"]
@@ -2425,9 +2571,9 @@ def _render_events_page(payload: dict) -> str:
         else "<p class='muted'>No stale summaries in the visible event scope.</p>"
     )
     contradiction_query_path = _shell_href(
-        f"/contradictions?q={quote(query, safe='')}", requested_pack
+        f"/ops/contradictions?q={quote(query, safe='')}", requested_pack
     )
-    contradiction_browser_path = _shell_href("/contradictions", requested_pack)
+    contradiction_browser_path = _shell_href("/ops/contradictions", requested_pack)
     contradiction_entry = (
         f"<div class='link-row'><a href='{escape(contradiction_query_path)}'>Review visible contradictions</a></div>"
         if payload["scoped_open_contradiction_ids"] and query
@@ -2443,7 +2589,7 @@ def _render_events_page(payload: dict) -> str:
             [
                 "<h1>Event Dossier</h1>",
                 "<p class='muted'>A timeline-oriented view over dated truth objects, not a separate event object model.</p>",
-                "<form method='get' action='/events'>",
+                "<form method='get' action='/ops/events'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -2666,7 +2812,7 @@ def _render_derivations_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Deep Dive Derivations</h1>",
-                "<form method='get' action='/deep-dives'>",
+                "<form method='get' action='/ops/deep-dives'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -2739,7 +2885,7 @@ def _render_production_browser_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Production Browser</h1>",
-                "<form method='get' action='/production'>",
+                "<form method='get' action='/ops/production'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -2765,7 +2911,7 @@ def _render_production_browser_page(payload: dict) -> str:
     )
 
 
-def _render_clusters_page(payload: dict, *, action_path: str = "/clusters") -> str:
+def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
     limit_note = (
@@ -2956,7 +3102,7 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
                 "<li>Nearby groups are reading neighborhoods, not canonical truth boundaries.</li>"
                 "</ul></section>",
                 "<section class='card'><h2>Neighborhoods</h2>"
-                f"<p><a href='{escape(_shell_href('/clusters', requested_pack))}'>Open Cluster Browser</a></p>"
+                f"<p><a href='{escape(_shell_href('/ops/clusters', requested_pack))}'>Open Cluster Browser</a></p>"
                 f"<ul class='list-tight'>{clusters}</ul></section>",
                 "</section>",
                 f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{notes}</ul></section>",
@@ -3162,7 +3308,7 @@ def _render_evolution_browser_page(payload: dict) -> str:
     status = payload.get("status", "all")
     selected_link_type = payload.get("link_type", "")
     requested_pack = payload.get("requested_pack", "")
-    next_path = _shell_href("/evolution", requested_pack)
+    next_path = _shell_href("/ops/evolution", requested_pack)
     type_counts = (
         "".join(
             f"<span class='pill'>{escape(link_type)}: {count}</span>"
@@ -3175,7 +3321,7 @@ def _render_evolution_browser_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Evolution Browser</h1>",
-                "<form method='get' action='/evolution' class='link-row'>",
+                "<form method='get' action='/ops/evolution' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -3210,7 +3356,7 @@ def _render_evolution_browser_page(payload: dict) -> str:
 
 def _render_candidate_items(payload: dict) -> str:
     requested_pack = str(payload.get("requested_pack") or "")
-    next_path = _shell_href("/candidates", requested_pack)
+    next_path = _shell_href("/ops/candidates", requested_pack)
     rendered: list[str] = []
     for item in payload.get("items", []):
         if not isinstance(item, dict):
@@ -3262,14 +3408,14 @@ def _render_candidate_items(payload: dict) -> str:
             "<div class='muted'>Similar active concepts</div>"
             f"<ul class='list-tight'>{similar_html}</ul>"
             "<div class='link-row'>"
-            "<form method='post' action='/candidates/review' class='link-row'>"
+            "<form method='post' action='/ops/candidates/review' class='link-row'>"
             f"{pack_hidden}"
             f"<input type='hidden' name='slug' value='{escape(slug)}' />"
             "<input type='hidden' name='action' value='promote' />"
             f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             "<button type='submit'>Promote</button>"
             "</form>"
-            "<form method='post' action='/candidates/review' class='link-row'>"
+            "<form method='post' action='/ops/candidates/review' class='link-row'>"
             f"{pack_hidden}"
             f"<input type='hidden' name='slug' value='{escape(slug)}' />"
             "<input type='hidden' name='action' value='merge' />"
@@ -3277,7 +3423,7 @@ def _render_candidate_items(payload: dict) -> str:
             f"<input type='text' name='target_slug' value='{escape(default_target)}' placeholder='target slug' />"
             "<button type='submit'>Merge</button>"
             "</form>"
-            "<form method='post' action='/candidates/review' class='link-row'>"
+            "<form method='post' action='/ops/candidates/review' class='link-row'>"
             f"{pack_hidden}"
             f"<input type='hidden' name='slug' value='{escape(slug)}' />"
             "<input type='hidden' name='action' value='reject' />"
@@ -3310,7 +3456,7 @@ def _render_candidates_pagination(payload: dict) -> str:
         parts.append(f"offset={max(0, next_offset)}")
         if requested_pack:
             parts.append(f"pack={quote(requested_pack, safe='')}")
-        return "/candidates?" + "&".join(parts)
+        return "/ops/candidates?" + "&".join(parts)
 
     links = []
     if offset > 0:
@@ -3352,7 +3498,7 @@ def _render_candidates_page(payload: dict) -> str:
                 "<p class='muted'>Review registry candidates before they become canonical Evergreen objects. "
                 "Promote creates an active note, merge rewrites candidate links into an existing object, "
                 "and reject removes the pending candidate artifact.</p>",
-                "<form method='get' action='/candidates' class='link-row'>",
+                "<form method='get' action='/ops/candidates' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -3403,7 +3549,7 @@ def _render_signals_page(payload: dict) -> str:
     query = payload.get("query", "")
     selected_type = payload.get("signal_type", "")
     requested_pack = payload.get("requested_pack", "")
-    next_path = "/signals" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    next_path = "/ops/signals" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     surface_contract_card = _render_surface_contract_card(payload)
     governance_contract_card = _render_governance_contract_card(payload)
     operator_rail_card = _render_operator_rail(payload)
@@ -3478,7 +3624,7 @@ def _render_signals_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/actions/enqueue' class='link-row'>"
+                "<form method='post' action='/ops/actions/enqueue' class='link-row'>"
                 + f"<input type='hidden' name='signal_id' value='{escape(item['signal_id'])}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Queue action</button>"
@@ -3511,7 +3657,7 @@ def _render_signals_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Active Signals</h1>",
-                "<form method='get' action='/signals' class='link-row'>",
+                "<form method='get' action='/ops/signals' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -3543,7 +3689,7 @@ def _render_signals_page(payload: dict) -> str:
 
 def _render_briefing_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
-    next_path = "/briefing" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    next_path = "/ops/briefing" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     surface_contract_card = _render_surface_contract_card(payload)
     assembly_contract_card = _render_assembly_contract_card(payload)
     governance_contract_card = _render_governance_contract_card(payload)
@@ -3631,7 +3777,7 @@ def _render_briefing_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/actions/enqueue' class='link-row'>"
+                "<form method='post' action='/ops/actions/enqueue' class='link-row'>"
                 + f"<input type='hidden' name='signal_id' value='{escape(str(item['signal_id']))}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Queue action</button>"
@@ -3796,7 +3942,7 @@ def _render_briefing_page(payload: dict) -> str:
                 f"{_safe_count(queue_summary.get('safe_queued_count'))} safe to auto-run, ",
                 f"{_safe_count(queue_summary.get('running_count'))} running, ",
                 f"{_safe_count(queue_summary.get('failed_count'))} failed.</p>",
-                "<form method='post' action='/actions/run-batch' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-batch' class='link-row'>",
                 "<input type='hidden' name='limit' value='5' />",
                 "<input type='hidden' name='safe_only' value='1' />",
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
@@ -3817,7 +3963,7 @@ def _render_actions_page(payload: dict) -> str:
     query = payload.get("query", "")
     selected_status = payload.get("status", "")
     requested_pack = payload.get("requested_pack", "")
-    next_path = _shell_href("/actions", requested_pack)
+    next_path = _shell_href("/ops/actions", requested_pack)
     governance_contract_card = _render_governance_contract_card(payload)
     options = ["", "queued", "running", "succeeded", "failed", "blocked", "dismissed", "obsolete"]
     option_html = "".join(
@@ -3943,7 +4089,7 @@ def _render_actions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/actions/retry' class='link-row'>"
+                "<form method='post' action='/ops/actions/retry' class='link-row'>"
                 + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Retry</button>"
@@ -3952,7 +4098,7 @@ def _render_actions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/actions/dismiss' class='link-row'>"
+                "<form method='post' action='/ops/actions/dismiss' class='link-row'>"
                 + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Dismiss</button>"
@@ -3971,7 +4117,7 @@ def _render_actions_page(payload: dict) -> str:
             [
                 "<h1>Action Queue</h1>",
                 "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m ovp_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>",
-                "<form method='post' action='/actions/run-next' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-next' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -3980,7 +4126,7 @@ def _render_actions_page(payload: dict) -> str:
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Run next queued action</button>",
                 "</form>",
-                "<form method='post' action='/actions/run-batch' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-batch' class='link-row'>",
                 "<input type='hidden' name='limit' value='5' />",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -3990,7 +4136,7 @@ def _render_actions_page(payload: dict) -> str:
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Run 5 queued actions</button>",
                 "</form>",
-                "<form method='post' action='/actions/run-batch' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-batch' class='link-row'>",
                 "<input type='hidden' name='limit' value='5' />",
                 "<input type='hidden' name='safe_only' value='1' />",
                 (
@@ -4001,7 +4147,7 @@ def _render_actions_page(payload: dict) -> str:
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Run 5 safe queued actions</button>",
                 "</form>",
-                "<form method='get' action='/actions' class='link-row'>",
+                "<form method='get' action='/ops/actions' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4030,7 +4176,7 @@ def _render_contradictions_page(payload: dict) -> str:
     status = payload.get("status", "")
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
-    next_path = "/contradictions" + (
+    next_path = "/ops/contradictions" + (
         f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
     )
     assembly_contract_card = _render_assembly_contract_card(payload)
@@ -4175,7 +4321,7 @@ def _render_contradictions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/contradictions/resolve' class='link-row'>"
+                "<form method='post' action='/ops/contradictions/resolve' class='link-row'>"
                 f"<input type='hidden' name='contradiction_id' value='{escape(item['contradiction_id'])}' />"
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 "<select name='status'>"
@@ -4201,7 +4347,7 @@ def _render_contradictions_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Contradictions</h1>",
-                "<form method='get' action='/contradictions'>",
+                "<form method='get' action='/ops/contradictions'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4226,7 +4372,7 @@ def _render_contradictions_page(payload: dict) -> str:
                 f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
                 "<section class='card'>",
                 "<h2>Batch Resolve</h2>",
-                "<form id='contradiction-batch-form' method='post' action='/contradictions/resolve' class='link-row'>",
+                "<form id='contradiction-batch-form' method='post' action='/ops/contradictions/resolve' class='link-row'>",
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<select name='status'>",
                 "<option value='resolved_keep_positive'>resolved_keep_positive</option>",
@@ -4251,7 +4397,7 @@ def _render_contradictions_page(payload: dict) -> str:
 def _render_stale_summaries_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
-    next_path = "/summaries" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    next_path = "/ops/summaries" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     items = (
         "".join(
@@ -4285,7 +4431,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
                 if item["review_history"]
                 else ""
             )
-            + "<form method='post' action='/summaries/rebuild' class='link-row'>"
+            + "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
             + f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
             + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Rebuild Summary</button>"
@@ -4300,7 +4446,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Stale Summaries</h1>",
-                "<form method='get' action='/summaries'>",
+                "<form method='get' action='/ops/summaries'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4317,7 +4463,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
                 f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
                 "<section class='card'>",
                 "<h2>Batch Rebuild</h2>",
-                "<form id='summary-batch-form' method='post' action='/summaries/rebuild' class='link-row'>",
+                "<form id='summary-batch-form' method='post' action='/ops/summaries/rebuild' class='link-row'>",
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Rebuild Selected</button>",
                 "</form>",
@@ -4574,7 +4720,7 @@ def _render_pulse_fragment() -> str:
         "<script>(function(){"
         "var feed=document.getElementById('pulse-feed');"
         "var empty=feed.querySelector('.empty');"
-        "var src=new EventSource('/pulse/stream');"
+        "var src=new EventSource('/ops/pulse/stream');"
         "function render(ev){"
         "if(empty){empty.remove();empty=null;}"
         "try{var obj=JSON.parse(ev.data);"
@@ -4640,22 +4786,22 @@ def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
     # Fragment URLs. Candidate / Briefing / Actions are pack-aware but do not
     # care about the object id; Object pane needs the id and is hidden when
     # none is selected (the iframe falls back to the Objects index).
-    cand_src = "/candidates/fragment" + (
+    cand_src = "/ops/candidates/fragment" + (
         f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
     )
-    actions_src = "/actions/fragment" + (
+    actions_src = "/ops/actions/fragment" + (
         f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
     )
-    briefing_src = "/briefing/fragment" + (
+    briefing_src = "/ops/briefing/fragment" + (
         f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
     )
     object_src = (
         f"/object/fragment?id={quote(object_id, safe='')}"
         + (f"&pack={quote(requested_pack, safe='')}" if requested_pack else "")
         if object_id
-        else "/objects" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+        else "/ops/objects" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
     )
-    pulse_src = "/pulse/fragment"
+    pulse_src = "/ops/pulse/fragment"
     # ``</`` would close the surrounding <script> block early — escape it the
     # same way graph/visualize.py does for inline JSON-in-HTML. Precomputed
     # because Python 3.10 disallows backslashes inside f-string expressions.
@@ -4703,7 +4849,7 @@ def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
         "var packQsLead=pack?'?pack='+encodeURIComponent(pack):'';"
         "document.getElementById('pane-obj').src=id"
         "?'/object/fragment?id='+encodeURIComponent(id)+packQs"
-        ":'/objects'+packQsLead;"
+        ":'/ops/objects'+packQsLead;"
         "document.getElementById('wb-object').textContent=id||'∅';"
         "var url=new URL(window.location.href);"
         "if(id){url.searchParams.set('object_id',id);}else{url.searchParams.delete('object_id');}"
@@ -4794,8 +4940,8 @@ def _render_explore_page(*, object_id: str) -> str:
         │  Synthesis pane (Crystal preview)   │
         └─────────────────────────────────────┘
     """
-    canvas_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/objects"
-    synth_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/objects"
+    canvas_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/ops/objects"
+    synth_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/ops/objects"
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1' />"
@@ -4828,8 +4974,8 @@ def _render_explore_page(*, object_id: str) -> str:
         "</div>"
         "<script>(function(){"
         "function selectObject(id){"
-        "document.getElementById('pane-canvas').src=id?'/object/fragment?id='+encodeURIComponent(id):'/objects';"
-        "document.getElementById('pane-synth').src=id?'/object/fragment?id='+encodeURIComponent(id):'/objects';"
+        "document.getElementById('pane-canvas').src=id?'/object/fragment?id='+encodeURIComponent(id):'/ops/objects';"
+        "document.getElementById('pane-synth').src=id?'/object/fragment?id='+encodeURIComponent(id):'/ops/objects';"
         "document.getElementById('ex-object').textContent=id||'∅';"
         "var url=new URL(window.location.href);"
         "if(id){url.searchParams.set('object_id',id);}else{url.searchParams.delete('object_id');}"

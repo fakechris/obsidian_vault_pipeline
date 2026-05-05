@@ -183,7 +183,7 @@ def test_pulse_stream_round_trip(temp_vault: Path, running_server) -> None:
     # this moment), then emit an event from another thread. The next poll
     # inside the SSE loop must pick it up and ship a frame back. max_polls
     # bounds the loop so urlopen.read() returns instead of hanging forever.
-    url = _server_url(running_server, "/pulse/stream?max_polls=8&poll_interval=0.05")
+    url = _server_url(running_server, "/ops/pulse/stream?max_polls=8&poll_interval=0.05")
 
     body_holder: dict[str, str] = {}
 
@@ -215,15 +215,15 @@ def test_pulse_stream_round_trip(temp_vault: Path, running_server) -> None:
 
 
 def test_pulse_fragment_returns_html(temp_vault: Path, running_server) -> None:
-    url = _server_url(running_server, "/pulse/fragment")
+    url = _server_url(running_server, "/ops/pulse/fragment")
     with _NO_PROXY_OPENER.open(url, timeout=5) as response:
         body = response.read().decode("utf-8")
-    assert "EventSource('/pulse/stream')" in body
+    assert "EventSource('/ops/pulse/stream')" in body
     assert "<section class='pulse'>" in body
 
 
 def test_pulse_page_renders(temp_vault: Path, running_server) -> None:
-    url = _server_url(running_server, "/pulse")
+    url = _server_url(running_server, "/ops/pulse")
     with _NO_PROXY_OPENER.open(url, timeout=5) as response:
         body = response.read().decode("utf-8")
     assert "<title>Pulse</title>" in body

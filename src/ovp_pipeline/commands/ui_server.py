@@ -26,6 +26,7 @@ from ..ui.view_models import (
     build_atlas_browser_payload,
     build_briefing_payload,
     build_curated_atlas_payload,
+    build_reader_home_payload,
     build_candidate_browser_payload,
     build_cluster_browser_payload,
     build_cluster_detail_payload,
@@ -72,6 +73,7 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_atlas_page,
     _render_briefing_page,
     _render_curated_atlas_page,
+    _render_reader_home,
     _render_candidate_items,
     _render_candidates_page,
     _render_cluster_detail_page,
@@ -111,8 +113,7 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _shell_href,
     _shell_supports_research_nav,
     _unsupported_route_payload,
-    OPERATOR_ROUTES,
-    set_reader_mode,
+    set_request_path,
 )
 
 
@@ -127,6 +128,46 @@ def _parse_optional_int(query: dict[str, list[str]], key: str) -> int | None:
         return int(raw)
     except ValueError:
         return None
+
+
+# BL-050: legacy top-level maintainer paths now live under ``/ops/<same>``.
+# A request to any of these gets a 301 redirect so existing bookmarks /
+# inline JS hrefs keep working.  ``/api/*`` paths are deliberately not
+# in the table — APIs are unchanged in this migration.
+_LEGACY_MAINTAINER_PATHS: frozenset[str] = frozenset({
+    "/candidates",
+    "/candidates/review",
+    "/candidates/fragment",
+    "/contradictions",
+    "/contradictions/resolve",
+    "/signals",
+    "/actions",
+    "/actions/run-next",
+    "/actions/run-batch",
+    "/actions/retry",
+    "/actions/dismiss",
+    "/actions/enqueue",
+    "/actions/fragment",
+    "/evolution",
+    "/evolution/review",
+    "/production",
+    "/pulse",
+    "/pulse/fragment",
+    "/pulse/stream",
+    "/events",
+    "/reuse/fragment",
+    "/open-questions/fragment",
+    "/writing-prompts/fragment",
+    "/summaries",
+    "/summaries/rebuild",
+    "/deep-dives",
+    "/briefing",
+    "/briefing/fragment",
+    "/workbench",
+    "/clusters",
+    "/cluster",
+    "/objects",
+})
 
 
 def create_server(
@@ -144,14 +185,30 @@ def create_server(
             path = parsed.path
             query = parse_qs(parsed.query)
 
-            mode_param = query.get("mode", [""])[0]
-            is_operator = mode_param == "operator" or path in OPERATOR_ROUTES
-            set_reader_mode(not is_operator)
+            # BL-050: legacy maintainer paths → 301 to /ops/<same>.
+            # Preserves any existing query string verbatim.
+            if path in _LEGACY_MAINTAINER_PATHS:
+                target = "/ops" + path
+                if parsed.query:
+                    target = f"{target}?{parsed.query}"
+                self.send_response(301)
+                self.send_header("Location", target)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+
+            # BL-050: shell selection is decided by URL prefix.  The
+            # renderer's ``_layout`` reads this thread-local to pick
+            # Reader vs Maintainer nav.
+            set_request_path(path)
 
             try:
                 if path == "/":
-                    payload = _build_runtime_home_payload_from_query(resolved_vault, query)
-                    self._write_html(_render_library_home(payload))
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_reader_home_payload(
+                        resolved_vault, pack_name=pack_name,
+                    )
+                    self._write_html(_render_reader_home(payload))
                     return
                 if path == "/ops":
                     payload = _build_runtime_home_payload_from_query(resolved_vault, query)
@@ -226,7 +283,7 @@ def create_server(
                             status=503,
                         )
                     return
-                if path == "/objects":
+                if path == "/ops/objects":
                     limit = int(query.get("limit", ["100"])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     q = query.get("q", [""])[0]
@@ -269,12 +326,12 @@ def create_server(
                     pack_name = query.get("pack", [""])[0] or None
                     self._write_json(build_briefing_payload(resolved_vault, pack_name=pack_name))
                     return
-                if path in {"/briefing", "/briefing/fragment"}:
+                if path in {"/ops/briefing", "/ops/briefing/fragment"}:
                     pack_name = query.get("pack", [""])[0] or None
                     page = _render_briefing_page(
                         build_briefing_payload(resolved_vault, pack_name=pack_name)
                     )
-                    if path == "/briefing/fragment":
+                    if path == "/ops/briefing/fragment":
                         self._write_html(_fragment_from_page(page))
                     else:
                         self._write_html(page)
@@ -292,7 +349,7 @@ def create_server(
                         )
                     )
                     return
-                if path == "/signals":
+                if path == "/ops/signals":
                     q = query.get("q", [""])[0]
                     signal_type = query.get("type", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
@@ -310,7 +367,7 @@ def create_server(
                     limit = int(query.get("limit", [str(DEFAULT_CANDIDATE_BROWSER_LIMIT)])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/candidates", api=True
+                        pack_name=pack_name, route_path="/ops/candidates", api=True
                     ):
                         return
                     self._write_json(
@@ -323,14 +380,14 @@ def create_server(
                         )
                     )
                     return
-                if path in {"/candidates", "/candidates/fragment"}:
+                if path in {"/ops/candidates", "/ops/candidates/fragment"}:
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     limit = int(query.get("limit", [str(DEFAULT_CANDIDATE_BROWSER_LIMIT)])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     candidate_warning = query.get("candidate_warning", [""])[0]
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/candidates", api=False
+                        pack_name=pack_name, route_path="/ops/candidates", api=False
                     ):
                         return
                     payload = build_candidate_browser_payload(
@@ -342,7 +399,7 @@ def create_server(
                     )
                     payload["candidate_warning"] = candidate_warning
                     page = _render_candidates_page(payload)
-                    if path == "/candidates/fragment":
+                    if path == "/ops/candidates/fragment":
                         self._write_html(_fragment_from_page(page))
                     else:
                         self._write_html(page)
@@ -353,7 +410,7 @@ def create_server(
                     link_type = query.get("link_type", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/evolution", api=True
+                        pack_name=pack_name, route_path="/ops/evolution", api=True
                     ):
                         return
                     self._write_json(
@@ -366,13 +423,13 @@ def create_server(
                         )
                     )
                     return
-                if path == "/evolution":
+                if path == "/ops/evolution":
                     q = query.get("q", [""])[0]
                     status = query.get("status", ["all"])[0] or "all"
                     link_type = query.get("link_type", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/evolution", api=False
+                        pack_name=pack_name, route_path="/ops/evolution", api=False
                     ):
                         return
                     payload = build_evolution_browser_payload(
@@ -422,18 +479,18 @@ def create_server(
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/events", api=True
+                        pack_name=pack_name, route_path="/ops/events", api=True
                     ):
                         return
                     self._write_json(
                         build_event_dossier_payload(resolved_vault, pack_name=pack_name, query=q)
                     )
                     return
-                if path == "/events":
+                if path == "/ops/events":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/events", api=False
+                        pack_name=pack_name, route_path="/ops/events", api=False
                     ):
                         return
                     payload = build_event_dossier_payload(
@@ -495,7 +552,7 @@ def create_server(
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/deep-dives", api=True
+                        pack_name=pack_name, route_path="/ops/deep-dives", api=True
                     ):
                         return
                     self._write_json(
@@ -504,11 +561,11 @@ def create_server(
                         )
                     )
                     return
-                if path == "/deep-dives":
+                if path == "/ops/deep-dives":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/deep-dives", api=False
+                        pack_name=pack_name, route_path="/ops/deep-dives", api=False
                     ):
                         return
                     payload = build_derivation_browser_payload(
@@ -525,7 +582,7 @@ def create_server(
                         )
                     )
                     return
-                if path == "/production":
+                if path == "/ops/production":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_production_browser_payload(
@@ -537,18 +594,18 @@ def create_server(
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/clusters", api=True
+                        pack_name=pack_name, route_path="/ops/clusters", api=True
                     ):
                         return
                     self._write_json(
                         build_cluster_browser_payload(resolved_vault, pack_name=pack_name, query=q)
                     )
                     return
-                if path == "/clusters":
+                if path == "/ops/clusters":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/clusters", api=False
+                        pack_name=pack_name, route_path="/ops/clusters", api=False
                     ):
                         return
                     payload = build_cluster_browser_payload(
@@ -595,7 +652,7 @@ def create_server(
                     cluster_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/cluster", api=True
+                        pack_name=pack_name, route_path="/ops/cluster", api=True
                     ):
                         return
                     self._write_json(
@@ -604,11 +661,11 @@ def create_server(
                         )
                     )
                     return
-                if path == "/cluster":
+                if path == "/ops/cluster":
                     cluster_id = self._required(query, "id")
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/cluster", api=False
+                        pack_name=pack_name, route_path="/ops/cluster", api=False
                     ):
                         return
                     payload = build_cluster_detail_payload(
@@ -629,7 +686,7 @@ def create_server(
                         )
                     )
                     return
-                if path in {"/actions", "/actions/fragment"}:
+                if path in {"/ops/actions", "/ops/actions/fragment"}:
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
@@ -640,7 +697,7 @@ def create_server(
                         query=q,
                     )
                     page = _render_actions_page(payload)
-                    if path == "/actions/fragment":
+                    if path == "/ops/actions/fragment":
                         self._write_html(_fragment_from_page(page))
                     else:
                         self._write_html(page)
@@ -649,7 +706,7 @@ def create_server(
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/summaries", api=True
+                        pack_name=pack_name, route_path="/ops/summaries", api=True
                     ):
                         return
                     self._write_json(
@@ -658,11 +715,11 @@ def create_server(
                         )
                     )
                     return
-                if path == "/summaries":
+                if path == "/ops/summaries":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/summaries", api=False
+                        pack_name=pack_name, route_path="/ops/summaries", api=False
                     ):
                         return
                     payload = build_stale_summary_browser_payload(
@@ -691,7 +748,7 @@ def create_server(
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/contradictions", api=True
+                        pack_name=pack_name, route_path="/ops/contradictions", api=True
                     ):
                         return
                     self._write_json(
@@ -703,12 +760,12 @@ def create_server(
                         )
                     )
                     return
-                if path == "/contradictions":
+                if path == "/ops/contradictions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/contradictions", api=False
+                        pack_name=pack_name, route_path="/ops/contradictions", api=False
                     ):
                         return
                     payload = build_contradiction_browser_payload(
@@ -727,7 +784,7 @@ def create_server(
                     payload = build_reuse_report_payload(resolved_vault, pack=pack_name)
                     if path == "/api/reuse":
                         self._write_json(payload)
-                    elif path == "/reuse/fragment":
+                    elif path == "/ops/reuse/fragment":
                         self._write_html(_render_reuse_report_fragment(payload))
                     else:
                         self._write_html(_render_reuse_report_page(payload))
@@ -736,7 +793,7 @@ def create_server(
                     payload = _build_open_questions_payload(resolved_vault)
                     if path == "/api/open-questions":
                         self._write_json(payload)
-                    elif path == "/open-questions/fragment":
+                    elif path == "/ops/open-questions/fragment":
                         self._write_html(_render_open_questions_fragment(payload))
                     else:
                         self._write_html(_render_open_questions_page(payload))
@@ -749,25 +806,25 @@ def create_server(
                     payload = _build_writing_prompts_payload(resolved_vault)
                     if path == "/api/writing-prompts":
                         self._write_json(payload)
-                    elif path == "/writing-prompts/fragment":
+                    elif path == "/ops/writing-prompts/fragment":
                         self._write_html(_render_writing_prompts_fragment(payload))
                     else:
                         self._write_html(_render_writing_prompts_page(payload))
                     return
-                if path == "/workbench":
+                if path == "/ops/workbench":
                     object_id = query.get("object_id", [""])[0]
                     pack_name = query.get("pack", [""])[0] or ""
                     self._write_html(
                         _render_workbench_page(object_id=object_id, requested_pack=pack_name)
                     )
                     return
-                if path == "/pulse":
+                if path == "/ops/pulse":
                     self._write_html(_render_pulse_page())
                     return
-                if path == "/pulse/fragment":
+                if path == "/ops/pulse/fragment":
                     self._write_html(_render_pulse_fragment())
                     return
-                if path == "/pulse/stream":
+                if path == "/ops/pulse/stream":
                     raw_max = query.get("max_polls", [""])[0]
                     raw_interval = query.get("poll_interval", [""])[0]
                     max_polls = int(raw_max) if raw_max else None
@@ -809,7 +866,20 @@ def create_server(
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = parsed.path
-            set_reader_mode(False)
+
+            # BL-050: legacy maintainer POST paths → 308 to preserve
+            # method + body during the redirect (301 would force GET).
+            if path in _LEGACY_MAINTAINER_PATHS:
+                target = "/ops" + path
+                if parsed.query:
+                    target = f"{target}?{parsed.query}"
+                self.send_response(308)
+                self.send_header("Location", target)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+
+            set_request_path(path)
             try:
                 form = self._read_form()
                 cookie_header = self.headers.get("Cookie", "")
@@ -821,7 +891,7 @@ def create_server(
                 if path == "/api/contradictions/resolve":
                     pack_name = self._form_first(form, "pack").strip() or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/contradictions/resolve", api=True
+                        pack_name=pack_name, route_path="/ops/contradictions/resolve", api=True
                     ):
                         return
                     self._write_json(self._resolve_contradiction_action(form))
@@ -864,46 +934,46 @@ def create_server(
                             status=503,
                         )
                     return
-                if path == "/contradictions/resolve":
+                if path == "/ops/contradictions/resolve":
                     pack_name = self._form_first(form, "pack").strip() or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/contradictions/resolve", api=False
+                        pack_name=pack_name, route_path="/ops/contradictions/resolve", api=False
                     ):
                         return
                     self._resolve_contradiction_action(form)
                     self._redirect(
-                        self._form_first(form, "next").strip() or "/contradictions?status=resolved"
+                        self._form_first(form, "next").strip() or "/ops/contradictions?status=resolved"
                     )
                     return
                 if path == "/api/summaries/rebuild":
                     pack_name = self._form_first(form, "pack").strip() or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/summaries/rebuild", api=True
+                        pack_name=pack_name, route_path="/ops/summaries/rebuild", api=True
                     ):
                         return
                     self._write_json(self._rebuild_summary_action(form))
                     return
-                if path == "/summaries/rebuild":
+                if path == "/ops/summaries/rebuild":
                     pack_name = self._form_first(form, "pack").strip() or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/summaries/rebuild", api=False
+                        pack_name=pack_name, route_path="/ops/summaries/rebuild", api=False
                     ):
                         return
                     self._rebuild_summary_action(form)
-                    self._redirect(self._form_first(form, "next").strip() or "/summaries")
+                    self._redirect(self._form_first(form, "next").strip() or "/ops/summaries")
                     return
                 if path == "/api/evolution/review":
                     pack_name = self._form_first(form, "pack").strip() or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/evolution/review", api=True
+                        pack_name=pack_name, route_path="/ops/evolution/review", api=True
                     ):
                         return
                     self._write_json(self._review_evolution_action(form))
                     return
-                if path == "/evolution/review":
+                if path == "/ops/evolution/review":
                     pack_name = self._form_first(form, "pack").strip() or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/evolution/review", api=False
+                        pack_name=pack_name, route_path="/ops/evolution/review", api=False
                     ):
                         return
                     payload = self._review_evolution_action(form)
@@ -912,15 +982,15 @@ def create_server(
                 if path == "/api/candidates/review":
                     pack_name = self._form_first(form, "pack").strip() or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/candidates/review", api=True
+                        pack_name=pack_name, route_path="/ops/candidates/review", api=True
                     ):
                         return
                     self._write_json(self._review_candidate_action(form))
                     return
-                if path == "/candidates/review":
+                if path == "/ops/candidates/review":
                     pack_name = self._form_first(form, "pack").strip() or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/candidates/review", api=False
+                        pack_name=pack_name, route_path="/ops/candidates/review", api=False
                     ):
                         return
                     payload = self._review_candidate_action(form)
@@ -929,7 +999,7 @@ def create_server(
                 if path == "/api/actions/enqueue":
                     self._write_json(self._enqueue_signal_action(form))
                     return
-                if path == "/actions/enqueue":
+                if path == "/ops/actions/enqueue":
                     payload = self._enqueue_signal_action(form)
                     self._redirect(str(payload["next_path"]))
                     return
@@ -944,7 +1014,7 @@ def create_server(
                         )
                     )
                     return
-                if path == "/actions/run-next":
+                if path == "/ops/actions/run-next":
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
                     pack_name = self._form_first(form, "pack").strip() or None
                     run_next_action_queue_item(
@@ -967,7 +1037,7 @@ def create_server(
                         )
                     )
                     return
-                if path == "/actions/run-batch":
+                if path == "/ops/actions/run-batch":
                     limit = int(self._form_first(form, "limit").strip() or "5")
                     safe_only = self._form_first(form, "safe_only").strip() == "1"
                     pack_name = self._form_first(form, "pack").strip() or None
@@ -982,14 +1052,14 @@ def create_server(
                 if path == "/api/actions/retry":
                     self._write_json(self._retry_action(form))
                     return
-                if path == "/actions/retry":
+                if path == "/ops/actions/retry":
                     payload = self._retry_action(form)
                     self._redirect(str(payload["next_path"]))
                     return
                 if path == "/api/actions/dismiss":
                     self._write_json(self._dismiss_action(form))
                     return
-                if path == "/actions/dismiss":
+                if path == "/ops/actions/dismiss":
                     payload = self._dismiss_action(form)
                     self._redirect(str(payload["next_path"]))
                     return

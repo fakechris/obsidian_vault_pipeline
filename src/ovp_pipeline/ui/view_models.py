@@ -582,7 +582,7 @@ def _build_dashboard_workflow_groups(
             [
                 {
                     "label": "Orientation Brief",
-                    "path": _scoped_path("/briefing", pack_name=requested_pack),
+                    "path": _scoped_path("/ops/briefing", pack_name=requested_pack),
                     "detail": "Read the current entry product.",
                 },
                 {
@@ -599,7 +599,7 @@ def _build_dashboard_workflow_groups(
             [
                 {
                     "label": "Objects",
-                    "path": _scoped_path("/objects", pack_name=requested_pack),
+                    "path": _scoped_path("/ops/objects", pack_name=requested_pack),
                     "detail": "Browse indexed evergreen objects.",
                 },
                 {
@@ -616,13 +616,13 @@ def _build_dashboard_workflow_groups(
             [
                 {
                     "label": "Signals",
-                    "path": _scoped_path("/signals", pack_name=requested_pack),
+                    "path": _scoped_path("/ops/signals", pack_name=requested_pack),
                     "detail": "Review current active signals.",
                 },
                 {
                     "label": "Contradictions" if research_overview_supported else "Actions",
                     "path": _scoped_path(
-                        "/contradictions" if research_overview_supported else "/actions",
+                        "/ops/contradictions" if research_overview_supported else "/ops/actions",
                         pack_name=requested_pack,
                     ),
                     "detail": (
@@ -640,13 +640,13 @@ def _build_dashboard_workflow_groups(
             [
                 {
                     "label": "Production",
-                    "path": _scoped_path("/production", pack_name=requested_pack),
+                    "path": _scoped_path("/ops/production", pack_name=requested_pack),
                     "detail": "Inspect production weak points and chain state.",
                 },
                 {
                     "label": "Deep Dives" if research_overview_supported else "Notes",
                     "path": _scoped_path(
-                        "/deep-dives" if research_overview_supported else "/objects",
+                        "/ops/deep-dives" if research_overview_supported else "/ops/objects",
                         pack_name=requested_pack,
                     ),
                     "detail": (
@@ -665,7 +665,7 @@ def _build_dashboard_workflow_groups(
                 {
                     "label": "Events" if research_overview_supported else "Objects",
                     "path": _scoped_path(
-                        "/events" if research_overview_supported else "/objects",
+                        "/ops/events" if research_overview_supported else "/ops/objects",
                         pack_name=requested_pack,
                     ),
                     "detail": (
@@ -677,7 +677,7 @@ def _build_dashboard_workflow_groups(
                 {
                     "label": "Clusters" if research_overview_supported else "Search",
                     "path": _scoped_path(
-                        "/clusters" if research_overview_supported else "/search",
+                        "/ops/clusters" if research_overview_supported else "/search",
                         pack_name=requested_pack,
                     ),
                     "detail": (
@@ -951,7 +951,7 @@ def _build_related_cluster_items(
                 "label": str(row["label"]),
                 "display_title": f"Cluster around {row['center_title']}",
                 "detail_path": (
-                    f"/cluster?id={quote(str(row['cluster_id']), safe='')}"
+                    f"/ops/cluster?id={quote(str(row['cluster_id']), safe='')}"
                     f"&pack={quote(requested_pack, safe='')}"
                 ),
                 "member_count": int(row["member_count"]),
@@ -1268,7 +1268,7 @@ def _build_cluster_surface_sections(
             "contradiction_id": item["contradiction_id"],
             "subject_key": item["subject_key"],
             "object_ids": _object_ids_from_claim_ids(item["positive_claim_ids"], item["negative_claim_ids"]),
-            "path": f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
+            "path": f"/ops/contradictions?q={quote(str(item['subject_key']), safe='')}",
         }
         for item in list_contradictions(
             vault_dir,
@@ -1370,7 +1370,7 @@ def build_cluster_summary_payload(
     requested_pack = pack_name or str(cluster["pack"])
     member_index = {str(member["object_id"]): member for member in cluster["members"]}
     detail_path = (
-        f"/cluster?id={quote(str(cluster['cluster_id']), safe='')}"
+        f"/ops/cluster?id={quote(str(cluster['cluster_id']), safe='')}"
         f"&pack={quote(requested_pack, safe='')}"
     )
     enriched_cluster = {
@@ -1673,18 +1673,18 @@ def build_signal_browser_payload(
         "operator_rail": [
             _operator_action(
                 "Action Queue",
-                _scoped_path("/actions", pack_name=requested_pack),
+                _scoped_path("/ops/actions", pack_name=requested_pack),
                 "Run or inspect queued actions.",
             ),
             _operator_action(
                 "Production Browser",
-                _scoped_path("/production", pack_name=requested_pack),
+                _scoped_path("/ops/production", pack_name=requested_pack),
                 "Trace current production weak points.",
             ),
             _operator_action(
                 "Contradictions",
                 _scoped_path(
-                    "/contradictions" if _supports_research_shell(pack_name) else "/search",
+                    "/ops/contradictions" if _supports_research_shell(pack_name) else "/search",
                     pack_name=requested_pack,
                 ),
                 (
@@ -1695,7 +1695,7 @@ def build_signal_browser_payload(
             ),
             _operator_action(
                 "Orientation Brief",
-                _scoped_path("/briefing", pack_name=requested_pack),
+                _scoped_path("/ops/briefing", pack_name=requested_pack),
                 "Return to the current entry product.",
             ),
         ],
@@ -1755,22 +1755,22 @@ def build_candidate_browser_payload(
     payload["operator_rail"] = [
         _operator_action(
             "Orientation Brief",
-            _scoped_path("/briefing", pack_name=requested_pack),
+            _scoped_path("/ops/briefing", pack_name=requested_pack),
             "Read the compiled context before changing canonical concepts.",
         ),
         _operator_action(
             "Signals",
-            _scoped_path("/signals", pack_name=requested_pack),
+            _scoped_path("/ops/signals", pack_name=requested_pack),
             "Check whether this candidate is attached to active production signals.",
         ),
         _operator_action(
             "Actions",
-            _scoped_path("/actions", pack_name=requested_pack),
+            _scoped_path("/ops/actions", pack_name=requested_pack),
             "Inspect queued work that may depend on candidate canonicalization.",
         ),
         _operator_action(
             "Objects",
-            _scoped_path("/objects", pack_name=requested_pack),
+            _scoped_path("/ops/objects", pack_name=requested_pack),
             "Compare candidates against active Evergreen objects.",
         ),
     ]
@@ -1915,25 +1915,25 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         {
             "kind": "productive",
             "label": "Productive",
-            "path": _scoped_path("/signals", pack_name=requested_pack),
+            "path": _scoped_path("/ops/signals", pack_name=requested_pack),
             "detail": f"{loop_summary['productive_count']} signals produced visible downstream change.",
         },
         {
             "kind": "waiting",
             "label": "Waiting",
-            "path": _scoped_path("/actions", pack_name=requested_pack),
+            "path": _scoped_path("/ops/actions", pack_name=requested_pack),
             "detail": f"{loop_summary['waiting_count']} signals currently have queued execution waiting.",
         },
         {
             "kind": "running",
             "label": "Running",
-            "path": _scoped_path("/actions", pack_name=requested_pack),
+            "path": _scoped_path("/ops/actions", pack_name=requested_pack),
             "detail": f"{loop_summary['running_count']} signals are currently executing.",
         },
         {
             "kind": "blocked",
             "label": "Blocked",
-            "path": _scoped_path("/actions", pack_name=requested_pack),
+            "path": _scoped_path("/ops/actions", pack_name=requested_pack),
             "detail": (
                 f"{loop_summary['failed_count'] + loop_summary['stalled_count']} signals are failed or stalled."
             ),
@@ -1941,7 +1941,7 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
         {
             "kind": "review_only",
             "label": "Review Only",
-            "path": _scoped_path("/signals", pack_name=requested_pack),
+            "path": _scoped_path("/ops/signals", pack_name=requested_pack),
             "detail": f"{loop_summary['review_only_count']} signals currently route to review rather than queued execution.",
         },
     ]
@@ -2038,17 +2038,17 @@ def build_briefing_payload(vault_dir: Path | str, *, pack_name: str | None = Non
     operator_rail = [
         _operator_action(
             "Signals",
-            _scoped_path("/signals", pack_name=requested_pack),
+            _scoped_path("/ops/signals", pack_name=requested_pack),
             "Open active signal review from the current shell.",
         ),
         _operator_action(
             "Action Queue",
-            _scoped_path("/actions", pack_name=requested_pack),
+            _scoped_path("/ops/actions", pack_name=requested_pack),
             "Run or inspect queued actions.",
         ),
         _operator_action(
             "Production Browser",
-            _scoped_path("/production", pack_name=requested_pack),
+            _scoped_path("/ops/production", pack_name=requested_pack),
             "Inspect production-chain weak points and reach.",
         ),
         _operator_action(
@@ -2110,17 +2110,17 @@ def build_object_page_payload(
         for item in detail["relations"]
     ]
     research_links = {
-        "events_path": _scoped_path(f"/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
+        "events_path": _scoped_path(f"/ops/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
         "contradictions_path": _scoped_path(
-            f"/contradictions?q={quote(object_id, safe='')}",
+            f"/ops/contradictions?q={quote(object_id, safe='')}",
             pack_name=requested_pack,
         ),
         "summaries_path": _scoped_path(
-            f"/summaries?q={quote(object_id, safe='')}",
+            f"/ops/summaries?q={quote(object_id, safe='')}",
             pack_name=requested_pack,
         ),
         "deep_dives_path": _scoped_path(
-            f"/deep-dives?q={quote(object_id, safe='')}",
+            f"/ops/deep-dives?q={quote(object_id, safe='')}",
             pack_name=requested_pack,
         ),
         "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
@@ -2351,7 +2351,7 @@ def build_object_page_payload(
         ),
         _operator_action(
             "Event dossier" if research_shell_enabled else "Signals",
-            research_links["events_path"] if research_shell_enabled else _scoped_path("/signals", pack_name=requested_pack),
+            research_links["events_path"] if research_shell_enabled else _scoped_path("/ops/signals", pack_name=requested_pack),
             (
                 "See timeline context for this object."
                 if research_shell_enabled
@@ -2369,7 +2369,7 @@ def build_object_page_payload(
         ),
         _operator_action(
             "Production Browser",
-            _scoped_path("/production", pack_name=requested_pack),
+            _scoped_path("/ops/production", pack_name=requested_pack),
             "Inspect downstream production chain state.",
         ),
     ]
@@ -2496,17 +2496,17 @@ def build_topic_overview_payload(
         pack_name=pack_name,
     )
     research_links = {
-        "events_path": _scoped_path(f"/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
+        "events_path": _scoped_path(f"/ops/events?q={quote(object_id, safe='')}", pack_name=requested_pack),
         "contradictions_path": _scoped_path(
-            f"/contradictions?q={quote(object_id, safe='')}",
+            f"/ops/contradictions?q={quote(object_id, safe='')}",
             pack_name=requested_pack,
         ),
         "summaries_path": _scoped_path(
-            f"/summaries?q={quote(object_id, safe='')}",
+            f"/ops/summaries?q={quote(object_id, safe='')}",
             pack_name=requested_pack,
         ),
         "deep_dives_path": _scoped_path(
-            f"/deep-dives?q={quote(object_id, safe='')}",
+            f"/ops/deep-dives?q={quote(object_id, safe='')}",
             pack_name=requested_pack,
         ),
         "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
@@ -2629,7 +2629,7 @@ def build_topic_overview_payload(
                         "kind": "gap_signal",
                         "label": item["label"],
                         "path": _scoped_path(
-                            f"/production?q={quote(object_id, safe='')}",
+                            f"/ops/production?q={quote(object_id, safe='')}",
                             pack_name=requested_pack,
                         ),
                         "detail": f"{item['count']} objects in this topic scope.",
@@ -2703,7 +2703,7 @@ def build_topic_overview_payload(
         ),
         _operator_action(
             "Event dossier" if research_shell_enabled else "Signals",
-            research_links["events_path"] if research_shell_enabled else _scoped_path("/signals", pack_name=requested_pack),
+            research_links["events_path"] if research_shell_enabled else _scoped_path("/ops/signals", pack_name=requested_pack),
             (
                 "See time-bounded activity around this topic."
                 if research_shell_enabled
@@ -2721,7 +2721,7 @@ def build_topic_overview_payload(
         ),
         _operator_action(
             "Production Browser",
-            _scoped_path("/production", pack_name=requested_pack),
+            _scoped_path("/ops/production", pack_name=requested_pack),
             "Inspect production-chain weak points in the current shell.",
         ),
     ]
@@ -2843,11 +2843,11 @@ def build_event_dossier_payload(
                 pack_name=requested_pack,
             ),
             "contradictions_path": _scoped_path(
-                f"/contradictions?q={quote(str(event['object_id']), safe='')}",
+                f"/ops/contradictions?q={quote(str(event['object_id']), safe='')}",
                 pack_name=requested_pack,
             ),
             "summaries_path": _scoped_path(
-                f"/summaries?q={quote(str(event['object_id']), safe='')}",
+                f"/ops/summaries?q={quote(str(event['object_id']), safe='')}",
                 pack_name=requested_pack,
             ),
         }
@@ -2897,7 +2897,7 @@ def build_event_dossier_payload(
                 {
                     "kind": "contradictions",
                     "label": "Contradiction review",
-                    "path": _scoped_path(f"/contradictions?q={quote(query or '', safe='')}", pack_name=requested_pack) if query else _scoped_path("/contradictions", pack_name=requested_pack),
+                    "path": _scoped_path(f"/ops/contradictions?q={quote(query or '', safe='')}", pack_name=requested_pack) if query else _scoped_path("/ops/contradictions", pack_name=requested_pack),
                     "detail": "Inspect tensions in the visible event scope.",
                 },
             ],
@@ -2928,7 +2928,7 @@ def build_event_dossier_payload(
                     {
                         "kind": "contradiction",
                         "label": item["subject_key"],
-                        "path": _scoped_path(f"/contradictions?q={quote(item['subject_key'], safe='')}", pack_name=requested_pack),
+                        "path": _scoped_path(f"/ops/contradictions?q={quote(item['subject_key'], safe='')}", pack_name=requested_pack),
                         "detail": item["status"],
                     }
                     for item in scoped_contradictions[:3]
@@ -2964,27 +2964,27 @@ def build_event_dossier_payload(
     operator_rail = [
         _operator_action(
             "Production Browser",
-            _scoped_path("/production", pack_name=requested_pack),
+            _scoped_path("/ops/production", pack_name=requested_pack),
             "Inspect production chains behind the visible timeline scope.",
         ),
         _operator_action(
             "Contradictions",
             _scoped_path(
-                f"/contradictions?q={quote(query or '', safe='')}",
+                f"/ops/contradictions?q={quote(query or '', safe='')}",
                 pack_name=requested_pack,
             )
             if query
-            else _scoped_path("/contradictions", pack_name=requested_pack),
+            else _scoped_path("/ops/contradictions", pack_name=requested_pack),
             "Review contradiction rows for the current dossier scope.",
         ),
         _operator_action(
             "Signals",
-            _scoped_path("/signals", pack_name=requested_pack),
+            _scoped_path("/ops/signals", pack_name=requested_pack),
             "Open the active signal queue.",
         ),
         _operator_action(
             "Clusters" if research_shell_enabled else "Search",
-            _scoped_path("/clusters" if research_shell_enabled else "/search", pack_name=requested_pack),
+            _scoped_path("/ops/clusters" if research_shell_enabled else "/search", pack_name=requested_pack),
             (
                 "Explore graph clusters connected to current work."
                 if research_shell_enabled
@@ -3408,7 +3408,7 @@ def build_cluster_detail_payload(
     requested_pack = pack_name or str(cluster["pack"])
     member_index = {str(member["object_id"]): member for member in cluster["members"]}
     detail_path = (
-        f"/cluster?id={quote(str(cluster['cluster_id']), safe='')}"
+        f"/ops/cluster?id={quote(str(cluster['cluster_id']), safe='')}"
         f"&pack={quote(requested_pack, safe='')}"
     )
     enriched_cluster = {
@@ -3470,7 +3470,7 @@ def build_cluster_detail_payload(
             derived_from=("knowledge.db.graph_clusters", "knowledge.db.graph_edges"),
         ),
         "cluster": enriched_cluster,
-        "browser_path": f"/clusters?pack={quote(requested_pack, safe='')}",
+        "browser_path": f"/ops/clusters?pack={quote(requested_pack, safe='')}",
         "edges": enriched_edges,
         **sections,
         "model_notes": [
@@ -3547,7 +3547,7 @@ def build_contradiction_browser_payload(
                     {
                         "kind": "contradiction",
                         "label": item["subject_key"],
-                        "path": _scoped_path(f"/contradictions?q={quote(item['subject_key'], safe='')}", pack_name=requested_pack),
+                        "path": _scoped_path(f"/ops/contradictions?q={quote(item['subject_key'], safe='')}", pack_name=requested_pack),
                         "detail": item["status"],
                     }
                     for item in items[:4]
@@ -3589,7 +3589,7 @@ def build_contradiction_browser_payload(
                     {
                         "kind": "open_contradiction",
                         "label": item["subject_key"],
-                        "path": _scoped_path(f"/contradictions?q={quote(item['subject_key'], safe='')}", pack_name=requested_pack),
+                        "path": _scoped_path(f"/ops/contradictions?q={quote(item['subject_key'], safe='')}", pack_name=requested_pack),
                         "detail": item["status_explanation"],
                     }
                     for item in items[:4]
@@ -3618,22 +3618,22 @@ def build_contradiction_browser_payload(
     operator_rail = [
         _operator_action(
             "Signals",
-            _scoped_path("/signals", pack_name=requested_pack),
+            _scoped_path("/ops/signals", pack_name=requested_pack),
             "Open active signals for related maintenance entry points.",
         ),
         _operator_action(
             "Action Queue",
-            _scoped_path("/actions", pack_name=requested_pack),
+            _scoped_path("/ops/actions", pack_name=requested_pack),
             "Inspect queued or failed execution work.",
         ),
         _operator_action(
             "Production Browser",
-            _scoped_path("/production", pack_name=requested_pack),
+            _scoped_path("/ops/production", pack_name=requested_pack),
             "Trace production gaps behind the visible contradictions.",
         ),
         _operator_action(
             "Events",
-            _scoped_path("/events", pack_name=requested_pack),
+            _scoped_path("/ops/events", pack_name=requested_pack),
             "Compare contradiction scope against the timeline surface.",
         ),
     ]
@@ -3792,18 +3792,18 @@ def build_truth_dashboard_payload(
             "count": 0,
             "open_count": 0,
             "items": [],
-            "browser_path": _scoped_path("/contradictions", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/contradictions", pack_name=requested_pack),
         }
         events = {
             "count": 0,
             "items": [],
             "dates": [],
-            "browser_path": _scoped_path("/events", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/events", pack_name=requested_pack),
         }
         stale_summaries = {
             "count": 0,
             "items": [],
-            "browser_path": _scoped_path("/summaries", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/summaries", pack_name=requested_pack),
         }
         evolution = {
             "candidate_count": 0,
@@ -3818,7 +3818,7 @@ def build_truth_dashboard_payload(
                     "kind": "contradiction",
                     "label": item["subject_key"],
                     "path": _scoped_path(
-                        f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
+                        f"/ops/contradictions?q={quote(str(item['subject_key']), safe='')}",
                         pack_name=requested_pack,
                     ),
                     "detail": f"{len(item['object_ids'])} objects in scope",
@@ -3899,7 +3899,7 @@ def build_truth_dashboard_payload(
                         "kind": "contradiction",
                         "label": item["subject_key"],
                         "path": _scoped_path(
-                            f"/contradictions?q={quote(str(item['subject_key']), safe='')}",
+                            f"/ops/contradictions?q={quote(str(item['subject_key']), safe='')}",
                             pack_name=requested_pack,
                         ),
                         "detail": f"{len(item['object_ids'])} objects in scope",
@@ -3926,19 +3926,19 @@ def build_truth_dashboard_payload(
                 {
                     "kind": "orientation",
                     "label": "Orientation Brief",
-                    "path": _scoped_path("/briefing", pack_name=requested_pack),
+                    "path": _scoped_path("/ops/briefing", pack_name=requested_pack),
                     "detail": "Open the current knowledge entry product.",
                 },
                 {
                     "kind": "signals",
                     "label": "Signals",
-                    "path": _scoped_path("/signals", pack_name=requested_pack),
+                    "path": _scoped_path("/ops/signals", pack_name=requested_pack),
                     "detail": "Review current active signals.",
                 },
                 {
                     "kind": "production",
                     "label": "Production",
-                    "path": _scoped_path("/production", pack_name=requested_pack),
+                    "path": _scoped_path("/ops/production", pack_name=requested_pack),
                     "detail": "Inspect production weak points.",
                 },
                 *(
@@ -3946,7 +3946,7 @@ def build_truth_dashboard_payload(
                         {
                             "kind": "graph",
                             "label": "Clusters",
-                            "path": _scoped_path("/clusters", pack_name=requested_pack),
+                            "path": _scoped_path("/ops/clusters", pack_name=requested_pack),
                             "detail": "Explore graph clusters.",
                         }
                     ]
@@ -3985,18 +3985,18 @@ def build_truth_dashboard_payload(
             "count": contradictions["count"],
             "open_count": contradictions["open_count"],
             "items": contradictions["items"][:8],
-            "browser_path": _scoped_path("/contradictions", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/contradictions", pack_name=requested_pack),
         },
         "events": {
             "count": events["event_count"],
             "items": events["events"][:8],
             "dates": events["dates"],
-            "browser_path": _scoped_path("/events", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/events", pack_name=requested_pack),
         },
         "stale_summaries": {
             "count": stale_summaries["count"],
             "items": stale_summaries["items"][:8],
-            "browser_path": _scoped_path("/summaries", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/summaries", pack_name=requested_pack),
         },
         "evolution": {
             "candidate_count": evolution["candidate_count"],
@@ -4005,13 +4005,13 @@ def build_truth_dashboard_payload(
         },
         "production": {
             **production,
-            "browser_path": _scoped_path("/production", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/production", pack_name=requested_pack),
             "weak_point_count": len(production_weak_points),
         },
         "signals": {
             **signals,
             "items": signals["items"][:8],
-            "browser_path": _scoped_path("/signals", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/signals", pack_name=requested_pack),
         },
         "runtime": runtime,
         "runtime_state": operational_runtime_state,
@@ -4078,13 +4078,13 @@ def build_runtime_home_payload(
         "signals": {
             "count": 0,
             "items": [],
-            "browser_path": _scoped_path("/signals", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/signals", pack_name=requested_pack),
             "surface_contract": describe_observation_surface_contract(pack_name=pack_name, surface_kind="signals"),
         },
         "production": {
             "weak_points": [],
             "weak_point_count": 0,
-            "browser_path": _scoped_path("/production", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/production", pack_name=requested_pack),
             "surface_contract": describe_observation_surface_contract(
                 pack_name=pack_name,
                 surface_kind="production_chains",
@@ -4094,18 +4094,18 @@ def build_runtime_home_payload(
             "count": 0,
             "open_count": 0,
             "items": [],
-            "browser_path": _scoped_path("/contradictions", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/contradictions", pack_name=requested_pack),
         },
         "events": {
             "count": 0,
             "items": [],
             "dates": [],
-            "browser_path": _scoped_path("/events", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/events", pack_name=requested_pack),
         },
         "stale_summaries": {
             "count": 0,
             "items": [],
-            "browser_path": _scoped_path("/summaries", pack_name=requested_pack),
+            "browser_path": _scoped_path("/ops/summaries", pack_name=requested_pack),
         },
         "evolution": {
             "candidate_count": 0,
@@ -4248,6 +4248,137 @@ def build_atlas_browser_payload(
 
 CURATED_ATLAS_DEFAULT_TOP_N = 30
 CURATED_ATLAS_MAX_TOP_N = 100
+
+# BL-050: Reader home pulls from the M14 substrate (community
+# crystals + curated atlas + scoring).  Tunables live next to the
+# atlas defaults so they share one mental model.
+READER_HOME_TOP_TOPICS_LIMIT = 5
+READER_HOME_RECENT_CRYSTALS_LIMIT = 8
+READER_HOME_RECENT_DAYS = 7
+
+
+def build_reader_home_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    """Reader-shell home payload.  No DB stat counts, no pipeline
+    state — just reading entry points sourced from the synthesis
+    substrate.
+
+    Sections:
+
+    * **top_topics** — top-N rows from ``crystal_scores`` for the
+      pack, joined with body + label so the home can render a teaser
+      without re-fetching markdown.
+    * **curated_atlas** — total chain count + top-N constant so the
+      home can headline "30 most reusable ideas in your vault".
+    * **recent_crystals** — community crystals synthesized in the
+      last ``READER_HOME_RECENT_DAYS`` days, capped at
+      ``READER_HOME_RECENT_CRYSTALS_LIMIT``.
+    * **map_supported** — whether the active pack supports a
+      research-style graph nav (drives the Map card visibility).
+    """
+    from ..synthesis.curated_atlas import build_curated_atlas, _extract_teaser
+    from ..synthesis._shared import CRYSTAL_DIR_REL
+    from datetime import datetime, timedelta, timezone
+
+    requested_pack = pack_name or ""
+    pack = pack_name or PRIMARY_PACK_NAME
+
+    db_path = _db_path(vault_dir)
+    # Reader home must not crash on a fresh vault that hasn't run
+    # ``ovp-knowledge-index`` yet — show the empty-state hint instead.
+    atlas = None
+    recent_rows: list[tuple] = []
+    if db_path.exists():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                atlas = build_curated_atlas(
+                    conn, pack=pack, top_n=READER_HOME_TOP_TOPICS_LIMIT,
+                )
+                cutoff = (datetime.now(timezone.utc)
+                          - timedelta(days=READER_HOME_RECENT_DAYS)).isoformat(timespec="seconds")
+                recent_rows = conn.execute(
+                    """
+                    SELECT cc.cluster_id, cc.synthesized_at, cc.body_md, gc.label
+                      FROM community_crystals cc
+                      JOIN graph_clusters gc
+                        ON gc.pack = cc.pack AND gc.cluster_id = cc.cluster_id
+                     WHERE cc.pack = ?
+                       AND cc.superseded_by_synthesized_at = ''
+                       AND cc.synthesized_at > ?
+                     ORDER BY cc.synthesized_at DESC
+                     LIMIT ?
+                    """,
+                    (pack, cutoff, READER_HOME_RECENT_CRYSTALS_LIMIT),
+                ).fetchall()
+        except sqlite3.DatabaseError:
+            atlas = None
+            recent_rows = []
+    if atlas is None:
+        # Empty placeholder so downstream rendering shows the
+        # ``run ovp-knowledge-index`` hint without special-casing.
+        from ..synthesis.curated_atlas import CuratedAtlas
+        atlas = CuratedAtlas(
+            pack=pack, top_n=READER_HOME_TOP_TOPICS_LIMIT,
+            total_chains=0, entries=tuple(),
+            generated_at="",
+        )
+
+    def _safe_id(cluster_id: str) -> str:
+        return (cluster_id[len("cluster::"):]
+                if cluster_id.startswith("cluster::") else cluster_id)
+
+    top_topics = []
+    for entry in atlas.entries:
+        safe_id = _safe_id(entry.crystal_id) if entry.crystal_kind == "community" else (
+            f"contradiction-{entry.crystal_id[len('contradiction::'):]}"
+            if entry.crystal_id.startswith("contradiction::")
+            else entry.crystal_id
+        )
+        note_rel = str(CRYSTAL_DIR_REL / f"{safe_id}.md")
+        top_topics.append({
+            "rank": entry.rank,
+            "label": entry.label,
+            "teaser": entry.teaser,
+            "score": round(entry.score, 3),
+            "note_href": _scoped_path(
+                f"/note?path={quote(note_rel, safe='')}",
+                pack_name=requested_pack,
+            ),
+        })
+
+    recent_crystals = []
+    for cluster_id, synthesized_at, body_md, label in recent_rows:
+        safe_id = _safe_id(str(cluster_id))
+        note_rel = str(CRYSTAL_DIR_REL / f"{safe_id}.md")
+        recent_crystals.append({
+            "label": str(label or "(untitled)"),
+            "synthesized_at": str(synthesized_at or ""),
+            "teaser": _extract_teaser(str(body_md or ""), max_chars=140),
+            "note_href": _scoped_path(
+                f"/note?path={quote(note_rel, safe='')}",
+                pack_name=requested_pack,
+            ),
+        })
+
+    return {
+        "screen": "reader/home",
+        "requested_pack": requested_pack,
+        "pack": atlas.pack,
+        "top_topics": top_topics,
+        "curated_atlas": {
+            "total_chains": atlas.total_chains,
+            "top_n": CURATED_ATLAS_DEFAULT_TOP_N,
+            "atlas_href": _scoped_path("/atlas/curated", pack_name=requested_pack),
+        },
+        "recent_crystals": recent_crystals,
+        "recent_days": READER_HOME_RECENT_DAYS,
+        "map_supported": _supports_research_shell(pack_name),
+        "search_href": _scoped_path("/search", pack_name=requested_pack),
+        "map_href": _scoped_path("/map", pack_name=requested_pack),
+    }
 
 
 def build_curated_atlas_payload(
@@ -4503,17 +4634,17 @@ def build_production_browser_payload(
     operator_rail = [
         _operator_action(
             "Orientation Brief",
-            _scoped_path("/briefing", pack_name=requested_pack),
+            _scoped_path("/ops/briefing", pack_name=requested_pack),
             "Return to the current entry product.",
         ),
         _operator_action(
             "Signals",
-            _scoped_path("/signals", pack_name=requested_pack),
+            _scoped_path("/ops/signals", pack_name=requested_pack),
             "Review active signals related to chain maintenance.",
         ),
         _operator_action(
             "Action Queue",
-            _scoped_path("/actions", pack_name=requested_pack),
+            _scoped_path("/ops/actions", pack_name=requested_pack),
             "Run or inspect queued execution work.",
         ),
         _operator_action(
@@ -4805,7 +4936,7 @@ def build_note_page_payload(
     fallback_object_path = (
         production_chain["objects"][0]["object_path"]
         if production_chain["objects"]
-        else _scoped_path("/objects", pack_name=requested_pack)
+        else _scoped_path("/ops/objects", pack_name=requested_pack)
     )
     fallback_object_label = "Open derived object" if production_chain["objects"] else "Objects"
     return {
@@ -4818,12 +4949,12 @@ def build_note_page_payload(
         "operator_rail": [
             _operator_action(
                 "Production Browser",
-                _scoped_path("/production", pack_name=requested_pack),
+                _scoped_path("/ops/production", pack_name=requested_pack),
                 "Inspect broader production-chain weak points.",
             ),
             _operator_action(
                 "Signals",
-                _scoped_path("/signals", pack_name=requested_pack),
+                _scoped_path("/ops/signals", pack_name=requested_pack),
                 "Open active signals for this shell scope.",
             ),
             _operator_action(

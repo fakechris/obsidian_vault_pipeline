@@ -77,14 +77,14 @@ def test_render_workbench_page_falls_back_when_no_object_selected() -> None:
     # an `id=` query — the JS bridge mentions `/object/fragment` as a string
     # literal in the selectObject() builder, which is fine.
     assert "id='pane-obj' src='/object/fragment" not in html
-    assert "id='pane-obj' src='/objects" in html
+    assert "id='pane-obj' src='/ops/objects" in html
 
 
 def test_render_workbench_page_threads_pack_into_each_pane() -> None:
     html = _render_workbench_page(object_id="", requested_pack="research-tech")
-    assert "/candidates/fragment?pack=research-tech" in html
-    assert "/actions/fragment?pack=research-tech" in html
-    assert "/briefing/fragment?pack=research-tech" in html
+    assert "/ops/candidates/fragment?pack=research-tech" in html
+    assert "/ops/actions/fragment?pack=research-tech" in html
+    assert "/ops/briefing/fragment?pack=research-tech" in html
 
 
 # ---------------------------------------------------------------------------
@@ -134,18 +134,18 @@ def _fetch(server, path: str) -> str:
 
 
 def test_workbench_route_returns_html_with_iframes(running_server) -> None:
-    body = _fetch(running_server, "/workbench?object_id=alpha")
+    body = _fetch(running_server, "/ops/workbench?object_id=alpha")
     assert "<title>Workbench</title>" in body
     assert "/object/fragment?id=alpha" in body
-    assert "/candidates/fragment" in body
-    assert "/actions/fragment" in body
-    assert "/briefing/fragment" in body
-    assert "/pulse/fragment" in body
+    assert "/ops/candidates/fragment" in body
+    assert "/ops/actions/fragment" in body
+    assert "/ops/briefing/fragment" in body
+    assert "/ops/pulse/fragment" in body
 
 
 def test_briefing_fragment_omits_full_page_chrome(running_server) -> None:
-    fragment = _fetch(running_server, "/briefing/fragment?pack=default-knowledge")
-    page = _fetch(running_server, "/briefing?pack=default-knowledge")
+    fragment = _fetch(running_server, "/ops/briefing/fragment?pack=default-knowledge")
+    page = _fetch(running_server, "/ops/briefing?pack=default-knowledge")
     # The fragment must be strictly shorter than the full page (chrome stripped).
     assert len(fragment) < len(page)
     # Fragment must not contain the outer html chrome.
@@ -158,8 +158,8 @@ def test_briefing_fragment_omits_full_page_chrome(running_server) -> None:
 
 
 def test_actions_fragment_omits_full_page_chrome(running_server) -> None:
-    fragment = _fetch(running_server, "/actions/fragment?pack=default-knowledge")
-    page = _fetch(running_server, "/actions?pack=default-knowledge")
+    fragment = _fetch(running_server, "/ops/actions/fragment?pack=default-knowledge")
+    page = _fetch(running_server, "/ops/actions?pack=default-knowledge")
     assert len(fragment) < len(page)
     assert "<!doctype" not in fragment.lower()
 
@@ -173,8 +173,9 @@ def test_object_fragment_omits_full_page_chrome(running_server) -> None:
     assert "Alpha" in fragment
 
 
-def test_workbench_navbar_link_present(running_server) -> None:
+def test_workbench_cross_link_to_ops(running_server) -> None:
+    """BL-050: Reader shell always exposes a single cross-link to
+    the Maintainer shell (no more ``?mode=operator`` toggle)."""
     home = _fetch(running_server, "/")
-    assert 'href="/ops"' not in home
-    ops_home = _fetch(running_server, "/?mode=operator")
-    assert 'href="/ops"' in ops_home
+    assert 'href="/ops"' in home
+    assert "→ Maintenance" in home

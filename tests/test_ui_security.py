@@ -15,7 +15,7 @@ class TestSafeRedirectPath:
         assert _safe_redirect_path("/search") == "/search"
 
     def test_path_with_query(self):
-        assert _safe_redirect_path("/objects?q=test") == "/objects?q=test"
+        assert _safe_redirect_path("/ops/objects?q=test") == "/ops/objects?q=test"
 
     def test_empty_falls_back(self):
         assert _safe_redirect_path("") == "/"
