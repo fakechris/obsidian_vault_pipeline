@@ -104,7 +104,10 @@ def index_crystals_into_page_fts(
     rows = []
     for cluster_id, label, body_md in cur:
         slug = _COMMUNITY_PREFIX + _community_safe_id(cluster_id)
-        title = f"[crystal] {label or '(untitled)'}"
+        # BL-051: user-facing label says "topic", not "crystal".
+        # Slug prefix (``crystal:``) stays as-is — it's a stable
+        # identifier downstream code keys off.
+        title = f"[topic] {label or '(untitled)'}"
         rows.append((slug, title, body_md or ""))
     if rows:
         conn.executemany(
@@ -127,7 +130,9 @@ def index_crystals_into_page_fts(
     for contradiction_id, subject_key, body_md in cur:
         slug = (_CONTRADICTION_PREFIX
                 + _contradiction_safe_id(contradiction_id))
-        title = f"[contradiction] {subject_key or '(untitled)'}"
+        # BL-051: contradiction crystals surface as "open question" —
+        # they're unresolved tensions, not settled topics.
+        title = f"[open question] {subject_key or '(untitled)'}"
         rows.append((slug, title, body_md or ""))
     if rows:
         conn.executemany(

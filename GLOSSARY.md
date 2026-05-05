@@ -19,7 +19,7 @@ If a term cannot be classified as a kind of one of the six, it does not belong i
 
 **Access Surface (root term)** — see [ARCHITECTURE](./ARCHITECTURE.md). UI / MCP / CLI / export.
 
-**Atlas** — *kind of Access Surface.* Reader-first browse over the knowledge graph. Renders in `/atlas` route. See [PRODUCT_SURFACES](./PRODUCT_SURFACES.md).
+**Atlas** — *kind of Access Surface.* The legacy MOC browser at `/atlas`.  Power-user diagnostic over `graph_clusters`; not the primary reading entry — that's [Featured Topics](#featured-topics).  See [PRODUCT_SURFACES](./PRODUCT_SURFACES.md).
 
 **Audit (event log)** — *Governance subaxis.* Append-only record of every promotion, review decision, and Canonical State modification.
 
@@ -51,7 +51,9 @@ If a term cannot be classified as a kind of one of the six, it does not belong i
 
 **Context Pack** — *kind of Projection.* Selected-objects snapshot assembled at request time for an external agent. Same architecture status as a Briefing.
 
-**Curated Atlas / Crystal Read Model** (planned M14) — *kind of Access Surface.* A ranked, top-N curation over the crystal corpus. Reads Projections; writes nothing.
+**Curated Atlas / Crystal Read Model** (M14) — *kind of Access Surface.* The internal name for what the user sees as **Featured Topics**.  A ranked top-N curation over the crystal corpus, reading `crystal_scores`.  Lives at `/topics` (the URL `/atlas/curated` 301s here).  Reads Projections; writes nothing.
+
+<a id="featured-topics"></a>**Featured Topics** — *user-facing label* for the Curated Atlas / Crystal Read Model.  Renders at `/topics`.  Each entry is a **Topic** (community crystal) or **open question** (contradiction crystal).
 
 ## D — G
 
@@ -122,6 +124,10 @@ If a term cannot be classified as a kind of one of the six, it does not belong i
 **Stale Summary** — *Governance Review subaxis.* Materialized summary that needs re-derivation because its source changed.
 
 **Synthesis Layer (M13)** — *kind of Projection.* The community + contradiction crystals.
+
+**Topic / Topics (UI label)** — *user-facing rename* (BL-051) of the **community crystal**.  Internal storage names — table `community_crystals`, frontmatter `type: community_crystal`, file dir `40-Resources/Crystals/`, CLI `ovp-synthesize-community-crystals` — keep "crystal" because the rename was strictly UI-layer.  Rule: when the system stores it, call it a crystal; when the user reads it, call it a topic.
+
+**Open question (UI label)** — *user-facing rename* (BL-051) of the **contradiction crystal**.  Same layering rule as **Topic**: the storage stays `contradiction_crystals`; only the UI label and FTS title prefix changed.
 
 **Verification** — *Governance subaxis.* Evidence / hash / freshness / replay checks.
 

@@ -148,16 +148,17 @@ def test_ui_server_root_serves_reader_library_home(temp_vault):
     # Reader nav (no Workbench)
     assert 'href="/">Library</a>' in body
     assert 'href="/search">Search</a>' in body
-    assert 'href="/atlas/curated">Atlas</a>' in body
+    assert 'href="/topics">Topics</a>' in body
     assert 'href="/map">Map</a>' in body
     assert 'href="/ops">Workbench</a>' not in body
     # Cross-link to maintainer shell
     assert ">→ Maintenance</a>" in body
-    # New BL-050 sections.  Top Topics / Recent Crystals always
-    # render with empty-state hints; Curated Atlas card only
-    # appears when crystal_scores has rows (gemini PR #150 review).
+    # BL-051: Reader home sections renamed to "Top Topics" + "Recent
+    # Topics" (was Recent Crystals); Curated Atlas card folded into
+    # Top Topics with a "See all N featured topics →" footer link
+    # rather than its own card.
     assert "Top Topics" in body
-    assert "Recent Crystals" in body
+    assert "Recent Topics" in body
     # Search box (inline form)
     assert "action='/search'" in body
     assert "name='q'" in body
@@ -271,7 +272,9 @@ def test_render_reader_home_hides_unavailable_map_for_non_research_pack():
 
     assert "Knowledge Library" in body
     assert "Top Topics" in body
-    assert "Curated Atlas" in body
+    # BL-051: standalone "Curated Atlas" card removed; "See all N
+    # featured topics →" link lives inside Top Topics now.
+    assert "featured topics" in body
     assert "Knowledge Map" not in body
     assert 'href="/map?pack=media-editorial"' not in body
 
@@ -1451,7 +1454,7 @@ def test_ui_server_reader_nav_hides_map_for_non_research_pack(temp_vault):
     # Reader nav core
     assert 'href="/?pack=media-editorial">Library</a>' in body
     assert 'href="/search?pack=media-editorial">Search</a>' in body
-    assert 'href="/atlas/curated?pack=media-editorial">Atlas</a>' in body
+    assert 'href="/topics?pack=media-editorial">Topics</a>' in body
     # Map gated out for non-research pack
     assert 'href="/map?pack=media-editorial">Map</a>' not in body
     # Cross-link still present
@@ -3693,7 +3696,7 @@ def test_ui_server_topic_page_preserves_pack_scope_in_shell_nav(temp_vault):
     # plus a cross-link to Maintenance.  All pack-scoped.
     assert 'href="/?pack=default-knowledge">Library</a>' in body
     assert 'href="/search?pack=default-knowledge">Search</a>' in body
-    assert 'href="/atlas/curated?pack=default-knowledge">Atlas</a>' in body
+    assert 'href="/topics?pack=default-knowledge">Topics</a>' in body
     assert 'href="/ops?pack=default-knowledge"' in body
     assert "Assembly Contract" in body
     assert "inherited from topic_overview in research-tech" in body

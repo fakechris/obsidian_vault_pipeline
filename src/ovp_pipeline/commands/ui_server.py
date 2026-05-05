@@ -521,10 +521,23 @@ def create_server(
                     )
                     self._write_html(_render_atlas_page(payload))
                     return
-                if path == "/api/atlas/curated":
+                # BL-051: ``/topics`` is the canonical reader URL for
+                # the Featured Topics page.  Old ``/atlas/curated`` and
+                # ``/api/atlas/curated`` 301 to the new paths so any
+                # bookmark from PR #148 keeps working.
+                if path in {"/atlas/curated", "/api/atlas/curated"}:
+                    target = "/api/topics" if path.startswith("/api/") else "/topics"
+                    if parsed.query:
+                        target = f"{target}?{parsed.query}"
+                    self.send_response(301)
+                    self.send_header("Location", target)
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
+                if path == "/api/topics":
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/atlas/curated", api=True
+                        pack_name=pack_name, route_path="/topics", api=True
                     ):
                         return
                     self._write_json(
@@ -535,10 +548,10 @@ def create_server(
                         )
                     )
                     return
-                if path == "/atlas/curated":
+                if path == "/topics":
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/atlas/curated", api=False
+                        pack_name=pack_name, route_path="/topics", api=False
                     ):
                         return
                     payload = build_curated_atlas_payload(
@@ -616,35 +629,43 @@ def create_server(
                 if path == "/api/graph":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    show_all = query.get("show_all", [""])[0] == "1"
                     if self._guard_research_route(
                         pack_name=pack_name, route_path="/graph", api=True
                     ):
                         return
                     self._write_json(
-                        build_graph_map_payload(resolved_vault, pack_name=pack_name, query=q)
+                        build_graph_map_payload(
+                            resolved_vault, pack_name=pack_name, query=q,
+                            show_all=show_all,
+                        )
                     )
                     return
                 if path == "/graph":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    show_all = query.get("show_all", [""])[0] == "1"
                     if self._guard_research_route(
                         pack_name=pack_name, route_path="/graph", api=False
                     ):
                         return
                     payload = build_graph_map_payload(
-                        resolved_vault, pack_name=pack_name, query=q
+                        resolved_vault, pack_name=pack_name, query=q,
+                        show_all=show_all,
                     )
                     self._write_html(_render_graph_map_page(payload, action_path="/graph"))
                     return
                 if path == "/map":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
+                    show_all = query.get("show_all", [""])[0] == "1"
                     if self._guard_research_route(
                         pack_name=pack_name, route_path="/map", api=False
                     ):
                         return
                     payload = build_graph_map_payload(
-                        resolved_vault, pack_name=pack_name, query=q
+                        resolved_vault, pack_name=pack_name, query=q,
+                        show_all=show_all,
                     )
                     self._write_html(_render_graph_map_page(payload, action_path="/map"))
                     return
