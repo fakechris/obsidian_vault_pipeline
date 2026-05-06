@@ -938,24 +938,17 @@ def create_server(
                         _render_workbench_page(object_id=object_id, requested_pack=pack_name)
                     )
                     return
-                if path == "/ops/timeline":
+                if path in ("/ops/timeline", "/api/timeline"):
                     pack_name = query.get("pack", [""])[0] or None
                     raw_days = query.get("days", [""])[0]
                     days = int(raw_days) if raw_days.isdigit() else None
                     payload = build_timeline_payload(
                         resolved_vault, pack_name=pack_name, days=days,
                     )
-                    self._write_html(_render_timeline_page(payload))
-                    return
-                if path == "/api/timeline":
-                    pack_name = query.get("pack", [""])[0] or None
-                    raw_days = query.get("days", [""])[0]
-                    days = int(raw_days) if raw_days.isdigit() else None
-                    self._write_json(
-                        build_timeline_payload(
-                            resolved_vault, pack_name=pack_name, days=days,
-                        )
-                    )
+                    if path == "/api/timeline":
+                        self._write_json(payload)
+                    else:
+                        self._write_html(_render_timeline_page(payload))
                     return
                 if path == "/ops/pulse":
                     self._write_html(_render_pulse_page())

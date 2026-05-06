@@ -1309,6 +1309,26 @@ def _render_note_page(
     )
 
 
+# Lineage-card CSS pulled to a module-level constant so the
+# render function doesn't ship a multi-line literal in the middle
+# of its body.  Scope is intentionally local — promoting these
+# styles to ``_layout`` would make them load on every page even
+# when the lineage card isn't rendered.
+_LINEAGE_CARD_STYLE = (
+    "<style>"
+    ".lineage-flow{display:flex;flex-direction:column;gap:.4rem}"
+    ".lineage-row{padding:.5rem .7rem;border-left:3px solid #c9bfae;"
+    "background:#fbf9f5;border-radius:0 4px 4px 0}"
+    ".lineage-row.you{border-left-color:#1c5e1c;background:#eef5e7}"
+    ".lineage-row h3{margin:.1rem 0;font-size:.95rem}"
+    ".lineage-row ul{margin:.2rem 0 .2rem 1.2rem}"
+    ".lineage-row .muted{color:#71675d;font-size:.82rem}"
+    ".lineage-arrow{color:#a59b8c;text-align:center;font-size:.9rem;"
+    "padding:.1rem 0}"
+    "</style>"
+)
+
+
 def _render_lineage_card(
     lineage: dict | None, *, requested_pack: str = "",
 ) -> str:
@@ -1345,17 +1365,7 @@ def _render_lineage_card(
 
     blocks: list[str] = [
         "<section class='card'><h2>Lineage</h2>",
-        "<style>"
-        ".lineage-flow{display:flex;flex-direction:column;gap:.4rem}"
-        ".lineage-row{padding:.5rem .7rem;border-left:3px solid #c9bfae;"
-        "background:#fbf9f5;border-radius:0 4px 4px 0}"
-        ".lineage-row.you{border-left-color:#1c5e1c;background:#eef5e7}"
-        ".lineage-row h3{margin:.1rem 0;font-size:.95rem}"
-        ".lineage-row ul{margin:.2rem 0 .2rem 1.2rem}"
-        ".lineage-row .muted{color:#71675d;font-size:.82rem}"
-        ".lineage-arrow{color:#a59b8c;text-align:center;font-size:.9rem;"
-        "padding:.1rem 0}"
-        "</style>",
+        _LINEAGE_CARD_STYLE,
         "<div class='lineage-flow'>",
         f"<div class='lineage-row you'>{header}</div>",
     ]
@@ -4877,6 +4887,42 @@ def _render_pulse_fragment() -> str:
     )
 
 
+# Timeline / Lineage UI strings — pulled out for translation /
+# constant-vs-magic-number hygiene.  Body copy is intentionally
+# Chinese to match the rest of the maintainer surface.
+_TIMELINE_NEW_EVERGREENS_LABEL = "新增 evergreens"
+_TIMELINE_ERROR_SAMPLE_HEADING = "Errors / skips"
+# Cap the per-error row's ``subject`` rendering so a 2KB JSON dump
+# doesn't blow out the day card.  140 covers most "absorb_parse_error
+# on /Users/chris/.../<long-path>.md" cases without truncation.
+_TIMELINE_ERROR_SUBJECT_MAX_CHARS = 140
+
+# Day-card CSS pulled to a module-level constant so
+# ``_render_timeline_page`` doesn't ship a multi-line literal in the
+# middle of its body.  Inline rather than promoted to ``_layout`` —
+# the styles are scoped to one route, lifting them globally would
+# pollute every other page's CSS.
+_TIMELINE_DAY_CARD_STYLE = (
+    "<style>"
+    ".day-card{border:1px solid #ded6cd;border-radius:8px;"
+    "padding:1rem;margin-bottom:1.2rem;background:#fbf9f5}"
+    ".day-card h2{margin:0 0 .3rem 0;font-size:1.1rem}"
+    ".day-meta{color:#71675d;font-size:.85rem;margin-bottom:.7rem}"
+    ".event-grid{display:grid;grid-template-columns:repeat(auto-fit,"
+    "minmax(220px,1fr));gap:.4rem;margin-bottom:.7rem}"
+    ".event-grid .pill{background:#ede7df;padding:.18rem .55rem;"
+    "border-radius:4px;font-size:.85rem}"
+    ".event-grid .pill.error{background:#f5d7d4;color:#761b15}"
+    ".event-grid .pill.highlight{background:#dde9d3;color:#2c5316}"
+    ".samples{margin:.4rem 0}"
+    ".samples h3{font-size:.95rem;margin:.4rem 0 .2rem 0}"
+    ".samples ul{margin:.1rem 0 .4rem 1.2rem}"
+    ".errors li{color:#761b15;font-family:ui-monospace,monospace;"
+    "font-size:.8rem;margin-bottom:.2rem}"
+    "</style>"
+)
+
+
 def _render_timeline_page(payload: dict) -> str:
     """Daily digest of audit events.
 
@@ -4912,30 +4958,7 @@ def _render_timeline_page(payload: dict) -> str:
         )
         return _layout("Timeline", body, requested_pack=requested_pack)
 
-    highlighted = set(payload.get("highlighted_types") or [])
-
-    # CSS for compact day cards.
-    style = (
-        "<style>"
-        ".day-card{border:1px solid #ded6cd;border-radius:8px;"
-        "padding:1rem;margin-bottom:1.2rem;background:#fbf9f5}"
-        ".day-card h2{margin:0 0 .3rem 0;font-size:1.1rem}"
-        ".day-meta{color:#71675d;font-size:.85rem;margin-bottom:.7rem}"
-        ".event-grid{display:grid;grid-template-columns:repeat(auto-fit,"
-        "minmax(220px,1fr));gap:.4rem;margin-bottom:.7rem}"
-        ".event-grid .pill{background:#ede7df;padding:.18rem .55rem;"
-        "border-radius:4px;font-size:.85rem}"
-        ".event-grid .pill.error{background:#f5d7d4;color:#761b15}"
-        ".event-grid .pill.highlight{background:#dde9d3;color:#2c5316}"
-        ".samples{margin:.4rem 0}"
-        ".samples h3{font-size:.95rem;margin:.4rem 0 .2rem 0}"
-        ".samples ul{margin:.1rem 0 .4rem 1.2rem}"
-        ".errors li{color:#761b15;font-family:ui-monospace,monospace;"
-        "font-size:.8rem;margin-bottom:.2rem}"
-        "</style>"
-    )
-
-    sections: list[str] = [style]
+    sections: list[str] = [_TIMELINE_DAY_CARD_STYLE]
     sections.append(
         f"<p class='muted'>Showing the last {window} days of "
         f"<code>audit_events</code>.  {len(days)} day(s) with activity.</p>"
@@ -4981,7 +5004,7 @@ def _render_timeline_page(payload: dict) -> str:
                 for s in samples
             )
             samples_html = (
-                f"<div class='samples'><h3>新增 evergreens "
+                f"<div class='samples'><h3>{_TIMELINE_NEW_EVERGREENS_LABEL} "
                 f"(sample {len(samples)} of {by_type.get('evergreen_auto_promoted', 0)})</h3>"
                 f"<ul>{items}</ul></div>"
             )
@@ -4991,12 +5014,14 @@ def _render_timeline_page(payload: dict) -> str:
             items = "".join(
                 "<li>[{type}] <strong>{subject}</strong></li>".format(
                     type=escape(str(e.get("event_type", ""))),
-                    subject=escape(str(e.get("subject", ""))[:140]),
+                    subject=escape(
+                        str(e.get("subject", ""))[:_TIMELINE_ERROR_SUBJECT_MAX_CHARS]
+                    ),
                 )
                 for e in errors
             )
             errors_html = (
-                f"<div class='samples errors'><h3>Errors / skips "
+                f"<div class='samples errors'><h3>{_TIMELINE_ERROR_SAMPLE_HEADING} "
                 f"(sample {len(errors)})</h3><ul>{items}</ul></div>"
             )
 

@@ -81,6 +81,24 @@ TIMELINE_HIGHLIGHTED_TYPES = (
     "community_crystal_synthesized",
     "contradiction_crystal_synthesized",
 )
+# Subset of the highlighted types that the renderer pulls into the
+# per-day "errors / skips" sample list.  These are the failure modes
+# the maintainer most often opens the dashboard to chase down.
+TIMELINE_ERROR_EVENT_TYPES = (
+    "absorb_parse_error",
+    "absorb_schema_drift",
+    "absorb_skipped_source",
+    "broken_link",
+    "github_intake_error",
+)
+# Trim error-row payload snippets so the dashboard doesn't dump
+# multi-KB JSON dumps onto the page.  200 chars is enough to see the
+# error class + filename without burying the rest of the day card.
+TIMELINE_SNIPPET_CHARS = 200
+# Cap on sibling-evergreen count returned by ``_compute_v2_lineage``
+# so a popular raw source (one that produced 20+ units) doesn't
+# render a wall of links on every per-evergreen lineage card.
+LINEAGE_SIBLING_EVERGREEN_LIMIT = 50
 DEFAULT_TRACEABILITY_BROWSER_LIMIT = 15
 DEFAULT_GRAPH_MAP_LIMIT = 24
 # BL-051: cap each cluster at 3 members in the visual map (~96 nodes
@@ -2908,26 +2926,23 @@ def build_timeline_payload(
 
         # Error / skip events get their own short list — these are
         # the things the maintainer most often opens the dashboard
-        # to chase down.
-        error_types = (
-            "absorb_parse_error", "absorb_schema_drift",
-            "absorb_skipped_source", "broken_link",
-            "github_intake_error",
-        )
-        placeholders = ",".join("?" for _ in error_types)
+        # to chase down.  Types live in ``TIMELINE_ERROR_EVENT_TYPES``
+        # so the SQL ``IN`` clause stays in sync with downstream
+        # consumers (e.g. the renderer's "error" pill colouring).
+        placeholders = ",".join("?" for _ in TIMELINE_ERROR_EVENT_TYPES)
         error_rows = conn.execute(
             f"""
             SELECT date(timestamp) AS day, event_type,
                    COALESCE(json_extract(payload_json, '$.source'),
                             json_extract(payload_json, '$.slug'),
                             slug) AS subject,
-                   substr(payload_json, 1, 200) AS snippet
+                   substr(payload_json, 1, {TIMELINE_SNIPPET_CHARS}) AS snippet
               FROM audit_events
              WHERE event_type IN ({placeholders})
                AND date(timestamp) >= ?
              ORDER BY timestamp DESC
             """,
-            (*error_types, cutoff),
+            (*TIMELINE_ERROR_EVENT_TYPES, cutoff),
         ).fetchall()
         for day, event_type, subject, snippet in error_rows:
             if not day:
@@ -5079,25 +5094,61 @@ def _compute_v2_lineage(
 
     with sqlite3.connect(db_path) as conn:
         if raw_stem:
-            # Find all evergreens whose ``## Source`` block links back
-            # to this raw stem.  ``pages_index.body`` is exactly the
-            # markdown body so a ``LIKE`` against the wikilink token
-            # works even before BL-058b adds a typed ``source_stem``
-            # column.  Limit pulls keep the payload bounded for raw
-            # sources that produced 10+ units (the AGI / crewAI cases).
+            # First-choice strategy: query the indexed ``page_links``
+            # table where each row is one resolved wikilink.  Cheap
+            # JOIN, scales linearly with the in-degree of the target.
             try:
                 rows = conn.execute(
                     """
-                    SELECT slug, title FROM pages_index
-                     WHERE note_type = 'evergreen'
-                       AND body LIKE ?
-                     ORDER BY slug
-                     LIMIT 50
+                    SELECT pi.slug, pi.title
+                      FROM page_links pl
+                      JOIN pages_index pi ON pi.slug = pl.source_slug
+                     WHERE pi.note_type = 'evergreen'
+                       AND (pl.target_slug = ? OR pl.target_raw = ?)
+                     ORDER BY pi.slug
+                     LIMIT ?
                     """,
-                    (f"%[[{raw_stem}]]%",),
+                    (raw_stem, raw_stem, LINEAGE_SIBLING_EVERGREEN_LIMIT),
                 ).fetchall()
             except sqlite3.OperationalError:
                 rows = []
+            # Fallback: ``page_links`` only stores rows whose target
+            # was resolvable to a slug already in ``pages_index``.  The
+            # file scanner (knowledge_index.py:1062) drops unresolved
+            # wikilinks entirely — and raw intake sources in
+            # ``50-Inbox/03-Processed`` are NOT scanned into
+            # ``pages_index`` (only Evergreen / Atlas / 20-Areas are),
+            # so the ``## Source`` link to a raw-source basename like
+            # ``2026-04-28_neuphonic_neutts`` produces zero
+            # ``page_links`` rows.  The body-LIKE scan below recovers
+            # those cases.  Once BL-058b adds a typed ``source_stem``
+            # column to ``pages_index`` (or a typed ``source_path``
+            # field to evergreen frontmatter that knowledge_index
+            # surfaces), this fallback can be removed.
+            if not rows:
+                # ``ESCAPE`` lets the LIKE pattern carry literal ``%``
+                # / ``_`` / ``\`` characters in raw stems without false
+                # positives.  Trigram-FTS would be faster but
+                # ``page_fts`` strips brackets when tokenising so
+                # phrase-matching ``[[<stem>]]`` doesn't beat LIKE.
+                escaped = (
+                    raw_stem.replace("\\", "\\\\")
+                            .replace("%", "\\%")
+                            .replace("_", "\\_")
+                )
+                try:
+                    rows = conn.execute(
+                        """
+                        SELECT slug, title FROM pages_index
+                         WHERE note_type = 'evergreen'
+                           AND body LIKE ? ESCAPE '\\'
+                         ORDER BY slug
+                         LIMIT ?
+                        """,
+                        (f"%[[{escaped}]]%", LINEAGE_SIBLING_EVERGREEN_LIMIT),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    rows = []
             for slug, title in rows:
                 sibling_evergreens.append({
                     "slug": str(slug),
