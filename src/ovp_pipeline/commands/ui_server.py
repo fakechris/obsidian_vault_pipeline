@@ -42,6 +42,7 @@ from ..ui.view_models import (
     build_search_payload,
     build_signal_browser_payload,
     build_stale_summary_browser_payload,
+    build_timeline_payload,
     build_topic_overview_payload,
 )
 from ..truth_api import (
@@ -95,6 +96,7 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_production_browser_page,
     _render_pulse_fragment,
     _render_pulse_page,
+    _render_timeline_page,
     _render_reuse_report_fragment,
     _render_run_history_card,
     _render_runtime_card,
@@ -935,6 +937,18 @@ def create_server(
                     self._write_html(
                         _render_workbench_page(object_id=object_id, requested_pack=pack_name)
                     )
+                    return
+                if path in ("/ops/timeline", "/api/timeline"):
+                    pack_name = query.get("pack", [""])[0] or None
+                    raw_days = query.get("days", [""])[0]
+                    days = int(raw_days) if raw_days.isdigit() else None
+                    payload = build_timeline_payload(
+                        resolved_vault, pack_name=pack_name, days=days,
+                    )
+                    if path == "/api/timeline":
+                        self._write_json(payload)
+                    else:
+                        self._write_html(_render_timeline_page(payload))
                     return
                 if path == "/ops/pulse":
                     self._write_html(_render_pulse_page())

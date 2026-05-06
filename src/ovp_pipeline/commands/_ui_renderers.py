@@ -126,17 +126,35 @@ def _reader_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
 
 
 def _ops_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
-    """Maintainer shell nav.  Each item is a real landing page; the
-    dashboard at ``/ops`` aggregates the long tail of fragments
-    (candidates / actions queue / runtime cards) so they don't need
-    their own top-level link yet."""
-    return [
+    """Maintainer shell nav.
+
+    The BL-050 nav opened at five items (Overview / Contradictions /
+    Signals / Pulse / Audit) but the maintainer surface ships a
+    dozen+ landing pages — every other surface was reachable only by
+    typing the URL.  The expanded list here surfaces the day-to-day
+    paths a reviewer hits ("what changed today", "review pending
+    candidates", "browse the canonical evergreens"), and keeps the
+    research-only entries (clusters, deep-dives, production) gated
+    on ``_shell_supports_research_nav`` so a non-research pack
+    doesn't see broken links.
+    """
+    items: list[tuple[str, str]] = [
         ("Overview", "/ops"),
-        ("Contradictions", "/ops/contradictions"),
-        ("Signals", "/ops/signals"),
+        ("Timeline", "/ops/timeline"),
         ("Pulse", "/ops/pulse"),
         ("Audit", "/ops/events"),
+        ("Evergreens", "/ops/objects"),
+        ("Candidates", "/ops/candidates"),
+        ("Actions", "/ops/actions"),
+        ("Contradictions", "/ops/contradictions"),
+        ("Signals", "/ops/signals"),
     ]
+    if _shell_supports_research_nav(requested_pack):
+        items.extend([
+            ("Clusters", "/ops/clusters"),
+            ("Deep-dives", "/ops/deep-dives"),
+        ])
+    return items
 
 
 # Kept as a thin alias so existing renderers that import the symbol
@@ -1265,6 +1283,10 @@ def _render_note_page(
         f'<a href="{escape(str(item["href"]))}">{escape(str(item["label"]))}</a>'
         for item in section_nav_items
     )
+    lineage_html = _render_lineage_card(
+        payload.get("lineage") if payload else None,
+        requested_pack=requested_pack,
+    )
     operator_rail_card = _render_operator_rail(payload or {})
     return _layout(
         f"Markdown Note: {relative_path}",
@@ -1277,6 +1299,7 @@ def _render_note_page(
             + operator_rail_card
             + (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "")
             + f"{frontmatter_html}"
+            + f"{lineage_html}"
             + f"{provenance_html}"
             + f"{production_chain_html}"
             + f"{_render_compiled_sections(remaining_sections)}"
@@ -1284,6 +1307,167 @@ def _render_note_page(
         ),
         requested_pack=requested_pack,
     )
+
+
+# Lineage-card CSS pulled to a module-level constant so the
+# render function doesn't ship a multi-line literal in the middle
+# of its body.  Scope is intentionally local — promoting these
+# styles to ``_layout`` would make them load on every page even
+# when the lineage card isn't rendered.
+_LINEAGE_CARD_STYLE = (
+    "<style>"
+    ".lineage-flow{display:flex;flex-direction:column;gap:.4rem}"
+    ".lineage-row{padding:.5rem .7rem;border-left:3px solid #c9bfae;"
+    "background:#fbf9f5;border-radius:0 4px 4px 0}"
+    ".lineage-row.you{border-left-color:#1c5e1c;background:#eef5e7}"
+    ".lineage-row h3{margin:.1rem 0;font-size:.95rem}"
+    ".lineage-row ul{margin:.2rem 0 .2rem 1.2rem}"
+    ".lineage-row .muted{color:#71675d;font-size:.82rem}"
+    ".lineage-arrow{color:#a59b8c;text-align:center;font-size:.9rem;"
+    "padding:.1rem 0}"
+    "</style>"
+)
+
+
+def _render_lineage_card(
+    lineage: dict | None, *, requested_pack: str = "",
+) -> str:
+    """Render the BL-058 raw-source ↔ evergreens ↔ crystals chain.
+
+    Returns ``""`` when ``lineage`` is ``None`` (note isn't an
+    evergreen or 03-Processed source) so the surrounding template
+    can interpolate it without a conditional.
+
+    Visual model — single vertical card with three or four arrows
+    depending on direction:
+
+      Raw source  →  N evergreens  →  M clusters  →  K crystals
+
+    The arrow blocks each link to a real surface so the operator
+    can drill down without copy-pasting paths.
+    """
+    if not lineage:
+        return ""
+
+    raw = lineage.get("raw_source")
+    evergreens = lineage.get("evergreens") or []
+    clusters = lineage.get("clusters") or []
+    crystals = lineage.get("crystals") or []
+    kind = str(lineage.get("kind") or "")
+
+    # Top "current node" indicator — different copy depending on
+    # whether the user is looking at the source or one of the
+    # downstream evergreens.
+    if kind == "raw_source":
+        header = "<strong>You are here:</strong> raw source intake"
+    else:
+        header = "<strong>You are here:</strong> evergreen"
+
+    blocks: list[str] = [
+        "<section class='card'><h2>Lineage</h2>",
+        _LINEAGE_CARD_STYLE,
+        "<div class='lineage-flow'>",
+        f"<div class='lineage-row you'>{header}</div>",
+    ]
+
+    # ── Raw source row ─────────────────────────────────────────
+    if raw:
+        path = escape(str(raw.get("path") or ""))
+        slug = escape(str(raw.get("slug") or ""))
+        href = str(raw.get("note_href") or "")
+        link = (
+            f"<a href='{escape(href)}'>{slug}</a>" if href else slug
+        )
+        archived_note = (
+            "" if path
+            else " <span class='muted'>(archived — only stem available)</span>"
+        )
+        blocks.append("<div class='lineage-arrow'>↑ derived from</div>")
+        blocks.append(
+            "<div class='lineage-row'>"
+            "<h3>Raw source</h3>"
+            f"<div>{link}{archived_note}</div>"
+            f"<div class='muted'>{path}</div>"
+            "</div>"
+        )
+
+    # ── Evergreens row ─────────────────────────────────────────
+    if evergreens:
+        items = "".join(
+            "<li><a href='{href}'>{title}</a> "
+            "<span class='muted'><code>{slug}</code></span></li>".format(
+                href=escape(str(eg.get("note_href", ""))),
+                title=escape(str(eg.get("title", "(untitled)"))),
+                slug=escape(str(eg.get("slug", ""))),
+            )
+            for eg in evergreens
+        )
+        blocks.append(
+            "<div class='lineage-arrow'>"
+            f"↓ produced {len(evergreens)} evergreen(s)"
+            "</div>"
+            "<div class='lineage-row'>"
+            "<h3>Evergreens</h3>"
+            f"<ul>{items}</ul>"
+            "</div>"
+        )
+
+    # ── Clusters row ───────────────────────────────────────────
+    if clusters:
+        items = "".join(
+            "<li><a href='{href}'>{label}</a> "
+            "<span class='muted'>{n} members</span></li>".format(
+                href=escape(str(cl.get("crystal_note_href", "") or cl.get("cluster_href", ""))),
+                label=escape(str(cl.get("label", "(untitled)"))),
+                n=int(cl.get("member_count", 0)),
+            )
+            for cl in clusters
+        )
+        blocks.append(
+            "<div class='lineage-arrow'>"
+            f"↓ grouped into {len(clusters)} cluster(s)"
+            "</div>"
+            "<div class='lineage-row'>"
+            "<h3>Clusters (Louvain communities)</h3>"
+            f"<ul>{items}</ul>"
+            "</div>"
+        )
+
+    # ── Crystals row ───────────────────────────────────────────
+    if crystals:
+        items = "".join(
+            "<li><a href='{href}'>{label}</a> "
+            "<span class='muted'>[{kind}]</span></li>".format(
+                href=escape(str(cr.get("note_href", ""))),
+                label=escape(str(cr.get("label", "(untitled)"))),
+                kind=escape(str(cr.get("kind", ""))),
+            )
+            for cr in crystals
+        )
+        blocks.append(
+            "<div class='lineage-arrow'>"
+            f"↓ synthesized into {len(crystals)} crystal(s)"
+            "</div>"
+            "<div class='lineage-row'>"
+            "<h3>Crystals</h3>"
+            f"<ul>{items}</ul>"
+            "</div>"
+        )
+
+    # If only the "you are here" row exists (no upstream / downstream
+    # links) tell the user that explicitly so the empty card doesn't
+    # look broken.
+    has_chain = bool(raw or evergreens or clusters or crystals)
+    if not has_chain:
+        blocks.append(
+            "<div class='lineage-row muted'>"
+            "<em>No lineage links found yet — re-run "
+            "<code>ovp-knowledge-index</code> after absorb / synthesis.</em>"
+            "</div>"
+        )
+
+    blocks.append("</div></section>")
+    return "".join(blocks)
 
 
 def _render_search_page(payload: dict) -> str:
@@ -4701,6 +4885,158 @@ def _render_pulse_fragment() -> str:
         "})();</script>"
         "</section>"
     )
+
+
+# Timeline / Lineage UI strings — pulled out for translation /
+# constant-vs-magic-number hygiene.  Body copy is intentionally
+# Chinese to match the rest of the maintainer surface.
+_TIMELINE_NEW_EVERGREENS_LABEL = "新增 evergreens"
+_TIMELINE_ERROR_SAMPLE_HEADING = "Errors / skips"
+# Cap the per-error row's ``subject`` rendering so a 2KB JSON dump
+# doesn't blow out the day card.  140 covers most "absorb_parse_error
+# on /Users/chris/.../<long-path>.md" cases without truncation.
+_TIMELINE_ERROR_SUBJECT_MAX_CHARS = 140
+
+# Day-card CSS pulled to a module-level constant so
+# ``_render_timeline_page`` doesn't ship a multi-line literal in the
+# middle of its body.  Inline rather than promoted to ``_layout`` —
+# the styles are scoped to one route, lifting them globally would
+# pollute every other page's CSS.
+_TIMELINE_DAY_CARD_STYLE = (
+    "<style>"
+    ".day-card{border:1px solid #ded6cd;border-radius:8px;"
+    "padding:1rem;margin-bottom:1.2rem;background:#fbf9f5}"
+    ".day-card h2{margin:0 0 .3rem 0;font-size:1.1rem}"
+    ".day-meta{color:#71675d;font-size:.85rem;margin-bottom:.7rem}"
+    ".event-grid{display:grid;grid-template-columns:repeat(auto-fit,"
+    "minmax(220px,1fr));gap:.4rem;margin-bottom:.7rem}"
+    ".event-grid .pill{background:#ede7df;padding:.18rem .55rem;"
+    "border-radius:4px;font-size:.85rem}"
+    ".event-grid .pill.error{background:#f5d7d4;color:#761b15}"
+    ".event-grid .pill.highlight{background:#dde9d3;color:#2c5316}"
+    ".samples{margin:.4rem 0}"
+    ".samples h3{font-size:.95rem;margin:.4rem 0 .2rem 0}"
+    ".samples ul{margin:.1rem 0 .4rem 1.2rem}"
+    ".errors li{color:#761b15;font-family:ui-monospace,monospace;"
+    "font-size:.8rem;margin-bottom:.2rem}"
+    "</style>"
+)
+
+
+def _render_timeline_page(payload: dict) -> str:
+    """Daily digest of audit events.
+
+    Sister to ``/ops/pulse`` (live tail) and ``/ops/events``
+    (object-keyed dossier).  Pulse shows what's happening now;
+    Events lets you drill down per object; Timeline answers the
+    operator's day-to-day "what got created / went wrong today
+    or yesterday" question without making them grep
+    ``60-Logs/pipeline.jsonl`` themselves.
+    """
+    requested_pack = str(payload.get("requested_pack") or "")
+    window = int(payload.get("window_days") or 14)
+    days = payload.get("days") or []
+
+    if not payload.get("available", True):
+        body = (
+            "<section class='card'>"
+            "<h2>Timeline unavailable</h2>"
+            f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
+            "<p>Run <code>ovp-knowledge-index</code> to populate "
+            "<code>audit_events</code>.</p>"
+            "</section>"
+        )
+        return _layout("Timeline", body, requested_pack=requested_pack)
+
+    if not days:
+        body = (
+            "<section class='card'>"
+            f"<h2>No events in the last {window} days</h2>"
+            "<p class='muted'>The pipeline hasn't run in this window — "
+            "check <code>60-Logs/pipeline.jsonl</code> for last activity.</p>"
+            "</section>"
+        )
+        return _layout("Timeline", body, requested_pack=requested_pack)
+
+    sections: list[str] = [_TIMELINE_DAY_CARD_STYLE]
+    sections.append(
+        f"<p class='muted'>Showing the last {window} days of "
+        f"<code>audit_events</code>.  {len(days)} day(s) with activity.</p>"
+    )
+    for day in days:
+        date = escape(str(day.get("date", "")))
+        total = int(day.get("total", 0))
+        by_type = day.get("by_type") or {}
+        samples = day.get("samples") or []
+        errors = day.get("errors") or []
+
+        # Sort by-type counts: highlighted ones first (in their canonical
+        # order), then everything else by frequency.
+        ordered_pills: list[tuple[str, int, bool, bool]] = []
+        seen: set[str] = set()
+        for t in payload.get("highlighted_types") or []:
+            if t in by_type:
+                ordered_pills.append((t, by_type[t], True, "error" in t or "broken" in t))
+                seen.add(t)
+        for t, n in sorted(by_type.items(), key=lambda x: -x[1]):
+            if t in seen:
+                continue
+            ordered_pills.append((t, n, False, False))
+
+        pills_html = "".join(
+            "<span class='pill {cls}'>{type}: <strong>{n}</strong></span>".format(
+                cls=("error" if is_error else ("highlight" if is_highlight else "")),
+                type=escape(t),
+                n=n,
+            )
+            for t, n, is_highlight, is_error in ordered_pills
+        )
+
+        samples_html = ""
+        if samples:
+            items = "".join(
+                "<li><a href='{href}'>{title}</a> <span class='muted'>"
+                "<code>{slug}</code></span></li>".format(
+                    href=escape(str(s.get("note_href", ""))),
+                    title=escape(str(s.get("title", "(untitled)"))),
+                    slug=escape(str(s.get("slug", ""))),
+                )
+                for s in samples
+            )
+            samples_html = (
+                f"<div class='samples'><h3>{_TIMELINE_NEW_EVERGREENS_LABEL} "
+                f"(sample {len(samples)} of {by_type.get('evergreen_auto_promoted', 0)})</h3>"
+                f"<ul>{items}</ul></div>"
+            )
+
+        errors_html = ""
+        if errors:
+            items = "".join(
+                "<li>[{type}] <strong>{subject}</strong></li>".format(
+                    type=escape(str(e.get("event_type", ""))),
+                    subject=escape(
+                        str(e.get("subject", ""))[:_TIMELINE_ERROR_SUBJECT_MAX_CHARS]
+                    ),
+                )
+                for e in errors
+            )
+            errors_html = (
+                f"<div class='samples errors'><h3>{_TIMELINE_ERROR_SAMPLE_HEADING} "
+                f"(sample {len(errors)})</h3><ul>{items}</ul></div>"
+            )
+
+        sections.append(
+            "<section class='day-card'>"
+            f"<h2>{date}</h2>"
+            f"<div class='day-meta'>{total} events</div>"
+            f"<div class='event-grid'>{pills_html}</div>"
+            f"{samples_html}"
+            f"{errors_html}"
+            "</section>"
+        )
+
+    body = "".join(sections)
+    return _layout("Timeline", body, requested_pack=requested_pack)
 
 
 def _render_pulse_page() -> str:

@@ -63,6 +63,42 @@ from ..truth_api import (
 
 DEFAULT_CANDIDATE_BROWSER_LIMIT = 25
 DEFAULT_EVENT_DOSSIER_LIMIT = 25
+DEFAULT_TIMELINE_DAYS = 14
+DEFAULT_TIMELINE_SAMPLE_SIZE = 6
+# Audit event types that the operator-facing timeline highlights
+# above the long-tail ``by_type`` histogram.  Order matters: the
+# renderer prints these blocks top-to-bottom so a quick "new
+# evergreens / errors / sources processed" scan reads naturally.
+TIMELINE_HIGHLIGHTED_TYPES = (
+    "evergreen_auto_promoted",
+    "github_intake_completed",
+    "article_processed",
+    "absorb_skipped_source",
+    "absorb_parse_error",
+    "absorb_schema_drift",
+    "github_intake_error",
+    "broken_link",
+    "community_crystal_synthesized",
+    "contradiction_crystal_synthesized",
+)
+# Subset of the highlighted types that the renderer pulls into the
+# per-day "errors / skips" sample list.  These are the failure modes
+# the maintainer most often opens the dashboard to chase down.
+TIMELINE_ERROR_EVENT_TYPES = (
+    "absorb_parse_error",
+    "absorb_schema_drift",
+    "absorb_skipped_source",
+    "broken_link",
+    "github_intake_error",
+)
+# Trim error-row payload snippets so the dashboard doesn't dump
+# multi-KB JSON dumps onto the page.  200 chars is enough to see the
+# error class + filename without burying the rest of the day card.
+TIMELINE_SNIPPET_CHARS = 200
+# Cap on sibling-evergreen count returned by ``_compute_v2_lineage``
+# so a popular raw source (one that produced 20+ units) doesn't
+# render a wall of links on every per-evergreen lineage card.
+LINEAGE_SIBLING_EVERGREEN_LIMIT = 50
 DEFAULT_TRACEABILITY_BROWSER_LIMIT = 15
 DEFAULT_GRAPH_MAP_LIMIT = 24
 # BL-051: cap each cluster at 3 members in the visual map (~96 nodes
@@ -2795,6 +2831,146 @@ def build_topic_overview_payload(
     return payload
 
 
+def build_timeline_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    days: int | None = None,
+) -> dict[str, Any]:
+    """Daily digest of ``audit_events`` for the maintainer dashboard.
+
+    Pre-fix the maintainer side had ``/ops/pulse`` (live tail) and
+    ``/ops/events`` (object-keyed dossier) but no "what got created
+    today / yesterday / last week" view.  This payload groups the
+    last ``days`` days of audit events by date, surfaces the highest-
+    signal event types per day (new evergreens, github intake,
+    absorb errors, crystal synthesis), and samples a handful of
+    affected slugs so the user can click straight through to a
+    specific note from the dashboard.
+
+    Returns ``{"days": [{date, total, by_type: {...},
+    samples: [{slug, title, path}], errors: [{type, slug, snippet}]}]}``
+    in reverse-chronological order.
+    """
+    from datetime import datetime, timedelta, timezone
+    requested_pack = pack_name or ""
+    window = max(1, days if days is not None else DEFAULT_TIMELINE_DAYS)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=window)).strftime("%Y-%m-%d")
+
+    db_path = _db_path(vault_dir)
+    if not db_path.exists():
+        return {
+            "screen": "ops/timeline",
+            "requested_pack": requested_pack,
+            "window_days": window,
+            "days": [],
+            "available": False,
+            "reason": "knowledge_index has not been built yet",
+        }
+
+    days_map: dict[str, dict[str, Any]] = {}
+    with sqlite3.connect(db_path) as conn:
+        # Per-day, per-type counts.  ``date()`` rolls a UTC ISO
+        # timestamp into ``YYYY-MM-DD`` — the same key the renderer
+        # uses to header each section.
+        rows = conn.execute(
+            """
+            SELECT date(timestamp) AS day, event_type, COUNT(*) AS n
+              FROM audit_events
+             WHERE date(timestamp) >= ?
+             GROUP BY day, event_type
+            """,
+            (cutoff,),
+        ).fetchall()
+        for day, event_type, count in rows:
+            if not day:
+                continue
+            bucket = days_map.setdefault(day, {
+                "date": day, "total": 0, "by_type": {},
+                "samples": [], "errors": [],
+            })
+            bucket["by_type"][event_type] = int(count)
+            bucket["total"] += int(count)
+
+        # Sample evergreens promoted today/yesterday/etc — give the
+        # user a clickable list rather than a bare count.
+        sample_rows = conn.execute(
+            """
+            SELECT date(timestamp) AS day,
+                   json_extract(payload_json, '$.slug') AS slug,
+                   json_extract(payload_json, '$.title') AS title
+              FROM audit_events
+             WHERE event_type = 'evergreen_auto_promoted'
+               AND date(timestamp) >= ?
+             ORDER BY timestamp DESC
+            """,
+            (cutoff,),
+        ).fetchall()
+        for day, slug, title in sample_rows:
+            if not day or not slug:
+                continue
+            bucket = days_map.get(day)
+            if bucket is None:
+                continue
+            if len(bucket["samples"]) >= DEFAULT_TIMELINE_SAMPLE_SIZE:
+                continue
+            note_path = f"10-Knowledge/Evergreen/{slug}.md"
+            bucket["samples"].append({
+                "slug": str(slug),
+                "title": str(title or slug),
+                "note_href": _scoped_path(
+                    f"/note?path={quote(note_path, safe='')}",
+                    pack_name=requested_pack,
+                ),
+            })
+
+        # Error / skip events get their own short list — these are
+        # the things the maintainer most often opens the dashboard
+        # to chase down.  Types live in ``TIMELINE_ERROR_EVENT_TYPES``
+        # so the SQL ``IN`` clause stays in sync with downstream
+        # consumers (e.g. the renderer's "error" pill colouring).
+        placeholders = ",".join("?" for _ in TIMELINE_ERROR_EVENT_TYPES)
+        error_rows = conn.execute(
+            f"""
+            SELECT date(timestamp) AS day, event_type,
+                   COALESCE(json_extract(payload_json, '$.source'),
+                            json_extract(payload_json, '$.slug'),
+                            slug) AS subject,
+                   substr(payload_json, 1, {TIMELINE_SNIPPET_CHARS}) AS snippet
+              FROM audit_events
+             WHERE event_type IN ({placeholders})
+               AND date(timestamp) >= ?
+             ORDER BY timestamp DESC
+            """,
+            (*TIMELINE_ERROR_EVENT_TYPES, cutoff),
+        ).fetchall()
+        for day, event_type, subject, snippet in error_rows:
+            if not day:
+                continue
+            bucket = days_map.get(day)
+            if bucket is None:
+                continue
+            if len(bucket["errors"]) >= DEFAULT_TIMELINE_SAMPLE_SIZE:
+                continue
+            bucket["errors"].append({
+                "event_type": str(event_type),
+                "subject": str(subject or "(unspecified)"),
+                "snippet": str(snippet or ""),
+            })
+
+    days_sorted = sorted(
+        days_map.values(), key=lambda d: d["date"], reverse=True,
+    )
+    return {
+        "screen": "ops/timeline",
+        "requested_pack": requested_pack,
+        "window_days": window,
+        "days": days_sorted,
+        "available": True,
+        "highlighted_types": list(TIMELINE_HIGHLIGHTED_TYPES),
+    }
+
+
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -4834,6 +5010,292 @@ def build_search_payload(
     }
 
 
+def _compute_v2_lineage(
+    vault_dir: Path | str,
+    note_path: str,
+    requested_pack: str,
+) -> dict[str, Any] | None:
+    """Compute the BL-058 raw-source ↔ evergreens ↔ crystals chain
+    for the note at ``note_path``.
+
+    Pre-fix the only lineage signal was ``production_chain`` (the
+    legacy deep-dive era data flow).  v2 evergreens come from raw
+    GitHub/article sources in ``50-Inbox/03-Processed`` rather than
+    deep-dives, so the operator had no UI to answer "which raw
+    source did this evergreen come from?" or "which evergreens
+    came from this raw source?".  This payload fills that gap.
+
+    Returns ``None`` when the note isn't an evergreen or a raw
+    intake source — the caller suppresses the card in that case
+    so non-applicable notes (MOCs, atlas pages, …) don't render
+    an empty section.
+
+    Shape::
+
+        {
+          "kind": "evergreen" | "raw_source",
+          "raw_source": {"slug", "path", "note_href"} | None,
+          "evergreens": [{slug, title, note_href}, ...],
+          "clusters": [{cluster_id, label, member_count, cluster_href}, ...],
+          "crystals": [{kind, crystal_id, label, note_href}, ...],
+        }
+    """
+    rel = str(note_path).replace("\\", "/").lstrip("./")
+    is_evergreen = rel.startswith("10-Knowledge/Evergreen/") and rel.endswith(".md")
+    is_raw_source = rel.startswith("50-Inbox/03-Processed/") and rel.endswith(".md")
+    if not (is_evergreen or is_raw_source):
+        return None
+
+    vault_root = Path(vault_dir).resolve()
+    abs_path = vault_root / rel
+    if not abs_path.exists():
+        return None
+
+    db_path = _db_path(vault_dir)
+    if not db_path.exists():
+        return None
+
+    raw_stem: str | None = None
+    target_evergreen_slugs: list[str] = []
+
+    if is_evergreen:
+        # Parse the body's ``## Source`` block to find the raw source
+        # wikilink.  Frontmatter doesn't yet carry a ``source_path``
+        # field for v2 evergreens (BL-058 deferred that to BL-058b),
+        # so the wikilink in the rendered body is the only durable
+        # back-reference we can rely on without a schema migration.
+        try:
+            text = abs_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        m = re.search(
+            r"##\s*Source\s*\n+\s*-\s*\[\[([^\]]+)\]\]",
+            text, flags=re.MULTILINE,
+        )
+        if m:
+            raw_stem = m.group(1).strip()
+        else:
+            # Older v1 evergreens: scan body for any wikilink targeting
+            # the 03-Processed area (less reliable but keeps the lineage
+            # card useful for legacy notes too).
+            m = re.search(r"\[\[([^\]]*?(?:_深度解读|github|article))\]\]", text)
+            if m:
+                raw_stem = m.group(1).strip()
+        own_slug = abs_path.stem
+        if own_slug:
+            target_evergreen_slugs.append(own_slug)
+    else:
+        # Raw source — ``raw_stem`` is the file's basename without ``.md``.
+        raw_stem = abs_path.stem
+
+    sibling_evergreens: list[dict[str, str]] = []
+    clusters: list[dict[str, Any]] = []
+    crystals: list[dict[str, Any]] = []
+
+    with sqlite3.connect(db_path) as conn:
+        if raw_stem:
+            # First-choice strategy: query the indexed ``page_links``
+            # table where each row is one resolved wikilink.  Cheap
+            # JOIN, scales linearly with the in-degree of the target.
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT pi.slug, pi.title
+                      FROM page_links pl
+                      JOIN pages_index pi ON pi.slug = pl.source_slug
+                     WHERE pi.note_type = 'evergreen'
+                       AND (pl.target_slug = ? OR pl.target_raw = ?)
+                     ORDER BY pi.slug
+                     LIMIT ?
+                    """,
+                    (raw_stem, raw_stem, LINEAGE_SIBLING_EVERGREEN_LIMIT),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            # Fallback: ``page_links`` only stores rows whose target
+            # was resolvable to a slug already in ``pages_index``.  The
+            # file scanner (knowledge_index.py:1062) drops unresolved
+            # wikilinks entirely — and raw intake sources in
+            # ``50-Inbox/03-Processed`` are NOT scanned into
+            # ``pages_index`` (only Evergreen / Atlas / 20-Areas are),
+            # so the ``## Source`` link to a raw-source basename like
+            # ``2026-04-28_neuphonic_neutts`` produces zero
+            # ``page_links`` rows.  The body-LIKE scan below recovers
+            # those cases.  Once BL-058b adds a typed ``source_stem``
+            # column to ``pages_index`` (or a typed ``source_path``
+            # field to evergreen frontmatter that knowledge_index
+            # surfaces), this fallback can be removed.
+            if not rows:
+                # ``ESCAPE`` lets the LIKE pattern carry literal ``%``
+                # / ``_`` / ``\`` characters in raw stems without false
+                # positives.  Trigram-FTS would be faster but
+                # ``page_fts`` strips brackets when tokenising so
+                # phrase-matching ``[[<stem>]]`` doesn't beat LIKE.
+                escaped = (
+                    raw_stem.replace("\\", "\\\\")
+                            .replace("%", "\\%")
+                            .replace("_", "\\_")
+                )
+                try:
+                    rows = conn.execute(
+                        """
+                        SELECT slug, title FROM pages_index
+                         WHERE note_type = 'evergreen'
+                           AND body LIKE ? ESCAPE '\\'
+                         ORDER BY slug
+                         LIMIT ?
+                        """,
+                        (f"%[[{escaped}]]%", LINEAGE_SIBLING_EVERGREEN_LIMIT),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    rows = []
+            for slug, title in rows:
+                sibling_evergreens.append({
+                    "slug": str(slug),
+                    "title": str(title or slug),
+                    "note_href": _scoped_path(
+                        f"/note?path={quote(f'10-Knowledge/Evergreen/{slug}.md', safe='')}",
+                        pack_name=requested_pack,
+                    ),
+                })
+                if slug not in target_evergreen_slugs:
+                    target_evergreen_slugs.append(str(slug))
+
+        # Forward chain: clusters that contain any of our evergreen
+        # slugs.  ``member_object_ids_json`` is a JSON array of object
+        # ids that match the evergreen slug.
+        if target_evergreen_slugs:
+            try:
+                cluster_rows = conn.execute(
+                    """
+                    SELECT cluster_id, label, member_object_ids_json
+                      FROM graph_clusters
+                     WHERE cluster_kind = 'louvain_community'
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                cluster_rows = []
+            slug_set = set(target_evergreen_slugs)
+            for cluster_id, label, members_json in cluster_rows:
+                try:
+                    members = set(json.loads(members_json or "[]"))
+                except json.JSONDecodeError:
+                    continue
+                hit = members & slug_set
+                if not hit:
+                    continue
+                from ..synthesis._shared import crystal_safe_id
+                safe_id = crystal_safe_id("community", str(cluster_id))
+                clusters.append({
+                    "cluster_id": str(cluster_id),
+                    "label": str(label or "(untitled)"),
+                    "member_count": len(members),
+                    "matched": sorted(hit),
+                    "cluster_href": _scoped_path(
+                        f"/ops/cluster?id={quote(str(cluster_id), safe='')}",
+                        pack_name=requested_pack,
+                    ),
+                    "crystal_note_href": _scoped_path(
+                        f"/note?path=40-Resources/Crystals/{safe_id}.md",
+                        pack_name=requested_pack,
+                    ),
+                })
+
+            # Crystals — community first, contradictions second.
+            try:
+                crystal_rows = conn.execute(
+                    """
+                    SELECT cluster_id, source_evergreen_slugs_json
+                      FROM community_crystals
+                     WHERE superseded_by_synthesized_at = ''
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                crystal_rows = []
+            for cluster_id, slugs_json in crystal_rows:
+                try:
+                    slugs = set(json.loads(slugs_json or "[]"))
+                except json.JSONDecodeError:
+                    continue
+                if not (slugs & slug_set):
+                    continue
+                from ..synthesis._shared import crystal_safe_id
+                safe_id = crystal_safe_id("community", str(cluster_id))
+                crystals.append({
+                    "kind": "community_crystal",
+                    "crystal_id": str(cluster_id),
+                    "label": str(cluster_id),
+                    "note_href": _scoped_path(
+                        f"/note?path=40-Resources/Crystals/{safe_id}.md",
+                        pack_name=requested_pack,
+                    ),
+                })
+            try:
+                contra_rows = conn.execute(
+                    """
+                    SELECT contradiction_id, subject_key, source_object_ids_json
+                      FROM contradiction_crystals
+                     WHERE superseded_by_synthesized_at = ''
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                contra_rows = []
+            for contradiction_id, subject_key, source_ids_json in contra_rows:
+                try:
+                    sources = set(json.loads(source_ids_json or "[]"))
+                except json.JSONDecodeError:
+                    continue
+                if not (sources & slug_set):
+                    continue
+                from ..synthesis._shared import crystal_safe_id
+                safe_id = crystal_safe_id("contradiction", str(contradiction_id))
+                crystals.append({
+                    "kind": "contradiction_crystal",
+                    "crystal_id": str(contradiction_id),
+                    "label": str(subject_key or contradiction_id),
+                    "note_href": _scoped_path(
+                        f"/note?path=40-Resources/Crystals/{safe_id}.md",
+                        pack_name=requested_pack,
+                    ),
+                })
+
+    raw_source_info: dict[str, str] | None = None
+    if raw_stem:
+        # Locate the raw source file under 03-Processed.  The basename
+        # → path mapping is unambiguous because Phase A's output filenames
+        # are already disambiguated by ``<date>_<owner>_<repo>``.
+        candidates = list(
+            (vault_root / "50-Inbox" / "03-Processed").rglob(f"{raw_stem}.md")
+        )
+        if candidates:
+            rel_target = candidates[0].relative_to(vault_root)
+            raw_source_info = {
+                "slug": raw_stem,
+                "path": str(rel_target),
+                "note_href": _scoped_path(
+                    f"/note?path={quote(str(rel_target), safe='')}",
+                    pack_name=requested_pack,
+                ),
+            }
+        else:
+            # File may have been archived already (Phase A re-process
+            # moves the legacy deep-dive into 70-Archive).  Surface the
+            # stem so the user can grep for it.
+            raw_source_info = {
+                "slug": raw_stem,
+                "path": "",
+                "note_href": "",
+            }
+
+    return {
+        "kind": "evergreen" if is_evergreen else "raw_source",
+        "raw_source": raw_source_info,
+        "evergreens": sibling_evergreens,
+        "clusters": sorted(clusters, key=lambda c: -int(c.get("member_count", 0))),
+        "crystals": crystals,
+    }
+
+
 def build_note_page_payload(
     vault_dir: Path | str,
     *,
@@ -5005,6 +5467,12 @@ def build_note_page_payload(
         "provenance": provenance,
         "inbound_capture": inbound_capture,
         "production_chain": production_chain,
+        # BL-058 follow-up — raw source ↔ evergreens ↔ clusters ↔ crystals
+        # chain.  ``None`` for notes that aren't an evergreen or
+        # 03-Processed source so the renderer can suppress the card.
+        "lineage": _compute_v2_lineage(
+            vault_dir, note_path, requested_pack,
+        ),
         "operator_rail": [
             _operator_action(
                 "Production Browser",
