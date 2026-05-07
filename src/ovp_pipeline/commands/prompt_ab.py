@@ -43,7 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..llm_client import get_litellm_client
-from ..runtime import VaultLayout, resolve_vault_dir
+from ..runtime import VaultLayout, resolve_vault_dir, safe_json_for_script
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +175,13 @@ USER_TEMPLATE = """以下是源文 markdown(已去除 frontmatter)。请按你�
 """
 
 
+# Cap the body sent to the LLM so a runaway clipping (occasionally
+# hundreds of KB after Reader normalises a Substack post) can't blow
+# past the model's context window.  30 KB ≈ ~10k tokens which fits
+# comfortably under all production-tier providers.
+MAX_LLM_BODY_CHARS = 30000
+
+
 # ---------------------------------------------------------------------------
 # Source loading + body extraction
 # ---------------------------------------------------------------------------
@@ -255,7 +262,7 @@ def _call(llm_call, system: str, body: str) -> tuple[str, object]:
     exactly what the model emitted (including parse failures, which are
     themselves a quality signal).
     """
-    user = USER_TEMPLATE.format(body=body[:30000])  # cap to avoid context overflow
+    user = USER_TEMPLATE.format(body=body[:MAX_LLM_BODY_CHARS])
     try:
         raw = llm_call(system, user, 6000)
     except Exception as exc:
@@ -551,27 +558,11 @@ render(idx);
 """
 
 
-def _safe_json_for_script(obj: object) -> str:
-    """JSON-encode ``obj`` and escape chars that would break a literal
-    embed inside a ``<script>`` tag (mirrors the helper in
-    ``fidelity_sample.py``).
-    """
-    encoded = json.dumps(obj, ensure_ascii=False)
-    return (
-        encoded
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("&", "\\u0026")
-        .replace(" ", "\\u2028")
-        .replace(" ", "\\u2029")
-    )
-
-
 def _render_html(rows: list[dict], *, run_id: str) -> str:
     return (
         _HTML
         .replace("__RUN_ID__", run_id)
-        .replace("__DATA_JSON__", _safe_json_for_script(rows))
+        .replace("__DATA_JSON__", safe_json_for_script(rows))
     )
 
 
@@ -727,23 +718,18 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _extract_source_url(path: Path) -> str:
-    """Pull source_url / source from the file's frontmatter, if any."""
+    """Read ``path``'s frontmatter and return its canonical ``source:``
+    URL, if any.  Thin adapter over ``source_dedup.extract_source_url``
+    (the public helper that intake URL dedup also uses) so this CLI
+    can't drift from the field-recognition rules used by the rest of
+    the pipeline.
+    """
+    from ..source_dedup import extract_source_url, read_file_head
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        text = read_file_head(path)
+    except OSError:
         return ""
-    if not text.startswith("---"):
-        return ""
-    try:
-        end = text.index("---", 3)
-    except ValueError:
-        return ""
-    fm_text = text[3:end]
-    for line in fm_text.splitlines():
-        m = re.match(r"^\s*(?:source|source_url|url)\s*:\s*\"?([^\"]+)\"?\s*$", line)
-        if m and m.group(1).startswith(("http://", "https://")):
-            return m.group(1).strip()
-    return ""
+    return extract_source_url(text) or ""
 
 
 if __name__ == "__main__":

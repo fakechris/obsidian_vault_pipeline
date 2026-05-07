@@ -71,29 +71,7 @@ from urllib.parse import urlparse
 
 import yaml
 
-from ..runtime import VaultLayout, resolve_vault_dir
-
-
-def _safe_json_for_script(obj: object) -> str:
-    """JSON-encode ``obj`` and escape chars that would break a literal
-    embed inside a ``<script>`` tag.
-
-    A naive ``json.dumps`` lets a sample body containing the literal
-    sequence ``</script>`` close the surrounding tag, breaking the
-    page (and giving content-side script-injection vibes).  The
-    OWASP-blessed fix is to escape ``<``/``>``/``&`` plus the JSON
-    line separators ``U+2028``/``U+2029`` to ``\\uXXXX`` — the result
-    is still valid JSON AND safe inside ``<script>…</script>``.
-    """
-    encoded = json.dumps(obj, ensure_ascii=False)
-    return (
-        encoded
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("&", "\\u0026")
-        .replace(" ", "\\u2028")
-        .replace(" ", "\\u2029")
-    )
+from ..runtime import VaultLayout, resolve_vault_dir, safe_json_for_script
 
 
 SOURCE_CATEGORIES = ("twitter", "github", "paper", "blog", "commentary", "other")
@@ -184,13 +162,17 @@ def _raw_body(text: str) -> str:
 # question marks, exclamations.  Kept narrow so we don't shred URLs/code.
 _SENTENCE_SPLIT = re.compile(r"(?<=[。！？；])\s+|(?<=[.!?])\s+(?=[A-Z一-鿿])")
 
+# Minimum claim length.  Anything shorter is almost always a list-marker
+# fragment ("1.", "2.") or a partial split that hasn't reattached.
+MIN_SENTENCE_CHARS = 8
+
 
 def _split_sentences(text: str) -> list[str]:
     text = text.strip()
     if not text:
         return []
     parts = [p.strip() for p in _SENTENCE_SPLIT.split(text)]
-    return [p for p in parts if len(p) >= 8]
+    return [p for p in parts if len(p) >= MIN_SENTENCE_CHARS]
 
 
 def _extract_claims(body: str) -> list[dict]:
@@ -257,15 +239,28 @@ def _section_body(body: str, headings: tuple[str, ...]) -> str:
 # Raw-source segmentation
 # ---------------------------------------------------------------------------
 
+# Paragraphs longer than this get split by sentence so the reviewer
+# pane doesn't drown in walls of prose.
+PARAGRAPH_SOFT_MAX = 600
+
+# When re-joining sentences into segments, flush once we cross this
+# many chars.  Keeps segments roughly readable-per-glance.
+SEGMENT_BUFFER_TARGET = 400
+
+# Below this length, an ASCII-only paragraph is structural noise
+# (markdown-table rows, image-only stubs).  CJK paragraphs of the
+# same length usually carry actual content so they're kept.
+MIN_ASCII_PARAGRAPH_CHARS = 20
+
 
 def _split_raw_segments(raw_body: str) -> list[dict]:
     """Split raw source body into reviewer-readable segments.
 
     Strategy:
     - First split on blank-line paragraph boundaries (\n\n+).
-    - For very long paragraphs (> 600 chars), further split by sentence
-      so a reviewer scanning the right pane doesn't drown in 1500-char
-      walls of prose.
+    - For very long paragraphs (> ``PARAGRAPH_SOFT_MAX`` chars),
+      further split by sentence so a reviewer scanning the right
+      pane doesn't drown in 1500-char walls of prose.
 
     Each segment is keyed by sequential index so the UI can scroll-
     target it.
@@ -275,21 +270,20 @@ def _split_raw_segments(raw_body: str) -> list[dict]:
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", raw_body) if p.strip()]
     segments: list[dict] = []
     for para in paragraphs:
-        # Skip image-only or very short structural paragraphs
-        if len(para) < 20 and not re.search(r"[一-鿿]", para):
+        if len(para) < MIN_ASCII_PARAGRAPH_CHARS and not re.search(r"[一-鿿]", para):
             continue
-        if len(para) <= 600:
+        if len(para) <= PARAGRAPH_SOFT_MAX:
             segments.append({"text": para})
             continue
         # Split long paragraphs by sentence
         sentences = _split_sentences(para)
         if not sentences:
-            segments.append({"text": para[:600] + "…"})
+            segments.append({"text": para[:PARAGRAPH_SOFT_MAX] + "…"})
             continue
         buf: list[str] = []
         buf_len = 0
         for s in sentences:
-            if buf_len + len(s) > 400 and buf:
+            if buf_len + len(s) > SEGMENT_BUFFER_TARGET and buf:
                 segments.append({"text": " ".join(buf)})
                 buf = [s]
                 buf_len = len(s)
@@ -1116,7 +1110,7 @@ def _render_html(samples: list[dict], *, run_id: str, vault_dir: Path) -> str:
     return (
         _HTML_TEMPLATE
         .replace("__RUN_ID__", html.escape(run_id))
-        .replace("__SAMPLES_JSON__", _safe_json_for_script(payload))
+        .replace("__SAMPLES_JSON__", safe_json_for_script(payload))
     )
 
 
