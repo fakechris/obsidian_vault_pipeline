@@ -126,25 +126,44 @@ def _reader_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
 
 
 def _ops_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
-    """Maintainer shell nav.
+    """Maintainer shell nav, BL-053 IA: workbench mode, not toolbox.
 
-    The BL-050 nav opened at five items (Overview / Contradictions /
-    Signals / Pulse / Audit) but the maintainer surface ships a
-    dozen+ landing pages — every other surface was reachable only by
-    typing the URL.  The expanded list here surfaces the day-to-day
-    paths a reviewer hits ("what changed today", "review pending
-    candidates", "browse the canonical evergreens"), and keeps the
-    research-only entries (clusters, deep-dives, production) gated
-    on ``_shell_supports_research_nav`` so a non-research pack
-    doesn't see broken links.
+    Pre-BL-053 the nav was a flat 9-item list — every surface
+    individually addressable.  Operators had to remember which URL
+    answered which question.  Post-BL-053 the nav is grouped by
+    operator intent:
+
+      * **Today** (`/ops/today`) — what happened in the current day,
+        five cards across the pipeline's macro-stages.
+      * **Runs** (`/ops/runs`) — by-transaction pivot; click any run
+        to see its full event timeline.
+      * **Timeline** (`/ops/timeline`) — multi-day digest, kept for
+        the long-window view that complements ``/ops/today``.
+      * **Pulse / Events** — live tail + object-keyed dossier.
+      * **Queue group**: Concept Candidates / Relation Proposals /
+        Actions / Contradictions / Review Queue — everything waiting
+        for human attention.
+      * **Catalog group**: Evergreens / Signals / Clusters / Deep-
+        dives — browseable surfaces.
+
+    BL-052 vocab fixes folded in:
+      - Nav label ``Audit`` → ``Events`` (path unchanged).
+      - Nav label ``Candidates`` → ``Concept Candidates``.
+      - Nav label ``Workbench`` no longer in nav (it's reachable via
+        the Queue group's Review Queue link when ready).
     """
     items: list[tuple[str, str]] = [
+        # Workbench root + by-time pivots
         ("Overview", "/ops"),
+        ("Today", "/ops/today"),
+        ("Runs", "/ops/runs"),
         ("Timeline", "/ops/timeline"),
+        # Live + audit
         ("Pulse", "/ops/pulse"),
-        ("Audit", "/ops/events"),
+        ("Events", "/ops/events"),
+        # Browseables / queues
         ("Evergreens", "/ops/objects"),
-        ("Candidates", "/ops/candidates"),
+        ("Concept Candidates", "/ops/candidates"),
         ("Actions", "/ops/actions"),
         ("Contradictions", "/ops/contradictions"),
         ("Signals", "/ops/signals"),
@@ -5037,6 +5056,262 @@ def _render_timeline_page(payload: dict) -> str:
 
     body = "".join(sections)
     return _layout("Timeline", body, requested_pack=requested_pack)
+
+
+_TODAY_DIGEST_STYLE = """
+<style>
+.today-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
+.today-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; }
+.today-card h3 { margin: 0 0 8px 0; font-size: 1rem; }
+.today-card .total { font-size: 2rem; font-weight: 600; color: #111827; }
+.today-card.failures .total { color: #b91c1c; }
+.today-card .by-type { color: #6b7280; font-size: 0.85rem; margin-top: 4px; }
+.today-card .by-type code { background: #f3f4f6; padding: 1px 6px; border-radius: 3px; }
+.today-card .samples { margin-top: 12px; padding-top: 12px; border-top: 1px solid #f3f4f6; }
+.today-card .samples ul { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.85rem; }
+.today-card .samples li { margin: 2px 0; }
+.today-card.empty .total { color: #d1d5db; }
+</style>
+"""
+
+
+def _render_today_digest_page(payload: dict) -> str:
+    """5-card today digest — the maintainer's "what happened today" view.
+
+    Replaces the old "open ``/ops`` and squint at recent activity"
+    workflow with five explicit cards (one per pipeline macro-stage)
+    that summarise *today's* audit events.
+    """
+    requested_pack = str(payload.get("requested_pack") or "")
+    date = str(payload.get("date") or "")
+    cards = payload.get("cards") or []
+
+    if not payload.get("available", True):
+        body = (
+            "<section class='card'>"
+            "<h2>Today digest unavailable</h2>"
+            f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
+            "<p>Run <code>ovp-knowledge-index</code> to populate "
+            "<code>audit_events</code>.</p>"
+            "</section>"
+        )
+        return _layout(f"Today — {date}", body, requested_pack=requested_pack)
+
+    sections: list[str] = [_TODAY_DIGEST_STYLE]
+    sections.append(
+        f"<p class='muted'>Audit events recorded on "
+        f"<strong>{escape(date)}</strong> (UTC).  Click "
+        f"<a href='/ops/timeline'>Timeline</a> for the multi-day view.</p>"
+    )
+    sections.append("<div class='today-grid'>")
+    for card in cards:
+        card_id = str(card.get("id") or "")
+        label = str(card.get("label") or card_id)
+        total = int(card.get("total") or 0)
+        by_type = card.get("by_type") or {}
+        samples = card.get("samples") or []
+
+        empty_class = " empty" if total == 0 else ""
+        failures_class = " failures" if card_id == "failures" else ""
+
+        # Type breakdown — top 3 types as a tail line.
+        type_pills = ""
+        if by_type:
+            top = sorted(by_type.items(), key=lambda x: -x[1])[:3]
+            type_pills = " · ".join(
+                f"<code>{escape(t)}</code>×{n}" for t, n in top
+            )
+
+        sample_html = ""
+        if samples:
+            items = "".join(
+                "<li><span class='muted'>{type}</span> <strong>{subject}</strong></li>".format(
+                    type=escape(str(s.get("event_type", ""))[:30]),
+                    subject=escape(str(s.get("subject", ""))[:80]),
+                )
+                for s in samples
+            )
+            sample_html = f"<div class='samples'><ul>{items}</ul></div>"
+
+        sections.append(
+            f"<div class='today-card{empty_class}{failures_class}'>"
+            f"<h3>{escape(label)}</h3>"
+            f"<div class='total'>{total}</div>"
+            f"<div class='by-type'>{type_pills}</div>"
+            f"{sample_html}"
+            f"</div>"
+        )
+    sections.append("</div>")
+
+    body = "".join(sections)
+    return _layout(f"Today — {date}", body, requested_pack=requested_pack)
+
+
+_RUNS_INDEX_STYLE = """
+<style>
+.runs-table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+.runs-table th, .runs-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #f3f4f6; }
+.runs-table th { background: #f9fafb; font-weight: 500; font-size: 0.85rem; color: #6b7280; }
+.runs-table td { font-size: 0.9rem; }
+.runs-table .status-completed { color: #059669; font-weight: 500; }
+.runs-table .status-running { color: #2563eb; font-weight: 500; }
+.runs-table .status-stale { color: #ca8a04; font-weight: 500; }
+.runs-table code { font-size: 0.8rem; }
+</style>
+"""
+
+
+def _render_runs_index_page(payload: dict) -> str:
+    """List of recent transactions with status + click-through.
+
+    Each row is one ``transaction_started`` event; the ``status``
+    cell reflects whether a matching ``transaction_completed`` row
+    was found (otherwise ``running`` for fresh, ``stale`` for >6h
+    without a completion event).
+    """
+    requested_pack = str(payload.get("requested_pack") or "")
+    runs = payload.get("runs") or []
+
+    if not payload.get("available", True):
+        body = (
+            "<section class='card'>"
+            "<h2>Runs index unavailable</h2>"
+            f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
+            "</section>"
+        )
+        return _layout("Runs", body, requested_pack=requested_pack)
+
+    if not runs:
+        body = (
+            "<section class='card'>"
+            "<h2>No transactions found</h2>"
+            "<p class='muted'>No <code>transaction_started</code> events "
+            "in <code>audit_events</code>.</p>"
+            "</section>"
+        )
+        return _layout("Runs", body, requested_pack=requested_pack)
+
+    rows = "".join(
+        "<tr>"
+        "<td><code>{ts}</code></td>"
+        "<td>{type}</td>"
+        "<td class='status-{status}'>{status}</td>"
+        "<td>{events}</td>"
+        "<td><a href='{href}'>{txn_id}</a></td>"
+        "</tr>".format(
+            ts=escape(str(r.get("started_at", "")[:19])),
+            type=escape(str(r.get("workflow_type", ""))),
+            status=escape(str(r.get("status", ""))),
+            events=int(r.get("event_count") or 0),
+            href=escape(str(r.get("detail_href", ""))),
+            txn_id=escape(str(r.get("txn_id", ""))[:30]),
+        )
+        for r in runs
+    )
+
+    body = (
+        f"{_RUNS_INDEX_STYLE}"
+        f"<p class='muted'>Showing {len(runs)} recent transaction(s).  "
+        f"Click a <code>txn_id</code> to see the full event timeline for that run.</p>"
+        "<table class='runs-table'>"
+        "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
+        "<th>Events</th><th>Run</th></tr></thead>"
+        f"<tbody>{rows}</tbody>"
+        "</table>"
+    )
+    return _layout("Runs", body, requested_pack=requested_pack)
+
+
+_RUN_DETAIL_STYLE = """
+<style>
+.run-header { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
+.run-header dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; font-size: 0.9rem; }
+.run-header dt { color: #6b7280; }
+.run-header dd { margin: 0; }
+.event-rows { width: 100%; border-collapse: collapse; }
+.event-rows tr td { padding: 6px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+.event-rows td.ts { white-space: nowrap; font-family: monospace; font-size: 0.8rem; color: #6b7280; }
+.event-rows td.type { font-weight: 500; }
+.event-rows td.subject { color: #374151; }
+.event-rows tr.error td.type { color: #b91c1c; }
+.event-rows tr.bracket td { background: #f0fdf4; font-weight: 500; }
+.event-rows tr.bracket-completed td { background: #ecfdf5; }
+</style>
+"""
+
+_BRACKET_EVENT_TYPES = frozenset({
+    "transaction_started",
+    "transaction_completed",
+})
+
+_ERROR_EVENT_TYPE_PREFIXES = ("absorb_parse_error", "absorb_schema_drift",
+                              "broken_link", "github_intake_error",
+                              "article_error", "image_download_error")
+
+
+def _render_run_detail_page(payload: dict) -> str:
+    """Per-transaction event timeline.
+
+    Renders every event tagged with this run's ``txn_id`` (or
+    sharing the bracketing ``session_id``) in chronological order
+    so the operator can scan the full sequence of stages, successes
+    and failures of one run on a single page.
+    """
+    requested_pack = str(payload.get("requested_pack") or "")
+    txn_id = str(payload.get("txn_id") or "")
+    workflow_type = str(payload.get("workflow_type") or "(unknown)")
+    started_at = str(payload.get("started_at") or "")
+    completed_at = str(payload.get("completed_at") or "(still running)")
+    events = payload.get("events") or []
+
+    if not payload.get("available", True):
+        body = (
+            "<section class='card'>"
+            f"<h2>Run {escape(txn_id)} unavailable</h2>"
+            f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
+            "</section>"
+        )
+        return _layout(f"Run {txn_id[:30]}", body, requested_pack=requested_pack)
+
+    header = (
+        f"{_RUN_DETAIL_STYLE}"
+        "<div class='run-header'>"
+        "<dl>"
+        f"<dt>Run id</dt><dd><code>{escape(txn_id)}</code></dd>"
+        f"<dt>Workflow</dt><dd>{escape(workflow_type)}</dd>"
+        f"<dt>Started</dt><dd><code>{escape(started_at)}</code></dd>"
+        f"<dt>Completed</dt><dd><code>{escape(completed_at)}</code></dd>"
+        f"<dt>Events</dt><dd>{len(events)}</dd>"
+        "</dl></div>"
+    )
+
+    rows = []
+    for ev in events:
+        et = str(ev.get("event_type", ""))
+        css_classes: list[str] = []
+        if et == "transaction_started":
+            css_classes.append("bracket")
+        elif et == "transaction_completed":
+            css_classes.append("bracket bracket-completed")
+        elif any(et.startswith(p) for p in _ERROR_EVENT_TYPE_PREFIXES):
+            css_classes.append("error")
+        cls = (" class='" + " ".join(css_classes) + "'") if css_classes else ""
+        rows.append(
+            f"<tr{cls}>"
+            f"<td class='ts'>{escape(str(ev.get('timestamp',''))[:19])}</td>"
+            f"<td class='type'>{escape(et)}</td>"
+            f"<td class='subject'>{escape(str(ev.get('subject',''))[:120])}</td>"
+            "</tr>"
+        )
+
+    body = (
+        f"{header}"
+        "<table class='event-rows'>"
+        "<thead><tr><th>Time</th><th>Event</th><th>Subject</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+    )
+    return _layout(f"Run {txn_id[:30]}", body, requested_pack=requested_pack)
 
 
 def _render_pulse_page() -> str:
