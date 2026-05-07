@@ -32,7 +32,6 @@ import json
 import re
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -128,13 +127,19 @@ def _classify(llm: Any, title: str, definition: str, excerpt: str) -> str:
     return KIND_CONCEPT
 
 
-def _emit_audit(log_path: Path, event: dict[str, Any]) -> None:
+def _emit_audit(logger: Any, event: dict[str, Any]) -> None:
+    """Emit one audit event via a shared logger.
+
+    Pre-fix this re-instantiated ``PipelineLogger`` on every call,
+    which gave each event a fresh ``session_id`` — defeating
+    BL-053's by-run grouping (``/ops/runs/<txn_id>``).  The caller
+    now constructs a single logger up-front and reuses it for the
+    whole backfill so the per-run drilldown sees the entire run's
+    events together.
+    """
     event_type = event.pop("event_type", "backfill")
     event.pop("timestamp", None)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    from ..auto_moc_updater import PipelineLogger
-
-    PipelineLogger(log_path).log(event_type, event)
+    logger.log(event_type, event)
 
 
 def run(
@@ -150,6 +155,15 @@ def run(
         return {"error": "directory_not_found"}
 
     log_path = vault_dir / "60-Logs" / "pipeline.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Single PipelineLogger instance for the whole run so every
+    # audit event shares the same ``session_id`` — that's what
+    # ``/ops/runs/<txn_id>`` keys off to group events.  Pre-fix
+    # ``_emit_audit`` re-instantiated PipelineLogger per call,
+    # giving each event a fresh session.
+    from ..auto_moc_updater import PipelineLogger
+    logger = PipelineLogger(log_path)
+
     md_files = sorted(evergreen_dir.glob("*.md"))
     total = len(md_files)
     print(f"Found {total} Evergreen notes in {evergreen_dir}")
@@ -161,12 +175,14 @@ def run(
     # whose entity_type was set by the pre-BL-025 collapse but
     # whose unit_type carries the real richer kind.  ``phase2``
     # covers v1 evergreens (no unit_type) — they need LLM.
+    # Each tuple carries ``body_start`` so Phase 2 doesn't have
+    # to re-match the frontmatter regex.
     already_correct = 0
-    phase1: list[tuple[Path, str, dict[str, str]]] = []
-    phase2: list[tuple[Path, str, dict[str, str]]] = []
+    phase1: list[tuple[Path, str, dict[str, str], int]] = []
+    phase2: list[tuple[Path, str, dict[str, str], int]] = []
     for fp in md_files:
         text = fp.read_text(encoding="utf-8", errors="replace")
-        fm, _, _ = _parse_frontmatter(text)
+        fm, body_start, _ = _parse_frontmatter(text)
         existing_type = fm.get("entity_type", "").strip()
         unit_type = fm.get("unit_type", "").strip()
 
@@ -177,7 +193,7 @@ def run(
             if existing_type == unit_type:
                 already_correct += 1
             else:
-                phase1.append((fp, text, fm))
+                phase1.append((fp, text, fm, body_start))
             continue
 
         # No (recognised) unit_type — needs LLM if entity_type
@@ -185,7 +201,7 @@ def run(
         if existing_type and existing_type in VALID_KINDS:
             already_correct += 1
             continue
-        phase2.append((fp, text, fm))
+        phase2.append((fp, text, fm, body_start))
 
     print(
         f"Already correct: {already_correct}, "
@@ -203,13 +219,13 @@ def run(
 
     if dry_run:
         print("[dry-run] Phase 1 sample (first 10):")
-        for fp, _, fm in phase1[:10]:
+        for fp, _, fm, _ in phase1[:10]:
             ut = fm.get("unit_type", "?")
             print(f"  {fp.name}  unit_type={ut}  (would set entity_type={ut})")
         if len(phase1) > 10:
             print(f"  ... and {len(phase1) - 10} more Phase 1 files")
         print("[dry-run] Phase 2 sample (first 10):")
-        for fp, _, fm in phase2[:10]:
+        for fp, _, fm, _ in phase2[:10]:
             print(f"  {fp.name}  title={fm.get('title', '?')}")
         if len(phase2) > 10:
             print(f"  ... and {len(phase2) - 10} more Phase 2 files")
@@ -228,16 +244,15 @@ def run(
     # Phase 1: deterministic rewrite (no LLM).  Pass through
     # unit_type → entity_type for each file.
     print(f"\n=== Phase 1: deterministic ({len(phase1)} files) ===")
-    for i, (fp, text, fm) in enumerate(phase1):
+    for i, (fp, text, fm, _body_start) in enumerate(phase1):
         unit_type = fm["unit_type"].strip()
         new_text = _inject_entity_type(text, unit_type)
         fp.write_text(new_text, encoding="utf-8")
         classified += 1
         stats[unit_type] = stats.get(unit_type, 0) + 1
         _emit_audit(
-            log_path,
+            logger,
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "event_type": "entity_type_backfill_v2_passthrough",
                 "file": str(fp.relative_to(vault_dir)),
                 "entity_type": unit_type,
@@ -256,10 +271,11 @@ def run(
         print(f"\n=== Phase 2: LLM classification ({len(phase2)} files) ===")
         llm = _build_llm_client()
 
-    for i, (fp, text, fm) in enumerate(phase2):
+    for i, (fp, text, fm, body_start) in enumerate(phase2):
         title = fm.get("title", fp.stem.replace("-", " "))
-        body_start = _FRONTMATTER_RE.match(text)
-        body = text[body_start.end() :] if body_start else text
+        # Reuse body_start computed in the scan loop instead of
+        # re-running the frontmatter regex per file.
+        body = text[body_start:] if body_start else text
         definition = ""
         def_match = re.search(r">\s*\*\*(?:一句话定义|Definition)\*\*:\s*(.+)", body, re.IGNORECASE)
         if def_match:
@@ -270,9 +286,8 @@ def run(
         except Exception as exc:  # noqa: BLE001 - continue per-note processing; errors are audited
             print(f"  [{i+1}/{len(phase2)}] ERROR {fp.name}: {exc}")
             _emit_audit(
-                log_path,
+                logger,
                 {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "event_type": "entity_type_backfill_error",
                     "file": str(fp.relative_to(vault_dir)),
                     "error": str(exc),
@@ -287,9 +302,8 @@ def run(
         stats[kind] = stats.get(kind, 0) + 1
 
         _emit_audit(
-            log_path,
+            logger,
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "event_type": "entity_type_backfill",
                 "file": str(fp.relative_to(vault_dir)),
                 "entity_type": kind,
@@ -321,9 +335,8 @@ def run(
     print(f"Distribution: {json.dumps(stats, indent=2)}")
 
     _emit_audit(
-        log_path,
+        logger,
         {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": "entity_type_backfill_summary",
             **summary,
         },
