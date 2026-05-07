@@ -2971,6 +2971,481 @@ def build_timeline_payload(
     }
 
 
+# ---------------------------------------------------------------------------
+# BL-053: Ops workbench IA — by-day "today" digest + by-run "runs" index
+# ---------------------------------------------------------------------------
+
+# Per-card event-type buckets for ``/ops/today``.  These are
+# **inclusive** — an event listed in two cards (rare) gets counted in
+# both.  Card ordering is the rendering order.  Tweak when new
+# pipeline events land; the renderer reads the dict shape directly so
+# adding a card is purely a data change.
+TODAY_DIGEST_CARDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (
+        "intake",
+        "Intake",
+        (
+            "clippings_processed",
+            "source_archived_to_processed",
+            "source_staged_for_processing",
+            "github_intake_completed",
+            "article_intake_only",
+            "source_dedup_skipped",
+        ),
+    ),
+    (
+        "absorb",
+        "Absorb",
+        (
+            "evergreen_auto_promoted",
+            "absorb_completed",
+            "candidates_upserted",
+        ),
+    ),
+    (
+        "synthesis",
+        "Synthesis",
+        (
+            "community_crystal_synthesized",
+            "contradiction_crystal_synthesized",
+            "crystal_archived",
+        ),
+    ),
+    (
+        "governance",
+        "Governance",
+        (
+            "promote_concept",
+            "concept_archived",
+            "concept_merged",
+            "dedup_cleanup_archived",
+            "candidate_review_action",
+            "evolution_review_action",
+            "contradictions_resolved",
+        ),
+    ),
+    (
+        "failures",
+        "Failures",
+        (
+            "absorb_parse_error",
+            "absorb_schema_drift",
+            "absorb_skipped_source",
+            "broken_link",
+            "github_intake_error",
+            "article_error",
+            "image_download_error",
+        ),
+    ),
+)
+
+# Cap on how many sample rows each ``/ops/today`` card surfaces.
+# Cards are skim-mode — operators click through to the per-stage page
+# for the long tail.
+TODAY_CARD_SAMPLE_SIZE = 5
+
+# Default lookback window for ``/ops/runs``: how many recent
+# transactions to show.  30 covers ~1 week of normal cadence (~3-5
+# runs/day across full+incremental) and keeps the page small.
+DEFAULT_RUNS_INDEX_LIMIT = 30
+
+# A transaction with no ``transaction_completed`` row is treated as
+# ``running`` for this many hours after start; older than that and
+# we surface it as ``stale`` (probably crashed mid-run with no
+# completion event ever written).  6h covers the longest legitimate
+# full run on the live vault (~3h) with comfortable headroom.
+RUNS_STALE_AFTER_HOURS = 6
+
+
+def build_today_digest_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    """5-card today digest for the maintainer dashboard.
+
+    Pre-BL-053 the maintainer's day started by visiting ``/ops`` (a
+    static dashboard) and ``/ops/timeline`` (a 14-day histogram with
+    samples).  Neither answered "what happened **today**" at a glance.
+    This payload groups today's audit events into 5 cards aligned
+    with the pipeline's 5 macro-stages — intake, absorb, synthesis,
+    governance, failures — each carrying total + breakdown +
+    clickable samples.
+
+    ``target_date`` accepts ``YYYY-MM-DD`` for back-dated views
+    (defaults to today UTC).
+    """
+    from datetime import datetime, timezone
+    requested_pack = pack_name or ""
+    if target_date:
+        date_key = target_date.strip()
+    else:
+        date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    db_path = _db_path(vault_dir)
+    if not db_path.exists():
+        return {
+            "screen": "ops/today",
+            "requested_pack": requested_pack,
+            "date": date_key,
+            "cards": [],
+            "available": False,
+            "reason": "knowledge_index has not been built yet",
+        }
+
+    cards: list[dict[str, Any]] = []
+    with sqlite3.connect(db_path) as conn:
+        for card_id, card_label, event_types in TODAY_DIGEST_CARDS:
+            placeholders = ",".join("?" for _ in event_types)
+            counts_rows = conn.execute(
+                f"""
+                SELECT event_type, COUNT(*) AS n
+                  FROM audit_events
+                 WHERE date(timestamp) = ?
+                   AND event_type IN ({placeholders})
+                 GROUP BY event_type
+                 ORDER BY n DESC
+                """,
+                (date_key, *event_types),
+            ).fetchall()
+            by_type = {row[0]: int(row[1]) for row in counts_rows}
+            total = sum(by_type.values())
+
+            # Sample rows — favour high-signal subjects (slug / source
+            # path / file) over raw event_type so the click-through is
+            # actionable.  Skip stage events that don't carry a slug.
+            sample_rows = conn.execute(
+                f"""
+                SELECT event_type,
+                       COALESCE(json_extract(payload_json, '$.slug'),
+                                json_extract(payload_json, '$.source'),
+                                json_extract(payload_json, '$.file'),
+                                json_extract(payload_json, '$.url'),
+                                slug) AS subject,
+                       json_extract(payload_json, '$.title') AS title,
+                       timestamp
+                  FROM audit_events
+                 WHERE date(timestamp) = ?
+                   AND event_type IN ({placeholders})
+                 ORDER BY timestamp DESC
+                """,
+                (date_key, *event_types),
+            ).fetchall()
+            samples: list[dict[str, str]] = []
+            for event_type, subject, title, ts in sample_rows:
+                if not subject:
+                    continue
+                if len(samples) >= TODAY_CARD_SAMPLE_SIZE:
+                    break
+                samples.append({
+                    "event_type": str(event_type),
+                    "subject": str(subject),
+                    "title": str(title or subject),
+                    "timestamp": str(ts or ""),
+                })
+            cards.append({
+                "id": card_id,
+                "label": card_label,
+                "total": total,
+                "by_type": by_type,
+                "samples": samples,
+            })
+
+    return {
+        "screen": "ops/today",
+        "requested_pack": requested_pack,
+        "date": date_key,
+        "cards": cards,
+        "available": True,
+    }
+
+
+def build_runs_index_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Index of recent transactions for ``/ops/runs``.
+
+    Lists ``transaction_started`` rows in reverse-chronological order
+    with status (completed / failed / running), workflow type, start
+    + end timestamps, and event count.  Status comes from a
+    ``transaction_completed`` event for the same ``txn_id`` if any —
+    rows with no matching completion are flagged as ``running`` (or
+    ``stale`` if older than 6 hours and still no completion).
+    """
+    from datetime import datetime, timedelta, timezone
+    requested_pack = pack_name or ""
+    cap = max(1, limit if limit is not None else DEFAULT_RUNS_INDEX_LIMIT)
+
+    db_path = _db_path(vault_dir)
+    if not db_path.exists():
+        return {
+            "screen": "ops/runs",
+            "requested_pack": requested_pack,
+            "runs": [],
+            "available": False,
+            "reason": "knowledge_index has not been built yet",
+        }
+
+    runs: list[dict[str, Any]] = []
+    with sqlite3.connect(db_path) as conn:
+        # ``transaction_started`` carries ``txn_id`` and the workflow
+        # ``type`` in its payload.  We pair each with an optional
+        # matching ``transaction_completed`` row by ``txn_id``.
+        started_rows = conn.execute(
+            """
+            SELECT json_extract(payload_json, '$.txn_id') AS txn_id,
+                   json_extract(payload_json, '$.type')   AS workflow_type,
+                   timestamp
+              FROM audit_events
+             WHERE event_type = 'transaction_started'
+             ORDER BY timestamp DESC
+             LIMIT ?
+            """,
+            (cap,),
+        ).fetchall()
+
+        if not started_rows:
+            return {
+                "screen": "ops/runs",
+                "requested_pack": requested_pack,
+                "runs": [],
+                "available": True,
+            }
+
+        txn_ids = tuple(row[0] for row in started_rows if row[0])
+        completed_lookup: dict[str, str] = {}
+        if txn_ids:
+            placeholders = ",".join("?" for _ in txn_ids)
+            for tid, ts in conn.execute(
+                f"""
+                SELECT json_extract(payload_json, '$.txn_id') AS txn_id,
+                       timestamp
+                  FROM audit_events
+                 WHERE event_type = 'transaction_completed'
+                   AND json_extract(payload_json, '$.txn_id') IN ({placeholders})
+                """,
+                txn_ids,
+            ).fetchall():
+                if tid:
+                    completed_lookup[str(tid)] = str(ts)
+
+            # Per-txn event counts so the index page shows magnitude.
+            count_lookup: dict[str, int] = {}
+            for tid, n in conn.execute(
+                f"""
+                SELECT json_extract(payload_json, '$.txn_id') AS txn_id,
+                       COUNT(*) AS n
+                  FROM audit_events
+                 WHERE json_extract(payload_json, '$.txn_id') IN ({placeholders})
+                 GROUP BY txn_id
+                """,
+                txn_ids,
+            ).fetchall():
+                if tid:
+                    count_lookup[str(tid)] = int(n)
+        else:
+            count_lookup = {}
+
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=RUNS_STALE_AFTER_HOURS)
+    for txn_id, workflow_type, started_at in started_rows:
+        if not txn_id:
+            continue
+        completed_at = completed_lookup.get(str(txn_id), "")
+        if completed_at:
+            status = "completed"
+        else:
+            try:
+                started_dt = datetime.fromisoformat(
+                    str(started_at).replace("Z", "+00:00")
+                )
+                # PipelineLogger writes naive UTC timestamps for some
+                # events (no trailing Z, no offset).  Treat them as
+                # UTC so the < comparison doesn't crash.
+                if started_dt.tzinfo is None:
+                    started_dt = started_dt.replace(tzinfo=timezone.utc)
+                status = "stale" if started_dt < stale_cutoff else "running"
+            except ValueError:
+                status = "running"
+        runs.append({
+            "txn_id": str(txn_id),
+            "workflow_type": str(workflow_type or "(unknown)"),
+            "started_at": str(started_at or ""),
+            "completed_at": completed_at,
+            "status": status,
+            "event_count": count_lookup.get(str(txn_id), 0),
+            "detail_href": _scoped_path(
+                f"/ops/runs/{quote(str(txn_id), safe='')}",
+                pack_name=requested_pack,
+            ),
+        })
+
+    return {
+        "screen": "ops/runs",
+        "requested_pack": requested_pack,
+        "runs": runs,
+        "available": True,
+    }
+
+
+def build_run_detail_payload(
+    vault_dir: Path | str,
+    txn_id: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    """Per-transaction event timeline for ``/ops/runs/<txn_id>``.
+
+    Joins via ``session_id`` because most pipeline events don't
+    carry ``txn_id`` directly — they're emitted by the same
+    PipelineLogger process whose ``session_id`` is the column-
+    level grouping key.  Approach:
+
+    1. Find every ``transaction_started`` row matching ``txn_id`` —
+       collect all ``session_id`` values that participated in the
+       run.  Spawned subprocesses (``pinboard_process`` step etc.)
+       have their own session_id but they all bracket themselves
+       with ``transaction_started`` rows that share the parent
+       ``txn_id`` chain — for the pipeline's current shape, the
+       parent's session_id covers the whole run.
+    2. SELECT every audit row whose ``session_id`` is in that set
+       OR whose ``payload_json.txn_id`` matches.  This is the
+       union of "events the bracketing logger wrote" + "events
+       that explicitly tagged themselves with the txn".
+    3. Order by timestamp, return with subject + snippet.
+    """
+    requested_pack = pack_name or ""
+    cleaned_txn = (txn_id or "").strip()
+    if not cleaned_txn:
+        return {
+            "screen": "ops/runs/detail",
+            "requested_pack": requested_pack,
+            "txn_id": "",
+            "events": [],
+            "available": False,
+            "reason": "txn_id required",
+        }
+
+    db_path = _db_path(vault_dir)
+    if not db_path.exists():
+        return {
+            "screen": "ops/runs/detail",
+            "requested_pack": requested_pack,
+            "txn_id": cleaned_txn,
+            "events": [],
+            "available": False,
+            "reason": "knowledge_index has not been built yet",
+        }
+
+    with sqlite3.connect(db_path) as conn:
+        # Step 1: collect session_ids for this txn's bracketing rows.
+        # ``$.type`` is pulled via SQLite's ``json_extract`` (proper
+        # JSON parser) rather than substring-regex over the snippet —
+        # the snippet was truncating long payloads and a JSON
+        # formatter change could trivially break a regex match.
+        bracket_rows = conn.execute(
+            """
+            SELECT session_id, timestamp, event_type,
+                   json_extract(payload_json, '$.type') AS workflow_type
+              FROM audit_events
+             WHERE event_type IN ('transaction_started', 'transaction_completed')
+               AND json_extract(payload_json, '$.txn_id') = ?
+            """,
+            (cleaned_txn,),
+        ).fetchall()
+        session_ids = {row[0] for row in bracket_rows if row[0]}
+
+        if not session_ids and not bracket_rows:
+            return {
+                "screen": "ops/runs/detail",
+                "requested_pack": requested_pack,
+                "txn_id": cleaned_txn,
+                "events": [],
+                "available": False,
+                "reason": f"no events found for txn_id {cleaned_txn}",
+            }
+
+        # Step 2: fetch every event in those sessions OR tagged
+        # with the txn directly.  ``OR`` instead of ``UNION`` so
+        # the SQLite optimiser can use both indexes.
+        if session_ids:
+            placeholders = ",".join("?" for _ in session_ids)
+            rows = conn.execute(
+                f"""
+                SELECT timestamp, event_type, session_id,
+                       COALESCE(json_extract(payload_json, '$.slug'),
+                                json_extract(payload_json, '$.source'),
+                                json_extract(payload_json, '$.file'),
+                                json_extract(payload_json, '$.url'),
+                                slug) AS subject,
+                       substr(payload_json, 1, {TIMELINE_SNIPPET_CHARS}) AS snippet
+                  FROM audit_events
+                 WHERE session_id IN ({placeholders})
+                    OR json_extract(payload_json, '$.txn_id') = ?
+                 ORDER BY timestamp ASC
+                """,
+                (*session_ids, cleaned_txn),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"""
+                SELECT timestamp, event_type, session_id,
+                       COALESCE(json_extract(payload_json, '$.slug'),
+                                json_extract(payload_json, '$.source'),
+                                json_extract(payload_json, '$.file'),
+                                json_extract(payload_json, '$.url'),
+                                slug) AS subject,
+                       substr(payload_json, 1, {TIMELINE_SNIPPET_CHARS}) AS snippet
+                  FROM audit_events
+                 WHERE json_extract(payload_json, '$.txn_id') = ?
+                 ORDER BY timestamp ASC
+                """,
+                (cleaned_txn,),
+            ).fetchall()
+
+    events = [
+        {
+            "timestamp": str(ts or ""),
+            "event_type": str(event_type or ""),
+            "session_id": str(session_id or ""),
+            "subject": str(subject or ""),
+            "snippet": str(snippet or ""),
+        }
+        for ts, event_type, session_id, subject, snippet in rows
+    ]
+
+    # Header data: pull from the bracketing rows we already fetched.
+    # ``event_type`` is a column, not a payload field — keying off the
+    # column lets us populate workflow_type from the payload's ``type``
+    # without re-querying.
+    started_at = ""
+    completed_at = ""
+    workflow_type = ""
+    for _session_id, ts, event_type, payload_workflow_type in bracket_rows:
+        if event_type == "transaction_started":
+            started_at = str(ts or "")
+            if payload_workflow_type:
+                workflow_type = str(payload_workflow_type)
+        elif event_type == "transaction_completed":
+            completed_at = str(ts or "")
+
+    return {
+        "screen": "ops/runs/detail",
+        "requested_pack": requested_pack,
+        "txn_id": cleaned_txn,
+        "workflow_type": workflow_type,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "session_ids": sorted(session_ids),
+        "events": events,
+        "event_count": len(events),
+        "available": True,
+    }
+
+
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 

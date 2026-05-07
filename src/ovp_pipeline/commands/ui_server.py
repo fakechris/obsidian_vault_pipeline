@@ -43,6 +43,9 @@ from ..ui.view_models import (
     build_signal_browser_payload,
     build_stale_summary_browser_payload,
     build_timeline_payload,
+    build_today_digest_payload,
+    build_runs_index_payload,
+    build_run_detail_payload,
     build_topic_overview_payload,
 )
 from ..truth_api import (
@@ -97,6 +100,9 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_pulse_fragment,
     _render_pulse_page,
     _render_timeline_page,
+    _render_today_digest_page,
+    _render_runs_index_page,
+    _render_run_detail_page,
     _render_reuse_report_fragment,
     _render_run_history_card,
     _render_runtime_card,
@@ -949,6 +955,48 @@ def create_server(
                         self._write_json(payload)
                     else:
                         self._write_html(_render_timeline_page(payload))
+                    return
+                # BL-053: by-day "today" digest
+                if path in ("/ops/today", "/api/today"):
+                    pack_name = query.get("pack", [""])[0] or None
+                    target_date = query.get("date", [""])[0] or None
+                    payload = build_today_digest_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        target_date=target_date,
+                    )
+                    if path == "/api/today":
+                        self._write_json(payload)
+                    else:
+                        self._write_html(_render_today_digest_page(payload))
+                    return
+                # BL-053: by-run "runs" index
+                if path in ("/ops/runs", "/api/runs"):
+                    pack_name = query.get("pack", [""])[0] or None
+                    raw_limit = query.get("limit", [""])[0]
+                    limit = int(raw_limit) if raw_limit.isdigit() else None
+                    payload = build_runs_index_payload(
+                        resolved_vault, pack_name=pack_name, limit=limit,
+                    )
+                    if path == "/api/runs":
+                        self._write_json(payload)
+                    else:
+                        self._write_html(_render_runs_index_page(payload))
+                    return
+                # BL-053: per-run event timeline.  Path shape:
+                # ``/ops/runs/<txn_id>`` (HTML) or
+                # ``/api/runs/<txn_id>`` (JSON).
+                if path.startswith("/ops/runs/") or path.startswith("/api/runs/"):
+                    is_api = path.startswith("/api/runs/")
+                    txn_id = path.split("/", 3)[-1] if path.count("/") >= 3 else ""
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_run_detail_payload(
+                        resolved_vault, txn_id, pack_name=pack_name,
+                    )
+                    if is_api:
+                        self._write_json(payload)
+                    else:
+                        self._write_html(_render_run_detail_page(payload))
                     return
                 if path == "/ops/pulse":
                     self._write_html(_render_pulse_page())

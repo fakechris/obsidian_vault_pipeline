@@ -38,14 +38,20 @@ from ovp_pipeline.ui.view_models import (
 
 
 class TestOpsNav:
-    def test_includes_timeline_and_evergreens(self):
+    def test_includes_workbench_pivots_and_browseables(self):
         items = dict(_ops_nav_items(""))
-        # Pre-fix: only Overview/Contradictions/Signals/Pulse/Audit.
-        # Post-fix: those + Timeline + Evergreens + Candidates etc.
-        for label in ("Timeline", "Pulse", "Audit", "Evergreens",
-                      "Candidates", "Actions", "Contradictions", "Signals"):
+        # Post-BL-053 IA: by-time pivots first, then live + audit,
+        # then browseables / queues.  Labels reflect BL-052 vocab
+        # cleanup (``Audit`` → ``Events``, ``Candidates`` →
+        # ``Concept Candidates``).
+        for label in ("Today", "Runs", "Timeline", "Pulse", "Events",
+                      "Evergreens", "Concept Candidates",
+                      "Actions", "Contradictions", "Signals"):
             assert label in items, f"{label!r} missing from ops nav"
+        assert items["Today"] == "/ops/today"
+        assert items["Runs"] == "/ops/runs"
         assert items["Timeline"] == "/ops/timeline"
+        assert items["Events"] == "/ops/events"
         assert items["Evergreens"] == "/ops/objects"
 
     def test_research_only_entries_gated(self, monkeypatch):
@@ -487,3 +493,193 @@ class TestRenderLineageCard:
         })
         assert "old-source" in html
         assert "archived" in html
+
+
+# ---------------------------------------------------------------------------
+# BL-053: /ops/today, /ops/runs, /ops/runs/<txn_id>
+# ---------------------------------------------------------------------------
+
+
+def _seed_run_db(tmp_path: Path) -> Path:
+    """Seed an audit DB with two transactions worth of events.
+
+    Run A (txn-A, completed): clippings_processed + 2
+    article_intake_only + 1 absorb_parse_error.
+
+    Run B (txn-B, no completion → running): 1 article_intake_only.
+    """
+    db_path = tmp_path / "60-Logs" / "knowledge.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(_AUDIT_EVENTS_SCHEMA)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    later = (
+        datetime.now(timezone.utc) + timedelta(seconds=30)
+    ).strftime("%Y-%m-%dT%H:%M:%S")
+    rows = [
+        # Run A: bracketed by transaction_started + transaction_completed.
+        ("pipeline.jsonl", "transaction_started", "", "sess-A", today,
+         json.dumps({"txn_id": "txn-A", "type": "article-processing"})),
+        ("pipeline.jsonl", "clippings_processed", "", "sess-A", today,
+         json.dumps({"scanned": 2, "migrated": 2})),
+        ("pipeline.jsonl", "article_intake_only", "", "sess-A", today,
+         json.dumps({"file": "alpha.md", "source_url": "https://x.com/a"})),
+        ("pipeline.jsonl", "article_intake_only", "", "sess-A", today,
+         json.dumps({"file": "beta.md", "source_url": "https://x.com/b"})),
+        ("pipeline.jsonl", "absorb_parse_error", "", "sess-A", today,
+         json.dumps({"source": "/path/to/broken.md", "error": "JSON decode"})),
+        ("pipeline.jsonl", "transaction_completed", "", "sess-A", later,
+         json.dumps({"txn_id": "txn-A", "results": {"completed": 2}})),
+        # Run B: started but not completed.
+        ("pipeline.jsonl", "transaction_started", "", "sess-B", today,
+         json.dumps({"txn_id": "txn-B", "type": "github-redo"})),
+        ("pipeline.jsonl", "article_intake_only", "", "sess-B", today,
+         json.dumps({"file": "gamma.md"})),
+    ]
+    conn.executemany("INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+class TestBuildTodayDigestPayload:
+    def test_unavailable_when_db_missing(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+        payload = build_today_digest_payload(tmp_path)
+        assert payload["screen"] == "ops/today"
+        assert payload["available"] is False
+        assert payload["cards"] == []
+
+    def test_groups_events_into_five_cards(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+        _seed_run_db(tmp_path)
+        payload = build_today_digest_payload(tmp_path)
+        assert payload["available"] is True
+        # Five cards in canonical order.
+        assert [c["id"] for c in payload["cards"]] == [
+            "intake", "absorb", "synthesis", "governance", "failures",
+        ]
+        # Intake card carries clippings_processed + article_intake_only events.
+        intake = payload["cards"][0]
+        assert intake["total"] >= 4  # 1 clippings_processed + 3 intake_only
+        assert intake["by_type"].get("clippings_processed") == 1
+        assert intake["by_type"].get("article_intake_only") == 3
+        # Failures card surfaces the absorb_parse_error.
+        failures = payload["cards"][-1]
+        assert failures["by_type"].get("absorb_parse_error") == 1
+        # Each card with non-zero total has at least one sample.
+        for card in payload["cards"]:
+            if card["total"] > 0:
+                assert card["samples"], f"{card['id']} has no samples"
+
+    def test_target_date_overrides_today(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_today_digest_payload
+        _seed_run_db(tmp_path)
+        # Future date → no events.
+        future = "2099-01-01"
+        payload = build_today_digest_payload(tmp_path, target_date=future)
+        assert payload["date"] == future
+        assert all(c["total"] == 0 for c in payload["cards"])
+
+
+class TestBuildRunsIndexPayload:
+    def test_unavailable_when_db_missing(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_runs_index_payload
+        payload = build_runs_index_payload(tmp_path)
+        assert payload["available"] is False
+        assert payload["runs"] == []
+
+    def test_lists_runs_with_status(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_runs_index_payload
+        _seed_run_db(tmp_path)
+        payload = build_runs_index_payload(tmp_path)
+        assert payload["available"] is True
+        # Two transactions seeded.
+        txn_ids = {r["txn_id"] for r in payload["runs"]}
+        assert txn_ids == {"txn-A", "txn-B"}
+        # Run A completed; Run B running (started just now, < 6h cutoff).
+        by_id = {r["txn_id"]: r for r in payload["runs"]}
+        assert by_id["txn-A"]["status"] == "completed"
+        assert by_id["txn-B"]["status"] == "running"
+        # Workflow type pulled from payload.
+        assert by_id["txn-A"]["workflow_type"] == "article-processing"
+        assert by_id["txn-B"]["workflow_type"] == "github-redo"
+        # Detail href points at /ops/runs/<txn_id>
+        assert by_id["txn-A"]["detail_href"].endswith("/ops/runs/txn-A")
+
+    def test_limit_caps_results(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_runs_index_payload
+        _seed_run_db(tmp_path)
+        payload = build_runs_index_payload(tmp_path, limit=1)
+        assert len(payload["runs"]) == 1
+
+
+class TestBuildRunDetailPayload:
+    def test_returns_unavailable_for_unknown_txn(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_run_detail_payload
+        _seed_run_db(tmp_path)
+        payload = build_run_detail_payload(tmp_path, "txn-does-not-exist")
+        assert payload["available"] is False
+        assert "no events" in str(payload.get("reason", "")).lower()
+
+    def test_returns_session_scoped_events_for_known_txn(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_run_detail_payload
+        _seed_run_db(tmp_path)
+        payload = build_run_detail_payload(tmp_path, "txn-A")
+        assert payload["available"] is True
+        assert payload["txn_id"] == "txn-A"
+        assert payload["workflow_type"] == "article-processing"
+        # All 6 events for sess-A surface (the session_id JOIN strategy
+        # picks them up even though only the bracketing rows tag txn_id).
+        event_types = [e["event_type"] for e in payload["events"]]
+        assert "transaction_started" in event_types
+        assert "clippings_processed" in event_types
+        assert event_types.count("article_intake_only") == 2
+        assert "absorb_parse_error" in event_types
+        assert "transaction_completed" in event_types
+        # Chronological order: started first, completed last.
+        assert payload["events"][0]["event_type"] == "transaction_started"
+        assert payload["events"][-1]["event_type"] == "transaction_completed"
+
+    def test_empty_txn_id_returns_unavailable(self, tmp_path):
+        from ovp_pipeline.ui.view_models import build_run_detail_payload
+        payload = build_run_detail_payload(tmp_path, "")
+        assert payload["available"] is False
+        assert payload["txn_id"] == ""
+
+
+class TestBL053OpsNav:
+    """The IA shift surfaces ``Today`` and ``Runs`` ahead of the
+    long-window ``Timeline``; ``Audit`` label renamed to
+    ``Events`` per BL-052; ``Candidates`` label renamed to
+    ``Concept Candidates``.
+    """
+
+    def test_nav_includes_today_and_runs(self):
+        items = dict(_ops_nav_items(""))
+        assert items["Today"] == "/ops/today"
+        assert items["Runs"] == "/ops/runs"
+        # Timeline still present (multi-day complement).
+        assert items["Timeline"] == "/ops/timeline"
+
+    def test_nav_renames_audit_to_events(self):
+        items = dict(_ops_nav_items(""))
+        assert "Audit" not in items
+        assert items["Events"] == "/ops/events"
+
+    def test_nav_renames_candidates_label(self):
+        items = dict(_ops_nav_items(""))
+        # URL stays the same; label changes.
+        assert items.get("Concept Candidates") == "/ops/candidates"
+        assert "Candidates" not in items
+
+    def test_nav_ordering_workbench_pivots_first(self):
+        items = _ops_nav_items("")
+        labels = [label for label, _ in items]
+        # The IA shift puts the by-time pivots ahead of the live
+        # tail and browseables.  Overview stays as the workbench
+        # root link.
+        assert labels.index("Overview") < labels.index("Today")
+        assert labels.index("Today") < labels.index("Runs")
+        assert labels.index("Runs") < labels.index("Timeline")
+        assert labels.index("Timeline") < labels.index("Events")
