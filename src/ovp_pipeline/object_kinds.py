@@ -48,6 +48,52 @@ KIND_METHOD = "method"
 """Specific technique, algorithm, or protocol."""
 
 # ---------------------------------------------------------------------------
+# v2 absorb knowledge-unit kinds (BL-025/026, M8 type unification)
+# ---------------------------------------------------------------------------
+# These describe **what kind of knowledge unit** an evergreen is, not
+# what physical thing in the world it names.  They live alongside the
+# core object kinds above so that ``entity_type`` can carry either an
+# object kind (for entity notes — person / company / tool / ...) or a
+# unit kind (for evergreen notes — fact / method / procedure / ...).
+#
+# Pre-BL-025: ``auto_evergreen_extractor`` collapsed all v2 units to
+# either ``method`` or ``concept`` (binary), losing the rich 10-value
+# vocabulary the v2 prompt produced.  Result: 89% of live evergreens
+# carried ``entity_type: concept`` — Reader couldn't filter by type
+# meaningfully.
+#
+# Post-BL-025: each v2 ``unit_type`` value is also a valid
+# ``entity_type`` value.  Existing v1 evergreens (with
+# ``entity_type: concept``) are unchanged until BL-030 backfill.
+
+KIND_FACT = "fact"
+"""Single objective fact + at least one specific anchor."""
+
+KIND_PROCEDURE = "procedure"
+"""Numbered procedure with concrete actions / commands."""
+
+KIND_TRADEOFF = "tradeoff"
+"""Choice between alternatives + cost + applicability."""
+
+KIND_FAILURE_MODE = "failure_mode"
+"""How a system breaks; what conditions cause it."""
+
+KIND_COUNTEREXAMPLE = "counterexample"
+"""Concrete instance that contradicts a generally-held claim."""
+
+KIND_CASE_DETAIL = "case_detail"
+"""Specific case (who / where / what / outcome)."""
+
+KIND_LEARNING = "learning"
+"""Insight + the source's evidence for it."""
+
+KIND_DECISION = "decision"
+"""Decision + alternatives considered + rationale."""
+
+KIND_QUOTE = "quote"
+"""Verbatim quote worth preserving + brief annotation."""
+
+# ---------------------------------------------------------------------------
 # Structural / meta kinds
 # ---------------------------------------------------------------------------
 
@@ -80,6 +126,22 @@ CORE_OBJECT_KINDS: frozenset[str] = frozenset(
 )
 """Kinds that represent real-world knowledge objects (used for entity_type)."""
 
+V2_UNIT_TYPES: frozenset[str] = frozenset(
+    {
+        KIND_FACT,
+        KIND_METHOD,
+        KIND_PROCEDURE,
+        KIND_TRADEOFF,
+        KIND_FAILURE_MODE,
+        KIND_COUNTEREXAMPLE,
+        KIND_CASE_DETAIL,
+        KIND_LEARNING,
+        KIND_DECISION,
+        KIND_QUOTE,
+    }
+)
+"""v2 absorb's knowledge-unit kinds (used for evergreen ``entity_type``)."""
+
 STRUCTURAL_OBJECT_KINDS: frozenset[str] = frozenset(
     {
         KIND_EVERGREEN,
@@ -89,10 +151,24 @@ STRUCTURAL_OBJECT_KINDS: frozenset[str] = frozenset(
 )
 """Kinds that represent OVP-internal structural roles."""
 
-ALL_OBJECT_KINDS: frozenset[str] = CORE_OBJECT_KINDS | STRUCTURAL_OBJECT_KINDS
-"""Every recognized object kind."""
+ALL_OBJECT_KINDS: frozenset[str] = (
+    CORE_OBJECT_KINDS | STRUCTURAL_OBJECT_KINDS | V2_UNIT_TYPES
+)
+"""Every recognized object kind (entity-side + evergreen-side + structural)."""
+
+# Hard cap on taxonomy size — fail loudly if a future PR sneaks in
+# 30+ kinds without reading the design rationale.  Adding kinds is
+# fine; the bound just exists so an unreviewed proliferation breaks
+# the test suite.
+MAX_TAXONOMY_SIZE = 30
 
 # Convenience tuple for pack semantic relation contracts.
+# Stays scoped to ``CORE_OBJECT_KINDS`` — pack-declared semantic
+# relations (supports / challenges / extends / replaces / uses /
+# evolves) target entity-level kinds.  v2 unit kinds participate in
+# evergreen-level provenance relations (handled by ``provenance``
+# tables, not pack contracts), so adding them here would make the
+# pack relation surface explode without product benefit.
 RELATABLE_OBJECT_KINDS: tuple[str, ...] = tuple(sorted(CORE_OBJECT_KINDS))
 """Object kinds that may participate in semantic relations."""
 
@@ -100,7 +176,7 @@ RELATABLE_OBJECT_KINDS: tuple[str, ...] = tuple(sorted(CORE_OBJECT_KINDS))
 # Registry-level kind mapping (concept_registry backwards compatibility)
 # ---------------------------------------------------------------------------
 
-REGISTRY_VALID_KINDS: frozenset[str] = frozenset(
+_REGISTRY_ENTITY_KINDS: frozenset[str] = frozenset(
     {
         KIND_ENTITY,
         KIND_CONCEPT,
@@ -114,6 +190,12 @@ REGISTRY_VALID_KINDS: frozenset[str] = frozenset(
         KIND_EVENT,
     }
 )
+"""Entity-side kinds that ``ConceptEntry.kind`` accepts."""
+
+# BL-025/026: registry now also accepts the v2 unit kinds so a v2
+# absorb candidate can land in the registry without its
+# ``entity_type`` getting clamped back to ``KIND_CONCEPT``.
+REGISTRY_VALID_KINDS: frozenset[str] = _REGISTRY_ENTITY_KINDS | V2_UNIT_TYPES
 """Kinds valid for ConceptEntry.kind (excludes structural kinds)."""
 
 # Legacy aliases kept for backwards compatibility with existing registry data.
@@ -143,6 +225,7 @@ def normalize_kind(kind: str) -> str:
 # ---------------------------------------------------------------------------
 
 OBJECT_KIND_LABELS: dict[str, str] = {
+    # Entity-side kinds (physical things in the world)
     KIND_PERSON: "Person",
     KIND_CONCEPT: "Concept",
     KIND_COMPANY: "Company",
@@ -153,9 +236,20 @@ OBJECT_KIND_LABELS: dict[str, str] = {
     KIND_FRAMEWORK: "Framework",
     KIND_METHOD: "Method",
     KIND_ENTITY: "Entity",
+    # Structural
     KIND_CLAIM: "Claim",
     KIND_EVERGREEN: "Concept",
     KIND_DOCUMENT: "Document",
+    # v2 evergreen knowledge-unit kinds (BL-025/026)
+    KIND_FACT: "Fact",
+    KIND_PROCEDURE: "Procedure",
+    KIND_TRADEOFF: "Tradeoff",
+    KIND_FAILURE_MODE: "Failure mode",
+    KIND_COUNTEREXAMPLE: "Counterexample",
+    KIND_CASE_DETAIL: "Case detail",
+    KIND_LEARNING: "Learning",
+    KIND_DECISION: "Decision",
+    KIND_QUOTE: "Quote",
 }
 
 

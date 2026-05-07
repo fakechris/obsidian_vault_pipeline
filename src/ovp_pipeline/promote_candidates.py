@@ -145,7 +145,12 @@ def _candidate_to_evergreen_v1(candidate_text: str | None, entry: ConceptEntry) 
     """Pre-BL-058 path: rebuild frontmatter from registry entry, body
     is taken from the candidate file body if available.  Same byte
     output as the v1 implementation."""
-    from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
+    from .object_kinds import (
+        CORE_OBJECT_KINDS,
+        KIND_CONCEPT,
+        V2_UNIT_TYPES,
+        normalize_kind,
+    )
 
     aliases = list(dict.fromkeys([alias for alias in entry.aliases if alias]))
 
@@ -162,8 +167,13 @@ def _candidate_to_evergreen_v1(candidate_text: str | None, entry: ConceptEntry) 
         if not body.startswith("# "):
             body = f"# {entry.title}\n\n{body}".strip()
 
+    # BL-025/026: accept v2 unit kinds in addition to core entity-side
+    # kinds.
     normalized = normalize_kind(entry.kind) if entry.kind else KIND_CONCEPT
-    entity_type = normalized if normalized in CORE_OBJECT_KINDS else KIND_CONCEPT
+    if normalized in CORE_OBJECT_KINDS or normalized in V2_UNIT_TYPES:
+        entity_type = normalized
+    else:
+        entity_type = KIND_CONCEPT
 
     aliases_yaml = "[" + ", ".join(f'"{a}"' for a in aliases) + "]"
     return f'''---
@@ -377,7 +387,12 @@ def _render_v2_candidate(
     candidate→evergreen handoff.
     """
     from datetime import timezone
-    from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, KIND_METHOD, normalize_kind
+    from .object_kinds import (
+        CORE_OBJECT_KINDS,
+        KIND_CONCEPT,
+        V2_UNIT_TYPES,
+        normalize_kind,
+    )
 
     data = concept_data or {}
     aliases = list(dict.fromkeys([alias for alias in entry.aliases if alias]))
@@ -390,11 +405,12 @@ def _render_v2_candidate(
     specifics = [str(s).strip() for s in specifics_raw if str(s).strip()] if isinstance(specifics_raw, list) else []
     related = _normalize_related(data.get("related_concepts"), entry.slug)
 
-    # Map unit_type → entity_type using the same rule as the absorb
-    # extractor so a v2 candidate's frontmatter agrees with what the
-    # extractor's _unit_to_concept produced.
-    if unit_type in {"method", "procedure"}:
-        candidate_kind = KIND_METHOD
+    # BL-025/026: map ``unit_type`` directly to ``entity_type`` so the
+    # candidate frontmatter matches the extractor's new mapping (each
+    # of the 10 v2 unit kinds is its own entity_type).  Pre-fix used
+    # a binary collapse method/procedure → method, * → concept.
+    if unit_type in V2_UNIT_TYPES:
+        candidate_kind = unit_type
     else:
         normalized = normalize_kind(entry.kind) if entry.kind else KIND_CONCEPT
         candidate_kind = normalized if normalized in CORE_OBJECT_KINDS else KIND_CONCEPT
@@ -464,7 +480,12 @@ def _render_v1_candidate(
     yourself adding a v1 caller, ask whether it could carry v2
     fields instead.
     """
-    from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
+    from .object_kinds import (
+        CORE_OBJECT_KINDS,
+        KIND_CONCEPT,
+        V2_UNIT_TYPES,
+        normalize_kind,
+    )
 
     data = concept_data or {}
     aliases = list(dict.fromkeys([alias for alias in entry.aliases if alias]))
@@ -477,8 +498,10 @@ def _render_v1_candidate(
     if source_file is not None:
         source_link = f"\n## 📚 来源\n- [[{source_file.stem}]]\n"
 
+    # BL-025/026: accept v2 unit kinds in addition to core entity-side
+    # kinds.
     candidate_kind = normalize_kind(entry.kind) if entry.kind else KIND_CONCEPT
-    if candidate_kind not in CORE_OBJECT_KINDS:
+    if candidate_kind not in CORE_OBJECT_KINDS and candidate_kind not in V2_UNIT_TYPES:
         candidate_kind = KIND_CONCEPT
 
     aliases_yaml = "[" + ", ".join(f'"{a}"' for a in aliases) + "]"

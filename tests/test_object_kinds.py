@@ -23,14 +23,46 @@ from ovp_pipeline.object_kinds import (
 
 
 class TestCanonicalTaxonomy:
-    def test_core_and_structural_partition_all(self):
-        assert CORE_OBJECT_KINDS | STRUCTURAL_OBJECT_KINDS == ALL_OBJECT_KINDS
+    def test_partitions_compose_into_all(self):
+        # BL-025/026: ALL_OBJECT_KINDS now spans three axes — core
+        # (entity-side object kinds), structural (evergreen / claim
+        # / document), and v2 unit kinds (fact / method / procedure
+        # / tradeoff / ...).  Two are disjoint; CORE and V2 overlap
+        # by the single shared string ``method``.
+        from ovp_pipeline.object_kinds import V2_UNIT_TYPES, KIND_METHOD
+        assert (
+            CORE_OBJECT_KINDS | STRUCTURAL_OBJECT_KINDS | V2_UNIT_TYPES
+            == ALL_OBJECT_KINDS
+        )
+        # CORE and STRUCTURAL must stay disjoint — confusing them
+        # would let an entity get marked ``evergreen`` (or vice
+        # versa) and break the layer 1 / layer 2 type contract.
         assert CORE_OBJECT_KINDS & STRUCTURAL_OBJECT_KINDS == set()
+        # V2 unit kinds and STRUCTURAL kinds must also stay disjoint
+        # — a v2 unit is not a structural role.
+        assert V2_UNIT_TYPES & STRUCTURAL_OBJECT_KINDS == set()
+        # CORE and V2_UNIT_TYPES intersect ONLY on KIND_METHOD by
+        # design: an entity can have kind=method (a named technique)
+        # AND a v2 unit can have unit_type=method (extracted form).
+        # Any other shared string would be an unintended collision.
+        assert CORE_OBJECT_KINDS & V2_UNIT_TYPES == {KIND_METHOD}
 
-    def test_registry_kinds_subset_of_core(self):
-        assert REGISTRY_VALID_KINDS <= CORE_OBJECT_KINDS
+    def test_registry_kinds_span_core_plus_v2_units(self):
+        # BL-025/026: registry now also accepts v2 unit kinds so a
+        # v2 absorb candidate's ``entity_type`` doesn't get silently
+        # downgraded back to ``KIND_CONCEPT`` when ConceptEntry
+        # validates ``kind``.  Structural kinds stay out (a registry
+        # entry isn't a document).
+        from ovp_pipeline.object_kinds import V2_UNIT_TYPES
+        assert REGISTRY_VALID_KINDS == CORE_OBJECT_KINDS | V2_UNIT_TYPES
 
-    def test_relatable_kinds_match_core(self):
+    def test_relatable_kinds_stay_scoped_to_core(self):
+        # RELATABLE governs which kinds pack semantic-relation
+        # contracts (supports / challenges / extends / replaces /
+        # uses / evolves) can target.  Those relations apply at the
+        # entity level; v2 unit-level relations are provenance,
+        # handled by a different table.  Keeping RELATABLE = CORE
+        # avoids exploding pack surface.
         assert set(RELATABLE_OBJECT_KINDS) == CORE_OBJECT_KINDS
 
     def test_all_kinds_have_labels(self):
@@ -42,7 +74,17 @@ class TestCanonicalTaxonomy:
         assert not extra, f"Extra label keys not in taxonomy: {extra}"
 
     def test_taxonomy_size_bounded(self):
-        assert len(ALL_OBJECT_KINDS) < 15, "Taxonomy should stay small (< 15)"
+        from ovp_pipeline.object_kinds import MAX_TAXONOMY_SIZE
+        # Pre-BL-025: < 15 (core 10 + structural 3).
+        # Post-BL-025: 22 (added 9 v2 unit kinds; KIND_METHOD
+        # overlaps with CORE_OBJECT_KINDS so we add 9 not 10).
+        # The bound is a discipline knob, not a hard product
+        # constraint — bumping it requires an explicit decision.
+        assert len(ALL_OBJECT_KINDS) < MAX_TAXONOMY_SIZE, (
+            f"Taxonomy size {len(ALL_OBJECT_KINDS)} >= MAX_TAXONOMY_SIZE "
+            f"({MAX_TAXONOMY_SIZE}) — adding kinds is fine but bumping "
+            f"the cap is a deliberate decision."
+        )
 
 
 class TestNormalization:

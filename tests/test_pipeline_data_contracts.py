@@ -46,11 +46,21 @@ class TestKindTaxonomyConsistency:
         overlap = CORE_OBJECT_KINDS & STRUCTURAL_OBJECT_KINDS
         assert not overlap, f"Core and structural kinds overlap: {overlap}"
 
-    def test_core_plus_structural_equals_all(self):
-        assert CORE_OBJECT_KINDS | STRUCTURAL_OBJECT_KINDS == ALL_OBJECT_KINDS
+    def test_core_plus_structural_plus_v2_units_equals_all(self):
+        # BL-025/026: ALL now spans three axes — entity-side kinds
+        # (CORE), structural roles (evergreen/claim/document), and
+        # v2 unit kinds (fact/method/procedure/...).
+        from ovp_pipeline.object_kinds import V2_UNIT_TYPES
+        assert (
+            CORE_OBJECT_KINDS | STRUCTURAL_OBJECT_KINDS | V2_UNIT_TYPES
+            == ALL_OBJECT_KINDS
+        )
 
-    def test_registry_valid_kinds_equals_core(self):
-        assert REGISTRY_VALID_KINDS == CORE_OBJECT_KINDS
+    def test_registry_valid_kinds_equals_core_plus_v2_units(self):
+        # BL-025/026: registry accepts both entity-side and v2
+        # unit kinds.
+        from ovp_pipeline.object_kinds import V2_UNIT_TYPES
+        assert REGISTRY_VALID_KINDS == CORE_OBJECT_KINDS | V2_UNIT_TYPES
 
     def test_evergreen_not_in_core(self):
         assert KIND_EVERGREEN not in CORE_OBJECT_KINDS
