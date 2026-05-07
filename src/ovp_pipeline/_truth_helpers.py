@@ -9,6 +9,7 @@ runtime / pack-resolution layers.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import functools
 import json
 import logging
 import re
@@ -327,8 +328,28 @@ def _rewrite_jsonl(path: Path, payloads: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
-    resolved = resolve_vault_dir(vault_dir).resolve()
+@functools.lru_cache(maxsize=64)
+def _resolved_vault_dir_cached(vault_dir_str: str) -> Path:
+    """Memoise ``resolve_vault_dir(...).resolve()`` per vault dir.
+
+    Pre-fix every ``_vault_relative_path`` call (~14 K per
+    ``/ops/signals`` request) re-ran ``resolve()`` on the same
+    vault root, hitting ``realpath`` syscalls on every iteration.
+    Caching by the ``str`` form of the vault path is enough — any
+    given UI request runs against a single vault.
+    """
+    return resolve_vault_dir(vault_dir_str).resolve()
+
+
+@functools.lru_cache(maxsize=8192)
+def _vault_relative_path_cached(vault_dir_str: str, path: str) -> str:
+    """Memoised core: ``_vault_relative_path`` defers here once
+    inputs have been coerced to ``str``.  Call frequency on the
+    slow Ops pages is dominated by a small set of repeated paths
+    (the same evergreen referenced by N events), so a 8 K-entry
+    cache covers a full request without filling RAM.
+    """
+    resolved = _resolved_vault_dir_cached(vault_dir_str)
     candidate = Path(path)
     if not candidate.is_absolute():
         return path
@@ -336,6 +357,10 @@ def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
         return str(candidate.resolve().relative_to(resolved))
     except ValueError:
         return path
+
+
+def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
+    return _vault_relative_path_cached(str(vault_dir), str(path))
 
 
 def _read_note_text(vault_dir: Path | str, relative_path: str) -> str:
