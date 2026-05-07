@@ -39,6 +39,19 @@ try:
 except ImportError:
     from source_lifecycle import clipping_raw_name  # type: ignore
 
+try:
+    from .source_dedup import (
+        build_active_url_index,
+        extract_source_url,
+        read_file_head,
+    )
+except ImportError:  # pragma: no cover - script mode fallback
+    from source_dedup import (  # type: ignore
+        build_active_url_index,
+        extract_source_url,
+        read_file_head,
+    )
+
 
 VAULT_DIR = resolve_vault_dir()
 DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
@@ -343,6 +356,16 @@ class ClippingsProcessor:
         if batch_size:
             files = files[:batch_size]
 
+        # Build a single global URL→path index of the active
+        # staging set so we don't re-clip a URL that's already
+        # somewhere downstream (01-Raw / 02-Processing / 03-
+        # Processed) or sitting in another Clippings entry from
+        # the same batch.  We grow ``staged_urls`` in-process as
+        # we accept new clippings, since the on-disk index won't
+        # see migrations that happen during this loop.
+        active_index = build_active_url_index(self.vault_dir)
+        staged_urls: set[str] = set()
+
         for file_path in files:
             file_info = {
                 "original": str(file_path.name),
@@ -353,12 +376,58 @@ class ClippingsProcessor:
 
             file_info["new_name"] = new_name
 
+            # URL-level dedupe guard.  Catches the cross-stage case
+            # the basename guard misses (e.g. user re-clips the
+            # same x.com URL via a different filename, or a URL
+            # that's already in 03-Processed/2026-04 under last
+            # run's basename).  Two cases coexist: ``existing``
+            # holds the on-disk Path that already claimed the URL;
+            # ``in_batch_dup`` is True when an earlier file in
+            # this Clippings batch took the slot.
+            try:
+                head = read_file_head(file_path)
+                source_url = extract_source_url(head)
+            except OSError:
+                source_url = None
+            existing: Path | None = None
+            in_batch_dup = False
+            if source_url:
+                if source_url in staged_urls:
+                    in_batch_dup = True
+                else:
+                    candidate = active_index.get(source_url)
+                    if candidate is not None:
+                        try:
+                            is_self_match = candidate.resolve() == file_path.resolve()
+                        except OSError:
+                            is_self_match = False  # broken link can't be self
+                        if not is_self_match:
+                            existing = candidate
+            if existing is not None or in_batch_dup:
+                file_info["status"] = "skipped_url_dedup"
+                claim = (
+                    "a previous Clippings entry in this batch"
+                    if in_batch_dup
+                    else str(existing.relative_to(self.vault_dir))
+                )
+                file_info["reason"] = f"URL {source_url} already claimed by {claim}"
+                file_info["source_url"] = source_url
+                results["skipped"] += 1
+                results["files"].append(file_info)
+                self.logger.log("source_dedup_skipped", {
+                    "source": str(file_path),
+                    "url": source_url,
+                    "existing": "in_batch" if in_batch_dup else str(existing),
+                    "stage": "clippings_intake",
+                })
+                continue
+
             # Dedupe guard: if the same basename already lives in
             # 01-Raw (pending intake) or any 03-Processed/<YYYY-MM>/
-            # subdir, skip rather than silently overwrite.  This
-            # most commonly fires when a user re-clips the same
-            # article — we want the user to see the conflict, not
-            # lose the older copy.
+            # subdir, skip rather than silently overwrite.  Kept as
+            # a defence-in-depth check for files without parseable
+            # frontmatter URLs (extract_source_url returns None) —
+            # the URL gate above is the main defence.
             if self._target_already_exists(new_name):
                 file_info["status"] = "skipped_collision"
                 file_info["reason"] = (
@@ -385,6 +454,8 @@ class ClippingsProcessor:
             if self.obsidian_move(file_path, self.raw_dir, new_name):
                 file_info["status"] = "migrated"
                 results["migrated"] += 1
+                if source_url:
+                    staged_urls.add(source_url)
             else:
                 file_info["status"] = "failed"
                 results["failed"] += 1

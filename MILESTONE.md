@@ -50,6 +50,7 @@ Three target tiers:
 | **M11 Source Authority And Cross-Source Identity** | **Done** | typed source-authority providers (D1/D2/D3), entity layer (twitter_author / github_project / github_user / person / organization), runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
 | **M12 Extraction-Time Entity Prime And Auto-Wikilink** | **Done** | entity_aliases view (PR #126), LLM extractor primed with known entities (PR #127), `ovp-link-entities` auto-wikilink CLI (PR #128) — closes the loop from "we know who Karpathy is" to "the next ingest run uses that knowledge" (BL-038, BL-039, BL-040) |
 | **M13 Synthesis Layer (Crystal)** | **Done** | Louvain community detection (PR #130), community Crystal MVP (PR #131), contradiction crystals (PR #132), append-only versioning + `ovp-list-crystals` (PR #133) — closes the gap with NM 0.8's synthesis tier (BL-041, BL-042, BL-043, BL-044) |
+| **M17 Intake Hardening (BL-058)** | **Done (v0.13.0)** | URL preservation through deep-dive (C1, PR #170), deprecate legacy 13-section LLM rewrite as default (C2, PR #170), `ovp-dedup-cleanup` CLI (PR #170), measurement CLIs `ovp-fidelity-sample` + `ovp-prompt-ab` (PR #171), and **global URL dedup across the active staging chain** (Clippings + four `50-Inbox/` stages, PR #172) — closes the dedup-bypass surfaced by the v0.12.0 incremental run (12 fresh dups created via Clippings flow because the gate scanned only 03-Processed). Audit events `source_dedup_skipped` carry `stage` so attribution is in the log. |
 
 ## Active Backlog Alignment
 

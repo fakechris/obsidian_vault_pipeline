@@ -17,4 +17,4 @@ def test_unified_pipeline_version_falls_back_to_pyproject_when_metadata_missing(
 
     monkeypatch.setattr(metadata, "version", missing_distribution)
 
-    assert _get_version() == "0.12.0"
+    assert _get_version() == "0.13.0"

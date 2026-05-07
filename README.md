@@ -22,7 +22,7 @@ Capture → Compile → Reuse
 
 </div>
 
-Current document version: `v0.9.3`
+Current document version: `v0.13.0`
 
 Primary docs:
 
@@ -105,6 +105,7 @@ Current milestone sequence:
 | M11 Source Authority And Cross-Source Identity | Done | typed source-authority providers, entity layer (twitter_author / github_project / github_user / person / organization), runtime resolver, refresh wrapper, db backup (PRs #112–#124) |
 | M12 Extraction-Time Entity Prime And Auto-Wikilink | Done | entity_aliases view, LLM extractor primed with known entities, auto-wikilink CLI (PRs #126–#128) |
 | M13 Synthesis Layer (Crystal) | Done | Louvain communities + LLM-synthesized crystals + contradiction crystals + append-only versioning (PRs #130–#133, closes the L3 gap with NM 0.8) |
+| M14 Intake Hardening (BL-058) | Done | URL preservation through deep-dive, deprecate legacy 13-section LLM rewrite, **global URL dedup across the active staging chain** (Clippings + 4 50-Inbox stages), audit-event `stage` field, fidelity-sample + prompt-ab measurement CLIs (PRs #170–#172, v0.13.0) |
 
 Recent major changes (PRs #98–#124):
 

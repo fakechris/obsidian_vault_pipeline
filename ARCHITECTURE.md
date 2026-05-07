@@ -71,6 +71,22 @@ Governance is **not** a fourth step in the flow. It sits across all four states,
 
 **Test:** A Source's content hash + ingestion timestamp uniquely identify it; re-ingesting an unchanged URL must be idempotent.
 
+### Active staging set (URL uniqueness)
+
+A Source's `source_url` is its global identity in the active intake chain. The chain consists of five directories — collectively the **active staging set**:
+
+| Stage | Directory | Role |
+|---|---|---|
+| L0 | `Clippings/` (incl. subdirs) | user-side capture (Reader / web clipper) |
+| L1 | `50-Inbox/02-Pinboard/` | Pinboard fetch landing |
+| L2 | `50-Inbox/01-Raw/` | post-clipping / post-pinboard raw |
+| L3 | `50-Inbox/02-Processing/` | actively being processed |
+| L4 | `50-Inbox/03-Processed/<YYYY-MM>/` | intake done; absorb-eligible |
+
+A `source_url` appearing **anywhere** in this set claims its slot. Any second arrival of the same URL — at any layer — is rejected with a `source_dedup_skipped` audit event. `70-Archive/` is **excluded by design**: a user who archived a prior copy and wants a fresh take is supported.
+
+The dedup gate fires at every intake site (`ovp-clippings`, `ovp-pinboard-process`, `ovp-article --process-inbox`, `ovp-article --process-single`) using the global `source_dedup.build_active_url_index` index. See `src/ovp_pipeline/source_dedup.py` and `tests/test_intake_dedup_and_url.py` for the full contract.
+
 ## Term: Candidate
 
 **Meaning:** System-proposed internal state that has *not yet been accepted*. Includes proposed objects, claims, relations, and entity merges.
