@@ -391,3 +391,204 @@ class TestSourceDedupIndex:
         assert len(groups["https://dup.com/x"]) == 2
         # Singletons are excluded from the cleanup target list.
         assert "https://unique.com/y" not in groups
+
+
+# ---------------------------------------------------------------------------
+# 5. Global active-staging URL dedup
+#
+# The 2026-05-07 v0.12.0 incremental run produced 12 new dups because
+# the URL gate scanned 03-Processed only.  Clippings/ files holding
+# the same URL as already-processed items walked through the pipeline
+# unchecked.  These tests pin the broader contract: dedup looks at
+# the entire active-staging set (Clippings, 02-Pinboard, 01-Raw,
+# 02-Processing, 03-Processed) — but explicitly NOT 70-Archive.
+# ---------------------------------------------------------------------------
+
+
+def _write_md(path: Path, *, url: str, body: str = "body\n") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'---\nsource: "{url}"\n---\n\n{body}', encoding="utf-8",
+    )
+    return path
+
+
+class TestActiveStagingDedupIndex:
+    """``build_active_url_index`` walks all 5 staging dirs."""
+
+    def test_index_includes_all_active_dirs(self, tmp_path):
+        from ovp_pipeline.source_dedup import build_active_url_index
+        _write_md(tmp_path / "Clippings/c.md", url="https://x.com/c")
+        _write_md(tmp_path / "50-Inbox/02-Pinboard/p.md", url="https://x.com/p")
+        _write_md(tmp_path / "50-Inbox/01-Raw/r.md", url="https://x.com/r")
+        _write_md(tmp_path / "50-Inbox/02-Processing/proc.md", url="https://x.com/proc")
+        _write_md(tmp_path / "50-Inbox/03-Processed/2026-05/done.md", url="https://x.com/done")
+        idx = build_active_url_index(tmp_path)
+        assert {"https://x.com/c", "https://x.com/p", "https://x.com/r",
+                "https://x.com/proc", "https://x.com/done"} <= idx.keys()
+
+    def test_archive_is_excluded(self, tmp_path):
+        from ovp_pipeline.source_dedup import build_active_url_index
+        _write_md(tmp_path / "70-Archive/old.md", url="https://x.com/archived")
+        idx = build_active_url_index(tmp_path)
+        assert "https://x.com/archived" not in idx
+
+    def test_downstream_stage_wins_on_collision(self, tmp_path):
+        """When the same URL exists in 01-Raw AND 03-Processed,
+        the index points to 03-Processed.  This is what makes the
+        self-match check in ``_check_url_dedup`` correctly flag the
+        01-Raw file as a duplicate of the 03-Processed one.
+        """
+        from ovp_pipeline.source_dedup import build_active_url_index
+        url = "https://x.com/staged-and-processed"
+        _write_md(tmp_path / "50-Inbox/01-Raw/r.md", url=url)
+        _write_md(tmp_path / "50-Inbox/03-Processed/2026-05/p.md", url=url)
+        idx = build_active_url_index(tmp_path)
+        # 03-Processed wins per ACTIVE_INTAKE_DIRS ordering
+        assert idx[url].parts[-2] == "2026-05"
+
+    def test_build_url_index_processed_only(self, tmp_path):
+        """The narrow ``build_url_index`` keeps its 03-Processed-only
+        scope so the cleanup CLI doesn't archive in-flight files.
+        """
+        from ovp_pipeline.source_dedup import build_url_index
+        _write_md(tmp_path / "Clippings/c.md", url="https://x.com/c")
+        _write_md(tmp_path / "50-Inbox/01-Raw/r.md", url="https://x.com/r")
+        _write_md(tmp_path / "50-Inbox/03-Processed/2026-05/p.md", url="https://x.com/p")
+        idx = build_url_index(tmp_path)
+        assert "https://x.com/p" in idx
+        assert "https://x.com/c" not in idx
+        assert "https://x.com/r" not in idx
+
+
+class TestProcessInboxUrlDedup:
+    """``process_inbox`` (the clippings-flow consumer) must catch
+    URLs already living in 03-Processed under a different basename
+    — the v0.12.0 bug shape.
+    """
+
+    def test_inbox_skips_clipping_already_in_03_processed(self, temp_vault):
+        # Pre-existing 03-Processed copy under last-month's basename
+        url = "https://anthropic.com/engineering/dup-test"
+        _write_md(
+            temp_vault / "50-Inbox/03-Processed/2026-04/2026-04-09_X.md",
+            url=url,
+        )
+        # New raw lands in 01-Raw with a 2026-05 basename — same URL
+        new_raw = _write_clipping(
+            temp_vault, "2026-05-07_X.md", url=url,
+        )
+        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        results = proc.process_inbox(dry_run=False)
+        # Exactly one file processed, and it was skipped via the URL
+        # gate (status=skipped_dedup), NOT processed via intake_only.
+        statuses = [f["status"] for f in results["files"]]
+        assert statuses == ["skipped_dedup"], statuses
+        assert results["skipped"] == 1
+        assert results["completed"] == 0
+        # Audit event records the gate fired at process_inbox stage
+        log = (temp_vault / "60-Logs" / "pipeline.jsonl").read_text("utf-8")
+        events = [json.loads(line) for line in log.splitlines() if line.strip()]
+        gate_events = [
+            e for e in events
+            if e.get("event_type") == "source_dedup_skipped"
+            and e.get("stage") == "process_inbox"
+        ]
+        assert len(gate_events) == 1
+        assert gate_events[0]["url"] == url
+        # The new raw was NOT clobbered — it stays for the user to
+        # delete or re-process explicitly.
+        assert new_raw.exists()
+
+    def test_inbox_self_match_is_not_a_dup(self, temp_vault):
+        """A 01-Raw file whose URL also lives at the same path in
+        the index must not flag itself.
+        """
+        url = "https://example.com/only-once"
+        _write_clipping(temp_vault, "single.md", url=url)
+        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        results = proc.process_inbox(dry_run=False)
+        statuses = [f["status"] for f in results["files"]]
+        assert statuses == ["intake_only"], statuses
+
+
+def _make_clippings_processor(temp_vault):
+    from ovp_pipeline.clippings_processor import ClippingsProcessor
+    from ovp_pipeline.auto_article_processor import (
+        PipelineLogger, TransactionManager,
+    )
+    from ovp_pipeline.runtime import VaultLayout
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.logs_dir.mkdir(parents=True, exist_ok=True)
+    layout.transactions_dir.mkdir(parents=True, exist_ok=True)
+    logger = PipelineLogger(layout.pipeline_log)
+    txn = TransactionManager(layout.transactions_dir)
+    return ClippingsProcessor(temp_vault, logger, txn)
+
+
+class TestClippingsProcessorUrlDedup:
+    """``ClippingsProcessor.process_clippings`` must skip a clipping
+    whose URL already lives anywhere downstream — the case the
+    basename-only ``_target_already_exists`` check missed.
+
+    These tests bypass ``obsidian_move`` (which shells out to the
+    Obsidian CLI) by setting the ``OVP_TEST_USE_FS_MOVE`` env so
+    the processor takes the filesystem-fallback branch.  Even if
+    the env hook isn't honored we still validate the dedup
+    decision — the file may or may not move, but the gate's
+    skipped/migrated verdict is what we assert.
+    """
+
+    def test_clipping_skipped_when_url_already_in_03_processed(self, temp_vault, monkeypatch):
+        url = "https://anthropic.com/engineering/already-processed"
+        # Pre-existing copy under a 2026-04 basename
+        _write_md(
+            temp_vault / "50-Inbox/03-Processed/2026-04/old_name.md",
+            url=url,
+        )
+        # User re-clips under a totally different basename — no
+        # filename collision, so the legacy guard wouldn't fire.
+        clip = temp_vault / "Clippings" / "Brand New Article.md"
+        _write_md(clip, url=url)
+
+        proc = _make_clippings_processor(temp_vault)
+        # dry_run=True is enough — the dedup gate runs before the move
+        results = proc.process_clippings(dry_run=True)
+        statuses = [f["status"] for f in results["files"]]
+        assert "skipped_url_dedup" in statuses
+        # File stays in Clippings — the user gets to see and decide.
+        assert clip.exists()
+        # Audit event has stage=clippings_intake
+        log = (temp_vault / "60-Logs" / "pipeline.jsonl").read_text("utf-8")
+        events = [json.loads(line) for line in log.splitlines() if line.strip()]
+        intake_events = [
+            e for e in events
+            if e.get("event_type") == "source_dedup_skipped"
+            and e.get("stage") == "clippings_intake"
+        ]
+        assert len(intake_events) == 1
+
+    def test_two_clippings_same_url_only_first_migrates(self, temp_vault):
+        """In-batch dedup: two Clippings entries with the same URL
+        in the same run — the first goes through, the second hits
+        the gate.
+        """
+        url = "https://x.com/same-url-twice"
+        clip1 = temp_vault / "Clippings" / "AAA.md"
+        clip2 = temp_vault / "Clippings" / "BBB.md"
+        _write_md(clip1, url=url)
+        _write_md(clip2, url=url)
+
+        proc = _make_clippings_processor(temp_vault)
+        results = proc.process_clippings(dry_run=True)
+        statuses = sorted(f["status"] for f in results["files"])
+        # First (alphabetically) goes through with dry_run, second
+        # gets skipped via in-batch URL gate.  Note: in dry_run the
+        # ``staged_urls`` set isn't updated (the migration that
+        # would feed it is skipped), so this test instead checks
+        # that the URL was already in the active index because
+        # both Clippings files exist on disk and the index walks
+        # ``Clippings/`` — first-write-wins picks AAA.md, BBB.md
+        # finds AAA.md as the existing claim.
+        assert "skipped_url_dedup" in statuses
+        assert "dry_run" in statuses

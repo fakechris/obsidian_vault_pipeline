@@ -343,6 +343,21 @@ class ClippingsProcessor:
         if batch_size:
             files = files[:batch_size]
 
+        # Build a single global URL→path index of the active
+        # staging set so we don't re-clip a URL that's already
+        # somewhere downstream (01-Raw / 02-Processing / 03-
+        # Processed) or sitting in another Clippings entry from
+        # the same batch.  We grow ``staged_urls`` in-process as
+        # we accept new clippings, since the on-disk index won't
+        # see migrations that happen during this loop.
+        from .source_dedup import (
+            build_active_url_index,
+            extract_source_url,
+            read_file_head,
+        )
+        active_index = build_active_url_index(self.vault_dir)
+        staged_urls: set[str] = set()
+
         for file_path in files:
             file_info = {
                 "original": str(file_path.name),
@@ -353,12 +368,53 @@ class ClippingsProcessor:
 
             file_info["new_name"] = new_name
 
+            # URL-level dedupe guard.  Catches the cross-stage case
+            # the basename guard misses (e.g. user re-clips the
+            # same x.com URL via a different filename, or a URL
+            # that's already in 03-Processed/2026-04 under last
+            # run's basename).  Self-match (the Clippings file
+            # itself was already in the index because it lives
+            # under ``Clippings/``) is filtered explicitly.
+            try:
+                head = read_file_head(file_path)
+                source_url = extract_source_url(head)
+            except OSError:
+                source_url = None
+            existing: Path | None = None
+            if source_url:
+                if source_url in staged_urls:
+                    existing = file_path  # placeholder; reason below
+                else:
+                    candidate = active_index.get(source_url)
+                    if candidate is not None:
+                        try:
+                            if candidate.resolve() != file_path.resolve():
+                                existing = candidate
+                        except OSError:
+                            existing = candidate
+            if existing is not None:
+                file_info["status"] = "skipped_url_dedup"
+                file_info["reason"] = (
+                    f"URL {source_url} already claimed by "
+                    f"{existing.relative_to(self.vault_dir) if existing != file_path else 'a previous Clippings entry in this batch'}"
+                )
+                file_info["source_url"] = source_url
+                results["skipped"] += 1
+                results["files"].append(file_info)
+                self.logger.log("source_dedup_skipped", {
+                    "source": str(file_path),
+                    "url": source_url,
+                    "existing": str(existing) if existing != file_path else "in_batch",
+                    "stage": "clippings_intake",
+                })
+                continue
+
             # Dedupe guard: if the same basename already lives in
             # 01-Raw (pending intake) or any 03-Processed/<YYYY-MM>/
-            # subdir, skip rather than silently overwrite.  This
-            # most commonly fires when a user re-clips the same
-            # article — we want the user to see the conflict, not
-            # lose the older copy.
+            # subdir, skip rather than silently overwrite.  Kept as
+            # a defence-in-depth check for files without parseable
+            # frontmatter URLs (extract_source_url returns None) —
+            # the URL gate above is the main defence.
             if self._target_already_exists(new_name):
                 file_info["status"] = "skipped_collision"
                 file_info["reason"] = (
@@ -385,6 +441,8 @@ class ClippingsProcessor:
             if self.obsidian_move(file_path, self.raw_dir, new_name):
                 file_info["status"] = "migrated"
                 results["migrated"] += 1
+                if source_url:
+                    staged_urls.add(source_url)
             else:
                 file_info["status"] = "failed"
                 results["failed"] += 1

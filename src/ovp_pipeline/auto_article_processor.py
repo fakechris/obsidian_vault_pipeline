@@ -670,28 +670,39 @@ class AutoArticleProcessor:
             return restored
         return None
 
-    def _check_url_dedup(self, source: Path) -> dict | None:
+    def _check_url_dedup(
+        self,
+        source: Path,
+        *,
+        index: dict | None = None,
+        stage: str = "single_source",
+    ) -> dict | None:
         """Return a ``skipped_dedup`` result dict when ``source``'s URL
-        already appears in ``50-Inbox/03-Processed/``; ``None`` otherwise.
+        already appears anywhere in the active staging chain
+        (``Clippings/`` + 4 stages under ``50-Inbox/``); ``None``
+        otherwise.
 
-        Pre-fix, intake had no URL-level guard — the same Twitter
-        thread re-clipped from Reader landed as a fresh raw every
-        time, and absorb burned LLM cycles re-extracting identical
-        bodies.  The 8 confirmed duplicates in the 2026-05-06 census
-        each represent one of these cases.
+        Pre-2026-05-07 the gate scanned ``50-Inbox/03-Processed/`` only
+        and was wired to :meth:`process_single_source` only.  That
+        narrow design left the Clippings → ``process_inbox`` flow
+        without any URL guard — re-clipping the same article via a
+        Reader save produced 12 fresh duplicates per BL-058 v0.12.0
+        run.  Now: gate is invoked from both :meth:`process_inbox`
+        and :meth:`process_single_source`, and uses the global
+        active-staging index from :func:`source_dedup.build_active_url_index`.
 
-        Scope: invoked from :meth:`process_single_source` only — not
-        from :meth:`process_inbox`.  Inbox files are post-intake (the
-        next pipeline stage), so applying URL dedup there would
-        short-circuit legitimate reprocessing.  The asymmetry is
-        intentional; pre-existing 03-Processed dups are handled by
-        ``ovp-dedup-cleanup``.
+        ``index`` may be passed in by callers iterating many files
+        (``process_inbox``) so we don't rescan the vault per-file.
 
-        Note: only checks the active ``03-Processed`` tree, not the
-        ``70-Archive`` archive.  A user who archived a prior copy
-        and explicitly wants to re-process the URL gets through.
+        ``stage`` is recorded in the audit event so we can tell which
+        intake site fired the gate.
+
+        Note: ``70-Archive/`` is excluded by design.  A user who
+        archived a prior copy and explicitly wants to re-process the
+        URL gets through.
         """
         from .source_dedup import (
+            build_active_url_index,
             extract_source_url,
             find_existing_by_url,
             read_file_head,
@@ -703,11 +714,13 @@ class AutoArticleProcessor:
         url = extract_source_url(text)
         if not url:
             return None
-        existing = find_existing_by_url(self.vault_dir, url)
+        if index is None:
+            index = build_active_url_index(self.vault_dir)
+        existing = find_existing_by_url(self.vault_dir, url, index=index)
         if existing is None:
             return None
         # Don't flag a self-match — the same file already living in
-        # 03-Processed isn't a dup of itself.
+        # the staging chain isn't a dup of itself.
         try:
             if existing.resolve() == source.resolve():
                 return None
@@ -717,6 +730,7 @@ class AutoArticleProcessor:
             "source": str(source),
             "url": url,
             "existing": str(existing),
+            "stage": stage,
         })
         return {
             "file": str(source),
@@ -728,6 +742,7 @@ class AutoArticleProcessor:
             "dedup": {
                 "url": url,
                 "existing": str(existing.relative_to(self.vault_dir)),
+                "stage": stage,
             },
         }
 
@@ -1327,7 +1342,30 @@ class AutoArticleProcessor:
                 progress_summary=f"0/{work_units_total} articles processed",
             )
 
+        # Build the URL→path index once for the batch; the gate
+        # checks every queued file against it before any
+        # filesystem move.  Without this, a re-clip of an already-
+        # processed URL silently re-runs the entire pipeline.
+        from .source_dedup import build_active_url_index
+        active_index = build_active_url_index(self.vault_dir)
+
         for index, file_path in enumerate(files, start=1):
+            # URL dedup gate fires BEFORE staging so a detected dup
+            # leaves 01-Raw / 02-Processing untouched.  Self-match
+            # is filtered (the queued file is itself in the index
+            # because it lives under one of the staging dirs).
+            if not dry_run:
+                dedup_result = self._check_url_dedup(
+                    file_path, index=active_index, stage="process_inbox",
+                )
+                if dedup_result is not None:
+                    results["files"].append(dedup_result)
+                    results["skipped"] += 1
+                    self._finalize_lifecycle_source(
+                        file_path, dedup_result, dry_run=dry_run,
+                    )
+                    continue
+
             working_path = file_path
             if not dry_run and file_path.parent != self.processing_dir:
                 working_path = self._stage_source_for_processing(file_path)
