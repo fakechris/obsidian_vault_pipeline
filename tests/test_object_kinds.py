@@ -23,9 +23,22 @@ from ovp_pipeline.object_kinds import (
 
 
 class TestCanonicalTaxonomy:
-    def test_core_and_structural_partition_all(self):
-        assert CORE_OBJECT_KINDS | STRUCTURAL_OBJECT_KINDS == ALL_OBJECT_KINDS
+    def test_partitions_compose_into_all(self):
+        # BL-025/026: ALL_OBJECT_KINDS now spans three disjoint
+        # axes — core (entity-side object kinds), structural
+        # (evergreen / claim / document), and v2 unit kinds
+        # (fact / method / procedure / tradeoff / ...).
+        from ovp_pipeline.object_kinds import V2_UNIT_TYPES
+        assert (
+            CORE_OBJECT_KINDS | STRUCTURAL_OBJECT_KINDS | V2_UNIT_TYPES
+            == ALL_OBJECT_KINDS
+        )
         assert CORE_OBJECT_KINDS & STRUCTURAL_OBJECT_KINDS == set()
+        # KIND_METHOD lives in both CORE_OBJECT_KINDS and
+        # V2_UNIT_TYPES on purpose: an entity can have kind=method
+        # (the historical sense — a named technique) AND an
+        # evergreen unit can be unit_type=method (extracted
+        # form).  The string is the same.
 
     def test_registry_kinds_subset_of_core(self):
         assert REGISTRY_VALID_KINDS <= CORE_OBJECT_KINDS
@@ -42,7 +55,10 @@ class TestCanonicalTaxonomy:
         assert not extra, f"Extra label keys not in taxonomy: {extra}"
 
     def test_taxonomy_size_bounded(self):
-        assert len(ALL_OBJECT_KINDS) < 15, "Taxonomy should stay small (< 15)"
+        # Pre-BL-025: < 15 (core 10 + structural 3).
+        # Post-BL-025: < 25 (added 9 v2 unit kinds; KIND_METHOD
+        # overlaps with CORE_OBJECT_KINDS so we add 9 not 10).
+        assert len(ALL_OBJECT_KINDS) < 25, "Taxonomy should stay small (< 25)"
 
 
 class TestNormalization:

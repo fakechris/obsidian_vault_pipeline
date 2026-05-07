@@ -377,7 +377,12 @@ def _render_v2_candidate(
     candidate→evergreen handoff.
     """
     from datetime import timezone
-    from .object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, KIND_METHOD, normalize_kind
+    from .object_kinds import (
+        CORE_OBJECT_KINDS,
+        KIND_CONCEPT,
+        V2_UNIT_TYPES,
+        normalize_kind,
+    )
 
     data = concept_data or {}
     aliases = list(dict.fromkeys([alias for alias in entry.aliases if alias]))
@@ -390,11 +395,12 @@ def _render_v2_candidate(
     specifics = [str(s).strip() for s in specifics_raw if str(s).strip()] if isinstance(specifics_raw, list) else []
     related = _normalize_related(data.get("related_concepts"), entry.slug)
 
-    # Map unit_type → entity_type using the same rule as the absorb
-    # extractor so a v2 candidate's frontmatter agrees with what the
-    # extractor's _unit_to_concept produced.
-    if unit_type in {"method", "procedure"}:
-        candidate_kind = KIND_METHOD
+    # BL-025/026: map ``unit_type`` directly to ``entity_type`` so the
+    # candidate frontmatter matches the extractor's new mapping (each
+    # of the 10 v2 unit kinds is its own entity_type).  Pre-fix used
+    # a binary collapse method/procedure → method, * → concept.
+    if unit_type in V2_UNIT_TYPES:
+        candidate_kind = unit_type
     else:
         normalized = normalize_kind(entry.kind) if entry.kind else KIND_CONCEPT
         candidate_kind = normalized if normalized in CORE_OBJECT_KINDS else KIND_CONCEPT

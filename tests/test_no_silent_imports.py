@@ -30,7 +30,7 @@ def repo_root() -> Path:
 # Most of these are optional ``from dotenv import load_dotenv`` style
 # fallbacks where dotenv isn't a hard dependency.
 LEGACY_SILENT_IMPORTS = {
-    ("auto_evergreen_extractor.py", 188),      # dotenv optional (Phase 1 prompt-registry import shifted line)
+    ("auto_evergreen_extractor.py", 188),      # dotenv optional (BL-025/026 V2_UNIT_TYPES import; KIND_METHOD removed)
     ("auto_article_processor.py", 93),          # dotenv optional (BL-029 deep-dive deletion shifted line back)
     ("auto_github_processor.py", 99),           # dotenv optional (BL-066 rewrote module, line shifted)
     ("auto_moc_updater.py", 51),                # dotenv optional
@@ -42,7 +42,7 @@ LEGACY_SILENT_IMPORTS = {
     # We may tighten these in follow-up PRs but keep them here so the
     # ratchet test doesn't break.
     ("image_downloader.py", 213),
-    ("promote_candidates.py", 627),  # BL-058a inserted v2 helpers, line shifted
+    ("promote_candidates.py", 633),  # BL-025/026 V2_UNIT_TYPES import shifted line
     ("query_tool.py", 157),
     ("commands/backfill_entities.py", 214),     # pipeline.jsonl logger optional
     ("autopilot/daemon.py", 382),

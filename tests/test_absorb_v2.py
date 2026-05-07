@@ -162,19 +162,28 @@ class TestV2ResponseParsing:
         slugs = {c["concept_name"] for c in concepts}
         assert slugs == {"ok", "second"}
 
-    def test_method_unit_type_maps_to_method_entity_type(self, tmp_path):
-        extractor = _make_extractor(tmp_path)
-        for ut in ("method", "procedure"):
+    def test_v2_unit_type_passes_through_to_entity_type(self, tmp_path):
+        # BL-025/026: each of the 10 v2 unit kinds is also a valid
+        # entity_type — pre-fix behaviour collapsed everything except
+        # method/procedure to KIND_CONCEPT, defeating Reader-side
+        # type filtering on the 89% of evergreens that aren't
+        # methods.  Now ``unit_type`` passes through unchanged.
+        for ut in ("fact", "method", "procedure", "tradeoff",
+                   "failure_mode", "case_detail", "learning",
+                   "decision", "quote", "counterexample"):
             unit = {"slug": f"x-{ut}", "title": "X", "unit_type": ut}
             converted = EvergreenExtractor._unit_to_concept(unit)
-            assert converted["entity_type"] == "method"
+            assert converted["entity_type"] == ut, (
+                f"unit_type={ut} should pass through to entity_type"
+            )
 
-    def test_other_unit_types_collapse_to_concept_entity_type(self, tmp_path):
-        for ut in ("fact", "tradeoff", "failure_mode", "case_detail",
-                   "learning", "decision", "quote", "counterexample"):
-            unit = {"slug": f"x-{ut}", "title": "X", "unit_type": ut}
-            converted = EvergreenExtractor._unit_to_concept(unit)
-            assert converted["entity_type"] == "concept"
+    def test_unknown_unit_type_falls_back_to_concept(self, tmp_path):
+        # Defence in depth: an LLM that emits an unrecognised
+        # ``unit_type`` (drift, schema bug) gets KIND_CONCEPT so
+        # downstream code never sees an arbitrary string.
+        unit = {"slug": "x-junk", "title": "X", "unit_type": "made-up-type"}
+        converted = EvergreenExtractor._unit_to_concept(unit)
+        assert converted["entity_type"] == "concept"
 
 
 # ---------------------------------------------------------------------------

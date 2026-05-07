@@ -51,14 +51,14 @@ try:
     from .object_kinds import (
         CORE_OBJECT_KINDS,
         KIND_CONCEPT,
-        KIND_METHOD,
+        V2_UNIT_TYPES,
         normalize_kind,
     )
 except ImportError:
     from object_kinds import (  # type: ignore
         CORE_OBJECT_KINDS,
         KIND_CONCEPT,
-        KIND_METHOD,
+        V2_UNIT_TYPES,
         normalize_kind,
     )
 
@@ -732,17 +732,20 @@ class EvergreenExtractor:
         unit_type = str(unit.get("unit_type") or "fact").strip().lower()
         epistemic_role = str(unit.get("epistemic_role") or "").strip().lower()
 
-        # Map unit_type → entity_type (the existing object_kinds taxonomy).
-        # ``method`` and ``procedure`` both land on KIND_METHOD; everything
-        # else collapses to KIND_CONCEPT for now.  Future taxonomy expansion
-        # (BL-058b) can give each unit_type its own entity_type.
-        # ``CORE_OBJECT_KINDS`` / ``KIND_CONCEPT`` / ``KIND_METHOD`` are
-        # imported at module top.
-        if unit_type in {"method", "procedure"}:
-            entity_type = KIND_METHOD
+        # BL-025/026: map ``unit_type`` directly to ``entity_type``.
+        # Pre-fix this used a binary collapse — ``method`` and
+        # ``procedure`` → KIND_METHOD; everything else → KIND_CONCEPT.
+        # Result on the live vault: 89% of v2 evergreens carried
+        # ``entity_type: concept``, defeating Reader-side type
+        # filtering.  Each of the 10 v2 unit kinds is now also a valid
+        # ``entity_type`` (see ``object_kinds.V2_UNIT_TYPES``), so the
+        # ``unit_type`` value passes through unchanged when recognised.
+        # Unknown values fall back to KIND_CONCEPT for safety.
+        if unit_type in V2_UNIT_TYPES:
+            entity_type = unit_type
+        elif unit_type in CORE_OBJECT_KINDS:
+            entity_type = unit_type
         else:
-            entity_type = KIND_CONCEPT
-        if entity_type not in CORE_OBJECT_KINDS:
             entity_type = KIND_CONCEPT
 
         related = unit.get("related_concepts")
