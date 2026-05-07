@@ -88,6 +88,31 @@ def split_markdown_frontmatter(text: str) -> tuple[dict[str, object], str]:
     return parsed, body
 
 
+def safe_json_for_script(obj: object) -> str:
+    """JSON-encode ``obj`` and escape characters that would break a
+    literal embed inside an HTML ``<script>`` tag.
+
+    A naive ``json.dumps(...)`` injected into ``<script>__DATA__</script>``
+    is hijack-prone: a payload string containing the literal sequence
+    ``</script>`` closes the surrounding tag.  The OWASP-blessed fix is
+    to escape ``<`` / ``>`` / ``&`` plus the JSON-legal-but-JS-line-
+    terminator characters U+2028 and U+2029 to ``\\uXXXX`` — the result
+    remains valid JSON AND is safe inside ``<script>…</script>``.
+
+    Used by the HTML-rendering review CLIs (``ovp-fidelity-sample``,
+    ``ovp-prompt-ab``).  Centralised here so a future fix reaches both.
+    """
+    encoded = json.dumps(obj, ensure_ascii=False)
+    return (
+        encoded
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace(" ", "\\u2028")
+        .replace(" ", "\\u2029")
+    )
+
+
 def utc_now() -> datetime:
     """Return the current UTC datetime."""
     return datetime.now(timezone.utc)
