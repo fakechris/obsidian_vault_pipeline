@@ -158,6 +158,8 @@ ovp-refresh-entities = "ovp_pipeline.commands.refresh_entities:main"
 ovp-embedding-dedup = "ovp_pipeline.commands.embedding_dedup:main"
 ovp-dedup-cleanup = "ovp_pipeline.commands.dedup_cleanup:main"
 ovp-backup-db = "ovp_pipeline.commands.backup_db:main"
+ovp-fidelity-sample = "ovp_pipeline.commands.fidelity_sample:main"
+ovp-prompt-ab = "ovp_pipeline.commands.prompt_ab:main"
 
 [project.entry-points."ovp.packs"]
 default-knowledge = "ovp_pipeline.packs.default_knowledge:get_pack"
