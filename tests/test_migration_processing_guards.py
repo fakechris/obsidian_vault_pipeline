@@ -207,7 +207,7 @@ OSGym: Scalable OS Infra for Computer Use Agents
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
     processor.article_processor = SimpleNamespace(
         generate_interpretation=lambda **_: (_ for _ in ()).throw(AssertionError("LLM should not be called"))
     )
@@ -244,7 +244,7 @@ Example SDK
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
     processor.article_processor = SimpleNamespace(
         generate_interpretation=lambda **kwargs: ("---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok", {"tokens": 1}, "tools")
     )
@@ -299,7 +299,7 @@ Example SDK body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
     processor.article_processor = SimpleNamespace(
         generate_interpretation=lambda **kwargs: (
             "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
@@ -349,7 +349,7 @@ Raw clip body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
     processor.article_processor = SimpleNamespace(
         generate_interpretation=lambda **kwargs: (
             "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
@@ -438,7 +438,7 @@ Example body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
     processor.article_processor = SimpleNamespace(
         generate_interpretation=lambda **kwargs: (
             "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
@@ -484,7 +484,7 @@ Broken body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
     processor.article_processor = SimpleNamespace(
         generate_interpretation=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
     )
@@ -532,7 +532,7 @@ Body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
     processor.article_processor = SimpleNamespace(
         generate_interpretation=lambda **kwargs: (
             "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
@@ -587,7 +587,7 @@ Body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn)
+    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
     txn_id = txn.start("article-processing", "Batch progress")
 
     monkeypatch.setattr(
