@@ -56,8 +56,11 @@ class TestKindTaxonomyConsistency:
             == ALL_OBJECT_KINDS
         )
 
-    def test_registry_valid_kinds_equals_core(self):
-        assert REGISTRY_VALID_KINDS == CORE_OBJECT_KINDS
+    def test_registry_valid_kinds_equals_core_plus_v2_units(self):
+        # BL-025/026: registry accepts both entity-side and v2
+        # unit kinds.
+        from ovp_pipeline.object_kinds import V2_UNIT_TYPES
+        assert REGISTRY_VALID_KINDS == CORE_OBJECT_KINDS | V2_UNIT_TYPES
 
     def test_evergreen_not_in_core(self):
         assert KIND_EVERGREEN not in CORE_OBJECT_KINDS

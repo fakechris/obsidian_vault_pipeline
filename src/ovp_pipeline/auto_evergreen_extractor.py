@@ -819,9 +819,16 @@ class EvergreenExtractor:
         specifics = concept.get("specifics") or []
         specifics = [str(s).strip() for s in specifics if str(s).strip()]
 
+        # BL-025/026: accept the full taxonomy (v2 unit kinds + core
+        # object kinds).  Pre-fix this clamped to ``CORE_OBJECT_KINDS``
+        # only, silently undoing the identity mapping that
+        # ``_unit_to_concept`` had just produced.
         raw_kind = concept.get("entity_type", concept.get("kind", ""))
         normalized = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT
-        entity_type = normalized if normalized in CORE_OBJECT_KINDS else KIND_CONCEPT
+        if normalized in CORE_OBJECT_KINDS or normalized in V2_UNIT_TYPES:
+            entity_type = normalized
+        else:
+            entity_type = KIND_CONCEPT
 
         source_provenance = _read_source_provenance(source_file)
         # Single ``now`` for both ``absorbed_at`` and ``date`` so they
@@ -1023,9 +1030,18 @@ class AutoEvergreenExtractor:
                         # from a circular-import workaround that no
                         # longer applies.
                         canonical_slug = canonicalize_note_id(concept_name)
+                        # BL-025/026: accept v2 unit kinds in addition
+                        # to core entity-side kinds.  Pre-fix this
+                        # clamped to ``CORE_OBJECT_KINDS`` only,
+                        # silently re-collapsing fact/tradeoff/etc.
+                        # back to ``KIND_CONCEPT`` on the registry
+                        # write path.
                         raw_kind = concept.get("entity_type", KIND_CONCEPT)
                         resolved_kind = normalize_kind(raw_kind) if raw_kind else KIND_CONCEPT
-                        if resolved_kind not in CORE_OBJECT_KINDS:
+                        if (
+                            resolved_kind not in CORE_OBJECT_KINDS
+                            and resolved_kind not in V2_UNIT_TYPES
+                        ):
                             resolved_kind = KIND_CONCEPT
 
                         entry = registry.upsert_candidate(

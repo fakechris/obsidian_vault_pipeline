@@ -42,7 +42,7 @@ LEGACY_SILENT_IMPORTS = {
     # We may tighten these in follow-up PRs but keep them here so the
     # ratchet test doesn't break.
     ("image_downloader.py", 213),
-    ("promote_candidates.py", 633),  # BL-025/026 V2_UNIT_TYPES import shifted line
+    ("promote_candidates.py", 650),  # BL-025/026 review: extra V2_UNIT_TYPES imports shifted line
     ("query_tool.py", 157),
     ("commands/backfill_entities.py", 214),     # pipeline.jsonl logger optional
     ("autopilot/daemon.py", 382),

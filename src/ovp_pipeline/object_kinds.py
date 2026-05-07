@@ -156,7 +156,19 @@ ALL_OBJECT_KINDS: frozenset[str] = (
 )
 """Every recognized object kind (entity-side + evergreen-side + structural)."""
 
+# Hard cap on taxonomy size — fail loudly if a future PR sneaks in
+# 30+ kinds without reading the design rationale.  Adding kinds is
+# fine; the bound just exists so an unreviewed proliferation breaks
+# the test suite.
+MAX_TAXONOMY_SIZE = 30
+
 # Convenience tuple for pack semantic relation contracts.
+# Stays scoped to ``CORE_OBJECT_KINDS`` — pack-declared semantic
+# relations (supports / challenges / extends / replaces / uses /
+# evolves) target entity-level kinds.  v2 unit kinds participate in
+# evergreen-level provenance relations (handled by ``provenance``
+# tables, not pack contracts), so adding them here would make the
+# pack relation surface explode without product benefit.
 RELATABLE_OBJECT_KINDS: tuple[str, ...] = tuple(sorted(CORE_OBJECT_KINDS))
 """Object kinds that may participate in semantic relations."""
 
@@ -164,7 +176,7 @@ RELATABLE_OBJECT_KINDS: tuple[str, ...] = tuple(sorted(CORE_OBJECT_KINDS))
 # Registry-level kind mapping (concept_registry backwards compatibility)
 # ---------------------------------------------------------------------------
 
-REGISTRY_VALID_KINDS: frozenset[str] = frozenset(
+_REGISTRY_ENTITY_KINDS: frozenset[str] = frozenset(
     {
         KIND_ENTITY,
         KIND_CONCEPT,
@@ -178,6 +190,12 @@ REGISTRY_VALID_KINDS: frozenset[str] = frozenset(
         KIND_EVENT,
     }
 )
+"""Entity-side kinds that ``ConceptEntry.kind`` accepts."""
+
+# BL-025/026: registry now also accepts the v2 unit kinds so a v2
+# absorb candidate can land in the registry without its
+# ``entity_type`` getting clamped back to ``KIND_CONCEPT``.
+REGISTRY_VALID_KINDS: frozenset[str] = _REGISTRY_ENTITY_KINDS | V2_UNIT_TYPES
 """Kinds valid for ConceptEntry.kind (excludes structural kinds)."""
 
 # Legacy aliases kept for backwards compatibility with existing registry data.
