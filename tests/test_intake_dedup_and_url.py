@@ -1,32 +1,27 @@
-"""E2E tests for the BL-058 follow-up intake hardening:
+"""E2E tests for the BL-058 / BL-029 intake hardening:
 
-1. URL preservation through the deep-dive layer (C1).
-   When the legacy ``--keep-deep-dive`` flow runs, the resulting
-   markdown's frontmatter ``source:`` MUST be the raw clipping's
-   URL — not whatever the LLM wrote.
+1. ``AutoArticleProcessor`` is intake-only post-BL-029 — no LLM
+   call.  ``process_single_file`` returns ``intake_only`` and the
+   lifecycle layer archives the raw to ``50-Inbox/03-Processed/``
+   so absorb v2 can pick it up.
 
-2. Deep-dive layer is skipped by default (C2).
-   ``AutoArticleProcessor`` short-circuits before the LLM call,
-   leaves intake-only output, and the lifecycle still archives
-   the raw to ``50-Inbox/03-Processed/``.
-
-3. URL-based intake dedup.
+2. URL-based intake dedup.
    When the same source URL is intaken twice, the second pass
    emits ``source_dedup_skipped`` and leaves the new clipping
    in place rather than producing a duplicate raw.
 
-4. ``source_dedup`` index correctness.
+3. ``source_dedup`` index correctness.
    The URL→raw map handles the recognized frontmatter keys,
-   ignores quoted variants, skips files outside 03-Processed,
-   and surfaces dup groups for the cleanup CLI.
+   ignores quoted variants, skips files outside the active
+   staging set, and surfaces dup groups for the cleanup CLI.
 
 Why E2E (not unit-only):
    The original BL-058 abstraction-inflation bug shipped because
-   no test ran the full intake → deep-dive → frontmatter chain
-   together; the LLM-rewrites-frontmatter path stayed invisible
-   until users saw URLs disappearing months later.  These tests
-   pin the contract end-to-end so a future refactor that drops
-   ``raw_source_url`` again breaks here, not in production.
+   no test ran the full intake → archive chain together; the
+   LLM-rewrites-frontmatter path stayed invisible until users saw
+   URLs disappearing months later.  These tests pin the contract
+   end-to-end so a future refactor that drops ``source`` URL
+   preservation breaks here, not in production.
 """
 
 from __future__ import annotations
@@ -66,7 +61,7 @@ tags:
     return f
 
 
-def _make_processor(temp_vault: Path, *, skip_deep_dive: bool = True):
+def _make_processor(temp_vault: Path):
     from ovp_pipeline.auto_article_processor import (
         AutoArticleProcessor,
         PipelineLogger,
@@ -79,107 +74,7 @@ def _make_processor(temp_vault: Path, *, skip_deep_dive: bool = True):
     layout.transactions_dir.mkdir(parents=True, exist_ok=True)
     logger = PipelineLogger(layout.pipeline_log)
     txn = TransactionManager(layout.transactions_dir)
-    return AutoArticleProcessor(
-        layout.vault_dir, logger, txn,
-        skip_deep_dive=skip_deep_dive,
-    )
-
-
-# ---------------------------------------------------------------------------
-# 1. C1: URL preservation through legacy deep-dive
-# ---------------------------------------------------------------------------
-
-
-class TestC1UrlPreservedInDeepDive:
-    """When the operator opts back into the legacy LLM deep-dive
-    layer (``--keep-deep-dive`` / ``skip_deep_dive=False``), the
-    resulting markdown's ``source:`` field MUST be the raw URL,
-    not whatever the LLM picked from the article subtitle.
-
-    Pre-fix the LLM regenerated the entire frontmatter freely and
-    often replaced the URL with a non-URL identifier (article
-    series name, institution name, …).  ``_augment_frontmatter``
-    now overwrites both ``source:`` and ``source_url:`` with the
-    raw URL, treating the LLM's value as untrusted.
-    """
-
-    def test_augment_overwrites_llm_source_with_raw_url(self):
-        from ovp_pipeline.auto_article_processor import (
-            AutoArticleProcessor, PipelineLogger, TransactionManager,
-        )
-        from ovp_pipeline.runtime import VaultLayout
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            (tmp_path / "60-Logs").mkdir()
-            (tmp_path / "10-Knowledge" / "Atlas").mkdir(parents=True)
-            layout = VaultLayout.from_vault(tmp_path)
-            logger = PipelineLogger(layout.pipeline_log)
-            txn = TransactionManager(layout.transactions_dir)
-            proc = AutoArticleProcessor(
-                tmp_path, logger, txn, skip_deep_dive=False,
-            )
-
-            # Mimic the LLM-generated deep-dive markdown — the
-            # bug shape is "source: <subtitle>" instead of the URL.
-            llm_output = (
-                "---\n"
-                'title: "硅基原子"\n'
-                'source: 硅基时间系列 · 1+1原生组织(一)\n'
-                'author: 蒋涛\n'
-                'date: 2026-05-04\n'
-                "---\n\n"
-                "# Body\n"
-            )
-
-            result = proc._augment_frontmatter(
-                llm_output,
-                decisions=[],
-                area="AI-Research",
-                txn_id="test-txn",
-                raw_source_url="https://mp.weixin.qq.com/s/GSTKPlO_tnIkzSJKgphC-g",
-            )
-            # Both ``source`` and the new ``source_url`` carry the URL.
-            assert "source: https://mp.weixin.qq.com/s/GSTKPlO_tnIkzSJKgphC-g" in result
-            assert "source_url: https://mp.weixin.qq.com/s/GSTKPlO_tnIkzSJKgphC-g" in result
-            # The subtitle no longer poses as ``source``.
-            assert "source: 硅基时间系列" not in result
-
-    def test_no_clobber_when_raw_has_no_url(self):
-        # If the raw didn't have a URL (rare, but possible for
-        # hand-written notes), don't overwrite — the LLM's
-        # best-effort guess is still better than empty.
-        from ovp_pipeline.auto_article_processor import (
-            AutoArticleProcessor, PipelineLogger, TransactionManager,
-        )
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            (tmp_path / "60-Logs").mkdir()
-            (tmp_path / "10-Knowledge" / "Atlas").mkdir(parents=True)
-            from ovp_pipeline.runtime import VaultLayout
-            layout = VaultLayout.from_vault(tmp_path)
-            logger = PipelineLogger(layout.pipeline_log)
-            txn = TransactionManager(layout.transactions_dir)
-            proc = AutoArticleProcessor(
-                tmp_path, logger, txn, skip_deep_dive=False,
-            )
-            llm_output = (
-                "---\n"
-                'title: "Note"\n'
-                'source: Anthropic Engineering Blog\n'
-                "---\n\n# Body\n"
-            )
-            result = proc._augment_frontmatter(
-                llm_output, decisions=[], area="AI-Research",
-                txn_id="t", raw_source_url="",
-            )
-            # LLM's best-effort ``source`` survives.
-            assert "source: Anthropic Engineering Blog" in result
-            # ``source_url`` not added when we have nothing to add.
-            assert "source_url:" not in result
+    return AutoArticleProcessor(layout.vault_dir, logger, txn)
 
 
 # ---------------------------------------------------------------------------
@@ -188,16 +83,17 @@ class TestC1UrlPreservedInDeepDive:
 
 
 class TestC2DeepDiveSkippedByDefault:
-    """Default behaviour: ``skip_deep_dive=True``.
+    """Post-BL-029: intake-only is the only behaviour.
 
-    ``process_single_file`` short-circuits before the LLM call.
-    The lifecycle layer still archives the raw into 03-Processed
-    so absorb v2 can pick it up on the next run.  No write to
-    ``20-Areas/<area>/Topics/`` happens.
+    ``process_single_file`` does no LLM work — just image download
+    + frontmatter parse + ``intake_only`` return.  The lifecycle
+    layer still archives the raw into 03-Processed so absorb v2
+    can pick it up on the next run.  No write to
+    ``20-Areas/<area>/Topics/`` ever happens.
     """
 
     def test_intake_only_status_skips_llm(self, temp_vault):
-        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        proc = _make_processor(temp_vault)
         # No init_llm — verifies the LLM path is never reached.
         clip = _write_clipping(
             temp_vault, "2026-05-04_test.md",
@@ -223,7 +119,7 @@ class TestC2DeepDiveSkippedByDefault:
         # Goes through the full ``process_single_source`` path —
         # which moves clipping → raw → processing → archives the
         # processing copy to 03-Processed.
-        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        proc = _make_processor(temp_vault)
         clip = _write_clipping(
             temp_vault, "2026-05-04_clip.md",
             url="https://example.com/clip",
@@ -245,7 +141,7 @@ class TestC2DeepDiveSkippedByDefault:
         the lifecycle move.  Otherwise the BL-058 abstraction
         recurs from a different angle (we'd lose URLs at archive
         time instead of at deep-dive time)."""
-        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        proc = _make_processor(temp_vault)
         url = "https://mp.weixin.qq.com/s/test123"
         clip = _write_clipping(
             temp_vault, "2026-05-04_wechat.md", url=url,
@@ -265,7 +161,7 @@ class TestC2DeepDiveSkippedByDefault:
 
 class TestUrlIntakeDedup:
     def test_same_url_second_intake_skipped(self, temp_vault):
-        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        proc = _make_processor(temp_vault)
         url = "https://example.com/dup-article"
 
         # First intake — succeeds, raw lands in 03-Processed.
@@ -306,7 +202,7 @@ class TestUrlIntakeDedup:
             encoding="utf-8",
         )
 
-        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        proc = _make_processor(temp_vault)
         clip = _write_clipping(
             temp_vault, "2026-05-04_fresh.md",
             url="https://example.com/archived",
@@ -316,7 +212,7 @@ class TestUrlIntakeDedup:
         assert result["status"] == "intake_only"
 
     def test_dedup_emits_audit_event(self, temp_vault):
-        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        proc = _make_processor(temp_vault)
         url = "https://example.com/audit-log-test"
         proc.process_single_source(
             _write_clipping(temp_vault, "first.md", url=url), dry_run=False,
@@ -478,7 +374,7 @@ class TestProcessInboxUrlDedup:
         new_raw = _write_clipping(
             temp_vault, "2026-05-07_X.md", url=url,
         )
-        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        proc = _make_processor(temp_vault)
         results = proc.process_inbox(dry_run=False)
         # Exactly one file processed, and it was skipped via the URL
         # gate (status=skipped_dedup), NOT processed via intake_only.
@@ -506,7 +402,7 @@ class TestProcessInboxUrlDedup:
         """
         url = "https://example.com/only-once"
         _write_clipping(temp_vault, "single.md", url=url)
-        proc = _make_processor(temp_vault, skip_deep_dive=True)
+        proc = _make_processor(temp_vault)
         results = proc.process_inbox(dry_run=False)
         statuses = [f["status"] for f in results["files"]]
         assert statuses == ["intake_only"], statuses
