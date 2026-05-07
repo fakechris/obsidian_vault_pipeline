@@ -156,6 +156,7 @@ ovp-backfill-provenance = "ovp_pipeline.commands.backfill_provenance:main"
 ovp-refresh-source-authority = "ovp_pipeline.commands.refresh_source_authority:main"
 ovp-refresh-entities = "ovp_pipeline.commands.refresh_entities:main"
 ovp-embedding-dedup = "ovp_pipeline.commands.embedding_dedup:main"
+ovp-dedup-cleanup = "ovp_pipeline.commands.dedup_cleanup:main"
 ovp-backup-db = "ovp_pipeline.commands.backup_db:main"
 
 [project.entry-points."ovp.packs"]

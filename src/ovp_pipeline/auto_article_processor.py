@@ -520,9 +520,30 @@ aliases: []
 
 
 class AutoArticleProcessor:
-    """全自动文章处理器"""
+    """全自动文章处理器
 
-    def __init__(self, vault_dir: Path, logger: PipelineLogger, txn: TransactionManager):
+    BL-058 follow-up (C2, 2026-05-06): the legacy 13-section
+    LLM-driven deep-dive layer is deprecated.  In the default mode
+    (``skip_deep_dive=True``) the processor does intake-only work
+    — parse raw, download images, run lifecycle archive — and
+    leaves knowledge extraction to ``auto_evergreen_extractor``
+    running v2 absorb directly on the raw.  This matches the flow
+    ``auto_github_processor`` already uses post-BL-066.
+
+    The 13-section path stays gated behind
+    ``skip_deep_dive=False`` (or the ``--keep-deep-dive`` CLI flag)
+    for callers that haven't migrated.  It will be removed once no
+    caller relies on it.
+    """
+
+    def __init__(
+        self,
+        vault_dir: Path,
+        logger: PipelineLogger,
+        txn: TransactionManager,
+        *,
+        skip_deep_dive: bool = True,
+    ):
         self.layout = VaultLayout.from_vault(vault_dir)
         self.vault_dir = self.layout.vault_dir
         self.raw_dir = self.layout.raw_dir
@@ -532,6 +553,10 @@ class AutoArticleProcessor:
         self.txn = txn
         self.llm = None
         self.article_processor = None
+        # C2: when True, ``process_single_file`` short-circuits
+        # before the LLM ``generate_interpretation`` call and just
+        # lets the lifecycle layer move the raw to 03-Processed.
+        self.skip_deep_dive = skip_deep_dive
 
     def _extract_source_date(self, file_path: Path) -> datetime:
         match = re.match(r"^(\d{4}-\d{2}-\d{2})_", file_path.name)
@@ -623,15 +648,19 @@ class AutoArticleProcessor:
     def _finalize_lifecycle_source(self, working_path: Path, result: dict, dry_run: bool = False) -> Path | None:
         if dry_run:
             return None
+        # C2: ``intake_only`` is a success — raw was parsed, no
+        # deep-dive was generated, and the file should still be
+        # archived to 03-Processed so absorb v2 can pick it up.
+        success_statuses = {"completed", "intake_only"}
         if lifecycle_is_under(working_path, self.layout.pinboard_dir):
-            if result["status"] == "completed" and working_path.exists():
+            if result["status"] in success_statuses and working_path.exists():
                 archived = archive_pinboard_source(self.layout, working_path)
                 result["source_path"] = str(archived)
                 return archived
             return None
         if not lifecycle_is_under(working_path, self.processing_dir):
             return None
-        if result["status"] == "completed":
+        if result["status"] in success_statuses:
             archived = self._archive_source_to_processed(working_path)
             result["source_path"] = str(archived)
             return archived
@@ -640,6 +669,67 @@ class AutoArticleProcessor:
             result["source_path"] = str(restored)
             return restored
         return None
+
+    def _check_url_dedup(self, source: Path) -> dict | None:
+        """Return a ``skipped_dedup`` result dict when ``source``'s URL
+        already appears in ``50-Inbox/03-Processed/``; ``None`` otherwise.
+
+        Pre-fix, intake had no URL-level guard — the same Twitter
+        thread re-clipped from Reader landed as a fresh raw every
+        time, and absorb burned LLM cycles re-extracting identical
+        bodies.  The 8 confirmed duplicates in the 2026-05-06 census
+        each represent one of these cases.
+
+        Scope: invoked from :meth:`process_single_source` only — not
+        from :meth:`process_inbox`.  Inbox files are post-intake (the
+        next pipeline stage), so applying URL dedup there would
+        short-circuit legitimate reprocessing.  The asymmetry is
+        intentional; pre-existing 03-Processed dups are handled by
+        ``ovp-dedup-cleanup``.
+
+        Note: only checks the active ``03-Processed`` tree, not the
+        ``70-Archive`` archive.  A user who archived a prior copy
+        and explicitly wants to re-process the URL gets through.
+        """
+        from .source_dedup import (
+            extract_source_url,
+            find_existing_by_url,
+            read_file_head,
+        )
+        try:
+            text = read_file_head(source)
+        except OSError:
+            return None
+        url = extract_source_url(text)
+        if not url:
+            return None
+        existing = find_existing_by_url(self.vault_dir, url)
+        if existing is None:
+            return None
+        # Don't flag a self-match — the same file already living in
+        # 03-Processed isn't a dup of itself.
+        try:
+            if existing.resolve() == source.resolve():
+                return None
+        except OSError:
+            pass
+        self.logger.log("source_dedup_skipped", {
+            "source": str(source),
+            "url": url,
+            "existing": str(existing),
+        })
+        return {
+            "file": str(source),
+            "status": "skipped_dedup",
+            "output_path": None,
+            "tokens_used": 0,
+            "images_downloaded": 0,
+            "error": None,
+            "dedup": {
+                "url": url,
+                "existing": str(existing.relative_to(self.vault_dir)),
+            },
+        }
 
     def process_single_source(self, file_path: Path, dry_run: bool = False) -> dict:
         """Process one source while honoring the same lifecycle as inbox runs."""
@@ -660,6 +750,15 @@ class AutoArticleProcessor:
                 },
             }
             return result
+
+        # URL-dedup gate runs BEFORE any filesystem moves so a
+        # detected duplicate leaves ``50-Inbox/01-Raw`` (or wherever
+        # the source currently sits) untouched.  The user can then
+        # delete it manually or re-clip with a different URL.
+        dedup_result = self._check_url_dedup(source)
+        if dedup_result is not None:
+            dedup_result["source_lifecycle"] = {"zone": zone, "would_move": False}
+            return dedup_result
 
         working_path = source
         try:
@@ -923,13 +1022,32 @@ class AutoArticleProcessor:
                     print(f"Warning: could not upsert candidate '{d.proposed_slug}': {e}")
         return upserted
 
-    def _augment_frontmatter(self, content: str, decisions: list, area: str,
-                              txn_id: str) -> str:
+    def _augment_frontmatter(
+        self, content: str, decisions: list, area: str, txn_id: str,
+        *,
+        raw_source_url: str = "",
+    ) -> str:
         """
         Augment article frontmatter with link resolution metadata.
 
         Adds: area, canonical_concepts, concept_candidates,
-              link_resolution_status, link_resolution_version, pipeline_run_id
+              link_resolution_status, link_resolution_version,
+              pipeline_run_id
+
+        URL-preservation contract (C1, 2026-05-06):
+          ``raw_source_url`` is the canonical source URL pulled from
+          the **raw clipping's** frontmatter (before LLM rewriting).
+          When non-empty, this method overwrites whatever the LLM
+          wrote into ``source:`` with that URL.  Pre-fix the LLM
+          freely regenerated the field, often picking the article
+          subtitle or institution name (e.g. ``"硅基时间系列 ·
+          1+1原生组织(一)"``) and dropping the real
+          ``https://mp.weixin.qq.com/s/...`` URL — so the deep-dive
+          could no longer be traced back to its origin.
+
+          We also stash the URL as a dedicated ``source_url`` field
+          (not just ``source``) so any future refactor that
+          regenerates ``source`` can't silently lose the URL again.
         """
         if not content.startswith("---"):
             return content
@@ -961,6 +1079,15 @@ class AutoArticleProcessor:
         fm_dict["link_resolution_status"] = "resolved"
         fm_dict["link_resolution_version"] = RESOLVER_VERSION
         fm_dict["pipeline_run_id"] = txn_id
+
+        # C1: force source URL preservation when the raw had one.
+        # ``source`` may have been set to a non-URL by the LLM; we
+        # overwrite it.  We also write the canonical ``source_url``
+        # field for downstream tools that prefer a typed contract
+        # over the polysemantic ``source``.
+        if raw_source_url:
+            fm_dict["source"] = raw_source_url
+            fm_dict["source_url"] = raw_source_url
 
         # Reconstruct frontmatter
         new_fm_lines = []
@@ -1039,6 +1166,24 @@ class AutoArticleProcessor:
                 result["status"] = "dry_run"
                 return result
 
+            # C2 (BL-058 follow-up): skip the legacy 13-section LLM
+            # rewrite entirely.  ``auto_evergreen_extractor`` running
+            # v2 absorb on the raw produces strictly better units
+            # (specifics-preserving, no abstraction inflation), and
+            # the lifecycle layer in ``process_single_source`` /
+            # ``process_inbox`` still moves the raw to 03-Processed
+            # so absorb can pick it up on the next run.  Returning
+            # ``intake_only`` short-circuits before the LLM call,
+            # link resolution, and the 20-Areas write.
+            if self.skip_deep_dive:
+                result["status"] = "intake_only"
+                self.logger.log("article_intake_only", {
+                    "file": str(file_path.name),
+                    "source_url": str(file_data.get("source") or ""),
+                    "reason": "skip_deep_dive (C2 default)",
+                })
+                return result
+
             if not self.article_processor:
                 result["status"] = "error"
                 result["error"] = "LLM not initialized"
@@ -1076,9 +1221,17 @@ class AutoArticleProcessor:
                 interpretation, article_stem, classification, txn_id
             )
 
-            # Augment frontmatter with resolution metadata
+            # Augment frontmatter with resolution metadata.
+            # C1: pass the raw source URL so the deep-dive's
+            # ``source:`` field gets the canonical URL, not whatever
+            # the LLM picked from the article subtitle.
+            raw_source_url = ""
+            raw_src = str(file_data.get("source") or "").strip()
+            if raw_src.startswith(("http://", "https://")):
+                raw_source_url = raw_src
             interpretation = self._augment_frontmatter(
-                interpretation, decisions, classification, txn_id
+                interpretation, decisions, classification, txn_id,
+                raw_source_url=raw_source_url,
             )
 
             # 确定输出路径
@@ -1194,7 +1347,10 @@ class AutoArticleProcessor:
             result = self.process_single_file(working_path, dry_run)
             results["files"].append(result)
 
-            if result["status"] == "completed":
+            # C2: ``intake_only`` rolls up under ``completed`` since
+            # the raw was successfully archived to 03-Processed and
+            # absorb v2 will produce evergreens on the next run.
+            if result["status"] in ("completed", "intake_only"):
                 results["completed"] += 1
                 results["total_tokens"] += result.get("tokens_used", 0)
                 self._finalize_lifecycle_source(working_path, result, dry_run=dry_run)
@@ -1232,6 +1388,16 @@ def main():
     parser.add_argument("--api-base", help="API Base URL")
     parser.add_argument("--vault-dir", type=Path, default=None, help="Vault根目录")
     parser.add_argument("--output-dir", type=Path, default=None, help="兼容旧入口，当前忽略")
+    parser.add_argument(
+        "--keep-deep-dive", action="store_true",
+        help=(
+            "Run the legacy 13-section LLM-driven deep-dive layer "
+            "(BL-058 follow-up: deprecated, off by default).  Off "
+            "is the new default — raw lands in 03-Processed and "
+            "absorb v2 produces evergreens directly, no abstraction "
+            "inflation."
+        ),
+    )
     args = parser.parse_args()
 
     layout = VaultLayout.from_vault(args.vault_dir or VAULT_DIR)
@@ -1245,14 +1411,23 @@ def main():
     logger.log("transaction_started", {"txn_id": txn_id, "type": "article-processing"})
 
     # 初始化处理器
-    processor = AutoArticleProcessor(layout.vault_dir, logger, txn)
+    processor = AutoArticleProcessor(
+        layout.vault_dir, logger, txn,
+        skip_deep_dive=not args.keep_deep_dive,
+    )
 
-    try:
-        processor.init_llm(api_key=args.api_key, api_base=args.api_base)
-        print(f"✓ LLM Client: {processor.llm.model}")
-    except Exception as e:
-        print(f"✗ {e}")
-        sys.exit(1)
+    # C2: skip-deep-dive mode does no LLM calls — don't fail the
+    # CLI on a missing API key in that case.  Init only when the
+    # legacy deep-dive path is opted in.
+    if not processor.skip_deep_dive:
+        try:
+            processor.init_llm(api_key=args.api_key, api_base=args.api_base)
+            print(f"✓ LLM Client: {processor.llm.model}")
+        except Exception as e:
+            print(f"✗ {e}")
+            sys.exit(1)
+    else:
+        print("✓ skip-deep-dive (intake-only mode, no LLM)")
 
     # 执行处理
     txn.step(txn_id, "process", "in_progress", "Processing articles")
@@ -1261,11 +1436,16 @@ def main():
         results = processor.process_inbox(dry_run=args.dry_run, batch_size=args.batch_size, txn_id=txn_id)
     elif args.process_single:
         result = processor.process_single_source(args.process_single, dry_run=args.dry_run)
+        # C2: ``intake_only`` rolls up under ``completed`` since
+        # absorb v2 will produce evergreens on the next run.
+        # ``skipped_dedup`` keeps its own bucket so it's visible
+        # in the summary line.
+        ok = result["status"] in ("completed", "intake_only")
         results = {
             "total": 1,
-            "completed": 1 if result["status"] == "completed" else 0,
+            "completed": 1 if ok else 0,
             "failed": 1 if result["status"] == "error" else 0,
-            "skipped": 1 if result["status"] == "skipped" else 0,
+            "skipped": 1 if result["status"] in ("skipped", "skipped_dedup") else 0,
             "total_tokens": result.get("tokens_used", 0)
         }
     elif args.single:
