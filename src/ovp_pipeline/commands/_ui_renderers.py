@@ -5058,6 +5058,21 @@ def _render_timeline_page(payload: dict) -> str:
     return _layout("Timeline", body, requested_pack=requested_pack)
 
 
+# Number of by-type pills shown in the trail of each /ops/today
+# card.  3 fits one line on most screens; the long tail lives in
+# /ops/timeline.
+_TODAY_CARD_TOP_TYPES_LIMIT = 3
+# Truncate sample event_type / subject so a card stays scannable.
+_TODAY_SAMPLE_EVENT_TYPE_MAX_CHARS = 30
+_TODAY_SAMPLE_SUBJECT_MAX_CHARS = 80
+# /ops/runs* renderers — clip txn_id and the per-row subject so the
+# table doesn't word-wrap on long pipeline.jsonl strings.
+_RUN_TXN_ID_DISPLAY_MAX_CHARS = 30
+_RUN_DETAIL_SUBJECT_MAX_CHARS = 120
+# ISO-8601 timestamps are sliced to YYYY-MM-DDTHH:MM:SS for display.
+_TS_DISPLAY_LEN = 19
+
+
 _TODAY_DIGEST_STYLE = """
 <style>
 .today-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
@@ -5114,10 +5129,10 @@ def _render_today_digest_page(payload: dict) -> str:
         empty_class = " empty" if total == 0 else ""
         failures_class = " failures" if card_id == "failures" else ""
 
-        # Type breakdown — top 3 types as a tail line.
+        # Type breakdown — top-N types as a tail line.
         type_pills = ""
         if by_type:
-            top = sorted(by_type.items(), key=lambda x: -x[1])[:3]
+            top = sorted(by_type.items(), key=lambda x: -x[1])[:_TODAY_CARD_TOP_TYPES_LIMIT]
             type_pills = " · ".join(
                 f"<code>{escape(t)}</code>×{n}" for t, n in top
             )
@@ -5126,8 +5141,8 @@ def _render_today_digest_page(payload: dict) -> str:
         if samples:
             items = "".join(
                 "<li><span class='muted'>{type}</span> <strong>{subject}</strong></li>".format(
-                    type=escape(str(s.get("event_type", ""))[:30]),
-                    subject=escape(str(s.get("subject", ""))[:80]),
+                    type=escape(str(s.get("event_type", ""))[:_TODAY_SAMPLE_EVENT_TYPE_MAX_CHARS]),
+                    subject=escape(str(s.get("subject", ""))[:_TODAY_SAMPLE_SUBJECT_MAX_CHARS]),
                 )
                 for s in samples
             )
@@ -5199,12 +5214,12 @@ def _render_runs_index_page(payload: dict) -> str:
         "<td>{events}</td>"
         "<td><a href='{href}'>{txn_id}</a></td>"
         "</tr>".format(
-            ts=escape(str(r.get("started_at", "")[:19])),
+            ts=escape(str(r.get("started_at", "")[:_TS_DISPLAY_LEN])),
             type=escape(str(r.get("workflow_type", ""))),
             status=escape(str(r.get("status", ""))),
             events=int(r.get("event_count") or 0),
             href=escape(str(r.get("detail_href", ""))),
-            txn_id=escape(str(r.get("txn_id", ""))[:30]),
+            txn_id=escape(str(r.get("txn_id", ""))[:_RUN_TXN_ID_DISPLAY_MAX_CHARS]),
         )
         for r in runs
     )
@@ -5271,7 +5286,11 @@ def _render_run_detail_page(payload: dict) -> str:
             f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
             "</section>"
         )
-        return _layout(f"Run {txn_id[:30]}", body, requested_pack=requested_pack)
+        return _layout(
+            f"Run {txn_id[:_RUN_TXN_ID_DISPLAY_MAX_CHARS]}",
+            body,
+            requested_pack=requested_pack,
+        )
 
     header = (
         f"{_RUN_DETAIL_STYLE}"
@@ -5298,9 +5317,9 @@ def _render_run_detail_page(payload: dict) -> str:
         cls = (" class='" + " ".join(css_classes) + "'") if css_classes else ""
         rows.append(
             f"<tr{cls}>"
-            f"<td class='ts'>{escape(str(ev.get('timestamp',''))[:19])}</td>"
+            f"<td class='ts'>{escape(str(ev.get('timestamp',''))[:_TS_DISPLAY_LEN])}</td>"
             f"<td class='type'>{escape(et)}</td>"
-            f"<td class='subject'>{escape(str(ev.get('subject',''))[:120])}</td>"
+            f"<td class='subject'>{escape(str(ev.get('subject',''))[:_RUN_DETAIL_SUBJECT_MAX_CHARS])}</td>"
             "</tr>"
         )
 
@@ -5311,7 +5330,11 @@ def _render_run_detail_page(payload: dict) -> str:
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
     )
-    return _layout(f"Run {txn_id[:30]}", body, requested_pack=requested_pack)
+    return _layout(
+        f"Run {txn_id[:_RUN_TXN_ID_DISPLAY_MAX_CHARS]}",
+        body,
+        requested_pack=requested_pack,
+    )
 
 
 def _render_pulse_page() -> str:

@@ -3049,6 +3049,13 @@ TODAY_CARD_SAMPLE_SIZE = 5
 # runs/day across full+incremental) and keeps the page small.
 DEFAULT_RUNS_INDEX_LIMIT = 30
 
+# A transaction with no ``transaction_completed`` row is treated as
+# ``running`` for this many hours after start; older than that and
+# we surface it as ``stale`` (probably crashed mid-run with no
+# completion event ever written).  6h covers the longest legitimate
+# full run on the live vault (~3h) with comfortable headroom.
+RUNS_STALE_AFTER_HOURS = 6
+
 
 def build_today_digest_payload(
     vault_dir: Path | str,
@@ -3243,7 +3250,7 @@ def build_runs_index_payload(
         else:
             count_lookup = {}
 
-    stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=6)
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=RUNS_STALE_AFTER_HOURS)
     for txn_id, workflow_type, started_at in started_rows:
         if not txn_id:
             continue
@@ -3335,10 +3342,14 @@ def build_run_detail_payload(
 
     with sqlite3.connect(db_path) as conn:
         # Step 1: collect session_ids for this txn's bracketing rows.
+        # ``$.type`` is pulled via SQLite's ``json_extract`` (proper
+        # JSON parser) rather than substring-regex over the snippet —
+        # the snippet was truncating long payloads and a JSON
+        # formatter change could trivially break a regex match.
         bracket_rows = conn.execute(
             """
             SELECT session_id, timestamp, event_type,
-                   substr(payload_json, 1, 600) AS snippet
+                   json_extract(payload_json, '$.type') AS workflow_type
               FROM audit_events
              WHERE event_type IN ('transaction_started', 'transaction_completed')
                AND json_extract(payload_json, '$.txn_id') = ?
@@ -3409,17 +3420,15 @@ def build_run_detail_payload(
     # Header data: pull from the bracketing rows we already fetched.
     # ``event_type`` is a column, not a payload field — keying off the
     # column lets us populate workflow_type from the payload's ``type``
-    # without grepping the JSON twice.
+    # without re-querying.
     started_at = ""
     completed_at = ""
     workflow_type = ""
-    for _session_id, ts, event_type, snippet in bracket_rows:
-        snippet_str = snippet or ""
+    for _session_id, ts, event_type, payload_workflow_type in bracket_rows:
         if event_type == "transaction_started":
             started_at = str(ts or "")
-            m = re.search(r'"type"\s*:\s*"([^"]+)"', snippet_str)
-            if m:
-                workflow_type = m.group(1)
+            if payload_workflow_type:
+                workflow_type = str(payload_workflow_type)
         elif event_type == "transaction_completed":
             completed_at = str(ts or "")
 
