@@ -1,11 +1,28 @@
 """ovp-backfill-entity-type — Batch-classify entity_type for Evergreen notes.
 
-Traverses ``10-Knowledge/Evergreen/*.md``, skips notes that already have
-``entity_type`` in their frontmatter, and uses an LLM to classify the
-remaining notes into one of the 10 canonical core kinds defined in
-``object_kinds.py``.
+Two-phase backfill (BL-030, building on BL-025/026):
 
-Emits structured audit events to ``60-Logs/pipeline.jsonl``.
+  **Phase 1 — deterministic fast-path** (zero LLM cost):
+  Evergreens written by v2 absorb already carry ``unit_type:`` in
+  their frontmatter (one of fact / method / procedure / tradeoff /
+  ...). The pre-BL-025 collapse landed them as ``entity_type:
+  concept`` regardless.  Phase 1 just rewrites
+  ``entity_type = unit_type`` on those.
+
+  **Phase 2 — LLM classification** (paid):
+  Evergreens without ``unit_type`` (v1 deep-dive output, manual
+  notes) need an LLM to choose from the unified taxonomy
+  (``CORE_OBJECT_KINDS | V2_UNIT_TYPES``).
+
+The classifier picks from 19 distinct kinds — the 10 entity-side
+kinds plus the 9 v2-only unit kinds (KIND_METHOD overlaps).
+
+Emits structured audit events to ``60-Logs/pipeline.jsonl``:
+
+  - ``entity_type_backfill_v2_passthrough`` (Phase 1)
+  - ``entity_type_backfill`` (Phase 2 success)
+  - ``entity_type_backfill_error`` (Phase 2 LLM failure)
+  - ``entity_type_backfill_summary`` (final stats)
 """
 
 from __future__ import annotations
@@ -15,31 +32,49 @@ import json
 import re
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..object_kinds import CORE_OBJECT_KINDS, KIND_CONCEPT, normalize_kind
+from ..object_kinds import (
+    CORE_OBJECT_KINDS,
+    KIND_CONCEPT,
+    V2_UNIT_TYPES,
+    normalize_kind,
+)
 
 _FRONTMATTER_RE = re.compile(r"\A\s*\ufeff?---\r?\n(.*?)\r?\n---", re.DOTALL)
 _ENTITY_TYPE_LINE_RE = re.compile(r"^entity_type:\s*.*$", re.MULTILINE)
 
-VALID_KINDS = CORE_OBJECT_KINDS
+# Unified taxonomy for backfill: entity-side kinds + v2 unit kinds.
+# KIND_METHOD lives in both, so the union has 19 distinct values.
+VALID_KINDS = CORE_OBJECT_KINDS | V2_UNIT_TYPES
 
-SYSTEM_PROMPT = """You are a knowledge taxonomy classifier. Given a note's title, one-sentence definition, and a short excerpt from its body, classify it into exactly ONE of these 10 entity types:
+SYSTEM_PROMPT = """You are a knowledge-unit classifier. Pick exactly ONE of these 19 kinds for the note. Reply with just the kind string, nothing else.
 
-- concept: An abstract idea, principle, or pattern (e.g. "attention mechanism", "composability")
-- entity: A named real-world entity that doesn't fit other specific types
-- person: A specific individual (e.g. "Andrej Karpathy", "Ilya Sutskever")
-- company: An organization or company (e.g. "OpenAI", "Google DeepMind")
-- tool: A software tool, library, or product (e.g. "LangChain", "Docker", "Claude")
-- project: A specific project or initiative (e.g. "Apollo Program", "GPT-4 red teaming")
-- paper: A research paper or publication (e.g. "Attention Is All You Need")
-- event: A specific event or conference (e.g. "NeurIPS 2024", "GPT-4 launch")
-- framework: A structured approach or framework (e.g. "PARA method", "ReAct")
-- method: A technique or algorithm (e.g. "chain-of-thought", "RLHF")
+Entity-side kinds (the note names a real-world thing):
+- person: A specific individual (e.g. "Andrej Karpathy")
+- company: An organization (e.g. "OpenAI", "Anthropic")
+- tool: A software tool / library / product (e.g. "LangChain", "Claude Code")
+- project: A specific project or repo (e.g. "Apollo Program", "AutoGPT")
+- paper: A research publication (e.g. "Attention Is All You Need")
+- event: A dated event / conference (e.g. "NeurIPS 2024", "GPT-4 launch")
+- framework: A named methodology / mental model (e.g. "PARA", "ReAct")
+- method: A named technique / algorithm (e.g. "chain-of-thought", "RLHF")
+- entity: Catch-all named entity not fitting the above
+- concept: An abstract idea / principle / pattern
 
-Respond with ONLY the entity type string, nothing else. No explanation, no quotes, no punctuation."""
+Knowledge-unit kinds (the note states a knowledge claim):
+- fact: A single objective fact + at least one specific anchor (number, name, date)
+- procedure: Numbered steps with concrete actions / commands
+- tradeoff: Choice between alternatives + cost + applicability
+- failure_mode: How a system breaks; what conditions trigger it
+- counterexample: Concrete instance that contradicts a generally-held claim
+- case_detail: Specific case (who / where / what / outcome)
+- learning: Insight + the source's evidence for it
+- decision: A made decision + alternatives + rationale
+- quote: Verbatim quote worth preserving + brief annotation
+
+Pick the most-specific applicable kind. Reply with the kind word only — no explanation, no quotes, no punctuation."""
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], int, int]:
@@ -92,13 +127,19 @@ def _classify(llm: Any, title: str, definition: str, excerpt: str) -> str:
     return KIND_CONCEPT
 
 
-def _emit_audit(log_path: Path, event: dict[str, Any]) -> None:
+def _emit_audit(logger: Any, event: dict[str, Any]) -> None:
+    """Emit one audit event via a shared logger.
+
+    Pre-fix this re-instantiated ``PipelineLogger`` on every call,
+    which gave each event a fresh ``session_id`` — defeating
+    BL-053's by-run grouping (``/ops/runs/<txn_id>``).  The caller
+    now constructs a single logger up-front and reuses it for the
+    whole backfill so the per-run drilldown sees the entire run's
+    events together.
+    """
     event_type = event.pop("event_type", "backfill")
     event.pop("timestamp", None)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    from ..auto_moc_updater import PipelineLogger
-
-    PipelineLogger(log_path).log(event_type, event)
+    logger.log(event_type, event)
 
 
 def run(
@@ -114,43 +155,127 @@ def run(
         return {"error": "directory_not_found"}
 
     log_path = vault_dir / "60-Logs" / "pipeline.jsonl"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Single PipelineLogger instance for the whole run so every
+    # audit event shares the same ``session_id`` — that's what
+    # ``/ops/runs/<txn_id>`` keys off to group events.  Pre-fix
+    # ``_emit_audit`` re-instantiated PipelineLogger per call,
+    # giving each event a fresh session.
+    from ..auto_moc_updater import PipelineLogger
+    logger = PipelineLogger(log_path)
+
     md_files = sorted(evergreen_dir.glob("*.md"))
     total = len(md_files)
     print(f"Found {total} Evergreen notes in {evergreen_dir}")
 
-    needs_classification: list[tuple[Path, str, dict[str, str]]] = []
-    skipped = 0
+    # Phase 1 buckets — deterministic fast-path candidates and
+    # everything else.  ``already_correct`` skips files where
+    # entity_type already agrees with unit_type (or there's no
+    # unit_type to override).  ``phase1`` covers v2 evergreens
+    # whose entity_type was set by the pre-BL-025 collapse but
+    # whose unit_type carries the real richer kind.  ``phase2``
+    # covers v1 evergreens (no unit_type) — they need LLM.
+    # Each tuple carries ``body_start`` so Phase 2 doesn't have
+    # to re-match the frontmatter regex.
+    already_correct = 0
+    phase1: list[tuple[Path, str, dict[str, str], int]] = []
+    phase2: list[tuple[Path, str, dict[str, str], int]] = []
     for fp in md_files:
         text = fp.read_text(encoding="utf-8", errors="replace")
-        fm, _, _ = _parse_frontmatter(text)
-        if fm.get("entity_type") and fm["entity_type"] in VALID_KINDS:
-            skipped += 1
-            continue
-        needs_classification.append((fp, text, fm))
+        fm, body_start, _ = _parse_frontmatter(text)
+        existing_type = fm.get("entity_type", "").strip()
+        unit_type = fm.get("unit_type", "").strip()
 
-    print(f"Already classified: {skipped}, needs classification: {len(needs_classification)}")
+        if unit_type in V2_UNIT_TYPES:
+            # v2 evergreen — fast-path eligible.  Skip if
+            # entity_type already matches unit_type; otherwise
+            # rewrite to unit_type with no LLM call.
+            if existing_type == unit_type:
+                already_correct += 1
+            else:
+                phase1.append((fp, text, fm, body_start))
+            continue
+
+        # No (recognised) unit_type — needs LLM if entity_type
+        # missing / invalid.
+        if existing_type and existing_type in VALID_KINDS:
+            already_correct += 1
+            continue
+        phase2.append((fp, text, fm, body_start))
+
+    print(
+        f"Already correct: {already_correct}, "
+        f"Phase 1 (deterministic): {len(phase1)}, "
+        f"Phase 2 (LLM): {len(phase2)}"
+    )
+
     if limit > 0:
-        needs_classification = needs_classification[:limit]
-        print(f"Limited to {limit} notes")
+        # Apply limit globally — Phase 1 first, then Phase 2.
+        phase1_take = min(len(phase1), limit)
+        phase2_take = min(len(phase2), max(0, limit - phase1_take))
+        phase1 = phase1[:phase1_take]
+        phase2 = phase2[:phase2_take]
+        print(f"Limited to {phase1_take} Phase 1 + {phase2_take} Phase 2")
 
     if dry_run:
-        print("[dry-run] Would classify these notes:")
-        for fp, _, fm in needs_classification[:20]:
-            print(f"  {fp.name}  (title={fm.get('title', '?')})")
-        if len(needs_classification) > 20:
-            print(f"  ... and {len(needs_classification) - 20} more")
-        return {"dry_run": True, "to_classify": len(needs_classification), "skipped": skipped}
+        print("[dry-run] Phase 1 sample (first 10):")
+        for fp, _, fm, _ in phase1[:10]:
+            ut = fm.get("unit_type", "?")
+            print(f"  {fp.name}  unit_type={ut}  (would set entity_type={ut})")
+        if len(phase1) > 10:
+            print(f"  ... and {len(phase1) - 10} more Phase 1 files")
+        print("[dry-run] Phase 2 sample (first 10):")
+        for fp, _, fm, _ in phase2[:10]:
+            print(f"  {fp.name}  title={fm.get('title', '?')}")
+        if len(phase2) > 10:
+            print(f"  ... and {len(phase2) - 10} more Phase 2 files")
+        return {
+            "dry_run": True,
+            "already_correct": already_correct,
+            "phase1": len(phase1),
+            "phase2": len(phase2),
+        }
 
-    llm = _build_llm_client()
     classified = 0
     errors = 0
     stats: dict[str, int] = {}
     t0 = time.time()
 
-    for i, (fp, text, fm) in enumerate(needs_classification):
+    # Phase 1: deterministic rewrite (no LLM).  Pass through
+    # unit_type → entity_type for each file.
+    print(f"\n=== Phase 1: deterministic ({len(phase1)} files) ===")
+    for i, (fp, text, fm, _body_start) in enumerate(phase1):
+        unit_type = fm["unit_type"].strip()
+        new_text = _inject_entity_type(text, unit_type)
+        fp.write_text(new_text, encoding="utf-8")
+        classified += 1
+        stats[unit_type] = stats.get(unit_type, 0) + 1
+        _emit_audit(
+            logger,
+            {
+                "event_type": "entity_type_backfill_v2_passthrough",
+                "file": str(fp.relative_to(vault_dir)),
+                "entity_type": unit_type,
+                "previous": fm.get("entity_type", ""),
+            },
+        )
+        if (i + 1) % batch_size == 0:
+            print(f"  [{i+1}/{len(phase1)}] passthrough  last={fp.name} -> {unit_type}")
+
+    # Phase 2: LLM classification.  Skip entirely if Phase 2 list
+    # is empty (avoids paying for LLM init / API key check).
+    if not phase2:
+        print("\n=== Phase 2: skipped (no v1 evergreens needing LLM) ===")
+        llm = None
+    else:
+        print(f"\n=== Phase 2: LLM classification ({len(phase2)} files) ===")
+        llm = _build_llm_client()
+
+    for i, (fp, text, fm, body_start) in enumerate(phase2):
         title = fm.get("title", fp.stem.replace("-", " "))
-        body_start = _FRONTMATTER_RE.match(text)
-        body = text[body_start.end() :] if body_start else text
+        # Reuse body_start computed in the scan loop instead of
+        # re-running the frontmatter regex per file.
+        body = text[body_start:] if body_start else text
         definition = ""
         def_match = re.search(r">\s*\*\*(?:一句话定义|Definition)\*\*:\s*(.+)", body, re.IGNORECASE)
         if def_match:
@@ -159,11 +284,10 @@ def run(
         try:
             kind = _classify(llm, title, definition, body[:500])
         except Exception as exc:  # noqa: BLE001 - continue per-note processing; errors are audited
-            print(f"  [{i+1}/{len(needs_classification)}] ERROR {fp.name}: {exc}")
+            print(f"  [{i+1}/{len(phase2)}] ERROR {fp.name}: {exc}")
             _emit_audit(
-                log_path,
+                logger,
                 {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "event_type": "entity_type_backfill_error",
                     "file": str(fp.relative_to(vault_dir)),
                     "error": str(exc),
@@ -178,9 +302,8 @@ def run(
         stats[kind] = stats.get(kind, 0) + 1
 
         _emit_audit(
-            log_path,
+            logger,
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "event_type": "entity_type_backfill",
                 "file": str(fp.relative_to(vault_dir)),
                 "entity_type": kind,
@@ -192,7 +315,7 @@ def run(
             elapsed = time.time() - t0
             rate = (i + 1) / elapsed if elapsed > 0 else 0
             print(
-                f"  [{i+1}/{len(needs_classification)}] "
+                f"  [{i+1}/{len(phase2)}] "
                 f"classified={classified} errors={errors} "
                 f"rate={rate:.1f}/s  last={fp.name} -> {kind}"
             )
@@ -200,7 +323,9 @@ def run(
     elapsed = time.time() - t0
     summary = {
         "total_evergreen": total,
-        "already_classified": skipped,
+        "already_correct": already_correct,
+        "phase1_count": len(phase1),
+        "phase2_count": len(phase2),
         "classified": classified,
         "errors": errors,
         "elapsed_seconds": round(elapsed, 1),
@@ -210,9 +335,8 @@ def run(
     print(f"Distribution: {json.dumps(stats, indent=2)}")
 
     _emit_audit(
-        log_path,
+        logger,
         {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": "entity_type_backfill_summary",
             **summary,
         },
