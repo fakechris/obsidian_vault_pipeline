@@ -2101,34 +2101,138 @@ def _render_library_home(payload: dict) -> str:
     return _layout("Knowledge Library", body, requested_pack=requested_pack)
 
 
+_OBJECTS_INDEX_PAGE_SIZES = (10, 50, 100, 200)
+
+
 def _render_objects_index(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
-    items = "".join(
-        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a> '
-        f'<span class="muted">({escape(item["object_id"])})</span></li>'
-        for item in payload["items"]
+    sort = payload.get("sort", "alpha") or "alpha"
+    limit = int(payload.get("limit", 100) or 100)
+    offset = int(payload.get("offset", 0) or 0)
+    total_count = int(payload.get("total_count", 0) or 0)
+    object_kind = payload.get("object_kind") or ""
+
+    def _href(*, sort_: str | None = None, offset_: int | None = None,
+              limit_: int | None = None) -> str:
+        params: list[tuple[str, str]] = []
+        if requested_pack:
+            params.append(("pack", requested_pack))
+        if query:
+            params.append(("q", query))
+        if object_kind:
+            params.append(("object_kind", object_kind))
+        eff_sort = sort_ if sort_ is not None else sort
+        if eff_sort and eff_sort != "alpha":
+            params.append(("sort", eff_sort))
+        eff_limit = limit_ if limit_ is not None else limit
+        if eff_limit != 100:
+            params.append(("limit", str(eff_limit)))
+        eff_offset = offset_ if offset_ is not None else offset
+        if eff_offset:
+            params.append(("offset", str(eff_offset)))
+        if not params:
+            return "/ops/objects"
+        return "/ops/objects?" + "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params
+        )
+
+    def _item_html(item: dict) -> str:
+        suffix = ""
+        if sort == "most_linked":
+            count = int(item.get("backlink_count", 0) or 0)
+            suffix = f" <span class='muted'>· {count} backlinks</span>"
+        return (
+            "<li>"
+            f'<a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">'
+            f'{escape(item["title"])}</a> '
+            f'<span class="muted">({escape(item["object_id"])})</span>'
+            f"{suffix}</li>"
+        )
+
+    items = "".join(_item_html(item) for item in payload["items"]) or (
+        "<li class='muted'>No objects match the current filter.</li>"
     )
-    return _layout(
-        "Objects",
+
+    sort_options = (
+        ("alpha", "A → Z"),
+        ("most_linked", "Most-linked"),
+    )
+    sort_links = " · ".join(
         (
-            "<h1>Objects</h1>"
-            + "<form method='get' action='/ops/objects'>"
-            + (
-                f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
-                if requested_pack
-                else ""
-            )
-            + f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
-            + "<button type='submit'>Search</button>"
-            + "</form>"
-            + f"<p class='muted'>{payload['count']} objects in current page."
-            + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
-            + "</p>"
-            + f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
-        ),
-        requested_pack=requested_pack,
+            f"<strong>{escape(label)}</strong>"
+            if value == sort
+            else f"<a href='{escape(_href(sort_=value, offset_=0))}'>{escape(label)}</a>"
+        )
+        for value, label in sort_options
     )
+
+    page_size_links = " ".join(
+        (
+            f"<strong>{value}</strong>"
+            if value == limit
+            else f"<a href='{escape(_href(limit_=value, offset_=0))}'>{value}</a>"
+        )
+        for value in _OBJECTS_INDEX_PAGE_SIZES
+    )
+
+    showing_start = offset + 1 if total_count else 0
+    showing_end = min(offset + limit, total_count)
+    showing = (
+        f"Showing {showing_start}–{showing_end} of {total_count}"
+        if total_count
+        else "No matches"
+    )
+
+    prev_offset = max(0, offset - limit)
+    has_prev = offset > 0
+    has_next = offset + limit < total_count
+    pager_parts: list[str] = []
+    if has_prev:
+        pager_parts.append(
+            f"<a href='{escape(_href(offset_=prev_offset))}'>← Prev</a>"
+        )
+    else:
+        pager_parts.append("<span class='muted'>← Prev</span>")
+    if has_next:
+        pager_parts.append(
+            f"<a href='{escape(_href(offset_=offset + limit))}'>Next →</a>"
+        )
+    else:
+        pager_parts.append("<span class='muted'>Next →</span>")
+    pager = " · ".join(pager_parts)
+
+    body = (
+        "<h1>Objects</h1>"
+        + "<form method='get' action='/ops/objects'>"
+        + (
+            f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+            if requested_pack
+            else ""
+        )
+        + (
+            f"<input type='hidden' name='sort' value='{escape(sort)}' />"
+            if sort and sort != "alpha"
+            else ""
+        )
+        + (
+            f"<input type='hidden' name='object_kind' value='{escape(object_kind)}' />"
+            if object_kind
+            else ""
+        )
+        + f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
+        + "<button type='submit'>Search</button>"
+        + "</form>"
+        + "<p class='muted'>"
+        + escape(showing)
+        + (f" · pack scope: {escape(requested_pack)}" if requested_pack else "")
+        + "</p>"
+        + f"<p class='muted'>Sort: {sort_links} · Per page: {page_size_links}</p>"
+        + f"<p class='muted'>{pager}</p>"
+        + f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        + f"<p class='muted'>{pager}</p>"
+    )
+    return _layout("Objects", body, requested_pack=requested_pack)
 
 
 def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
@@ -2703,10 +2807,23 @@ def _render_events_page(payload: dict) -> str:
                     else ""
                 ),
                 f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> ",
+                "<label class='muted' style='margin-left:.5rem'>From "
+                f"<input type='date' name='from_date' value='{escape(payload.get('from_date',''))}' />"
+                "</label> ",
+                "<label class='muted'>To "
+                f"<input type='date' name='to_date' value='{escape(payload.get('to_date',''))}' />"
+                "</label> ",
                 "<button type='submit'>Search</button>",
                 "</form>",
                 f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                (
+                    f" Date filter: {escape(payload.get('from_date',''))}"
+                    + (f" → {escape(payload.get('to_date',''))}" if payload.get("to_date") and payload.get("to_date") != payload.get("from_date") else "")
+                    + "."
+                    if payload.get("from_date") or payload.get("to_date")
+                    else ""
+                ),
                 f"{escape(limit_note)}</p>",
                 _render_compiled_sections(lead_sections),
                 operator_rail_card,
@@ -3027,11 +3144,66 @@ def _render_production_browser_page(payload: dict) -> str:
 def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
-    limit_note = (
-        f" Showing the first {payload['limit']} graph clusters in this browser window."
-        if payload.get("is_limited")
-        else ""
-    )
+    total_count = int(payload.get("total_count", payload.get("count", 0)) or 0)
+    show_all = bool(payload.get("show_all"))
+    limit_value = int(payload.get("limit", 0) or 0)
+    default_limit = int(payload.get("default_limit", limit_value) or limit_value)
+
+    def _cluster_href(*, limit_: int | None = None, show_all_: bool | None = None) -> str:
+        params: list[tuple[str, str]] = []
+        if requested_pack:
+            params.append(("pack", requested_pack))
+        if query:
+            params.append(("q", query))
+        if show_all_ is not None:
+            if show_all_:
+                params.append(("show_all", "1"))
+        elif show_all:
+            params.append(("show_all", "1"))
+        eff_limit = limit_ if limit_ is not None else default_limit
+        if eff_limit and eff_limit != 15 and not (show_all_ or show_all):
+            params.append(("limit", str(eff_limit)))
+        if not params:
+            return action_path
+        return action_path + "?" + "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params
+        )
+
+    if show_all:
+        limit_note = f" Showing all {total_count} clusters."
+    elif payload.get("is_limited"):
+        limit_note = (
+            f" Showing top {payload['count']} of {total_count} by priority"
+            f" (member count + open contradictions + stale summaries)."
+        )
+    else:
+        limit_note = ""
+
+    if total_count > 0 and not show_all:
+        page_size_links = " ".join(
+            (
+                f"<strong>{value}</strong>"
+                if value == default_limit
+                else f"<a href='{escape(_cluster_href(limit_=value, show_all_=False))}'>{value}</a>"
+            )
+            for value in (15, 50, 200)
+        )
+        toggle_links = (
+            f" · <a href='{escape(_cluster_href(show_all_=True))}'>Show all {total_count}</a>"
+            if total_count > default_limit
+            else ""
+        )
+        cluster_pager = (
+            f"<p class='muted'>Per page: {page_size_links}{toggle_links}</p>"
+        )
+    elif show_all:
+        cluster_pager = (
+            "<p class='muted'>"
+            f"<a href='{escape(_cluster_href(show_all_=False, limit_=15))}'>← Back to top 15</a>"
+            "</p>"
+        )
+    else:
+        cluster_pager = ""
     kind_counts = (
         "".join(
             f"<span class='pill'>{escape(cluster_kind)}: {count}</span>"
@@ -3108,9 +3280,10 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
                 f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter clusters or members' /> ",
                 "<button type='submit'>Search</button>",
                 "</form>",
-                f"<p class='muted'>{payload['count']} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.",
+                f"<p class='muted'>Showing {payload['count']} of {total_count} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
+                cluster_pager,
                 f"<section class='card'><h2>Cluster Kinds</h2><div class='link-row'>{kind_counts}</div></section>",
                 f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>",
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
@@ -5048,13 +5221,29 @@ def _render_timeline_page(payload: dict) -> str:
                 f"(sample {len(errors)})</h3><ul>{items}</ul></div>"
             )
 
+        # Drill-down: every day card carries an explicit "open the
+        # events dossier scoped to this date" link so the operator
+        # can move from the histogram pill straight into the row-
+        # level audit list.
+        date_str = str(day.get("date", ""))
+        drill_path = "/ops/events?date=" + quote(date_str, safe="") + "&limit=200"
+        if requested_pack:
+            drill_path += "&pack=" + quote(requested_pack, safe="")
+        drill_html = (
+            f"<div class='samples'><a href='{escape(drill_path)}'>"
+            f"See all {total} events for {date} →</a></div>"
+            if total
+            else ""
+        )
+
         sections.append(
             "<section class='day-card'>"
-            f"<h2>{date}</h2>"
+            f"<h2><a href='{escape(drill_path)}'>{date}</a></h2>"
             f"<div class='day-meta'>{total} events</div>"
             f"<div class='event-grid'>{pills_html}</div>"
             f"{samples_html}"
             f"{errors_html}"
+            f"{drill_html}"
             "</section>"
         )
 
@@ -5090,6 +5279,9 @@ _TODAY_DIGEST_STYLE = """
 .today-card .samples ul { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.85rem; }
 .today-card .samples li { margin: 2px 0; }
 .today-card.empty .total { color: #d1d5db; }
+.today-card .see-all { margin-top: 10px; font-size: 0.85rem; }
+.today-card .see-all a { color: var(--accent); text-decoration: none; }
+.today-card .see-all a:hover { text-decoration: underline; }
 </style>
 """
 
@@ -5117,6 +5309,23 @@ def _render_today_digest_page(payload: dict) -> str:
         return _layout(f"Today — {date}", body, requested_pack=requested_pack)
 
     sections: list[str] = [_TODAY_DIGEST_STYLE]
+    prev_path = str(payload.get("prev_date_path") or "")
+    next_path = str(payload.get("next_date_path") or "")
+    prev_date = str(payload.get("prev_date") or "")
+    next_date = str(payload.get("next_date") or "")
+    pivot_parts: list[str] = []
+    if prev_path:
+        pivot_parts.append(
+            f"<a href='{escape(prev_path)}'>← {escape(prev_date)}</a>"
+        )
+    pivot_parts.append(f"<strong>Today: {escape(date)}</strong>")
+    if next_path:
+        pivot_parts.append(
+            f"<a href='{escape(next_path)}'>{escape(next_date)} →</a>"
+        )
+    sections.append(
+        f"<p class='muted'>{' · '.join(pivot_parts)}</p>"
+    )
     sections.append(
         f"<p class='muted'>Audit events recorded on "
         f"<strong>{escape(date)}</strong> (UTC).  Click "
@@ -5129,6 +5338,7 @@ def _render_today_digest_page(payload: dict) -> str:
         total = int(card.get("total") or 0)
         by_type = card.get("by_type") or {}
         samples = card.get("samples") or []
+        see_all_path = str(card.get("see_all_path") or "")
 
         empty_class = " empty" if total == 0 else ""
         failures_class = " failures" if card_id == "failures" else ""
@@ -5152,12 +5362,24 @@ def _render_today_digest_page(payload: dict) -> str:
             )
             sample_html = f"<div class='samples'><ul>{items}</ul></div>"
 
+        # ``See all N →`` link drops the operator into the events
+        # dossier filtered to this card's date.  Only render when
+        # there is more to see than the per-card sample.
+        see_all_html = ""
+        if see_all_path and total > len(samples):
+            see_all_html = (
+                f"<div class='see-all'>"
+                f"<a href='{escape(see_all_path)}'>See all {total} →</a>"
+                f"</div>"
+            )
+
         sections.append(
             f"<div class='today-card{empty_class}{failures_class}'>"
             f"<h3>{escape(label)}</h3>"
             f"<div class='total'>{total}</div>"
             f"<div class='by-type'>{type_pills}</div>"
             f"{sample_html}"
+            f"{see_all_html}"
             f"</div>"
         )
     sections.append("</div>")
@@ -5210,33 +5432,98 @@ def _render_runs_index_page(payload: dict) -> str:
         )
         return _layout("Runs", body, requested_pack=requested_pack)
 
-    rows = "".join(
-        "<tr>"
-        "<td><code>{ts}</code></td>"
-        "<td>{type}</td>"
-        "<td class='status-{status}'>{status}</td>"
-        "<td>{events}</td>"
-        "<td><a href='{href}'>{txn_id}</a></td>"
-        "</tr>".format(
-            ts=escape(str(r.get("started_at", "")[:_TS_DISPLAY_LEN])),
-            type=escape(str(r.get("workflow_type", ""))),
-            status=escape(str(r.get("status", ""))),
-            events=int(r.get("event_count") or 0),
-            href=escape(str(r.get("detail_href", ""))),
-            txn_id=escape(str(r.get("txn_id", ""))[:_RUN_TXN_ID_DISPLAY_MAX_CHARS]),
+    def _row_html(r: dict) -> str:
+        return (
+            "<tr>"
+            "<td><code>{ts}</code></td>"
+            "<td>{type}</td>"
+            "<td class='status-{status}'>{status}</td>"
+            "<td>{events}</td>"
+            "<td><a href='{href}'>{txn_id}</a></td>"
+            "</tr>".format(
+                ts=escape(str(r.get("started_at", "")[:_TS_DISPLAY_LEN])),
+                type=escape(str(r.get("workflow_type", ""))),
+                status=escape(str(r.get("status", ""))),
+                events=int(r.get("event_count") or 0),
+                href=escape(str(r.get("detail_href", ""))),
+                txn_id=escape(str(r.get("txn_id", ""))[:_RUN_TXN_ID_DISPLAY_MAX_CHARS]),
+            )
         )
-        for r in runs
+
+    day_groups = payload.get("day_groups") or []
+    limit_value = int(payload.get("limit", len(runs)) or len(runs))
+    window_days = payload.get("window_days")
+    if window_days is None:
+        window_text = ""
+    elif window_days == 0:
+        window_text = " (oldest from today)"
+    else:
+        window_text = f" (oldest from {window_days} day{'s' if window_days != 1 else ''} ago)"
+
+    if day_groups:
+        sections: list[str] = []
+        for group in day_groups:
+            date = str(group.get("date") or "")
+            count = int(group.get("count") or 0)
+            if group.get("idle"):
+                sections.append(
+                    f"<h3 class='muted'>{escape(date)} — Idle (no scheduled run)</h3>"
+                )
+                continue
+            day_runs = group.get("runs") or []
+            sections.append(
+                f"<h3>{escape(date)} — {count} run{'s' if count != 1 else ''}</h3>"
+                "<table class='runs-table'>"
+                "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
+                "<th>Events</th><th>Run</th></tr></thead>"
+                f"<tbody>{''.join(_row_html(r) for r in day_runs)}</tbody>"
+                "</table>"
+            )
+        runs_html = "".join(sections)
+    else:
+        runs_html = (
+            "<table class='runs-table'>"
+            "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
+            "<th>Events</th><th>Run</th></tr></thead>"
+            f"<tbody>{''.join(_row_html(r) for r in runs)}</tbody>"
+            "</table>"
+        )
+
+    # Window-size pivot links.  ``limit=`` exposes how the cap is
+    # applied; the operator can widen the window when triaging
+    # whether a regression is recent or longstanding.
+    def _runs_href(new_limit: int) -> str:
+        params: list[tuple[str, str]] = []
+        if requested_pack:
+            params.append(("pack", requested_pack))
+        if new_limit and new_limit != 30:
+            params.append(("limit", str(new_limit)))
+        if not params:
+            return "/ops/runs"
+        return "/ops/runs?" + "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params
+        )
+
+    pivot_options = (
+        (10, "Last 10"),
+        (30, "Last 30"),
+        (100, "Last 100"),
+    )
+    pivot_links = " · ".join(
+        (
+            f"<strong>{escape(label)}</strong>"
+            if value == limit_value
+            else f"<a href='{escape(_runs_href(value))}'>{escape(label)}</a>"
+        )
+        for value, label in pivot_options
     )
 
     body = (
         f"{_RUNS_INDEX_STYLE}"
-        f"<p class='muted'>Showing {len(runs)} recent transaction(s).  "
-        f"Click a <code>txn_id</code> to see the full event timeline for that run.</p>"
-        "<table class='runs-table'>"
-        "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
-        "<th>Events</th><th>Run</th></tr></thead>"
-        f"<tbody>{rows}</tbody>"
-        "</table>"
+        f"<p class='muted'>Showing last {limit_value} run(s){window_text}. "
+        f"Click a <code>txn_id</code> to see the full event timeline.</p>"
+        f"<p class='muted'>Window: {pivot_links}</p>"
+        f"{runs_html}"
     )
     return _layout("Runs", body, requested_pack=requested_pack)
 
@@ -5341,19 +5628,15 @@ def _render_run_detail_page(payload: dict) -> str:
     )
 
 
-def _render_pulse_page() -> str:
+def _render_pulse_page(*, requested_pack: str = "") -> str:
     fragment = _render_pulse_fragment()
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>Pulse</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:1080px;margin:1.5rem auto;padding:0 1rem}"
-        "h1{margin-bottom:.4rem}p.muted{color:#71675d}"
-        "</style></head><body>"
+    body = (
         "<h1>Pulse</h1>"
         "<p class='muted'>Live tail of <code>60-Logs/*.jsonl</code> (pipeline, reuse, "
         "evidence, open-questions). Polls once per second.</p>"
-        f"{fragment}</body></html>"
+        f"{fragment}"
     )
+    return _layout("Pulse", body, requested_pack=requested_pack)
 
 
 def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:

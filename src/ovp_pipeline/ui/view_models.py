@@ -26,6 +26,7 @@ from ..truth_api import (
     MAX_PAGE_SIZE,
     SIGNAL_TYPE_EXPLANATIONS,
     _batch_object_rows,
+    count_graph_clusters,
     count_objects,
     get_briefing_snapshot,
     get_graph_cluster_detail,
@@ -3144,18 +3145,59 @@ def build_today_digest_payload(
                     "title": str(title or subject),
                     "timestamp": str(ts or ""),
                 })
+            # ``see_all_path`` deep-links into the event dossier
+            # filtered to this card's date + event types so the
+            # operator can drill from the card sample (5 rows) into
+            # the full audit list.
+            see_all_qs = "&".join(
+                [
+                    f"date={quote(date_key, safe='')}",
+                    *(
+                        [f"pack={quote(requested_pack, safe='')}"]
+                        if requested_pack
+                        else []
+                    ),
+                    "limit=200",
+                ]
+            )
+            see_all_path = _scoped_path(
+                f"/ops/events?{see_all_qs}", pack_name=requested_pack
+            )
             cards.append({
                 "id": card_id,
                 "label": card_label,
                 "total": total,
                 "by_type": by_type,
                 "samples": samples,
+                "see_all_path": see_all_path,
+                "event_types": list(event_types),
             })
+
+    # Prev/next date pivots so the operator can step through history
+    # without crafting query strings.  Always populated (the dossier
+    # may be empty for the target date — that is itself useful info).
+    from datetime import datetime, timedelta
+    try:
+        anchor = datetime.strptime(date_key, "%Y-%m-%d")
+        prev_date = (anchor - timedelta(days=1)).strftime("%Y-%m-%d")
+        next_date = (anchor + timedelta(days=1)).strftime("%Y-%m-%d")
+    except ValueError:
+        prev_date = ""
+        next_date = ""
+
+    def _date_path(d: str) -> str:
+        if not d:
+            return ""
+        return _scoped_path(f"/ops/today?date={quote(d, safe='')}", pack_name=requested_pack)
 
     return {
         "screen": "ops/today",
         "requested_pack": requested_pack,
         "date": date_key,
+        "prev_date": prev_date,
+        "next_date": next_date,
+        "prev_date_path": _date_path(prev_date),
+        "next_date_path": _date_path(next_date),
         "cards": cards,
         "available": True,
     }
@@ -3283,10 +3325,71 @@ def build_runs_index_payload(
             ),
         })
 
+    # Day grouping — build ``[(day, [run, ...])]`` so the renderer can
+    # emit one section per calendar day in chronological order, with
+    # explicit ``Idle`` markers for days that contained no runs.  The
+    # operator's mental model is "what did the pipeline do this week";
+    # day-grouped output makes weekend gaps and broken-cron days
+    # immediately obvious.
+    from datetime import timedelta as _timedelta
+    runs_by_day: dict[str, list[dict[str, Any]]] = {}
+    for run in runs:
+        ts = str(run.get("started_at", ""))[:10]
+        if not ts:
+            continue
+        runs_by_day.setdefault(ts, []).append(run)
+
+    day_groups: list[dict[str, Any]] = []
+    if runs_by_day:
+        sorted_days = sorted(runs_by_day.keys(), reverse=True)
+        try:
+            newest = datetime.strptime(sorted_days[0], "%Y-%m-%d").date()
+            oldest = datetime.strptime(sorted_days[-1], "%Y-%m-%d").date()
+        except ValueError:
+            newest = oldest = None
+        if newest and oldest:
+            cur = newest
+            while cur >= oldest:
+                key = cur.strftime("%Y-%m-%d")
+                day_runs = runs_by_day.get(key, [])
+                day_groups.append({
+                    "date": key,
+                    "runs": day_runs,
+                    "count": len(day_runs),
+                    "idle": not day_runs,
+                })
+                cur -= _timedelta(days=1)
+        else:
+            for key in sorted_days:
+                day_groups.append({
+                    "date": key,
+                    "runs": runs_by_day[key],
+                    "count": len(runs_by_day[key]),
+                    "idle": False,
+                })
+
+    # Window summary — surface the implicit time range the limit
+    # imposes so the operator knows whether the page reflects "today"
+    # or "the last fortnight".
+    if runs:
+        oldest_ts = str(runs[-1].get("started_at", ""))
+        try:
+            oldest_dt = datetime.fromisoformat(oldest_ts.replace("Z", "+00:00"))
+            if oldest_dt.tzinfo is None:
+                oldest_dt = oldest_dt.replace(tzinfo=timezone.utc)
+            window_days = max(0, (datetime.now(timezone.utc) - oldest_dt).days)
+        except ValueError:
+            window_days = None
+    else:
+        window_days = None
+
     return {
         "screen": "ops/runs",
         "requested_pack": requested_pack,
         "runs": runs,
+        "day_groups": day_groups,
+        "limit": cap,
+        "window_days": window_days,
         "available": True,
     }
 
@@ -3456,10 +3559,14 @@ def build_event_dossier_payload(
     pack_name: str | None = None,
     query: str | None = None,
     limit: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
     research_shell_enabled = _supports_research_shell(pack_name)
     effective_limit = DEFAULT_EVENT_DOSSIER_LIMIT if limit is None else limit
+    normalized_from = (from_date or "").strip() or None
+    normalized_to = (to_date or "").strip() or None
     events = [
         _build_timeline_event_item(row)
         for row in list_timeline_events(
@@ -3467,6 +3574,8 @@ def build_event_dossier_payload(
             pack_name=pack_name,
             query=query,
             limit=effective_limit or DEFAULT_EVENT_DOSSIER_LIMIT,
+            from_date=normalized_from,
+            to_date=normalized_to,
         )
     ]
     provenance_map = get_object_provenance_map(
@@ -3661,6 +3770,8 @@ def build_event_dossier_payload(
         "event_type_counts": dict(event_type_counts),
         "limit": effective_limit,
         "is_limited": effective_limit is not None,
+        "from_date": normalized_from or "",
+        "to_date": normalized_to or "",
         "timeline_contract": {
             "timeline_kind": "dated_note_projection",
             "grouping_kind": "object_date_rollup",
@@ -3736,14 +3847,26 @@ def build_evolution_browser_payload(
     }
 
 
+_CLUSTER_BROWSER_PAGE_SIZES = (15, 50, 200)
+
+
 def build_cluster_browser_payload(
     vault_dir: Path | str,
     *,
     pack_name: str | None = None,
     query: str | None = None,
     limit: int = DEFAULT_TRACEABILITY_BROWSER_LIMIT,
+    show_all: bool = False,
 ) -> dict[str, Any]:
-    items = list_graph_clusters(vault_dir, pack_name=pack_name, query=query, limit=limit)
+    # ``show_all`` lifts the display cap so the operator can audit the
+    # full cluster set when they need to.  We still cap at MAX_PAGE_SIZE
+    # to protect renderer cost; a vault with 10k+ clusters would still
+    # be unworkable, so warn at the call site rather than render forever.
+    effective_limit = MAX_PAGE_SIZE if show_all else limit
+    total_count = count_graph_clusters(vault_dir, pack_name=pack_name, query=query)
+    items = list_graph_clusters(
+        vault_dir, pack_name=pack_name, query=query, limit=effective_limit
+    )
     cluster_provenance_index = _build_cluster_provenance_index(vault_dir, items)
     cluster_kind_counts = Counter(item["cluster_kind"] for item in items)
     largest_cluster_size = max((int(item["member_count"]) for item in items), default=0)
@@ -3860,8 +3983,11 @@ def build_cluster_browser_payload(
             derived_from=("knowledge.db.graph_clusters", "knowledge.db.graph_edges"),
         ),
         "query": query or "",
-        "limit": limit,
-        "is_limited": True,
+        "limit": effective_limit,
+        "default_limit": limit,
+        "show_all": bool(show_all),
+        "total_count": total_count,
+        "is_limited": not show_all and total_count > effective_limit,
         "items": enriched_items,
         "count": len(enriched_items),
         "cluster_kind_counts": dict(cluster_kind_counts),
@@ -4033,7 +4159,11 @@ def build_graph_map_payload(
         ),
         "query": query or "",
         "limit": limit,
-        "is_limited": cluster_payload["is_limited"],
+        # The graph map intentionally caps how many neighborhoods it
+        # paints; treat that cap as "limited" even when the underlying
+        # cluster set is small — the banner explains the display intent
+        # rather than reporting on pagination.
+        "is_limited": True,
         "layout": {"width": GRAPH_MAP_WIDTH, "height": GRAPH_MAP_HEIGHT},
         "nodes": node_items,
         "edges": edge_items,
@@ -4053,7 +4183,11 @@ def build_graph_map_payload(
             "edge_count": len(edge_items),
             "cluster_count": len(clusters),
             "largest_cluster_size": cluster_payload["largest_cluster_size"],
-            "is_limited": cluster_payload["is_limited"],
+            # The graph map intentionally caps how many neighborhoods it
+        # paints; treat that cap as "limited" even when the underlying
+        # cluster set is small — the banner explains the display intent
+        # rather than reporting on pagination.
+        "is_limited": True,
             "limit": limit,
             # BL-051 visibility caps — surface to the renderer so the
             # page can show the right banner + ``Show all`` toggle.
@@ -4793,6 +4927,9 @@ def build_runtime_home_payload(
     }
 
 
+_OBJECTS_INDEX_VALID_SORTS = ("alpha", "most_linked")
+
+
 def build_objects_index_payload(
     vault_dir: Path | str,
     *,
@@ -4801,8 +4938,11 @@ def build_objects_index_payload(
     query: str | None = None,
     object_kind: str | None = None,
     pack_name: str | None = None,
+    sort: str = "alpha",
 ) -> dict[str, Any]:
     requested_pack = pack_name or ""
+    if sort not in _OBJECTS_INDEX_VALID_SORTS:
+        sort = "alpha"
     items = [
         {
             **item,
@@ -4818,6 +4958,7 @@ def build_objects_index_payload(
             query=query,
             object_kind=object_kind,
             pack_name=pack_name,
+            sort=sort,
         )
     ]
     total_count = count_objects(vault_dir, query=query, object_kind=object_kind, pack_name=pack_name)
@@ -4842,6 +4983,7 @@ def build_objects_index_payload(
         "kind_stats": kind_stats,
         "limit": limit,
         "offset": offset,
+        "sort": sort,
         "query": query or "",
         "object_kind": object_kind or "",
     }

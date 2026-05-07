@@ -1244,6 +1244,9 @@ def _evolution_candidate_matches_query(item: dict[str, Any], normalized_query: s
     return any(normalized_query in haystack for haystack in haystacks if haystack)
 
 
+_OBJECTS_INDEX_SORTS = ("alpha", "most_linked")
+
+
 def list_objects(
     vault_dir: Path | str,
     *,
@@ -1252,7 +1255,10 @@ def list_objects(
     query: str | None = None,
     object_kind: str | None = None,
     pack_name: str | None = None,
+    sort: str = "alpha",
 ) -> list[dict[str, Any]]:
+    if sort not in _OBJECTS_INDEX_SORTS:
+        sort = "alpha"
     limit, offset = _validate_page_args(limit=limit, offset=offset)
     db_path = _db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
@@ -1262,51 +1268,110 @@ def list_objects(
     normalized_query = _escape_like(query.strip().lower()) if query else ""
 
     pack_placeholders = ",".join("?" for _ in pack_candidates)
+
+    # Build a column-prefix-aware WHERE clause; ``alpha`` queries the
+    # ``objects`` table directly while ``most_linked`` aliases it as ``o``
+    # so it can LEFT JOIN against a backlink-count subquery.
+    col_prefix = "o." if sort == "most_linked" else ""
     pack_order = " ".join(
         f"WHEN ? THEN {index}" for index, _ in enumerate(pack_candidates)
     )
     fallback_order = len(pack_candidates)
 
     inner_params: list[Any] = [*pack_candidates]
-    where_clause = f"pack IN ({pack_placeholders})"
+    where_parts = [f"{col_prefix}pack IN ({pack_placeholders})"]
     if object_kind:
         from .object_kinds import normalize_kind
 
-        where_clause += " AND object_kind = ?"
+        where_parts.append(f"{col_prefix}object_kind = ?")
         inner_params.append(normalize_kind(object_kind))
     if normalized_query:
-        where_clause += (
-            " AND ("
-            " object_id LIKE ? ESCAPE '\\'"
-            " OR title LIKE ? ESCAPE '\\'"
-            " OR source_slug LIKE ? ESCAPE '\\'"
-            ")"
+        where_parts.append(
+            f"({col_prefix}object_id LIKE ? ESCAPE '\\'"
+            f" OR {col_prefix}title LIKE ? ESCAPE '\\'"
+            f" OR {col_prefix}source_slug LIKE ? ESCAPE '\\')"
         )
         inner_params.extend([
             f"%{normalized_query}%",
             f"%{normalized_query}%",
             f"%{normalized_query}%",
         ])
+    where_clause = " AND ".join(where_parts)
+
+    if sort == "most_linked":
+        # Rank by incoming-relation count (backlinks).  The LEFT JOIN
+        # keeps zero-link objects so the result count matches the
+        # ``count_objects`` total used for pagination.  Tie-break by
+        # ``object_id`` to keep ordering deterministic.
+        select_clause = (
+            "SELECT pack, object_id, object_kind, title, canonical_path,"
+            " source_slug, backlink_count"
+        )
+        inner_select = (
+            "SELECT o.pack AS pack, o.object_id AS object_id,"
+            " o.object_kind AS object_kind, o.title AS title,"
+            " o.canonical_path AS canonical_path, o.source_slug AS source_slug,"
+            " COALESCE(r.backlinks, 0) AS backlink_count,"
+            " ROW_NUMBER() OVER ("
+            "PARTITION BY o.object_id"
+            f" ORDER BY CASE o.pack {pack_order} ELSE {fallback_order} END"
+            ") AS rn"
+            " FROM objects o"
+            " LEFT JOIN ("
+            "SELECT pack, target_object_id, COUNT(*) AS backlinks"
+            " FROM relations GROUP BY pack, target_object_id"
+            ") r ON r.pack = o.pack AND r.target_object_id = o.object_id"
+            f" WHERE {where_clause}"
+        )
+        order_clause = "ORDER BY backlink_count DESC, object_id"
+    else:  # alpha (default)
+        select_clause = (
+            "SELECT pack, object_id, object_kind, title, canonical_path, source_slug"
+        )
+        inner_select = (
+            "SELECT pack, object_id, object_kind, title, canonical_path, source_slug,"
+            " ROW_NUMBER() OVER ("
+            "PARTITION BY object_id"
+            f" ORDER BY CASE pack {pack_order} ELSE {fallback_order} END"
+            ") AS rn"
+            f" FROM objects WHERE {where_clause}"
+        )
+        order_clause = "ORDER BY object_id"
 
     sql = f"""
-        SELECT pack, object_id, object_kind, title, canonical_path, source_slug
+        {select_clause}
         FROM (
-            SELECT pack, object_id, object_kind, title, canonical_path, source_slug,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY object_id
-                       ORDER BY CASE pack {pack_order} ELSE {fallback_order} END
-                   ) AS rn
-            FROM objects
-            WHERE {where_clause}
+            {inner_select}
         )
         WHERE rn = 1
-        ORDER BY object_id
+        {order_clause}
         LIMIT ? OFFSET ?
     """
     params: list[Any] = [*pack_candidates, *inner_params, limit, offset]
 
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
+    if sort == "most_linked":
+        return [
+            {
+                "object_id": object_id,
+                "object_kind": object_kind,
+                "title": title,
+                "canonical_path": _vault_relative_path(resolved_vault, canonical_path),
+                "source_slug": source_slug,
+                "pack": pack,
+                "backlink_count": backlink_count,
+            }
+            for (
+                pack,
+                object_id,
+                object_kind,
+                title,
+                canonical_path,
+                source_slug,
+                backlink_count,
+            ) in rows
+        ]
     return [
         {
             "object_id": object_id,
@@ -2020,6 +2085,44 @@ def get_object_detail(
             "mocs": mocs,
         },
     }
+
+
+def count_graph_clusters(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+    query: str | None = None,
+) -> int:
+    """Total number of pack-scoped graph clusters matching ``query``.
+
+    Used by ``/ops/clusters`` to render ``Showing N of TOTAL`` headers
+    when the renderer applies a display ``limit``.
+    """
+    db_path = _db_path(vault_dir)
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="graph_clusters"
+    )
+    normalized_query = _escape_like(query.strip().lower()) if query else ""
+    sql = (
+        "SELECT COUNT(DISTINCT cluster_id) FROM graph_clusters WHERE pack IN ("
+        + ",".join("?" for _ in pack_candidates)
+        + ")"
+    )
+    params: list[Any] = [*pack_candidates]
+    if normalized_query:
+        sql += (
+            " AND ("
+            " lower(pack) LIKE ? ESCAPE '\\'"
+            " OR lower(cluster_kind) LIKE ? ESCAPE '\\'"
+            " OR lower(label) LIKE ? ESCAPE '\\'"
+            " OR lower(center_object_id) LIKE ? ESCAPE '\\'"
+            " OR lower(member_object_ids_json) LIKE ? ESCAPE '\\'"
+            ")"
+        )
+        params.extend([f"%{normalized_query}%"] * 5)
+    with sqlite3.connect(db_path) as conn:
+        ((count,),) = conn.execute(sql, tuple(params)).fetchall()
+    return int(count or 0)
 
 
 def list_graph_clusters(
@@ -5769,7 +5872,14 @@ def list_timeline_events(
     pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> list[dict[str, Any]]:
+    """List timeline events.
+
+    ``from_date`` / ``to_date`` accept ``YYYY-MM-DD`` strings.  Both are
+    inclusive.  Pass the same value for both to fetch a single day.
+    """
     limit, _ = _validate_page_args(limit=limit, offset=0)
     db_path = _db_path(vault_dir)
     normalized_query = _escape_like(query.strip().lower()) if query else ""
@@ -5789,6 +5899,12 @@ def list_timeline_events(
         WHERE objects.pack IN ({pack_placeholders})
     """
     params: list[Any] = [*pack_candidates]
+    if from_date:
+        sql += "\n            AND timeline_events.event_date >= ?\n        "
+        params.append(from_date)
+    if to_date:
+        sql += "\n            AND timeline_events.event_date <= ?\n        "
+        params.append(to_date)
     if normalized_query:
         sql += """
             AND (

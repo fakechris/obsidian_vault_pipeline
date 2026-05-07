@@ -1677,7 +1677,10 @@ def test_ui_server_atlas_endpoint_accepts_pack_scope(temp_vault):
     assert payload["requested_pack"] == "default-knowledge"
 
 
-def test_ui_server_deep_dives_endpoint_accepts_pack_scope(temp_vault):
+def test_ui_server_deep_dives_endpoint_redirects_with_query_preserved(temp_vault):
+    """BL-029 deleted the deep-dive producer; ``/api/deep-dives`` and
+    ``/ops/deep-dives`` 301 to ``/ops/today`` instead of returning JSON.
+    Existing bookmarks survive — just no JSON consumer remains."""
     from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
@@ -1689,14 +1692,15 @@ def test_ui_server_deep_dives_endpoint_accepts_pack_scope(temp_vault):
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request("GET", "/api/deep-dives?pack=default-knowledge")
         response = conn.getresponse()
-        payload = json.loads(response.read().decode("utf-8"))
+        location = response.getheader("Location") or ""
+        response.read()
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
-    assert response.status == 200
-    assert payload["requested_pack"] == "default-knowledge"
+    assert response.status == 301
+    assert location == "/ops/today?pack=default-knowledge"
 
 
 def test_ui_server_evolution_endpoint_returns_payload(temp_vault):

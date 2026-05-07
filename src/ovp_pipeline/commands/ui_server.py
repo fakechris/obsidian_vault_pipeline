@@ -384,16 +384,34 @@ def create_server(
                         )
                     return
                 if path == "/ops/objects":
-                    limit = int(query.get("limit", ["100"])[0])
-                    offset = int(query.get("offset", ["0"])[0])
+                    # Page-size whitelist guards against pathological
+                    # ``?limit=99999`` queries; mirrors the per-page UI
+                    # selector below.  Out-of-range values fall back
+                    # silently to the default (100).
+                    raw_limit = query.get("limit", ["100"])[0]
+                    try:
+                        limit = int(raw_limit)
+                    except ValueError:
+                        limit = 100
+                    if limit not in (10, 50, 100, 200):
+                        limit = 100
+                    raw_offset = query.get("offset", ["0"])[0]
+                    try:
+                        offset = max(0, int(raw_offset))
+                    except ValueError:
+                        offset = 0
+                    sort = query.get("sort", ["alpha"])[0] or "alpha"
                     q = query.get("q", [""])[0]
+                    object_kind = query.get("object_kind", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_objects_index_payload(
                         resolved_vault,
                         limit=limit,
                         offset=offset,
                         query=q,
+                        object_kind=object_kind,
                         pack_name=pack_name,
+                        sort=sort,
                     )
                     self._write_html(_render_objects_index(payload))
                     return
@@ -593,8 +611,26 @@ def create_server(
                         pack_name=pack_name, route_path="/ops/events", api=False
                     ):
                         return
+                    # ``date`` is shorthand for a single-day query
+                    # (``from_date == to_date``).  Explicit ``from_date`` /
+                    # ``to_date`` win when both forms are supplied.
+                    single_date = query.get("date", [""])[0] or ""
+                    from_date = query.get("from_date", [single_date])[0] or single_date or None
+                    to_date = query.get("to_date", [single_date])[0] or single_date or None
+                    raw_evt_limit = query.get("limit", [""])[0]
+                    try:
+                        evt_limit = int(raw_evt_limit) if raw_evt_limit else None
+                    except ValueError:
+                        evt_limit = None
+                    if evt_limit is not None and evt_limit not in (25, 50, 100, 200):
+                        evt_limit = None
                     payload = build_event_dossier_payload(
-                        resolved_vault, pack_name=pack_name, query=q
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
+                        limit=evt_limit,
+                        from_date=from_date,
+                        to_date=to_date,
                     )
                     self._write_html(_render_events_page(payload))
                     return
@@ -705,8 +741,20 @@ def create_server(
                         pack_name=pack_name, route_path="/ops/clusters", api=False
                     ):
                         return
+                    show_all = query.get("show_all", [""])[0] == "1"
+                    raw_cluster_limit = query.get("limit", [""])[0]
+                    try:
+                        cluster_limit = int(raw_cluster_limit) if raw_cluster_limit else 15
+                    except ValueError:
+                        cluster_limit = 15
+                    if cluster_limit not in (15, 50, 200):
+                        cluster_limit = 15
                     payload = build_cluster_browser_payload(
-                        resolved_vault, pack_name=pack_name, query=q
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
+                        limit=cluster_limit,
+                        show_all=show_all,
                     )
                     self._write_html(_render_clusters_page(payload))
                     return
@@ -984,7 +1032,8 @@ def create_server(
                         self._write_html(_render_run_detail_page(payload))
                     return
                 if path == "/ops/pulse":
-                    self._write_html(_render_pulse_page())
+                    pack_name = query.get("pack", [""])[0] or ""
+                    self._write_html(_render_pulse_page(requested_pack=pack_name))
                     return
                 if path == "/ops/pulse/fragment":
                     self._write_html(_render_pulse_fragment())
