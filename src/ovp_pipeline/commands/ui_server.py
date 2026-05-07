@@ -31,7 +31,6 @@ from ..ui.view_models import (
     build_cluster_browser_payload,
     build_cluster_detail_payload,
     build_contradiction_browser_payload,
-    build_derivation_browser_payload,
     build_evolution_browser_payload,
     build_event_dossier_payload,
     build_graph_map_payload,
@@ -84,7 +83,6 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_clusters_page,
     _render_contradictions_page,
     _render_dashboard,
-    _render_derivations_page,
     _render_events_page,
     _render_evolution_browser_page,
     _render_explore_fragment,
@@ -660,30 +658,17 @@ def create_server(
                     )
                     self._write_html(_render_curated_atlas_page(payload))
                     return
-                if path == "/api/deep-dives":
-                    q = query.get("q", [""])[0]
-                    pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(
-                        pack_name=pack_name, route_path="/ops/deep-dives", api=True
-                    ):
-                        return
-                    self._write_json(
-                        build_derivation_browser_payload(
-                            resolved_vault, pack_name=pack_name, query=q
-                        )
-                    )
-                    return
-                if path == "/ops/deep-dives":
-                    q = query.get("q", [""])[0]
-                    pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(
-                        pack_name=pack_name, route_path="/ops/deep-dives", api=False
-                    ):
-                        return
-                    payload = build_derivation_browser_payload(
-                        resolved_vault, pack_name=pack_name, query=q
-                    )
-                    self._write_html(_render_derivations_page(payload))
+                # BL-029 deleted the deep-dive producer, so the
+                # ``/ops/deep-dives`` index page is permanently
+                # empty.  Redirect any existing bookmarks to
+                # ``/ops/today``; preserve query string so a
+                # ``?pack=...`` link survives.  The ``/api`` twin
+                # is dropped (no JSON consumers in production).
+                if path in {"/ops/deep-dives", "/api/deep-dives"}:
+                    target = "/ops/today"
+                    if parsed.query:
+                        target = f"{target}?{parsed.query}"
+                    self._permanent_redirect(301, target)
                     return
                 if path == "/api/production":
                     q = query.get("q", [""])[0]

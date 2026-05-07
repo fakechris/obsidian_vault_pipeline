@@ -171,8 +171,12 @@ def _ops_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
     if _shell_supports_research_nav(requested_pack):
         items.extend([
             ("Clusters", "/ops/clusters"),
-            ("Deep-dives", "/ops/deep-dives"),
         ])
+        # ``Deep-dives`` was removed post-BL-029.  The legacy
+        # 13-section LLM rewrite no longer produces deep-dive
+        # markdown, so the index page is permanently empty.
+        # ``/ops/deep-dives`` 301s to ``/ops/today`` for any
+        # existing bookmarks.
     return items
 
 

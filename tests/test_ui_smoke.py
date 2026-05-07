@@ -143,7 +143,11 @@ date: 2026-04-13
         topic_status, topic_body = _get(port, "/topic?id=alpha")
         events_status, events_body = _get(port, "/ops/events")
         atlas_status, atlas_body = _get(port, "/atlas")
-        deep_dives_status, deep_dives_body = _get(port, "/ops/deep-dives")
+        # /ops/deep-dives 301-redirects to /ops/today post-BL-029.
+        # The HTTP smoke tests use httplib without auto-follow, so we
+        # only verify the 301 status here and skip the body asserts
+        # that used to pin the now-removed Deep Dive Derivations page.
+        deep_dives_status, _deep_dives_body = _get(port, "/ops/deep-dives")
         evolution_status, evolution_body = _get(port, "/ops/evolution")
         production_status, production_body = _get(port, "/ops/production")
         contradictions_status, contradictions_body = _get(port, "/ops/contradictions")
@@ -222,16 +226,13 @@ date: 2026-04-13
     assert "Contribution Summary" in atlas_body
     assert f"Showing the most recent {DEFAULT_TRACEABILITY_BROWSER_LIMIT} atlas pages" in atlas_body
 
-    assert deep_dives_status == 200
-    assert "Deep Dive Derivations" in deep_dives_body
-    assert "Contribution Summary" in deep_dives_body
+    # /ops/deep-dives 301s to /ops/today post-BL-029 (no producer).
+    assert deep_dives_status == 301
 
     assert evolution_status == 200
     assert "Evolution Browser" in evolution_body
     assert "Candidate Links" in evolution_body
     assert "/ops/evolution/review" in evolution_body
-    assert f"Showing the most recent {DEFAULT_TRACEABILITY_BROWSER_LIMIT} deep dives" in deep_dives_body
-    assert "Source Deep Dive" in deep_dives_body
 
     assert production_status == 200
     assert "Production Browser" in production_body
@@ -905,10 +906,9 @@ date: 2026-04-13
         server.server_close()
         thread.join(timeout=5)
 
-    assert status == 200
-    assert "Weekly Build" in body
-    assert "0 derived objects" in body
-    assert "Prompt Engineering" not in body
+    # Post-BL-029 the deep-dive producer is gone, so the index page
+    # was retired; the route now 301s to /ops/today.
+    assert status == 301
 
 
 def test_ui_search_page_combines_objects_and_notes(temp_vault):
@@ -1549,7 +1549,7 @@ date: 2026-04-13
     thread.start()
     try:
         atlas_status, atlas_body = _get(port, "/atlas")
-        derivations_status, derivations_body = _get(port, "/ops/deep-dives")
+        derivations_status, _derivations_body = _get(port, "/ops/deep-dives")
     finally:
         server.shutdown()
         server.server_close()
@@ -1562,12 +1562,7 @@ date: 2026-04-13
     assert "1 objects" in atlas_body
     assert f"/note?path={quote('10-Knowledge/Atlas/Atlas-Index.md', safe='')}" in atlas_body
 
-    assert derivations_status == 200
-    assert "Deep Dive Derivations" in derivations_body
-    assert "Deep Dive" in derivations_body
-    assert "Alpha" in derivations_body
-    assert "1 derived objects" in derivations_body
-    assert (
-        f"/note?path={quote('20-Areas/Tools/Topics/2026-04/Deep Dive_深度解读.md', safe='')}"
-        in derivations_body
-    )
+    # Post-BL-029 the deep-dives index 301s to /ops/today; the
+    # standalone derivations renderer + payload still exist and
+    # are tested in tests/test_ui_view_models.py.
+    assert derivations_status == 301

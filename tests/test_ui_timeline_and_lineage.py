@@ -65,6 +65,7 @@ class TestOpsNav:
         )
         items = dict(_ops_nav_items(""))
         assert "Clusters" not in items
+        # Deep-dives nav entry was removed post-BL-029 (no producer).
         assert "Deep-dives" not in items
 
         monkeypatch.setattr(
@@ -72,7 +73,9 @@ class TestOpsNav:
         )
         items_research = dict(_ops_nav_items(""))
         assert items_research["Clusters"] == "/ops/clusters"
-        assert items_research["Deep-dives"] == "/ops/deep-dives"
+        # Even on the research shell, Deep-dives no longer surfaces;
+        # the route 301s to /ops/today for legacy bookmarks.
+        assert "Deep-dives" not in items_research
 
 
 # ---------------------------------------------------------------------------
