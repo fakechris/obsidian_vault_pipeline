@@ -111,16 +111,27 @@ def main(argv: list[str] | None = None) -> int:
                   f"({size} bytes) → {target.relative_to(vault)}")
             if args.apply:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                if target.exists():
-                    print("             ⊘ target already exists, deleting source")
-                    loser.unlink()
-                else:
-                    shutil.move(str(loser), str(target))
+                # Don't silently unlink on collision — the existing
+                # target's bytes may differ (partial prior run, manual
+                # restore from archive, etc.).  Pick a unique target
+                # so we never lose data, and let the audit event
+                # record the actual on-disk path.
+                archived_target = target
+                counter = 1
+                while archived_target.exists():
+                    archived_target = target.with_name(
+                        f"{target.stem}__dup{counter}{target.suffix}"
+                    )
+                    counter += 1
+                if archived_target != target:
+                    print(f"             ⚠ target exists, archiving as "
+                          f"{archived_target.name}")
+                shutil.move(str(loser), str(archived_target))
                 moved += 1
                 if logger is not None:
                     logger.log("dedup_cleanup_archived", {
                         "url": url,
-                        "archived_path": str(target.relative_to(vault)),
+                        "archived_path": str(archived_target.relative_to(vault)),
                         "kept": str(canonical.relative_to(vault)),
                         "size_bytes": size,
                         "trigger": "ovp-dedup-cleanup",

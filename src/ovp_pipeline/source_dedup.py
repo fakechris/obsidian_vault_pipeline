@@ -36,19 +36,32 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterable
 
 # Frontmatter keys we recognize as the canonical source URL.  Order
 # matters: matches the precedence in
 # ``backfill_provenance.py:_canonical_source_url``.
 _SOURCE_URL_KEYS = ("source_url", "source", "url", "github", "twitter", "arxiv")
 
+# Frontmatter rarely exceeds ~1 KB; 3 KB is a safe upper bound that
+# still lets us reject bodies without slurping multi-MB raws.
+FRONTMATTER_SCAN_LIMIT = 3000
 
-def _extract_source_url(text: str) -> str | None:
+
+def read_file_head(path: Path, limit: int = FRONTMATTER_SCAN_LIMIT) -> str:
+    """Return the first ``limit`` chars of ``path`` (or fewer if the
+    file is shorter).  Used by the dedup index and intake URL gate to
+    avoid loading multi-MB clipped articles when only the frontmatter
+    needs inspection.
+    """
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        return fh.read(limit)
+
+
+def extract_source_url(text: str) -> str | None:
     """Pull a ``source: <url>`` value from the frontmatter.  Returns
     ``None`` for files with no http/https URL in any recognized key.
     """
-    head = text[:3000]
+    head = text[:FRONTMATTER_SCAN_LIMIT]
     if not head.startswith("---"):
         return None
     fm_end = head.find("\n---", 3)
@@ -65,6 +78,11 @@ def _extract_source_url(text: str) -> str | None:
         if v.startswith(("http://", "https://")):
             return v
     return None
+
+
+# Backwards-compatible private alias kept so a partially-updated tree
+# doesn't ImportError; new callers should use ``extract_source_url``.
+_extract_source_url = extract_source_url
 
 
 def build_url_index(vault_dir: Path | str) -> dict[str, Path]:
@@ -84,10 +102,10 @@ def build_url_index(vault_dir: Path | str) -> dict[str, Path]:
     out: dict[str, Path] = {}
     for f in sorted(processed.rglob("*.md")):
         try:
-            text = f.read_text(encoding="utf-8", errors="replace")
+            text = read_file_head(f)
         except OSError:
             continue
-        url = _extract_source_url(text)
+        url = extract_source_url(text)
         if url and url not in out:
             out[url] = f
     return out
@@ -128,10 +146,10 @@ def find_duplicate_groups(
         return groups
     for f in sorted(processed.rglob("*.md")):
         try:
-            text = f.read_text(encoding="utf-8", errors="replace")
+            text = read_file_head(f)
         except OSError:
             continue
-        url = _extract_source_url(text)
+        url = extract_source_url(text)
         if url:
             groups.setdefault(url, []).append(f)
     return {u: paths for u, paths in groups.items() if len(paths) > 1}

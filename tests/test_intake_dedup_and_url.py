@@ -32,11 +32,7 @@ Why E2E (not unit-only):
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -301,9 +297,6 @@ class TestUrlIntakeDedup:
         not 70-Archive — so an archived URL is invisible to the
         dedup check by design.
         """
-        from ovp_pipeline.runtime import VaultLayout
-        layout = VaultLayout.from_vault(temp_vault)
-
         # Pretend an old copy was archived.
         archive_dir = temp_vault / "70-Archive" / "old"
         archive_dir.mkdir(parents=True)
@@ -332,7 +325,7 @@ class TestUrlIntakeDedup:
             _write_clipping(temp_vault, "second.md", url=url), dry_run=False,
         )
         log = (temp_vault / "60-Logs" / "pipeline.jsonl").read_text(encoding="utf-8")
-        events = [json.loads(l) for l in log.splitlines() if l.strip()]
+        events = [json.loads(line) for line in log.splitlines() if line.strip()]
         dedup_events = [
             e for e in events if e.get("event_type") == "source_dedup_skipped"
         ]

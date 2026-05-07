@@ -680,16 +680,27 @@ class AutoArticleProcessor:
         bodies.  The 8 confirmed duplicates in the 2026-05-06 census
         each represent one of these cases.
 
+        Scope: invoked from :meth:`process_single_source` only — not
+        from :meth:`process_inbox`.  Inbox files are post-intake (the
+        next pipeline stage), so applying URL dedup there would
+        short-circuit legitimate reprocessing.  The asymmetry is
+        intentional; pre-existing 03-Processed dups are handled by
+        ``ovp-dedup-cleanup``.
+
         Note: only checks the active ``03-Processed`` tree, not the
         ``70-Archive`` archive.  A user who archived a prior copy
         and explicitly wants to re-process the URL gets through.
         """
+        from .source_dedup import (
+            extract_source_url,
+            find_existing_by_url,
+            read_file_head,
+        )
         try:
-            text = source.read_text(encoding="utf-8", errors="replace")
+            text = read_file_head(source)
         except OSError:
             return None
-        from .source_dedup import _extract_source_url, find_existing_by_url
-        url = _extract_source_url(text)
+        url = extract_source_url(text)
         if not url:
             return None
         existing = find_existing_by_url(self.vault_dir, url)
