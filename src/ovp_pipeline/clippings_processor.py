@@ -39,6 +39,19 @@ try:
 except ImportError:
     from source_lifecycle import clipping_raw_name  # type: ignore
 
+try:
+    from .source_dedup import (
+        build_active_url_index,
+        extract_source_url,
+        read_file_head,
+    )
+except ImportError:  # pragma: no cover - script mode fallback
+    from source_dedup import (  # type: ignore
+        build_active_url_index,
+        extract_source_url,
+        read_file_head,
+    )
+
 
 VAULT_DIR = resolve_vault_dir()
 DEFAULT_LAYOUT = VaultLayout.from_vault(VAULT_DIR)
@@ -350,11 +363,6 @@ class ClippingsProcessor:
         # the same batch.  We grow ``staged_urls`` in-process as
         # we accept new clippings, since the on-disk index won't
         # see migrations that happen during this loop.
-        from .source_dedup import (
-            build_active_url_index,
-            extract_source_url,
-            read_file_head,
-        )
         active_index = build_active_url_index(self.vault_dir)
         staged_urls: set[str] = set()
 
@@ -372,39 +380,44 @@ class ClippingsProcessor:
             # the basename guard misses (e.g. user re-clips the
             # same x.com URL via a different filename, or a URL
             # that's already in 03-Processed/2026-04 under last
-            # run's basename).  Self-match (the Clippings file
-            # itself was already in the index because it lives
-            # under ``Clippings/``) is filtered explicitly.
+            # run's basename).  Two cases coexist: ``existing``
+            # holds the on-disk Path that already claimed the URL;
+            # ``in_batch_dup`` is True when an earlier file in
+            # this Clippings batch took the slot.
             try:
                 head = read_file_head(file_path)
                 source_url = extract_source_url(head)
             except OSError:
                 source_url = None
             existing: Path | None = None
+            in_batch_dup = False
             if source_url:
                 if source_url in staged_urls:
-                    existing = file_path  # placeholder; reason below
+                    in_batch_dup = True
                 else:
                     candidate = active_index.get(source_url)
                     if candidate is not None:
                         try:
-                            if candidate.resolve() != file_path.resolve():
-                                existing = candidate
+                            is_self_match = candidate.resolve() == file_path.resolve()
                         except OSError:
+                            is_self_match = False  # broken link can't be self
+                        if not is_self_match:
                             existing = candidate
-            if existing is not None:
+            if existing is not None or in_batch_dup:
                 file_info["status"] = "skipped_url_dedup"
-                file_info["reason"] = (
-                    f"URL {source_url} already claimed by "
-                    f"{existing.relative_to(self.vault_dir) if existing != file_path else 'a previous Clippings entry in this batch'}"
+                claim = (
+                    "a previous Clippings entry in this batch"
+                    if in_batch_dup
+                    else str(existing.relative_to(self.vault_dir))
                 )
+                file_info["reason"] = f"URL {source_url} already claimed by {claim}"
                 file_info["source_url"] = source_url
                 results["skipped"] += 1
                 results["files"].append(file_info)
                 self.logger.log("source_dedup_skipped", {
                     "source": str(file_path),
                     "url": source_url,
-                    "existing": str(existing) if existing != file_path else "in_batch",
+                    "existing": "in_batch" if in_batch_dup else str(existing),
                     "stage": "clippings_intake",
                 })
                 continue

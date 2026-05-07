@@ -539,7 +539,7 @@ class TestClippingsProcessorUrlDedup:
     skipped/migrated verdict is what we assert.
     """
 
-    def test_clipping_skipped_when_url_already_in_03_processed(self, temp_vault, monkeypatch):
+    def test_clipping_skipped_when_url_already_in_03_processed(self, temp_vault):
         url = "https://anthropic.com/engineering/already-processed"
         # Pre-existing copy under a 2026-04 basename
         _write_md(
@@ -568,10 +568,15 @@ class TestClippingsProcessorUrlDedup:
         ]
         assert len(intake_events) == 1
 
-    def test_two_clippings_same_url_only_first_migrates(self, temp_vault):
-        """In-batch dedup: two Clippings entries with the same URL
-        in the same run — the first goes through, the second hits
-        the gate.
+    def test_two_clippings_same_url_dedup_in_batch_dry_run(self, temp_vault):
+        """Dry-run sanity: two Clippings entries with the same URL
+        in the same run — at least one is flagged via the URL gate.
+
+        In dry-run the ``staged_urls`` post-migration set isn't
+        exercised because no migration happens; the gate fires via
+        the on-disk active index instead (both Clippings files
+        exist on disk and the index walks ``Clippings/``).  The
+        non-dry-run sibling below pins the ``staged_urls`` path.
         """
         url = "https://x.com/same-url-twice"
         clip1 = temp_vault / "Clippings" / "AAA.md"
@@ -582,13 +587,100 @@ class TestClippingsProcessorUrlDedup:
         proc = _make_clippings_processor(temp_vault)
         results = proc.process_clippings(dry_run=True)
         statuses = sorted(f["status"] for f in results["files"])
-        # First (alphabetically) goes through with dry_run, second
-        # gets skipped via in-batch URL gate.  Note: in dry_run the
-        # ``staged_urls`` set isn't updated (the migration that
-        # would feed it is skipped), so this test instead checks
-        # that the URL was already in the active index because
-        # both Clippings files exist on disk and the index walks
-        # ``Clippings/`` — first-write-wins picks AAA.md, BBB.md
-        # finds AAA.md as the existing claim.
         assert "skipped_url_dedup" in statuses
         assert "dry_run" in statuses
+
+    def test_two_clippings_same_url_in_batch_real_migration(self, temp_vault):
+        """Real-migration sibling: stub ``obsidian_move`` to skip the
+        Obsidian CLI shell-out so we can run with ``dry_run=False``
+        and exercise the ``staged_urls.add(...)`` post-migration
+        path that the dry-run test can't reach.
+
+        Asserts: first clipping migrates, second skips via in-batch
+        gate (``existing == "in_batch"`` in the audit event), and
+        the gate's pre-move check still passes for the first one.
+        """
+        url = "https://x.com/same-url-real"
+        clip1 = temp_vault / "Clippings" / "AAA.md"
+        clip2 = temp_vault / "Clippings" / "BBB.md"
+        _write_md(clip1, url=url)
+        _write_md(clip2, url=url)
+
+        proc = _make_clippings_processor(temp_vault)
+        # Replace the Obsidian-CLI move with a noop so the test
+        # doesn't depend on the binary being on PATH; record calls.
+        moved: list[str] = []
+
+        def fake_move(source, dest_dir, new_name=None):
+            moved.append(str(source.name))
+            # Mirror the real ``obsidian_move`` log.
+            proc.logger.log("file_moved", {
+                "source": str(source.relative_to(proc.vault_dir)),
+                "destination": str((dest_dir / (new_name or source.name)).relative_to(proc.vault_dir)),
+                "method": "test_stub",
+            })
+            return True
+
+        proc.obsidian_move = fake_move  # type: ignore[assignment]
+
+        results = proc.process_clippings(dry_run=False)
+        statuses = sorted(f["status"] for f in results["files"])
+        assert statuses == ["migrated", "skipped_url_dedup"], statuses
+        assert moved == ["AAA.md"], moved  # only first file migrates
+
+        log = (temp_vault / "60-Logs" / "pipeline.jsonl").read_text("utf-8")
+        events = [json.loads(line) for line in log.splitlines() if line.strip()]
+        gate_events = [
+            e for e in events
+            if e.get("event_type") == "source_dedup_skipped"
+            and e.get("stage") == "clippings_intake"
+        ]
+        assert len(gate_events) == 1
+        assert gate_events[0]["existing"] == "in_batch"
+
+
+class TestActiveIntakeDirsPriorityLadder:
+    """Pin the full pairwise priority ordering of
+    ``ACTIVE_INTAKE_DIRS``.  When the same URL exists in two
+    staging dirs, ``build_active_url_index`` must point to the
+    one earlier in the tuple.  This guards against a future
+    re-ordering breaking the self-match logic in
+    ``_check_url_dedup`` that relies on downstream-stage-wins.
+    """
+
+    def test_priority_ladder_matches_expected_order(self):
+        from ovp_pipeline.source_dedup import ACTIVE_INTAKE_DIRS
+        # The downstream-first ladder is part of the contract; if
+        # this assertion ever needs editing, ``_check_url_dedup``'s
+        # self-match logic must be re-verified at the same time.
+        assert ACTIVE_INTAKE_DIRS == (
+            "50-Inbox/03-Processed",
+            "50-Inbox/02-Processing",
+            "50-Inbox/01-Raw",
+            "50-Inbox/02-Pinboard",
+            "Clippings",
+        )
+
+    def test_pairwise_priority_collisions(self, tmp_path):
+        """For each adjacent pair (A, B) where A is downstream of
+        B, a URL appearing in both must resolve to A's location.
+        """
+        from ovp_pipeline.source_dedup import (
+            ACTIVE_INTAKE_DIRS,
+            build_active_url_index,
+        )
+        for downstream, upstream in zip(ACTIVE_INTAKE_DIRS, ACTIVE_INTAKE_DIRS[1:]):
+            tag = f"{downstream}__vs__{upstream}".replace("/", "_")
+            url = f"https://x.com/pair/{tag}"
+            # Use distinct tmp_paths per pair so the indices don't bleed
+            this_pair = tmp_path / tag
+            _write_md(this_pair / downstream / "downstream.md", url=url)
+            _write_md(this_pair / upstream / "upstream.md", url=url)
+            idx = build_active_url_index(this_pair)
+            won = idx[url]
+            # Use Path.parts to assert the winning file lives under
+            # the downstream dir (substring-match would be fragile
+            # for the nested ``50-Inbox/03-Processed`` case).
+            assert downstream in str(won.relative_to(this_pair)), (
+                f"Pair ({downstream} downstream of {upstream}) — winner was {won}"
+            )

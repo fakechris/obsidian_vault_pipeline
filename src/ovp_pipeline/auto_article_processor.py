@@ -101,6 +101,21 @@ except ImportError:  # pragma: no cover - script mode fallback
         update_transaction_step,
     )
 
+try:
+    from .source_dedup import (
+        build_active_url_index,
+        extract_source_url,
+        find_existing_by_url,
+        read_file_head,
+    )
+except ImportError:  # pragma: no cover - script mode fallback
+    from source_dedup import (  # type: ignore
+        build_active_url_index,
+        extract_source_url,
+        find_existing_by_url,
+        read_file_head,
+    )
+
 # 自动加载 .env 文件（尝试多个位置）
 def _load_env_files():
     """加载 .env 文件，尝试多个位置"""
@@ -701,12 +716,6 @@ class AutoArticleProcessor:
         archived a prior copy and explicitly wants to re-process the
         URL gets through.
         """
-        from .source_dedup import (
-            build_active_url_index,
-            extract_source_url,
-            find_existing_by_url,
-            read_file_head,
-        )
         try:
             text = read_file_head(source)
         except OSError:
@@ -751,6 +760,17 @@ class AutoArticleProcessor:
         source = Path(file_path)
         zone = self._source_lifecycle_zone(source)
 
+        # URL-dedup gate runs BEFORE any filesystem moves AND before
+        # the dry-run early-return — the gate is read-only so it's
+        # safe to evaluate in preview mode, and surfacing the skip
+        # verdict in dry-run is what makes the preview honest.  A
+        # detected duplicate leaves ``50-Inbox/01-Raw`` (or wherever
+        # the source currently sits) untouched.
+        dedup_result = self._check_url_dedup(source)
+        if dedup_result is not None:
+            dedup_result["source_lifecycle"] = {"zone": zone, "would_move": False}
+            return dedup_result
+
         if dry_run:
             result = {
                 "file": str(source),
@@ -765,15 +785,6 @@ class AutoArticleProcessor:
                 },
             }
             return result
-
-        # URL-dedup gate runs BEFORE any filesystem moves so a
-        # detected duplicate leaves ``50-Inbox/01-Raw`` (or wherever
-        # the source currently sits) untouched.  The user can then
-        # delete it manually or re-clip with a different URL.
-        dedup_result = self._check_url_dedup(source)
-        if dedup_result is not None:
-            dedup_result["source_lifecycle"] = {"zone": zone, "would_move": False}
-            return dedup_result
 
         working_path = source
         try:
@@ -1346,25 +1357,24 @@ class AutoArticleProcessor:
         # checks every queued file against it before any
         # filesystem move.  Without this, a re-clip of an already-
         # processed URL silently re-runs the entire pipeline.
-        from .source_dedup import build_active_url_index
         active_index = build_active_url_index(self.vault_dir)
 
-        for index, file_path in enumerate(files, start=1):
-            # URL dedup gate fires BEFORE staging so a detected dup
-            # leaves 01-Raw / 02-Processing untouched.  Self-match
-            # is filtered (the queued file is itself in the index
-            # because it lives under one of the staging dirs).
-            if not dry_run:
-                dedup_result = self._check_url_dedup(
-                    file_path, index=active_index, stage="process_inbox",
+        for position, file_path in enumerate(files, start=1):
+            # URL dedup gate is read-only (frontmatter scan + dict
+            # lookup) so it runs even in dry-run — operators using
+            # ``--dry-run --process-inbox`` get the actual skip
+            # verdict in the preview rather than seeing every
+            # queued raw counted as if it would process.
+            dedup_result = self._check_url_dedup(
+                file_path, index=active_index, stage="process_inbox",
+            )
+            if dedup_result is not None:
+                results["files"].append(dedup_result)
+                results["skipped"] += 1
+                self._finalize_lifecycle_source(
+                    file_path, dedup_result, dry_run=dry_run,
                 )
-                if dedup_result is not None:
-                    results["files"].append(dedup_result)
-                    results["skipped"] += 1
-                    self._finalize_lifecycle_source(
-                        file_path, dedup_result, dry_run=dry_run,
-                    )
-                    continue
+                continue
 
             working_path = file_path
             if not dry_run and file_path.parent != self.processing_dir:
@@ -1376,10 +1386,10 @@ class AutoArticleProcessor:
                     step_name="process",
                     progress_mode="counted",
                     work_units_total=work_units_total,
-                    work_units_done=index - 1,
+                    work_units_done=position - 1,
                     work_units_failed=results["failed"],
                     current_item=working_path.name,
-                    progress_summary=f"{index - 1}/{work_units_total} articles processed",
+                    progress_summary=f"{position - 1}/{work_units_total} articles processed",
                 )
 
             result = self.process_single_file(working_path, dry_run)
@@ -1405,10 +1415,10 @@ class AutoArticleProcessor:
                     step_name="process",
                     progress_mode="counted",
                     work_units_total=work_units_total,
-                    work_units_done=index,
+                    work_units_done=position,
                     work_units_failed=results["failed"],
                     current_item=working_path.name,
-                    progress_summary=f"{index}/{work_units_total} articles processed",
+                    progress_summary=f"{position}/{work_units_total} articles processed",
                 )
 
         return results
