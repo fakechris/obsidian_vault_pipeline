@@ -389,12 +389,19 @@ def create_server(
                     limit = int(query.get("limit", ["100"])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     q = query.get("q", [""])[0]
+                    # BL-030 follow-up: ``kind`` (alias of
+                    # ``object_kind``) lets the reader filter the
+                    # index to a single entity_type — fact / method /
+                    # tradeoff / etc.  The facet chip rail in the
+                    # rendered page builds these query strings.
+                    kind = query.get("kind", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_objects_index_payload(
                         resolved_vault,
                         limit=limit,
                         offset=offset,
                         query=q,
+                        object_kind=kind,
                         pack_name=pack_name,
                     )
                     self._write_html(_render_objects_index(payload))

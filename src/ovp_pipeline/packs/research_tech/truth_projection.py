@@ -372,12 +372,23 @@ def build_truth_projection(
     claim_evidence: list[ClaimEvidenceRow] = []
     compiled_summaries: list[CompiledSummaryRow] = []
 
-    from ...object_kinds import CORE_OBJECT_KINDS, normalize_kind
+    from ...object_kinds import (
+        CORE_OBJECT_KINDS,
+        V2_UNIT_TYPES,
+        normalize_kind,
+    )
 
     from ...object_kinds import KIND_CONCEPT
 
+    # BL-025/026 follow-up: accept v2 unit kinds in addition to
+    # core entity-side kinds so the truth_store ``objects.object_kind``
+    # column carries the rich post-backfill values (fact / tradeoff /
+    # learning / ...) instead of clamping back to ``concept``.  This
+    # is what surfaces them in the Reader-side type facet.
+    _accepted_kinds = CORE_OBJECT_KINDS | V2_UNIT_TYPES
+
     for slug, title, note_type, path, _day_id, _frontmatter_json, body in page_rows:
-        resolved_kind = note_type if note_type in CORE_OBJECT_KINDS else KIND_CONCEPT
+        resolved_kind = note_type if note_type in _accepted_kinds else KIND_CONCEPT
         # BL-054: pull source_url from frontmatter so credibility +
         # diversity signals can key off it.  Empty when the evergreen
         # has not been backfilled — the diversity helper treats that
@@ -390,7 +401,7 @@ def build_truth_projection(
                     et = fm.get("entity_type", "")
                     if isinstance(et, str) and et:
                         normalized = normalize_kind(et)
-                        if normalized in CORE_OBJECT_KINDS:
+                        if normalized in _accepted_kinds:
                             resolved_kind = normalized
                     su = fm.get("source_url", "")
                     if isinstance(su, str):
