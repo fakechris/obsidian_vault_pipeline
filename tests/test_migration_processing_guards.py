@@ -14,7 +14,6 @@ from ovp_pipeline import auto_article_processor as article_module
 from ovp_pipeline import auto_paper_processor as paper_module
 from ovp_pipeline.auto_article_processor import (
     AutoArticleProcessor,
-    LiteLLMClient as ArticleLiteLLMClient,
     PipelineLogger as ArticleLogger,
     TransactionManager as ArticleTxn,
 )
@@ -180,105 +179,6 @@ def test_pinboard_processor_rejects_cross_day_cli_range(tmp_path):
     assert "不支持跨天范围查询" in result.stderr
 
 
-def test_article_processor_abstains_when_only_metadata_is_available(temp_vault, monkeypatch):
-    raw_file = temp_vault / "50-Inbox" / "02-Pinboard" / "2026-04-07_arxiv.org.md"
-    raw_file.parent.mkdir(parents=True, exist_ok=True)
-    raw_file.write_text(
-        """---
-title: "OSGym: Scalable OS Infra for Computer Use Agents"
-source: https://arxiv.org/pdf/2511.11672
-author: unknown
-date: 2026-04-07
-type: pinboard-website
-tags: [paper]
----
-
-OSGym: Scalable OS Infra for Computer Use Agents
-
-## Notes
-
-
-## Tags
-
-#paper
-""",
-        encoding="utf-8",
-    )
-
-    logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
-    txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
-    processor.article_processor = SimpleNamespace(
-        generate_interpretation=lambda **_: (_ for _ in ()).throw(AssertionError("LLM should not be called"))
-    )
-
-    monkeypatch.setattr(
-        "ovp_pipeline.image_downloader.ImageDownloader.process_file",
-        lambda self, file_path, backup=True: [],
-    )
-
-    result = processor.process_single_file(raw_file, dry_run=False)
-
-    assert result["status"] == "skipped"
-    assert result["error"] == "paper_source_requires_paper_processor"
-    assert result["output_path"] is None
-
-
-def test_article_processor_can_promote_docs_page_when_primary_page_is_thin(temp_vault, monkeypatch):
-    raw_file = temp_vault / "50-Inbox" / "02-Pinboard" / "2026-04-07_example.com.md"
-    raw_file.parent.mkdir(parents=True, exist_ok=True)
-    raw_file.write_text(
-        """---
-title: "Example SDK"
-source: https://example.com
-author: unknown
-date: 2026-04-07
-type: pinboard-website
-tags: [sdk]
----
-
-Example SDK
-""",
-        encoding="utf-8",
-    )
-
-    logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
-    txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
-    processor.article_processor = SimpleNamespace(
-        generate_interpretation=lambda **kwargs: ("---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok", {"tokens": 1}, "tools")
-    )
-
-    monkeypatch.setattr(
-        "ovp_pipeline.image_downloader.ImageDownloader.process_file",
-        lambda self, file_path, backup=True: [],
-    )
-
-    class FakeResponse:
-        def __init__(self, text: str, content_type: str = "text/html", status_code: int = 200):
-            self.text = text
-            self.status_code = status_code
-            self.headers = {"Content-Type": content_type}
-            self.content = text.encode("utf-8")
-
-    docs_text = "<html><body><article>" + ("Detailed docs content. " * 120) + "</article></body></html>"
-    homepage = '<html><body><h1>Example SDK</h1><a href="/docs/getting-started">Documentation</a></body></html>'
-
-    def fake_get(url, timeout=15, headers=None, allow_redirects=True):
-        if url == "https://example.com":
-            return FakeResponse(homepage)
-        if url == "https://example.com/docs/getting-started":
-            return FakeResponse(docs_text)
-        raise AssertionError(f"unexpected url {url}")
-
-    monkeypatch.setattr("ovp_pipeline.auto_article_processor.requests.get", fake_get)
-
-    result = processor.process_single_file(raw_file, dry_run=False)
-
-    assert result["status"] == "completed"
-    assert result["classification"] == "tools"
-
-
 def test_process_inbox_moves_completed_sources_to_monthly_processed(temp_vault, monkeypatch):
     raw_file = temp_vault / "50-Inbox" / "01-Raw" / "2026-04-07_example.md"
     raw_file.parent.mkdir(parents=True, exist_ok=True)
@@ -299,19 +199,7 @@ Example SDK body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
-    processor.article_processor = SimpleNamespace(
-        generate_interpretation=lambda **kwargs: (
-            "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
-            {"tokens": 1},
-            "tools",
-        )
-    )
-    monkeypatch.setattr(
-        processor,
-        "_prepare_interpretation_source",
-        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
-    )
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
 
     monkeypatch.setattr(
         "ovp_pipeline.image_downloader.ImageDownloader.process_file",
@@ -323,6 +211,8 @@ Example SDK body
     processed_file = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / raw_file.name
     processing_file = temp_vault / "50-Inbox" / "02-Processing" / raw_file.name
 
+    # Post-BL-029: ``intake_only`` is the only success status —
+    # rolls up under ``completed`` in the result counts.
     assert results["completed"] == 1
     assert not raw_file.exists()
     assert not processing_file.exists()
@@ -349,19 +239,8 @@ Raw clip body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
-    processor.article_processor = SimpleNamespace(
-        generate_interpretation=lambda **kwargs: (
-            "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
-            {"tokens": 1},
-            "tools",
-        )
-    )
-    monkeypatch.setattr(
-        processor,
-        "_prepare_interpretation_source",
-        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
-    )
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
+
     monkeypatch.setattr(
         "ovp_pipeline.image_downloader.ImageDownloader.process_file",
         lambda self, file_path, backup=True: [],
@@ -378,7 +257,7 @@ Raw clip body
 
     processed_files = list((temp_vault / "50-Inbox" / "03-Processed").glob("*/*Raw_Clip.md"))
 
-    assert result["status"] == "completed"
+    assert result["status"] == "intake_only"
     assert not clipping.exists()
     assert not list((temp_vault / "50-Inbox" / "01-Raw").glob("*Raw_Clip.md"))
     assert not list((temp_vault / "50-Inbox" / "02-Processing").glob("*Raw_Clip.md"))
@@ -392,15 +271,11 @@ def test_article_cli_process_single_uses_source_lifecycle(temp_vault, monkeypatc
 
     called: dict[str, object] = {}
 
-    def stub_init_llm(self, *, api_key=None, api_base=None):
-        self.llm = SimpleNamespace(model="stub-model")
-
     def stub_process_single_source(self, file_path, dry_run=False):
         called["file_path"] = Path(file_path)
         called["dry_run"] = dry_run
-        return {"status": "completed", "tokens_used": 0, "output_path": "out.md"}
+        return {"status": "intake_only", "tokens_used": 0, "output_path": None}
 
-    monkeypatch.setattr(article_module.AutoArticleProcessor, "init_llm", stub_init_llm)
     monkeypatch.setattr(article_module.AutoArticleProcessor, "process_single_source", stub_process_single_source)
     monkeypatch.setattr(
         sys,
@@ -438,19 +313,8 @@ Example body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
-    processor.article_processor = SimpleNamespace(
-        generate_interpretation=lambda **kwargs: (
-            "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
-            {"tokens": 1},
-            "tools",
-        )
-    )
-    monkeypatch.setattr(
-        processor,
-        "_prepare_interpretation_source",
-        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
-    )
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
+
     monkeypatch.setattr(
         "ovp_pipeline.image_downloader.ImageDownloader.process_file",
         lambda self, file_path, backup=True: [],
@@ -459,7 +323,7 @@ Example body
     result = processor.process_single_source(pinboard_file, dry_run=False)
     archived_files = list((temp_vault / "70-Archive" / "Pinboard").glob("*/2026-04-07_example.md"))
 
-    assert result["status"] == "completed"
+    assert result["status"] == "intake_only"
     assert not pinboard_file.exists()
     assert len(archived_files) == 1
 
@@ -484,16 +348,17 @@ Broken body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
-    processor.article_processor = SimpleNamespace(
-        generate_interpretation=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
-    )
-    monkeypatch.setattr(
-        processor,
-        "_prepare_interpretation_source",
-        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
-    )
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
 
+    # Force the processor to fail by making image download throw —
+    # post-BL-029 this is the realistic failure surface.
+    def raising_process_file(self, file_path, backup=True):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "ovp_pipeline.auto_article_processor.AutoArticleProcessor.parse_raw_file",
+        lambda self, file_path: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
     monkeypatch.setattr(
         "ovp_pipeline.image_downloader.ImageDownloader.process_file",
         lambda self, file_path, backup=True: [],
@@ -532,20 +397,8 @@ Body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
-    processor.article_processor = SimpleNamespace(
-        generate_interpretation=lambda **kwargs: (
-            "---\ntitle: Test\nsource: x\nauthor: y\ndate: 2026-04-07\ntype: article\ntags: []\nstatus: draft\n---\n\n# ok",
-            {"tokens": 1},
-            "tools",
-        )
-    )
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
 
-    monkeypatch.setattr(
-        processor,
-        "_prepare_interpretation_source",
-        lambda file_data: ("Substantive source material " * 80, {"origin": "body"}),
-    )
     monkeypatch.setattr(
         "ovp_pipeline.image_downloader.ImageDownloader.process_file",
         lambda self, file_path, backup=True: [],
@@ -587,13 +440,13 @@ Body
 
     logger = ArticleLogger(temp_vault / "60-Logs" / "pipeline.jsonl")
     txn = ArticleTxn(temp_vault / "60-Logs" / "transactions")
-    processor = AutoArticleProcessor(temp_vault, logger, txn, skip_deep_dive=False)
+    processor = AutoArticleProcessor(temp_vault, logger, txn)
     txn_id = txn.start("article-processing", "Batch progress")
 
     monkeypatch.setattr(
         processor,
         "process_single_file",
-        lambda file_path, dry_run=False: {"status": "completed", "tokens_used": 0},
+        lambda file_path, dry_run=False: {"status": "intake_only", "tokens_used": 0},
     )
 
     results = processor.process_inbox(dry_run=True, batch_size=1, txn_id=txn_id)
@@ -627,45 +480,6 @@ type: note
     linter.scan()
 
     assert linter._resolve_link(".") is None
-
-
-def test_processors_default_to_auto_vault_model_env(monkeypatch):
-    monkeypatch.setenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.7-highspeed")
-    monkeypatch.setenv("AUTO_VAULT_API_BASE", "https://api.minimaxi.com/anthropic")
-    monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
-
-    article_client = ArticleLiteLLMClient()
-    paper_client = PaperLiteLLMClient()
-    # BL-066: github processor no longer instantiates an LLM client.
-
-    assert article_client.model == "anthropic/MiniMax-M2.7-highspeed"
-    assert paper_client.model == "anthropic/MiniMax-M2.7-highspeed"
-
-
-def test_article_processor_defaults_api_base_from_shared_resolver(monkeypatch):
-    monkeypatch.delenv("AUTO_VAULT_API_BASE", raising=False)
-    monkeypatch.delenv("SPEC_ORCH_LLM_API_BASE", raising=False)
-    monkeypatch.delenv("MINIMAX_ANTHROPIC_BASE_URL", raising=False)
-    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
-    monkeypatch.setenv("AUTO_VAULT_API_KEY", "test-key")
-
-    article_client = ArticleLiteLLMClient()
-
-    assert article_client.api_base == "https://api.minimaxi.com/anthropic"
-
-
-def test_processors_fall_back_to_minimax_api_key_env(monkeypatch):
-    monkeypatch.delenv("AUTO_VAULT_API_KEY", raising=False)
-    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
-    monkeypatch.setenv("AUTO_VAULT_MODEL", "minimax/MiniMax-M2.7-highspeed")
-    monkeypatch.setenv("AUTO_VAULT_API_BASE", "https://api.minimaxi.com/anthropic")
-
-    paper_client = PaperLiteLLMClient()
-    article_client = ArticleLiteLLMClient()
-    # BL-066: github processor no longer instantiates an LLM client.
-
-    assert paper_client._api_key == "minimax-key"
-    assert article_client._api_key == "minimax-key"
 
 
 def test_github_main_runs_enrichment_on_process_single(temp_vault, monkeypatch):
@@ -773,29 +587,7 @@ tags: [paper]
     assert len(list((temp_vault / "70-Archive" / "Pinboard").glob("*/2026-04-07_paper.md"))) == 1
 
 
-def test_article_cli_summary_handles_results_without_queued_total(temp_vault, monkeypatch, capsys):
-    def stub_init_llm(self, *, api_key=None, api_base=None):
-        self.llm = SimpleNamespace(model="stub-model")
-
-    monkeypatch.setattr(article_module.AutoArticleProcessor, "init_llm", stub_init_llm)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "auto_article_processor.py",
-            "--single",
-            "https://example.com/article",
-            "--vault-dir",
-            str(temp_vault),
-        ],
-    )
-
-    assert article_module.main() == 0
-    assert "Queued:" not in capsys.readouterr().out
-
-
 @pytest.mark.parametrize(("client_class", "patch_mode"), [
-    (ArticleLiteLLMClient, "article"),
     (PaperLiteLLMClient, "module"),
     # BL-066: github processor has no LiteLLMClient; covered by other tests.
 ])
@@ -825,10 +617,7 @@ def test_litellm_clients_retry_transient_failures(monkeypatch, client_class, pat
             raise RuntimeError("transient upstream 404")
         return FakeResponse()
 
-    if patch_mode == "article":
-        monkeypatch.setattr("ovp_pipeline.auto_article_processor.litellm.completion", fake_completion)
-    else:
-        monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
     monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
 
     client = client_class()
@@ -840,7 +629,6 @@ def test_litellm_clients_retry_transient_failures(monkeypatch, client_class, pat
 
 
 @pytest.mark.parametrize(("client_class", "patch_mode"), [
-    (ArticleLiteLLMClient, "article"),
     (PaperLiteLLMClient, "module"),
     # BL-066: github processor has no LiteLLMClient; covered by other tests.
 ])
@@ -868,10 +656,7 @@ def test_litellm_clients_pass_explicit_completion_timeout(monkeypatch, client_cl
         captured.update(kwargs)
         return FakeResponse()
 
-    if patch_mode == "article":
-        monkeypatch.setattr("ovp_pipeline.auto_article_processor.litellm.completion", fake_completion)
-    else:
-        monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=fake_completion))
 
     client = client_class()
     content, metadata = client.generate("system", "user")

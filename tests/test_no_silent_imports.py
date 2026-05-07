@@ -31,7 +31,7 @@ def repo_root() -> Path:
 # fallbacks where dotenv isn't a hard dependency.
 LEGACY_SILENT_IMPORTS = {
     ("auto_evergreen_extractor.py", 188),      # dotenv optional (Phase 1 prompt-registry import shifted line)
-    ("auto_article_processor.py", 128),         # dotenv optional (BL-058 source_dedup imports shifted line)
+    ("auto_article_processor.py", 93),          # dotenv optional (BL-029 deep-dive deletion shifted line back)
     ("auto_github_processor.py", 99),           # dotenv optional (BL-066 rewrote module, line shifted)
     ("auto_moc_updater.py", 51),                # dotenv optional
     ("auto_paper_processor.py", 86),            # dotenv optional
