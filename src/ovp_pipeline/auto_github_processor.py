@@ -82,8 +82,30 @@ try:
 except ImportError:
     from source_lifecycle import maybe_archive_pinboard_process_single  # type: ignore
 
+try:
+    from .source_dedup import build_active_url_index, find_existing_by_url
+except ImportError:
+    from source_dedup import build_active_url_index, find_existing_by_url  # type: ignore
+
 
 VAULT_DIR = resolve_vault_dir()
+
+
+def _resolved_paths_differ(a: Path, b: Path) -> bool:
+    """``True`` when two paths point at different files on disk.
+
+    The dedup gate uses this to skip self-matches: the pinboard
+    stub being processed carries the source URL in its
+    frontmatter, so the active-URL index legitimately finds it,
+    but flagging that as a duplicate would block every legitimate
+    enrichment.  Resolves both sides — symlinks count as the same
+    file — and degrades to string equality when ``resolve()``
+    raises on a missing path.
+    """
+    try:
+        return a.resolve() != b.resolve()
+    except OSError:
+        return Path(a) != Path(b)
 
 
 def load_env_file(vault_dir: Path) -> None:
@@ -285,11 +307,14 @@ def process_single_repo(
     logger: PipelineLogger | None = None,
     dry_run: bool = False,
     overwrite: bool = False,
+    vault_dir: Path | str | None = None,
+    active_url_index: dict[str, Path] | None = None,
+    source_path: Path | None = None,
 ) -> dict[str, Any]:
     """Enrich a single GitHub URL and write the processed markdown.
 
     Returns a result dict with ``status`` ∈ {completed, skipped, error,
-    skipped_existing, dry_run}.
+    skipped_existing, skipped_dedup, dry_run}.
 
     Behavioral changes from the pre-BL-066 implementation:
     - No LLM call (no ``llm_client`` parameter).
@@ -308,6 +333,16 @@ def process_single_repo(
     the prior file — a real risk when DeepWiki was unavailable on
     the first attempt and a later run got better content (or vice
     versa).  Set ``overwrite=True`` to deliberately replace.
+
+    ``vault_dir`` / ``active_url_index``: cross-date URL dedup gate.
+    The same-day collision guard above (``output_path.exists()``)
+    only catches a re-run on the same date; a Pinboard re-clip on a
+    later date silently produced a duplicate processed source.  When
+    a vault directory is reachable, build the active-staging URL
+    index (Clippings + four ``50-Inbox/`` stages) and short-circuit
+    if this URL is already claimed.  Callers iterating many repos
+    can build the index once and pass it in so we don't rescan the
+    vault per repo.
     """
     result: dict[str, Any] = {
         "url": url,
@@ -325,6 +360,49 @@ def process_single_repo(
             logger.log("github_intake_error", {"url": url, "error": result["error"]})
         return result
     owner, repo = parsed
+
+    # Cross-date URL dedup — match the gate the article and Clippings
+    # flows (BL-058) already use.  Done before the same-day collision
+    # check so a hit shows the operator the canonical existing file
+    # rather than a phantom same-day filename.  ``source_path`` is
+    # the pinboard stub being processed; we never flag a self-match
+    # (the stub itself carries the source URL in its frontmatter, so
+    # the index always finds it).
+    if not overwrite and (vault_dir is not None or active_url_index is not None):
+        index = active_url_index
+        if index is None and vault_dir is not None:
+            try:
+                index = build_active_url_index(vault_dir)
+            except (OSError, ValueError):
+                index = None
+        if index is not None:
+            existing = find_existing_by_url(
+                vault_dir or Path("."), url, index=index, scope="active"
+            )
+            if existing is not None and (
+                source_path is None
+                or _resolved_paths_differ(existing, source_path)
+            ):
+                rel = existing
+                if vault_dir is not None:
+                    try:
+                        rel = existing.relative_to(Path(vault_dir).resolve())
+                    except ValueError:
+                        rel = existing
+                print(
+                    f"  ⊘ Skipping {owner}/{repo}: URL already claimed at "
+                    f"{rel} (use --overwrite to refresh)"
+                )
+                result["status"] = "skipped_dedup"
+                result["output_file"] = str(existing)
+                result["dedup"] = {"url": url, "existing": str(rel)}
+                if not dry_run and logger:
+                    logger.log("github_intake_skipped_dedup", {
+                        "url": url, "owner": owner, "repo": repo,
+                        "existing": str(existing),
+                        "stage": "github_intake",
+                    })
+                return result
 
     # Collision guard — refuse to silently overwrite a prior intake
     # of the same repo on the same date unless the caller asked for
@@ -557,6 +635,25 @@ def main() -> int:
     print(f"Output: {output_dir}")
     print("=" * 60)
 
+    # Build the active-staging URL index once for the whole batch so
+    # we don't rescan the vault per repo.  Skip the index when no
+    # vault dir is reachable (the dedup gate then no-ops).
+    batch_vault_dir = args.vault_dir or VAULT_DIR
+    active_url_index: dict[str, Path] | None = None
+    if batch_vault_dir is not None:
+        try:
+            active_url_index = build_active_url_index(batch_vault_dir)
+        except (OSError, ValueError):
+            active_url_index = None
+
+    # ``--process-single`` runs one stub per invocation, so we can
+    # thread its path into the dedup gate and skip the self-match.
+    # Batch URL lists don't have a per-row source path; the gate
+    # falls back to "any existing match counts" for those.
+    process_single_path: Path | None = None
+    if args.process_single and len(urls_to_process) == 1:
+        process_single_path = Path(args.process_single)
+
     results: list[dict[str, Any]] = []
     for i, item in enumerate(urls_to_process, 1):
         print(f"\n[{i}/{len(urls_to_process)}] {item['url']}")
@@ -569,6 +666,9 @@ def main() -> int:
             logger=logger,
             dry_run=args.dry_run,
             overwrite=args.overwrite,
+            vault_dir=batch_vault_dir,
+            active_url_index=active_url_index,
+            source_path=process_single_path,
         )
         maybe_archive_pinboard_process_single(
             layout,

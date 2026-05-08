@@ -137,3 +137,40 @@ class TestAuditEvents:
                    if e.get("event_type") == "entity_type_backfill_summary"]
         assert len(summary) == 1
         assert summary[0]["phase1_count"] == 1
+
+
+class TestSkippedNoFrontmatter:
+    """An Evergreen markdown without a frontmatter block can't carry
+    ``entity_type`` until someone adds frontmatter to it.  Pre-fix
+    the CLI silently no-op'd, wrote the file back unchanged, and
+    counted it as classified — the report claimed success while the
+    file on disk still had no ``entity_type``.  Now those files are
+    counted in their own bucket and audited as skipped."""
+
+    def test_no_frontmatter_evergreen_counts_as_skipped(self, tmp_path):
+        ev_dir = tmp_path / "10-Knowledge" / "Evergreen"
+        ev_dir.mkdir(parents=True, exist_ok=True)
+        plain = ev_dir / "plain.md"
+        plain.write_text("# Plain note with no frontmatter\nBody only.\n", encoding="utf-8")
+        before = plain.read_text("utf-8")
+
+        result = run(tmp_path, dry_run=False)
+
+        # Phase 2 picked it up (no entity_type, no unit_type).
+        assert result["phase2_count"] == 1
+        # But it bumps the new ``skipped_no_frontmatter`` counter and
+        # is NOT counted as classified.
+        assert result["skipped_no_frontmatter"] == 1
+        assert result["classified"] == 0
+        # File on disk is untouched.
+        assert plain.read_text("utf-8") == before
+        # Audit log gets the explicit skip event, not a fake backfill.
+        log = (tmp_path / "60-Logs" / "pipeline.jsonl").read_text("utf-8")
+        events = [json.loads(line) for line in log.splitlines() if line.strip()]
+        skipped = [e for e in events
+                   if e.get("event_type") == "entity_type_backfill_skipped"]
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "no_frontmatter"
+        backfill_events = [e for e in events
+                           if e.get("event_type") == "entity_type_backfill"]
+        assert backfill_events == []

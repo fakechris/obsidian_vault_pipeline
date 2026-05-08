@@ -26,6 +26,8 @@ from ..truth_api import (
     MAX_PAGE_SIZE,
     SIGNAL_TYPE_EXPLANATIONS,
     _batch_object_rows,
+    count_action_queue_by_status,
+    count_contradictions_by_status,
     count_graph_clusters,
     count_objects,
     get_briefing_snapshot,
@@ -1809,27 +1811,44 @@ def build_queue_overview_payload(
     """
     requested_pack = pack_name or ""
 
-    candidate_payload = list_candidate_concepts(vault_dir, limit=200)
-    candidates = candidate_payload.get("candidates") or []
-    candidates_pending = len(candidates)
-    candidates_oldest = candidates[0] if candidates else None
+    # Candidates: registry load is the cost; capping at 1 is enough
+    # for the oldest-pending hint — the registry's own ``count``
+    # field carries the total without iterating the list.
+    candidate_payload = list_candidate_concepts(vault_dir, limit=1)
+    candidates_first = (candidate_payload.get("candidates") or [None])[0]
+    candidates_pending = int(candidate_payload.get("count") or 0)
+    candidates_oldest = candidates_first
 
-    contradictions = list_contradictions(vault_dir, pack_name=pack_name, limit=500)
-    open_contradictions = [c for c in contradictions if c.get("status") == "open"]
-    contradictions_pending = len(open_contradictions)
-    contradictions_oldest = open_contradictions[0] if open_contradictions else None
+    # Contradictions: lightweight ``GROUP BY status`` + LIMIT 1
+    # probe instead of fetching up to 500 rows just to count.
+    contradiction_overview = count_contradictions_by_status(
+        vault_dir, pack_name=pack_name
+    )
+    contradictions_pending = int(
+        contradiction_overview.get("by_status", {}).get("open") or 0
+    )
+    contradictions_oldest = contradiction_overview.get("oldest_open")
 
+    # Signals come from a JSONL ledger so we still scan once, but
+    # bound the cost: read just enough to find the oldest waiting
+    # row, and use the same pass for the productive count.  500
+    # rows already covers any realistic active signals window.
     signals = list_signals(vault_dir, pack_name=pack_name, limit=500)
     signals_waiting = [s for s in signals if s.get("capture_status") == "waiting"]
     signals_productive = [s for s in signals if s.get("capture_status") == "productive"]
     signals_pending = len(signals_waiting)
     signals_oldest = signals_waiting[0] if signals_waiting else None
 
-    actions = list_action_queue(vault_dir, pack_name=pack_name, limit=500)
-    actions_failed = [a for a in actions if a.get("status") in ("failed", "blocked")]
-    actions_succeeded = [a for a in actions if a.get("status") == "succeeded"]
-    actions_pending = len(actions_failed)
-    actions_oldest = actions_failed[0] if actions_failed else None
+    # Action queue: lightweight pass that skips the per-row
+    # resolver-metadata + contract-metadata enrichment that
+    # ``list_action_queue`` runs on every row.
+    action_overview = count_action_queue_by_status(vault_dir, pack_name=pack_name)
+    action_by_status = action_overview.get("by_status", {})
+    actions_pending = int(
+        (action_by_status.get("failed") or 0) + (action_by_status.get("blocked") or 0)
+    )
+    actions_succeeded_count = int(action_by_status.get("succeeded") or 0)
+    actions_oldest = action_overview.get("oldest_failed")
 
     # Evergreen/object total — informational, surfaces "you have a
     # vault" so the healthy-state line carries weight.
@@ -1911,7 +1930,7 @@ def build_queue_overview_payload(
 
     healthy = {
         "productive_signals": len(signals_productive),
-        "succeeded_actions": len(actions_succeeded),
+        "succeeded_actions": actions_succeeded_count,
         "evergreen_total": evergreen_total,
     }
 

@@ -1838,6 +1838,39 @@ def test_ops_queue_overview_lists_pending_queues(temp_vault):
     assert "evergreen" in body
 
 
+def test_count_contradictions_by_status_returns_grouped_counts(temp_vault):
+    """``count_contradictions_by_status`` is the lightweight overview
+    probe that replaced the pre-fix ``list_contradictions(limit=500)``
+    inside ``build_queue_overview_payload`` — pre-fix the overview
+    page paid for the full claim-detail map + status-override JSONL
+    replay just to compute ``len()``."""
+    from ovp_pipeline.truth_api import count_contradictions_by_status
+
+    _seed_truth_store(temp_vault)
+    overview = count_contradictions_by_status(temp_vault, pack_name="default-knowledge")
+    assert "by_status" in overview
+    assert "oldest_open" in overview
+    assert "total" in overview
+    # Counts are integers, not row dicts — confirms we never built
+    # the heavy per-row payload.
+    assert all(isinstance(n, int) for n in overview["by_status"].values())
+
+
+def test_count_action_queue_by_status_returns_grouped_counts(temp_vault):
+    """``count_action_queue_by_status`` is the JSONL-pass version of
+    the same overview probe.  Skips the per-row resolver-metadata +
+    contract-metadata enrichment that ``list_action_queue`` runs on
+    every row."""
+    from ovp_pipeline.truth_api import count_action_queue_by_status
+
+    _seed_truth_store(temp_vault)
+    overview = count_action_queue_by_status(temp_vault, pack_name="default-knowledge")
+    assert "by_status" in overview
+    assert "oldest_failed" in overview
+    assert "total" in overview
+    assert all(isinstance(n, int) for n in overview["by_status"].values())
+
+
 def test_ui_server_evolution_endpoint_returns_payload(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
 

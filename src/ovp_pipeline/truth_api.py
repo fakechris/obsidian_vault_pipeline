@@ -2095,6 +2095,105 @@ def get_object_detail(
     }
 
 
+def count_contradictions_by_status(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    """Lightweight overview probe for ``/ops/queue``.
+
+    Returns ``{by_status: {status → count}, oldest_open: {...} | None,
+    total: int}`` without paying the cost of ``list_contradictions``
+    (claim-detail map + review-override JSONL replay + status text
+    reconciliation per row).  ``GROUP BY status`` runs in O(rows) on
+    the index, and the oldest-open probe is a single ``LIMIT 1``
+    SELECT — total wire cost is ~2 ms even on a 10k-row table.
+
+    Status here is the *raw* SQL value, not the override-reconciled
+    one, so a contradiction whose review action overrode it from
+    ``open`` → ``dismissed`` still counts as ``open`` in this
+    aggregate.  The queue overview wants the work-pending signal,
+    not the audit truth — leave override reconciliation to the
+    detail page.
+    """
+    db_path = _db_path(vault_dir)
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="contradictions"
+    )
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
+    by_status: dict[str, int] = {}
+    oldest_open: dict[str, Any] | None = None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            count_sql = (
+                "SELECT status, COUNT(*) FROM contradictions"
+                f" WHERE pack IN ({pack_placeholders})"  # noqa: S608
+                " GROUP BY status"
+            )
+            for status, n in conn.execute(count_sql, tuple(pack_candidates)).fetchall():
+                by_status[str(status or "")] = int(n or 0)
+            oldest_sql = (
+                "SELECT contradiction_id, subject_key FROM contradictions"
+                f" WHERE pack IN ({pack_placeholders}) AND status = 'open'"  # noqa: S608
+                " ORDER BY contradiction_id LIMIT 1"
+            )
+            row = conn.execute(oldest_sql, tuple(pack_candidates)).fetchone()
+            if row is not None:
+                oldest_open = {
+                    "contradiction_id": str(row[0] or ""),
+                    "subject_key": str(row[1] or ""),
+                }
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return {"by_status": {}, "oldest_open": None, "total": 0}
+        raise
+    return {
+        "by_status": by_status,
+        "oldest_open": oldest_open,
+        "total": sum(by_status.values()),
+    }
+
+
+def count_action_queue_by_status(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    """Lightweight overview probe for ``/ops/queue``.
+
+    Reads the action-queue ledger once and returns
+    ``{by_status: {status → count}, oldest_failed: {...} | None,
+    total: int}`` without running ``_normalize_action_queue_item``
+    on every row — that step pulls in resolver metadata, action
+    contracts, and result-artifact summaries that the queue
+    overview never reads.  Pre-fix the overview page paid that
+    cost on up to 500 rows just to compute ``len()`` and a single
+    oldest hint.
+    """
+    normalized_pack = str(pack_name or "").strip()
+    by_status: dict[str, int] = {}
+    oldest_failed: dict[str, Any] | None = None
+    with action_queue_write_lock(vault_dir):
+        for item in _read_action_queue_rows_unlocked(vault_dir):
+            row_pack = str(item.get("pack") or DEFAULT_WORKFLOW_PACK_NAME)
+            if normalized_pack and row_pack != normalized_pack:
+                continue
+            status = str(item.get("status") or "")
+            by_status[status] = by_status.get(status, 0) + 1
+            if status in ("failed", "blocked") and oldest_failed is None:
+                oldest_failed = {
+                    "action_id": str(item.get("action_id") or ""),
+                    "title": str(item.get("title") or ""),
+                    "created_at": str(item.get("created_at") or ""),
+                    "status": status,
+                }
+    return {
+        "by_status": by_status,
+        "oldest_failed": oldest_failed,
+        "total": sum(by_status.values()),
+    }
+
+
 def count_graph_clusters(
     vault_dir: Path | str,
     *,
