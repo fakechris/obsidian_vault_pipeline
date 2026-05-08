@@ -407,7 +407,13 @@ class ConceptRegistry:
 
         self._rebuild_alias_index()
         self._build_surface_index()
-        self._precompute_tokens()  # Pre-compute tokens for faster search
+        # ``_precompute_tokens`` was dead weight — it tokenised every
+        # entry's title/slug/definition/aliases via jieba and cached
+        # them in ``self._token_cache``, but nothing else in the
+        # codebase ever read that cache.  On a 6 K-entry registry the
+        # precompute took ~7 seconds and dominated ``/ops/candidates``.
+        # Removed (BL-030 follow-up).  If a future similarity-search
+        # path needs tokens it can call ``_get_cached_tokens`` lazily.
         return self
 
     def save(self) -> None:

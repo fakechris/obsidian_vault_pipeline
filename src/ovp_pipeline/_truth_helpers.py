@@ -9,6 +9,7 @@ runtime / pack-resolution layers.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import functools
 import json
 import logging
 import re
@@ -327,8 +328,43 @@ def _rewrite_jsonl(path: Path, payloads: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
-    resolved = resolve_vault_dir(vault_dir).resolve()
+_VAULT_DIR_NONE_SENTINEL = ""  # ``""`` means "fall back to env vars".
+
+
+@functools.lru_cache(maxsize=64)
+def _resolved_vault_dir_cached(vault_dir_str: str) -> Path:
+    """Memoise ``resolve_vault_dir(...).resolve()`` per vault dir.
+
+    Pre-fix every ``_vault_relative_path`` call (~14 K per
+    ``/ops/signals`` request) re-ran ``resolve()`` on the same
+    vault root, hitting ``realpath`` syscalls on every iteration.
+    Caching by the ``str`` form of the vault path is enough — any
+    given UI request runs against a single vault.
+
+    The empty string is a sentinel for ``None``; passing it in lets
+    ``resolve_vault_dir`` apply its ``OVP_VAULT_DIR`` / ``VAULT_DIR``
+    env-var fallback.  Pre-fix we naïvely ``str()``-coerced every
+    arg, which turned ``None`` into the literal path ``"None"`` and
+    silently broke that fallback.
+    """
+    arg: Path | str | None = vault_dir_str or None
+    return resolve_vault_dir(arg).resolve()
+
+
+@functools.lru_cache(maxsize=8192)
+def _vault_relative_path_cached(resolved_vault_str: str, path: str) -> str:
+    """Memoised core: ``_vault_relative_path`` defers here once
+    inputs have been coerced to ``str``.  Call frequency on the
+    slow Ops pages is dominated by a small set of repeated paths
+    (the same evergreen referenced by N events), so a 8 K-entry
+    cache covers a full request without filling RAM.
+
+    ``resolved_vault_str`` is the *already-resolved* vault path —
+    the wrapper uses ``_resolved_vault_dir_cached`` to handle env-
+    var fallback before we get here, so this layer never has to
+    interpret ``None``.
+    """
+    resolved = Path(resolved_vault_str)
     candidate = Path(path)
     if not candidate.is_absolute():
         return path
@@ -336,6 +372,16 @@ def _vault_relative_path(vault_dir: Path | str, path: str) -> str:
         return str(candidate.resolve().relative_to(resolved))
     except ValueError:
         return path
+
+
+def _vault_relative_path(vault_dir: Path | str | None, path: str) -> str:
+    # Resolve ``None`` via the env-var fallback before stringifying,
+    # otherwise ``str(None) == "None"`` would slip into the cache key
+    # and the lookup would silently treat ``"None"`` as a relative
+    # vault path.
+    cache_key = str(vault_dir) if vault_dir is not None else _VAULT_DIR_NONE_SENTINEL
+    resolved = _resolved_vault_dir_cached(cache_key)
+    return _vault_relative_path_cached(str(resolved), str(path))
 
 
 def _read_note_text(vault_dir: Path | str, relative_path: str) -> str:
