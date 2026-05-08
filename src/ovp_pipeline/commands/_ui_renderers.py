@@ -2113,6 +2113,34 @@ _TYPE_FACET_STYLE = """
 </style>
 """
 
+# Default chip-rail size for the type facet.  12 covers the common
+# CORE_OBJECT_KINDS set with one or two long-tail entries; the long
+# tail of rare kinds stays accessible via the search box / API.
+_TYPE_FACET_DEFAULT_LIMIT = 12
+
+
+def _build_objects_query_string(
+    *,
+    query: str = "",
+    object_kind: str = "",
+    requested_pack: str = "",
+) -> str:
+    """Shared query-string builder for ``/ops/objects`` URLs.
+
+    Centralises the q + kind + pack ordering so the type-facet chip
+    rail and the active-filter clear-link can't drift apart on URL
+    shape (e.g. param order, encoding) — both call sites used to
+    duplicate this logic with subtly different rules.
+    """
+    params: list[str] = []
+    if query:
+        params.append(f"q={quote(query, safe='')}")
+    if object_kind:
+        params.append(f"kind={quote(object_kind, safe='')}")
+    if requested_pack:
+        params.append(f"pack={quote(requested_pack, safe='')}")
+    return ("?" + "&".join(params)) if params else ""
+
 
 def _render_type_facet(
     kind_stats: list[dict],
@@ -2121,7 +2149,7 @@ def _render_type_facet(
     query: str,
     requested_pack: str,
     base_path: str = "/ops/objects",
-    top_n: int = 12,
+    top_n: int = _TYPE_FACET_DEFAULT_LIMIT,
 ) -> str:
     """Render the type-facet chip rail for ``/ops/objects`` and
     similar Reader-side surfaces.
@@ -2130,27 +2158,34 @@ def _render_type_facet(
     ``[{"object_kind": str, "count": int, ...}, ...]``.  Top-N
     types by count are shown as clickable chips; an "All" chip
     clears the filter.  The active kind is highlighted.
+
+    If ``active_kind`` is set but its row sits outside the top-N
+    slice, we splice it in so the operator can still see (and
+    click off) the active filter — otherwise the chip rail would
+    look as if no filter were applied.
     """
     if not kind_stats:
         return ""
     from ..object_kinds import display_label
-    sorted_stats = sorted(
+    ranked = sorted(
         (s for s in kind_stats if s.get("object_kind")),
         key=lambda s: -int(s.get("count") or 0),
-    )[:top_n]
+    )
+    sorted_stats = ranked[:top_n]
+    if active_kind and not any(
+        str(s.get("object_kind")) == active_kind for s in sorted_stats
+    ):
+        active_row = next(
+            (s for s in ranked if str(s.get("object_kind")) == active_kind),
+            None,
+        )
+        if active_row is not None:
+            sorted_stats = [*sorted_stats, active_row]
     if not sorted_stats:
         return ""
 
     def _href(kind: str) -> str:
-        params: list[str] = []
-        if query:
-            params.append(f"q={quote(query, safe='')}")
-        if kind:
-            params.append(f"kind={quote(kind, safe='')}")
-        if requested_pack:
-            params.append(f"pack={quote(requested_pack, safe='')}")
-        qs = ("?" + "&".join(params)) if params else ""
-        return f"{base_path}{qs}"
+        return f"{base_path}{_build_objects_query_string(query=query, object_kind=kind, requested_pack=requested_pack)}"
 
     chips: list[str] = []
     chips.append(
@@ -2197,18 +2232,15 @@ def _render_objects_index(payload: dict) -> str:
     )
 
     # Active filter banner — gives the reader a clear "you're seeing
-    # only X" signal + a one-click escape hatch.
+    # only X" signal + a one-click escape hatch.  Reuses the shared
+    # query-string builder so the clear-link can't drift from the
+    # chip-rail URLs.
     filter_banner = ""
     if active_kind:
         from ..object_kinds import display_label
-        clear_href = "/ops/objects"
-        params: list[str] = []
-        if query:
-            params.append(f"q={quote(query, safe='')}")
-        if requested_pack:
-            params.append(f"pack={quote(requested_pack, safe='')}")
-        if params:
-            clear_href = f"{clear_href}?{'&'.join(params)}"
+        clear_href = "/ops/objects" + _build_objects_query_string(
+            query=query, requested_pack=requested_pack
+        )
         filter_banner = (
             f"<p class='muted'>Filtered to type "
             f"<strong>{escape(display_label(active_kind))}</strong>"
