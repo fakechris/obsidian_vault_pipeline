@@ -49,7 +49,6 @@ from ..truth_api import (
     list_atlas_memberships,
     list_action_queue,
     list_contradictions,
-    list_deep_dive_derivations,
     list_graph_clusters,
     list_graph_edges_for_object_scope,
     list_objects,
@@ -689,16 +688,12 @@ def _build_dashboard_workflow_groups(
                     "detail": "Inspect production weak points and chain state.",
                 },
                 {
-                    "label": "Deep Dives" if research_overview_supported else "Notes",
+                    "label": "Notes",
                     "path": _scoped_path(
-                        "/ops/deep-dives" if research_overview_supported else "/ops/objects",
+                        "/ops/objects",
                         pack_name=requested_pack,
                     ),
-                    "detail": (
-                        "Follow note -> deep dive -> object derivation."
-                        if research_overview_supported
-                        else "Use object pages as the primary trace surface."
-                    ),
+                    "detail": "Use object pages as the primary trace surface.",
                 },
             ],
         ),
@@ -1486,29 +1481,21 @@ def _build_production_summary(
         for object_id in normalized_object_ids
     ]
     source_note_counts: Counter[str] = Counter()
-    deep_dive_counts: Counter[str] = Counter()
     atlas_page_counts: Counter[str] = Counter()
     source_note_items: dict[str, dict[str, str]] = {}
-    deep_dive_items: dict[str, dict[str, str]] = {}
     atlas_page_items: dict[str, dict[str, str]] = {}
     missing_source_object_ids: list[str] = []
-    missing_deep_dive_object_ids: list[str] = []
     missing_atlas_object_ids: list[str] = []
 
     for traceability in object_traceability:
         object_id = traceability["object"]["object_id"]
         if not traceability["source_notes"]:
             missing_source_object_ids.append(object_id)
-        if not traceability["deep_dives"]:
-            missing_deep_dive_object_ids.append(object_id)
         if not traceability["atlas_pages"]:
             missing_atlas_object_ids.append(object_id)
         for item in traceability["source_notes"]:
             source_note_items.setdefault(item["path"], item)
             source_note_counts[item["path"]] += 1
-        for item in traceability["deep_dives"]:
-            deep_dive_items.setdefault(item["slug"], item)
-            deep_dive_counts[item["slug"]] += 1
         for item in traceability["atlas_pages"]:
             atlas_page_items.setdefault(item["slug"], item)
             atlas_page_counts[item["slug"]] += 1
@@ -1540,15 +1527,6 @@ def _build_production_summary(
                 "object_ids": missing_source_object_ids,
             }
         )
-    if missing_deep_dive_object_ids:
-        signals.append(
-            {
-                "code": "missing_deep_dives",
-                "count": len(missing_deep_dive_object_ids),
-                "label": "Missing deep dives",
-                "object_ids": missing_deep_dive_object_ids,
-            }
-        )
     if missing_atlas_object_ids:
         signals.append(
             {
@@ -1563,11 +1541,9 @@ def _build_production_summary(
         "object_count": len(normalized_object_ids),
         "counts": {
             "source_notes": len(source_note_items),
-            "deep_dives": len(deep_dive_items),
             "atlas_pages": len(atlas_page_items),
         },
         "top_source_notes": _top_items(source_note_counts, source_note_items),
-        "top_deep_dives": _top_items(deep_dive_counts, deep_dive_items),
         "top_atlas_pages": _top_items(atlas_page_counts, atlas_page_items),
         "signals": signals,
     }
@@ -2329,16 +2305,11 @@ def build_object_page_payload(
             f"/ops/summaries?q={quote(object_id, safe='')}",
             pack_name=requested_pack,
         ),
-        "deep_dives_path": _scoped_path(
-            f"/ops/deep-dives?q={quote(object_id, safe='')}",
-            pack_name=requested_pack,
-        ),
         "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
     } if research_shell_enabled else {
         "events_path": "",
         "contradictions_path": "",
         "summaries_path": "",
-        "deep_dives_path": "",
         "atlas_path": "",
     }
     evolution_section = (
@@ -2470,18 +2441,6 @@ def build_object_page_payload(
                     )
                     or "None",
                 },
-                *[
-                    {
-                        "kind": "deep_dive",
-                        "label": item["title"],
-                        "path": _scoped_path(
-                            f"/note?path={quote(item['path'], safe='')}",
-                            pack_name=requested_pack,
-                        ),
-                        "detail": "Downstream deep dive",
-                    }
-                    for item in production_chain["deep_dives"][:2]
-                ],
                 *[
                     {
                         "kind": "atlas_page",
@@ -2715,16 +2674,11 @@ def build_topic_overview_payload(
             f"/ops/summaries?q={quote(object_id, safe='')}",
             pack_name=requested_pack,
         ),
-        "deep_dives_path": _scoped_path(
-            f"/ops/deep-dives?q={quote(object_id, safe='')}",
-            pack_name=requested_pack,
-        ),
         "atlas_path": _scoped_path(f"/atlas?q={quote(object_id, safe='')}", pack_name=requested_pack),
     } if research_shell_enabled else {
         "events_path": "",
         "contradictions_path": "",
         "summaries_path": "",
-        "deep_dives_path": "",
         "atlas_path": "",
     }
     compiled_sections = [
@@ -2763,12 +2717,6 @@ def build_topic_overview_payload(
                             "path": research_links["events_path"],
                             "detail": "See time-bounded activity around this topic.",
                         },
-                        {
-                            "kind": "deep_dives",
-                            "label": "Source deep dives",
-                            "path": research_links["deep_dives_path"],
-                            "detail": "Inspect supporting analysis.",
-                        },
                     ]
                     if research_shell_enabled
                     else []
@@ -2805,23 +2753,10 @@ def build_topic_overview_payload(
             "Production Chain",
             summary=(
                 f"{production_summary['object_count']} objects in scope currently resolve to "
-                f"{production_summary['counts']['source_notes']} source notes, "
-                f"{production_summary['counts']['deep_dives']} deep dives, and "
+                f"{production_summary['counts']['source_notes']} source notes and "
                 f"{production_summary['counts']['atlas_pages']} atlas pages."
             ),
             items=[
-                *[
-                    {
-                        "kind": "top_deep_dive",
-                        "label": item["title"],
-                        "path": _scoped_path(
-                            f"/note?path={quote(item['path'], safe='')}",
-                            pack_name=requested_pack,
-                        ),
-                        "detail": f"Supports {item['object_count']} objects in this topic scope.",
-                    }
-                    for item in production_summary["top_deep_dives"][:2]
-                ],
                 *[
                     {
                         "kind": "top_atlas_page",
@@ -4022,15 +3957,25 @@ def build_cluster_browser_payload(
     query: str | None = None,
     limit: int = DEFAULT_TRACEABILITY_BROWSER_LIMIT,
     show_all: bool = False,
+    offset: int = 0,
 ) -> dict[str, Any]:
     # ``show_all`` lifts the display cap so the operator can audit the
     # full cluster set when they need to.  We still cap at MAX_PAGE_SIZE
     # to protect renderer cost; a vault with 10k+ clusters would still
     # be unworkable, so warn at the call site rather than render forever.
+    #
+    # ``show_all`` and ``offset`` are mutually exclusive — Show all
+    # always starts from cluster #0; an explicit offset only paginates
+    # within the per-page limit.
     effective_limit = MAX_PAGE_SIZE if show_all else limit
+    effective_offset = 0 if show_all else max(0, int(offset or 0))
     total_count = count_graph_clusters(vault_dir, pack_name=pack_name, query=query)
     items = list_graph_clusters(
-        vault_dir, pack_name=pack_name, query=query, limit=effective_limit
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=effective_limit,
+        offset=effective_offset,
     )
     cluster_provenance_index = _build_cluster_provenance_index(vault_dir, items)
     cluster_kind_counts = Counter(item["cluster_kind"] for item in items)
@@ -4150,6 +4095,7 @@ def build_cluster_browser_payload(
         "query": query or "",
         "limit": effective_limit,
         "default_limit": limit,
+        "offset": effective_offset,
         "show_all": bool(show_all),
         "total_count": total_count,
         # Compute truncation from actual counts so show_all=True
@@ -5230,25 +5176,22 @@ def build_atlas_browser_payload(
         query=query,
         limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
     )
-    derivations = list_deep_dive_derivations(
-        vault_dir,
-        pack_name=pack_name,
-        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
-    )
-    object_to_deep_dives: dict[str, dict[str, dict[str, str]]] = {}
+    # Atlas membership browser: source-note coverage comes from
+    # ``get_note_traceability`` per atlas page.  Pre-BL-029 a parallel
+    # query joined the deep-dive index too — the chain has no
+    # deep-dive intermediate stage now, so just gather source notes.
     object_to_source_notes: dict[str, dict[str, dict[str, str]]] = {}
-    for item in derivations:
-        source_notes = get_note_traceability(vault_dir, note_path=item["path"], pack_name=pack_name)["source_notes"]
-        for derived in item["derived_objects"]:
-            object_to_deep_dives.setdefault(derived["object_id"], {})[item["slug"]] = {
-                "slug": item["slug"],
-                "title": item["title"],
-                "note_type": "deep_dive",
-                "path": item["path"],
-            }
-            object_to_source_notes.setdefault(derived["object_id"], {})
-            for source in source_notes:
-                object_to_source_notes[derived["object_id"]][source["path"]] = source
+    for atlas_item in items:
+        for member in atlas_item["members"]:
+            member_id = str(member.get("object_id") or "")
+            if not member_id:
+                continue
+            traceability = get_object_traceability(
+                vault_dir, member_id, pack_name=pack_name,
+            )
+            object_to_source_notes.setdefault(member_id, {})
+            for source in traceability["source_notes"]:
+                object_to_source_notes[member_id][source["path"]] = source
     enriched_items = []
     for item in items:
         enriched_members = [
@@ -5264,12 +5207,9 @@ def build_atlas_browser_payload(
         preview_titles = [member["title"] for member in enriched_members[:5]]
         member_object_ids = [member["object_id"] for member in enriched_members]
         source_note_map: dict[str, dict[str, str]] = {}
-        deep_dive_map: dict[str, dict[str, str]] = {}
         for member_object_id in member_object_ids:
             for source in object_to_source_notes.get(member_object_id, {}).values():
                 source_note_map.setdefault(source["path"], source)
-            for deep_dive in object_to_deep_dives.get(member_object_id, {}).values():
-                deep_dive_map.setdefault(deep_dive["slug"], deep_dive)
         enriched_items.append(
             {
                 **item,
@@ -5277,7 +5217,6 @@ def build_atlas_browser_payload(
                 "member_count": len(enriched_members),
                 "preview_titles": preview_titles,
                 "source_notes": list(source_note_map.values()),
-                "deep_dives": list(deep_dive_map.values()),
             }
         )
     return {
@@ -5525,64 +5464,6 @@ def build_curated_atlas_payload(
     }
 
 
-def build_derivation_browser_payload(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None = None,
-    query: str | None = None,
-) -> dict[str, Any]:
-    requested_pack = pack_name or ""
-    items = list_deep_dive_derivations(
-        vault_dir,
-        pack_name=pack_name,
-        query=query,
-        limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
-    )
-    enriched_items = []
-    for item in items:
-        derived_objects = [
-            {
-                "object_id": member["object_id"],
-                "title": member["title"],
-                "object_path": _scoped_path(
-                    f"/object?id={quote(str(member['object_id']), safe='')}",
-                    pack_name=requested_pack,
-                ),
-            }
-            for member in item["derived_objects"]
-        ]
-        preview_titles = [member["title"] for member in derived_objects[:5]]
-        provenance_map = get_object_provenance_map(
-            vault_dir,
-            [member["object_id"] for member in derived_objects],
-            pack_name=pack_name,
-        )
-        atlas_page_map: dict[str, dict[str, str]] = {}
-        for provenance in provenance_map.values():
-            for atlas_page in provenance["mocs"]:
-                atlas_page_map.setdefault(atlas_page["slug"], atlas_page)
-        source_notes = get_note_traceability(vault_dir, note_path=item["path"], pack_name=pack_name)["source_notes"]
-        enriched_items.append(
-            {
-                **item,
-                "derived_objects": derived_objects,
-                "derived_object_count": len(derived_objects),
-                "preview_titles": preview_titles,
-                "atlas_pages": list(atlas_page_map.values()),
-                "source_notes": source_notes,
-            }
-        )
-    return {
-        "screen": "derivations/browser",
-        "requested_pack": requested_pack,
-        "items": enriched_items,
-        "count": len(enriched_items),
-        "query": query or "",
-        "limit": DEFAULT_TRACEABILITY_BROWSER_LIMIT,
-        "is_limited": True,
-    }
-
-
 def build_production_browser_payload(
     vault_dir: Path | str,
     *,
@@ -5605,7 +5486,6 @@ def build_production_browser_payload(
             ),
             "items": [],
             "source_items": [],
-            "deep_dive_items": [],
             "weak_points": [],
             "count": 0,
             "query": query or "",
@@ -5613,7 +5493,6 @@ def build_production_browser_payload(
             "is_limited": True,
             "counts": {
                 "source_notes": 0,
-                "deep_dives": 0,
             },
             "operator_rail": [],
             "compiled_sections": [],
@@ -5626,7 +5505,6 @@ def build_production_browser_payload(
         limit=DEFAULT_TRACEABILITY_BROWSER_LIMIT,
     )
     source_items = [item for item in items if item["stage_label"] == "source_note"]
-    deep_dive_items = [item for item in items if item["stage_label"] == "deep_dive"]
     weak_points = _build_production_weak_points(vault_dir, pack_name=pack_name, query=query)
     compiled_sections = [
         _compiled_section(
@@ -5634,7 +5512,7 @@ def build_production_browser_payload(
             "Current State",
             summary=(
                 f"{len(items)} production-chain entries are currently visible, spanning "
-                f"{len(source_items)} source notes and {len(deep_dive_items)} deep dives."
+                f"{len(source_items)} source notes."
             ),
             items=[
                 {
@@ -5642,12 +5520,6 @@ def build_production_browser_payload(
                     "label": "Source notes",
                     "path": "",
                     "detail": f"{len(source_items)} source-note chain entries in scope.",
-                },
-                {
-                    "kind": "deep_dives",
-                    "label": "Deep dives",
-                    "path": "",
-                    "detail": f"{len(deep_dive_items)} deep-dive chain entries in scope.",
                 },
             ],
         ),
@@ -5739,7 +5611,6 @@ def build_production_browser_payload(
         "surface_contract": surface_contract,
         "items": items,
         "source_items": source_items,
-        "deep_dive_items": deep_dive_items,
         "weak_points": weak_points,
         "count": len(items),
         "query": query or "",
@@ -5747,7 +5618,6 @@ def build_production_browser_payload(
         "is_limited": True,
         "counts": {
             "source_notes": len(source_items),
-            "deep_dives": len(deep_dive_items),
         },
         "operator_rail": operator_rail,
         "compiled_sections": compiled_sections,
@@ -6161,16 +6031,6 @@ def build_note_page_payload(
         }
         for item in production_chain["source_notes"]
     ]
-    production_chain["deep_dives"] = [
-        {
-            **item,
-            "note_path": _scoped_path(
-                f"/note?path={quote(str(item['path']), safe='')}",
-                pack_name=requested_pack,
-            ),
-        }
-        for item in production_chain["deep_dives"]
-    ]
     production_chain["objects"] = [
         {
             **item,
@@ -6198,8 +6058,7 @@ def build_note_page_payload(
             summary=(
                 f"{production_chain['note']['title']} currently resolves as a "
                 f"{production_chain.get('stage_label', '').replace('_', ' ')} with "
-                f"{production_chain['counts']['deep_dives']} deep dives, "
-                f"{production_chain['counts']['objects']} objects, and "
+                f"{production_chain['counts']['objects']} objects and "
                 f"{production_chain['counts']['atlas_pages']} atlas pages downstream."
             ),
             items=[
@@ -6232,26 +6091,15 @@ def build_note_page_payload(
         _compiled_section(
             "evidence_traceability",
             "Evidence Traceability",
-            summary="The note traceability chain shows which deep dives, objects, and atlas pages this note currently anchors.",
+            summary="The note traceability chain shows which objects and atlas pages this note currently anchors.",
             items=[
-                *[
-                    {
-                        "kind": "deep_dive",
-                        "label": item["title"],
-                        "path": item["note_path"],
-                        "detail": "Downstream deep dive",
-                    }
-                    for item in production_chain["deep_dives"][:3]
-                ],
-                *[
-                    {
-                        "kind": "object",
-                        "label": item["title"],
-                        "path": item["object_path"],
-                        "detail": "Derived evergreen object",
-                    }
-                    for item in production_chain["objects"][:3]
-                ],
+                {
+                    "kind": "object",
+                    "label": item["title"],
+                    "path": item["object_path"],
+                    "detail": "Derived evergreen object",
+                }
+                for item in production_chain["objects"][:3]
             ],
         ),
         _compiled_section(
@@ -6276,26 +6124,15 @@ def build_note_page_payload(
         _compiled_section(
             "where_to_go_next",
             "Where To Go Next",
-            summary="Continue into downstream deep dives, derived objects, or atlas reach from this note.",
+            summary="Continue into derived objects or atlas reach from this note.",
             items=[
-                *[
-                    {
-                        "kind": "deep_dive",
-                        "label": item["title"],
-                        "path": item["note_path"],
-                        "detail": "Open downstream deep dive.",
-                    }
-                    for item in production_chain["deep_dives"][:2]
-                ],
-                *[
-                    {
-                        "kind": "object",
-                        "label": item["title"],
-                        "path": item["object_path"],
-                        "detail": "Open derived object page.",
-                    }
-                    for item in production_chain["objects"][:2]
-                ],
+                {
+                    "kind": "object",
+                    "label": item["title"],
+                    "path": item["object_path"],
+                    "detail": "Open derived object page.",
+                }
+                for item in production_chain["objects"][:2]
             ],
         ),
     ]

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from collections import Counter
-import functools
 import hashlib
 import json
 import os
@@ -27,7 +26,6 @@ from ._truth_helpers import (  # noqa: F401 — re-exported public constants
     _CANDIDATE_STRONG_EVIDENCE_COUNT,
     _CANDIDATE_STRONG_SOURCE_COUNT,
     _CJK_RE,
-    _DEEP_DIVE_OBJECT_MAP_CACHE,
     _EVOLUTION_CANDIDATE_CACHE,
     _FENCED_FRONTMATTER_RE,
     _LEGACY_AUTO_QUEUE_SIGNAL_TYPES,
@@ -2255,8 +2253,18 @@ def list_graph_clusters(
     pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
-    limit, _ = _validate_page_args(limit=limit, offset=0)
+    """List clusters scoped to ``pack_name`` with optional offset.
+
+    The function does its own dedup-by-``cluster_id`` after fetching from
+    SQL because the same id can appear under multiple packs (overlay shells
+    materialise the parent's clusters).  Pagination therefore happens
+    *after* dedup — we count distinct cluster_ids, skip the first
+    ``offset``, then take ``limit``.  SQL ``LIMIT/OFFSET`` would count
+    duplicates and produce off-by-N pages.
+    """
+    limit, offset = _validate_page_args(limit=limit, offset=offset)
     db_path = _db_path(vault_dir)
     pack_candidates = _materialized_truth_packs(
         vault_dir, pack_name=pack_name, table_name="graph_clusters"
@@ -2306,10 +2314,17 @@ def list_graph_clusters(
 
     items: list[dict[str, Any]] = []
     seen_cluster_ids: set[str] = set()
+    skipped = 0
     for cluster_pack, cluster_id, cluster_kind, label, center_object_id, member_json, score in rows:
         if cluster_id in seen_cluster_ids:
             continue
         seen_cluster_ids.add(cluster_id)
+        # Skip the first ``offset`` distinct cluster_ids to support
+        # paginated browsing.  Done after dedup so page boundaries
+        # match what the operator sees in the rendered list.
+        if skipped < offset:
+            skipped += 1
+            continue
         member_object_ids = json.loads(member_json)
         items.append(
             {
@@ -2526,17 +2541,6 @@ def _find_note_from_pipeline_log(vault_dir: Path, *, note_path: str) -> dict[str
     index = _pipeline_log_index(vault_dir)
     return index["original_source_by_output"].get(
         str((vault_dir / note_path).resolve().relative_to(vault_dir.resolve()))
-    )
-
-
-def _find_derived_notes_from_pipeline_log(
-    vault_dir: Path, *, note_path: str
-) -> list[dict[str, str]]:
-    log_path = VaultLayout.from_vault(vault_dir).logs_dir / "pipeline.jsonl"
-    if not log_path.exists():
-        return []
-    return list(
-        _pipeline_log_index(vault_dir)["derived_by_source_file"].get(Path(note_path).name, [])
     )
 
 
@@ -3546,12 +3550,6 @@ def dismiss_action_queue_item(vault_dir: Path | str, *, action_id: str) -> dict[
     return {"dismissed": True, "action": action}
 
 
-def _run_deep_dive_workflow_action(vault_dir: Path | str, action: dict[str, Any]) -> dict[str, Any]:
-    from .focused_actions import run_deep_dive_workflow_action
-
-    return run_deep_dive_workflow_action(vault_dir=vault_dir, action=action)
-
-
 def _run_object_extraction_workflow_action(
     vault_dir: Path | str, action: dict[str, Any]
 ) -> dict[str, Any]:
@@ -3888,8 +3886,6 @@ def _production_gap_items_from_chains(
         traceability = item["traceability"]
         missing: list[str] = []
         if item["stage_label"] == "source_note":
-            if not traceability["deep_dives"]:
-                missing.append("deep dives")
             if not traceability["objects"]:
                 missing.append("objects")
             if not traceability["atlas_pages"]:
@@ -4069,11 +4065,9 @@ def get_note_provenance(vault_dir: Path | str, *, note_path: str) -> dict[str, A
         )
     if original_source_note is None:
         original_source_note = _find_note_from_pipeline_log(resolved_vault, note_path=note_path)
-    derived_deep_dives = _find_derived_notes_from_pipeline_log(resolved_vault, note_path=note_path)
     return {
         "note_path": note_path,
         "original_source_note": original_source_note,
-        "derived_deep_dives": derived_deep_dives,
     }
 
 
@@ -4241,6 +4235,11 @@ def _match_note_capture_event(
             detail="Source note was restored to raw intake before downstream output landed.",
             skipped_count=1,
         )
+    # ``article_processed`` historically surfaced as "Deep dive
+    # created" in the per-note capture timeline; BL-029 removed
+    # the producer, but historical audit rows are still read here
+    # so the inbound-capture status stays accurate against vaults
+    # that pre-date the cleanup.  No new rows are emitted.
     if event_type == "article_processed":
         relative_output = _vault_relative_path(vault_dir, str(payload.get("output") or ""))
         file_name = Path(str(payload.get("file") or "")).name
@@ -4631,14 +4630,6 @@ def _page_row_by_path(vault_dir: Path | str, note_path: str) -> dict[str, str]:
     }
 
 
-def _deep_dive_objects_for_path(vault_dir: Path | str, note_path: str) -> list[dict[str, str]]:
-    resolved_vault = resolve_vault_dir(vault_dir)
-    normalized_target = str(
-        (resolved_vault / note_path).resolve().relative_to(resolved_vault.resolve())
-    )
-    return list(_deep_dive_object_map(vault_dir).get(normalized_target, []))
-
-
 def _linked_existing_objects_for_note_path(
     vault_dir: Path | str,
     note_path: str,
@@ -4719,7 +4710,7 @@ def _brain_first_lookup_payload(
                 "reuse or reconcile before creating new candidates."
             ),
         }
-    if stage_label in {"source_note", "deep_dive"}:
+    if stage_label == "source_note":
         return {
             "status": "no_existing_objects",
             "decision": "create_candidate",
@@ -4743,12 +4734,10 @@ def _note_backlink_expectation_payload(
     note_path: str,
     stage_label: str,
     source_notes: list[dict[str, Any]],
-    deep_dives: list[dict[str, Any]],
     objects: list[dict[str, Any]],
     atlas_pages: list[dict[str, Any]],
 ) -> dict[str, Any]:
     source_note_paths = [str(item.get("path") or "") for item in source_notes if item.get("path")]
-    deep_dive_paths = [str(item.get("path") or "") for item in deep_dives if item.get("path")]
     object_ids = [
         str(item.get("object_id") or item.get("slug") or "")
         for item in objects
@@ -4759,13 +4748,11 @@ def _note_backlink_expectation_payload(
     if stage_label == "source_note":
         status = (
             "satisfied"
-            if deep_dive_paths or object_ids or atlas_paths
+            if object_ids or atlas_paths
             else "missing_downstream_links"
         )
-    elif stage_label == "deep_dive":
-        status = "satisfied" if source_note_paths else "missing_source_backlink"
     elif stage_label in {"evergreen_note", "evergreen_object"}:
-        status = "satisfied" if source_note_paths or deep_dive_paths else "missing_source_backlink"
+        status = "satisfied" if source_note_paths else "missing_source_backlink"
     else:
         status = "inspect"
 
@@ -4773,11 +4760,10 @@ def _note_backlink_expectation_payload(
         "status": status,
         "note_path": str(note_path),
         "source_note_paths": source_note_paths,
-        "deep_dive_paths": deep_dive_paths,
         "object_ids": object_ids,
         "atlas_paths": atlas_paths,
         "summary": (
-            f"{len(source_note_paths)} source notes, {len(deep_dive_paths)} deep dives, "
+            f"{len(source_note_paths)} source notes, "
             f"{len(object_ids)} objects, {len(atlas_paths)} atlas pages linked."
         ),
     }
@@ -4877,182 +4863,27 @@ def _pipeline_log_index(vault_dir: Path) -> dict[str, Any]:
     return result
 
 
-def _deep_dive_object_map(vault_dir: Path | str) -> dict[str, list[dict[str, str]]]:
-    db_path = _db_path(vault_dir)
-    resolved_vault = resolve_vault_dir(vault_dir)
-    cache_key = (str(resolved_vault.resolve()), *(_path_signature(db_path)[1:]))
-    cached = _DEEP_DIVE_OBJECT_MAP_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    with sqlite3.connect(db_path) as conn:
-        deep_dive_rows = conn.execute(
-            """
-            SELECT path
-            FROM pages_index
-            WHERE note_type = 'deep_dive'
-            ORDER BY slug
-            """
-        ).fetchall()
-        object_rows = conn.execute(
-            """
-            SELECT object_id, title
-            FROM objects
-            ORDER BY object_id
-            """
-        ).fetchall()
-        audit_rows = conn.execute(
-            """
-            SELECT payload_json
-            FROM audit_events
-            WHERE event_type = 'evergreen_auto_promoted'
-            """
-        ).fetchall()
-
-    object_titles = {row[0]: row[1] for row in object_rows}
-    grouped_promotions: dict[str, dict[str, dict[str, str]]] = {}
-    for (payload_json,) in audit_rows:
-        try:
-            payload = json.loads(payload_json)
-        except json.JSONDecodeError:
-            continue
-        source_name = str(payload.get("source") or "").strip()
-        object_id = str(
-            payload.get("mutation", {}).get("target_slug") or payload.get("concept") or ""
-        ).strip()
-        if not source_name or not object_id:
-            continue
-        grouped_promotions.setdefault(source_name, {})[object_id] = {
-            "object_id": object_id,
-            "title": object_titles.get(object_id, object_id),
-        }
-
-    result: dict[str, list[dict[str, str]]] = {}
-    for (path,) in deep_dive_rows:
-        relative_path = _vault_relative_path(resolved_vault, path)
-        result[relative_path] = sorted(
-            grouped_promotions.get(Path(relative_path).name, {}).values(),
-            key=lambda item: item["object_id"],
-        )
-
-    _DEEP_DIVE_OBJECT_MAP_CACHE.clear()
-    _DEEP_DIVE_OBJECT_MAP_CACHE[cache_key] = result
-    return result
-
-
-@functools.lru_cache(maxsize=4)
-def _promoted_deep_dive_index_cached(
-    db_path_str: str, vault_dir_str: str, db_mtime_ns: int,
-) -> tuple[
-    tuple[tuple[str, str, str], ...],  # deep dive rows: (slug, title, relative_path)
-    dict[str, frozenset[str]],          # target_slug → frozenset of source_names
-]:
-    """Heavy half of ``_promoted_deep_dives_for_object`` cached per
-    ``knowledge.db`` mtime.
-
-    The events-page renderer calls the per-object helper N times
-    (one per event in the dossier), and previously each call
-    re-ran the same two SQL queries + JSON-parsed every
-    ``evergreen_auto_promoted`` payload (~10 K rows on the live
-    vault).  With the cache, the parse runs once per
-    ``ovp-knowledge-index`` rebuild — `mtime_ns` invalidates
-    the cache when the DB changes.
-
-    ``maxsize=4`` is plenty: usually a single vault per process,
-    occasionally two during pack swaps.
-    """
-    resolved_vault = resolve_vault_dir(vault_dir_str)
-    with sqlite3.connect(db_path_str) as conn:
-        deep_dive_rows = conn.execute(
-            """
-            SELECT slug, title, note_type, path
-            FROM pages_index
-            WHERE note_type = 'deep_dive'
-            ORDER BY slug
-            """
-        ).fetchall()
-        audit_rows = conn.execute(
-            """
-            SELECT payload_json
-            FROM audit_events
-            WHERE event_type = 'evergreen_auto_promoted'
-            """
-        ).fetchall()
-
-    # Build the target_slug → source_names index in one pass so each
-    # per-object lookup is O(1) instead of re-scanning the audit log.
-    by_target: dict[str, set[str]] = {}
-    for (payload_json,) in audit_rows:
-        try:
-            payload = json.loads(payload_json)
-        except json.JSONDecodeError:
-            continue
-        target_slug = str(
-            payload.get("mutation", {}).get("target_slug") or payload.get("concept") or ""
-        ).strip()
-        source_name = str(payload.get("source") or "").strip()
-        if target_slug and source_name:
-            by_target.setdefault(target_slug, set()).add(source_name)
-
-    deep_dive_normalised = tuple(
-        (str(slug), str(title), _vault_relative_path(resolved_vault, path))
-        for slug, title, _note_type, path in deep_dive_rows
-    )
-    by_target_frozen = {k: frozenset(v) for k, v in by_target.items()}
-    return deep_dive_normalised, by_target_frozen
-
-
-def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> list[dict[str, str]]:
-    db_path = _db_path(vault_dir)
-    try:
-        db_mtime_ns = db_path.stat().st_mtime_ns
-    except OSError:
-        db_mtime_ns = 0
-    deep_dive_rows, by_target = _promoted_deep_dive_index_cached(
-        str(db_path), str(vault_dir), db_mtime_ns,
-    )
-    promoted_source_names = by_target.get(object_id) or frozenset()
-    if not promoted_source_names:
-        return []
-    items: list[dict[str, str]] = []
-    seen_slugs: set[str] = set()
-    for slug, title, relative_path in deep_dive_rows:
-        if Path(relative_path).name not in promoted_source_names:
-            continue
-        if slug in seen_slugs:
-            continue
-        seen_slugs.add(slug)
-        items.append(
-            {
-                "slug": slug,
-                "title": title,
-                "note_type": "deep_dive",
-                "path": relative_path,
-            }
-        )
-    return items
-
-
 def get_note_traceability(
     vault_dir: Path | str,
     *,
     note_path: str,
     pack_name: str | None = None,
 ) -> dict[str, Any]:
+    """Trace one note through the post-BL-029 chain.
+
+    Stages: ``source_note`` → ``evergreen_note`` (objects) → atlas
+    adjacency.  The legacy intermediate ``deep_dive`` stage was
+    removed by BL-029; this function used to surface a
+    ``deep_dives`` slot which is now omitted from the payload.
+    """
     note = _page_row_by_path(vault_dir, note_path)
     provenance = get_note_provenance(vault_dir, note_path=note_path)
-    deep_dives: list[dict[str, str]] = []
     source_notes: list[dict[str, str]] = []
     objects: list[dict[str, str]] = []
     atlas_pages: list[dict[str, str]] = []
 
-    if note["note_type"] == "deep_dive":
-        deep_dives = [note]
-        if provenance["original_source_note"]:
-            source_notes = [provenance["original_source_note"]]
-    elif note["note_type"] == "evergreen":
+    if note["note_type"] == "evergreen":
         object_traceability = get_object_traceability(vault_dir, note["slug"], pack_name=pack_name)
-        deep_dives = object_traceability["deep_dives"]
         source_notes = object_traceability["source_notes"]
         objects = [
             {
@@ -5061,17 +4892,9 @@ def get_note_traceability(
             }
         ]
         atlas_pages = object_traceability["atlas_pages"]
-    else:
-        deep_dives = provenance["derived_deep_dives"]
-        if provenance["original_source_note"]:
-            source_notes = [provenance["original_source_note"]]
+    elif provenance["original_source_note"]:
+        source_notes = [provenance["original_source_note"]]
 
-    if not objects:
-        object_map: dict[str, dict[str, str]] = {}
-        for deep_dive in deep_dives:
-            for item in _deep_dive_objects_for_path(vault_dir, deep_dive["path"]):
-                object_map.setdefault(item["object_id"], item)
-        objects = list(object_map.values())
     if not atlas_pages:
         atlas_pages = _atlas_pages_for_object_ids(
             vault_dir,
@@ -5079,41 +4902,27 @@ def get_note_traceability(
             pack_name=pack_name,
         )
     note_type = str(note.get("note_type") or "")
-    if note_type == "deep_dive":
-        stage_label = "deep_dive"
-        stage_presence = {
-            "source_notes": bool(source_notes),
-            "deep_dives": True,
-            "objects": bool(objects),
-            "atlas_pages": bool(atlas_pages),
-        }
-        chain_summary = (
-            f"Deep dive currently traces to {len(source_notes)} source notes, "
-            f"{len(objects)} objects, {len(atlas_pages)} atlas pages."
-        )
-    elif note_type == "evergreen":
+    if note_type == "evergreen":
         stage_label = "evergreen_note"
         stage_presence = {
             "source_notes": bool(source_notes),
-            "deep_dives": bool(deep_dives),
             "objects": True,
             "atlas_pages": bool(atlas_pages),
         }
         chain_summary = (
             f"Evergreen note currently traces to {len(source_notes)} source notes, "
-            f"{len(deep_dives)} deep dives, {len(objects)} objects, {len(atlas_pages)} atlas pages."
+            f"{len(objects)} objects, {len(atlas_pages)} atlas pages."
         )
     else:
         stage_label = "source_note"
         stage_presence = {
             "source_notes": True,
-            "deep_dives": bool(deep_dives),
             "objects": bool(objects),
             "atlas_pages": bool(atlas_pages),
         }
         chain_summary = (
-            f"Source note currently traces to {len(deep_dives)} deep dives, "
-            f"{len(objects)} objects, {len(atlas_pages)} atlas pages."
+            f"Source note currently traces to {len(objects)} objects, "
+            f"{len(atlas_pages)} atlas pages."
         )
     linked_existing_objects = []
     if not objects:
@@ -5131,7 +4940,6 @@ def get_note_traceability(
         note_path=note_path,
         stage_label=stage_label,
         source_notes=source_notes,
-        deep_dives=deep_dives,
         objects=objects,
         atlas_pages=atlas_pages,
     )
@@ -5141,7 +4949,6 @@ def get_note_traceability(
         "note": note,
         "stage_label": stage_label,
         "source_notes": source_notes,
-        "deep_dives": deep_dives,
         "objects": objects,
         "atlas_pages": atlas_pages,
         "stage_presence": stage_presence,
@@ -5152,7 +4959,6 @@ def get_note_traceability(
         "backlink_expectation": backlink_expectation,
         "counts": {
             "source_notes": len(source_notes),
-            "deep_dives": len(deep_dives),
             "objects": len(objects),
             "atlas_pages": len(atlas_pages),
         },
@@ -5165,18 +4971,19 @@ def get_object_traceability(
     *,
     pack_name: str | None = None,
 ) -> dict[str, Any]:
+    """Trace one object back to its source notes + atlas adjacency.
+
+    Post-BL-029 chain: source_note → evergreen_object → atlas.  The
+    legacy deep-dive intermediate stage was removed; ``source_notes``
+    now comes directly from ``get_object_detail.provenance``
+    (page_links → non-evergreen non-atlas backlinks).
+    """
     detail = get_object_detail(vault_dir, object_id, pack_name=pack_name)
-    deep_dives = _promoted_deep_dives_for_object(vault_dir, object_id)
-    source_note_map: dict[str, dict[str, str]] = {}
-    for deep_dive in deep_dives:
-        original = get_note_provenance(vault_dir, note_path=deep_dive["path"])[
-            "original_source_note"
-        ]
-        if original:
-            source_note_map.setdefault(original["path"], original)
+    source_note_map: dict[str, dict[str, str]] = {
+        item["path"]: item for item in detail["provenance"]["source_notes"]
+    }
     stage_presence = {
         "source_notes": bool(source_note_map),
-        "deep_dives": bool(deep_dives),
         "atlas_pages": bool(detail["provenance"]["mocs"]),
     }
     missing_stages = [stage for stage, present in stage_presence.items() if not present]
@@ -5197,7 +5004,6 @@ def get_object_traceability(
         note_path=str(detail["provenance"]["evergreen_path"]),
         stage_label="evergreen_object",
         source_notes=list(source_note_map.values()),
-        deep_dives=deep_dives,
         objects=[object_as_link],
         atlas_pages=detail["provenance"]["mocs"],
     )
@@ -5209,20 +5015,18 @@ def get_object_traceability(
             "path": detail["provenance"]["evergreen_path"],
         },
         "source_notes": list(source_note_map.values()),
-        "deep_dives": deep_dives,
         "atlas_pages": detail["provenance"]["mocs"],
         "stage_presence": stage_presence,
         "missing_stages": missing_stages,
         "chain_status": chain_status,
         "chain_summary": (
             f"Object currently traces to {len(source_note_map)} source notes, "
-            f"{len(deep_dives)} deep dives, {len(detail['provenance']['mocs'])} atlas pages."
+            f"{len(detail['provenance']['mocs'])} atlas pages."
         ),
         "brain_first_lookup": brain_first_lookup,
         "backlink_expectation": backlink_expectation,
         "counts": {
             "source_notes": len(source_note_map),
-            "deep_dives": len(deep_dives),
             "atlas_pages": len(detail["provenance"]["mocs"]),
         },
     }
@@ -5404,17 +5208,35 @@ def _eligible_evolution_object_ids(
     *,
     pack_name: str | None = None,
 ) -> list[str]:
-    promoted_object_ids = {
-        item["object_id"]
-        for objects in _deep_dive_object_map(vault_dir).values()
-        for item in objects
-        if item.get("object_id")
-    }
-    existing_object_ids = {
-        item["object_id"]
-        for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE, pack_name=pack_name)
-    }
-    return sorted(promoted_object_ids.intersection(existing_object_ids))
+    """Object ids in scope for evolution-candidate scoring.
+
+    Pre-BL-029 this was the intersection of "objects in
+    ``objects`` table" and "objects produced by a deep-dive
+    promotion" — the deep-dive map is gone post-BL-029, and the
+    evergreen-promotion path now writes directly into ``objects``.
+    The simpler scope is "every object in the pack-scoped truth
+    store"; evolution candidate scoring already filters by other
+    signals (claims/relations recency).
+
+    Goes straight to SQL (``SELECT DISTINCT object_id``) instead of
+    routing through ``list_objects``: the latter caps results at
+    ``MAX_PAGE_SIZE`` and would silently drop the tail of any pack
+    with more than one page of objects.
+    """
+    db_path = _db_path(vault_dir)
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
+    if not pack_candidates:
+        return []
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT object_id FROM objects "
+            f"WHERE pack IN ({pack_placeholders})",
+            tuple(pack_candidates),
+        ).fetchall()
+    return sorted(str(row[0]) for row in rows if row[0])
 
 
 def _compute_evolution_candidates(
@@ -5566,7 +5388,7 @@ def _compute_evolution_candidates(
         earlier_key = _note_date_sort_key(earlier_date)
         later_choice: dict[str, str] | None = None
         later_choice_key: tuple[int, float, str] | None = None
-        for note in [*traceability["deep_dives"], *traceability["source_notes"]]:
+        for note in traceability["source_notes"]:
             if not _has_supersession_cue(vault_dir, note["path"]):
                 continue
             candidate_date = _note_date_text(vault_dir, note["path"])
@@ -5616,7 +5438,6 @@ def _compute_evolution_candidates(
                 for path in dict.fromkeys(
                     [
                         earlier_path,
-                        *[note["path"] for note in traceability["deep_dives"]],
                         *[note["path"] for note in traceability["source_notes"]],
                     ]
                 )
@@ -5634,7 +5455,7 @@ def _compute_evolution_candidates(
         earlier_path = traceability["object"]["canonical_path"]
         earlier_date = _note_date_text(vault_dir, earlier_path)
         earlier_key = _note_date_sort_key(earlier_date)
-        for note in [*traceability["deep_dives"], *traceability["source_notes"]]:
+        for note in traceability["source_notes"]:
             later_date = _note_date_text(vault_dir, note["path"])
             later_key = _note_date_sort_key(later_date)
             if later_key <= earlier_key:
@@ -5960,74 +5781,6 @@ def list_atlas_memberships(
         }
         for item in items
     ]
-
-
-def list_deep_dive_derivations(
-    vault_dir: Path | str,
-    *,
-    pack_name: str | None = None,
-    query: str | None = None,
-    limit: int = 100,
-) -> list[dict[str, Any]]:
-    limit, _ = _validate_page_args(limit=limit, offset=0)
-    db_path = _db_path(vault_dir)
-    resolved_vault = resolve_vault_dir(vault_dir)
-    normalized_query = (query or "").strip().lower()
-
-    with sqlite3.connect(db_path) as conn:
-        deep_dive_rows = conn.execute(
-            """
-            SELECT slug, title, note_type, path
-            FROM pages_index
-            WHERE note_type = 'deep_dive'
-            ORDER BY slug
-            """
-        ).fetchall()
-
-    derivation_map = _deep_dive_object_map(vault_dir)
-    object_rows = _batch_object_rows(
-        vault_dir,
-        [item["object_id"] for items in derivation_map.values() for item in items],
-        pack_name=pack_name,
-    )
-
-    items: list[dict[str, Any]] = []
-    for slug, title, note_type, path in deep_dive_rows:
-        relative_path = _vault_relative_path(resolved_vault, path)
-        derived_objects = [
-            {
-                "object_id": item["object_id"],
-                "title": str(object_rows[item["object_id"]]["title"]),
-                "pack": str(object_rows[item["object_id"]]["pack"]),
-            }
-            for item in derivation_map.get(relative_path, [])
-            if item["object_id"] in object_rows
-        ]
-        if normalized_query:
-            haystacks = [
-                slug.lower(),
-                title.lower(),
-                relative_path.lower(),
-                *(
-                    value.lower()
-                    for item in derived_objects
-                    for value in (item["object_id"], item["title"])
-                ),
-            ]
-            if not any(normalized_query in haystack for haystack in haystacks):
-                continue
-        items.append(
-            {
-                "slug": slug,
-                "title": title,
-                "note_type": note_type,
-                "path": relative_path,
-                "derived_objects": sorted(derived_objects, key=lambda item: item["object_id"]),
-            }
-        )
-        if len(items) >= limit:
-            break
-    return items
 
 
 def list_timeline_events(

@@ -237,34 +237,18 @@ def list_production_chains(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     limit, _ = core._validate_page_args(limit=limit, offset=0)
-    db_path = core._db_path(vault_dir)
     resolved_vault = resolve_vault_dir(vault_dir)
     normalized_query = (query or "").strip().lower()
-    with sqlite3.connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT slug, title, note_type, path
-            FROM pages_index
-            WHERE note_type = 'deep_dive'
-            ORDER BY note_type, slug
-            """
-        ).fetchall()
 
     candidates: list[dict[str, str]] = []
     seen_paths: set[str] = set()
-    for slug, title, note_type, path in rows:
-        relative_path = core._vault_relative_path(resolved_vault, path)
-        seen_paths.add(relative_path)
-        candidates.append(
-            {
-                "slug": str(slug),
-                "title": str(title),
-                "note_type": str(note_type),
-                "path": relative_path,
-                "stage_label": "deep_dive",
-            }
-        )
 
+    # Active source notes live in ``50-Inbox/03-Processed/`` post-
+    # BL-029.  The legacy ``note_type='deep_dive'`` row that used to
+    # introduce a separate stage in this list is no longer treated
+    # as a canonical chain stage; it stays in pages_index as a
+    # historical archive but is not surfaced as a production-chain
+    # candidate.
     processed_root = resolved_vault / "50-Inbox" / "03-Processed"
     if processed_root.exists():
         for candidate in sorted(processed_root.rglob("*.md")):
@@ -291,7 +275,6 @@ def list_production_chains(
                 str(candidate["title"]).lower(),
                 str(candidate["slug"]).lower(),
                 relative_path.lower(),
-                *(item["title"].lower() for item in chain["deep_dives"]),
                 *(item["title"].lower() for item in chain["objects"]),
                 *(item["title"].lower() for item in chain["atlas_pages"]),
                 *(item["title"].lower() for item in chain["source_notes"]),
@@ -487,47 +470,15 @@ def build_signal_entries(
 
     for item in production_chains:
         traceability = item["traceability"]
-        if item["stage_label"] == "source_note" and not traceability["deep_dives"]:
-            signals.append(
-                {
-                    "signal_id": core._signal_id("source_needs_deep_dive", item["path"]),
-                    "signal_type": "source_needs_deep_dive",
-                    "detected_at": timestamp,
-                    "status": "active",
-                    "title": item["title"],
-                    "detail": "Processed source note has no derived deep dive yet.",
-                    "explanation": core.SIGNAL_TYPE_EXPLANATIONS["source_needs_deep_dive"],
-                    "source_path": f"/note?path={quote(item['path'], safe='')}",
-                    "source_label": "Production",
-                    "object_ids": [],
-                    "note_paths": [item["path"]],
-                    "downstream_effects": [
-                        {
-                            "label": "Open source note",
-                            "path": f"/note?path={quote(item['path'], safe='')}",
-                        },
-                        {
-                            "label": "Inspect production chain",
-                            "path": _scoped_path(
-                                f"/production?q={quote(item['title'], safe='')}",
-                                pack_name=normalized_pack,
-                            ),
-                        },
-                    ],
-                    "recommended_action": core._recommended_action(
-                        kind="deep_dive_workflow",
-                        label="Create deep dive",
-                        path=f"/note?path={quote(item['path'], safe='')}",
-                        executable=False,
-                    ),
-                    "payload": {
-                        "stage_label": item["stage_label"],
-                        "traceability_counts": traceability["counts"],
-                        **_traceability_contract_payload(traceability),
-                    },
-                }
-            )
-        if item["stage_label"] == "deep_dive" and not traceability["objects"]:
+        # Post-BL-029 signal: a processed source note that hasn't
+        # produced any evergreen objects yet.  The legacy signal id
+        # ``source_needs_deep_dive`` is kept as an internal label
+        # so the existing pack-side governance / processor_contracts
+        # / handlers wiring for ``deep_dive_workflow`` continues to
+        # route this signal correctly.  The user-facing UX no
+        # longer references "deep dive" anywhere — the label is
+        # purely internal plumbing.
+        if item["stage_label"] == "source_note" and not traceability["objects"]:
             object_ids = _traceability_object_ids(traceability)
             object_effects = [
                 {
@@ -544,20 +495,20 @@ def build_signal_entries(
             ]
             signals.append(
                 {
-                    "signal_id": core._signal_id("deep_dive_needs_objects", item["path"]),
-                    "signal_type": "deep_dive_needs_objects",
+                    "signal_id": core._signal_id("source_needs_deep_dive", item["path"]),
+                    "signal_type": "source_needs_deep_dive",
                     "detected_at": timestamp,
                     "status": "active",
                     "title": item["title"],
-                    "detail": "Deep dive has not produced any evergreen objects yet.",
-                    "explanation": core.SIGNAL_TYPE_EXPLANATIONS["deep_dive_needs_objects"],
+                    "detail": "Processed source note has not produced any evergreen objects yet.",
+                    "explanation": core.SIGNAL_TYPE_EXPLANATIONS["source_needs_deep_dive"],
                     "source_path": f"/note?path={quote(item['path'], safe='')}",
                     "source_label": "Production",
                     "object_ids": object_ids,
                     "note_paths": [item["path"]],
                     "downstream_effects": [
                         {
-                            "label": "Open deep dive",
+                            "label": "Open source note",
                             "path": f"/note?path={quote(item['path'], safe='')}",
                         },
                         *object_effects,
@@ -570,7 +521,7 @@ def build_signal_entries(
                         },
                     ],
                     "recommended_action": core._recommended_action(
-                        kind="object_extraction_workflow",
+                        kind="deep_dive_workflow",
                         label="Extract evergreen objects",
                         path=f"/note?path={quote(item['path'], safe='')}",
                         executable=False,

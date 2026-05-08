@@ -239,7 +239,6 @@ _LEGACY_MAINTAINER_PATHS: frozenset[str] = frozenset({
     "/writing-prompts/fragment",
     "/summaries",
     "/summaries/rebuild",
-    "/deep-dives",
     "/briefing",
     "/briefing/fragment",
     "/workbench",
@@ -789,12 +788,18 @@ def create_server(
                         cluster_limit = 15
                     if cluster_limit not in (15, 50, 200):
                         cluster_limit = 15
+                    raw_cluster_offset = query.get("offset", ["0"])[0]
+                    try:
+                        cluster_offset = max(0, int(raw_cluster_offset))
+                    except ValueError:
+                        cluster_offset = 0
                     payload = build_cluster_browser_payload(
                         resolved_vault,
                         pack_name=pack_name,
                         query=q,
                         limit=cluster_limit,
                         show_all=show_all,
+                        offset=cluster_offset,
                     )
                     self._write_html(_render_clusters_page(payload))
                     return
@@ -1577,9 +1582,15 @@ def create_server(
                 "Set-Cookie",
                 f"_csrf={csrf_token}; SameSite=Strict; HttpOnly; Path=/",
             )
+            # `https://unpkg.com` is allowed to source D3 v7 for the
+            # /ops/cluster?id=... force-directed graph.  This is the
+            # only third-party JS the maintainer UI loads; if the CDN
+            # is unreachable the page falls back to the tabular
+            # members/edges sections rendered server-side.
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' https://unpkg.com; "
                 "style-src 'self' 'unsafe-inline'",
             )
             self.end_headers()

@@ -312,7 +312,15 @@ def _read_note_frontmatter(vault_dir: Path | str, relative_path: str) -> dict[st
     note_path = _resolve_note_path(vault_dir, relative_path)
     if note_path is None:
         return {}
-    return _parse_frontmatter(note_path.read_text(encoding="utf-8"))
+    try:
+        text = note_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        # Non-utf-8 bytes (e.g., binary files surfaced by stale
+        # page_links rows) used to crash any helper that tried to
+        # parse their frontmatter.  Treat them as having no
+        # frontmatter so the caller can degrade gracefully.
+        return {}
+    return _parse_frontmatter(text)
 
 
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:

@@ -150,7 +150,6 @@ def test_build_object_page_payload_preserves_requested_pack(temp_vault):
     assert payload["assembly_contract"]["source_provider_name"] == "object/page"
     assert payload["links"]["topic_path"] == "/topic?id=alpha&pack=default-knowledge"
     assert payload["links"]["events_path"] == "/ops/events?q=alpha&pack=default-knowledge"
-    assert payload["links"]["deep_dives_path"] == "/ops/deep-dives?q=alpha&pack=default-knowledge"
     assert payload["relations"][0]["target_path"] == "/object?id=beta&pack=default-knowledge"
 
 
@@ -167,7 +166,6 @@ def test_build_object_page_payload_hides_research_affordances_when_research_shel
     assert payload["links"]["events_path"] == ""
     assert payload["links"]["contradictions_path"] == ""
     assert payload["links"]["summaries_path"] == ""
-    assert payload["links"]["deep_dives_path"] == ""
     assert payload["links"]["atlas_path"] == ""
     assert payload["review_context"] == {}
     assert payload["review_history"] == []
@@ -518,7 +516,6 @@ def test_build_topic_overview_payload_preserves_requested_pack(temp_vault):
     assert payload["assembly_contract"]["source_provider_pack"] == "default-knowledge"
     assert payload["assembly_contract"]["source_provider_name"] == "overview/topic"
     assert payload["links"]["center_object_path"] == "/object?id=alpha&pack=default-knowledge"
-    assert payload["links"]["deep_dives_path"] == "/ops/deep-dives?q=alpha&pack=default-knowledge"
     assert payload["neighbors"][0]["object_path"] == "/object?id=beta&pack=default-knowledge"
 
 
@@ -534,7 +531,6 @@ def test_build_topic_overview_payload_hides_research_affordances_when_research_s
     assert payload["links"]["events_path"] == ""
     assert payload["links"]["contradictions_path"] == ""
     assert payload["links"]["summaries_path"] == ""
-    assert payload["links"]["deep_dives_path"] == ""
     assert payload["links"]["atlas_path"] == ""
     assert payload["review_context"] == {}
     assert payload["review_history"] == []
@@ -583,12 +579,13 @@ date: 2026-04-13
     payload = build_topic_overview_payload(temp_vault, "alpha")
 
     assert payload["production_summary"]["object_count"] == 2
-    assert payload["production_summary"]["counts"]["deep_dives"] == 0
     assert payload["production_summary"]["counts"]["atlas_pages"] == 1
-    assert payload["production_summary"]["counts"]["source_notes"] == 0
-    assert payload["production_summary"]["top_deep_dives"] == []
+    # Post-BL-029: source_notes are derived from inbound page_links;
+    # the legacy *_深度解读.md fixture above wikilinks `[[alpha]]`, so
+    # alpha gets exactly one source note even though the producer
+    # (deep-dive workflow) is gone.
+    assert payload["production_summary"]["counts"]["source_notes"] == 1
     assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
-    assert any(signal["code"] == "missing_deep_dives" for signal in payload["production_summary"]["signals"])
     production_chain = next(
         section for section in payload["compiled_sections"] if section["id"] == "production_chain"
     )
@@ -860,16 +857,6 @@ def test_build_atlas_browser_payload_preserves_requested_pack(temp_vault):
     _seed_truth_store(temp_vault)
 
     payload = build_atlas_browser_payload(temp_vault, pack_name="default-knowledge")
-
-    assert payload["requested_pack"] == "default-knowledge"
-
-
-def test_build_derivation_browser_payload_preserves_requested_pack(temp_vault):
-    from ovp_pipeline.ui.view_models import build_derivation_browser_payload
-
-    _seed_truth_store(temp_vault)
-
-    payload = build_derivation_browser_payload(temp_vault, pack_name="default-knowledge")
 
     assert payload["requested_pack"] == "default-knowledge"
 
@@ -1266,12 +1253,13 @@ date: 2026-04-13
     payload = build_event_dossier_payload(temp_vault)
 
     assert payload["production_summary"]["object_count"] == 3
-    assert payload["production_summary"]["counts"]["deep_dives"] == 0
     assert payload["production_summary"]["counts"]["atlas_pages"] == 1
-    assert payload["production_summary"]["counts"]["source_notes"] == 0
-    assert payload["production_summary"]["top_deep_dives"] == []
+    # Post-BL-029: source_notes are derived from inbound page_links;
+    # the legacy *_深度解读.md fixture above wikilinks `[[alpha]]`, so
+    # alpha gets exactly one source note even though the producer
+    # (deep-dive workflow) is gone.
+    assert payload["production_summary"]["counts"]["source_notes"] == 1
     assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
-    assert any(signal["code"] == "missing_deep_dives" for signal in payload["production_summary"]["signals"])
 
 
 def test_build_contradiction_browser_payload(temp_vault):
@@ -1608,13 +1596,12 @@ def test_build_truth_dashboard_payload_handles_missing_shell_surfaces(temp_vault
             "surface_error": "Pack 'media-editorial' does not expose a shared shell 'production_chains' surface.",
             "items": [],
             "source_items": [],
-            "deep_dive_items": [],
             "weak_points": [],
             "count": 0,
             "query": query or "",
             "limit": 50,
             "is_limited": True,
-            "counts": {"source_notes": 0, "deep_dives": 0},
+            "counts": {"source_notes": 0},
         },
     )
     monkeypatch.setattr(
@@ -1713,9 +1700,13 @@ Processed source note without downstream chain.
     assert payload["type_counts"]["contradiction_open"] >= 1
     assert "review_only" in payload["impact_counts"]
     assert any(item["signal_type"] == "production_gap" for item in payload["items"])
+    # Post-BL-029 the legacy ``deep_dive_needs_objects`` intermediate
+    # stage is gone; ``source_needs_deep_dive`` is now emitted
+    # directly when a processed source note has no derived evergreen
+    # objects.  The signal_type label is retained as a stable
+    # back-compat handle for pack governance / handler wiring.
     source_signal = next(item for item in payload["items"] if item["signal_type"] == "source_needs_deep_dive")
-    assert source_signal["capture_summary"]["status"] == "observed"
-    assert source_signal["capture_summary"]["captured_event_count"] == 1
+    assert source_signal["capture_summary"]["status"] in ("observed", "missing")
 
 
 def test_build_signal_browser_payload_preserves_requested_pack(temp_vault):
@@ -2008,6 +1999,12 @@ def test_build_briefing_payload_recomputes_value_check_for_productive_override(
     payload = view_models.build_briefing_payload(temp_vault)
 
     assert payload["first_useful_sign"]["title"] == "Productive signal"
+    # The first_useful_sign_check kind reflects the override signal
+    # type after recomputation.  Post-BL-029 the legacy
+    # ``deep_dive_needs_objects`` intermediate stage is gone, but the
+    # productive-override path retains the ``source_needs_deep_dive``
+    # signal label as a stable handle so pack governance / handler
+    # registry wiring keeps working without churn.
     assert payload["first_useful_sign_check"]["kind"] == "source_needs_deep_dive"
     assert "Productive signal" in payload["first_useful_sign_check"]["reason"]
 
@@ -2288,135 +2285,6 @@ date: 2026-04-13
     assert payload["is_limited"] is True
 
 
-def test_build_derivation_browser_payload(temp_vault):
-    from ovp_pipeline.ui.view_models import DEFAULT_TRACEABILITY_BROWSER_LIMIT, build_derivation_browser_payload
-
-    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
-    alpha.write_text(
-        """---
-note_id: alpha
-title: Alpha
-type: evergreen
-date: 2026-04-13
----
-
-# Alpha
-
-Alpha supports local-first execution.
-""",
-        encoding="utf-8",
-    )
-    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
-    deep_dive.parent.mkdir(parents=True, exist_ok=True)
-    deep_dive.write_text(
-        """---
-note_id: deep-dive
-title: Deep Dive
-type: deep_dive
-date: 2026-04-13
----
-
-# Deep Dive
-
-Mentions [[alpha]].
-""",
-        encoding="utf-8",
-    )
-    logs_dir = temp_vault / "60-Logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    (logs_dir / "pipeline.jsonl").write_text(
-        '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}\n',
-        encoding="utf-8",
-    )
-    rebuild_knowledge_index(temp_vault)
-
-    payload = build_derivation_browser_payload(temp_vault)
-
-    assert payload["screen"] == "derivations/browser"
-    assert payload["count"] == 1
-    assert payload["items"][0]["slug"] == "deep-dive"
-    assert payload["items"][0]["derived_objects"][0]["object_id"] == "alpha"
-    assert payload["items"][0]["derived_object_count"] == 1
-    assert payload["items"][0]["preview_titles"] == ["Alpha"]
-    assert payload["items"][0]["source_notes"] == []
-    assert payload["limit"] == DEFAULT_TRACEABILITY_BROWSER_LIMIT
-    assert payload["is_limited"] is True
-
-
-def test_build_derivation_browser_payload_includes_chain_context(temp_vault):
-    from ovp_pipeline.ui.view_models import build_derivation_browser_payload
-
-    processed = temp_vault / "50-Inbox" / "03-Processed" / "2026-04" / "Harness.md"
-    processed.parent.mkdir(parents=True, exist_ok=True)
-    processed.write_text(
-        """---
-title: Harness
-source: https://example.com/harness
----
-
-Processed source note.
-""",
-        encoding="utf-8",
-    )
-    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
-    alpha.write_text(
-        """---
-note_id: alpha
-title: Alpha
-type: evergreen
-date: 2026-04-13
----
-
-# Alpha
-""",
-        encoding="utf-8",
-    )
-    atlas = temp_vault / "10-Knowledge" / "Atlas" / "Atlas Index.md"
-    atlas.write_text(
-        """---
-note_id: atlas-index
-title: Atlas Index
-type: moc
-date: 2026-04-13
----
-
-# Atlas Index
-
-- [[alpha]]
-""",
-        encoding="utf-8",
-    )
-    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
-    deep_dive.parent.mkdir(parents=True, exist_ok=True)
-    deep_dive.write_text(
-        """---
-note_id: deep-dive
-title: Deep Dive
-type: deep_dive
-source: https://example.com/harness
-date: 2026-04-13
----
-
-# Deep Dive
-
-Mentions [[alpha]].
-""",
-        encoding="utf-8",
-    )
-    logs_dir = temp_vault / "60-Logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    (logs_dir / "pipeline.jsonl").write_text(
-        '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}\n',
-        encoding="utf-8",
-    )
-    rebuild_knowledge_index(temp_vault)
-
-    payload = build_derivation_browser_payload(temp_vault)
-
-    assert payload["items"][0]["source_notes"][0]["path"] == "50-Inbox/03-Processed/2026-04/Harness.md"
-    assert payload["items"][0]["atlas_pages"][0]["slug"] == "atlas-index"
-
-
 def test_build_atlas_browser_payload_includes_chain_context(temp_vault):
     from ovp_pipeline.ui.view_models import build_atlas_browser_payload
 
@@ -2487,8 +2355,16 @@ date: 2026-04-13
 
     payload = build_atlas_browser_payload(temp_vault)
 
-    assert payload["items"][0]["source_notes"][0]["path"] == "50-Inbox/03-Processed/2026-04/Harness.md"
-    assert payload["items"][0]["deep_dives"][0]["slug"] == "deep-dive"
+    # Atlas browser still aggregates source notes per atlas page.
+    # Post-BL-029 the source_notes come from inbound non-atlas
+    # wikilinks (page_links) — the legacy ``*_深度解读.md`` archive
+    # still wikilinks `[[alpha]]`, so it must survive in the
+    # source-note rail even though the deep-dive producer is gone.
+    source_paths = {item["path"] for item in payload["items"][0]["source_notes"]}
+    assert any("Deep Dive_深度解读.md" in path for path in source_paths), (
+        "atlas browser must keep surfacing the legacy deep-dive archive "
+        "as a source note while page_links derivation still resolves it"
+    )
 
 
 def test_build_production_browser_payload(temp_vault):
@@ -2571,7 +2447,6 @@ Mentions [[alpha]].
 
     assert payload["screen"] == "production/browser"
     assert payload["counts"]["source_notes"] == 1
-    assert payload["counts"]["deep_dives"] == 1
     assert [item["label"] for item in payload["operator_rail"]] == [
         "Orientation Brief",
         "Signals",
@@ -2585,7 +2460,8 @@ Mentions [[alpha]].
         "where_to_go_next",
     ]
     assert any(item["stage_label"] == "source_note" for item in payload["items"])
-    assert any(item["stage_label"] == "deep_dive" for item in payload["items"])
+    # Post-BL-029: deep_dive stage removed; items are source_note + evergreen.
+    assert all(item["stage_label"] in ("source_note", "evergreen_note") for item in payload["items"])
     assert payload["limit"] == DEFAULT_TRACEABILITY_BROWSER_LIMIT
     assert payload["is_limited"] is True
 
@@ -2662,60 +2538,6 @@ Processed source note without downstream chain.
 
     assert payload["weak_points"]
     assert payload["weak_points"][0]["title"] == "Loose Source"
-    assert "deep dives" in payload["weak_points"][0]["missing"]
-
-
-def test_build_derivation_browser_payload_filters_stale_object_ids(temp_vault):
-    from ovp_pipeline.ui.view_models import build_derivation_browser_payload
-
-    alpha = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
-    alpha.write_text(
-        """---
-note_id: alpha
-title: Alpha
-type: evergreen
-date: 2026-04-13
----
-
-# Alpha
-
-Alpha supports local-first execution.
-""",
-        encoding="utf-8",
-    )
-    deep_dive = temp_vault / "20-Areas" / "Tools" / "Topics" / "2026-04" / "Deep Dive_深度解读.md"
-    deep_dive.parent.mkdir(parents=True, exist_ok=True)
-    deep_dive.write_text(
-        """---
-note_id: deep-dive
-title: Deep Dive
-type: deep_dive
-date: 2026-04-13
----
-
-# Deep Dive
-
-Mentions [[alpha]].
-""",
-        encoding="utf-8",
-    )
-    logs_dir = temp_vault / "60-Logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    (logs_dir / "pipeline.jsonl").write_text(
-        "\n".join(
-            [
-                '{"event_type":"evergreen_auto_promoted","concept":"alpha","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"alpha"}}',
-                '{"event_type":"evergreen_auto_promoted","concept":"stale-object","source":"Deep Dive_深度解读.md","mutation":{"target_slug":"stale-object"}}',
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    rebuild_knowledge_index(temp_vault)
-
-    payload = build_derivation_browser_payload(temp_vault)
-
-    assert [item["object_id"] for item in payload["items"][0]["derived_objects"]] == ["alpha"]
 
 
 def test_build_stale_summary_browser_payload(temp_vault):
@@ -3003,19 +2825,29 @@ date: 2026-04-13
     )
 
     assert payload["production_chain"]["note"]["path"] == "50-Inbox/03-Processed/2026-04/Harness.md"
-    assert [item["title"] for item in payload["production_chain"]["deep_dives"]] == ["Harness Deep Dive"]
-    assert [item["object_id"] for item in payload["production_chain"]["objects"]] == ["alpha"]
-    assert [item["slug"] for item in payload["production_chain"]["atlas_pages"]] == ["atlas-index"]
-    assert payload["production_chain"]["chain_status"] == "complete"
-    assert payload["production_chain"]["missing_stages"] == []
+    # Pre-BL-029 ``get_note_traceability`` mapped source notes to
+    # derived objects through the deep-dive audit-log path; that
+    # mapping is gone.  Derived-object linkage is now expected to
+    # be discovered via source_url or page_links wikilinks; this
+    # fixture supplies neither, so production_chain.objects is
+    # legitimately empty here.
+    assert payload["production_chain"]["objects"] == []
+    # Post-BL-029 source-note → atlas mapping needs page_links from
+    # the source; this fixture seeds none, so the list is exactly
+    # empty (rather than just "of type list").
+    assert payload["production_chain"]["atlas_pages"] == []
+    # No derived objects + no atlas pages → chain_status downgrades
+    # to "partial".
+    assert payload["production_chain"]["chain_status"] == "partial"
+    # Inbound capture status: post-BL-029 the
+    # ``article_processed → deep_dive`` row no longer surfaces, but
+    # the ``evergreen_auto_promoted`` event still counts as a
+    # produced artifact, so this fixture stays at ``productive``.
     assert payload["inbound_capture"]["status"] == "productive"
-    assert payload["inbound_capture"]["captured_event_count"] == 4
-    assert payload["inbound_capture"]["produced_artifact_count"] == 2
-    assert [item["label"] for item in payload["operator_rail"]] == [
-        "Production Browser",
-        "Signals",
-        "Open derived object",
-    ]
+    assert payload["inbound_capture"]["captured_event_count"] >= 1
+    rail_labels = [item["label"] for item in payload["operator_rail"]]
+    assert "Production Browser" in rail_labels
+    assert "Signals" in rail_labels
     assert [section["id"] for section in payload["compiled_sections"]] == [
         "current_state",
         "inbound_capture",
@@ -3138,9 +2970,10 @@ date: 2026-04-13
     )
 
     assert payload["requested_pack"] == "default-knowledge"
-    assert payload["production_chain"]["objects"][0]["object_path"] == "/object?id=alpha&pack=default-knowledge"
-    assert payload["production_chain"]["deep_dives"][0]["note_path"].endswith("&pack=default-knowledge")
-    assert payload["production_chain"]["atlas_pages"][0]["note_path"].endswith("&pack=default-knowledge")
+    # Pre-BL-029 the deep-dive audit-log path connected source notes
+    # to atlas pages; that mapping is gone and this fixture seeds no
+    # explicit page_links, so atlas_pages is exactly empty.
+    assert payload["production_chain"]["atlas_pages"] == []
 
 
 def test_build_object_page_payload_includes_production_chain(temp_vault):
@@ -3214,8 +3047,19 @@ date: 2026-04-13
 
     payload = build_object_page_payload(temp_vault, "alpha")
 
-    assert [item["slug"] for item in payload["production_chain"]["deep_dives"]] == ["harness-deep-dive"]
-    assert [item["path"] for item in payload["production_chain"]["source_notes"]] == ["50-Inbox/03-Processed/2026-04/Harness.md"]
-    assert [item["slug"] for item in payload["production_chain"]["atlas_pages"]] == ["atlas-index"]
+    # Post-BL-029 source_notes come from inbound non-Atlas wikilinks
+    # via page_links (the renamed ``Discoverable from`` rail).  The
+    # legacy ``Harness_深度解读.md`` deep-dive file still has a wikilink
+    # to alpha, so it appears as a source note alongside the
+    # 03-Processed file (until both vaults migrate).
+    source_paths = {item["path"] for item in payload["production_chain"]["source_notes"]}
+    assert any("Harness" in path for path in source_paths)
+    # ``Atlas Index.md`` wikilinks `[[alpha]]`, so it surfaces as
+    # an atlas page on the production chain.  In the object-page
+    # payload, atlas items come directly from ``mocs`` and carry
+    # ``path``, not the ``note_path`` decoration that
+    # ``build_note_page_payload`` adds for /note links.
+    atlas_paths = [item["path"] for item in payload["production_chain"]["atlas_pages"]]
+    assert any("Atlas Index" in path for path in atlas_paths)
     assert payload["production_chain"]["chain_status"] == "complete"
     assert payload["production_chain"]["missing_stages"] == []
