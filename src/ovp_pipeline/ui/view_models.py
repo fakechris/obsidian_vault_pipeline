@@ -4022,15 +4022,25 @@ def build_cluster_browser_payload(
     query: str | None = None,
     limit: int = DEFAULT_TRACEABILITY_BROWSER_LIMIT,
     show_all: bool = False,
+    offset: int = 0,
 ) -> dict[str, Any]:
     # ``show_all`` lifts the display cap so the operator can audit the
     # full cluster set when they need to.  We still cap at MAX_PAGE_SIZE
     # to protect renderer cost; a vault with 10k+ clusters would still
     # be unworkable, so warn at the call site rather than render forever.
+    #
+    # ``show_all`` and ``offset`` are mutually exclusive — Show all
+    # always starts from cluster #0; an explicit offset only paginates
+    # within the per-page limit.
     effective_limit = MAX_PAGE_SIZE if show_all else limit
+    effective_offset = 0 if show_all else max(0, int(offset or 0))
     total_count = count_graph_clusters(vault_dir, pack_name=pack_name, query=query)
     items = list_graph_clusters(
-        vault_dir, pack_name=pack_name, query=query, limit=effective_limit
+        vault_dir,
+        pack_name=pack_name,
+        query=query,
+        limit=effective_limit,
+        offset=effective_offset,
     )
     cluster_provenance_index = _build_cluster_provenance_index(vault_dir, items)
     cluster_kind_counts = Counter(item["cluster_kind"] for item in items)
@@ -4150,6 +4160,7 @@ def build_cluster_browser_payload(
         "query": query or "",
         "limit": effective_limit,
         "default_limit": limit,
+        "offset": effective_offset,
         "show_all": bool(show_all),
         "total_count": total_count,
         # Compute truncation from actual counts so show_all=True

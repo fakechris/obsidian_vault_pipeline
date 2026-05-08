@@ -3412,8 +3412,15 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
     show_all = bool(payload.get("show_all"))
     limit_value = int(payload.get("limit", 0) or 0)
     default_limit = int(payload.get("default_limit", limit_value) or limit_value)
+    offset_value = int(payload.get("offset", 0) or 0)
+    rendered_count = int(payload.get("count", 0) or 0)
 
-    def _cluster_href(*, limit_: int | None = None, show_all_: bool | None = None) -> str:
+    def _cluster_href(
+        *,
+        limit_: int | None = None,
+        show_all_: bool | None = None,
+        offset_: int | None = None,
+    ) -> str:
         params: list[tuple[str, str]] = []
         if requested_pack:
             params.append(("pack", requested_pack))
@@ -3427,6 +3434,11 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
         eff_limit = limit_ if limit_ is not None else default_limit
         if eff_limit and eff_limit != 15 and not (show_all_ or show_all):
             params.append(("limit", str(eff_limit)))
+        # Offset only makes sense in the paginated mode; show_all
+        # always reads from cluster #0 so we drop it.
+        eff_offset = offset_ if offset_ is not None else offset_value
+        if eff_offset and not (show_all_ or show_all):
+            params.append(("offset", str(eff_offset)))
         if not params:
             return action_path
         return action_path + "?" + "&".join(
@@ -3435,20 +3447,28 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
 
     if show_all:
         limit_note = f" Showing all {total_count} clusters."
-    elif payload.get("is_limited"):
+    elif total_count > 0 and rendered_count > 0:
+        # Use 1-indexed range — "Showing 51–100 of 730" reads more
+        # naturally than "Showing 50–100 of 730".
+        first = offset_value + 1
+        last = offset_value + rendered_count
         limit_note = (
-            f" Showing top {payload['count']} of {total_count} by priority"
-            f" (member count + open contradictions + stale summaries)."
+            f" Showing {first}–{last} of {total_count}"
+            " by priority (member count + open contradictions"
+            " + stale summaries)."
         )
     else:
         limit_note = ""
 
+    # Per-page chip rail + Show-all escape hatch — unchanged from
+    # PR #179 except that switching per-page resets offset to 0,
+    # which the href builder already handles.
     if total_count > 0 and not show_all:
         page_size_links = " ".join(
             (
                 f"<strong>{value}</strong>"
                 if value == default_limit
-                else f"<a href='{escape(_cluster_href(limit_=value, show_all_=False))}'>{value}</a>"
+                else f"<a href='{escape(_cluster_href(limit_=value, show_all_=False, offset_=0))}'>{value}</a>"
             )
             for value in (15, 50, 200)
         )
@@ -3457,13 +3477,28 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
             if total_count > default_limit
             else ""
         )
+        # Prev/Next pager — clamped at boundaries so first / last page
+        # show disabled labels rather than dead links.
+        has_prev = offset_value > 0
+        has_next = (offset_value + rendered_count) < total_count
+        prev_offset = max(0, offset_value - default_limit)
+        next_offset = offset_value + default_limit
+        if has_prev:
+            prev_link = f"<a href='{escape(_cluster_href(offset_=prev_offset))}'>← Prev</a>"
+        else:
+            prev_link = "<span class='muted'>← Prev</span>"
+        if has_next:
+            next_link = f"<a href='{escape(_cluster_href(offset_=next_offset))}'>Next →</a>"
+        else:
+            next_link = "<span class='muted'>Next →</span>"
         cluster_pager = (
             f"<p class='muted'>Per page: {page_size_links}{toggle_links}</p>"
+            f"<p class='muted'>{prev_link} · {next_link}</p>"
         )
     elif show_all:
         cluster_pager = (
             "<p class='muted'>"
-            f"<a href='{escape(_cluster_href(show_all_=False, limit_=15))}'>← Back to top 15</a>"
+            f"<a href='{escape(_cluster_href(show_all_=False, limit_=15, offset_=0))}'>← Back to top 15</a>"
             "</p>"
         )
     else:

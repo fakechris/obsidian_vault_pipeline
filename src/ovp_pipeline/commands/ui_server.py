@@ -789,12 +789,18 @@ def create_server(
                         cluster_limit = 15
                     if cluster_limit not in (15, 50, 200):
                         cluster_limit = 15
+                    raw_cluster_offset = query.get("offset", ["0"])[0]
+                    try:
+                        cluster_offset = max(0, int(raw_cluster_offset))
+                    except ValueError:
+                        cluster_offset = 0
                     payload = build_cluster_browser_payload(
                         resolved_vault,
                         pack_name=pack_name,
                         query=q,
                         limit=cluster_limit,
                         show_all=show_all,
+                        offset=cluster_offset,
                     )
                     self._write_html(_render_clusters_page(payload))
                     return

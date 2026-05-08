@@ -2255,8 +2255,18 @@ def list_graph_clusters(
     pack_name: str | None = None,
     query: str | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
-    limit, _ = _validate_page_args(limit=limit, offset=0)
+    """List clusters scoped to ``pack_name`` with optional offset.
+
+    The function does its own dedup-by-``cluster_id`` after fetching from
+    SQL because the same id can appear under multiple packs (overlay shells
+    materialise the parent's clusters).  Pagination therefore happens
+    *after* dedup — we count distinct cluster_ids, skip the first
+    ``offset``, then take ``limit``.  SQL ``LIMIT/OFFSET`` would count
+    duplicates and produce off-by-N pages.
+    """
+    limit, offset = _validate_page_args(limit=limit, offset=offset)
     db_path = _db_path(vault_dir)
     pack_candidates = _materialized_truth_packs(
         vault_dir, pack_name=pack_name, table_name="graph_clusters"
@@ -2306,10 +2316,17 @@ def list_graph_clusters(
 
     items: list[dict[str, Any]] = []
     seen_cluster_ids: set[str] = set()
+    skipped = 0
     for cluster_pack, cluster_id, cluster_kind, label, center_object_id, member_json, score in rows:
         if cluster_id in seen_cluster_ids:
             continue
         seen_cluster_ids.add(cluster_id)
+        # Skip the first ``offset`` distinct cluster_ids to support
+        # paginated browsing.  Done after dedup so page boundaries
+        # match what the operator sees in the rendered list.
+        if skipped < offset:
+            skipped += 1
+            continue
         member_object_ids = json.loads(member_json)
         items.append(
             {
