@@ -2097,14 +2097,156 @@ def _render_library_home(payload: dict) -> str:
     return _layout("Knowledge Library", body, requested_pack=requested_pack)
 
 
+_TYPE_FACET_STYLE = """
+<style>
+.type-facet { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 16px 0; padding: 12px; background: #fafaf6; border: 1px solid #e7e1d8; border-radius: 6px; }
+.type-facet h3 { width: 100%; margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 500; color: #71675d; }
+.type-facet a.chip {
+  display: inline-block; padding: 4px 10px; font-size: 0.85rem;
+  border: 1px solid #d6cfc4; border-radius: 14px; background: #fff;
+  color: #1f1a17; text-decoration: none;
+}
+.type-facet a.chip:hover { background: #f4dfd2; border-color: #9f4f24; }
+.type-facet a.chip.active { background: #9f4f24; color: #fff; border-color: #9f4f24; font-weight: 500; }
+.type-facet a.chip .count { color: #71675d; font-size: 0.78rem; margin-left: 4px; }
+.type-facet a.chip.active .count { color: #f4dfd2; }
+</style>
+"""
+
+# Default chip-rail size for the type facet.  12 covers the common
+# CORE_OBJECT_KINDS set with one or two long-tail entries; the long
+# tail of rare kinds stays accessible via the search box / API.
+_TYPE_FACET_DEFAULT_LIMIT = 12
+
+
+def _build_objects_query_string(
+    *,
+    query: str = "",
+    object_kind: str = "",
+    requested_pack: str = "",
+) -> str:
+    """Shared query-string builder for ``/ops/objects`` URLs.
+
+    Centralises the q + kind + pack ordering so the type-facet chip
+    rail and the active-filter clear-link can't drift apart on URL
+    shape (e.g. param order, encoding) — both call sites used to
+    duplicate this logic with subtly different rules.
+    """
+    params: list[str] = []
+    if query:
+        params.append(f"q={quote(query, safe='')}")
+    if object_kind:
+        params.append(f"kind={quote(object_kind, safe='')}")
+    if requested_pack:
+        params.append(f"pack={quote(requested_pack, safe='')}")
+    return ("?" + "&".join(params)) if params else ""
+
+
+def _render_type_facet(
+    kind_stats: list[dict],
+    *,
+    active_kind: str,
+    query: str,
+    requested_pack: str,
+    base_path: str = "/ops/objects",
+    top_n: int = _TYPE_FACET_DEFAULT_LIMIT,
+) -> str:
+    """Render the type-facet chip rail for ``/ops/objects`` and
+    similar Reader-side surfaces.
+
+    ``kind_stats`` is the ``list_object_kind_stats`` shape:
+    ``[{"object_kind": str, "count": int, ...}, ...]``.  Top-N
+    types by count are shown as clickable chips; an "All" chip
+    clears the filter.  The active kind is highlighted.
+
+    If ``active_kind`` is set but its row sits outside the top-N
+    slice, we splice it in so the operator can still see (and
+    click off) the active filter — otherwise the chip rail would
+    look as if no filter were applied.
+    """
+    if not kind_stats:
+        return ""
+    from ..object_kinds import display_label
+    ranked = sorted(
+        (s for s in kind_stats if s.get("object_kind")),
+        key=lambda s: -int(s.get("count") or 0),
+    )
+    sorted_stats = ranked[:top_n]
+    if active_kind and not any(
+        str(s.get("object_kind")) == active_kind for s in sorted_stats
+    ):
+        active_row = next(
+            (s for s in ranked if str(s.get("object_kind")) == active_kind),
+            None,
+        )
+        if active_row is not None:
+            sorted_stats = [*sorted_stats, active_row]
+    if not sorted_stats:
+        return ""
+
+    def _href(kind: str) -> str:
+        return f"{base_path}{_build_objects_query_string(query=query, object_kind=kind, requested_pack=requested_pack)}"
+
+    chips: list[str] = []
+    chips.append(
+        f"<a href='{escape(_href(''))}'"
+        + (" class='chip active'" if not active_kind else " class='chip'")
+        + ">All</a>"
+    )
+    for stat in sorted_stats:
+        kind = str(stat["object_kind"])
+        count = int(stat.get("count") or 0)
+        label = display_label(kind)
+        cls = "chip active" if kind == active_kind else "chip"
+        chips.append(
+            f"<a href='{escape(_href(kind))}' class='{cls}'>"
+            f"{escape(label)}<span class='count'>{count}</span>"
+            "</a>"
+        )
+    return (
+        f"{_TYPE_FACET_STYLE}"
+        "<div class='type-facet'>"
+        "<h3>Filter by type</h3>"
+        + "".join(chips)
+        + "</div>"
+    )
+
+
 def _render_objects_index(payload: dict) -> str:
     query = payload.get("query", "")
+    active_kind = str(payload.get("object_kind") or "")
     requested_pack = payload.get("requested_pack", "")
+    kind_stats = payload.get("kind_stats") or []
     items = "".join(
         f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a> '
         f'<span class="muted">({escape(item["object_id"])})</span></li>'
         for item in payload["items"]
     )
+
+    facet_html = _render_type_facet(
+        kind_stats,
+        active_kind=active_kind,
+        query=query,
+        requested_pack=requested_pack,
+        base_path="/ops/objects",
+    )
+
+    # Active filter banner — gives the reader a clear "you're seeing
+    # only X" signal + a one-click escape hatch.  Reuses the shared
+    # query-string builder so the clear-link can't drift from the
+    # chip-rail URLs.
+    filter_banner = ""
+    if active_kind:
+        from ..object_kinds import display_label
+        clear_href = "/ops/objects" + _build_objects_query_string(
+            query=query, requested_pack=requested_pack
+        )
+        filter_banner = (
+            f"<p class='muted'>Filtered to type "
+            f"<strong>{escape(display_label(active_kind))}</strong>"
+            f" · <a href='{escape(clear_href)}'>clear filter</a></p>"
+        )
+
     return _layout(
         "Objects",
         (
@@ -2115,9 +2257,16 @@ def _render_objects_index(payload: dict) -> str:
                 if requested_pack
                 else ""
             )
+            + (
+                f"<input type='hidden' name='kind' value='{escape(active_kind)}' />"
+                if active_kind
+                else ""
+            )
             + f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
             + "<button type='submit'>Search</button>"
             + "</form>"
+            + facet_html
+            + filter_banner
             + f"<p class='muted'>{payload['count']} objects in current page."
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
