@@ -200,7 +200,10 @@ def test_reader_graph_navigation(temp_vault):
             if isinstance(node.get("path"), str) and node["path"].startswith("/object?")
         ]
         assert obj_paths, "/map JSON data should carry at least one /object? path"
-        st, obj = _get(port, obj_paths[0])
+        # Body intentionally unused — only the status code matters
+        # for this scenario (the prior reader-side assertions covered
+        # /object page contents).
+        st, _ = _get(port, obj_paths[0])
         assert st == 200
     finally:
         server.shutdown()

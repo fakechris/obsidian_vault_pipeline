@@ -3608,7 +3608,10 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
 def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
-    layout = payload["layout"]
+    # Note: ``payload["layout"]`` is no longer read — the D3 force
+    # solver computes positions client-side.  ``build_graph_map_payload``
+    # still emits the field for shape stability but nothing on the
+    # server side consumes it after this commit.
     summary = payload["map_summary"]
     show_all = bool(summary.get("show_all"))
     member_cap = int(summary.get("member_cap") or 0)
@@ -3662,12 +3665,6 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
         or "<li class='muted'>No graph clusters found yet.</li>"
     )
     notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
-    # The static-SVG path (server-computed orbital rings) is gone —
-    # ``render_graph_map_force_graph`` ignores ``payload["layout"]``
-    # and ``node["x"]``/``node["y"]`` on purpose; the D3 force solver
-    # re-lays the graph each load.  ``layout`` is kept on the payload
-    # for downstream consumers (none today) but unused here.
-    _ = layout
     map_section = render_graph_map_force_graph(payload)
     return _layout(
         "Knowledge Graph",
