@@ -199,6 +199,33 @@ def _build_runtime_home_payload_from_query(
     return build_runtime_home_payload(vault_dir, pack_name=pack_name)
 
 
+def _render_page_help(
+    title: str,
+    *,
+    what: str,
+    can: str,
+    effect: str,
+) -> str:
+    """Three-line maintainer help banner used on every /ops/* surface.
+
+    Each ops page answers three questions: what is this surface, what
+    can the operator do here, and what changes when they click a
+    button.  Until BL-053 Phase 2 the operator had to learn that by
+    trial and error; this helper renders a collapsed ``<details>``
+    block so the answers are one click away on every page without
+    eating screen space when not needed.
+    """
+    return (
+        "<aside class='page-help'><details>"
+        f"<summary>{escape(title)} — what is this?</summary>"
+        "<dl>"
+        f"<dt>What this is</dt><dd>{what}</dd>"
+        f"<dt>What you can do</dt><dd>{can}</dd>"
+        f"<dt>What happens when you click</dt><dd>{effect}</dd>"
+        "</dl></details></aside>"
+    )
+
+
 def _layout(
     title: str, body: str, *, requested_pack: str = "", auto_refresh_seconds: int | None = None
 ) -> str:
@@ -257,6 +284,11 @@ def _layout(
       button {{ padding: 0.55rem 0.8rem; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }}
       button:hover {{ opacity: 0.92; }}
       .muted {{ color: var(--muted); }}
+      .page-help {{ background: #fbf7f0; border: 1px solid var(--border); border-radius: 12px; padding: .25rem .9rem; margin: .25rem 0 1rem; font-size: .92rem; }}
+      .page-help summary {{ cursor: pointer; padding: .55rem 0; color: var(--accent); font-weight: 600; }}
+      .page-help dl {{ margin: .25rem 0 .5rem; display: grid; grid-template-columns: max-content 1fr; gap: .25rem .9rem; }}
+      .page-help dt {{ color: var(--muted); }}
+      .page-help dd {{ margin: 0; }}
       .hero {{ margin-bottom: 1.5rem; }}
       .shell {{ background: var(--surface); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 12px 36px rgba(31, 26, 23, 0.06); }}
       .shell-head {{ padding: 1.1rem 1.25rem 0; }}
@@ -2238,6 +2270,25 @@ def _render_objects_index(payload: dict) -> str:
 
     body = (
         "<h1>Objects</h1>"
+        + _render_page_help(
+            "Objects",
+            what=(
+                "Every canonical Evergreen object in the pack-scoped truth"
+                " store.  These are the rows downstream consumers"
+                " (briefings, deep dives, atlas, signals) read from."
+            ),
+            can=(
+                "Filter by text, sort by alpha or most-linked, paginate"
+                " 10/50/100/200 at a time.  Click any row to open the"
+                " full object page (claims, relations, provenance,"
+                " contradictions, sources)."
+            ),
+            effect=(
+                "Read-only browser.  Mutations live on the per-object"
+                " page (and on /ops/queue/contradictions for"
+                " contradiction resolution)."
+            ),
+        )
         + "<form method='get' action='/ops/objects'>"
         + (
             f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -2833,6 +2884,27 @@ def _render_events_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Event Dossier</h1>",
+                _render_page_help(
+                    "Event dossier",
+                    what=(
+                        "Audit-event projection grouped by object and date."
+                        "  Each row is one timeline event (page projection,"
+                        " heading projection, contradiction outcome, etc.)"
+                        " linked back to its truth object."
+                    ),
+                    can=(
+                        "Filter by free text, date range (single ?date= or"
+                        " ?from_date= + ?to_date=), or limit (25/50/100/200)."
+                        "  Drill into any object to see its full provenance."
+                    ),
+                    effect=(
+                        "Read-only — the page just queries the audit ledger."
+                        "  The Quick Maintenance card at the bottom does"
+                        " expose actions (resolve / queue summary rebuild)"
+                        " that mutate the truth store; the help block on"
+                        " those buttons explains the consequences."
+                    ),
+                ),
                 "<p class='muted'>A timeline-oriented view over dated truth objects, not a separate event object model.</p>",
                 "<form method='get' action='/ops/events'>",
                 (
@@ -3305,6 +3377,25 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
         "".join(
             [
                 "<h1>Graph Clusters</h1>",
+                _render_page_help(
+                    "Graph clusters",
+                    what=(
+                        "Connected components of pack-scoped graph relations"
+                        " (research-tech: louvain communities; other packs:"
+                        " plain transitive closure).  Clusters surface the"
+                        " neighborhoods a single object lives in."
+                    ),
+                    can=(
+                        "Use sort + per-page (15/50/200) to slice the list."
+                        "  <strong>Show all</strong> drops the limit so you"
+                        " can audit every cluster.  Click a row to drill"
+                        " into the cluster detail page."
+                    ),
+                    effect=(
+                        "Read-only.  Cluster scoring rebuilds when you"
+                        " regenerate the graph index, not on click."
+                    ),
+                ),
                 f"<form method='get' action='{escape(action_path)}'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -3856,19 +3947,26 @@ def _render_queue_overview_page(payload: dict) -> str:
     healthy = payload.get("healthy") or {}
     pending_total = int(payload.get("pending_total") or 0)
 
-    intro = (
-        "<aside class='page-help'>"
-        "<p><strong>What this is.</strong> The four queues that need a"
-        " human decision before the pipeline can move on.  Each row is"
-        " a separate queue with its own review surface; click through"
-        " for the items.</p>"
-        "<p><strong>Concept candidates</strong> are absorb-pipeline"
-        " proposals waiting for promote / merge / reject."
-        " <strong>Contradictions</strong> are open semantic tensions"
-        " awaiting resolution.  <strong>Signals waiting</strong> are"
-        " detected-but-not-acted-on observations.  <strong>Actions</strong>"
-        " are queued worker tasks; failed/blocked rows surface here.</p>"
-        "</aside>"
+    intro = _render_page_help(
+        "Maintainer queue",
+        what=(
+            "The four queues that need a human decision before the"
+            " pipeline can move on: <strong>concept candidates</strong>,"
+            " <strong>contradictions</strong>,"
+            " <strong>signals waiting</strong>, and"
+            " <strong>actions failed/blocked</strong>."
+        ),
+        can=(
+            "Click any row to open that queue's detail page."
+            "  Empty queues are listed under Healthy so you can confirm"
+            " &ldquo;no action needed&rdquo; rather than wonder whether"
+            " the pipeline is broken."
+        ),
+        effect=(
+            "This page is just an aggregator — counts come from the"
+            " same builders the four detail pages use, so the foyer"
+            " never goes stale."
+        ),
     )
 
     if pending_total == 0:
@@ -3937,10 +4035,32 @@ def _render_candidates_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Candidate Workbench</h1>",
+                _render_page_help(
+                    "Concept candidates",
+                    what=(
+                        "Concept slugs the absorb pipeline thinks deserve their"
+                        " own Evergreen note.  They are still proposals — only a"
+                        " <strong>Promote</strong> turns one into a canonical"
+                        " object."
+                    ),
+                    can=(
+                        "<strong>Promote</strong> creates an Evergreen note from"
+                        " the candidate.  <strong>Merge</strong> rewrites links"
+                        " into an existing object (target slug required)."
+                        "  <strong>Reject</strong> drops the candidate as"
+                        " spurious or duplicate."
+                    ),
+                    effect=(
+                        "Promote and Merge mutate the truth store (objects,"
+                        " relations) and trigger a re-index; Reject only marks"
+                        " the candidate as resolved.  All three are reversible"
+                        " by re-running the absorb step on the source."
+                    ),
+                ),
                 "<p class='muted'>Review registry candidates before they become canonical Evergreen objects. "
                 "Promote creates an active note, merge rewrites candidate links into an existing object, "
                 "and reject removes the pending candidate artifact.</p>",
-                "<form method='get' action='/ops/candidates' class='link-row'>",
+                "<form method='get' action='/ops/queue/concepts' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4099,7 +4219,31 @@ def _render_signals_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Active Signals</h1>",
-                "<form method='get' action='/ops/signals' class='link-row'>",
+                _render_page_help(
+                    "Signals",
+                    what=(
+                        "Detection-only observations the pipeline emits when it"
+                        " notices something worth a human look — stale summaries,"
+                        " open contradictions, missing provenance, etc."
+                        "  Signals are passive: nothing happens until you queue"
+                        " an action."
+                    ),
+                    can=(
+                        "Filter by status (productive / waiting / failed/stalled)"
+                        " or signal type.  <strong>Queue action</strong> sends"
+                        " the recommended command to the action worker."
+                        "  <strong>Dismiss</strong> tags the signal as not worth"
+                        " acting on; both the row and any attached evidence"
+                        " stay live."
+                    ),
+                    effect=(
+                        "Queueing an action adds a row to /ops/queue/actions —"
+                        " the worker runs it on its next cycle.  Until then the"
+                        " truth store is unchanged.  Dismissing only updates the"
+                        " signal ledger."
+                    ),
+                ),
+                "<form method='get' action='/ops/queue/signals' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4558,6 +4702,28 @@ def _render_actions_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Action Queue</h1>",
+                _render_page_help(
+                    "Action queue",
+                    what=(
+                        "Commands the workflow worker should run.  Items get"
+                        " here from <strong>/ops/queue/signals</strong> "
+                        "(<em>Queue action</em>), periodic pipeline jobs (e.g."
+                        " backfill cron), or manual enqueue via the CLI."
+                    ),
+                    can=(
+                        "<strong>Run next</strong> dequeues a single item to"
+                        " the action worker.  <strong>Run batch</strong>"
+                        " processes up to 5 in one pass.  <strong>Retry</strong>"
+                        " requeues a failed action; <strong>Dismiss</strong>"
+                        " removes it from the queue without running."
+                    ),
+                    effect=(
+                        "Run/Retry actually executes the queued command (may"
+                        " mutate the truth store, the vault, or external"
+                        " services depending on the action).  Dismiss only"
+                        " marks the row as dismissed; nothing else changes."
+                    ),
+                ),
                 "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m ovp_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>",
                 "<form method='post' action='/ops/actions/run-next' class='link-row'>",
                 (
@@ -4789,7 +4955,33 @@ def _render_contradictions_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Contradictions</h1>",
-                "<form method='get' action='/ops/contradictions'>",
+                _render_page_help(
+                    "Contradictions",
+                    what=(
+                        "Pairs of claims the contradiction detector flagged"
+                        " as semantically incompatible.  Each row points at"
+                        " a positive-claim set and a negative-claim set; only"
+                        " a human can pick which side is canonical."
+                    ),
+                    can=(
+                        "<strong>resolved_keep_positive</strong> marks the"
+                        " positive claims as canonical and supersedes the"
+                        " negative side.  <strong>resolved_keep_negative</strong>"
+                        " is the mirror image."
+                        "  <strong>dismissed</strong> closes the row as a"
+                        " false alarm without changing either side."
+                        "  <strong>needs_human</strong> leaves it open for"
+                        " deeper review."
+                    ),
+                    effect=(
+                        "Keep-positive / Keep-negative tag the rejected claims"
+                        " as superseded and trigger a re-compile of any"
+                        " downstream summaries that quoted them."
+                        "  Dismissed only updates the contradiction row."
+                        "  ‘Rebuild summaries’ kicks the compile queue once."
+                    ),
+                ),
+                "<form method='get' action='/ops/queue/contradictions'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -5243,9 +5435,28 @@ def _render_timeline_page(payload: dict) -> str:
     window = int(payload.get("window_days") or 14)
     days = payload.get("days") or []
 
+    timeline_help = _render_page_help(
+        "Timeline",
+        what=(
+            "Day-by-day rollup of <code>audit_events</code> for the last"
+            " ~14 days.  Sister to <strong>/ops/today</strong> (single"
+            " day) and <strong>/ops/pulse</strong> (live tail)."
+        ),
+        can=(
+            "Click any date heading or its <strong>See all N →</strong>"
+            " link to drop into <strong>/ops/events</strong> filtered"
+            " to that day.  Pills show top event types per day."
+        ),
+        effect=(
+            "Read-only.  Following a drill-down link opens the events"
+            " dossier with the date filter applied."
+        ),
+    )
+
     if not payload.get("available", True):
         body = (
-            "<section class='card'>"
+            timeline_help
+            + "<section class='card'>"
             "<h2>Timeline unavailable</h2>"
             f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
             "<p>Run <code>ovp-knowledge-index</code> to populate "
@@ -5256,7 +5467,8 @@ def _render_timeline_page(payload: dict) -> str:
 
     if not days:
         body = (
-            "<section class='card'>"
+            timeline_help
+            + "<section class='card'>"
             f"<h2>No events in the last {window} days</h2>"
             "<p class='muted'>The pipeline hasn't run in this window — "
             "check <code>60-Logs/pipeline.jsonl</code> for last activity.</p>"
@@ -5265,6 +5477,7 @@ def _render_timeline_page(payload: dict) -> str:
         return _layout("Timeline", body, requested_pack=requested_pack)
 
     sections: list[str] = [_TIMELINE_DAY_CARD_STYLE]
+    sections.append(timeline_help)
     sections.append(
         f"<p class='muted'>Showing the last {window} days of "
         f"<code>audit_events</code>.  {len(days)} day(s) with activity.</p>"
@@ -5419,6 +5632,26 @@ def _render_today_digest_page(payload: dict) -> str:
         return _layout(f"Today — {date}", body, requested_pack=requested_pack)
 
     sections: list[str] = [_TODAY_DIGEST_STYLE]
+    sections.append(
+        _render_page_help(
+            "Today digest",
+            what=(
+                "Five-card summary of what the pipeline did today (UTC),"
+                " grouped by macro-stage: intake, absorb, synthesis,"
+                " governance, failures.  Counts come from"
+                " <code>audit_events</code>."
+            ),
+            can=(
+                "Click <strong>See all N →</strong> on any card to drop"
+                " into <strong>/ops/events</strong> filtered to that day."
+                "  Use the prev/next pivots to step through history."
+            ),
+            effect=(
+                "All links read from the audit ledger.  This page mutates"
+                " nothing — it's a window onto the pipeline's day."
+            ),
+        )
+    )
     prev_path = str(payload.get("prev_date_path") or "")
     next_path = str(payload.get("next_date_path") or "")
     prev_date = str(payload.get("prev_date") or "")
@@ -5523,9 +5756,29 @@ def _render_runs_index_page(payload: dict) -> str:
     requested_pack = str(payload.get("requested_pack") or "")
     runs = payload.get("runs") or []
 
+    runs_help = _render_page_help(
+        "Runs",
+        what=(
+            "Index of pipeline transactions (one row per"
+            " <code>transaction_started</code> audit event) grouped"
+            " by calendar day with status, workflow, and event count."
+            "  ‘Idle’ markers surface days the pipeline did not run."
+        ),
+        can=(
+            "Click any <code>txn_id</code> to inspect that run's"
+            " event timeline.  Use the window pivot (Last 10 / 30 /"
+            " 100) to widen the lens when triaging."
+        ),
+        effect=(
+            "Read-only.  Per-run drill-down is also read-only — it"
+            " just reads from <code>audit_events</code>."
+        ),
+    )
+
     if not payload.get("available", True):
         body = (
-            "<section class='card'>"
+            runs_help
+            + "<section class='card'>"
             "<h2>Runs index unavailable</h2>"
             f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
             "</section>"
@@ -5534,7 +5787,8 @@ def _render_runs_index_page(payload: dict) -> str:
 
     if not runs:
         body = (
-            "<section class='card'>"
+            runs_help
+            + "<section class='card'>"
             "<h2>No transactions found</h2>"
             "<p class='muted'>No <code>transaction_started</code> events "
             "in <code>audit_events</code>.</p>"
@@ -5630,10 +5884,11 @@ def _render_runs_index_page(payload: dict) -> str:
 
     body = (
         f"{_RUNS_INDEX_STYLE}"
-        f"<p class='muted'>Showing last {limit_value} run(s){window_text}. "
+        + runs_help
+        + f"<p class='muted'>Showing last {limit_value} run(s){window_text}. "
         f"Click a <code>txn_id</code> to see the full event timeline.</p>"
-        f"<p class='muted'>Window: {pivot_links}</p>"
-        f"{runs_html}"
+        + f"<p class='muted'>Window: {pivot_links}</p>"
+        + f"{runs_html}"
     )
     return _layout("Runs", body, requested_pack=requested_pack)
 
@@ -5740,11 +5995,27 @@ def _render_run_detail_page(payload: dict) -> str:
 
 def _render_pulse_page(*, requested_pack: str = "") -> str:
     fragment = _render_pulse_fragment()
+    help_banner = _render_page_help(
+        "Pulse",
+        what=(
+            "Live tail of pipeline log files (<code>pipeline.jsonl</code>,"
+            " <code>reuse.jsonl</code>, <code>evidence.jsonl</code>,"
+            " <code>open-questions.jsonl</code>).  Polls once per second."
+        ),
+        can=(
+            "Watch in real time as the absorb/intake pipeline runs."
+            "  No interactive controls; this is purely a tail."
+        ),
+        effect=(
+            "Read-only.  The poll only reads from disk — nothing else."
+        ),
+    )
     body = (
         "<h1>Pulse</h1>"
-        "<p class='muted'>Live tail of <code>60-Logs/*.jsonl</code> (pipeline, reuse, "
+        + help_banner
+        + "<p class='muted'>Live tail of <code>60-Logs/*.jsonl</code> (pipeline, reuse, "
         "evidence, open-questions). Polls once per second.</p>"
-        f"{fragment}"
+        + fragment
     )
     return _layout("Pulse", body, requested_pack=requested_pack)
 

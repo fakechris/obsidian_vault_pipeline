@@ -1751,6 +1751,52 @@ def test_ops_queue_legacy_paths_301_to_new_routes(temp_vault, legacy, canonical)
     assert location == f"{canonical}?pack=default-knowledge"
 
 
+@pytest.mark.parametrize(
+    ("path", "summary_substring"),
+    [
+        ("/ops/queue", "Maintainer queue"),
+        ("/ops/queue/concepts", "Concept candidates"),
+        ("/ops/queue/contradictions", "Contradictions"),
+        ("/ops/queue/signals", "Signals"),
+        ("/ops/queue/actions", "Action queue"),
+        ("/ops/today", "Today digest"),
+        ("/ops/timeline", "Timeline"),
+        ("/ops/pulse", "Pulse"),
+        ("/ops/events", "Event dossier"),
+        ("/ops/objects", "Objects"),
+        ("/ops/runs", "Runs"),
+    ],
+)
+def test_ops_pages_render_page_help_banner(temp_vault, path, summary_substring):
+    """Every maintainer surface should expose the BL-053 Phase 2
+    page-help banner so the operator can answer "what is this page,
+    what can I do, what changes when I click" in one place.  The
+    banner is a collapsed ``<details>`` block — the assertion checks
+    it's present and tagged with the surface's title."""
+    from ovp_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", path)
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200, f"{path} returned {response.status}"
+    assert "page-help" in body, f"{path} missing page-help class"
+    assert f"{summary_substring} — what is this?" in body, (
+        f"{path} missing help summary {summary_substring!r}"
+    )
+
+
 def test_ops_queue_overview_lists_pending_queues(temp_vault):
     """``/ops/queue`` is the maintainer landing page that consolidates
     the four pending-review queues; it should render headings for the
