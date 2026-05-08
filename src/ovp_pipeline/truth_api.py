@@ -686,10 +686,7 @@ def _emit_extract_provenance(
     Best-effort like ``_emit_promote_provenance``: provenance failure
     must not abort the review action's primary commit.
     """
-    import sqlite3
-
     from .provenance import upsert_provenance
-    from .runtime import VaultLayout
 
     layout = VaultLayout.from_vault(vault_dir)
     if not layout.knowledge_db.exists():
@@ -706,9 +703,7 @@ def _emit_extract_provenance(
             return
         # Try the absolute path first (common since rebuild stores
         # absolute canonical_path); fall back to vault-relative.
-        from pathlib import Path as _Path
-
-        abs_path = _Path(canonical_path)
+        abs_path = Path(canonical_path)
         if not abs_path.is_absolute():
             abs_path = resolve_vault_dir(vault_dir) / canonical_path
         if not abs_path.is_file():
@@ -863,10 +858,7 @@ def review_candidate_concept(
                 target_slug=target_slug_value,
             )
         except Exception as exc:  # noqa: BLE001 — never block the review path
-            import logging
-            logging.getLogger(__name__).warning(
-                "provenance emit for extract failed: %s", exc,
-            )
+            LOGGER.warning("provenance emit for extract failed: %s", exc)
         try:
             _emit_promote_provenance(
                 resolved_vault,
@@ -877,10 +869,7 @@ def review_candidate_concept(
                 note=note,
             )
         except Exception as exc:  # noqa: BLE001 — never block the review path
-            import logging
-            logging.getLogger(__name__).warning(
-                "provenance emit for promote/merge failed: %s", exc,
-            )
+            LOGGER.warning("provenance emit for promote/merge failed: %s", exc)
 
     status_by_action = {
         "promote": "promoted",
