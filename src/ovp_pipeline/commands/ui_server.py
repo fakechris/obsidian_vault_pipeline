@@ -239,7 +239,6 @@ _LEGACY_MAINTAINER_PATHS: frozenset[str] = frozenset({
     "/writing-prompts/fragment",
     "/summaries",
     "/summaries/rebuild",
-    "/deep-dives",
     "/briefing",
     "/briefing/fragment",
     "/workbench",

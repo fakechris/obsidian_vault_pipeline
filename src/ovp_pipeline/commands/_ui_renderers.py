@@ -1294,13 +1294,11 @@ def _render_note_page(
         vault_dir, markdown, requested_pack=requested_pack
     )
     source_note = None
-    derived_notes: list[dict[str, str]] = []
     production_chain = None
     compiled_sections: list[dict[str, object]] = []
     section_nav_items: list[dict[str, str]] = []
     if payload:
         source_note = payload.get("provenance", {}).get("original_source_note")
-        derived_notes = payload.get("provenance", {}).get("derived_deep_dives", [])
         production_chain = payload.get("production_chain")
         compiled_sections = list(payload.get("compiled_sections") or [])
         section_nav_items = list(payload.get("section_nav") or [])
@@ -1316,18 +1314,6 @@ def _render_note_page(
             f"<div class='muted'>{escape(source_note['path'])}</div>"
             "</dd></div>"
             "</dl>"
-            "</section>"
-        )
-    if derived_notes:
-        derived_list = "".join(
-            f'<li><a href="{escape(item.get("note_path") or _note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
-            f"<div class='muted'>{escape(item['path'])}</div></li>"
-            for item in derived_notes
-        )
-        provenance_html += (
-            "<section class='card'>"
-            "<h2>Derived Deep Dives</h2>"
-            f"<ul class='list-tight'>{derived_list}</ul>"
             "</section>"
         )
     production_chain_html = ""
@@ -1347,7 +1333,6 @@ def _render_note_page(
             f"<div><dt>Missing Stages</dt><dd>{escape(missing_stages)}</dd></div>"
             f"<div><dt>Chain Summary</dt><dd>{escape(str(production_chain.get('chain_summary') or ''))}</dd></div>"
             f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Deep Dives</dt><dd>{_render_named_note_links(production_chain['deep_dives'], requested_pack=requested_pack)}</dd></div>"
             f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'], requested_pack=requested_pack)}</dd></div>"
             f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(production_chain['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
             "</dl>"
@@ -1884,7 +1869,6 @@ def _render_production_summary_card(
         f"<li>{escape(label)}: {int(summary['counts'][key])}</li>"
         for key, label in (
             ("source_notes", "Source notes"),
-            ("deep_dives", "Deep dives"),
             ("atlas_pages", "Atlas / MOC pages"),
         )
     )
@@ -1894,7 +1878,6 @@ def _render_production_summary_card(
         "<dl class='meta-list'>"
         f"<div><dt>Objects in scope</dt><dd>{int(summary['object_count'])}</dd></div>"
         f"<div><dt>Top Source Notes</dt><dd>{_render_named_note_links(summary['top_source_notes'], requested_pack=requested_pack)}</dd></div>"
-        f"<div><dt>Top Deep Dives</dt><dd>{_render_named_note_links(summary['top_deep_dives'], requested_pack=requested_pack)}</dd></div>"
         f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(summary['top_atlas_pages'], requested_pack=requested_pack)}</dd></div>"
         "</dl>"
         f"<ul class='list-tight'>{count_items}{signal_items}</ul>"
@@ -2707,7 +2690,6 @@ def _render_object_page(payload: dict) -> str:
                 f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>",
                 f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>",
                 f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>",
-                f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>",
                 f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>",
             ]
         )
@@ -2763,7 +2745,6 @@ def _render_object_page(payload: dict) -> str:
             f"<div><dt>Missing Stages</dt><dd>{escape(', '.join(str(item).replace('_', ' ') for item in payload['production_chain'].get('missing_stages', [])) or 'None')}</dd></div>"
             f"<div><dt>Chain Summary</dt><dd>{escape(str(payload['production_chain'].get('chain_summary') or ''))}</dd></div>"
             f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Source Deep Dives</dt><dd>{_render_named_note_links(payload['production_chain']['deep_dives'], requested_pack=requested_pack)}</dd></div>"
             f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
             f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
             "</dl></section>",
@@ -2876,7 +2857,6 @@ def _render_topic_page(payload: dict) -> str:
                 f"<a href='{escape(payload['links']['events_path'])}'>Related events</a>",
                 f"<a href='{escape(payload['links']['contradictions_path'])}'>Contradictions</a>",
                 f"<a href='{escape(payload['links']['summaries_path'])}'>Stale summaries</a>",
-                f"<a href='{escape(payload['links']['deep_dives_path'])}'>Source deep dives</a>",
                 f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>",
             ]
         )
@@ -3135,7 +3115,6 @@ def _render_atlas_page(payload: dict) -> str:
             "<li>"
             f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
             + f" <span class='pill'>{item['member_count']} objects</span>"
-            + f" <span class='pill'>{len(item['deep_dives'])} deep dives</span>"
             + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
             + f" <span class='muted'>{_render_limited_inline_links(item['members'], render_member_link)}</span>"
             + (
@@ -3144,7 +3123,6 @@ def _render_atlas_page(payload: dict) -> str:
                 else ""
             )
             + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
-            + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['deep_dives'], requested_pack=requested_pack)}</div>"
             + "</li>"
             for item in payload["items"]
         )
@@ -3267,66 +3245,6 @@ def _render_curated_atlas_page(payload: dict) -> str:
     )
 
 
-def _render_derivations_page(payload: dict) -> str:
-    query = payload.get("query", "")
-    requested_pack = payload.get("requested_pack", "")
-    limit_note = (
-        f" Showing the most recent {payload['limit']} deep dives in this browser window."
-        if payload.get("is_limited")
-        else ""
-    )
-    items = (
-        "".join(
-            "<li>"
-            f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
-            + f" <span class='pill'>{item['derived_object_count']} derived objects</span>"
-            + f" <span class='pill'>{len(item['source_notes'])} source notes</span>"
-            + f" <span class='pill'>{len(item['atlas_pages'])} atlas pages</span>"
-            + (
-                " <span class='muted'>"
-                + ", ".join(
-                    f'<a href="{escape(_object_href(member["object_id"], member.get("object_path", ""), requested_pack=requested_pack))}">{escape(member["title"])}</a>'
-                    for member in item["derived_objects"]
-                )
-                + "</span>"
-            )
-            + (
-                f"<div class='muted'>Preview: {escape(', '.join(item['preview_titles']))}</div>"
-                if item["preview_titles"]
-                else ""
-            )
-            + f"<div class='muted'>Source Notes: {_render_named_note_links(item['source_notes'], requested_pack=requested_pack)}</div>"
-            + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['atlas_pages'], requested_pack=requested_pack)}</div>"
-            + "</li>"
-            for item in payload["items"]
-        )
-        or "<li>None</li>"
-    )
-    return _layout(
-        "Deep Dive Derivations",
-        "".join(
-            [
-                "<h1>Deep Dive Derivations</h1>",
-                "<form method='get' action='/ops/deep-dives'>",
-                (
-                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
-                    if requested_pack
-                    else ""
-                ),
-                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter deep dives or objects' /> ",
-                "<button type='submit'>Search</button>",
-                "</form>",
-                f"<p class='muted'>{payload['count']} deep dive notes linked to indexed objects.",
-                f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
-                f"{escape(limit_note)}</p>",
-                "<section class='card'><h2>Contribution Summary</h2><p class='muted'>Each deep dive now shows upstream source notes and downstream Atlas reach, not just derived objects.</p></section>",
-                f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
-            ]
-        ),
-        requested_pack=requested_pack,
-    )
-
-
 def _render_production_browser_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
@@ -3346,13 +3264,11 @@ def _render_production_browser_page(payload: dict) -> str:
             f'<a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a>'
             + f" <span class='pill'>{escape(item['stage_label'].replace('_', ' '))}</span>"
             + f" <span class='pill'>{escape(str(item['traceability'].get('chain_status') or ''))}</span>"
-            + f" <span class='pill'>{item['traceability']['counts']['deep_dives']} deep dives</span>"
             + f" <span class='pill'>{item['traceability']['counts']['objects']} objects</span>"
             + f" <span class='pill'>{item['traceability']['counts']['atlas_pages']} atlas pages</span>"
             + f"<div class='muted'>Chain status: {escape(str(item['traceability'].get('chain_status') or ''))}</div>"
             + f"<div class='muted'>Missing stages: {escape(', '.join(str(value).replace('_', ' ') for value in item['traceability'].get('missing_stages', [])) or 'None')}</div>"
             + f"<div class='muted'>Chain summary: {escape(str(item['traceability'].get('chain_summary') or ''))}</div>"
-            + f"<div class='muted'>Deep Dives: {_render_named_note_links(item['traceability']['deep_dives'], requested_pack=requested_pack)}</div>"
             + f"<div class='muted'>Objects: {_render_object_links(item['traceability']['objects'], requested_pack=requested_pack)}</div>"
             + f"<div class='muted'>Atlas / MOC Reach: {_render_named_note_links(item['traceability']['atlas_pages'], requested_pack=requested_pack)}</div>"
             + "</li>"
@@ -3386,10 +3302,10 @@ def _render_production_browser_page(payload: dict) -> str:
                     if requested_pack
                     else ""
                 ),
-                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter source notes, deep dives, objects, or atlas' /> ",
+                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter source notes, objects, or atlas' /> ",
                 "<button type='submit'>Search</button>",
                 "</form>",
-                f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes and {payload['counts']['deep_dives']} deep dives.",
+                f"<p class='muted'>{payload['count']} production-chain entries. {payload['counts']['source_notes']} source notes.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
                 _render_compiled_sections(lead_sections),
@@ -3941,7 +3857,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
             f"<section class='card'><h2>Object Kinds</h2><div class='link-row'>{object_kind_counts}</div></section>"
             f"<section class='card'><h2>Coverage</h2><p class='muted'>"
-            f"{review_context['source_note_count']} source/deep-dive notes · "
+            f"{review_context['source_note_count']} source notes · "
             f"{review_context['moc_count']} atlas pages · "
             f"{review_context['open_contradiction_count']} open contradictions · "
             f"{review_context['stale_summary_count']} stale summaries"
