@@ -66,7 +66,7 @@ docs that point at storage may say "crystal".  See [GLOSSARY](./GLOSSARY.md).
 | `/ops/events` | Audit / event log | Projection: audit_events |
 | `/ops/clusters`, `/ops/cluster?id=<id>` | Louvain community diagnostics | Projection: `graph_clusters` |
 | `/ops/objects` | Typed-object audit table | Projection: objects |
-| `/ops/summaries`, `/ops/briefing`, `/ops/deep-dives` | Compiled-content review | Projection: compiled_summaries / briefing / deep dives |
+| `/ops/summaries`, `/ops/briefing` | Compiled-content review | Projection: compiled_summaries / briefing |
 | `/ops/reuse/fragment`, `/ops/open-questions/fragment`, `/ops/writing-prompts/fragment` | Embedded telemetry fragments for the dashboard | Projections |
 | `/ops/workbench` | Reviewer / triage workbench | Projection: review actions |
 
