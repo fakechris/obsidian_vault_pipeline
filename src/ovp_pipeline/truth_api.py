@@ -5094,7 +5094,7 @@ def get_object_source_chain(
                 break
         provenance_rows: list[tuple[str, str, str, str]] = []
         if truth_pack:
-            provenance_rows = list(conn.execute(
+            provenance_rows = conn.execute(
                 """
                 SELECT derived_via_stage, derived_at, source_url, metadata_json
                 FROM provenance
@@ -5102,7 +5102,7 @@ def get_object_source_chain(
                 ORDER BY derived_at, derived_via_stage
                 """,
                 (truth_pack, object_id),
-            ).fetchall())
+            ).fetchall()
 
     source_url_domain = ""
     if source_url:
