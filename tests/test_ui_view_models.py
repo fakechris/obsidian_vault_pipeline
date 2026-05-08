@@ -3063,3 +3063,99 @@ date: 2026-04-13
     assert any("Atlas Index" in path for path in atlas_paths)
     assert payload["production_chain"]["chain_status"] == "complete"
     assert payload["production_chain"]["missing_stages"] == []
+
+
+def test_build_object_page_payload_carries_source_chain(temp_vault):
+    """Post-BL-029 ``/object`` page surfaces the new source chain.
+
+    Seeds an evergreen with ``source_url`` set on the ``objects`` row
+    and a ``provenance`` row at ``stage='ingest'``, then asserts the
+    payload's ``source_chain`` field carries the URL, the parsed
+    domain, and the stage timestamp.  No staging file is seeded — so
+    ``source_file_path`` is empty (the renderer surfaces a
+    ``no active staging file resolved`` muted note in that case).
+    """
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE objects SET source_url = ? WHERE object_id = 'alpha'",
+            ("https://github.com/example/repo",),
+        )
+        conn.execute(
+            """
+            INSERT INTO provenance
+              (pack, object_id, source_url, source_fingerprint,
+               derived_via_stage, derived_at, parent_object_id, metadata_json)
+            VALUES (?, ?, ?, '', 'ingest', '2026-04-28T12:14:03Z', NULL, '{}')
+            """,
+            ("research-tech", "alpha", "https://github.com/example/repo"),
+        )
+        conn.commit()
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    chain = payload["source_chain"]
+    assert chain["source_url"] == "https://github.com/example/repo"
+    assert chain["source_url_domain"] == "github.com"
+    assert chain["source_file_path"] == ""  # nothing seeded in 50-Inbox
+    stages = chain["provenance_stages"]
+    assert len(stages) == 1
+    assert stages[0]["stage"] == "ingest"
+    assert stages[0]["derived_at"] == "2026-04-28T12:14:03Z"
+    assert chain["evergreen_path_legacy"] is False
+
+
+def test_build_object_page_payload_warns_on_legacy_evergreen_path(temp_vault):
+    """Legacy ``*_深度解读.md`` archive evergreens get a warning chip.
+
+    When ``objects.canonical_path`` still points at a pre-BL-029
+    deep-dive archive file (re-promotion never happened), the
+    ``source_chain.evergreen_path_legacy`` flag flips so the
+    renderer can show a ``legacy archive`` chip nudging the
+    operator to re-run absorb.
+    """
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.ui.view_models import build_object_page_payload
+
+    _seed_truth_store(temp_vault)
+    legacy_path = (
+        temp_vault / "10-Knowledge" / "Evergreen" / "Alpha_深度解读.md"
+    )
+    legacy_path.write_text("legacy archive", encoding="utf-8")
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE objects SET canonical_path = ? WHERE object_id = 'alpha'",
+            (str(legacy_path),),
+        )
+        conn.commit()
+
+    payload = build_object_page_payload(temp_vault, "alpha")
+
+    chain = payload["source_chain"]
+    assert chain["evergreen_path_legacy"] is True
+    assert chain["evergreen_path"].endswith("_深度解读.md")
+
+
+def test_get_object_source_chain_handles_missing_source_url(temp_vault):
+    """Legacy objects without ``source_url`` get blank chain fields.
+
+    Pre-BL-054 evergreens never received a ``source_url`` backfill;
+    the helper must not crash and must not invent fake data — every
+    field is the empty string / list.
+    """
+    from ovp_pipeline.truth_api import get_object_source_chain
+
+    _seed_truth_store(temp_vault)
+    chain = get_object_source_chain(temp_vault, "alpha")
+
+    assert chain["source_url"] == ""
+    assert chain["source_url_domain"] == ""
+    assert chain["source_file_path"] == ""
+    assert chain["provenance_stages"] == []
+    assert chain["evergreen_path"]  # canonical evergreen still resolves
+    assert chain["evergreen_path_legacy"] is False

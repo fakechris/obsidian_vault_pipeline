@@ -297,4 +297,9 @@ Fragment paths (`/ops/candidates/fragment`,
 iframes and form submitters don't churn.
 
 `/ops/deep-dives` (and `/api/deep-dives`) 301 to `/ops/today`
-since BL-029 removed the deep-dive producer.
+since BL-029 removed the deep-dive producer.  See
+[`docs/page-ia-post-bl029.md`](page-ia-post-bl029.md) for the
+full post-deep-dive page IA — what each `/object`, `/topic`,
+`/note`, and `/ops/*` surface is for and how the new pipeline
+chain (Source URL → Source File → Pipeline Stages → Evergreen)
+maps onto them.
