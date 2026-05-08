@@ -27,6 +27,7 @@ from ..ui.view_models import (
     DEFAULT_CANDIDATE_BROWSER_LIMIT,
     build_runtime_home_payload,
 )
+from ._graph_visualizers import render_cluster_force_graph
 
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
@@ -3916,6 +3917,7 @@ def _render_cluster_detail_page(payload: dict) -> str:
     )
     review_context = payload["review_context"]
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
+    force_graph_section = render_cluster_force_graph(payload)
     return _layout(
         "Graph Cluster",
         (
@@ -3927,7 +3929,8 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<p>Center: <a href='{escape(cluster['center_object_path'])}'>{escape(cluster['center_title'])}</a></p>"
             f"<p class='muted'>{cluster['member_count']} member objects.</p>"
             "</section>"
-            f"<section class='card'><h2>Cluster Synthesis</h2><ul class='list-tight'>{summary_bullets}</ul></section>"
+            + force_graph_section
+            + f"<section class='card'><h2>Cluster Synthesis</h2><ul class='list-tight'>{summary_bullets}</ul></section>"
             f"<section class='card'><h2>Structural Label</h2><p><strong>{escape(payload['structural_label']['title'])}</strong></p><p class='muted'>{escape(payload['structural_label']['reason'])}</p></section>"
             f"<section class='card'><h2>Relation Patterns</h2><ul class='list-tight'>{relation_patterns}</ul></section>"
             f"<section class='card'><h2>Review Pressure</h2><h3>Open Contradictions</h3><ul class='list-tight'>{open_contradictions}</ul><h3>Stale Summaries</h3><ul class='list-tight'>{stale_summaries}</ul></section>"

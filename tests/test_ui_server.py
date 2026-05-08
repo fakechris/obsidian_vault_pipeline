@@ -1908,6 +1908,65 @@ def test_count_action_queue_by_status_returns_grouped_counts(temp_vault):
     assert all(isinstance(n, int) for n in overview["by_status"].values())
 
 
+def test_ops_cluster_detail_mounts_force_graph(temp_vault):
+    """``/ops/cluster?id=...`` injects the D3 force-directed graph.
+
+    The page now opens with an interactive force-directed view above
+    the existing tabular sections.  The renderer ships a JSON
+    ``<script type="application/json">`` block carrying nodes +
+    edges, plus the D3 v7 CDN script tag and the bootstrap script.
+    Tabular sections (Members, Internal Edges) stay as the printable
+    fallback.
+    """
+    from ovp_pipeline.commands.ui_server import create_server
+    from ovp_pipeline.runtime import VaultLayout
+
+    _seed_truth_store(temp_vault)
+    layout = VaultLayout.from_vault(temp_vault)
+    db = sqlite3.connect(layout.knowledge_db)
+    try:
+        db.execute("DELETE FROM graph_clusters WHERE pack='default-knowledge'")
+        db.execute(
+            "INSERT INTO graph_clusters (pack, cluster_id, cluster_kind,"
+            " label, center_object_id, member_object_ids_json, score)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "default-knowledge", "cluster::test", "louvain_community",
+                "alpha-cluster", "alpha",
+                '["alpha", "beta", "conflict"]', 5.0,
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request(
+            "GET", "/ops/cluster?id=cluster::test&pack=default-knowledge"
+        )
+        body = conn.getresponse().read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    # Force-directed mount + D3 + JSON data block.
+    assert "Force-Directed View" in body
+    assert "cluster-graph-svg" in body
+    assert "cluster-graph-data" in body
+    assert "d3@7" in body or "d3.min.js" in body
+    # Tabular fallback still rendered.
+    assert "Internal Edges" in body
+    assert "<h2>Members</h2>" in body
+    # JSON block carries the seeded members.
+    assert '"id": "alpha"' in body or '"id":"alpha"' in body
+
+
 def test_ops_clusters_supports_offset_pagination(temp_vault):
     """``/ops/clusters?limit=N&offset=M`` walks pages.
 
