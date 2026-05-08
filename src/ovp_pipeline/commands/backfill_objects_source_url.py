@@ -68,18 +68,25 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-from ..runtime import VaultLayout, resolve_vault_dir
-from .backfill_provenance import (
-    _build_evergreen_to_source_from_audit,
-    _read_frontmatter_dict,
+from ..runtime import (
+    VaultLayout,
+    format_utc_timestamp,
+    read_markdown_frontmatter,
+    resolve_vault_dir,
+    utc_now,
 )
+from .backfill_provenance import _build_evergreen_to_source_from_audit
 
 logger = logging.getLogger(__name__)
 
 
-# Order matches ``backfill_provenance._URL_FIELD_PRIORITY``: frontmatter
-# fields that historically carried a source URL, in the order we'd trust
-# them when more than one is present.
+# Reverse priority of ``backfill_provenance._URL_FIELD_PRIORITY``:
+# we read from the *evergreen* (which carries ``source_url`` as its
+# canonical field) rather than from the *source* article (where
+# ``source:`` is the canonical field).  Other variants (``url``,
+# ``github``, ``twitter``, ``arxiv``) are tail-tier fallbacks for
+# legacy / hand-edited evergreens that copied a URL into a custom
+# field.
 _FRONTMATTER_URL_KEYS = (
     "source_url",
     "source",
@@ -90,18 +97,19 @@ _FRONTMATTER_URL_KEYS = (
 )
 
 
-def _strip_yaml_quotes(value: str) -> str:
-    v = value.strip()
-    if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
-        return v[1:-1]
-    return v
-
-
 def _frontmatter_source_url(canonical_path: str) -> str:
     """Read evergreen frontmatter and return the first non-empty URL.
 
     Returns ``""`` when the file is missing, empty, or has no URL
     field.  Never raises on read errors — backfill is best-effort.
+
+    Catches ``Exception`` deliberately: ``read_markdown_frontmatter``
+    runs strict ``yaml.safe_load`` which raises ``YAMLError`` (not a
+    subclass of ``ValueError``) on real-vault frontmatter that
+    pre-BL-058a tools wrote without quoting (e.g. ``source_anchor:
+    @nekocode/agent`` — a leading ``@`` is invalid YAML).  A
+    backfill CLI must not abort the whole pass on one malformed
+    file; it should skip and report.
     """
     if not canonical_path:
         return ""
@@ -109,12 +117,11 @@ def _frontmatter_source_url(canonical_path: str) -> str:
     if not path.is_file():
         return ""
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
+        fm = read_markdown_frontmatter(path)
+    except Exception:  # noqa: BLE001 — see docstring
         return ""
-    fm = _read_frontmatter_dict(text)
     for key in _FRONTMATTER_URL_KEYS:
-        candidate = _strip_yaml_quotes(fm.get(key, ""))
+        candidate = str(fm.get(key, "") or "").strip()
         if candidate:
             return candidate
     return ""
@@ -212,12 +219,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no knowledge.db at {db_path}", file=sys.stderr)
         return 1
 
-    audit_index = _build_evergreen_to_source_from_audit(db_path, vault)
-    logger.info(
-        "loaded %d audit_events evergreen → source mappings",
-        len(audit_index),
-    )
-
     counts = {
         "scanned": 0,
         "frontmatter": 0,
@@ -229,8 +230,22 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = sqlite3.connect(db_path)
     try:
+        # Short-circuit before the expensive audit-event walk.  The
+        # audit-event index requires an ``rglob('*.md')`` scan of the
+        # whole vault (3,877 unique stems on the live vault); skipping
+        # it on idempotent re-runs is the difference between a
+        # sub-second exit and a 5+ second one.
         rows = list(_iter_objects_with_empty_source_url(conn))
         counts["scanned"] = len(rows)
+        if not rows:
+            logger.info("no objects with empty source_url; nothing to do")
+            audit_index: dict[str, dict[str, str]] = {}
+        else:
+            audit_index = _build_evergreen_to_source_from_audit(db_path, vault)
+            logger.info(
+                "loaded %d audit_events evergreen → source mappings",
+                len(audit_index),
+            )
         for pack, object_id, canonical_path in rows:
             source_url, strategy = _resolve_source_url(
                 pack=pack,
@@ -254,11 +269,9 @@ def main(argv: list[str] | None = None) -> int:
                 # Idempotent — same dedup guard rebuild_knowledge_index
                 # uses; never inserts a duplicate ingest row for the same
                 # ``(pack, object_id, source_url)`` triple.
-                from datetime import datetime, timezone
-
                 from .backfill_provenance import _make_fingerprint
 
-                derived_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                derived_at = format_utc_timestamp(utc_now())
                 conn.execute(
                     """
                     INSERT INTO provenance
