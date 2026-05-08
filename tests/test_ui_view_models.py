@@ -580,8 +580,11 @@ date: 2026-04-13
 
     assert payload["production_summary"]["object_count"] == 2
     assert payload["production_summary"]["counts"]["atlas_pages"] == 1
-    # Post-BL-029: source_notes come from page_links — legacy *_深度解读.md still counts.
-    assert payload["production_summary"]["counts"]["source_notes"] >= 0
+    # Post-BL-029: source_notes are derived from inbound page_links;
+    # the legacy *_深度解读.md fixture above wikilinks `[[alpha]]`, so
+    # alpha gets exactly one source note even though the producer
+    # (deep-dive workflow) is gone.
+    assert payload["production_summary"]["counts"]["source_notes"] == 1
     assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
     production_chain = next(
         section for section in payload["compiled_sections"] if section["id"] == "production_chain"
@@ -1251,8 +1254,11 @@ date: 2026-04-13
 
     assert payload["production_summary"]["object_count"] == 3
     assert payload["production_summary"]["counts"]["atlas_pages"] == 1
-    # Post-BL-029: source_notes come from page_links — legacy *_深度解读.md still counts.
-    assert payload["production_summary"]["counts"]["source_notes"] >= 0
+    # Post-BL-029: source_notes are derived from inbound page_links;
+    # the legacy *_深度解读.md fixture above wikilinks `[[alpha]]`, so
+    # alpha gets exactly one source note even though the producer
+    # (deep-dive workflow) is gone.
+    assert payload["production_summary"]["counts"]["source_notes"] == 1
     assert any(signal["code"] == "missing_source_notes" for signal in payload["production_summary"]["signals"])
 
 
@@ -1694,8 +1700,11 @@ Processed source note without downstream chain.
     assert payload["type_counts"]["contradiction_open"] >= 1
     assert "review_only" in payload["impact_counts"]
     assert any(item["signal_type"] == "production_gap" for item in payload["items"])
-    # Post-BL-029 the legacy ``source_needs_deep_dive`` signal was
-    # replaced by ``source_needs_deep_dive`` (no intermediate stage).
+    # Post-BL-029 the legacy ``deep_dive_needs_objects`` intermediate
+    # stage is gone; ``source_needs_deep_dive`` is now emitted
+    # directly when a processed source note has no derived evergreen
+    # objects.  The signal_type label is retained as a stable
+    # back-compat handle for pack governance / handler wiring.
     source_signal = next(item for item in payload["items"] if item["signal_type"] == "source_needs_deep_dive")
     assert source_signal["capture_summary"]["status"] in ("observed", "missing")
 
@@ -1991,9 +2000,11 @@ def test_build_briefing_payload_recomputes_value_check_for_productive_override(
 
     assert payload["first_useful_sign"]["title"] == "Productive signal"
     # The first_useful_sign_check kind reflects the override signal
-    # type after recomputation.  Pre-BL-029 this was the legacy
-    # ``source_needs_deep_dive``; post-BL-029 the same productive
-    # override surfaces as ``source_needs_deep_dive``.
+    # type after recomputation.  Post-BL-029 the legacy
+    # ``deep_dive_needs_objects`` intermediate stage is gone, but the
+    # productive-override path retains the ``source_needs_deep_dive``
+    # signal label as a stable handle so pack governance / handler
+    # registry wiring keeps working without churn.
     assert payload["first_useful_sign_check"]["kind"] == "source_needs_deep_dive"
     assert "Productive signal" in payload["first_useful_sign_check"]["reason"]
 
@@ -2346,11 +2357,14 @@ date: 2026-04-13
 
     # Atlas browser still aggregates source notes per atlas page.
     # Post-BL-029 the source_notes come from inbound non-atlas
-    # wikilinks (page_links) — both the active 03-Processed file
-    # and the legacy ``*_深度解读.md`` archive count as inbound
-    # source notes if both still link to the object.
+    # wikilinks (page_links) — the legacy ``*_深度解读.md`` archive
+    # still wikilinks `[[alpha]]`, so it must survive in the
+    # source-note rail even though the deep-dive producer is gone.
     source_paths = {item["path"] for item in payload["items"][0]["source_notes"]}
-    assert source_paths, "atlas browser should surface source notes for the seeded object"
+    assert any("Deep Dive_深度解读.md" in path for path in source_paths), (
+        "atlas browser must keep surfacing the legacy deep-dive archive "
+        "as a source note while page_links derivation still resolves it"
+    )
 
 
 def test_build_production_browser_payload(temp_vault):
@@ -2818,16 +2832,18 @@ date: 2026-04-13
     # fixture supplies neither, so production_chain.objects is
     # legitimately empty here.
     assert payload["production_chain"]["objects"] == []
-    # Post-BL-029 source-note → atlas mapping needs page_links from the source.  Test fixture didnt seed that, so empty is fine.
-    assert isinstance(payload["production_chain"]["atlas_pages"], list)
-    assert payload["production_chain"]["chain_status"] in ("complete", "partial")
-    # Inbound capture status: pre-BL-029 the article_processed →
-    # deep_dive event counted as a produced artifact, lifting status
-    # to "productive".  Post-cleanup that event no longer surfaces;
-    # the same 4 audit rows still reach this note as observations,
-    # but only 1 produced-artifact row remains (the evergreen
-    # promotion).
-    assert payload["inbound_capture"]["status"] in ("productive", "observed")
+    # Post-BL-029 source-note → atlas mapping needs page_links from
+    # the source; this fixture seeds none, so the list is exactly
+    # empty (rather than just "of type list").
+    assert payload["production_chain"]["atlas_pages"] == []
+    # No derived objects + no atlas pages → chain_status downgrades
+    # to "partial".
+    assert payload["production_chain"]["chain_status"] == "partial"
+    # Inbound capture status: post-BL-029 the
+    # ``article_processed → deep_dive`` row no longer surfaces, but
+    # the ``evergreen_auto_promoted`` event still counts as a
+    # produced artifact, so this fixture stays at ``productive``.
+    assert payload["inbound_capture"]["status"] == "productive"
     assert payload["inbound_capture"]["captured_event_count"] >= 1
     rail_labels = [item["label"] for item in payload["operator_rail"]]
     assert "Production Browser" in rail_labels
@@ -2954,12 +2970,10 @@ date: 2026-04-13
     )
 
     assert payload["requested_pack"] == "default-knowledge"
-    # Atlas pages still carry pack-scoped href when populated.
     # Pre-BL-029 the deep-dive audit-log path connected source notes
-    # to atlas pages; that mapping is gone, so atlas_pages may be
-    # empty for source-note inputs without explicit page_links.
-    if payload["production_chain"]["atlas_pages"]:
-        assert payload["production_chain"]["atlas_pages"][0]["note_path"].endswith("&pack=default-knowledge")
+    # to atlas pages; that mapping is gone and this fixture seeds no
+    # explicit page_links, so atlas_pages is exactly empty.
+    assert payload["production_chain"]["atlas_pages"] == []
 
 
 def test_build_object_page_payload_includes_production_chain(temp_vault):
@@ -3040,7 +3054,12 @@ date: 2026-04-13
     # 03-Processed file (until both vaults migrate).
     source_paths = {item["path"] for item in payload["production_chain"]["source_notes"]}
     assert any("Harness" in path for path in source_paths)
-    # Post-BL-029 source-note → atlas mapping needs page_links from the source.  Test fixture didnt seed that, so empty is fine.
-    assert isinstance(payload["production_chain"]["atlas_pages"], list)
+    # ``Atlas Index.md`` wikilinks `[[alpha]]`, so it surfaces as
+    # an atlas page on the production chain.  In the object-page
+    # payload, atlas items come directly from ``mocs`` and carry
+    # ``path``, not the ``note_path`` decoration that
+    # ``build_note_page_payload`` adds for /note links.
+    atlas_paths = [item["path"] for item in payload["production_chain"]["atlas_pages"]]
+    assert any("Atlas Index" in path for path in atlas_paths)
     assert payload["production_chain"]["chain_status"] == "complete"
     assert payload["production_chain"]["missing_stages"] == []

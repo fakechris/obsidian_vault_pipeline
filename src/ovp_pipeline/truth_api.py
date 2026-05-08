@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from collections import Counter
-import functools
 import hashlib
 import json
 import os
@@ -5218,11 +5217,26 @@ def _eligible_evolution_object_ids(
     The simpler scope is "every object in the pack-scoped truth
     store"; evolution candidate scoring already filters by other
     signals (claims/relations recency).
+
+    Goes straight to SQL (``SELECT DISTINCT object_id``) instead of
+    routing through ``list_objects``: the latter caps results at
+    ``MAX_PAGE_SIZE`` and would silently drop the tail of any pack
+    with more than one page of objects.
     """
-    return sorted({
-        item["object_id"]
-        for item in list_objects(vault_dir, limit=MAX_PAGE_SIZE, pack_name=pack_name)
-    })
+    db_path = _db_path(vault_dir)
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
+    if not pack_candidates:
+        return []
+    pack_placeholders = ",".join("?" for _ in pack_candidates)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT DISTINCT object_id FROM objects "
+            f"WHERE pack IN ({pack_placeholders})",
+            tuple(pack_candidates),
+        ).fetchall()
+    return sorted(str(row[0]) for row in rows if row[0])
 
 
 def _compute_evolution_candidates(

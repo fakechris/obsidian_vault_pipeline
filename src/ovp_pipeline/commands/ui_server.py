@@ -1582,9 +1582,15 @@ def create_server(
                 "Set-Cookie",
                 f"_csrf={csrf_token}; SameSite=Strict; HttpOnly; Path=/",
             )
+            # `https://unpkg.com` is allowed to source D3 v7 for the
+            # /ops/cluster?id=... force-directed graph.  This is the
+            # only third-party JS the maintainer UI loads; if the CDN
+            # is unreachable the page falls back to the tabular
+            # members/edges sections rendered server-side.
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' https://unpkg.com; "
                 "style-src 'self' 'unsafe-inline'",
             )
             self.end_headers()

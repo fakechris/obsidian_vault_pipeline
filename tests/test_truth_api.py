@@ -2521,7 +2521,7 @@ date: 2026-04-13
     assert [item["slug"] for item in detail["provenance"]["mocs"]] == ["alias-atlas"]
 
 
-@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR")
+@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR", strict=True)
 def test_truth_api_note_traceability_exposes_brain_first_lookup_for_existing_links(temp_vault):
     from ovp_pipeline.truth_api import get_note_traceability
 
@@ -2593,7 +2593,7 @@ date: 2026-04-13
     ]
 
 
-@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR")
+@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR", strict=True)
 def test_truth_api_returns_note_traceability_for_processed_source(temp_vault):
     from ovp_pipeline.truth_api import get_note_traceability
 
@@ -2707,7 +2707,7 @@ date: 2026-04-13
     assert "1 deep dives, 1 objects, 1 atlas pages" in traceability["chain_summary"]
 
 
-@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR")
+@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR", strict=True)
 def test_truth_api_returns_object_traceability(temp_vault):
     from ovp_pipeline.truth_api import get_object_traceability
 
@@ -3211,7 +3211,7 @@ def test_truth_api_auto_queue_signal_types_respect_explicit_opt_out(monkeypatch)
     assert truth_api._auto_queue_signal_types_for_pack("opt-out-pack") == set()
 
 
-@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR")
+@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR", strict=True)
 def test_truth_api_backfills_active_auto_queue_signals_without_duplicates(temp_vault):
     from ovp_pipeline.truth_api import list_action_queue, list_signals, sync_signal_ledger
 
@@ -3457,7 +3457,7 @@ def test_truth_api_run_next_action_queue_item_blocks_missing_action_target_befor
     assert action["retry_count"] == 0
 
 
-@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR")
+@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR", strict=True)
 def test_truth_api_run_next_action_queue_item_blocks_object_extraction_without_note_target(
     temp_vault, monkeypatch
 ):
@@ -3498,7 +3498,7 @@ def test_truth_api_run_next_action_queue_item_blocks_object_extraction_without_n
     assert action["blocked_reason"] == "backlink_expectation_unavailable:missing_note_path"
 
 
-@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR")
+@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR", strict=True)
 def test_truth_api_run_next_action_queue_item_blocks_object_extraction_without_source_backlink(
     temp_vault, monkeypatch
 ):
@@ -3676,7 +3676,7 @@ def test_truth_api_cannot_dismiss_running_action_queue_item(temp_vault):
         truth_api.dismiss_action_queue_item(temp_vault, action_id="action::running")
 
 
-@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR")
+@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR", strict=True)
 def test_truth_api_run_action_queue_processes_multiple_queued_items(temp_vault, monkeypatch):
     import ovp_pipeline.truth_api as truth_api
 
@@ -4635,7 +4635,7 @@ def test_research_tech_observation_surface_build_production_chains_delegates_to_
     assert calls == [(temp_vault, "default-knowledge", "chain", 5)]
 
 
-@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR")
+@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR", strict=True)
 def test_truth_api_compute_signal_entries_reuses_production_chains(temp_vault, monkeypatch):
     from ovp_pipeline.packs.research_tech import surfaces as research_surfaces
 

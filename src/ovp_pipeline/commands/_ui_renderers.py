@@ -3365,12 +3365,12 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
     if show_all:
         limit_note = f" Showing all {total_count} clusters."
     elif total_count > 0 and rendered_count > 0:
-        # Use 1-indexed range — "Showing 51–100 of 730" reads more
-        # naturally than "Showing 50–100 of 730".
+        # Use 1-indexed range - "Showing 51-100 of 730" reads more
+        # naturally than "Showing 50-100 of 730".
         first = offset_value + 1
         last = offset_value + rendered_count
         limit_note = (
-            f" Showing {first}–{last} of {total_count}"
+            f" Showing {first}-{last} of {total_count}"
             " by priority (member count + open contradictions"
             " + stale summaries)."
         )

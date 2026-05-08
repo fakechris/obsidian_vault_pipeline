@@ -164,6 +164,7 @@ _FORCE_GRAPH_CSS = """
 .cluster-graph-legend .chip { display: inline-flex; align-items: center;
   gap: 0.3rem; padding: 0.15rem 0.55rem; border-radius: 999px;
   border: 1px solid var(--border); background: white; cursor: pointer;
+  appearance: none; font: inherit;
   font-size: 0.85rem; user-select: none; }
 .cluster-graph-legend .chip.muted { opacity: 0.4; }
 .cluster-graph-legend .chip-swatch { width: 10px; height: 10px;
@@ -358,10 +359,14 @@ _FORCE_GRAPH_BOOTSTRAP = r"""
       .on('zoom', function (event) { rootG.attr('transform', event.transform); }));
 
     // Legend chips — click toggles the corresponding edge_kind.
+    // Use real <button> elements so keyboard users can tab to them
+    // and activate with Enter/Space (a11y review fix).
     (data.edge_kinds || []).forEach(function (kind) {
-      var chip = document.createElement('span');
+      var chip = document.createElement('button');
+      chip.type = 'button';
       chip.className = 'chip';
       chip.dataset.kind = kind;
+      chip.setAttribute('aria-pressed', 'true');
       chip.innerHTML = "<span class='chip-swatch' style='background:" +
         edgeColor(kind) + "'></span>" + escapeHtml(kind);
       chip.addEventListener('click', function () { toggleKind(kind, chip); });
@@ -379,9 +384,11 @@ _FORCE_GRAPH_BOOTSTRAP = r"""
       if (visibleKinds.has(kind)) {
         visibleKinds.delete(kind);
         chipEl.classList.add('muted');
+        chipEl.setAttribute('aria-pressed', 'false');
       } else {
         visibleKinds.add(kind);
         chipEl.classList.remove('muted');
+        chipEl.setAttribute('aria-pressed', 'true');
       }
       edgeSel.classed('faded', function (d) { return !visibleKinds.has(d.edge_kind); });
     }

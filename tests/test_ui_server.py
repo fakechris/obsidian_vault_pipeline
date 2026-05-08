@@ -1103,7 +1103,7 @@ def test_ui_server_object_page_preserves_pack_scope_in_shell_nav(temp_vault):
     assert "Next Actions" not in body
 
 
-@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR")
+@pytest.mark.xfail(reason="deep-dive sweep — test fixtures still reference legacy chain; updating in follow-up PR", strict=True)
 def test_ui_server_note_page_preserves_pack_scope_in_shell_nav(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
 
@@ -1973,7 +1973,7 @@ def test_ops_clusters_supports_offset_pagination(temp_vault):
 
     Pre-fix the page exposed only per-page chips + Show all; you couldn't
     reach cluster #50 of 730.  ``list_graph_clusters`` now accepts
-    ``offset``; the renderer surfaces ``Showing N–M of TOTAL`` and
+    ``offset``; the renderer surfaces ``Showing N-M of TOTAL`` and
     prev/next links.  Test seeds three clusters and walks page 1 → 2.
     """
     from ovp_pipeline.commands.ui_server import create_server
@@ -2022,7 +2022,7 @@ def test_ops_clusters_supports_offset_pagination(temp_vault):
         thread.join(timeout=5)
 
     # Page 1 with limit ≥ total: pager renders, Prev disabled, Next disabled.
-    assert "Showing 1–3 of 3" in body1
+    assert "Showing 1-3 of 3" in body1
     assert "<span class='muted'>← Prev</span>" in body1
     assert "<span class='muted'>Next →</span>" in body1
     # Page 2 (offset=2, default per-page=15 since 2 isn't a valid
@@ -2030,7 +2030,7 @@ def test_ops_clusters_supports_offset_pagination(temp_vault):
     # ``<a>`` link.  The Prev href drops ``limit=`` (default) and
     # ``offset=0`` (canonical first page), so it's the cleanest URL
     # back to page 1.
-    assert "Showing 3–3 of 3" in body2
+    assert "Showing 3-3 of 3" in body2
     assert "<a href='/ops/clusters?pack=default-knowledge'>← Prev</a>" in body2
 
 
