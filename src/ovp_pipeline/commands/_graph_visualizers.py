@@ -1,21 +1,23 @@
 """Interactive graph visualisations for the maintainer surface.
 
-Today this module hosts the cluster-detail force-directed graph used
-by ``/ops/cluster?id=...``.  The same JS module is reusable on
-``/map`` (currently static SVG with server-computed positions); we
-defer that retrofit to a separate PR so the cluster viz can ship
-without disturbing reader-side rendering.
+Hosts the D3-force layout used by both ``/ops/cluster?id=...``
+(``render_cluster_force_graph``) and the reader-side ``/map``
+(``render_graph_map_force_graph``).  The two call sites differ
+only in the empty-state copy and the kind of payload they hand
+in; the actual drawing / drag / zoom / legend behaviour is shared
+through the private ``_render_force_graph_section`` helper.
 
 This is the first external JS dependency in the codebase: D3 v7 is
 loaded from ``unpkg.com``.  The tradeoff: building a smooth force-
 layout + drag/zoom + edge-encoding solver inline would be 200+ lines
 of vanilla JS and still lack D3-quality interactions.  D3 is ~280 KB,
-cached after first hit, and only loads on the cluster-detail page.
+cached after first hit and shared across the two pages that use it.
 
 Data flow:
     payload (Python dict)
-      → render_cluster_force_graph(payload) builds SVG container
-        plus a <script type="application/json"> block carrying
+      → public renderer (cluster vs map) flattens to ``{nodes, edges}``
+      → ``_render_force_graph_section`` builds SVG container plus a
+        ``<script type="application/json">`` block carrying
         ``{nodes, edges, edge_kinds, object_kinds}``
       → bootstrap script (inline) parses the JSON and feeds D3-force
       → user sees nodes circles + edge lines, can drag / zoom /
@@ -75,24 +77,23 @@ def _edge_payload(edge: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def render_cluster_force_graph(payload: dict[str, Any]) -> str:
-    """Return an HTML section: SVG mount + JSON data + D3 bootstrap.
+def _render_force_graph_section(
+    nodes_data: list[dict[str, Any]],
+    edges_data: list[dict[str, Any]],
+    *,
+    title: str,
+    intro: str,
+    empty_message: str,
+    aria_label: str,
+) -> str:
+    """Inner helper — build the SVG mount + JSON data + bootstrap.
 
-    The caller (``_render_cluster_detail_page``) injects this after
-    the cluster header card.  The existing tabular ``Members`` and
-    ``Internal Edges`` sections stay below as the printable /
-    accessibility fallback.
+    Both ``render_cluster_force_graph`` (single cluster) and
+    ``render_graph_map_force_graph`` (multi-cluster reader map)
+    funnel through here.  DOM ids stay ``cluster-graph-*`` because
+    they are internal CSS/JS handles — renaming would churn the
+    bootstrap string for no user-visible benefit.
     """
-    cluster = payload.get("cluster") or {}
-    member_links = cluster.get("member_links") or []
-    edges = payload.get("edges") or []
-
-    nodes_data = [_node_payload(member) for member in member_links]
-    edges_data = [_edge_payload(edge) for edge in edges]
-
-    # Distinct edge kinds and object kinds drive legend chips +
-    # ordinal colour scales in the bootstrap.  Sort for stable
-    # display order.
     edge_kinds = sorted({e["edge_kind"] for e in edges_data})
     object_kinds = sorted({n["object_kind"] for n in nodes_data if n["object_kind"]})
 
@@ -108,25 +109,19 @@ def render_cluster_force_graph(payload: dict[str, Any]) -> str:
     }
 
     # JSON-in-HTML escape: ``</`` would close the surrounding script
-    # block early when the data ever contained that substring.  Same
-    # mitigation graph/visualize.py and the workbench renderer use.
+    # block early when the data ever contained that substring.
     payload_json = json.dumps(graph_payload).replace("</", "<\\/")
 
     if not nodes_data:
         return (
-            "<section class='card'><h2>Force-Directed View</h2>"
-            "<p class='muted'>No members in this cluster — the graph "
-            "view is hidden until the cluster has at least one "
-            "member.</p></section>"
+            f"<section class='card'><h2>{escape(title)}</h2>"
+            f"<p class='muted'>{escape(empty_message)}</p></section>"
         )
 
     return (
         "<section class='card cluster-graph'>"
-        "<h2>Force-Directed View</h2>"
-        "<p class='muted'>Drag a node to pin it (double-click to "
-        "release).  Wheel zooms; drag the background pans.  Click "
-        "an edge-kind chip to fade non-matching edges.  Click a "
-        "node to open its object detail.</p>"
+        f"<h2>{escape(title)}</h2>"
+        f"<p class='muted'>{escape(intro)}</p>"
         f"<style>{_FORCE_GRAPH_CSS}</style>"
         "<div class='cluster-graph-toolbar'>"
         "<span class='muted'>Filter edges:</span>"
@@ -137,7 +132,7 @@ def render_cluster_force_graph(payload: dict[str, Any]) -> str:
         "<svg id='cluster-graph-svg' "
         f"viewBox='0 0 800 {GRAPH_VIEWPORT_HEIGHT}' "
         "preserveAspectRatio='xMidYMid meet' role='img' "
-        "aria-label='Cluster force-directed graph'>"
+        f"aria-label='{escape(aria_label)}'>"
         "<defs><marker id='cluster-arrow' viewBox='0 -5 10 10' "
         "refX='15' refY='0' markerWidth='7' markerHeight='7' "
         "orient='auto'><path d='M0,-5L10,0L0,5' fill='#9f9088'/>"
@@ -151,6 +146,71 @@ def render_cluster_force_graph(payload: dict[str, Any]) -> str:
         f"<script src='{escape(_D3_CDN)}' defer></script>"
         f"<script>{_FORCE_GRAPH_BOOTSTRAP}</script>"
         "</section>"
+    )
+
+
+def render_cluster_force_graph(payload: dict[str, Any]) -> str:
+    """Return an HTML section: SVG mount + JSON data + D3 bootstrap.
+
+    The caller (``_render_cluster_detail_page``) injects this after
+    the cluster header card.  The existing tabular ``Members`` and
+    ``Internal Edges`` sections stay below as the printable /
+    accessibility fallback.
+    """
+    cluster = payload.get("cluster") or {}
+    member_links = cluster.get("member_links") or []
+    edges = payload.get("edges") or []
+    return _render_force_graph_section(
+        nodes_data=[_node_payload(member) for member in member_links],
+        edges_data=[_edge_payload(edge) for edge in edges],
+        title="Force-Directed View",
+        intro=(
+            "Drag a node to pin it (double-click to release).  "
+            "Wheel zooms; drag the background pans.  Click an "
+            "edge-kind chip to fade non-matching edges.  Click a "
+            "node to open its object detail."
+        ),
+        empty_message=(
+            "No members in this cluster — the graph view is hidden "
+            "until the cluster has at least one member."
+        ),
+        aria_label="Cluster force-directed graph",
+    )
+
+
+def render_graph_map_force_graph(payload: dict[str, Any]) -> str:
+    """``/map`` reader-side force-directed view.
+
+    Unlike ``render_cluster_force_graph``, the input is a flat
+    ``{nodes, edges}`` covering every cluster the map is showing —
+    cluster identity is not visually encoded (the force solver
+    naturally pulls densely-connected nodes together; cluster-
+    specific drill-in is on ``/ops/cluster?id=...``).
+
+    Pre-computed orbital ``x`` / ``y`` on the ``/map`` payload are
+    intentionally ignored — the D3 force solver re-lays the graph
+    on every page load.  This is the whole point of the retrofit:
+    static positions stop reflecting graph topology as the corpus
+    grows.
+    """
+    nodes = payload.get("nodes") or []
+    edges = payload.get("edges") or []
+    return _render_force_graph_section(
+        nodes_data=[_node_payload(node) for node in nodes],
+        edges_data=[_edge_payload(edge) for edge in edges],
+        title="Knowledge Graph",
+        intro=(
+            "Drag a node to pin it (double-click to release).  "
+            "Wheel zooms; drag the background pans.  Click an "
+            "edge-kind chip to fade non-matching edges.  Click a "
+            "node to open its object page."
+        ),
+        empty_message=(
+            "No nodes in scope — try widening the search query, "
+            "removing the per-cluster cap, or seeding the graph "
+            "via ``ovp-knowledge-index``."
+        ),
+        aria_label="Knowledge graph force-directed view",
     )
 
 
