@@ -666,6 +666,72 @@ def list_candidate_concepts(
     }
 
 
+def _emit_extract_provenance(
+    vault_dir: Path,
+    *,
+    pack_name: str,
+    target_slug: str,
+) -> None:
+    """BL-056: write one ``stage='extract'`` row backdated to the
+    candidate's extraction time.
+
+    Reads ``absorbed_at`` + ``extraction_prompt_version`` from the
+    promoted evergreen's frontmatter (the candidate file moved into
+    ``10-Knowledge/Evergreen/`` carries those fields verbatim from
+    ``auto_evergreen_extractor``).  When the frontmatter doesn't
+    carry ``absorbed_at`` (legacy candidates, hand-edited evergreens),
+    the row is skipped — emitting at ``now`` would lie about the
+    chain timestamp and break the audit guarantee.
+
+    Best-effort like ``_emit_promote_provenance``: provenance failure
+    must not abort the review action's primary commit.
+    """
+    from .provenance import upsert_provenance
+
+    layout = VaultLayout.from_vault(vault_dir)
+    if not layout.knowledge_db.exists():
+        return
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        row = conn.execute(
+            "SELECT canonical_path, source_url FROM objects WHERE pack=? AND object_id=?",
+            (pack_name, target_slug),
+        ).fetchone()
+        if not row:
+            return
+        canonical_path, source_url = row[0] or "", row[1] or ""
+        if not canonical_path:
+            return
+        # Try the absolute path first (common since rebuild stores
+        # absolute canonical_path); fall back to vault-relative.
+        abs_path = Path(canonical_path)
+        if not abs_path.is_absolute():
+            abs_path = resolve_vault_dir(vault_dir) / canonical_path
+        if not abs_path.is_file():
+            return
+        try:
+            text = abs_path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        frontmatter = _parse_frontmatter(text)
+        absorbed_at = str(frontmatter.get("absorbed_at") or "").strip()
+        if not absorbed_at:
+            return
+        prompt_version = str(frontmatter.get("extraction_prompt_version") or "").strip()
+        metadata: dict[str, Any] = {"via": "auto_evergreen_extractor"}
+        if prompt_version:
+            metadata["prompt_version"] = prompt_version
+        upsert_provenance(
+            conn,
+            pack=pack_name,
+            object_id=target_slug,
+            derived_via_stage="extract",
+            source_url=source_url,
+            metadata=metadata,
+            derived_at=absorbed_at,
+        )
+        conn.commit()
+
+
 def _emit_promote_provenance(
     vault_dir: Path,
     *,
@@ -767,26 +833,43 @@ def review_candidate_concept(
             knowledge_index_error = str(exc)
             rebuild_exception = exc
 
-    # BL-056: emit a ``stage='promote'`` (or ``'merge'``) provenance
-    # row for the resulting evergreen, in addition to the
-    # ``stage='ingest'`` row the rebuild already wrote.  Best-effort:
-    # provenance failure must not abort the review action's primary
-    # commit.
+    # BL-056: emit ``stage='extract'`` + ``stage='promote'`` (or
+    # ``'merge'``) provenance rows for the resulting evergreen, in
+    # addition to the ``stage='ingest'`` row the rebuild already
+    # wrote.  Two writes, two stage labels, one event:
+    #
+    #   - ``extract`` is backdated to the candidate's
+    #     ``absorbed_at`` so the chain timestamp reflects when
+    #     ``auto_evergreen_extractor`` produced the candidate, not
+    #     when the human reviewed it.
+    #   - ``promote`` carries the lifecycle action + reviewer note
+    #     at the current time.
+    #
+    # Best-effort: provenance failure must not abort the review
+    # action's primary commit.  Logged at WARN so the operator
+    # knows the audit row is missing.
     if knowledge_index_rebuilt and lifecycle_action in {"promote", "merge"}:
+        target_slug_value = mutation.target_slug or normalized_slug
+        truth_pack = _truth_pack_name(pack_name)
+        try:
+            _emit_extract_provenance(
+                resolved_vault,
+                pack_name=truth_pack,
+                target_slug=target_slug_value,
+            )
+        except Exception as exc:  # noqa: BLE001 — never block the review path
+            LOGGER.warning("provenance emit for extract failed: %s", exc)
         try:
             _emit_promote_provenance(
                 resolved_vault,
-                pack_name=_truth_pack_name(pack_name),
-                target_slug=mutation.target_slug or normalized_slug,
+                pack_name=truth_pack,
+                target_slug=target_slug_value,
                 lifecycle_action=lifecycle_action,
                 source_slug=normalized_slug,
                 note=note,
             )
         except Exception as exc:  # noqa: BLE001 — never block the review path
-            import logging
-            logging.getLogger(__name__).warning(
-                "provenance emit for promote/merge failed: %s", exc,
-            )
+            LOGGER.warning("provenance emit for promote/merge failed: %s", exc)
 
     status_by_action = {
         "promote": "promoted",

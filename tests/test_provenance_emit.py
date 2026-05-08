@@ -1,6 +1,6 @@
 """BL-056: stage emit hooks for the provenance spine.
 
-Verifies that the three Canonical-State-write moments emit provenance
+Verifies that every Canonical-State-write moment emits provenance
 rows beyond the rebuild's ``stage='ingest'`` baseline:
 
 1. ``synthesize_community_crystal`` — every community crystal
@@ -9,15 +9,18 @@ rows beyond the rebuild's ``stage='ingest'`` baseline:
    contradiction crystal path.
 3. ``promote`` — ``review_candidate_concept`` writes a row for the
    target evergreen after the post-promote rebuild succeeds.
-   (Tested via the helper ``_emit_promote_provenance`` directly so
-   we don't have to spin up the full promotion lifecycle.)
+4. ``extract`` — same review path, but backdated to the candidate's
+   ``absorbed_at`` so the chain timestamp reflects when
+   ``auto_evergreen_extractor`` produced it, not when the human
+   reviewed it.  Skipped when frontmatter doesn't carry
+   ``absorbed_at`` (legacy / hand-edited objects) — emitting at
+   ``now`` would lie about the chain.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -246,6 +249,156 @@ class TestCommitCrystalVersionEmit:
         assert row == (
             "contradiction::xyz", "synthesize_contradiction_crystal",
         )
+
+# ---------------------------------------------------------------------------
+# _emit_extract_provenance — backdated to the candidate's ``absorbed_at``
+# ---------------------------------------------------------------------------
+
+
+class TestEmitExtractProvenance:
+    """BL-056 ``stage='extract'`` row is the post-rebuild backdate of
+    when ``auto_evergreen_extractor`` produced the candidate that
+    became this evergreen.  Reads ``absorbed_at`` +
+    ``extraction_prompt_version`` from the promoted evergreen's
+    frontmatter; skips emission entirely when ``absorbed_at`` is
+    missing rather than fabricating a ``now`` timestamp that would
+    break the chain audit.
+    """
+
+    def _seed_layout(self, tmp_path):
+        """Build a minimal vault directory layout the helper expects."""
+        vault = tmp_path / "vault"
+        (vault / "60-Logs").mkdir(parents=True, exist_ok=True)
+        (vault / "10-Knowledge" / "Evergreen").mkdir(parents=True, exist_ok=True)
+        return vault
+
+    def _seed_db(self, vault, *, object_id, canonical_path, source_url=""):
+        """Seed enough of the truth-store schema for the helper to
+        find the evergreen and emit a row.  Mirrors only what the
+        helper actually reads — narrower than ``rebuild_knowledge_index``."""
+        db_path = vault / "60-Logs" / "knowledge.db"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(SCHEMA)
+        conn.execute(
+            """
+            INSERT INTO objects
+              (pack, object_id, object_kind, title, canonical_path,
+               source_slug, source_url)
+            VALUES (?, ?, 'concept', ?, ?, ?, ?)
+            """,
+            (
+                "research-tech", object_id, object_id.title(),
+                str(canonical_path), object_id, source_url,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def test_extract_row_backdated_to_absorbed_at(self, tmp_path):
+        from ovp_pipeline.truth_api import _emit_extract_provenance
+
+        vault = self._seed_layout(tmp_path)
+        evergreen = vault / "10-Knowledge" / "Evergreen" / "alpha.md"
+        evergreen.write_text(
+            "---\n"
+            "note_id: alpha\n"
+            'title: "Alpha"\n'
+            "type: evergreen\n"
+            'absorbed_at: "2026-04-28T12:14:03Z"\n'
+            "extraction_prompt_version: v2\n"
+            'source_url: "https://example.com/alpha"\n'
+            "---\n\n# Alpha\n",
+            encoding="utf-8",
+        )
+        db_path = self._seed_db(
+            vault, object_id="alpha",
+            canonical_path=evergreen,
+            source_url="https://example.com/alpha",
+        )
+
+        _emit_extract_provenance(
+            vault, pack_name="research-tech", target_slug="alpha",
+        )
+
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT derived_via_stage, derived_at, source_url, metadata_json "
+                "FROM provenance WHERE object_id = 'alpha'"
+            ).fetchone()
+        assert row is not None
+        assert row[0] == "extract"
+        # Backdated to the candidate's ``absorbed_at``, not ``now``.
+        assert row[1] == "2026-04-28T12:14:03Z"
+        assert row[2] == "https://example.com/alpha"
+        metadata = json.loads(row[3])
+        assert metadata["via"] == "auto_evergreen_extractor"
+        assert metadata["prompt_version"] == "v2"
+
+    def test_skips_emit_when_absorbed_at_missing(self, tmp_path):
+        """Legacy / hand-edited evergreens without ``absorbed_at``
+        are intentionally skipped.  Emitting at ``now`` would lie
+        about the chain timestamp."""
+        from ovp_pipeline.truth_api import _emit_extract_provenance
+
+        vault = self._seed_layout(tmp_path)
+        evergreen = vault / "10-Knowledge" / "Evergreen" / "legacy.md"
+        evergreen.write_text(
+            "---\n"
+            "note_id: legacy\n"
+            'title: "Legacy"\n'
+            "type: evergreen\n"
+            "---\n\n# Legacy\n",
+            encoding="utf-8",
+        )
+        db_path = self._seed_db(
+            vault, object_id="legacy", canonical_path=evergreen,
+        )
+
+        _emit_extract_provenance(
+            vault, pack_name="research-tech", target_slug="legacy",
+        )
+
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM provenance WHERE object_id = 'legacy'"
+            ).fetchone()[0]
+        assert count == 0
+
+    def test_idempotent_re_emit(self, tmp_path):
+        """Re-emit at the same ``absorbed_at`` is a no-op via the
+        provenance PK ``(pack, object_id, derived_via_stage,
+        derived_at)`` — running the candidate review twice on the
+        same evergreen leaves exactly one ``extract`` row."""
+        from ovp_pipeline.truth_api import _emit_extract_provenance
+
+        vault = self._seed_layout(tmp_path)
+        evergreen = vault / "10-Knowledge" / "Evergreen" / "alpha.md"
+        evergreen.write_text(
+            "---\n"
+            "note_id: alpha\n"
+            'title: "Alpha"\n'
+            "type: evergreen\n"
+            'absorbed_at: "2026-04-28T12:14:03Z"\n'
+            "extraction_prompt_version: v2\n"
+            "---\n\n# Alpha\n",
+            encoding="utf-8",
+        )
+        db_path = self._seed_db(
+            vault, object_id="alpha", canonical_path=evergreen,
+        )
+
+        for _ in range(3):
+            _emit_extract_provenance(
+                vault, pack_name="research-tech", target_slug="alpha",
+            )
+
+        with sqlite3.connect(db_path) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM provenance "
+                "WHERE object_id = 'alpha' AND derived_via_stage = 'extract'"
+            ).fetchone()[0]
+        assert count == 1
 
     def test_no_stage_emit_when_not_requested(self, conn, tmp_path):
         # Backward compat: callers that haven't migrated can still
