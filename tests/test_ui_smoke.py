@@ -150,7 +150,7 @@ date: 2026-04-13
         deep_dives_status, _deep_dives_body = _get(port, "/ops/deep-dives")
         evolution_status, evolution_body = _get(port, "/ops/evolution")
         production_status, production_body = _get(port, "/ops/production")
-        contradictions_status, contradictions_body = _get(port, "/ops/contradictions")
+        contradictions_status, contradictions_body = _get(port, "/ops/queue/contradictions")
     finally:
         server.shutdown()
         server.server_close()
@@ -1064,7 +1064,7 @@ Processed source note without downstream chain.
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/ops/signals")
+        status, body = _get(port, "/ops/queue/signals")
     finally:
         server.shutdown()
         server.server_close()
@@ -1115,7 +1115,7 @@ date: 2026-04-13
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/ops/signals")
+        status, body = _get(port, "/ops/queue/signals")
     finally:
         server.shutdown()
         server.server_close()
@@ -1191,7 +1191,7 @@ Processed source note without downstream chain.
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/ops/actions")
+        status, body = _get(port, "/ops/queue/actions")
     finally:
         server.shutdown()
         server.server_close()
@@ -1230,7 +1230,7 @@ Thin note.
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        contradictions_status, contradictions_body = _get(port, "/ops/contradictions")
+        contradictions_status, contradictions_body = _get(port, "/ops/queue/contradictions")
         summaries_status, summaries_body = _get(port, "/ops/summaries")
     finally:
         server.shutdown()
@@ -1275,7 +1275,7 @@ def test_ui_contradictions_page_filters_by_status(temp_vault):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/ops/contradictions?status=resolved")
+        status, body = _get(port, "/ops/queue/contradictions?status=resolved")
     finally:
         server.shutdown()
         server.server_close()
@@ -1311,7 +1311,7 @@ Alpha supports local-first execution.
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/ops/contradictions")
+        status, body = _get(port, "/ops/queue/contradictions")
     finally:
         server.shutdown()
         server.server_close()
@@ -1330,7 +1330,7 @@ def test_ui_contradictions_page_filters_by_query(temp_vault):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        status, body = _get(port, "/ops/contradictions?q=alp")
+        status, body = _get(port, "/ops/queue/contradictions?q=alp")
     finally:
         server.shutdown()
         server.server_close()
@@ -1364,7 +1364,7 @@ def test_ui_contradictions_page_can_resolve_item(temp_vault):
                 "rebuild_summaries": "1",
             },
         )
-        page_status, page_body = _get(port, "/ops/contradictions?status=resolved")
+        page_status, page_body = _get(port, "/ops/queue/contradictions?status=resolved")
         object_status, object_body = _get(port, "/object?id=alpha")
     finally:
         server.shutdown()
@@ -1372,7 +1372,7 @@ def test_ui_contradictions_page_can_resolve_item(temp_vault):
         thread.join(timeout=5)
 
     assert status == 303
-    assert headers["location"] == "/ops/contradictions?status=resolved"
+    assert headers["location"] == "/ops/queue/contradictions?status=resolved"
     assert page_status == 200
     assert "resolved_keep_positive" in page_body
     assert "Reviewed in browser" in page_body

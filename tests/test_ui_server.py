@@ -4,6 +4,8 @@ import json
 import sqlite3
 import subprocess
 import threading
+
+import pytest
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection, RemoteDisconnected
 from pathlib import Path
@@ -1276,7 +1278,7 @@ def test_ui_server_contradictions_page_renders_assembly_contract(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/ops/contradictions?pack=default-knowledge")
+        conn.request("GET", "/ops/queue/contradictions?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1364,7 +1366,7 @@ def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/ops/signals?pack=default-knowledge")
+        conn.request("GET", "/ops/queue/signals?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1373,11 +1375,13 @@ def test_ui_server_signals_page_preserves_pack_scope_in_shell_nav(temp_vault):
         thread.join(timeout=5)
 
     assert response.status == 200
-    # /ops/signals is in the Maintainer shell — its nav has Overview /
-    # Contradictions / Signals / Pulse / Audit and a back-link to Library.
+    # The maintainer shell nav after BL-053 Phase 2: Overview, by-time
+    # pivots, Pulse / Events, Evergreens, and a single ``Queue`` link
+    # consolidating the four pending-review browse pages.  The page
+    # itself still lives under /ops/queue/signals.
     assert 'href="/?pack=default-knowledge"' in body  # cross-link to Reader shell
     assert 'href="/ops?pack=default-knowledge">Overview</a>' in body
-    assert 'href="/ops/signals?pack=default-knowledge">Signals</a>' in body
+    assert 'href="/ops/queue?pack=default-knowledge">Queue</a>' in body
     assert "inherited from research-tech-signals" in body
     assert body.index("Next Actions") < body.index("Signal Types")
 
@@ -1415,7 +1419,7 @@ def test_ui_server_signals_page_renders_missing_surface_contract_error(temp_vaul
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/ops/signals?pack=media-editorial")
+        conn.request("GET", "/ops/queue/signals?pack=media-editorial")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -1701,6 +1705,73 @@ def test_ui_server_deep_dives_endpoint_redirects_with_query_preserved(temp_vault
 
     assert response.status == 301
     assert location == "/ops/today?pack=default-knowledge"
+
+
+_OPS_QUEUE_REDIRECT_PAIRS = (
+    ("/ops/candidates", "/ops/queue/concepts"),
+    ("/ops/contradictions", "/ops/queue/contradictions"),
+    ("/ops/signals", "/ops/queue/signals"),
+    ("/ops/actions", "/ops/queue/actions"),
+)
+
+
+@pytest.mark.parametrize(("legacy", "canonical"), _OPS_QUEUE_REDIRECT_PAIRS)
+def test_ops_queue_legacy_paths_301_to_new_routes(temp_vault, legacy, canonical):
+    """BL-053 Phase 2: the four bare ``/ops/<queue>`` paths 301 to
+    ``/ops/queue/<sub>`` so existing bookmarks survive the
+    consolidation without losing their query string."""
+    from ovp_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", f"{legacy}?pack=default-knowledge")
+        response = conn.getresponse()
+        location = response.getheader("Location") or ""
+        response.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 301
+    assert location == f"{canonical}?pack=default-knowledge"
+
+
+def test_ops_queue_overview_lists_pending_queues(temp_vault):
+    """``/ops/queue`` is the maintainer landing page that consolidates
+    the four pending-review queues; it should render headings for the
+    ``Pending review`` and ``Healthy`` sections so the operator can
+    tell whether anything still needs attention."""
+    from ovp_pipeline.commands.ui_server import create_server
+
+    _seed_truth_store(temp_vault)
+    server = create_server(temp_vault, host="127.0.0.1", port=0)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/ops/queue?pack=default-knowledge")
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert "Maintainer Queue" in body
+    assert "Pending review" in body
+    assert "Healthy" in body
+    # Healthy summary always shows the evergreen total even with an
+    # empty seed; a populated vault would also surface concept-
+    # candidate counts in the Pending block.
+    assert "evergreen" in body
 
 
 def test_ui_server_evolution_endpoint_returns_payload(temp_vault):
@@ -2568,7 +2639,7 @@ def test_ui_server_contradictions_page_renders_detection_semantics(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/ops/contradictions")
+        conn.request("GET", "/ops/queue/contradictions")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -2651,7 +2722,7 @@ def test_ui_server_actions_page_renders_execution_contract_metadata(temp_vault, 
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/ops/actions")
+        conn.request("GET", "/ops/queue/actions")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -2772,7 +2843,7 @@ def test_ui_server_signals_page_renders_governance_resolver_metadata(temp_vault,
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/ops/signals")
+        conn.request("GET", "/ops/queue/signals")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -3130,7 +3201,7 @@ def test_ui_server_actions_page_preserves_pack_scope_in_shell_nav(temp_vault, mo
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/ops/actions?pack=default-knowledge")
+        conn.request("GET", "/ops/queue/actions?pack=default-knowledge")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -4126,7 +4197,7 @@ def test_ui_server_candidates_page_renders_review_controls(temp_vault):
     thread.start()
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/ops/candidates")
+        conn.request("GET", "/ops/queue/concepts")
         response = conn.getresponse()
         body = response.read().decode("utf-8")
     finally:
@@ -4158,8 +4229,8 @@ def test_ui_server_candidates_page_renders_pagination_links():
         }
     )
 
-    assert 'href="/ops/candidates?q=alpha&amp;limit=25&amp;offset=0&amp;pack=default-knowledge"' in html
-    assert 'href="/ops/candidates?q=alpha&amp;limit=25&amp;offset=50&amp;pack=default-knowledge"' in html
+    assert 'href="/ops/queue/concepts?q=alpha&amp;limit=25&amp;offset=0&amp;pack=default-knowledge"' in html
+    assert 'href="/ops/queue/concepts?q=alpha&amp;limit=25&amp;offset=50&amp;pack=default-knowledge"' in html
 
 
 def test_ui_server_candidate_item_keeps_zero_score_and_requires_low_score_merge_target():

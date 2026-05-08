@@ -38,6 +38,7 @@ from ..ui.view_models import (
     build_object_page_payload,
     build_objects_index_payload,
     build_production_browser_payload,
+    build_queue_overview_payload,
     build_search_payload,
     build_signal_browser_payload,
     build_stale_summary_browser_payload,
@@ -97,6 +98,7 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_production_browser_page,
     _render_pulse_fragment,
     _render_pulse_page,
+    _render_queue_overview_page,
     _render_timeline_page,
     _render_today_digest_page,
     _render_runs_index_page,
@@ -467,7 +469,7 @@ def create_server(
                         )
                     )
                     return
-                if path == "/ops/signals":
+                if path == "/ops/queue/signals":
                     q = query.get("q", [""])[0]
                     signal_type = query.get("type", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
@@ -498,14 +500,14 @@ def create_server(
                         )
                     )
                     return
-                if path in {"/ops/candidates", "/ops/candidates/fragment"}:
+                if path in {"/ops/queue/concepts", "/ops/candidates/fragment"}:
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     limit = int(query.get("limit", [str(DEFAULT_CANDIDATE_BROWSER_LIMIT)])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     candidate_warning = query.get("candidate_warning", [""])[0]
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/ops/candidates", api=False
+                        pack_name=pack_name, route_path="/ops/queue/concepts", api=False
                     ):
                         return
                     payload = build_candidate_browser_payload(
@@ -706,6 +708,35 @@ def create_server(
                         target = f"{target}?{parsed.query}"
                     self._permanent_redirect(301, target)
                     return
+                # BL-053 Phase 2: ``/ops/queue/*`` is the new home
+                # for the four pending-review queues.  The bare
+                # legacy paths 301 to the queue routes so existing
+                # bookmarks survive.  Fragment paths
+                # (``/ops/candidates/fragment``,
+                # ``/ops/actions/fragment``) and form-POST sub-routes
+                # (``/ops/contradictions/resolve``,
+                # ``/ops/actions/enqueue`` etc.) are NOT redirected —
+                # they remain reachable at their old paths so the
+                # workbench iframes and form submitters keep working.
+                _OPS_QUEUE_REDIRECTS = {
+                    "/ops/candidates": "/ops/queue/concepts",
+                    "/ops/contradictions": "/ops/queue/contradictions",
+                    "/ops/signals": "/ops/queue/signals",
+                    "/ops/actions": "/ops/queue/actions",
+                }
+                if path in _OPS_QUEUE_REDIRECTS:
+                    target = _OPS_QUEUE_REDIRECTS[path]
+                    if parsed.query:
+                        target = f"{target}?{parsed.query}"
+                    self._permanent_redirect(301, target)
+                    return
+                if path == "/ops/queue":
+                    pack_name = query.get("pack", [""])[0] or None
+                    payload = build_queue_overview_payload(
+                        resolved_vault, pack_name=pack_name
+                    )
+                    self._write_html(_render_queue_overview_page(payload))
+                    return
                 if path == "/api/production":
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
@@ -839,7 +870,7 @@ def create_server(
                         )
                     )
                     return
-                if path in {"/ops/actions", "/ops/actions/fragment"}:
+                if path in {"/ops/queue/actions", "/ops/actions/fragment"}:
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
@@ -919,12 +950,14 @@ def create_server(
                         )
                     )
                     return
-                if path == "/ops/contradictions":
+                if path == "/ops/queue/contradictions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/ops/contradictions", api=False
+                        pack_name=pack_name,
+                        route_path="/ops/queue/contradictions",
+                        api=False,
                     ):
                         return
                     payload = build_contradiction_browser_payload(
@@ -1150,7 +1183,7 @@ def create_server(
                         return
                     self._resolve_contradiction_action(form)
                     self._redirect(
-                        self._form_first(form, "next").strip() or "/ops/contradictions?status=resolved"
+                        self._form_first(form, "next").strip() or "/ops/queue/contradictions?status=resolved"
                     )
                     return
                 if path == "/api/summaries/rebuild":

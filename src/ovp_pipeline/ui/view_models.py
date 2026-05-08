@@ -1784,6 +1784,149 @@ def build_action_queue_payload(
     }
 
 
+def build_queue_overview_payload(
+    vault_dir: Path | str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    """Counts + oldest-row hints across the four maintainer queues.
+
+    The four queues — concept candidates, contradictions, signals
+    waiting for action, action-worker tasks — historically lived on
+    four different ``/ops/*`` pages with no top-level summary, so
+    the operator could not tell whether the day's triage was done
+    without visiting each page.  This payload powers ``/ops/queue``,
+    a single landing page that answers "is there anything to do?"
+    in one screen.
+
+    The implementation is intentionally cheap: it reuses each
+    queue's existing ``list_*`` function with a small ``limit`` to
+    sample the oldest pending item, then counts items in
+    interpretable buckets.  Healthy state (productive signals,
+    completed actions, evergreens already in the truth store) is
+    surfaced separately so the page makes the "no action needed"
+    case visible too.
+    """
+    requested_pack = pack_name or ""
+
+    candidate_payload = list_candidate_concepts(vault_dir, limit=200)
+    candidates = candidate_payload.get("candidates") or []
+    candidates_pending = len(candidates)
+    candidates_oldest = candidates[0] if candidates else None
+
+    contradictions = list_contradictions(vault_dir, pack_name=pack_name, limit=500)
+    open_contradictions = [c for c in contradictions if c.get("status") == "open"]
+    contradictions_pending = len(open_contradictions)
+    contradictions_oldest = open_contradictions[0] if open_contradictions else None
+
+    signals = list_signals(vault_dir, pack_name=pack_name, limit=500)
+    signals_waiting = [s for s in signals if s.get("capture_status") == "waiting"]
+    signals_productive = [s for s in signals if s.get("capture_status") == "productive"]
+    signals_failed = [
+        s for s in signals if s.get("capture_status") in ("failed", "stalled")
+    ]
+    signals_pending = len(signals_waiting)
+    signals_oldest = signals_waiting[0] if signals_waiting else None
+
+    actions = list_action_queue(vault_dir, pack_name=pack_name, limit=500)
+    actions_failed = [a for a in actions if a.get("status") in ("failed", "blocked")]
+    actions_succeeded = [a for a in actions if a.get("status") == "succeeded"]
+    actions_pending = len(actions_failed)
+    actions_oldest = actions_failed[0] if actions_failed else None
+
+    # Evergreen/object total — informational, surfaces "you have a
+    # vault" so the healthy-state line carries weight.
+    try:
+        evergreen_total = count_objects(vault_dir, pack_name=pack_name)
+    except Exception:
+        evergreen_total = 0
+
+    queues = [
+        {
+            "id": "concepts",
+            "label": "concept candidate" + ("s" if candidates_pending != 1 else ""),
+            "count": candidates_pending,
+            "browse_path": _scoped_path(
+                "/ops/queue/concepts", pack_name=requested_pack
+            ),
+            "oldest_subject": (
+                str(candidates_oldest.get("title") or candidates_oldest.get("slug") or "")
+                if candidates_oldest
+                else ""
+            ),
+            "oldest_at": (
+                str(candidates_oldest.get("last_seen_at") or "")
+                if candidates_oldest
+                else ""
+            ),
+        },
+        {
+            "id": "contradictions",
+            "label": "contradiction" + ("s" if contradictions_pending != 1 else "") + " open",
+            "count": contradictions_pending,
+            "browse_path": _scoped_path(
+                "/ops/queue/contradictions", pack_name=requested_pack
+            ),
+            "oldest_subject": (
+                str(contradictions_oldest.get("subject_key") or "")
+                if contradictions_oldest
+                else ""
+            ),
+            "oldest_at": "",
+        },
+        {
+            "id": "signals",
+            "label": "signal" + ("s" if signals_pending != 1 else "") + " waiting",
+            "count": signals_pending,
+            "browse_path": _scoped_path(
+                "/ops/queue/signals?status=waiting", pack_name=requested_pack
+            ),
+            "oldest_subject": (
+                str(signals_oldest.get("title") or signals_oldest.get("signal_type") or "")
+                if signals_oldest
+                else ""
+            ),
+            "oldest_at": (
+                str(signals_oldest.get("detected_at") or "")
+                if signals_oldest
+                else ""
+            ),
+        },
+        {
+            "id": "actions",
+            "label": "action" + ("s" if actions_pending != 1 else "") + " failed/blocked",
+            "count": actions_pending,
+            "browse_path": _scoped_path(
+                "/ops/queue/actions?status=failed", pack_name=requested_pack
+            ),
+            "oldest_subject": (
+                str(actions_oldest.get("title") or actions_oldest.get("action_id") or "")
+                if actions_oldest
+                else ""
+            ),
+            "oldest_at": (
+                str(actions_oldest.get("created_at") or "")
+                if actions_oldest
+                else ""
+            ),
+        },
+    ]
+
+    healthy = {
+        "productive_signals": len(signals_productive),
+        "succeeded_actions": len(actions_succeeded),
+        "evergreen_total": evergreen_total,
+    }
+
+    return {
+        "screen": "ops/queue",
+        "requested_pack": requested_pack,
+        "queues": queues,
+        "pending_total": sum(q["count"] for q in queues),
+        "healthy": healthy,
+    }
+
+
 def build_candidate_browser_payload(
     vault_dir: Path | str,
     *,

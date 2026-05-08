@@ -163,10 +163,11 @@ def _ops_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
         ("Events", "/ops/events"),
         # Browseables / queues
         ("Evergreens", "/ops/objects"),
-        ("Concept Candidates", "/ops/candidates"),
-        ("Actions", "/ops/actions"),
-        ("Contradictions", "/ops/contradictions"),
-        ("Signals", "/ops/signals"),
+        # BL-053 Phase 2: ``/ops/queue`` is the single landing page
+        # for the four pending-review queues; the legacy four pages
+        # live under ``/ops/queue/<sub>`` and the bare ``/ops/<sub>``
+        # paths 301 to the queue routes for backwards compatibility.
+        ("Queue", "/ops/queue"),
     ]
     if _shell_supports_research_nav(requested_pack):
         items.extend([
@@ -3688,7 +3689,7 @@ def _render_evolution_browser_page(payload: dict) -> str:
 
 def _render_candidate_items(payload: dict) -> str:
     requested_pack = str(payload.get("requested_pack") or "")
-    next_path = _shell_href("/ops/candidates", requested_pack)
+    next_path = _shell_href("/ops/queue/concepts", requested_pack)
     rendered: list[str] = []
     for item in payload.get("items", []):
         if not isinstance(item, dict):
@@ -3788,7 +3789,7 @@ def _render_candidates_pagination(payload: dict) -> str:
         parts.append(f"offset={max(0, next_offset)}")
         if requested_pack:
             parts.append(f"pack={quote(requested_pack, safe='')}")
-        return "/ops/candidates?" + "&".join(parts)
+        return "/ops/queue/concepts?" + "&".join(parts)
 
     links = []
     if offset > 0:
@@ -3805,6 +3806,82 @@ def _render_candidates_pagination(payload: dict) -> str:
         + "".join(links)
         + "</div>"
     )
+
+
+def _render_queue_overview_page(payload: dict) -> str:
+    """Maintainer queue landing page.
+
+    Surfaces the four pending-review queues (concept candidates,
+    contradictions, signals, action queue) in one place so the
+    operator can tell whether triage is done without visiting four
+    pages.  Healthy state (productive signals, succeeded actions,
+    evergreen total) is surfaced separately so "no action needed"
+    is visible too.
+    """
+    requested_pack = str(payload.get("requested_pack") or "")
+    queues = payload.get("queues") or []
+    healthy = payload.get("healthy") or {}
+    pending_total = int(payload.get("pending_total") or 0)
+
+    intro = (
+        "<aside class='page-help'>"
+        "<p><strong>What this is.</strong> The four queues that need a"
+        " human decision before the pipeline can move on.  Each row is"
+        " a separate queue with its own review surface; click through"
+        " for the items.</p>"
+        "<p><strong>Concept candidates</strong> are absorb-pipeline"
+        " proposals waiting for promote / merge / reject."
+        " <strong>Contradictions</strong> are open semantic tensions"
+        " awaiting resolution.  <strong>Signals waiting</strong> are"
+        " detected-but-not-acted-on observations.  <strong>Actions</strong>"
+        " are queued worker tasks; failed/blocked rows surface here.</p>"
+        "</aside>"
+    )
+
+    if pending_total == 0:
+        pending_html = (
+            "<section class='card'><h2>Pending review</h2>"
+            "<p class='muted'>Nothing waiting in any queue.</p></section>"
+        )
+    else:
+        rows: list[str] = []
+        for queue in queues:
+            count = int(queue.get("count") or 0)
+            if count == 0:
+                # Skip empty queues from the pending list — the
+                # healthy-state card carries the "0 waiting" signal.
+                continue
+            label = str(queue.get("label") or queue.get("id") or "")
+            href = str(queue.get("browse_path") or "")
+            oldest_subject = str(queue.get("oldest_subject") or "")
+            oldest_at = str(queue.get("oldest_at") or "")[:19]
+            oldest_html = ""
+            if oldest_subject:
+                oldest_html = f" <span class='muted'>(oldest: {escape(oldest_subject)}"
+                if oldest_at:
+                    oldest_html += f" @ {escape(oldest_at)}"
+                oldest_html += ")</span>"
+            rows.append(
+                f"<li><strong>{count}</strong> {escape(label)}"
+                f"{oldest_html}"
+                f" — <a href='{escape(href)}'>review →</a></li>"
+            )
+        pending_html = (
+            "<section class='card'><h2>Pending review</h2>"
+            f"<ul class='list-tight'>{''.join(rows)}</ul></section>"
+        )
+
+    healthy_html = (
+        "<section class='card'><h2>Healthy (no action needed)</h2>"
+        "<ul class='list-tight'>"
+        f"<li>{int(healthy.get('productive_signals') or 0)} productive signals</li>"
+        f"<li>{int(healthy.get('succeeded_actions') or 0)} succeeded actions</li>"
+        f"<li>{int(healthy.get('evergreen_total') or 0)} evergreen objects in the truth store</li>"
+        "</ul></section>"
+    )
+
+    body = "<h1>Maintainer Queue</h1>" + intro + pending_html + healthy_html
+    return _layout("Queue", body, requested_pack=requested_pack)
 
 
 def _render_candidates_page(payload: dict) -> str:
