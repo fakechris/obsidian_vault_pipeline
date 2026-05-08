@@ -163,16 +163,21 @@ def _ops_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
         ("Events", "/ops/events"),
         # Browseables / queues
         ("Evergreens", "/ops/objects"),
-        ("Concept Candidates", "/ops/candidates"),
-        ("Actions", "/ops/actions"),
-        ("Contradictions", "/ops/contradictions"),
-        ("Signals", "/ops/signals"),
+        # BL-053 Phase 2: ``/ops/queue`` is the single landing page
+        # for the four pending-review queues; the legacy four pages
+        # live under ``/ops/queue/<sub>`` and the bare ``/ops/<sub>``
+        # paths 301 to the queue routes for backwards compatibility.
+        ("Queue", "/ops/queue"),
     ]
     if _shell_supports_research_nav(requested_pack):
         items.extend([
             ("Clusters", "/ops/clusters"),
-            ("Deep-dives", "/ops/deep-dives"),
         ])
+        # ``Deep-dives`` was removed post-BL-029.  The legacy
+        # 13-section LLM rewrite no longer produces deep-dive
+        # markdown, so the index page is permanently empty.
+        # ``/ops/deep-dives`` 301s to ``/ops/today`` for any
+        # existing bookmarks.
     return items
 
 
@@ -192,6 +197,50 @@ def _build_runtime_home_payload_from_query(
 ) -> dict:
     pack_name = query.get("pack", [""])[0] or None
     return build_runtime_home_payload(vault_dir, pack_name=pack_name)
+
+
+def _format_event_date_filter_summary(from_date: str, to_date: str) -> str:
+    """Render the ``Date filter: ...`` segment for ``/ops/events``.
+
+    The pre-fix string had a bug when only ``to_date`` was set: it
+    rendered ``Date filter:  → YYYY-MM-DD.`` (empty ``from_date``
+    on the left of the arrow).  Branch on which sides are present
+    and format each case explicitly.
+    """
+    if from_date and to_date and from_date != to_date:
+        return f" Date filter: {escape(from_date)} → {escape(to_date)}."
+    if from_date:
+        return f" Date filter: {escape(from_date)}."
+    if to_date:
+        return f" Date filter: ≤ {escape(to_date)}."
+    return ""
+
+
+def _render_page_help(
+    title: str,
+    *,
+    what: str,
+    can: str,
+    effect: str,
+) -> str:
+    """Three-line maintainer help banner used on every /ops/* surface.
+
+    Each ops page answers three questions: what is this surface, what
+    can the operator do here, and what changes when they click a
+    button.  Until BL-053 Phase 2 the operator had to learn that by
+    trial and error; this helper renders a collapsed ``<details>``
+    block so the answers are one click away on every page without
+    eating screen space when not needed.
+    """
+    return (
+        "<aside class='page-help'><details>"
+        f"<summary>{escape(title)} — what is this?</summary>"
+        "<dl>"
+        f"<dt>What this is</dt><dd>{what}</dd>"
+        f"<dt>What you can do</dt><dd>{can}</dd>"
+        f"<dt>What happens when you click</dt><dd>{effect}</dd>"
+        "</dl></details></aside>"
+    )
 
 
 def _layout(
@@ -252,6 +301,11 @@ def _layout(
       button {{ padding: 0.55rem 0.8rem; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }}
       button:hover {{ opacity: 0.92; }}
       .muted {{ color: var(--muted); }}
+      .page-help {{ background: #fbf7f0; border: 1px solid var(--border); border-radius: 12px; padding: .25rem .9rem; margin: .25rem 0 1rem; font-size: .92rem; }}
+      .page-help summary {{ cursor: pointer; padding: .55rem 0; color: var(--accent); font-weight: 600; }}
+      .page-help dl {{ margin: .25rem 0 .5rem; display: grid; grid-template-columns: max-content 1fr; gap: .25rem .9rem; }}
+      .page-help dt {{ color: var(--muted); }}
+      .page-help dd {{ margin: 0; }}
       .hero {{ margin-bottom: 1.5rem; }}
       .shell {{ background: var(--surface); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 12px 36px rgba(31, 26, 23, 0.06); }}
       .shell-head {{ padding: 1.1rem 1.25rem 0; }}
@@ -2009,6 +2063,38 @@ def _render_dashboard(payload: dict) -> str:
     right_sections.append(
         _render_review_history(payload["recent_review_actions"], title="Recent Review Actions")
     )
+    foyer = payload.get("foyer") or {}
+    foyer_today_path = str(foyer.get("today_path") or "/ops/today")
+    foyer_queue_path = str(foyer.get("queue_path") or "/ops/queue")
+    foyer_runs_path = str(foyer.get("runs_path") or "/ops/runs")
+    foyer_today_summary = str(foyer.get("today_summary") or "—")
+    foyer_queue_summary = str(foyer.get("queue_summary") or "—")
+    last_run = foyer.get("last_run") or {}
+    if last_run:
+        last_run_summary = (
+            f"{escape(str(last_run.get('workflow_type', '')))}"
+            f" — <strong>{escape(str(last_run.get('status', '')))}</strong>"
+            f" <span class='muted'>{escape(str(last_run.get('started_at', ''))[:19])}</span>"
+        )
+        last_run_link = (
+            f"<a href='{escape(str(last_run.get('detail_href') or foyer_runs_path))}'>open →</a>"
+        )
+    else:
+        last_run_summary = "<span class='muted'>no runs yet</span>"
+        last_run_link = f"<a href='{escape(foyer_runs_path)}'>open →</a>"
+    foyer_block = (
+        "<section class='card'>"
+        "<h2>Maintainer Foyer</h2>"
+        "<dl class='meta-list'>"
+        f"<div><dt>Today</dt><dd>{escape(foyer_today_summary)}"
+        f" <a href='{escape(foyer_today_path)}'>see →</a></dd></div>"
+        f"<div><dt>Queue</dt><dd>{escape(foyer_queue_summary)}"
+        f" <a href='{escape(foyer_queue_path)}'>see →</a></dd></div>"
+        f"<div><dt>Last run</dt><dd>{last_run_summary} {last_run_link}</dd></div>"
+        "</dl>"
+        "</section>"
+    )
+
     dashboard_body = "".join(
         [
             "<section class='hero'>",
@@ -2016,6 +2102,7 @@ def _render_dashboard(payload: dict) -> str:
             "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
             "</section>",
+            foyer_block,
             runtime_card,
             runtime_state_card,
             run_history_card,
@@ -2095,6 +2182,9 @@ def _render_library_home(payload: dict) -> str:
         ]
     )
     return _layout("Knowledge Library", body, requested_pack=requested_pack)
+
+
+_OBJECTS_INDEX_PAGE_SIZES = (10, 50, 100, 200)
 
 
 _TYPE_FACET_STYLE = """
@@ -2216,12 +2306,103 @@ def _render_objects_index(payload: dict) -> str:
     query = payload.get("query", "")
     active_kind = str(payload.get("object_kind") or "")
     requested_pack = payload.get("requested_pack", "")
+    sort = payload.get("sort", "alpha") or "alpha"
+    limit = int(payload.get("limit", 100) or 100)
+    offset = int(payload.get("offset", 0) or 0)
+    total_count = int(payload.get("total_count", 0) or 0)
+    object_kind = active_kind  # alias kept for the shared href builder
     kind_stats = payload.get("kind_stats") or []
-    items = "".join(
-        f'<li><a href="{escape(_object_href(item["object_id"], item.get("object_path", "")))}">{escape(item["title"])}</a> '
-        f'<span class="muted">({escape(item["object_id"])})</span></li>'
-        for item in payload["items"]
+
+    def _href(*, sort_: str | None = None, offset_: int | None = None,
+              limit_: int | None = None,
+              object_kind_: str | None = None) -> str:
+        params: list[tuple[str, str]] = []
+        if requested_pack:
+            params.append(("pack", requested_pack))
+        if query:
+            params.append(("q", query))
+        eff_kind = object_kind_ if object_kind_ is not None else object_kind
+        if eff_kind:
+            params.append(("object_kind", eff_kind))
+        eff_sort = sort_ if sort_ is not None else sort
+        if eff_sort and eff_sort != "alpha":
+            params.append(("sort", eff_sort))
+        eff_limit = limit_ if limit_ is not None else limit
+        if eff_limit != 100:
+            params.append(("limit", str(eff_limit)))
+        eff_offset = offset_ if offset_ is not None else offset
+        if eff_offset:
+            params.append(("offset", str(eff_offset)))
+        if not params:
+            return "/ops/objects"
+        return "/ops/objects?" + "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params
+        )
+
+    def _item_html(item: dict) -> str:
+        suffix = ""
+        if sort == "most_linked":
+            count = int(item.get("backlink_count", 0) or 0)
+            suffix = f" <span class='muted'>· {count} backlinks</span>"
+        return (
+            "<li>"
+            f'<a href="{escape(_object_href(item["object_id"], item.get("object_path", ""), requested_pack=requested_pack))}">'
+            f'{escape(item["title"])}</a> '
+            f'<span class="muted">({escape(item["object_id"])})</span>'
+            f"{suffix}</li>"
+        )
+
+    items = "".join(_item_html(item) for item in payload["items"]) or (
+        "<li class='muted'>No objects match the current filter.</li>"
     )
+
+    sort_options = (
+        ("alpha", "A → Z"),
+        ("most_linked", "Most-linked"),
+    )
+    sort_links = " · ".join(
+        (
+            f"<strong>{escape(label)}</strong>"
+            if value == sort
+            else f"<a href='{escape(_href(sort_=value, offset_=0))}'>{escape(label)}</a>"
+        )
+        for value, label in sort_options
+    )
+
+    page_size_links = " ".join(
+        (
+            f"<strong>{value}</strong>"
+            if value == limit
+            else f"<a href='{escape(_href(limit_=value, offset_=0))}'>{value}</a>"
+        )
+        for value in _OBJECTS_INDEX_PAGE_SIZES
+    )
+
+    showing_start = offset + 1 if total_count else 0
+    showing_end = min(offset + limit, total_count)
+    showing = (
+        f"Showing {showing_start}–{showing_end} of {total_count}"
+        if total_count
+        else "No matches"
+    )
+
+    prev_offset = max(0, offset - limit)
+    has_prev = offset > 0
+    has_next = offset + limit < total_count
+    pager_parts: list[str] = []
+    if has_prev:
+        pager_parts.append(
+            f"<a href='{escape(_href(offset_=prev_offset))}'>← Prev</a>"
+        )
+    else:
+        pager_parts.append("<span class='muted'>← Prev</span>")
+    if has_next:
+        pager_parts.append(
+            f"<a href='{escape(_href(offset_=offset + limit))}'>Next →</a>"
+        )
+    else:
+        pager_parts.append("<span class='muted'>Next →</span>")
+    pager = " · ".join(pager_parts)
 
     facet_html = _render_type_facet(
         kind_stats,
@@ -2247,33 +2428,57 @@ def _render_objects_index(payload: dict) -> str:
             f" · <a href='{escape(clear_href)}'>clear filter</a></p>"
         )
 
-    return _layout(
-        "Objects",
-        (
-            "<h1>Objects</h1>"
-            + "<form method='get' action='/ops/objects'>"
-            + (
-                f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
-                if requested_pack
-                else ""
-            )
-            + (
-                f"<input type='hidden' name='kind' value='{escape(active_kind)}' />"
-                if active_kind
-                else ""
-            )
-            + f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
-            + "<button type='submit'>Search</button>"
-            + "</form>"
-            + facet_html
-            + filter_banner
-            + f"<p class='muted'>{payload['count']} objects in current page."
-            + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
-            + "</p>"
-            + f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
-        ),
-        requested_pack=requested_pack,
+    body = (
+        "<h1>Objects</h1>"
+        + _render_page_help(
+            "Objects",
+            what=(
+                "Every canonical Evergreen object in the pack-scoped truth"
+                " store.  These are the rows downstream consumers"
+                " (briefings, deep dives, atlas, signals) read from."
+            ),
+            can=(
+                "Filter by text or object kind (chip rail below), sort by"
+                " alpha or most-linked, paginate 10/50/100/200 at a time."
+                "  Click any row to open the full object page."
+            ),
+            effect=(
+                "Read-only browser.  Mutations live on the per-object"
+                " page (and on /ops/queue/contradictions for"
+                " contradiction resolution)."
+            ),
+        )
+        + "<form method='get' action='/ops/objects'>"
+        + (
+            f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
+            if requested_pack
+            else ""
+        )
+        + (
+            f"<input type='hidden' name='sort' value='{escape(sort)}' />"
+            if sort and sort != "alpha"
+            else ""
+        )
+        + (
+            f"<input type='hidden' name='object_kind' value='{escape(object_kind)}' />"
+            if object_kind
+            else ""
+        )
+        + f"<input type='text' name='q' value='{escape(query)}' placeholder='Search objects' /> "
+        + "<button type='submit'>Search</button>"
+        + "</form>"
+        + facet_html
+        + filter_banner
+        + "<p class='muted'>"
+        + escape(showing)
+        + (f" · pack scope: {escape(requested_pack)}" if requested_pack else "")
+        + "</p>"
+        + f"<p class='muted'>Sort: {sort_links} · Per page: {page_size_links}</p>"
+        + f"<p class='muted'>{pager}</p>"
+        + f"<section class='card'><ul class='list-tight'>{items}</ul></section>"
+        + f"<p class='muted'>{pager}</p>"
     )
+    return _layout("Objects", body, requested_pack=requested_pack)
 
 
 def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
@@ -2840,6 +3045,27 @@ def _render_events_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Event Dossier</h1>",
+                _render_page_help(
+                    "Event dossier",
+                    what=(
+                        "Audit-event projection grouped by object and date."
+                        "  Each row is one timeline event (page projection,"
+                        " heading projection, contradiction outcome, etc.)"
+                        " linked back to its truth object."
+                    ),
+                    can=(
+                        "Filter by free text, date range (single ?date= or"
+                        " ?from_date= + ?to_date=), or limit (25/50/100/200)."
+                        "  Drill into any object to see its full provenance."
+                    ),
+                    effect=(
+                        "Read-only — the page just queries the audit ledger."
+                        "  The Quick Maintenance card at the bottom does"
+                        " expose actions (resolve / queue summary rebuild)"
+                        " that mutate the truth store; the help block on"
+                        " those buttons explains the consequences."
+                    ),
+                ),
                 "<p class='muted'>A timeline-oriented view over dated truth objects, not a separate event object model.</p>",
                 "<form method='get' action='/ops/events'>",
                 (
@@ -2848,10 +3074,20 @@ def _render_events_page(payload: dict) -> str:
                     else ""
                 ),
                 f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter events' /> ",
+                "<label class='muted' style='margin-left:.5rem'>From "
+                f"<input type='date' name='from_date' value='{escape(payload.get('from_date',''))}' />"
+                "</label> ",
+                "<label class='muted'>To "
+                f"<input type='date' name='to_date' value='{escape(payload.get('to_date',''))}' />"
+                "</label> ",
                 "<button type='submit'>Search</button>",
                 "</form>",
                 f"<p class='muted'>{payload['cluster_count']} event clusters from {payload['event_count']} timeline rows across {len(payload['dates'])} dates.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
+                _format_event_date_filter_summary(
+                    str(payload.get("from_date", "") or ""),
+                    str(payload.get("to_date", "") or ""),
+                ),
                 f"{escape(limit_note)}</p>",
                 _render_compiled_sections(lead_sections),
                 operator_rail_card,
@@ -3172,11 +3408,66 @@ def _render_production_browser_page(payload: dict) -> str:
 def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
-    limit_note = (
-        f" Showing the first {payload['limit']} graph clusters in this browser window."
-        if payload.get("is_limited")
-        else ""
-    )
+    total_count = int(payload.get("total_count", payload.get("count", 0)) or 0)
+    show_all = bool(payload.get("show_all"))
+    limit_value = int(payload.get("limit", 0) or 0)
+    default_limit = int(payload.get("default_limit", limit_value) or limit_value)
+
+    def _cluster_href(*, limit_: int | None = None, show_all_: bool | None = None) -> str:
+        params: list[tuple[str, str]] = []
+        if requested_pack:
+            params.append(("pack", requested_pack))
+        if query:
+            params.append(("q", query))
+        if show_all_ is not None:
+            if show_all_:
+                params.append(("show_all", "1"))
+        elif show_all:
+            params.append(("show_all", "1"))
+        eff_limit = limit_ if limit_ is not None else default_limit
+        if eff_limit and eff_limit != 15 and not (show_all_ or show_all):
+            params.append(("limit", str(eff_limit)))
+        if not params:
+            return action_path
+        return action_path + "?" + "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params
+        )
+
+    if show_all:
+        limit_note = f" Showing all {total_count} clusters."
+    elif payload.get("is_limited"):
+        limit_note = (
+            f" Showing top {payload['count']} of {total_count} by priority"
+            f" (member count + open contradictions + stale summaries)."
+        )
+    else:
+        limit_note = ""
+
+    if total_count > 0 and not show_all:
+        page_size_links = " ".join(
+            (
+                f"<strong>{value}</strong>"
+                if value == default_limit
+                else f"<a href='{escape(_cluster_href(limit_=value, show_all_=False))}'>{value}</a>"
+            )
+            for value in (15, 50, 200)
+        )
+        toggle_links = (
+            f" · <a href='{escape(_cluster_href(show_all_=True))}'>Show all {total_count}</a>"
+            if total_count > default_limit
+            else ""
+        )
+        cluster_pager = (
+            f"<p class='muted'>Per page: {page_size_links}{toggle_links}</p>"
+        )
+    elif show_all:
+        cluster_pager = (
+            "<p class='muted'>"
+            f"<a href='{escape(_cluster_href(show_all_=False, limit_=15))}'>← Back to top 15</a>"
+            "</p>"
+        )
+    else:
+        cluster_pager = ""
     kind_counts = (
         "".join(
             f"<span class='pill'>{escape(cluster_kind)}: {count}</span>"
@@ -3244,6 +3535,25 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
         "".join(
             [
                 "<h1>Graph Clusters</h1>",
+                _render_page_help(
+                    "Graph clusters",
+                    what=(
+                        "Connected components of pack-scoped graph relations"
+                        " (research-tech: louvain communities; other packs:"
+                        " plain transitive closure).  Clusters surface the"
+                        " neighborhoods a single object lives in."
+                    ),
+                    can=(
+                        "Use sort + per-page (15/50/200) to slice the list."
+                        "  <strong>Show all</strong> drops the limit so you"
+                        " can audit every cluster.  Click a row to drill"
+                        " into the cluster detail page."
+                    ),
+                    effect=(
+                        "Read-only.  Cluster scoring rebuilds when you"
+                        " regenerate the graph index, not on click."
+                    ),
+                ),
                 f"<form method='get' action='{escape(action_path)}'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -3253,9 +3563,10 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
                 f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter clusters or members' /> ",
                 "<button type='submit'>Search</button>",
                 "</form>",
-                f"<p class='muted'>{payload['count']} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.",
+                f"<p class='muted'>Showing {payload['count']} of {total_count} graph clusters. Largest cluster has {payload['largest_cluster_size']} objects.",
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
+                cluster_pager,
                 f"<section class='card'><h2>Cluster Kinds</h2><div class='link-row'>{kind_counts}</div></section>",
                 f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>",
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
@@ -3660,7 +3971,7 @@ def _render_evolution_browser_page(payload: dict) -> str:
 
 def _render_candidate_items(payload: dict) -> str:
     requested_pack = str(payload.get("requested_pack") or "")
-    next_path = _shell_href("/ops/candidates", requested_pack)
+    next_path = _shell_href("/ops/queue/concepts", requested_pack)
     rendered: list[str] = []
     for item in payload.get("items", []):
         if not isinstance(item, dict):
@@ -3760,7 +4071,7 @@ def _render_candidates_pagination(payload: dict) -> str:
         parts.append(f"offset={max(0, next_offset)}")
         if requested_pack:
             parts.append(f"pack={quote(requested_pack, safe='')}")
-        return "/ops/candidates?" + "&".join(parts)
+        return "/ops/queue/concepts?" + "&".join(parts)
 
     links = []
     if offset > 0:
@@ -3777,6 +4088,89 @@ def _render_candidates_pagination(payload: dict) -> str:
         + "".join(links)
         + "</div>"
     )
+
+
+def _render_queue_overview_page(payload: dict) -> str:
+    """Maintainer queue landing page.
+
+    Surfaces the four pending-review queues (concept candidates,
+    contradictions, signals, action queue) in one place so the
+    operator can tell whether triage is done without visiting four
+    pages.  Healthy state (productive signals, succeeded actions,
+    evergreen total) is surfaced separately so "no action needed"
+    is visible too.
+    """
+    requested_pack = str(payload.get("requested_pack") or "")
+    queues = payload.get("queues") or []
+    healthy = payload.get("healthy") or {}
+    pending_total = int(payload.get("pending_total") or 0)
+
+    intro = _render_page_help(
+        "Maintainer queue",
+        what=(
+            "The four queues that need a human decision before the"
+            " pipeline can move on: <strong>concept candidates</strong>,"
+            " <strong>contradictions</strong>,"
+            " <strong>signals waiting</strong>, and"
+            " <strong>actions failed/blocked</strong>."
+        ),
+        can=(
+            "Click any row to open that queue's detail page."
+            "  Empty queues are listed under Healthy so you can confirm"
+            " &ldquo;no action needed&rdquo; rather than wonder whether"
+            " the pipeline is broken."
+        ),
+        effect=(
+            "This page is just an aggregator — counts come from the"
+            " same builders the four detail pages use, so the foyer"
+            " never goes stale."
+        ),
+    )
+
+    if pending_total == 0:
+        pending_html = (
+            "<section class='card'><h2>Pending review</h2>"
+            "<p class='muted'>Nothing waiting in any queue.</p></section>"
+        )
+    else:
+        rows: list[str] = []
+        for queue in queues:
+            count = int(queue.get("count") or 0)
+            if count == 0:
+                # Skip empty queues from the pending list — the
+                # healthy-state card carries the "0 waiting" signal.
+                continue
+            label = str(queue.get("label") or queue.get("id") or "")
+            href = str(queue.get("browse_path") or "")
+            oldest_subject = str(queue.get("oldest_subject") or "")
+            oldest_at = str(queue.get("oldest_at") or "")[:19]
+            oldest_html = ""
+            if oldest_subject:
+                oldest_html = f" <span class='muted'>(oldest: {escape(oldest_subject)}"
+                if oldest_at:
+                    oldest_html += f" @ {escape(oldest_at)}"
+                oldest_html += ")</span>"
+            rows.append(
+                f"<li><strong>{count}</strong> {escape(label)}"
+                f"{oldest_html}"
+                f" — <a href='{escape(href)}'>review →</a></li>"
+            )
+        pending_html = (
+            "<section class='card'><h2>Pending review</h2>"
+            f"<ul class='list-tight'>{''.join(rows)}</ul></section>"
+        )
+
+    healthy_html = (
+        "<section class='card'><h2>Healthy (no action needed)</h2>"
+        "<ul class='list-tight'>"
+        f"<li>{int(healthy.get('productive_signals') or 0)} productive signals</li>"
+        f"<li>{int(healthy.get('succeeded_actions') or 0)} succeeded actions</li>"
+        f"<li>{int(healthy.get('evergreen_total') or 0)} evergreen objects in the truth store</li>"
+        "</ul></section>"
+    )
+
+    body = "<h1>Maintainer Queue</h1>" + intro + pending_html + healthy_html
+    return _layout("Queue", body, requested_pack=requested_pack)
 
 
 def _render_candidates_page(payload: dict) -> str:
@@ -3799,10 +4193,32 @@ def _render_candidates_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Candidate Workbench</h1>",
+                _render_page_help(
+                    "Concept candidates",
+                    what=(
+                        "Concept slugs the absorb pipeline thinks deserve their"
+                        " own Evergreen note.  They are still proposals — only a"
+                        " <strong>Promote</strong> turns one into a canonical"
+                        " object."
+                    ),
+                    can=(
+                        "<strong>Promote</strong> creates an Evergreen note from"
+                        " the candidate.  <strong>Merge</strong> rewrites links"
+                        " into an existing object (target slug required)."
+                        "  <strong>Reject</strong> drops the candidate as"
+                        " spurious or duplicate."
+                    ),
+                    effect=(
+                        "Promote and Merge mutate the truth store (objects,"
+                        " relations) and trigger a re-index; Reject only marks"
+                        " the candidate as resolved.  All three are reversible"
+                        " by re-running the absorb step on the source."
+                    ),
+                ),
                 "<p class='muted'>Review registry candidates before they become canonical Evergreen objects. "
                 "Promote creates an active note, merge rewrites candidate links into an existing object, "
                 "and reject removes the pending candidate artifact.</p>",
-                "<form method='get' action='/ops/candidates' class='link-row'>",
+                "<form method='get' action='/ops/queue/concepts' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -3961,7 +4377,31 @@ def _render_signals_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Active Signals</h1>",
-                "<form method='get' action='/ops/signals' class='link-row'>",
+                _render_page_help(
+                    "Signals",
+                    what=(
+                        "Detection-only observations the pipeline emits when it"
+                        " notices something worth a human look — stale summaries,"
+                        " open contradictions, missing provenance, etc."
+                        "  Signals are passive: nothing happens until you queue"
+                        " an action."
+                    ),
+                    can=(
+                        "Filter by status (productive / waiting / failed/stalled)"
+                        " or signal type.  <strong>Queue action</strong> sends"
+                        " the recommended command to the action worker."
+                        "  <strong>Dismiss</strong> tags the signal as not worth"
+                        " acting on; both the row and any attached evidence"
+                        " stay live."
+                    ),
+                    effect=(
+                        "Queueing an action adds a row to /ops/queue/actions —"
+                        " the worker runs it on its next cycle.  Until then the"
+                        " truth store is unchanged.  Dismissing only updates the"
+                        " signal ledger."
+                    ),
+                ),
+                "<form method='get' action='/ops/queue/signals' class='link-row'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4420,6 +4860,28 @@ def _render_actions_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Action Queue</h1>",
+                _render_page_help(
+                    "Action queue",
+                    what=(
+                        "Commands the workflow worker should run.  Items get"
+                        " here from <strong>/ops/queue/signals</strong> "
+                        "(<em>Queue action</em>), periodic pipeline jobs (e.g."
+                        " backfill cron), or manual enqueue via the CLI."
+                    ),
+                    can=(
+                        "<strong>Run next</strong> dequeues a single item to"
+                        " the action worker.  <strong>Run batch</strong>"
+                        " processes up to 5 in one pass.  <strong>Retry</strong>"
+                        " requeues a failed action; <strong>Dismiss</strong>"
+                        " removes it from the queue without running."
+                    ),
+                    effect=(
+                        "Run/Retry actually executes the queued command (may"
+                        " mutate the truth store, the vault, or external"
+                        " services depending on the action).  Dismiss only"
+                        " marks the row as dismissed; nothing else changes."
+                    ),
+                ),
                 "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m ovp_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>",
                 "<form method='post' action='/ops/actions/run-next' class='link-row'>",
                 (
@@ -4651,7 +5113,33 @@ def _render_contradictions_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Contradictions</h1>",
-                "<form method='get' action='/ops/contradictions'>",
+                _render_page_help(
+                    "Contradictions",
+                    what=(
+                        "Pairs of claims the contradiction detector flagged"
+                        " as semantically incompatible.  Each row points at"
+                        " a positive-claim set and a negative-claim set; only"
+                        " a human can pick which side is canonical."
+                    ),
+                    can=(
+                        "<strong>resolved_keep_positive</strong> marks the"
+                        " positive claims as canonical and supersedes the"
+                        " negative side.  <strong>resolved_keep_negative</strong>"
+                        " is the mirror image."
+                        "  <strong>dismissed</strong> closes the row as a"
+                        " false alarm without changing either side."
+                        "  <strong>needs_human</strong> leaves it open for"
+                        " deeper review."
+                    ),
+                    effect=(
+                        "Keep-positive / Keep-negative tag the rejected claims"
+                        " as superseded and trigger a re-compile of any"
+                        " downstream summaries that quoted them."
+                        "  Dismissed only updates the contradiction row."
+                        "  ‘Rebuild summaries’ kicks the compile queue once."
+                    ),
+                ),
+                "<form method='get' action='/ops/queue/contradictions'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -5105,9 +5593,28 @@ def _render_timeline_page(payload: dict) -> str:
     window = int(payload.get("window_days") or 14)
     days = payload.get("days") or []
 
+    timeline_help = _render_page_help(
+        "Timeline",
+        what=(
+            "Day-by-day rollup of <code>audit_events</code> for the last"
+            " ~14 days.  Sister to <strong>/ops/today</strong> (single"
+            " day) and <strong>/ops/pulse</strong> (live tail)."
+        ),
+        can=(
+            "Click any date heading or its <strong>See all N →</strong>"
+            " link to drop into <strong>/ops/events</strong> filtered"
+            " to that day.  Pills show top event types per day."
+        ),
+        effect=(
+            "Read-only.  Following a drill-down link opens the events"
+            " dossier with the date filter applied."
+        ),
+    )
+
     if not payload.get("available", True):
         body = (
-            "<section class='card'>"
+            timeline_help
+            + "<section class='card'>"
             "<h2>Timeline unavailable</h2>"
             f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
             "<p>Run <code>ovp-knowledge-index</code> to populate "
@@ -5118,7 +5625,8 @@ def _render_timeline_page(payload: dict) -> str:
 
     if not days:
         body = (
-            "<section class='card'>"
+            timeline_help
+            + "<section class='card'>"
             f"<h2>No events in the last {window} days</h2>"
             "<p class='muted'>The pipeline hasn't run in this window — "
             "check <code>60-Logs/pipeline.jsonl</code> for last activity.</p>"
@@ -5127,6 +5635,7 @@ def _render_timeline_page(payload: dict) -> str:
         return _layout("Timeline", body, requested_pack=requested_pack)
 
     sections: list[str] = [_TIMELINE_DAY_CARD_STYLE]
+    sections.append(timeline_help)
     sections.append(
         f"<p class='muted'>Showing the last {window} days of "
         f"<code>audit_events</code>.  {len(days)} day(s) with activity.</p>"
@@ -5193,13 +5702,29 @@ def _render_timeline_page(payload: dict) -> str:
                 f"(sample {len(errors)})</h3><ul>{items}</ul></div>"
             )
 
+        # Drill-down: every day card carries an explicit "open the
+        # events dossier scoped to this date" link so the operator
+        # can move from the histogram pill straight into the row-
+        # level audit list.
+        date_str = str(day.get("date", ""))
+        drill_path = "/ops/events?date=" + quote(date_str, safe="") + "&limit=200"
+        if requested_pack:
+            drill_path += "&pack=" + quote(requested_pack, safe="")
+        drill_html = (
+            f"<div class='samples'><a href='{escape(drill_path)}'>"
+            f"See all {total} events for {date} →</a></div>"
+            if total
+            else ""
+        )
+
         sections.append(
             "<section class='day-card'>"
-            f"<h2>{date}</h2>"
+            f"<h2><a href='{escape(drill_path)}'>{date}</a></h2>"
             f"<div class='day-meta'>{total} events</div>"
             f"<div class='event-grid'>{pills_html}</div>"
             f"{samples_html}"
             f"{errors_html}"
+            f"{drill_html}"
             "</section>"
         )
 
@@ -5235,6 +5760,9 @@ _TODAY_DIGEST_STYLE = """
 .today-card .samples ul { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.85rem; }
 .today-card .samples li { margin: 2px 0; }
 .today-card.empty .total { color: #d1d5db; }
+.today-card .see-all { margin-top: 10px; font-size: 0.85rem; }
+.today-card .see-all a { color: var(--accent); text-decoration: none; }
+.today-card .see-all a:hover { text-decoration: underline; }
 </style>
 """
 
@@ -5263,6 +5791,43 @@ def _render_today_digest_page(payload: dict) -> str:
 
     sections: list[str] = [_TODAY_DIGEST_STYLE]
     sections.append(
+        _render_page_help(
+            "Today digest",
+            what=(
+                "Five-card summary of what the pipeline did today (UTC),"
+                " grouped by macro-stage: intake, absorb, synthesis,"
+                " governance, failures.  Counts come from"
+                " <code>audit_events</code>."
+            ),
+            can=(
+                "Click <strong>See all N →</strong> on any card to drop"
+                " into <strong>/ops/events</strong> filtered to that day."
+                "  Use the prev/next pivots to step through history."
+            ),
+            effect=(
+                "All links read from the audit ledger.  This page mutates"
+                " nothing — it's a window onto the pipeline's day."
+            ),
+        )
+    )
+    prev_path = str(payload.get("prev_date_path") or "")
+    next_path = str(payload.get("next_date_path") or "")
+    prev_date = str(payload.get("prev_date") or "")
+    next_date = str(payload.get("next_date") or "")
+    pivot_parts: list[str] = []
+    if prev_path:
+        pivot_parts.append(
+            f"<a href='{escape(prev_path)}'>← {escape(prev_date)}</a>"
+        )
+    pivot_parts.append(f"<strong>Today: {escape(date)}</strong>")
+    if next_path:
+        pivot_parts.append(
+            f"<a href='{escape(next_path)}'>{escape(next_date)} →</a>"
+        )
+    sections.append(
+        f"<p class='muted'>{' · '.join(pivot_parts)}</p>"
+    )
+    sections.append(
         f"<p class='muted'>Audit events recorded on "
         f"<strong>{escape(date)}</strong> (UTC).  Click "
         f"<a href='/ops/timeline'>Timeline</a> for the multi-day view.</p>"
@@ -5274,6 +5839,7 @@ def _render_today_digest_page(payload: dict) -> str:
         total = int(card.get("total") or 0)
         by_type = card.get("by_type") or {}
         samples = card.get("samples") or []
+        see_all_path = str(card.get("see_all_path") or "")
 
         empty_class = " empty" if total == 0 else ""
         failures_class = " failures" if card_id == "failures" else ""
@@ -5297,12 +5863,24 @@ def _render_today_digest_page(payload: dict) -> str:
             )
             sample_html = f"<div class='samples'><ul>{items}</ul></div>"
 
+        # ``See all N →`` link drops the operator into the events
+        # dossier filtered to this card's date.  Only render when
+        # there is more to see than the per-card sample.
+        see_all_html = ""
+        if see_all_path and total > len(samples):
+            see_all_html = (
+                f"<div class='see-all'>"
+                f"<a href='{escape(see_all_path)}'>See all {total} →</a>"
+                f"</div>"
+            )
+
         sections.append(
             f"<div class='today-card{empty_class}{failures_class}'>"
             f"<h3>{escape(label)}</h3>"
             f"<div class='total'>{total}</div>"
             f"<div class='by-type'>{type_pills}</div>"
             f"{sample_html}"
+            f"{see_all_html}"
             f"</div>"
         )
     sections.append("</div>")
@@ -5336,9 +5914,29 @@ def _render_runs_index_page(payload: dict) -> str:
     requested_pack = str(payload.get("requested_pack") or "")
     runs = payload.get("runs") or []
 
+    runs_help = _render_page_help(
+        "Runs",
+        what=(
+            "Index of pipeline transactions (one row per"
+            " <code>transaction_started</code> audit event) grouped"
+            " by calendar day with status, workflow, and event count."
+            "  ‘Idle’ markers surface days the pipeline did not run."
+        ),
+        can=(
+            "Click any <code>txn_id</code> to inspect that run's"
+            " event timeline.  Use the window pivot (Last 10 / 30 /"
+            " 100) to widen the lens when triaging."
+        ),
+        effect=(
+            "Read-only.  Per-run drill-down is also read-only — it"
+            " just reads from <code>audit_events</code>."
+        ),
+    )
+
     if not payload.get("available", True):
         body = (
-            "<section class='card'>"
+            runs_help
+            + "<section class='card'>"
             "<h2>Runs index unavailable</h2>"
             f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
             "</section>"
@@ -5347,7 +5945,8 @@ def _render_runs_index_page(payload: dict) -> str:
 
     if not runs:
         body = (
-            "<section class='card'>"
+            runs_help
+            + "<section class='card'>"
             "<h2>No transactions found</h2>"
             "<p class='muted'>No <code>transaction_started</code> events "
             "in <code>audit_events</code>.</p>"
@@ -5355,33 +5954,99 @@ def _render_runs_index_page(payload: dict) -> str:
         )
         return _layout("Runs", body, requested_pack=requested_pack)
 
-    rows = "".join(
-        "<tr>"
-        "<td><code>{ts}</code></td>"
-        "<td>{type}</td>"
-        "<td class='status-{status}'>{status}</td>"
-        "<td>{events}</td>"
-        "<td><a href='{href}'>{txn_id}</a></td>"
-        "</tr>".format(
-            ts=escape(str(r.get("started_at", "")[:_TS_DISPLAY_LEN])),
-            type=escape(str(r.get("workflow_type", ""))),
-            status=escape(str(r.get("status", ""))),
-            events=int(r.get("event_count") or 0),
-            href=escape(str(r.get("detail_href", ""))),
-            txn_id=escape(str(r.get("txn_id", ""))[:_RUN_TXN_ID_DISPLAY_MAX_CHARS]),
+    def _row_html(r: dict) -> str:
+        return (
+            "<tr>"
+            "<td><code>{ts}</code></td>"
+            "<td>{type}</td>"
+            "<td class='status-{status}'>{status}</td>"
+            "<td>{events}</td>"
+            "<td><a href='{href}'>{txn_id}</a></td>"
+            "</tr>".format(
+                ts=escape(str(r.get("started_at", "")[:_TS_DISPLAY_LEN])),
+                type=escape(str(r.get("workflow_type", ""))),
+                status=escape(str(r.get("status", ""))),
+                events=int(r.get("event_count") or 0),
+                href=escape(str(r.get("detail_href", ""))),
+                txn_id=escape(str(r.get("txn_id", ""))[:_RUN_TXN_ID_DISPLAY_MAX_CHARS]),
+            )
         )
-        for r in runs
+
+    day_groups = payload.get("day_groups") or []
+    limit_value = int(payload.get("limit", len(runs)) or len(runs))
+    window_days = payload.get("window_days")
+    if window_days is None:
+        window_text = ""
+    elif window_days == 0:
+        window_text = " (oldest from today)"
+    else:
+        window_text = f" (oldest from {window_days} day{'s' if window_days != 1 else ''} ago)"
+
+    if day_groups:
+        sections: list[str] = []
+        for group in day_groups:
+            date = str(group.get("date") or "")
+            count = int(group.get("count") or 0)
+            if group.get("idle"):
+                sections.append(
+                    f"<h3 class='muted'>{escape(date)} — Idle (no scheduled run)</h3>"
+                )
+                continue
+            day_runs = group.get("runs") or []
+            sections.append(
+                f"<h3>{escape(date)} — {count} run{'s' if count != 1 else ''}</h3>"
+                "<table class='runs-table'>"
+                "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
+                "<th>Events</th><th>Run</th></tr></thead>"
+                f"<tbody>{''.join(_row_html(r) for r in day_runs)}</tbody>"
+                "</table>"
+            )
+        runs_html = "".join(sections)
+    else:
+        runs_html = (
+            "<table class='runs-table'>"
+            "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
+            "<th>Events</th><th>Run</th></tr></thead>"
+            f"<tbody>{''.join(_row_html(r) for r in runs)}</tbody>"
+            "</table>"
+        )
+
+    # Window-size pivot links.  ``limit=`` exposes how the cap is
+    # applied; the operator can widen the window when triaging
+    # whether a regression is recent or longstanding.
+    def _runs_href(new_limit: int) -> str:
+        params: list[tuple[str, str]] = []
+        if requested_pack:
+            params.append(("pack", requested_pack))
+        if new_limit and new_limit != 30:
+            params.append(("limit", str(new_limit)))
+        if not params:
+            return "/ops/runs"
+        return "/ops/runs?" + "&".join(
+            f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params
+        )
+
+    pivot_options = (
+        (10, "Last 10"),
+        (30, "Last 30"),
+        (100, "Last 100"),
+    )
+    pivot_links = " · ".join(
+        (
+            f"<strong>{escape(label)}</strong>"
+            if value == limit_value
+            else f"<a href='{escape(_runs_href(value))}'>{escape(label)}</a>"
+        )
+        for value, label in pivot_options
     )
 
     body = (
         f"{_RUNS_INDEX_STYLE}"
-        f"<p class='muted'>Showing {len(runs)} recent transaction(s).  "
-        f"Click a <code>txn_id</code> to see the full event timeline for that run.</p>"
-        "<table class='runs-table'>"
-        "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
-        "<th>Events</th><th>Run</th></tr></thead>"
-        f"<tbody>{rows}</tbody>"
-        "</table>"
+        + runs_help
+        + f"<p class='muted'>Showing last {limit_value} run(s){window_text}. "
+        f"Click a <code>txn_id</code> to see the full event timeline.</p>"
+        + f"<p class='muted'>Window: {pivot_links}</p>"
+        + f"{runs_html}"
     )
     return _layout("Runs", body, requested_pack=requested_pack)
 
@@ -5486,19 +6151,31 @@ def _render_run_detail_page(payload: dict) -> str:
     )
 
 
-def _render_pulse_page() -> str:
+def _render_pulse_page(*, requested_pack: str = "") -> str:
     fragment = _render_pulse_fragment()
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>Pulse</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:1080px;margin:1.5rem auto;padding:0 1rem}"
-        "h1{margin-bottom:.4rem}p.muted{color:#71675d}"
-        "</style></head><body>"
-        "<h1>Pulse</h1>"
-        "<p class='muted'>Live tail of <code>60-Logs/*.jsonl</code> (pipeline, reuse, "
-        "evidence, open-questions). Polls once per second.</p>"
-        f"{fragment}</body></html>"
+    help_banner = _render_page_help(
+        "Pulse",
+        what=(
+            "Live tail of pipeline log files (<code>pipeline.jsonl</code>,"
+            " <code>reuse.jsonl</code>, <code>evidence.jsonl</code>,"
+            " <code>open-questions.jsonl</code>).  Polls once per second."
+        ),
+        can=(
+            "Watch in real time as the absorb/intake pipeline runs."
+            "  No interactive controls; this is purely a tail."
+        ),
+        effect=(
+            "Read-only.  The poll only reads from disk — nothing else."
+        ),
     )
+    body = (
+        "<h1>Pulse</h1>"
+        + help_banner
+        + "<p class='muted'>Live tail of <code>60-Logs/*.jsonl</code> (pipeline, reuse, "
+        "evidence, open-questions). Polls once per second.</p>"
+        + fragment
+    )
+    return _layout("Pulse", body, requested_pack=requested_pack)
 
 
 def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:

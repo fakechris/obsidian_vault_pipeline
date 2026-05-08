@@ -40,19 +40,23 @@ from ovp_pipeline.ui.view_models import (
 class TestOpsNav:
     def test_includes_workbench_pivots_and_browseables(self):
         items = dict(_ops_nav_items(""))
-        # Post-BL-053 IA: by-time pivots first, then live + audit,
-        # then browseables / queues.  Labels reflect BL-052 vocab
-        # cleanup (``Audit`` → ``Events``, ``Candidates`` →
-        # ``Concept Candidates``).
+        # BL-053 Phase 2 IA: the four pending-review queues that used
+        # to live as separate nav entries (Concept Candidates /
+        # Actions / Contradictions / Signals) are consolidated into
+        # a single ``Queue`` link.  The other by-time / browse pivots
+        # remain as before.
         for label in ("Today", "Runs", "Timeline", "Pulse", "Events",
-                      "Evergreens", "Concept Candidates",
-                      "Actions", "Contradictions", "Signals"):
+                      "Evergreens", "Queue"):
             assert label in items, f"{label!r} missing from ops nav"
         assert items["Today"] == "/ops/today"
         assert items["Runs"] == "/ops/runs"
         assert items["Timeline"] == "/ops/timeline"
         assert items["Events"] == "/ops/events"
         assert items["Evergreens"] == "/ops/objects"
+        assert items["Queue"] == "/ops/queue"
+        # The four legacy queue labels were dropped from the nav.
+        for legacy in ("Concept Candidates", "Actions", "Contradictions", "Signals"):
+            assert legacy not in items, f"legacy nav entry {legacy!r} should be gone"
 
     def test_research_only_entries_gated(self, monkeypatch):
         # Research-pack items show only when the active pack supports
@@ -65,6 +69,7 @@ class TestOpsNav:
         )
         items = dict(_ops_nav_items(""))
         assert "Clusters" not in items
+        # Deep-dives nav entry was removed post-BL-029 (no producer).
         assert "Deep-dives" not in items
 
         monkeypatch.setattr(
@@ -72,7 +77,9 @@ class TestOpsNav:
         )
         items_research = dict(_ops_nav_items(""))
         assert items_research["Clusters"] == "/ops/clusters"
-        assert items_research["Deep-dives"] == "/ops/deep-dives"
+        # Even on the research shell, Deep-dives no longer surfaces;
+        # the route 301s to /ops/today for legacy bookmarks.
+        assert "Deep-dives" not in items_research
 
 
 # ---------------------------------------------------------------------------
@@ -667,11 +674,18 @@ class TestBL053OpsNav:
         assert "Audit" not in items
         assert items["Events"] == "/ops/events"
 
-    def test_nav_renames_candidates_label(self):
+    def test_nav_consolidates_queue_browseables(self):
+        # BL-053 Phase 2 collapsed the four pending-review nav entries
+        # (Concept Candidates / Actions / Contradictions / Signals)
+        # into a single ``Queue`` link.  The legacy paths still
+        # 301-redirect, but they're no longer surfaced in the nav.
         items = dict(_ops_nav_items(""))
-        # URL stays the same; label changes.
-        assert items.get("Concept Candidates") == "/ops/candidates"
+        assert items.get("Queue") == "/ops/queue"
+        assert "Concept Candidates" not in items
         assert "Candidates" not in items
+        assert "Actions" not in items
+        assert "Contradictions" not in items
+        assert "Signals" not in items
 
     def test_nav_ordering_workbench_pivots_first(self):
         items = _ops_nav_items("")

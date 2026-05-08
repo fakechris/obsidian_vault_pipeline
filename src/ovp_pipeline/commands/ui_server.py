@@ -31,7 +31,6 @@ from ..ui.view_models import (
     build_cluster_browser_payload,
     build_cluster_detail_payload,
     build_contradiction_browser_payload,
-    build_derivation_browser_payload,
     build_evolution_browser_payload,
     build_event_dossier_payload,
     build_graph_map_payload,
@@ -39,6 +38,7 @@ from ..ui.view_models import (
     build_object_page_payload,
     build_objects_index_payload,
     build_production_browser_payload,
+    build_queue_overview_payload,
     build_search_payload,
     build_signal_browser_payload,
     build_stale_summary_browser_payload,
@@ -84,7 +84,6 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_clusters_page,
     _render_contradictions_page,
     _render_dashboard,
-    _render_derivations_page,
     _render_events_page,
     _render_evolution_browser_page,
     _render_explore_fragment,
@@ -99,6 +98,7 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_production_browser_page,
     _render_pulse_fragment,
     _render_pulse_page,
+    _render_queue_overview_page,
     _render_timeline_page,
     _render_today_digest_page,
     _render_runs_index_page,
@@ -386,23 +386,43 @@ def create_server(
                         )
                     return
                 if path == "/ops/objects":
-                    limit = int(query.get("limit", ["100"])[0])
-                    offset = int(query.get("offset", ["0"])[0])
+                    # Page-size whitelist guards against pathological
+                    # ``?limit=99999`` queries; mirrors the per-page UI
+                    # selector below.  Out-of-range values fall back
+                    # silently to the default (100).
+                    raw_limit = query.get("limit", ["100"])[0]
+                    try:
+                        limit = int(raw_limit)
+                    except ValueError:
+                        limit = 100
+                    if limit not in (10, 50, 100, 200):
+                        limit = 100
+                    raw_offset = query.get("offset", ["0"])[0]
+                    try:
+                        offset = max(0, int(raw_offset))
+                    except ValueError:
+                        offset = 0
+                    sort = query.get("sort", ["alpha"])[0] or "alpha"
                     q = query.get("q", [""])[0]
-                    # BL-030 follow-up: ``kind`` (alias of
-                    # ``object_kind``) lets the reader filter the
-                    # index to a single entity_type — fact / method /
-                    # tradeoff / etc.  The facet chip rail in the
-                    # rendered page builds these query strings.
-                    kind = query.get("kind", [""])[0] or None
+                    # BL-030 follow-up: ``kind`` is the legacy alias
+                    # (used by the type-facet chip rail in PR #177);
+                    # ``object_kind`` is the canonical name.  Accept
+                    # both — preferring ``object_kind`` — so existing
+                    # bookmarks and chip-rail links keep filtering.
+                    object_kind = (
+                        query.get("object_kind", [""])[0]
+                        or query.get("kind", [""])[0]
+                        or None
+                    )
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_objects_index_payload(
                         resolved_vault,
                         limit=limit,
                         offset=offset,
                         query=q,
-                        object_kind=kind,
+                        object_kind=object_kind,
                         pack_name=pack_name,
+                        sort=sort,
                     )
                     self._write_html(_render_objects_index(payload))
                     return
@@ -458,7 +478,7 @@ def create_server(
                         )
                     )
                     return
-                if path == "/ops/signals":
+                if path == "/ops/queue/signals":
                     q = query.get("q", [""])[0]
                     signal_type = query.get("type", [""])[0] or None
                     pack_name = query.get("pack", [""])[0] or None
@@ -489,14 +509,14 @@ def create_server(
                         )
                     )
                     return
-                if path in {"/ops/candidates", "/ops/candidates/fragment"}:
+                if path in {"/ops/queue/concepts", "/ops/candidates/fragment"}:
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     limit = int(query.get("limit", [str(DEFAULT_CANDIDATE_BROWSER_LIMIT)])[0])
                     offset = int(query.get("offset", ["0"])[0])
                     candidate_warning = query.get("candidate_warning", [""])[0]
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/ops/candidates", api=False
+                        pack_name=pack_name, route_path="/ops/queue/concepts", api=False
                     ):
                         return
                     payload = build_candidate_browser_payload(
@@ -602,8 +622,26 @@ def create_server(
                         pack_name=pack_name, route_path="/ops/events", api=False
                     ):
                         return
+                    # ``date`` is shorthand for a single-day query
+                    # (``from_date == to_date``).  Explicit ``from_date`` /
+                    # ``to_date`` win when both forms are supplied.
+                    single_date = query.get("date", [""])[0] or ""
+                    from_date = query.get("from_date", [single_date])[0] or single_date or None
+                    to_date = query.get("to_date", [single_date])[0] or single_date or None
+                    raw_evt_limit = query.get("limit", [""])[0]
+                    try:
+                        evt_limit = int(raw_evt_limit) if raw_evt_limit else None
+                    except ValueError:
+                        evt_limit = None
+                    if evt_limit is not None and evt_limit not in (25, 50, 100, 200):
+                        evt_limit = None
                     payload = build_event_dossier_payload(
-                        resolved_vault, pack_name=pack_name, query=q
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
+                        limit=evt_limit,
+                        from_date=from_date,
+                        to_date=to_date,
                     )
                     self._write_html(_render_events_page(payload))
                     return
@@ -667,30 +705,46 @@ def create_server(
                     )
                     self._write_html(_render_curated_atlas_page(payload))
                     return
-                if path == "/api/deep-dives":
-                    q = query.get("q", [""])[0]
-                    pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(
-                        pack_name=pack_name, route_path="/ops/deep-dives", api=True
-                    ):
-                        return
-                    self._write_json(
-                        build_derivation_browser_payload(
-                            resolved_vault, pack_name=pack_name, query=q
-                        )
-                    )
+                # BL-029 deleted the deep-dive producer, so the
+                # ``/ops/deep-dives`` index page is permanently
+                # empty.  Redirect any existing bookmarks to
+                # ``/ops/today``; preserve query string so a
+                # ``?pack=...`` link survives.  The ``/api`` twin
+                # is dropped (no JSON consumers in production).
+                if path in {"/ops/deep-dives", "/api/deep-dives"}:
+                    target = "/ops/today"
+                    if parsed.query:
+                        target = f"{target}?{parsed.query}"
+                    self._permanent_redirect(301, target)
                     return
-                if path == "/ops/deep-dives":
-                    q = query.get("q", [""])[0]
+                # BL-053 Phase 2: ``/ops/queue/*`` is the new home
+                # for the four pending-review queues.  The bare
+                # legacy paths 301 to the queue routes so existing
+                # bookmarks survive.  Fragment paths
+                # (``/ops/candidates/fragment``,
+                # ``/ops/actions/fragment``) and form-POST sub-routes
+                # (``/ops/contradictions/resolve``,
+                # ``/ops/actions/enqueue`` etc.) are NOT redirected —
+                # they remain reachable at their old paths so the
+                # workbench iframes and form submitters keep working.
+                _OPS_QUEUE_REDIRECTS = {
+                    "/ops/candidates": "/ops/queue/concepts",
+                    "/ops/contradictions": "/ops/queue/contradictions",
+                    "/ops/signals": "/ops/queue/signals",
+                    "/ops/actions": "/ops/queue/actions",
+                }
+                if path in _OPS_QUEUE_REDIRECTS:
+                    target = _OPS_QUEUE_REDIRECTS[path]
+                    if parsed.query:
+                        target = f"{target}?{parsed.query}"
+                    self._permanent_redirect(301, target)
+                    return
+                if path == "/ops/queue":
                     pack_name = query.get("pack", [""])[0] or None
-                    if self._guard_research_route(
-                        pack_name=pack_name, route_path="/ops/deep-dives", api=False
-                    ):
-                        return
-                    payload = build_derivation_browser_payload(
-                        resolved_vault, pack_name=pack_name, query=q
+                    payload = build_queue_overview_payload(
+                        resolved_vault, pack_name=pack_name
                     )
-                    self._write_html(_render_derivations_page(payload))
+                    self._write_html(_render_queue_overview_page(payload))
                     return
                 if path == "/api/production":
                     q = query.get("q", [""])[0]
@@ -727,8 +781,20 @@ def create_server(
                         pack_name=pack_name, route_path="/ops/clusters", api=False
                     ):
                         return
+                    show_all = query.get("show_all", [""])[0] == "1"
+                    raw_cluster_limit = query.get("limit", [""])[0]
+                    try:
+                        cluster_limit = int(raw_cluster_limit) if raw_cluster_limit else 15
+                    except ValueError:
+                        cluster_limit = 15
+                    if cluster_limit not in (15, 50, 200):
+                        cluster_limit = 15
                     payload = build_cluster_browser_payload(
-                        resolved_vault, pack_name=pack_name, query=q
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
+                        limit=cluster_limit,
+                        show_all=show_all,
                     )
                     self._write_html(_render_clusters_page(payload))
                     return
@@ -813,7 +879,7 @@ def create_server(
                         )
                     )
                     return
-                if path in {"/ops/actions", "/ops/actions/fragment"}:
+                if path in {"/ops/queue/actions", "/ops/actions/fragment"}:
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
@@ -893,12 +959,14 @@ def create_server(
                         )
                     )
                     return
-                if path == "/ops/contradictions":
+                if path == "/ops/queue/contradictions":
                     status = query.get("status", [""])[0] or None
                     q = query.get("q", [""])[0]
                     pack_name = query.get("pack", [""])[0] or None
                     if self._guard_research_route(
-                        pack_name=pack_name, route_path="/ops/contradictions", api=False
+                        pack_name=pack_name,
+                        route_path="/ops/queue/contradictions",
+                        api=False,
                     ):
                         return
                     payload = build_contradiction_browser_payload(
@@ -1006,7 +1074,8 @@ def create_server(
                         self._write_html(_render_run_detail_page(payload))
                     return
                 if path == "/ops/pulse":
-                    self._write_html(_render_pulse_page())
+                    pack_name = query.get("pack", [""])[0] or ""
+                    self._write_html(_render_pulse_page(requested_pack=pack_name))
                     return
                 if path == "/ops/pulse/fragment":
                     self._write_html(_render_pulse_fragment())
@@ -1123,7 +1192,7 @@ def create_server(
                         return
                     self._resolve_contradiction_action(form)
                     self._redirect(
-                        self._form_first(form, "next").strip() or "/ops/contradictions?status=resolved"
+                        self._form_first(form, "next").strip() or "/ops/queue/contradictions?status=resolved"
                     )
                     return
                 if path == "/api/summaries/rebuild":
