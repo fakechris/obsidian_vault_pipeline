@@ -2180,11 +2180,28 @@ def count_action_queue_by_status(
                 continue
             status = str(item.get("status") or "")
             by_status[status] = by_status.get(status, 0) + 1
-            if status in ("failed", "blocked") and oldest_failed is None:
+            if status not in ("failed", "blocked"):
+                continue
+            # The action queue is persisted in *reverse* chronological
+            # order (see ``enqueue_signal_action`` — newest first).
+            # The first failed/blocked row encountered is therefore
+            # the *newest* one; the queue overview wants the
+            # *oldest* hint so the operator sees the row that has
+            # been stuck longest.  Track explicitly by ``created_at``
+            # and only swap when we find a strictly older row.
+            created_at = str(item.get("created_at") or "")
+            current_oldest = (
+                str(oldest_failed.get("created_at") or "") if oldest_failed else ""
+            )
+            should_replace = oldest_failed is None or (
+                created_at != ""
+                and (current_oldest == "" or created_at < current_oldest)
+            )
+            if should_replace:
                 oldest_failed = {
                     "action_id": str(item.get("action_id") or ""),
                     "title": str(item.get("title") or ""),
-                    "created_at": str(item.get("created_at") or ""),
+                    "created_at": created_at,
                     "status": status,
                 }
     return {

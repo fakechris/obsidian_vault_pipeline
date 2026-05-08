@@ -1814,6 +1814,14 @@ def build_queue_overview_payload(
     # Candidates: registry load is the cost; capping at 1 is enough
     # for the oldest-pending hint — the registry's own ``count``
     # field carries the total without iterating the list.
+    #
+    # The candidate registry is intentionally vault-global, not pack-
+    # scoped — ``ConceptRegistry`` lives at one path per vault and
+    # is keyed by slug across the whole vault.  ``list_candidate_concepts``
+    # therefore takes no ``pack_name`` argument; passing one would
+    # raise ``TypeError``.  The other queues' pack scoping still
+    # holds because contradictions / actions / signals all live in
+    # per-pack tables or ledgers.
     candidate_payload = list_candidate_concepts(vault_dir, limit=1)
     candidates_first = (candidate_payload.get("candidates") or [None])[0]
     candidates_pending = int(candidate_payload.get("count") or 0)
