@@ -1838,6 +1838,76 @@ def test_ops_queue_overview_lists_pending_queues(temp_vault):
     assert "evergreen" in body
 
 
+def test_count_contradictions_by_status_returns_grouped_counts(temp_vault):
+    """``count_contradictions_by_status`` is the lightweight overview
+    probe that replaced the pre-fix ``list_contradictions(limit=500)``
+    inside ``build_queue_overview_payload`` — pre-fix the overview
+    page paid for the full claim-detail map + status-override JSONL
+    replay just to compute ``len()``.
+
+    The ``Alpha``/``Conflict`` pair seeded by ``_seed_truth_store``
+    produces exactly one open contradiction (Alpha's local-first
+    claim vs. Conflict's negation), so we can assert concrete
+    counts rather than just shape — a key existence check would
+    pass on an empty by_status dict (``all([])`` is True) which
+    defeats the regression test."""
+    from ovp_pipeline.truth_api import count_contradictions_by_status
+
+    _seed_truth_store(temp_vault)
+    overview = count_contradictions_by_status(temp_vault, pack_name="default-knowledge")
+    assert overview["total"] == 1
+    assert overview["by_status"].get("open") == 1
+    assert overview["oldest_open"] is not None
+    # Counts are integers, not row dicts — confirms we never built
+    # the heavy per-row payload.
+    assert all(isinstance(n, int) for n in overview["by_status"].values())
+
+
+def test_count_action_queue_by_status_returns_grouped_counts(temp_vault):
+    """``count_action_queue_by_status`` is the JSONL-pass version of
+    the same overview probe.  Skips the per-row resolver-metadata +
+    contract-metadata enrichment that ``list_action_queue`` runs on
+    every row.
+
+    Seed three rows with different statuses + ``created_at`` to
+    pin both the grouped count and the explicit oldest-failed
+    selection.  Pre-fix the helper picked the *first* failed row
+    encountered, but the action queue is persisted in reverse
+    chronological order so that returned the newest failed action
+    rather than the oldest stuck one."""
+    from ovp_pipeline.truth_api import count_action_queue_by_status
+
+    _seed_truth_store(temp_vault)
+    queue_path = temp_vault / "60-Logs" / "actions.jsonl"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        # Newest first — matches the reverse-chronological persist order.
+        {"action_id": "a3", "pack": "default-knowledge",
+         "status": "succeeded", "created_at": "2026-05-07T10:00:00Z",
+         "title": "newest"},
+        {"action_id": "a2", "pack": "default-knowledge",
+         "status": "failed", "created_at": "2026-05-06T10:00:00Z",
+         "title": "newer-failed"},
+        {"action_id": "a1", "pack": "default-knowledge",
+         "status": "failed", "created_at": "2026-05-01T10:00:00Z",
+         "title": "oldest-failed"},
+    ]
+    queue_path.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8",
+    )
+
+    overview = count_action_queue_by_status(
+        temp_vault, pack_name="default-knowledge",
+    )
+    assert overview["total"] == 3
+    assert overview["by_status"].get("failed") == 2
+    assert overview["by_status"].get("succeeded") == 1
+    # The hint must be the oldest failed row, not the newest one.
+    assert overview["oldest_failed"]["action_id"] == "a1"
+    assert overview["oldest_failed"]["created_at"] == "2026-05-01T10:00:00Z"
+    assert all(isinstance(n, int) for n in overview["by_status"].values())
+
+
 def test_ui_server_evolution_endpoint_returns_payload(temp_vault):
     from ovp_pipeline.commands.ui_server import create_server
 

@@ -91,11 +91,22 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], int, int]:
     return kvs, m.end(), len(text)
 
 
-def _inject_entity_type(text: str, entity_type: str) -> str:
-    """Insert or replace ``entity_type: <value>`` in frontmatter."""
+def _inject_entity_type(text: str, entity_type: str) -> str | None:
+    """Insert or replace ``entity_type: <value>`` in frontmatter.
+
+    Returns the rewritten markdown, or ``None`` when ``text`` has no
+    frontmatter block to write into.  Pre-fix this helper silently
+    returned the original text when no frontmatter was present and
+    the calling phase still wrote the file back, incremented the
+    ``classified`` counter, and emitted an ``entity_type_backfill``
+    audit event — the report claimed the file had been backfilled
+    while the on-disk markdown still carried no ``entity_type``.
+    Returning ``None`` lets callers count and audit those files
+    distinctly.
+    """
     m = _FRONTMATTER_RE.match(text)
     if not m:
-        return text
+        return None
     fm_block = m.group(1)
     if _ENTITY_TYPE_LINE_RE.search(fm_block):
         new_fm = _ENTITY_TYPE_LINE_RE.sub(f"entity_type: {entity_type}", fm_block)
@@ -238,6 +249,7 @@ def run(
 
     classified = 0
     errors = 0
+    skipped_no_frontmatter = 0
     stats: dict[str, int] = {}
     t0 = time.time()
 
@@ -247,6 +259,17 @@ def run(
     for i, (fp, text, fm, _body_start) in enumerate(phase1):
         unit_type = fm["unit_type"].strip()
         new_text = _inject_entity_type(text, unit_type)
+        if new_text is None:
+            skipped_no_frontmatter += 1
+            _emit_audit(
+                logger,
+                {
+                    "event_type": "entity_type_backfill_skipped",
+                    "file": str(fp.relative_to(vault_dir)),
+                    "reason": "no_frontmatter",
+                },
+            )
+            continue
         fp.write_text(new_text, encoding="utf-8")
         classified += 1
         stats[unit_type] = stats.get(unit_type, 0) + 1
@@ -297,6 +320,18 @@ def run(
             continue
 
         new_text = _inject_entity_type(text, kind)
+        if new_text is None:
+            skipped_no_frontmatter += 1
+            _emit_audit(
+                logger,
+                {
+                    "event_type": "entity_type_backfill_skipped",
+                    "file": str(fp.relative_to(vault_dir)),
+                    "reason": "no_frontmatter",
+                    "would_be_entity_type": kind,
+                },
+            )
+            continue
         fp.write_text(new_text, encoding="utf-8")
         classified += 1
         stats[kind] = stats.get(kind, 0) + 1
@@ -328,10 +363,14 @@ def run(
         "phase2_count": len(phase2),
         "classified": classified,
         "errors": errors,
+        "skipped_no_frontmatter": skipped_no_frontmatter,
         "elapsed_seconds": round(elapsed, 1),
         "distribution": stats,
     }
-    print(f"\nDone. classified={classified}, errors={errors}, elapsed={elapsed:.1f}s")
+    print(
+        f"\nDone. classified={classified}, errors={errors}, "
+        f"skipped_no_frontmatter={skipped_no_frontmatter}, elapsed={elapsed:.1f}s"
+    )
     print(f"Distribution: {json.dumps(stats, indent=2)}")
 
     _emit_audit(

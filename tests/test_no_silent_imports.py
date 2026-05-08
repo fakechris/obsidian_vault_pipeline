@@ -32,7 +32,7 @@ def repo_root() -> Path:
 LEGACY_SILENT_IMPORTS = {
     ("auto_evergreen_extractor.py", 188),      # dotenv optional (BL-025/026 V2_UNIT_TYPES import; KIND_METHOD removed)
     ("auto_article_processor.py", 93),          # dotenv optional (BL-029 deep-dive deletion shifted line back)
-    ("auto_github_processor.py", 99),           # dotenv optional (BL-066 rewrote module, line shifted)
+    ("auto_github_processor.py", 121),          # dotenv optional (post-179 review wired source_dedup imports + dedup helper above; line shifted)
     ("auto_moc_updater.py", 51),                # dotenv optional
     ("auto_paper_processor.py", 86),            # dotenv optional
     ("clippings_processor.py", 64),             # dotenv optional (BL-058 source_dedup imports shifted line)

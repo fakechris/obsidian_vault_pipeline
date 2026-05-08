@@ -541,6 +541,81 @@ tags: [tool]
     assert not list((temp_vault / "20-Areas").rglob("*example*_深度解读.md"))
 
 
+def test_github_intake_skips_url_already_in_active_staging(temp_vault, monkeypatch):
+    """Cross-date URL dedup gate.
+
+    Pre-fix the GitHub intake's collision guard only checked the
+    same-day output filename, so a Pinboard re-clip on a later date
+    silently produced a duplicate processed source.  Wire-in the
+    BL-058 active-URL index gate: when ``https://github.com/o/r`` is
+    already claimed in the staging chain (Clippings + four
+    50-Inbox/ stages), the next run reports ``skipped_dedup`` and
+    archives the new pinboard stub instead of re-running enrichment.
+    """
+    # An older processed copy of the same URL — a previous April run.
+    older_processed = (
+        temp_vault / "50-Inbox" / "03-Processed" / "2026-04"
+        / "2026-04-28_o_r.md"
+    )
+    older_processed.parent.mkdir(parents=True, exist_ok=True)
+    older_processed.write_text(
+        "---\n"
+        "title: \"o/r\"\n"
+        "source: https://github.com/o/r\n"
+        "date: 2026-04-28\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    # New pinboard re-clip on a later date for the same repo.
+    pinboard_file = temp_vault / "50-Inbox" / "02-Pinboard" / "2026-05-07_o_r.md"
+    pinboard_file.parent.mkdir(parents=True, exist_ok=True)
+    pinboard_file.write_text(
+        "---\n"
+        "title: \"o/r\"\n"
+        "source: https://github.com/o/r\n"
+        "date: 2026-05-07\n"
+        "tags: [github]\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    enrich_calls: list[tuple[str, str]] = []
+
+    def fake_enrich(owner: str, repo: str) -> EnrichedSource:
+        enrich_calls.append((owner, repo))
+        return EnrichedSource(
+            owner=owner, repo=repo, tier="readme", body="# body\n", metadata={},
+        )
+
+    monkeypatch.setattr(github_module, "enrich_github_source", fake_enrich)
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "auto_github_processor.py",
+            "--process-single", str(pinboard_file),
+            "--vault-dir", str(temp_vault),
+        ],
+    )
+
+    assert github_module.main() == 0
+    # Enrichment should NOT have run — we caught the URL upstream.
+    assert enrich_calls == []
+    # No new processed file for the May date.
+    may_processed = list(
+        (temp_vault / "50-Inbox" / "03-Processed").rglob("2026-05-07_o_r.md")
+    )
+    assert may_processed == []
+    # The pinboard stub was archived (its job is done; the URL is
+    # already claimed in 03-Processed) — pre-fix the stub stayed in
+    # the active queue and the next sweep would re-trigger the gate.
+    assert not pinboard_file.exists()
+    archived = list(
+        (temp_vault / "70-Archive" / "Pinboard").rglob("2026-05-07_o_r.md")
+    )
+    assert len(archived) == 1
+
+
 def test_paper_cli_does_not_override_auto_vault_model_when_flag_is_omitted(temp_vault, monkeypatch):
     pinboard_file = temp_vault / "50-Inbox" / "02-Pinboard" / "2026-04-07_paper.md"
     pinboard_file.parent.mkdir(parents=True, exist_ok=True)
