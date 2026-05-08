@@ -27,7 +27,7 @@ from ..ui.view_models import (
     DEFAULT_CANDIDATE_BROWSER_LIMIT,
     build_runtime_home_payload,
 )
-from ._graph_visualizers import render_cluster_force_graph
+from ._graph_visualizers import render_cluster_force_graph, render_graph_map_force_graph
 
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
@@ -3625,8 +3625,6 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
         )
     else:
         cap_note = ""
-    show_all_qs = "&show_all=1" if "?" in action_path else "?show_all=1"
-    show_all_path = action_path
     if not show_all and truncated:
         # Append show_all=1 onto the same action; keep pack scope.
         prefix = action_path
@@ -3664,40 +3662,13 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
         or "<li class='muted'>No graph clusters found yet.</li>"
     )
     notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
-    node_lookup = {str(node["object_id"]): node for node in payload["nodes"]}
-
-    def node_x(node: dict) -> float:
-        return float(node.get("x") or 0)
-
-    def node_y(node: dict) -> float:
-        return float(node.get("y") or 0)
-
-    edge_lines = "".join(
-        "<line "
-        f"x1='{node_x(node_lookup[str(edge['source_object_id'])])}' "
-        f"y1='{node_y(node_lookup[str(edge['source_object_id'])])}' "
-        f"x2='{node_x(node_lookup[str(edge['target_object_id'])])}' "
-        f"y2='{node_y(node_lookup[str(edge['target_object_id'])])}' "
-        "stroke='#c7b8a6' stroke-width='1.4' stroke-opacity='0.7'>"
-        f"<title>{escape(edge['source_title'])} -> {escape(edge['target_title'])}: {escape(edge['edge_kind'])}</title>"
-        "</line>"
-        for edge in payload["edges"]
-        if str(edge["source_object_id"]) in node_lookup
-        and str(edge["target_object_id"]) in node_lookup
-    )
-    node_marks = "".join(
-        "<a "
-        f"href='{escape(str(node['path']))}' aria-label='{escape(str(node['title']))}'>"
-        f"<circle cx='{node_x(node)}' cy='{node_y(node)}' r='{node['radius']}' fill='#9f4f24' "
-        "stroke='#fffdfa' stroke-width='2'>"
-        f"<title>{escape(str(node['title']))} · {escape(str(node['kind_label']))} · {node['degree']} links</title>"
-        "</circle>"
-        f"<text x='{node_x(node)}' y='{node_y(node) + float(node['radius']) + _GRAPH_MAP_NODE_LABEL_Y_OFFSET}' "
-        "text-anchor='middle' font-size='12' fill='#3c332b'>"
-        f"{escape(str(node['title']))}</text>"
-        "</a>"
-        for node in payload["nodes"]
-    )
+    # The static-SVG path (server-computed orbital rings) is gone —
+    # ``render_graph_map_force_graph`` ignores ``payload["layout"]``
+    # and ``node["x"]``/``node["y"]`` on purpose; the D3 force solver
+    # re-lays the graph each load.  ``layout`` is kept on the payload
+    # for downstream consumers (none today) but unused here.
+    _ = layout
+    map_section = render_graph_map_force_graph(payload)
     return _layout(
         "Knowledge Graph",
         "".join(
@@ -3720,30 +3691,14 @@ def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str
                 f"<div class='card'><h2>Connections</h2><p>{payload['map_summary']['edge_count']}</p></div>",
                 f"<div class='card'><h2>Neighborhoods</h2><p>{payload['map_summary']['cluster_count']}</p></div>",
                 "</section>",
-                "<section class='card'>",
-                "<h2>Map</h2>",
-                f"<svg id='graph-map-canvas' viewBox='0 0 {layout['width']} {layout['height']}' "
-                "style='width:100%;height:auto;max-height:68vh;background:#fffdfa;border:1px solid #e7e1d8;border-radius:8px'>",
-                "<title>Knowledge graph map</title>",
-                "<desc>Interactive map of knowledge objects and their connections.</desc>",
-                # BL-051: labels overlap badly when every node renders one
-                # statically.  Hide labels by default, reveal on hover or
-                # focus.  Each node ``<a>`` carries an aria-label + svg
-                # ``<title>`` so accessibility tooling still has the name.
-                "<style>"
-                "#graph-map-canvas text { opacity: 0; transition: opacity 0.12s ease; pointer-events: none; }"
-                "#graph-map-canvas a:hover text, #graph-map-canvas a:focus text { opacity: 1; }"
-                "</style>",
-                edge_lines,
-                node_marks,
-                "</svg>",
-                "</section>",
+                map_section,
                 "<section class='grid two-col'>",
                 "<section class='card'><h2>How To Read This Map</h2>"
                 "<ul class='list-tight'>"
-                "<li>Each dot is a knowledge object you can open.</li>"
-                "<li>Lines show accepted graph relations from the local projection.</li>"
-                "<li>Nearby groups are reading neighborhoods, not canonical truth boundaries.</li>"
+                "<li>Each dot is a knowledge object you can open.  Click it to jump to the object page.</li>"
+                "<li>Lines show accepted graph relations from the local projection — drag a node to pin it, double-click to release.</li>"
+                "<li>Densely connected groups settle into neighborhoods, but those are reading hints, not canonical truth boundaries.</li>"
+                "<li>For a cluster-specific view with internal-edge detail, open one from <em>Neighborhoods</em> below.</li>"
                 "</ul></section>",
                 "<section class='card'><h2>Neighborhoods</h2>"
                 f"<p><a href='{escape(_shell_href('/ops/clusters', requested_pack))}'>Open Cluster Browser</a></p>"

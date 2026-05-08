@@ -171,6 +171,15 @@ def test_reader_search_to_object(temp_vault):
 # ---------------------------------------------------------------------------
 
 def test_reader_graph_navigation(temp_vault):
+    """``/map`` post-D3-retrofit: ``/object?`` click-through paths
+    live in the inline JSON data block consumed by the D3 bootstrap,
+    not as ``href=`` attributes on the rendered HTML.  Pull one and
+    verify it loads — this preserves the original scenario intent
+    (reader can drill from the map into an object page) without
+    requiring a JS-aware browser harness.
+    """
+    import json
+
     _seed(temp_vault)
     server = create_server(temp_vault, host="127.0.0.1", port=0)
     port = server.server_address[1]
@@ -181,9 +190,17 @@ def test_reader_graph_navigation(temp_vault):
         assert st == 200
         assert "Knowledge" in graph
 
-        obj_links = _extract_hrefs(graph, "/object?")
-        assert obj_links, "/map page should contain at least one /object? link"
-        st, obj = _get(port, obj_links[0])
+        marker = "id='cluster-graph-data'>"
+        start = graph.index(marker) + len(marker)
+        end = graph.index("</script>", start)
+        data = json.loads(graph[start:end].replace("<\\/", "</"))
+        obj_paths = [
+            node["path"]
+            for node in data["nodes"]
+            if isinstance(node.get("path"), str) and node["path"].startswith("/object?")
+        ]
+        assert obj_paths, "/map JSON data should carry at least one /object? path"
+        st, obj = _get(port, obj_paths[0])
         assert st == 200
     finally:
         server.shutdown()

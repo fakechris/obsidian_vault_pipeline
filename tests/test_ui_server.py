@@ -221,14 +221,19 @@ def test_ui_server_map_route_serves_readable_map_entry(temp_vault):
 
     assert status == 200
     assert "Knowledge Graph" in body
-    assert "graph-map-canvas" in body
+    # Post-retrofit: ``/map`` mounts the D3 force solver from
+    # ``_graph_visualizers.py``.  The static-SVG canvas
+    # (``graph-map-canvas`` id, server-computed orbital positions)
+    # is gone; the new mount is the shared ``cluster-graph-svg``
+    # element + ``cluster-graph-data`` JSON block.
+    assert "cluster-graph-svg" in body
+    assert "cluster-graph-data" in body
+    assert "https://unpkg.com/d3@7" in body
     assert "Alpha" in body
     assert "Beta" in body
     assert "How To Read This Map" in body
     assert "Open Cluster Browser" in body
     assert "Showing the first 24 graph neighborhoods" in body
-    assert "<title>Knowledge graph map</title>" in body
-    assert "role='img'" not in body
     assert "action='/map'" in body
     assert "action='/ops/clusters'" not in body
     assert 'href="/">Library</a>' in body
@@ -244,7 +249,8 @@ def test_ui_server_graph_route_serves_visual_graph_mvp(temp_vault):
 
     assert status == 200
     assert "Knowledge Graph" in body
-    assert "graph-map-canvas" in body
+    assert "cluster-graph-svg" in body
+    assert "cluster-graph-data" in body
     assert "Alpha" in body
     assert "Beta" in body
     assert "Showing the first 24 graph neighborhoods" in body
@@ -693,7 +699,18 @@ def test_render_source_backlink_rail_skips_non_dict_items():
     assert "bad-data" not in html
 
 
-def test_render_graph_map_defaults_missing_coordinates():
+def test_render_graph_map_force_view_omits_static_coords():
+    """Post-retrofit ``/map`` mounts the D3 force solver.
+
+    The pre-retrofit assertion was that nodes without server-
+    computed ``x``/``y`` defaulted to ``0.0`` in the inline SVG
+    coordinates.  That whole code path is gone — the D3 solver
+    computes positions client-side, and the renderer hands it a
+    JSON payload with the raw nodes/edges.  Test pivots to:
+    nodes serialize into the ``cluster-graph-data`` JSON block,
+    no inline ``cx=``/``x1=`` coordinates leak through.
+    """
+    import json
     from ovp_pipeline.commands.ui_server import _render_graph_map_page
 
     html = _render_graph_map_page(
@@ -715,7 +732,7 @@ def test_render_graph_map_defaults_missing_coordinates():
                     "object_id": "a",
                     "path": "/object?id=a",
                     "title": "A",
-                    "radius": 8,
+                    "object_kind": "concept",
                     "kind_label": "Concept",
                     "degree": 1,
                 },
@@ -723,7 +740,7 @@ def test_render_graph_map_defaults_missing_coordinates():
                     "object_id": "b",
                     "path": "/object?id=b",
                     "title": "B",
-                    "radius": 8,
+                    "object_kind": "concept",
                     "kind_label": "Concept",
                     "degree": 1,
                 },
@@ -735,13 +752,24 @@ def test_render_graph_map_defaults_missing_coordinates():
                     "source_title": "A",
                     "target_title": "B",
                     "edge_kind": "related",
+                    "weight": 1.0,
                 }
             ],
         }
     )
 
-    assert "cx='0.0'" in html
-    assert "x1='0.0'" in html
+    assert "cluster-graph-svg" in html
+    assert "cluster-graph-data" in html
+    # No leftover inline coord attributes from the removed static-SVG path.
+    assert "cx='0.0'" not in html
+    assert "x1='0.0'" not in html
+    # The JSON data block must carry both seeded nodes so D3 has
+    # something to lay out.
+    start = html.index("id='cluster-graph-data'>") + len("id='cluster-graph-data'>")
+    end = html.index("</script>", start)
+    data = json.loads(html[start:end].replace("<\\/", "</"))
+    assert {n["id"] for n in data["nodes"]} == {"a", "b"}
+    assert len(data["edges"]) == 1
 
 
 def test_ui_server_ops_route_renders_runtime_state_card(temp_vault):
