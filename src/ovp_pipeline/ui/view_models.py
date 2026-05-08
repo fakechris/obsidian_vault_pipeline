@@ -33,6 +33,7 @@ from ..truth_api import (
     get_briefing_snapshot,
     get_graph_cluster_detail,
     get_object_detail,
+    get_object_source_chain,
     get_object_traceability,
     get_note_inbound_capture_summary,
     get_note_provenance,
@@ -2352,6 +2353,7 @@ def build_object_page_payload(
         else []
     )
     production_chain = get_object_traceability(vault_dir, object_id, pack_name=pack_name)
+    source_chain = get_object_source_chain(vault_dir, object_id, pack_name=pack_name)
     compiled_sections = [
         _compiled_section(
             "current_state",
@@ -2557,6 +2559,7 @@ def build_object_page_payload(
         "reader_profile": reader_profile,
         "kind_profile": kind_profile,
         "source_backlink_rail": source_backlink_rail,
+        "source_chain": source_chain,
         "production_chain": production_chain,
         "relations": relations,
         "claim_count": len(detail["claims"]),

@@ -9,7 +9,7 @@ import re
 import sqlite3
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from ._truth_helpers import (  # noqa: F401 — re-exported public constants
     CONTRADICTION_STATUS_EXPLANATIONS,
@@ -1916,7 +1916,8 @@ def get_object_detail(
         for candidate_pack in pack_candidates:
             object_row = conn.execute(
                 """
-                SELECT object_id, object_kind, title, canonical_path, source_slug
+                SELECT object_id, object_kind, title, canonical_path,
+                       source_slug, source_url
                 FROM objects
                 WHERE pack = ? AND object_id = ?
                 """,
@@ -2040,6 +2041,7 @@ def get_object_detail(
             "title": object_row[2],
             "canonical_path": _vault_relative_path(resolved_vault, object_row[3]),
             "source_slug": object_row[4],
+            "source_url": object_row[5] or "",
             "pack": truth_pack,
         },
         "summary": (
@@ -5029,6 +5031,125 @@ def get_object_traceability(
             "source_notes": len(source_note_map),
             "atlas_pages": len(detail["provenance"]["mocs"]),
         },
+    }
+
+
+# Legacy archive filename pattern produced by the pre-BL-029
+# auto_article_processor.  The producer is gone, but legacy vaults
+# still hold these files until ``absorb v2`` re-promotes them.
+# We surface a warning chip when an evergreen object's
+# ``canonical_path`` still points at one.
+_LEGACY_DEEP_DIVE_SUFFIX = "_深度解读.md"
+
+
+def get_object_source_chain(
+    vault_dir: Path | str,
+    object_id: str,
+    *,
+    pack_name: str | None = None,
+) -> dict[str, Any]:
+    """Resolve the post-BL-029 source chain for one object.
+
+    The chain (and the ``/object`` page that surfaces it) is::
+
+        Source URL  →  Source File (active staging)
+                    →  Pipeline Stages (provenance rows)
+                    →  Evergreen Markdown (canonical object file)
+
+    ``source_url`` lives on ``objects`` (BL-054).  Per-stage rows
+    live in ``provenance`` (BL-055; today only ``stage='ingest'`` is
+    written, future BL-056 fills ``extract``/``promote``/...).
+    Source-file resolution reuses ``source_dedup.find_existing_by_url``
+    so it stays in sync with the intake gate.
+
+    Returns a structurally-stable dict — every field is always
+    present, even when the underlying signal is missing — so the
+    renderer never has to ``.get(...)`` defensively.
+    """
+    from .source_dedup import find_existing_by_url
+
+    db_path = _db_path(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    pack_candidates = _materialized_truth_packs(
+        vault_dir, pack_name=pack_name, table_name="objects"
+    )
+
+    truth_pack = ""
+    source_url = ""
+    canonical_path = ""
+    with sqlite3.connect(db_path) as conn:
+        for candidate_pack in pack_candidates:
+            row = conn.execute(
+                """
+                SELECT canonical_path, source_url
+                FROM objects
+                WHERE pack = ? AND object_id = ?
+                """,
+                (candidate_pack, object_id),
+            ).fetchone()
+            if row is not None:
+                truth_pack = candidate_pack
+                canonical_path = row[0] or ""
+                source_url = row[1] or ""
+                break
+        provenance_rows: list[tuple[str, str, str, str]] = []
+        if truth_pack:
+            provenance_rows = list(conn.execute(
+                """
+                SELECT derived_via_stage, derived_at, source_url, metadata_json
+                FROM provenance
+                WHERE pack = ? AND object_id = ?
+                ORDER BY derived_at, derived_via_stage
+                """,
+                (truth_pack, object_id),
+            ).fetchall())
+
+    source_url_domain = ""
+    if source_url:
+        try:
+            parsed = urlparse(source_url)
+            source_url_domain = (parsed.netloc or "").lower()
+        except ValueError:
+            source_url_domain = ""
+
+    source_file_relative = ""
+    if source_url:
+        try:
+            staging_path = find_existing_by_url(resolved_vault, source_url)
+        except Exception:  # noqa: BLE001 — index lookup is best-effort
+            staging_path = None
+        if staging_path is not None:
+            source_file_relative = _vault_relative_path(
+                resolved_vault, str(staging_path),
+            )
+
+    provenance_stages: list[dict[str, Any]] = []
+    for stage, derived_at, prov_source_url, metadata_json in provenance_rows:
+        try:
+            metadata = json.loads(metadata_json) if metadata_json else {}
+        except (TypeError, ValueError):
+            metadata = {}
+        provenance_stages.append({
+            "stage": stage or "",
+            "derived_at": derived_at or "",
+            "source_url": prov_source_url or "",
+            "metadata": metadata if isinstance(metadata, dict) else {},
+        })
+
+    evergreen_path = _vault_relative_path(resolved_vault, canonical_path) if canonical_path else ""
+    evergreen_path_legacy = bool(
+        evergreen_path and evergreen_path.endswith(_LEGACY_DEEP_DIVE_SUFFIX)
+    )
+
+    return {
+        "object_id": object_id,
+        "pack": truth_pack,
+        "source_url": source_url,
+        "source_url_domain": source_url_domain,
+        "source_file_path": source_file_relative,
+        "provenance_stages": provenance_stages,
+        "evergreen_path": evergreen_path,
+        "evergreen_path_legacy": evergreen_path_legacy,
     }
 
 

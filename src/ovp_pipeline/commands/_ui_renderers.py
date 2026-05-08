@@ -2528,14 +2528,110 @@ def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
         "".join(render_related_object(item) for item in related_objects)
         or "<li class='muted'>No related objects yet.</li>"
     )
+    # Section heading is "Discoverable from" (not "Sources &
+    # Backlinks") so the difference between this rail and the new
+    # Source chain card is structurally clear:
+    #   - Source chain  = pipeline lineage (URL → file → stages → evergreen)
+    #   - Discoverable from = inbound wikilinks + atlas membership
+    # The DOM id stays ``sources`` so existing in-page anchors and
+    # the Sources nav link keep working.
     return (
-        "<section id='sources' class='card'><h2>Sources &amp; Backlinks</h2>"
+        "<section id='sources' class='card'><h2>Discoverable from</h2>"
         f"<p class='muted'>{escape(str(rail.get('summary') or 'No source links yet.'))}</p>"
         "<dl class='meta-list'>"
         f"<div><dt>Evergreen</dt><dd>{evergreen_html}</dd></div>"
         f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_html}</ul></dd></div>"
         f"<div><dt>Atlas Pages</dt><dd><ul class='list-tight'>{atlas_html}</ul></dd></div>"
         f"<div><dt>Related Objects</dt><dd><ul class='list-tight'>{related_html}</ul></dd></div>"
+        "</dl></section>"
+    )
+
+
+def _render_source_chain_card(payload: dict, *, requested_pack: str) -> str:
+    """Post-BL-029 ``/object`` provenance card.
+
+    Surfaces the chain ``Source URL → Source File → Pipeline Stages
+    → Evergreen Markdown`` in the order data flows.  Replaces the
+    pre-BL-029 Provenance card that listed evergreen + atlas links
+    only (those moved to the renamed ``Discoverable from`` rail).
+    """
+    chain = payload.get("source_chain") or {}
+    chain = chain if isinstance(chain, dict) else {}
+
+    source_url = str(chain.get("source_url") or "")
+    domain = str(chain.get("source_url_domain") or "")
+    if source_url:
+        url_html = (
+            f'<a href="{escape(source_url)}" rel="noopener noreferrer" target="_blank">'
+            f'{escape(source_url)}</a>'
+            + (f" <span class='muted'>({escape(domain)})</span>" if domain else "")
+        )
+    else:
+        url_html = "<span class='muted'>None recorded</span>"
+
+    source_file = str(chain.get("source_file_path") or "")
+    if source_file:
+        source_file_html = (
+            f'<a href="{escape(_note_href(source_file, requested_pack))}">'
+            f'{escape(source_file)}</a>'
+        )
+    elif source_url:
+        source_file_html = (
+            "<span class='muted'>No active staging file resolved for this URL "
+            "(may have been archived or never ingested).</span>"
+        )
+    else:
+        source_file_html = "<span class='muted'>None</span>"
+
+    stages = chain.get("provenance_stages") or []
+    stages = [item for item in stages if isinstance(item, dict)]
+    if stages:
+        stage_rows = "".join(
+            "<li>"
+            f"<strong>{escape(str(item.get('stage') or ''))}</strong>"
+            f" <span class='muted'>{escape(str(item.get('derived_at') or ''))}</span>"
+            + (
+                f" <span class='muted'>via {escape(str(item.get('metadata', {}).get('via') or ''))}</span>"
+                if isinstance(item.get("metadata"), dict) and item["metadata"].get("via")
+                else ""
+            )
+            + "</li>"
+            for item in stages
+        )
+        stages_html = f"<ul class='list-tight'>{stage_rows}</ul>"
+    else:
+        stages_html = (
+            "<span class='muted'>No provenance rows yet "
+            "(BL-055 backfill writes ``ingest`` rows; ``extract`` / "
+            "``promote`` land in BL-056).</span>"
+        )
+
+    evergreen_path = str(chain.get("evergreen_path") or "")
+    legacy = bool(chain.get("evergreen_path_legacy"))
+    if evergreen_path:
+        evergreen_html = (
+            f'<a href="{escape(_note_href(evergreen_path, requested_pack))}">'
+            f'{escape(evergreen_path)}</a>'
+        )
+        if legacy:
+            evergreen_html += (
+                " <span class='pill warn' title='Path matches the pre-BL-029 "
+                "&quot;*_深度解读.md&quot; archive pattern.  Re-run absorb to refresh "
+                "the canonical evergreen file.'>legacy archive</span>"
+            )
+    else:
+        evergreen_html = "<span class='muted'>None</span>"
+
+    return (
+        "<section class='card'><h2>Source chain</h2>"
+        "<p class='muted'>The post-BL-029 pipeline lineage for this object: "
+        "URL → active staging file → recorded provenance stages → canonical "
+        "evergreen markdown.</p>"
+        "<dl class='meta-list'>"
+        f"<div><dt>Source URL</dt><dd>{url_html}</dd></div>"
+        f"<div><dt>Source File</dt><dd>{source_file_html}</dd></div>"
+        f"<div><dt>Pipeline Stages</dt><dd>{stages_html}</dd></div>"
+        f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
         "</dl></section>"
     )
 
@@ -2612,21 +2708,6 @@ def _render_object_page(payload: dict) -> str:
             for reason in item["reason_texts"]
         )
         or "<li class='muted'>No stale summary signals for this object.</li>"
-    )
-    source_notes = (
-        "".join(
-            f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a> '
-            f"<span class='muted'>({escape(item['note_type'])})</span></li>"
-            for item in payload["provenance"]["source_notes"]
-        )
-        or "<li>None</li>"
-    )
-    mocs = (
-        "".join(
-            f'<li><a href="{escape(_note_href(item["path"], requested_pack))}">{escape(item["title"])}</a></li>'
-            for item in payload["provenance"]["mocs"]
-        )
-        or "<li>None</li>"
     )
     summary_text = payload["summary"]["summary_text"] if payload["summary"] else ""
     reader_profile = payload.get("reader_profile") or {}
@@ -2729,16 +2810,12 @@ def _render_object_page(payload: dict) -> str:
     right_sections.extend(
         [
             _render_kind_profile_card(payload),
+            _render_source_chain_card(payload, requested_pack=requested_pack),
             _render_source_backlink_rail(payload, requested_pack=requested_pack),
             "<section class='card'><h2>Context</h2><dl class='meta-list'>"
             f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
             f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
             f"<div><dt>Canonical Path</dt><dd>{canonical_path_html}</dd></div>"
-            "</dl></section>",
-            "<section class='card'><h2>Provenance</h2><dl class='meta-list'>"
-            f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
-            f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_notes}</ul></dd></div>"
-            f"<div><dt>Atlas / MOC</dt><dd><ul class='list-tight'>{mocs}</ul></dd></div>"
             "</dl></section>",
             "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
             f"<div><dt>Chain Status</dt><dd>{escape(str(payload['production_chain'].get('chain_status') or ''))}</dd></div>"

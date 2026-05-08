@@ -4094,7 +4094,11 @@ Mentions [[alpha]] as a local-first execution pattern.
 
     assert '<span class="pill">Concept</span>' in body
     assert "Alpha supports local-first execution." in body
-    assert "<h2>Sources &amp; Backlinks</h2>" in body
+    # Post-Commit 4 the right-rail heading renamed to make the
+    # split between pipeline lineage (Source chain card) and
+    # inbound-link reach (this rail) explicit.
+    assert "<h2>Discoverable from</h2>" in body
+    assert "<h2>Source chain</h2>" in body
     assert "Source Deep Dive" in body
     assert "Mentions [[alpha]] as a local-first execution pattern." in body
     assert "Related Objects" in body
