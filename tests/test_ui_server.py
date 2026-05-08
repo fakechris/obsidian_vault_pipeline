@@ -1692,8 +1692,9 @@ def test_ui_server_atlas_endpoint_accepts_pack_scope(temp_vault):
 
 def test_ui_server_deep_dives_endpoint_redirects_with_query_preserved(temp_vault):
     """BL-029 deleted the deep-dive producer; ``/api/deep-dives`` and
-    ``/ops/deep-dives`` 301 to ``/ops/today`` instead of returning JSON.
-    Existing bookmarks survive — just no JSON consumer remains."""
+    ``/ops/deep-dives`` both 301 to ``/ops/today`` instead of
+    returning JSON / HTML.  Existing bookmarks survive — just no
+    consumer remains for either path."""
     from ovp_pipeline.commands.ui_server import create_server
 
     _seed_truth_store(temp_vault)
@@ -1704,16 +1705,24 @@ def test_ui_server_deep_dives_endpoint_redirects_with_query_preserved(temp_vault
     try:
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request("GET", "/api/deep-dives?pack=default-knowledge")
-        response = conn.getresponse()
-        location = response.getheader("Location") or ""
-        response.read()
+        api_response = conn.getresponse()
+        api_location = api_response.getheader("Location") or ""
+        api_response.read()
+
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/ops/deep-dives?pack=default-knowledge")
+        ops_response = conn.getresponse()
+        ops_location = ops_response.getheader("Location") or ""
+        ops_response.read()
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
-    assert response.status == 301
-    assert location == "/ops/today?pack=default-knowledge"
+    assert api_response.status == 301
+    assert api_location == "/ops/today?pack=default-knowledge"
+    assert ops_response.status == 301
+    assert ops_location == "/ops/today?pack=default-knowledge"
 
 
 _OPS_QUEUE_REDIRECT_PAIRS = (

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from collections import Counter
+import functools
 import hashlib
 import json
 import os
@@ -1303,6 +1304,13 @@ def list_objects(
         # keeps zero-link objects so the result count matches the
         # ``count_objects`` total used for pagination.  Tie-break by
         # ``object_id`` to keep ordering deterministic.
+        #
+        # The relations sub-query intentionally groups by
+        # ``target_object_id`` only (no pack join): an object's
+        # popularity should reflect inbound links from every active
+        # pack in the vault, not just the pack the row happens to
+        # live in.  Without this, a "Core" object referenced by many
+        # "User"-pack rows would look unlinked.
         select_clause = (
             "SELECT pack, object_id, object_kind, title, canonical_path,"
             " source_slug, backlink_count"
@@ -1314,14 +1322,14 @@ def list_objects(
             " COALESCE(r.backlinks, 0) AS backlink_count,"
             " ROW_NUMBER() OVER ("
             "PARTITION BY o.object_id"
-            f" ORDER BY CASE o.pack {pack_order} ELSE {fallback_order} END"
+            f" ORDER BY CASE o.pack {pack_order} ELSE {fallback_order} END"  # noqa: S608
             ") AS rn"
             " FROM objects o"
             " LEFT JOIN ("
-            "SELECT pack, target_object_id, COUNT(*) AS backlinks"
-            " FROM relations GROUP BY pack, target_object_id"
-            ") r ON r.pack = o.pack AND r.target_object_id = o.object_id"
-            f" WHERE {where_clause}"
+            "SELECT target_object_id, COUNT(*) AS backlinks"
+            " FROM relations GROUP BY target_object_id"
+            ") r ON r.target_object_id = o.object_id"
+            f" WHERE {where_clause}"  # noqa: S608
         )
         order_clause = "ORDER BY backlink_count DESC, object_id"
     else:  # alpha (default)
@@ -1332,9 +1340,9 @@ def list_objects(
             "SELECT pack, object_id, object_kind, title, canonical_path, source_slug,"
             " ROW_NUMBER() OVER ("
             "PARTITION BY object_id"
-            f" ORDER BY CASE pack {pack_order} ELSE {fallback_order} END"
+            f" ORDER BY CASE pack {pack_order} ELSE {fallback_order} END"  # noqa: S608
             ") AS rn"
-            f" FROM objects WHERE {where_clause}"
+            f" FROM objects WHERE {where_clause}"  # noqa: S608
         )
         order_clause = "ORDER BY object_id"
 
@@ -2105,7 +2113,7 @@ def count_graph_clusters(
     normalized_query = _escape_like(query.strip().lower()) if query else ""
     sql = (
         "SELECT COUNT(DISTINCT cluster_id) FROM graph_clusters WHERE pack IN ("
-        + ",".join("?" for _ in pack_candidates)
+        + ",".join("?" for _ in pack_candidates)  # noqa: S608
         + ")"
     )
     params: list[Any] = [*pack_candidates]
@@ -4816,10 +4824,29 @@ def _deep_dive_object_map(vault_dir: Path | str) -> dict[str, list[dict[str, str
     return result
 
 
-def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> list[dict[str, str]]:
-    db_path = _db_path(vault_dir)
-    resolved_vault = resolve_vault_dir(vault_dir)
-    with sqlite3.connect(db_path) as conn:
+@functools.lru_cache(maxsize=4)
+def _promoted_deep_dive_index_cached(
+    db_path_str: str, vault_dir_str: str, db_mtime_ns: int,
+) -> tuple[
+    tuple[tuple[str, str, str], ...],  # deep dive rows: (slug, title, relative_path)
+    dict[str, frozenset[str]],          # target_slug → frozenset of source_names
+]:
+    """Heavy half of ``_promoted_deep_dives_for_object`` cached per
+    ``knowledge.db`` mtime.
+
+    The events-page renderer calls the per-object helper N times
+    (one per event in the dossier), and previously each call
+    re-ran the same two SQL queries + JSON-parsed every
+    ``evergreen_auto_promoted`` payload (~10 K rows on the live
+    vault).  With the cache, the parse runs once per
+    ``ovp-knowledge-index`` rebuild — `mtime_ns` invalidates
+    the cache when the DB changes.
+
+    ``maxsize=4`` is plenty: usually a single vault per process,
+    occasionally two during pack swaps.
+    """
+    resolved_vault = resolve_vault_dir(vault_dir_str)
+    with sqlite3.connect(db_path_str) as conn:
         deep_dive_rows = conn.execute(
             """
             SELECT slug, title, note_type, path
@@ -4836,7 +4863,9 @@ def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> li
             """
         ).fetchall()
 
-    promoted_source_names: set[str] = set()
+    # Build the target_slug → source_names index in one pass so each
+    # per-object lookup is O(1) instead of re-scanning the audit log.
+    by_target: dict[str, set[str]] = {}
     for (payload_json,) in audit_rows:
         try:
             payload = json.loads(payload_json)
@@ -4846,13 +4875,32 @@ def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> li
             payload.get("mutation", {}).get("target_slug") or payload.get("concept") or ""
         ).strip()
         source_name = str(payload.get("source") or "").strip()
-        if target_slug == object_id and source_name:
-            promoted_source_names.add(source_name)
+        if target_slug and source_name:
+            by_target.setdefault(target_slug, set()).add(source_name)
 
+    deep_dive_normalised = tuple(
+        (str(slug), str(title), _vault_relative_path(resolved_vault, path))
+        for slug, title, _note_type, path in deep_dive_rows
+    )
+    by_target_frozen = {k: frozenset(v) for k, v in by_target.items()}
+    return deep_dive_normalised, by_target_frozen
+
+
+def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> list[dict[str, str]]:
+    db_path = _db_path(vault_dir)
+    try:
+        db_mtime_ns = db_path.stat().st_mtime_ns
+    except OSError:
+        db_mtime_ns = 0
+    deep_dive_rows, by_target = _promoted_deep_dive_index_cached(
+        str(db_path), str(vault_dir), db_mtime_ns,
+    )
+    promoted_source_names = by_target.get(object_id) or frozenset()
+    if not promoted_source_names:
+        return []
     items: list[dict[str, str]] = []
     seen_slugs: set[str] = set()
-    for slug, title, _note_type, path in deep_dive_rows:
-        relative_path = _vault_relative_path(resolved_vault, path)
+    for slug, title, relative_path in deep_dive_rows:
         if Path(relative_path).name not in promoted_source_names:
             continue
         if slug in seen_slugs:
@@ -4860,8 +4908,8 @@ def _promoted_deep_dives_for_object(vault_dir: Path | str, object_id: str) -> li
         seen_slugs.add(slug)
         items.append(
             {
-                "slug": str(slug),
-                "title": str(title),
+                "slug": slug,
+                "title": title,
                 "note_type": "deep_dive",
                 "path": relative_path,
             }

@@ -1822,9 +1822,6 @@ def build_queue_overview_payload(
     signals = list_signals(vault_dir, pack_name=pack_name, limit=500)
     signals_waiting = [s for s in signals if s.get("capture_status") == "waiting"]
     signals_productive = [s for s in signals if s.get("capture_status") == "productive"]
-    signals_failed = [
-        s for s in signals if s.get("capture_status") in ("failed", "stalled")
-    ]
     signals_pending = len(signals_waiting)
     signals_oldest = signals_waiting[0] if signals_waiting else None
 
@@ -3291,15 +3288,13 @@ def build_today_digest_payload(
             # ``see_all_path`` deep-links into the event dossier
             # filtered to this card's date + event types so the
             # operator can drill from the card sample (5 rows) into
-            # the full audit list.
+            # the full audit list.  ``_scoped_path`` already appends
+            # ``pack=`` when ``pack_name`` is set, so we don't add
+            # it to ``see_all_qs`` ourselves — pre-fix doing both
+            # produced duplicate ``pack=`` query params.
             see_all_qs = "&".join(
                 [
                     f"date={quote(date_key, safe='')}",
-                    *(
-                        [f"pack={quote(requested_pack, safe='')}"]
-                        if requested_pack
-                        else []
-                    ),
                     "limit=200",
                 ]
             )
@@ -4130,7 +4125,10 @@ def build_cluster_browser_payload(
         "default_limit": limit,
         "show_all": bool(show_all),
         "total_count": total_count,
-        "is_limited": not show_all and total_count > effective_limit,
+        # Compute truncation from actual counts so show_all=True
+        # doesn't silently report "complete" while still capped at
+        # MAX_PAGE_SIZE on a vault with > MAX_PAGE_SIZE clusters.
+        "is_limited": total_count > len(enriched_items),
         "items": enriched_items,
         "count": len(enriched_items),
         "cluster_kind_counts": dict(cluster_kind_counts),

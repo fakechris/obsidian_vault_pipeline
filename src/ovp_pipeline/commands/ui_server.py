@@ -404,7 +404,16 @@ def create_server(
                         offset = 0
                     sort = query.get("sort", ["alpha"])[0] or "alpha"
                     q = query.get("q", [""])[0]
-                    object_kind = query.get("object_kind", [""])[0] or None
+                    # BL-030 follow-up: ``kind`` is the legacy alias
+                    # (used by the type-facet chip rail in PR #177);
+                    # ``object_kind`` is the canonical name.  Accept
+                    # both — preferring ``object_kind`` — so existing
+                    # bookmarks and chip-rail links keep filtering.
+                    object_kind = (
+                        query.get("object_kind", [""])[0]
+                        or query.get("kind", [""])[0]
+                        or None
+                    )
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_objects_index_payload(
                         resolved_vault,
