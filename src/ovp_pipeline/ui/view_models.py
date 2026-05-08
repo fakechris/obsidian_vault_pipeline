@@ -4992,6 +4992,65 @@ def build_runtime_home_payload(
             "items": [],
             "error": "object_index_unavailable",
         }
+    # BL-053 Phase 2 foyer block: three-section "what's the state of
+    # the world" header rendered at the top of /ops.  Each block re-
+    # uses an existing builder so the foyer never gets out of sync
+    # with the source-of-truth pages it links to.
+    foyer: dict[str, Any] = {
+        "today_summary": "",
+        "today_path": _scoped_path("/ops/today", pack_name=requested_pack),
+        "queue_summary": "",
+        "queue_path": _scoped_path("/ops/queue", pack_name=requested_pack),
+        "last_run": None,
+        "runs_path": _scoped_path("/ops/runs", pack_name=requested_pack),
+    }
+    try:
+        today = build_today_digest_payload(vault_dir, pack_name=pack_name)
+        if today.get("available"):
+            cards = today.get("cards") or []
+            ingested = sum(
+                int(card.get("total") or 0)
+                for card in cards
+                if card.get("id") in ("intake", "absorb")
+            )
+            failures = sum(
+                int(card.get("total") or 0)
+                for card in cards
+                if card.get("id") == "failures"
+            )
+            foyer["today_summary"] = (
+                f"{ingested} ingested · {failures} failure"
+                f"{'s' if failures != 1 else ''} · {today.get('date', '')}"
+            )
+    except (OSError, sqlite3.Error):
+        pass
+    try:
+        queue = build_queue_overview_payload(vault_dir, pack_name=pack_name)
+        pending_chunks = [
+            f"{int(q.get('count') or 0)} {q.get('label')}"
+            for q in queue.get("queues", [])
+            if int(q.get("count") or 0) > 0
+        ]
+        if pending_chunks:
+            foyer["queue_summary"] = " · ".join(pending_chunks)
+        else:
+            foyer["queue_summary"] = "no pending review items"
+    except (OSError, sqlite3.Error):
+        pass
+    try:
+        runs = build_runs_index_payload(vault_dir, pack_name=pack_name, limit=1)
+        if runs.get("runs"):
+            last = runs["runs"][0]
+            foyer["last_run"] = {
+                "txn_id": str(last.get("txn_id", "")),
+                "workflow_type": str(last.get("workflow_type", "")),
+                "status": str(last.get("status", "")),
+                "started_at": str(last.get("started_at", "")),
+                "detail_href": str(last.get("detail_href", "")),
+            }
+    except (OSError, sqlite3.Error):
+        pass
+
     entry_sections: list[dict[str, Any]] = []
     return {
         "screen": "truth/runtime-home",
@@ -5002,6 +5061,7 @@ def build_runtime_home_payload(
             generated_by="build_runtime_home_payload",
             derived_from=("knowledge.db", "runtime ledgers"),
         ),
+        "foyer": foyer,
         "runtime": runtime,
         "runtime_state": operational_runtime_state,
         "research_overview": {

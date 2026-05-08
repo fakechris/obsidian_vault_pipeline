@@ -180,6 +180,15 @@ def test_ui_server_ops_route_serves_operator_dashboard(temp_vault):
 
     assert status == 200
     assert "OVP Truth UI" in body
+    # BL-053 Phase 2 foyer: the maintainer dashboard now leads with a
+    # three-block "what's the state of the world" header — Today,
+    # Queue, Last run — so the operator can answer "is anything
+    # broken?" without scrolling.  The blocks deep-link into the
+    # source-of-truth pages they summarise.
+    assert "Maintainer Foyer" in body
+    assert "/ops/today" in body
+    assert "/ops/queue" in body
+    assert "/ops/runs" in body
     assert "Workflow Map" in body
     assert "Orient" in body
     assert "Inspect" in body

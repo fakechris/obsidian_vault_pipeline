@@ -2014,6 +2014,38 @@ def _render_dashboard(payload: dict) -> str:
     right_sections.append(
         _render_review_history(payload["recent_review_actions"], title="Recent Review Actions")
     )
+    foyer = payload.get("foyer") or {}
+    foyer_today_path = str(foyer.get("today_path") or "/ops/today")
+    foyer_queue_path = str(foyer.get("queue_path") or "/ops/queue")
+    foyer_runs_path = str(foyer.get("runs_path") or "/ops/runs")
+    foyer_today_summary = str(foyer.get("today_summary") or "—")
+    foyer_queue_summary = str(foyer.get("queue_summary") or "—")
+    last_run = foyer.get("last_run") or {}
+    if last_run:
+        last_run_summary = (
+            f"{escape(str(last_run.get('workflow_type', '')))}"
+            f" — <strong>{escape(str(last_run.get('status', '')))}</strong>"
+            f" <span class='muted'>{escape(str(last_run.get('started_at', ''))[:19])}</span>"
+        )
+        last_run_link = (
+            f"<a href='{escape(str(last_run.get('detail_href') or foyer_runs_path))}'>open →</a>"
+        )
+    else:
+        last_run_summary = "<span class='muted'>no runs yet</span>"
+        last_run_link = f"<a href='{escape(foyer_runs_path)}'>open →</a>"
+    foyer_block = (
+        "<section class='card'>"
+        "<h2>Maintainer Foyer</h2>"
+        "<dl class='meta-list'>"
+        f"<div><dt>Today</dt><dd>{escape(foyer_today_summary)}"
+        f" <a href='{escape(foyer_today_path)}'>see →</a></dd></div>"
+        f"<div><dt>Queue</dt><dd>{escape(foyer_queue_summary)}"
+        f" <a href='{escape(foyer_queue_path)}'>see →</a></dd></div>"
+        f"<div><dt>Last run</dt><dd>{last_run_summary} {last_run_link}</dd></div>"
+        "</dl>"
+        "</section>"
+    )
+
     dashboard_body = "".join(
         [
             "<section class='hero'>",
@@ -2021,6 +2053,7 @@ def _render_dashboard(payload: dict) -> str:
             "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
             "</section>",
+            foyer_block,
             runtime_card,
             runtime_state_card,
             run_history_card,
