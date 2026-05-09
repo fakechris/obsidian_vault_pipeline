@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none">
+  <title>OVP — monogram</title>
+  
+  <rect x="6" y="9" width="22" height="3.2" rx="1.6" fill="currentColor"></rect>
+  <rect x="6" y="17" width="16" height="3.2" rx="1.6" fill="currentColor" opacity="0.65"></rect>
+  <rect x="6" y="25" width="10" height="3.2" rx="1.6" fill="currentColor" opacity="0.40"></rect>
+  <circle cx="30" cy="26.6" r="4" fill="#9f4f24"></circle>
+</svg>

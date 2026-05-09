@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.resources as importlib_resources
 import json
 import secrets
 import sqlite3
@@ -9,7 +10,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from ..knowledge_index import (
     contradiction_object_ids,
@@ -248,6 +249,24 @@ _LEGACY_MAINTAINER_PATHS: frozenset[str] = frozenset({
 })
 
 
+# Suffix → Content-Type map for the /static/<path> endpoint.  Kept
+# narrow so the route can never be coaxed into serving arbitrary
+# files: any suffix not in this map returns 404.
+_STATIC_CONTENT_TYPES: dict[str, str] = {
+    ".css":   "text/css; charset=utf-8",
+    ".js":    "application/javascript; charset=utf-8",
+    ".svg":   "image/svg+xml",
+    ".woff2": "font/woff2",
+    ".woff":  "font/woff",
+    ".png":   "image/png",
+    ".jpg":   "image/jpeg",
+    ".jpeg":  "image/jpeg",
+    ".webp":  "image/webp",
+    ".ico":   "image/x-icon",
+    ".txt":   "text/plain; charset=utf-8",
+}
+
+
 def create_server(
     vault_dir: Path | str, *, host: str = "127.0.0.1", port: int = 8787
 ) -> ThreadingHTTPServer:
@@ -296,6 +315,14 @@ def create_server(
             # Preserves any existing query string verbatim.
             if path in _LEGACY_MAINTAINER_PATHS:
                 self._permanent_redirect(301, self._legacy_target(parsed))
+                return
+
+            # /static/<path> serves package data from
+            # src/ovp_pipeline/static/.  Handled before
+            # set_request_path() so static loads don't pollute the
+            # Reader/Maintainer shell-selection thread-local.
+            if path.startswith("/static/"):
+                self._serve_static(path[len("/static/"):])
                 return
 
             # BL-050: shell selection is decided by URL prefix.  The
@@ -1730,6 +1757,52 @@ def create_server(
                 "default-src 'self'; script-src 'self' 'unsafe-inline'; "
                 "style-src 'self' 'unsafe-inline'",
             )
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _serve_static(self, asset_path: str) -> None:
+            """Serve a file from the package's ``static/`` directory.
+
+            Reject any path that contains ``..`` segments, an absolute
+            prefix, or whose suffix is not in the small allow-list —
+            this is a static-asset endpoint, not a generic file server.
+            URL-decode before validation so percent-encoded traversal
+            attempts (``%2e%2e``) hit the same checks as literal ones.
+            Hashed/binary assets get a 1-year immutable cache; CSS/JS
+            get ``no-cache`` while the design system is iterating.
+            """
+            asset_path = unquote(asset_path)
+            if (
+                not asset_path
+                or asset_path.startswith("/")
+                or ".." in asset_path.split("/")
+                or "\x00" in asset_path
+            ):
+                self._write_html("<h1>404</h1>", status=404)
+                return
+            suffix = Path(asset_path).suffix.lower()
+            content_type = _STATIC_CONTENT_TYPES.get(suffix)
+            if content_type is None:
+                self._write_html("<h1>404</h1>", status=404)
+                return
+            try:
+                resource = (
+                    importlib_resources.files("ovp_pipeline")
+                    .joinpath("static", asset_path)
+                )
+                body = resource.read_bytes()
+            except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
+                self._write_html("<h1>404</h1>", status=404)
+                return
+            cache = (
+                "public, max-age=31536000, immutable"
+                if suffix in {".woff2", ".woff", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico"}
+                else "no-cache"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", cache)
             self.end_headers()
             self.wfile.write(body)
 

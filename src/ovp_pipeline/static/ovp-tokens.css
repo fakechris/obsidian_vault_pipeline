@@ -1,0 +1,128 @@
+/* ============================================================
+   OVP DESIGN SYSTEM — ovp-tokens.css   (v2 · dual scheme)
+   Two equal-weight schemes:
+     - Light "Atelier"   : warm parchment + terracotta (origin)
+     - Dark  "Vault"     : near-black + deep blue + cyan (improvement)
+
+   Mirrored from docs/design-system/colors_and_type.css with the
+   @font-face block removed — fonts ship via Google Fonts CDN
+   (configured in _ui_renderers.py::_layout()), with graceful
+   fallback through ui-sans-serif / system-ui declared in the
+   --ovp-font-* family stacks below.
+   ============================================================ */
+
+/* ===== LIGHT (default) — "Atelier" ===== */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg:           #f7f6f2;
+  --bg-deep:      #efece5;       /* canvas behind shells, e.g. graph void */
+  --surface:      #fffdfa;
+  --surface-2:    #fbf7f0;       /* page-help, raised tier */
+  --border:       #e7e1d8;
+  --border-strong:#cdc4b6;
+  --text:         #1f1a17;
+  --text-soft:    #443a32;
+  --muted:        #71675d;
+  --accent:       #9f4f24;       /* terracotta */
+  --accent-soft:  #f4dfd2;
+  --accent-2:     #2563bb;       /* secondary accent — used in graph + charts */
+  --accent-2-soft:#dbe7f7;
+
+  --warn-border:  #d48a2f;
+  --warn-bg:      #fff8ec;
+  --warn-text:    #a85e10;
+
+  --code-bg:      #f4f4f5;
+  --code-text:    #1f1a17;
+
+  /* graph-specific surface */
+  --graph-bg:        #efece5;
+  --graph-fog:       #efece5;
+  --graph-link:      rgba(31, 26, 23, 0.16);
+  --graph-link-hi:   #9f4f24;
+  --graph-hull:      rgba(159, 79, 36, 0.10);
+  --graph-hull-edge: rgba(159, 79, 36, 0.55);
+  --graph-grid:      rgba(31, 26, 23, 0.04);
+
+  /* community palette (8) — chosen to read on light bg */
+  --c-1: #9f4f24;  /* ai-research      — terracotta   */
+  --c-2: #2563bb;  /* tools            — deep blue    */
+  --c-3: #2f7d52;  /* programming      — moss green   */
+  --c-4: #b8862e;  /* investing        — gold ochre   */
+  --c-5: #6c4dab;  /* writing          — plum         */
+  --c-6: #b04545;  /* ops              — barn red     */
+  --c-7: #2d6e87;  /* research-method  — slate teal   */
+  --c-8: #645a52;  /* archive          — warm gray    */
+
+  --shadow-shell: 0 12px 36px rgba(31, 26, 23, 0.06);
+  --shadow-pop:   0 16px 48px rgba(31, 26, 23, 0.12);
+}
+
+/* ===== DARK — "Vault" : deep blue tech ===== */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:           #0a0e16;
+  --bg-deep:      #05080d;
+  --surface:      #11161f;
+  --surface-2:    #161c27;
+  --border:       #1f2937;
+  --border-strong:#2c3a4f;
+  --text:         #e6edf5;
+  --text-soft:    #c2cfde;
+  --muted:        #7d8aa0;
+  --accent:       #3b82f6;       /* deep blue */
+  --accent-soft:  rgba(59, 130, 246, 0.16);
+  --accent-2:     #06b6d4;       /* cyan */
+  --accent-2-soft:rgba(6, 182, 212, 0.16);
+
+  --warn-border:  #f59e0b;
+  --warn-bg:      rgba(245, 158, 11, 0.10);
+  --warn-text:    #fbbf24;
+
+  --code-bg:      #0e1420;
+  --code-text:    #e6edf5;
+
+  --graph-bg:        #05080d;
+  --graph-fog:       #05080d;
+  --graph-link:      rgba(125, 138, 160, 0.28);
+  --graph-link-hi:   #06b6d4;
+  --graph-hull:      rgba(59, 130, 246, 0.08);
+  --graph-hull-edge: rgba(59, 130, 246, 0.55);
+  --graph-grid:      rgba(255, 255, 255, 0.03);
+
+  /* community palette (dark) — neon-leaning, all readable on near-black */
+  --c-1: #3b82f6;  /* ai-research      — deep blue     */
+  --c-2: #06b6d4;  /* tools            — cyan          */
+  --c-3: #22c55e;  /* programming      — emerald       */
+  --c-4: #eab308;  /* investing        — amber         */
+  --c-5: #a78bfa;  /* writing          — violet        */
+  --c-6: #f472b6;  /* ops              — pink          */
+  --c-7: #14b8a6;  /* research-method  — teal          */
+  --c-8: #94a3b8;  /* archive          — slate         */
+
+  --shadow-shell: 0 12px 36px rgba(0, 0, 0, 0.55);
+  --shadow-pop:   0 18px 52px rgba(0, 0, 0, 0.7);
+}
+
+/* ===== TYPE ===== */
+:root, [data-theme] {
+  --ovp-font-sans: 'IBM Plex Sans', 'IBM Plex Sans SC', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --ovp-font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --ovp-text-xs:   0.78rem;
+  --ovp-text-sm:   0.92rem;
+  --ovp-text-base: 1rem;
+  --ovp-text-lg:   1.15rem;
+  --ovp-text-xl:   1.4rem;
+  --ovp-text-2xl:  1.75rem;
+  --ovp-text-3xl:  2.5rem;
+
+  --ovp-radius-input: 10px;
+  --ovp-radius-md:    12px;
+  --ovp-radius-card:  16px;
+  --ovp-radius-shell: 20px;
+  --ovp-radius-pill:  999px;
+}

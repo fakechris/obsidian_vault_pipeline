@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 56" fill="none">
+  <title>OVP — wordmark</title>
+  <g transform="translate(0,7)">
+    <rect x="0" y="6" width="32" height="4" rx="2" fill="currentColor"></rect>
+    <rect x="0" y="18" width="22" height="4" rx="2" fill="currentColor" opacity="0.65"></rect>
+    <rect x="0" y="30" width="14" height="4" rx="2" fill="currentColor" opacity="0.40"></rect>
+    <circle cx="38" cy="32" r="5" fill="#9f4f24"></circle>
+  </g>
+  <text x="58" y="39" font-family="&#39;IBM Plex Sans&#39;, &#39;IBM Plex Sans SC&#39;, Inter, ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="600" fill="currentColor" letter-spacing="-0.005em">obsidian vault pipeline<tspan fill="#9f4f24" font-weight="700">.</tspan></text>
+</svg>
