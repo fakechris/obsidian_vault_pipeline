@@ -34,11 +34,17 @@ from urllib.parse import quote
 
 # Visual encoding constants — exposed at module level so they can be
 # tuned without touching the JS string.
-NODE_RADIUS_MIN = 6.0
-NODE_RADIUS_MAX = 18.0
-EDGE_WIDTH_MIN = 1.0
-EDGE_WIDTH_MAX = 6.0
-GRAPH_VIEWPORT_HEIGHT = 520
+#
+# Sizing follows the Obsidian-Canvas aesthetic: small, calm nodes
+# (3-9px) so dense clusters stay legible, hairline edges (0.5-2px)
+# that fade into the background until hovered, and a tall viewport
+# so 30+ member clusters lay out without compressing nodes against
+# the toolbar.
+NODE_RADIUS_MIN = 3.0
+NODE_RADIUS_MAX = 9.0
+EDGE_WIDTH_MIN = 0.5
+EDGE_WIDTH_MAX = 2.0
+GRAPH_VIEWPORT_HEIGHT = 640
 
 # CDN script tag for D3 v7.  Pulled once per cluster page; the
 # browser caches it across cluster page loads.
@@ -133,10 +139,13 @@ def _render_force_graph_section(
         f"viewBox='0 0 800 {GRAPH_VIEWPORT_HEIGHT}' "
         "preserveAspectRatio='xMidYMid meet' role='img' "
         f"aria-label='{escape(aria_label)}'>"
-        "<defs><marker id='cluster-arrow' viewBox='0 -5 10 10' "
-        "refX='15' refY='0' markerWidth='7' markerHeight='7' "
-        "orient='auto'><path d='M0,-5L10,0L0,5' fill='#9f9088'/>"
-        "</marker></defs>"
+        # No SVG <marker> arrowheads — they default to
+        # markerUnits='strokeWidth', which made a 7×7 triangle
+        # explode to 42×42 px when the max-weight edge crossed a
+        # node (the screenshot bug from PR #182 review).  This
+        # graph is undirected from the operator's POV anyway —
+        # ``related_to`` / ``derived_from`` semantics live in the
+        # tooltip, not in chevron orientation.
         "<g id='cluster-graph-edges'></g>"
         "<g id='cluster-graph-nodes'></g>"
         "</svg>"
@@ -165,10 +174,10 @@ def render_cluster_force_graph(payload: dict[str, Any]) -> str:
         edges_data=[_edge_payload(edge) for edge in edges],
         title="Force-Directed View",
         intro=(
-            "Drag a node to pin it (double-click to release).  "
-            "Wheel zooms; drag the background pans.  Click an "
-            "edge-kind chip to fade non-matching edges.  Click a "
-            "node to open its object detail."
+            "Hover a node to highlight its neighbours; click to "
+            "open its object detail.  Drag to pin (double-click "
+            "releases), wheel to zoom, drag the background to "
+            "pan.  Edge-kind chips fade non-matching edges."
         ),
         empty_message=(
             "No members in this cluster — the graph view is hidden "
@@ -200,10 +209,10 @@ def render_graph_map_force_graph(payload: dict[str, Any]) -> str:
         edges_data=[_edge_payload(edge) for edge in edges],
         title="Knowledge Graph",
         intro=(
-            "Drag a node to pin it (double-click to release).  "
-            "Wheel zooms; drag the background pans.  Click an "
-            "edge-kind chip to fade non-matching edges.  Click a "
-            "node to open its object page."
+            "Hover a node to highlight its neighbours; click to "
+            "open its object page.  Drag to pin (double-click "
+            "releases), wheel to zoom, drag the background to "
+            "pan.  Edge-kind chips fade non-matching edges."
         ),
         empty_message=(
             "No nodes in scope — try widening the search query, "
@@ -215,36 +224,80 @@ def render_graph_map_force_graph(payload: dict[str, Any]) -> str:
 
 
 _FORCE_GRAPH_CSS = """
-.cluster-graph svg { width: 100%; height: auto; max-height: 560px;
-  background: #fbf9f5; border-radius: 12px; }
+/* Obsidian Canvas-inspired dark palette.  Self-contained — does
+   not lean on the maintainer-shell ``--bg`` / ``--text`` tokens so
+   the graph stays dark even on pages whose ``<body>`` theme is
+   light (e.g. /map under the Reader shell). */
+.cluster-graph { --gv-bg: #1c1c20; --gv-bg-grid: #25262c;
+  --gv-edge: #4a4a55; --gv-edge-hover: #7daff5; --gv-edge-faded: rgba(74,74,85,0.08);
+  --gv-node-stroke: #2a2b32; --gv-node-stroke-hover: #ffffff;
+  --gv-text: #d4d4dc; --gv-text-dim: #8a8a94;
+  --gv-attention: #ff7a59; --gv-active: #7daff5; --gv-reference: #4a4a55;
+  --gv-tooltip-bg: #15151a; --gv-tooltip-border: #2f3037; --gv-tooltip-accent: #ffd9b8; }
+.cluster-graph svg { width: 100%; height: auto; max-height: 720px;
+  background:
+    radial-gradient(circle at 1px 1px, var(--gv-bg-grid) 1px, transparent 0)
+    0 0 / 24px 24px,
+    var(--gv-bg);
+  border-radius: 12px;
+  border: 1px solid #2a2b32;
+  cursor: grab; }
+.cluster-graph svg:active { cursor: grabbing; }
 .cluster-graph-toolbar { display: flex; align-items: center;
   flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0 0.75rem; }
 .cluster-graph-legend { display: inline-flex; flex-wrap: wrap;
   gap: 0.4rem; }
 .cluster-graph-legend .chip { display: inline-flex; align-items: center;
-  gap: 0.3rem; padding: 0.15rem 0.55rem; border-radius: 999px;
-  border: 1px solid var(--border); background: white; cursor: pointer;
-  appearance: none; font: inherit;
-  font-size: 0.85rem; user-select: none; }
-.cluster-graph-legend .chip.muted { opacity: 0.4; }
-.cluster-graph-legend .chip-swatch { width: 10px; height: 10px;
+  gap: 0.3rem; padding: 0.2rem 0.6rem; border-radius: 999px;
+  border: 1px solid #2f3037; background: #1c1c20; color: #d4d4dc;
+  cursor: pointer; appearance: none; font: inherit;
+  font-size: 0.8rem; user-select: none;
+  transition: opacity 120ms ease, border-color 120ms ease, background 120ms ease; }
+.cluster-graph-legend .chip:hover { border-color: #4a4a55; background: #25262c; }
+.cluster-graph-legend .chip.muted { opacity: 0.32; }
+.cluster-graph-legend .chip-swatch { width: 8px; height: 8px;
   border-radius: 50%; display: inline-block; }
-.cluster-graph-reset { font-size: 0.85rem; padding: 0.25rem 0.7rem;
-  background: white; color: var(--text); border: 1px solid var(--border); }
+.cluster-graph-reset { font-size: 0.8rem; padding: 0.2rem 0.7rem;
+  background: #1c1c20; color: #d4d4dc; border: 1px solid #2f3037;
+  border-radius: 6px; cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease; }
+.cluster-graph-reset:hover { background: #25262c; border-color: #4a4a55; }
 .cluster-graph-tooltip { position: absolute; pointer-events: none;
-  background: #1f1a17; color: #f7f6f2; padding: 0.5rem 0.7rem;
-  border-radius: 6px; font-size: 0.85rem; max-width: 280px;
-  line-height: 1.4; opacity: 0; transform: translate(-50%, -100%);
-  transition: opacity 120ms; z-index: 1000; }
+  background: var(--gv-tooltip-bg); color: var(--gv-text);
+  border: 1px solid var(--gv-tooltip-border);
+  padding: 0.55rem 0.75rem; border-radius: 8px;
+  font-size: 0.82rem; max-width: 320px; line-height: 1.45;
+  opacity: 0; transform: translate(-50%, -100%);
+  transition: opacity 100ms ease; z-index: 1000;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.4); }
 .cluster-graph-tooltip.visible { opacity: 1; }
-.cluster-graph-tooltip strong { color: #ffd9b8; }
-.cluster-graph-edge { stroke-opacity: 0.55; }
-.cluster-graph-edge.faded { stroke-opacity: 0.06; }
+.cluster-graph-tooltip strong { color: var(--gv-tooltip-accent);
+  display: block; margin-bottom: 0.2rem; }
+.cluster-graph-tooltip .meta { color: var(--gv-text-dim);
+  font-size: 0.75rem; }
+/* Edges are hairlines by default and pull color from edge_kind via
+   inline ``stroke``; CSS only manages opacity transitions. */
+.cluster-graph-edge { stroke-opacity: 0.42; pointer-events: none;
+  transition: stroke-opacity 120ms ease, stroke-width 120ms ease; }
+.cluster-graph-edge.faded { stroke-opacity: 0.05; }
+.cluster-graph-edge.hovered { stroke-opacity: 0.95; }
 .cluster-graph-node { cursor: pointer; }
-.cluster-graph-node circle { stroke-width: 2; stroke: #fffdfa; }
-.cluster-graph-node.attention circle { stroke: #c2410c; }
-.cluster-graph-node text { font-size: 11px; fill: #1f1a17;
-  pointer-events: none; user-select: none; }
+.cluster-graph-node circle { stroke: var(--gv-node-stroke); stroke-width: 1;
+  transition: stroke 120ms ease, stroke-width 120ms ease, r 120ms ease; }
+.cluster-graph-node:hover circle { stroke: var(--gv-node-stroke-hover);
+  stroke-width: 2; }
+.cluster-graph-node.attention circle { stroke: var(--gv-attention); }
+.cluster-graph-node.active circle { stroke: var(--gv-active); }
+.cluster-graph-node.dim { opacity: 0.18; }
+.cluster-graph-node text { font-size: 10.5px; fill: var(--gv-text);
+  pointer-events: none; user-select: none;
+  paint-order: stroke; stroke: rgba(28,28,32,0.85); stroke-width: 3;
+  stroke-linejoin: round; opacity: 0; transition: opacity 120ms ease; }
+/* Show labels only on hover or for high-priority nodes — keeps
+   dense clusters readable instead of a wall of overlapping text. */
+.cluster-graph-node.attention text,
+.cluster-graph-node:hover text,
+.cluster-graph-node.hovered text { opacity: 1; }
 """.strip()
 
 
@@ -331,11 +384,11 @@ _FORCE_GRAPH_BOOTSTRAP = r"""
     var simulation = d3.forceSimulation(data.nodes)
       .force('link', d3.forceLink(data.edges)
         .id(function (d) { return d.id; })
-        .distance(110)
-        .strength(0.6))
-      .force('charge', d3.forceManyBody().strength(-220))
+        .distance(80)
+        .strength(0.55))
+      .force('charge', d3.forceManyBody().strength(-160))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collide', d3.forceCollide().radius(function (d) { return radiusScale(d.priority_score || 0) + 4; }));
+      .force('collide', d3.forceCollide().radius(function (d) { return radiusScale(d.priority_score || 0) + 8; }));
 
     var rootG = svg.append('g').attr('class', 'cluster-graph-root');
     var edgesGroup = rootG.append('g').attr('class', 'edges');
@@ -353,8 +406,17 @@ _FORCE_GRAPH_BOOTSTRAP = r"""
       .enter().append('line')
       .attr('class', 'cluster-graph-edge')
       .attr('stroke', function (d) { return edgeColor(d.edge_kind); })
-      .attr('stroke-width', function (d) { return widthScale(d.weight || 1); })
-      .attr('marker-end', 'url(#cluster-arrow)');
+      .attr('stroke-width', function (d) { return widthScale(d.weight || 1); });
+
+    // Build an adjacency index once so hover highlights can fan out
+    // to first-degree neighbours in O(1) per node.
+    var neighbours = {};
+    data.edges.forEach(function (e) {
+      var s = typeof e.source === 'object' ? e.source.id : e.source;
+      var t = typeof e.target === 'object' ? e.target.id : e.target;
+      (neighbours[s] = neighbours[s] || new Set()).add(t);
+      (neighbours[t] = neighbours[t] || new Set()).add(s);
+    });
 
     var nodeSel = nodesGroup.selectAll('g')
       .data(data.nodes)
@@ -362,24 +424,47 @@ _FORCE_GRAPH_BOOTSTRAP = r"""
       .attr('class', function (d) {
         var cls = 'cluster-graph-node';
         if (d.priority_band === 'attention') cls += ' attention';
+        else if (d.priority_band === 'active') cls += ' active';
         return cls;
       })
       .on('click', function (event, d) {
         if (event.defaultPrevented) return;
         if (d.path) window.location.href = d.path;
       })
-      .on('mouseenter', function (event, d) { showTooltip(event, d); })
-      .on('mousemove', function (event, d) { positionTooltip(event); })
-      .on('mouseleave', function () { hideTooltip(); });
+      .on('mouseenter', function (event, d) {
+        focusNode(d);
+        showTooltip(event, d);
+      })
+      .on('mousemove', function (event) { positionTooltip(event); })
+      .on('mouseleave', function () {
+        clearFocus();
+        hideTooltip();
+      });
 
     nodeSel.append('circle')
       .attr('r', function (d) { return radiusScale(d.priority_score || 0); })
       .attr('fill', function (d) { return nodeColor(d.object_kind || ''); });
 
     nodeSel.append('text')
-      .attr('x', function (d) { return radiusScale(d.priority_score || 0) + 4; })
+      .attr('x', function (d) { return radiusScale(d.priority_score || 0) + 5; })
       .attr('y', 4)
-      .text(function (d) { return d.title.length > 38 ? d.title.slice(0, 36) + '…' : d.title; });
+      .text(function (d) { return d.title.length > 32 ? d.title.slice(0, 30) + '…' : d.title; });
+
+    function focusNode(d) {
+      var nbrs = neighbours[d.id] || new Set();
+      nodeSel.classed('hovered', function (n) { return n.id === d.id; })
+        .classed('dim', function (n) { return n.id !== d.id && !nbrs.has(n.id); });
+      edgeSel.classed('hovered', function (e) {
+        var s = typeof e.source === 'object' ? e.source.id : e.source;
+        var t = typeof e.target === 'object' ? e.target.id : e.target;
+        return s === d.id || t === d.id;
+      });
+    }
+
+    function clearFocus() {
+      nodeSel.classed('hovered', false).classed('dim', false);
+      edgeSel.classed('hovered', false);
+    }
 
     // Drag behaviour with double-click release for pinning.
     nodeSel.call(d3.drag()
@@ -454,11 +539,13 @@ _FORCE_GRAPH_BOOTSTRAP = r"""
     }
 
     function showTooltip(event, d) {
-      var lines = ["<strong>" + escapeHtml(d.title) + "</strong>"];
-      if (d.object_kind) lines.push(escapeHtml(d.object_kind));
-      if (d.priority_band) lines.push("priority: " + escapeHtml(d.priority_band));
-      if (d.summary_excerpt) lines.push(escapeHtml(d.summary_excerpt));
-      tooltip.innerHTML = lines.join('<br>');
+      var meta = [];
+      if (d.object_kind) meta.push(escapeHtml(d.object_kind));
+      if (d.priority_band) meta.push(escapeHtml(d.priority_band));
+      var html = "<strong>" + escapeHtml(d.title) + "</strong>";
+      if (meta.length) html += "<span class='meta'>" + meta.join(" · ") + "</span>";
+      if (d.summary_excerpt) html += "<div>" + escapeHtml(d.summary_excerpt) + "</div>";
+      tooltip.innerHTML = html;
       tooltip.classList.add('visible');
       positionTooltip(event);
     }
