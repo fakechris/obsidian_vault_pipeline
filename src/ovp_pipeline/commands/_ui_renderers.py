@@ -281,9 +281,11 @@ def _layout(
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+SC:wght@400;600&display=swap" />
     <link rel="stylesheet" href="/static/ovp-tokens.css" />
     <link rel="stylesheet" href="/static/ovp-ui.css" />
+    <link rel="stylesheet" href="/static/ovp-pages.css" />
     <style>
       /* Page-local additions only — anything reusable belongs in
-         /static/ovp-ui.css so the kit stays diffable.  */
+         /static/ovp-ui.css (kit-faithful) or /static/ovp-pages.css
+         (OVP-specific page components).  */
       main.page {{ display: block; }}
       .nav .brand-mark {{ display: inline-flex; align-items: center; gap: 0.45rem;
         font-weight: 700; color: var(--text); margin-right: 0.4rem;
@@ -1351,20 +1353,11 @@ def _render_note_page(
 # render function doesn't ship a multi-line literal in the middle
 # of its body.  Scope is intentionally local — promoting these
 # styles to ``_layout`` would make them load on every page even
-# when the lineage card isn't rendered.
-_LINEAGE_CARD_STYLE = (
-    "<style>"
-    ".lineage-flow{display:flex;flex-direction:column;gap:.4rem}"
-    ".lineage-row{padding:.5rem .7rem;border-left:3px solid #c9bfae;"
-    "background:#fbf9f5;border-radius:0 4px 4px 0}"
-    ".lineage-row.you{border-left-color:#1c5e1c;background:#eef5e7}"
-    ".lineage-row h3{margin:.1rem 0;font-size:.95rem}"
-    ".lineage-row ul{margin:.2rem 0 .2rem 1.2rem}"
-    ".lineage-row .muted{color:#71675d;font-size:.82rem}"
-    ".lineage-arrow{color:#a59b8c;text-align:center;font-size:.9rem;"
-    "padding:.1rem 0}"
-    "</style>"
-)
+# when the lineage card isn't rendered.  Visual rules now live in
+# /static/ovp-pages.css (.lineage-flow / .lineage-row / .lineage-arrow);
+# this constant stays as an empty string so callers that interpolate
+# it stay shape-stable and we don't have to chase every f-string.
+_LINEAGE_CARD_STYLE = ""
 
 
 def _render_lineage_card(
@@ -2150,21 +2143,8 @@ def _render_library_home(payload: dict) -> str:
 _OBJECTS_INDEX_PAGE_SIZES = (10, 50, 100, 200)
 
 
-_TYPE_FACET_STYLE = """
-<style>
-.type-facet { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 16px 0; padding: 12px; background: #fafaf6; border: 1px solid #e7e1d8; border-radius: 6px; }
-.type-facet h3 { width: 100%; margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 500; color: #71675d; }
-.type-facet a.chip {
-  display: inline-block; padding: 4px 10px; font-size: 0.85rem;
-  border: 1px solid #d6cfc4; border-radius: 14px; background: #fff;
-  color: #1f1a17; text-decoration: none;
-}
-.type-facet a.chip:hover { background: #f4dfd2; border-color: #9f4f24; }
-.type-facet a.chip.active { background: #9f4f24; color: #fff; border-color: #9f4f24; font-weight: 500; }
-.type-facet a.chip .count { color: #71675d; font-size: 0.78rem; margin-left: 4px; }
-.type-facet a.chip.active .count { color: #f4dfd2; }
-</style>
-"""
+# Type-facet chip-rail rules now live in /static/ovp-pages.css.
+_TYPE_FACET_STYLE = ""
 
 # Default chip-rail size for the type facet.  12 covers the common
 # CORE_OBJECT_KINDS set with one or two long-tail entries; the long
@@ -5403,22 +5383,44 @@ def _render_reuse_report_fragment(payload: dict) -> str:
     )
 
 
-def _render_reuse_report_page(payload: dict) -> str:
-    fragment = _render_reuse_report_fragment(payload)
+def _render_fragment_shell(title: str, fragment: str) -> str:
+    """Minimal token-driven shell for fragment-only standalone pages.
+
+    Used by ``/reuse``, ``/open-questions``, ``/writing-prompts`` —
+    pages that render a single section into a centered card without
+    the full ``_layout()`` nav chrome.  Loads the same three
+    stylesheets as ``_layout()`` so light/dark + IBM Plex apply.
+    """
     return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>Reuse Report</title>"
-        "<style>"
-        "body{font-family:system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem}"
-        "table{border-collapse:collapse;width:100%}"
-        "th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}"
-        "th{background:#f4f4f4}"
-        "code{background:#f0f0f0;padding:0 .2rem;border-radius:3px}"
-        ".empty{color:#888;font-style:italic}"
-        "</style></head><body>"
-        f"{fragment}"
-        "</body></html>"
+        "<!doctype html>\n"
+        '<html lang="en" data-theme="light">\n'
+        "<head>\n"
+        "<meta charset='utf-8' />\n"
+        "<meta name='viewport' content='width=device-width, initial-scale=1' />\n"
+        f"<title>{escape(title)}</title>\n"
+        '<link rel="icon" type="image/svg+xml" href="/static/monogram.svg" />\n'
+        '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+        'family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&'
+        'display=swap" />\n'
+        '<link rel="stylesheet" href="/static/ovp-tokens.css" />\n'
+        '<link rel="stylesheet" href="/static/ovp-ui.css" />\n'
+        '<link rel="stylesheet" href="/static/ovp-pages.css" />\n'
+        "<style>main.page { max-width: 880px; padding-top: 2rem; }</style>\n"
+        "<script>(function(){try{var s=localStorage.getItem('ovp-theme');"
+        "if(s==='light'||s==='dark')document.documentElement.dataset.theme=s;}"
+        "catch(e){}})();</script>\n"
+        "</head>\n<body>\n"
+        '<main class="page">\n<div class="shell"><div class="shell-body">\n'
+        f'<h1 style="margin-top:0">{escape(title)}</h1>\n'
+        f"{fragment}\n"
+        "</div></div>\n</main>\n</body>\n</html>"
     )
+
+
+def _render_reuse_report_page(payload: dict) -> str:
+    return _render_fragment_shell("Reuse Report", _render_reuse_report_fragment(payload))
 
 
 def _build_open_questions_payload(vault_dir: Path) -> dict:
@@ -5474,16 +5476,7 @@ def _render_open_questions_fragment(payload: dict) -> str:
 
 
 def _render_open_questions_page(payload: dict) -> str:
-    fragment = _render_open_questions_fragment(payload)
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>Open Questions</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem}"
-        ".empty{color:#888;font-style:italic}"
-        "li{margin:.4rem 0}small{color:#888;margin-left:.5rem}"
-        "</style></head><body>"
-        f"{fragment}</body></html>"
-    )
+    return _render_fragment_shell("Open Questions", _render_open_questions_fragment(payload))
 
 
 def _render_writing_prompts_fragment(payload: dict) -> str:
@@ -5494,16 +5487,7 @@ def _render_writing_prompts_fragment(payload: dict) -> str:
 
 
 def _render_writing_prompts_page(payload: dict) -> str:
-    fragment = _render_writing_prompts_fragment(payload)
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>Writing Prompts</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem}"
-        "pre{white-space:pre-wrap;background:#f7f7f7;padding:1rem;border-radius:4px}"
-        ".empty{color:#888;font-style:italic}"
-        "</style></head><body>"
-        f"{fragment}</body></html>"
-    )
+    return _render_fragment_shell("Writing Prompts", _render_writing_prompts_fragment(payload))
 
 
 _SHELL_BODY_OPEN = '<div class="shell-body">'
@@ -5581,18 +5565,9 @@ def _render_pulse_fragment() -> str:
     appends frames into a tight scrolling list. Designed for the Workbench
     bottom pane; works equally well as a standalone iframe.
     """
+    # ``.pulse`` rules live in /static/ovp-pages.css (token-driven).
     return (
         "<section class='pulse'>"
-        "<style>"
-        ".pulse{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;}"
-        ".pulse ul{list-style:none;margin:0;padding:.4rem;max-height:240px;overflow:auto;"
-        "background:#0e1116;color:#d6deeb;border-radius:6px;}"
-        ".pulse li{margin:.1rem 0;white-space:pre-wrap;}"
-        ".pulse li .ts{color:#7c8593;margin-right:.4rem;}"
-        ".pulse li .et{color:#82aaff;margin-right:.4rem;}"
-        ".pulse li .pk{color:#c792ea;margin-right:.4rem;}"
-        ".pulse .empty{color:#7c8593;padding:.4rem;}"
-        "</style>"
         "<ul id='pulse-feed'><li class='empty'>Waiting for events…</li></ul>"
         "<script>(function(){"
         "var feed=document.getElementById('pulse-feed');"
@@ -5642,26 +5617,8 @@ _TIMELINE_ERROR_SUBJECT_MAX_CHARS = 140
 # ``_render_timeline_page`` doesn't ship a multi-line literal in the
 # middle of its body.  Inline rather than promoted to ``_layout`` —
 # the styles are scoped to one route, lifting them globally would
-# pollute every other page's CSS.
-_TIMELINE_DAY_CARD_STYLE = (
-    "<style>"
-    ".day-card{border:1px solid #ded6cd;border-radius:8px;"
-    "padding:1rem;margin-bottom:1.2rem;background:#fbf9f5}"
-    ".day-card h2{margin:0 0 .3rem 0;font-size:1.1rem}"
-    ".day-meta{color:#71675d;font-size:.85rem;margin-bottom:.7rem}"
-    ".event-grid{display:grid;grid-template-columns:repeat(auto-fit,"
-    "minmax(220px,1fr));gap:.4rem;margin-bottom:.7rem}"
-    ".event-grid .pill{background:#ede7df;padding:.18rem .55rem;"
-    "border-radius:4px;font-size:.85rem}"
-    ".event-grid .pill.error{background:#f5d7d4;color:#761b15}"
-    ".event-grid .pill.highlight{background:#dde9d3;color:#2c5316}"
-    ".samples{margin:.4rem 0}"
-    ".samples h3{font-size:.95rem;margin:.4rem 0 .2rem 0}"
-    ".samples ul{margin:.1rem 0 .4rem 1.2rem}"
-    ".errors li{color:#761b15;font-family:ui-monospace,monospace;"
-    "font-size:.8rem;margin-bottom:.2rem}"
-    "</style>"
-)
+# Timeline day-card rules now live in /static/ovp-pages.css.
+_TIMELINE_DAY_CARD_STYLE = ""
 
 
 def _render_timeline_page(payload: dict) -> str:
@@ -5832,24 +5789,8 @@ _RUN_DETAIL_SUBJECT_MAX_CHARS = 120
 _TS_DISPLAY_LEN = 19
 
 
-_TODAY_DIGEST_STYLE = """
-<style>
-.today-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
-.today-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; }
-.today-card h3 { margin: 0 0 8px 0; font-size: 1rem; }
-.today-card .total { font-size: 2rem; font-weight: 600; color: #111827; }
-.today-card.failures .total { color: #b91c1c; }
-.today-card .by-type { color: #6b7280; font-size: 0.85rem; margin-top: 4px; }
-.today-card .by-type code { background: #f3f4f6; padding: 1px 6px; border-radius: 3px; }
-.today-card .samples { margin-top: 12px; padding-top: 12px; border-top: 1px solid #f3f4f6; }
-.today-card .samples ul { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.85rem; }
-.today-card .samples li { margin: 2px 0; }
-.today-card.empty .total { color: #d1d5db; }
-.today-card .see-all { margin-top: 10px; font-size: 0.85rem; }
-.today-card .see-all a { color: var(--accent); text-decoration: none; }
-.today-card .see-all a:hover { text-decoration: underline; }
-</style>
-"""
+# Today digest cards now live in /static/ovp-pages.css.
+_TODAY_DIGEST_STYLE = ""
 
 
 def _render_today_digest_page(payload: dict) -> str:
@@ -5974,18 +5915,8 @@ def _render_today_digest_page(payload: dict) -> str:
     return _layout(f"Today — {date}", body, requested_pack=requested_pack)
 
 
-_RUNS_INDEX_STYLE = """
-<style>
-.runs-table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-.runs-table th, .runs-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #f3f4f6; }
-.runs-table th { background: #f9fafb; font-weight: 500; font-size: 0.85rem; color: #6b7280; }
-.runs-table td { font-size: 0.9rem; }
-.runs-table .status-completed { color: #059669; font-weight: 500; }
-.runs-table .status-running { color: #2563eb; font-weight: 500; }
-.runs-table .status-stale { color: #ca8a04; font-weight: 500; }
-.runs-table code { font-size: 0.8rem; }
-</style>
-"""
+# Runs index table rules now live in /static/ovp-pages.css.
+_RUNS_INDEX_STYLE = ""
 
 
 def _render_runs_index_page(payload: dict) -> str:
@@ -6136,22 +6067,8 @@ def _render_runs_index_page(payload: dict) -> str:
     return _layout("Runs", body, requested_pack=requested_pack)
 
 
-_RUN_DETAIL_STYLE = """
-<style>
-.run-header { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
-.run-header dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; font-size: 0.9rem; }
-.run-header dt { color: #6b7280; }
-.run-header dd { margin: 0; }
-.event-rows { width: 100%; border-collapse: collapse; }
-.event-rows tr td { padding: 6px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
-.event-rows td.ts { white-space: nowrap; font-family: monospace; font-size: 0.8rem; color: #6b7280; }
-.event-rows td.type { font-weight: 500; }
-.event-rows td.subject { color: #374151; }
-.event-rows tr.error td.type { color: #b91c1c; }
-.event-rows tr.bracket td { background: #f0fdf4; font-weight: 500; }
-.event-rows tr.bracket-completed td { background: #ecfdf5; }
-</style>
-"""
+# Run detail rules now live in /static/ovp-pages.css.
+_RUN_DETAIL_STYLE = ""
 
 _BRACKET_EVENT_TYPES = frozenset({
     "transaction_started",
@@ -6305,34 +6222,30 @@ def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
     pack_json = json.dumps(requested_pack).replace("</", "<\\/")
 
     return (
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<!doctype html>\n<html lang='en' data-theme='light'><head><meta charset='utf-8' />"
         "<meta name='viewport' content='width=device-width, initial-scale=1' />"
         "<title>Workbench</title>"
-        "<style>"
-        "*{box-sizing:border-box}"
-        "body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;background:#f7f6f2;color:#1f1a17}"
-        "header{padding:.6rem 1rem;border-bottom:1px solid #e7e1d8;display:flex;gap:1rem;align-items:center}"
-        "header h1{font-size:1rem;margin:0;color:#9f4f24}"
-        "header .meta{color:#71675d;font-size:.85rem}"
-        ".grid{display:grid;height:calc(100vh - 56px);"
-        "grid-template-columns:280px 1fr 280px;"
-        "grid-template-rows:1fr 1fr 220px;"
-        "gap:1px;background:#e7e1d8;}"
-        ".pane{background:#fffdfa;overflow:auto}"
-        ".pane iframe{width:100%;height:100%;border:0;display:block}"
-        ".pane.cand{grid-row:1/3}"
-        ".pane.obj{grid-row:1/2}"
-        ".pane.brief{grid-row:2/3}"
-        ".pane.act{grid-row:1/3}"
-        ".pane.pulse{grid-column:1/4;grid-row:3/4}"
-        "</style></head><body>"
+        "<link rel='icon' type='image/svg+xml' href='/static/monogram.svg' />"
+        "<link rel='preconnect' href='https://fonts.googleapis.com' />"
+        "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin />"
+        "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?"
+        "family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&"
+        "display=swap' />"
+        "<link rel='stylesheet' href='/static/ovp-tokens.css' />"
+        "<link rel='stylesheet' href='/static/ovp-ui.css' />"
+        "<link rel='stylesheet' href='/static/ovp-pages.css' />"
+        "<style>*{box-sizing:border-box}</style>"
+        "<script>(function(){try{var s=localStorage.getItem('ovp-theme');"
+        "if(s==='light'||s==='dark')document.documentElement.dataset.theme=s;}"
+        "catch(e){}})();</script>"
+        "</head><body class='fullbleed-shell'>"
         "<header>"
         "<h1>Workbench</h1>"
         f"<span class='meta'>object: <code id='wb-object'>{escape(object_id) or '∅'}</code></span>"
         f"<span class='meta'>pack: <code>{escape(requested_pack) or '∅'}</code></span>"
-        "<a href='/' style='margin-left:auto;color:#9f4f24;text-decoration:none'>← Shell</a>"
+        "<a href='/' style='margin-left:auto'>← Shell</a>"
         "</header>"
-        "<div class='grid'>"
+        "<div class='fullbleed-grid workbench'>"
         f"<section class='pane cand'><iframe id='pane-cand' src='{escape(cand_src)}'></iframe></section>"
         f"<section class='pane obj'><iframe id='pane-obj' src='{escape(object_src)}'></iframe></section>"
         f"<section class='pane brief'><iframe id='pane-brief' src='{escape(briefing_src)}'></iframe></section>"
@@ -6385,17 +6298,9 @@ def _render_explore_fragment(object_id: str) -> str:
     Pulse fragment so the look-and-feel is consistent across SSE panes.
     """
     object_qs = quote(object_id, safe="")
+    # ``.agent-timeline`` rules live in /static/ovp-pages.css.
     return (
         "<section class='agent-timeline'>"
-        "<style>"
-        ".agent-timeline{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;}"
-        ".agent-timeline ul{list-style:none;margin:0;padding:.4rem;height:100%;overflow:auto;"
-        "background:#0e1116;color:#d6deeb;border-radius:6px;}"
-        ".agent-timeline li{margin:.1rem 0;white-space:pre-wrap;}"
-        ".agent-timeline li .ts{color:#7c8593;margin-right:.4rem;}"
-        ".agent-timeline li .tool{color:#82aaff;margin-right:.4rem;}"
-        ".agent-timeline .empty{color:#7c8593;padding:.4rem;}"
-        "</style>"
         "<ul id='agent-feed'><li class='empty'>Waiting for agent decisions…</li></ul>"
         "<script>(function(){"
         "var feed=document.getElementById('agent-feed');"
@@ -6440,31 +6345,29 @@ def _render_explore_page(*, object_id: str) -> str:
     canvas_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/ops/objects"
     synth_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/ops/objects"
     return (
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<!doctype html>\n<html lang='en' data-theme='light'><head><meta charset='utf-8' />"
         "<meta name='viewport' content='width=device-width, initial-scale=1' />"
         "<title>Explore</title>"
-        "<style>"
-        "*{box-sizing:border-box}"
-        "body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;background:#f7f6f2;color:#1f1a17}"
-        "header{padding:.6rem 1rem;border-bottom:1px solid #e7e1d8;display:flex;gap:1rem;align-items:center}"
-        "header h1{font-size:1rem;margin:0;color:#9f4f24}"
-        "header .meta{color:#71675d;font-size:.85rem}"
-        ".grid{display:grid;height:calc(100vh - 56px);"
-        "grid-template-columns:1fr 360px;"
-        "grid-template-rows:1fr 260px;"
-        "gap:1px;background:#e7e1d8;}"
-        ".pane{background:#fffdfa;overflow:auto}"
-        ".pane iframe{width:100%;height:100%;border:0;display:block}"
-        ".pane.canvas{grid-row:1/2;grid-column:1/2}"
-        ".pane.timeline{grid-row:1/2;grid-column:2/3;padding:.4rem}"
-        ".pane.synth{grid-column:1/3;grid-row:2/3}"
-        "</style></head><body>"
+        "<link rel='icon' type='image/svg+xml' href='/static/monogram.svg' />"
+        "<link rel='preconnect' href='https://fonts.googleapis.com' />"
+        "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin />"
+        "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?"
+        "family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&"
+        "display=swap' />"
+        "<link rel='stylesheet' href='/static/ovp-tokens.css' />"
+        "<link rel='stylesheet' href='/static/ovp-ui.css' />"
+        "<link rel='stylesheet' href='/static/ovp-pages.css' />"
+        "<style>*{box-sizing:border-box}</style>"
+        "<script>(function(){try{var s=localStorage.getItem('ovp-theme');"
+        "if(s==='light'||s==='dark')document.documentElement.dataset.theme=s;}"
+        "catch(e){}})();</script>"
+        "</head><body class='fullbleed-shell'>"
         "<header>"
         "<h1>Explore</h1>"
         f"<span class='meta'>object: <code id='ex-object'>{escape(object_id) or '∅'}</code></span>"
-        "<a href='/' style='margin-left:auto;color:#9f4f24;text-decoration:none'>← Shell</a>"
+        "<a href='/' style='margin-left:auto'>← Shell</a>"
         "</header>"
-        "<div class='grid'>"
+        "<div class='fullbleed-grid explore'>"
         f"<section class='pane canvas'><iframe id='pane-canvas' src='{escape(canvas_src)}'></iframe></section>"
         f"<section class='pane timeline'>{_render_explore_fragment(object_id)}</section>"
         f"<section class='pane synth'><iframe id='pane-synth' src='{escape(synth_src)}'></iframe></section>"
