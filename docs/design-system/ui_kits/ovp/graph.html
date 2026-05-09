@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>OVP — Cluster Graph (3D)</title>
+<link rel="stylesheet" href="ovp-ui.css">
+<link rel="icon" type="image/svg+xml" href="../../assets/monogram.svg">
+<style>
+  body { overflow: hidden; }
+  .graph-page {
+    position: fixed; inset: 0;
+    background: var(--graph-bg);
+    transition: background 200ms;
+  }
+  #graph-canvas { position: absolute; inset: 0; }
+
+  /* ---------- TOP BAR ---------- */
+  .topbar {
+    position: absolute; top: 16px; left: 16px; right: 16px;
+    display: flex; align-items: center; gap: 12px;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .topbar > * { pointer-events: auto; }
+  .topbar .brand {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 8px 14px 8px 12px; font-weight: 700; font-size: 0.95rem;
+    letter-spacing: -0.01em;
+    display: inline-flex; align-items: center; gap: 8px;
+    box-shadow: var(--shadow-shell);
+  }
+  .topbar .brand .dot { color: var(--accent); }
+  .topbar .brand .crumb { color: var(--muted); font-weight: 500; font-size: 0.85rem; margin-left: 6px; }
+
+  .search-wrap {
+    position: relative;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 6px 10px 6px 14px;
+    display: inline-flex; align-items: center; gap: 8px;
+    min-width: 280px;
+    box-shadow: var(--shadow-shell);
+  }
+  .search-wrap input {
+    border: 0; background: transparent; outline: none;
+    color: var(--text); font: inherit;
+    width: 100%; padding: 4px 0;
+  }
+  .search-wrap .kbd {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+    color: var(--muted); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .search-results {
+    position: absolute; top: 100%; left: 0; right: 0; margin-top: 6px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: var(--shadow-pop);
+    max-height: 320px; overflow-y: auto; display: none;
+  }
+  .search-results.open { display: block; }
+  .search-results .row {
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+    cursor: pointer; display: flex; align-items: center; gap: 8px;
+    font-size: 0.92rem;
+  }
+  .search-results .row:last-child { border-bottom: 0; }
+  .search-results .row:hover { background: var(--surface-2); }
+  .search-results .row .swatch {
+    width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0;
+  }
+  .search-results .row .meta { color: var(--muted); font-size: 0.78rem; margin-left: auto; }
+  .search-results .empty { padding: 12px; color: var(--muted); font-size: 0.85rem; text-align: center; }
+
+  .topbar .spacer { flex: 1; }
+
+  .theme-toggle {
+    background: var(--surface); border: 1px solid var(--border);
+    box-shadow: var(--shadow-shell);
+  }
+
+  .topbar .nav-link {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 8px 14px; font-size: 0.85rem;
+    color: var(--muted); font-weight: 500;
+    box-shadow: var(--shadow-shell);
+  }
+  .topbar .nav-link:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+
+  /* ---------- LEFT: COMMUNITY LEGEND / FILTERS ---------- */
+  .panel {
+    position: absolute; z-index: 4;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; box-shadow: var(--shadow-shell);
+    padding: 14px;
+  }
+  .panel h4 {
+    margin: 0 0 10px; font-size: 0.78rem;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .panel h4 + .desc { margin-top: -6px; margin-bottom: 10px; font-size: 0.78rem; color: var(--muted); }
+
+  .left-panel {
+    top: 80px; left: 16px; width: 260px;
+    max-height: calc(100vh - 200px);
+    overflow-y: auto;
+  }
+  .legend-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 6px; border-radius: 8px;
+    cursor: pointer; user-select: none;
+    transition: background 120ms;
+  }
+  .legend-row:hover { background: var(--surface-2); }
+  .legend-row.dim { opacity: 0.4; }
+  .legend-row .swatch {
+    width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0;
+  }
+  .legend-row .name { flex: 1; font-size: 0.92rem; font-weight: 500; }
+  .legend-row .count { font-size: 0.78rem; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+
+  .filter-section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+  .filter-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 4px; font-size: 0.88rem; cursor: pointer;
+    border-radius: 6px;
+    transition: background 120ms;
+  }
+  .filter-row:hover { background: var(--surface-2); }
+  .filter-row input { margin: 0; accent-color: var(--accent); }
+  .filter-row .badge {
+    margin-left: auto; font-size: 0.72rem; color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ---------- BOTTOM: TIMELINE ---------- */
+  .timeline-bar {
+    position: absolute; left: 16px; right: 360px; bottom: 16px; z-index: 4;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; box-shadow: var(--shadow-shell);
+    padding: 12px 16px;
+  }
+  .timeline-bar .head {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+    font-size: 0.82rem;
+  }
+  .timeline-bar .head .label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; }
+  .timeline-bar .head .date { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: var(--accent); }
+  .timeline-bar .head .actions { margin-left: auto; display: flex; gap: 6px; }
+  .timeline-bar .head .actions button {
+    padding: 3px 9px; font-size: 0.78rem;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--muted); border-radius: 999px;
+  }
+  .timeline-bar .head .actions button:hover { color: var(--accent); border-color: var(--accent); }
+  .timeline-bar .head .actions button.playing { color: white; background: var(--accent); border-color: var(--accent); }
+
+  .scrubber {
+    position: relative; height: 28px; cursor: pointer;
+    border-radius: 8px; overflow: hidden;
+    background: var(--bg-deep);
+  }
+  .scrubber .ticks { position: absolute; inset: 0; display: flex; }
+  .scrubber .tick { flex: 1; border-right: 1px solid var(--border); }
+  .scrubber .tick:last-child { border-right: 0; }
+  .scrubber .bars {
+    position: absolute; inset: 0; display: flex; align-items: end;
+    padding: 0 1px; gap: 1px; pointer-events: none;
+  }
+  .scrubber .bar {
+    flex: 1; background: var(--accent); opacity: 0.45;
+    border-radius: 2px 2px 0 0; min-height: 2px;
+  }
+  .scrubber .head-line {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: var(--accent); pointer-events: none;
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+  .scrubber .label-axis {
+    position: absolute; left: 4px; bottom: 2px; right: 4px;
+    display: flex; justify-content: space-between;
+    font-size: 0.7rem; color: var(--muted); pointer-events: none;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ---------- RIGHT: DETAIL PANEL ---------- */
+  .right-panel {
+    top: 80px; right: 16px; bottom: 16px; width: 330px;
+    overflow-y: auto;
+    display: flex; flex-direction: column;
+  }
+  .detail-empty {
+    color: var(--muted); font-size: 0.92rem; text-align: center;
+    padding: 60px 20px;
+  }
+  .detail-empty .glyph {
+    font-size: 2.4rem; opacity: 0.4; margin-bottom: 10px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .detail-head {
+    margin-bottom: 12px;
+  }
+  .detail-head .typewrap {
+    display: inline-flex; gap: 6px; align-items: center;
+    margin-bottom: 8px;
+  }
+  .detail-head h2 {
+    font-size: 1.2rem; line-height: 1.25; margin: 0 0 6px;
+    text-wrap: balance;
+  }
+  .detail-head .community-line {
+    font-size: 0.82rem; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .detail-head .community-line .swatch {
+    width: 8px; height: 8px; border-radius: 999px;
+  }
+  .detail-head .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .detail-head .actions .btn { padding: 6px 10px; font-size: 0.82rem; }
+
+  .neighbors h5 {
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); font-family: 'JetBrains Mono', monospace;
+    margin: 14px 0 6px; font-weight: 600;
+  }
+  .neighbors .nrow {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 6px;
+    font-size: 0.88rem; cursor: pointer;
+    transition: background 120ms;
+  }
+  .neighbors .nrow:hover { background: var(--surface-2); color: var(--accent); }
+  .neighbors .nrow .swatch { width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0; }
+  .neighbors .nrow .kindtag {
+    font-size: 0.68rem; padding: 1px 5px; border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--bg-deep); color: var(--muted); margin-left: auto;
+  }
+  .neighbors .nrow .kindtag.contradict { background: var(--warn-bg); color: var(--warn-text); }
+
+  /* ---------- TWEAKS PANEL ---------- */
+  .tweaks {
+    position: absolute; bottom: 16px; right: 16px;
+    width: 330px; z-index: 6;
+    /* sits on top of right-panel bottom */
+  }
+  .tweaks-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0; font-size: 0.85rem;
+  }
+  .tweaks-row .label { flex: 1; color: var(--text-soft); }
+  .tweaks-row .seg {
+    display: inline-flex; border: 1px solid var(--border);
+    border-radius: 999px; overflow: hidden;
+  }
+  .tweaks-row .seg button {
+    padding: 4px 10px; font-size: 0.78rem;
+    background: transparent; border: 0; color: var(--muted);
+    border-radius: 0;
+    border-right: 1px solid var(--border);
+  }
+  .tweaks-row .seg button:last-child { border-right: 0; }
+  .tweaks-row .seg button.active { background: var(--accent); color: white; }
+  .tweaks-row input[type="range"] { flex: 1.4; accent-color: var(--accent); }
+  .tweaks-row .val { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--muted); width: 32px; text-align: right; }
+
+  /* ---------- HELP CHIP ---------- */
+  .help-chip {
+    position: absolute; bottom: 16px; left: 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; box-shadow: var(--shadow-shell);
+    padding: 8px 14px; font-size: 0.78rem; color: var(--muted);
+    z-index: 4; pointer-events: none;
+    font-family: 'JetBrains Mono', monospace;
+    display: none; /* hidden when timeline shown */
+  }
+  .help-chip kbd {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+    color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px; background: var(--bg-deep);
+    margin: 0 2px;
+  }
+
+  /* ---------- HUD overlay (top-right meta) ---------- */
+  .hud {
+    position: absolute; bottom: 80px; right: 360px;
+    display: flex; gap: 8px; z-index: 4;
+    pointer-events: none;
+  }
+  .hud .chip {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; padding: 6px 12px;
+    font-size: 0.78rem; color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    box-shadow: var(--shadow-shell);
+  }
+  .hud .chip strong { color: var(--text); margin-right: 4px; }
+
+  /* ---------- HOVER LABEL ---------- */
+  .hover-label {
+    position: absolute; pointer-events: none; z-index: 8;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: var(--shadow-pop);
+    padding: 6px 10px; font-size: 0.85rem;
+    transform: translate(12px, -50%);
+    display: none;
+    max-width: 240px;
+  }
+  .hover-label .ttl { font-weight: 600; }
+  .hover-label .sub { color: var(--muted); font-size: 0.78rem; margin-top: 2px; }
+
+  /* responsive collapse */
+  @media (max-width: 1100px) {
+    .timeline-bar { right: 16px; }
+    .right-panel { display: none; }
+    .hud { right: 16px; }
+  }
+  @media (max-width: 760px) {
+    .left-panel { display: none; }
+    .topbar .nav-link { display: none; }
+    .search-wrap { min-width: 0; flex: 1; }
+  }
+</style>
+</head>
+
+<body>
+<div class="graph-page" id="graph-page">
+
+  <div id="graph-canvas"></div>
+
+  <!-- ============ TOP BAR ============ -->
+  <header class="topbar">
+    <span class="brand">
+      <img src="../../assets/monogram.svg" width="20" height="20" style="display:block">
+      <span>obsidian vault pipeline<span class="dot">.</span></span>
+      <span class="crumb">/ atlas · cluster graph</span>
+    </span>
+
+    <div class="search-wrap">
+      <span class="muted mono tiny">⌕</span>
+      <input id="search" type="text" placeholder="Find a node, topic, or community…" autocomplete="off">
+      <span class="kbd">/</span>
+      <div class="search-results" id="search-results"></div>
+    </div>
+
+    <span class="spacer"></span>
+
+    <a class="nav-link" href="index.html">← Library</a>
+    <a class="nav-link" href="index.html">Maintenance</a>
+
+    <div class="theme-toggle">
+      <button data-theme-set="light" id="th-light">LIGHT</button>
+      <button data-theme-set="dark"  id="th-dark" class="active">DARK</button>
+    </div>
+  </header>
+
+  <!-- ============ LEFT PANEL: COMMUNITIES + FILTERS ============ -->
+  <aside class="panel left-panel">
+    <h4>Communities</h4>
+    <div class="desc">Click to isolate · ⇧-click to multi-select</div>
+    <div id="legend"></div>
+
+    <div class="filter-section">
+      <h4>Node type</h4>
+      <label class="filter-row"><input type="checkbox" data-filter="evergreen"     checked>Evergreen<span class="badge" id="cnt-evergreen">0</span></label>
+      <label class="filter-row"><input type="checkbox" data-filter="deepdive"      checked>Deep dive<span class="badge" id="cnt-deepdive">0</span></label>
+      <label class="filter-row"><input type="checkbox" data-filter="topic"         checked>Topic<span class="badge" id="cnt-topic">0</span></label>
+      <label class="filter-row"><input type="checkbox" data-filter="open-question" checked>Open question<span class="badge" id="cnt-open-question">0</span></label>
+    </div>
+
+    <div class="filter-section">
+      <h4>Source</h4>
+      <label class="filter-row"><input type="checkbox" data-filter-src="manual"   checked>Manual</label>
+      <label class="filter-row"><input type="checkbox" data-filter-src="pinboard" checked>Pinboard</label>
+      <label class="filter-row"><input type="checkbox" data-filter-src="clipper"  checked>Clipper</label>
+      <label class="filter-row"><input type="checkbox" data-filter-src="github"   checked>GitHub</label>
+    </div>
+
+    <div class="filter-section">
+      <h4>Quality threshold</h4>
+      <input type="range" id="quality-slider" min="0" max="5" step="0.1" value="0" style="width:100%;accent-color:var(--accent)">
+      <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-top:4px">
+        <span>≥ <span id="quality-val">0.0</span></span>
+        <span>5.0</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ HUD ============ -->
+  <div class="hud">
+    <div class="chip"><strong id="hud-nodes">0</strong>nodes</div>
+    <div class="chip"><strong id="hud-links">0</strong>links</div>
+    <div class="chip"><strong id="hud-comms">0</strong>communities</div>
+    <div class="chip" id="hud-mode"><strong>EXPAND</strong>double-click</div>
+  </div>
+
+  <!-- ============ BOTTOM: TIMELINE ============ -->
+  <div class="timeline-bar"></div>
+
+  <!-- ============ RIGHT PANEL: DETAIL ============ -->
+  <aside class="panel right-panel" id="detail">
+    <div class="detail-empty">
+      <div class="glyph">⌖</div>
+      <div>Click a node to inspect.</div>
+      <div style="margin-top:6px;font-size:0.78rem">Or hover to highlight neighbors.</div>
+    </div>
+  </aside>
+
+  <!-- ============ TWEAKS PANEL (overlay on right-panel bottom) ============ -->
+  <div class="panel tweaks" id="tweaks">
+    <h4>Tweaks</h4>
+    <div class="tweaks-row">
+      <span class="label">View</span>
+      <div class="seg" id="seg-dims">
+        <button data-dims="3" class="active">3D</button>
+        <button data-dims="2">2D</button>
+      </div>
+    </div>
+    <div class="tweaks-row">
+      <span class="label">Disclosure</span>
+      <div class="seg" id="seg-mode">
+        <button data-mode="dblclick" class="active">Dbl-click</button>
+        <button data-mode="hover">Hover</button>
+        <button data-mode="zoom">Zoom</button>
+      </div>
+    </div>
+    <div class="tweaks-row">
+      <span class="label">Show hulls</span>
+      <div class="seg" id="seg-hulls">
+        <button data-hulls="on" class="active">On</button>
+        <button data-hulls="off">Off</button>
+      </div>
+    </div>
+    <div class="tweaks-row">
+      <span class="label">Link strength</span>
+      <input type="range" id="link-strength" min="-300" max="-30" step="10" value="-150">
+      <span class="val" id="link-strength-val">-150</span>
+    </div>
+    <div class="tweaks-row">
+      <span class="label">Node base size</span>
+      <input type="range" id="node-size" min="2" max="10" step="0.5" value="4.5">
+      <span class="val" id="node-size-val">4.5</span>
+    </div>
+    <div class="tweaks-row">
+      <span class="label">Spin</span>
+      <div class="seg" id="seg-spin">
+        <button data-spin="off" class="active">Off</button>
+        <button data-spin="slow">Slow</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="hover-label" id="hover-label">
+    <div class="ttl"></div>
+    <div class="sub"></div>
+  </div>
+
+</div>
+
+<!-- ============ Libraries ============ -->
+<script src="https://unpkg.com/three@0.155.0/build/three.min.js"></script>
+<script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+<script src="graph-data.js"></script>
+<script src="graph-app.js"></script>
+
+</body>
+</html>

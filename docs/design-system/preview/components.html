@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OVP — Components</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 32px; background: var(--bg); }
+  .ovp-root { display: grid; gap: 22px; }
+  .demo-block { padding: 18px; border: 1px dashed var(--border); border-radius: 12px; background: var(--surface); }
+  .demo-label { font-family: var(--ovp-font-mono); font-size: 0.78rem; color: var(--muted); letter-spacing: 0.04em; margin-bottom: 12px; }
+  h2.section { margin: 0 0 4px; font-size: 1.05rem; }
+</style>
+</head>
+<body class="ovp-root">
+
+  <div class="demo-block">
+    <div class="demo-label">SHELL · the outer container · radius 20 · single shadow</div>
+    <div class="ovp-shell">
+      <div class="ovp-shell-head">
+        <div class="ovp-nav">
+          <strong style="color:var(--accent)">Library</strong>
+          <a href="#">Topics</a>
+          <a href="#">Search</a>
+          <a href="#">Atlas</a>
+          <a href="#">Map</a>
+          <span class="ovp-cross-link"><a href="#">→ Maintenance</a></span>
+        </div>
+        <div class="ovp-subnav">
+          <a href="#" aria-current="page">All</a>
+          <a href="#">AI Research</a>
+          <a href="#">Tools</a>
+          <a href="#">Programming</a>
+          <a href="#">Investing</a>
+        </div>
+      </div>
+      <div class="ovp-shell-body">
+        <h1 style="margin-top:8px">Featured Topics</h1>
+        <p class="ovp-muted">Compiled clusters of evidence-backed concepts, ranked by recency and link strength.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="demo-block">
+    <div class="demo-label">CARD · standard + warning · radius 16 · no shadow</div>
+    <div class="ovp-card">
+      <h3 style="margin:0">RAG vs. Agent Architectures</h3>
+      <div class="ovp-muted" style="margin-top:4px;font-size:0.92rem">12 evidence pages · last updated 2026-04-03</div>
+      <p style="margin:10px 0 0">A topic crystal compiled from 4 deep-dives and 11 atomic concepts. Open questions: 2.</p>
+      <div style="margin-top:10px">
+        <span class="ovp-pill">cluster</span>
+        <span class="ovp-pill">ai-research</span>
+      </div>
+    </div>
+    <div class="ovp-card warning">
+      <strong style="color:#a85e10">2 Open Questions</strong>
+      <p style="margin:6px 0 0">Contradiction crystals surface as Open Questions in the reader shell — never as "errors".</p>
+    </div>
+  </div>
+
+  <div class="demo-block">
+    <div class="demo-label">PILLS · status + counts</div>
+    <span class="ovp-pill">ready</span>
+    <span class="ovp-pill">running</span>
+    <span class="ovp-pill">stale</span>
+    <span class="ovp-pill">blocked</span>
+    <span class="ovp-pill">12 evidence</span>
+    <span class="ovp-pill">v0.2.0</span>
+  </div>
+
+  <div class="demo-block">
+    <div class="demo-label">FORM · input + button (primary) + button (secondary)</div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="text" placeholder="Search the vault…" style="flex:1;min-width:240px">
+      <button>Search</button>
+      <button class="secondary">Open in Obsidian</button>
+    </div>
+  </div>
+
+  <div class="demo-block">
+    <div class="demo-label">PAGE-HELP DISCLOSURE · the standard "what is this page?" pattern</div>
+    <details class="ovp-page-help" open>
+      <summary>What is this page?</summary>
+      <p style="margin:0.4rem 0 0.6rem">Topics are compiled clusters of related concepts, surfaced from your vault by the canonical pipeline.</p>
+      <dl>
+        <dt>Compiled by</dt><dd><code>ovp-build-crystals</code></dd>
+        <dt>Sources</dt><dd>Evergreen pages + deep dives</dd>
+        <dt>Refresh</dt><dd>Daily, or on <code>ovp --full</code></dd>
+      </dl>
+    </details>
+  </div>
+
+  <div class="demo-block">
+    <div class="demo-label">META LIST · the frontmatter / definition pattern</div>
+    <div class="ovp-card">
+      <dl class="ovp-meta-list">
+        <div style="display:contents"><dt>Type</dt><dd>evergreen</dd></div>
+        <div style="display:contents"><dt>Sources</dt><dd>arxiv.org/2402.13616, gist.github.com/karpathy/…</dd></div>
+        <div style="display:contents"><dt>Linked from</dt><dd>4 deep dives, 1 MOC</dd></div>
+        <div style="display:contents"><dt>Last absorbed</dt><dd>2026-04-03 14:02</dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <div class="demo-block">
+    <div class="demo-label">STATS GRID · auto-fit minmax(190, 1fr)</div>
+    <div class="ovp-grid stats">
+      <div class="ovp-card" style="margin:0"><div class="ovp-muted" style="font-size:0.82rem">Evergreen</div><div style="font-size:1.6rem;font-weight:700;margin-top:2px">412</div></div>
+      <div class="ovp-card" style="margin:0"><div class="ovp-muted" style="font-size:0.82rem">Deep dives</div><div style="font-size:1.6rem;font-weight:700;margin-top:2px">88</div></div>
+      <div class="ovp-card" style="margin:0"><div class="ovp-muted" style="font-size:0.82rem">Topics</div><div style="font-size:1.6rem;font-weight:700;margin-top:2px">14</div></div>
+      <div class="ovp-card" style="margin:0"><div class="ovp-muted" style="font-size:0.82rem">Open questions</div><div style="font-size:1.6rem;font-weight:700;margin-top:2px;color:#a85e10">3</div></div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<title>OVP — Logo</title>
+<link rel="stylesheet" href="../ui_kits/ovp/ovp-ui.css">
+<style>
+  body { padding: 1.5rem; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1 { margin: 0 0 0.4rem; font-size: 1.6rem; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin-bottom: 1.25rem; max-width: 60ch; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem; }
+  .stage {
+    border: 1px solid var(--border); border-radius: 16px; padding: 1.25rem 1.5rem;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 130px;
+  }
+  .stage.light { background: #f7f6f2; color: #1f1a17; }
+  .stage.dark  { background: #0a0e16; color: #e6edf5; }
+  .stage svg { display: block; height: auto; }
+  .stage.wm svg { width: 100%; max-width: 360px; }
+  .stage.mono svg { width: 80px; height: 80px; }
+
+  .row { display: flex; gap: 0.75rem; align-items: center; }
+  .row .stage { flex: 1; }
+
+  .construction {
+    border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem;
+    background: var(--bg-deep);
+    margin-top: 1rem;
+  }
+  .construction .grid-bg {
+    background-color: var(--surface);
+    background-image:
+      linear-gradient(to right, var(--border) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+    background-size: 20px 20px;
+    border: 1px solid var(--border);
+    border-radius: 12px; padding: 30px; display: flex; justify-content: center;
+    margin-bottom: 0.8rem;
+  }
+  .construction svg { width: 220px; height: 220px; color: var(--text); }
+
+  .meta { font-size: 0.92rem; }
+  .meta dt { color: var(--muted); font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 0.6rem; }
+  .meta dd { margin: 2px 0 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="pill">Logo · proposal</span>
+  <h1 style="margin-top:0.5rem">obsidian vault pipeline.</h1>
+  <p class="lede">A geometric mark that diagrams the OVP architecture: three stacked bars in the brand's text color, each shorter and softer than the last, funneling into a terracotta circle. The bars are <em>Source · Candidate · Canonical State</em> compacting through Governance; the dot is the Projection the reader sees. The full-stop after the wordmark wears the same terracotta — a tiny callback the source repo already uses (<code>brand.dot</code>).</p>
+
+  <h3 class="muted mono tiny" style="text-transform:uppercase;letter-spacing:0.08em;margin:1.25rem 0 0.5rem">Wordmark — primary lockup</h3>
+  <p class="muted tiny" style="margin:-0.25rem 0 0.5rem">Same lockup on light and dark surfaces. Bars + wordmark inherit <code>currentColor</code>; the terracotta dot stays fixed across schemes.</p>
+  <div class="grid2">
+    <div class="stage wm light">
+      <svg viewBox="0 0 420 56" xmlns="http://www.w3.org/2000/svg" fill="none" aria-label="obsidian vault pipeline">
+        <g transform="translate(0,7)">
+          <rect x="0"  y="6"  width="32" height="4" rx="2" fill="currentColor"/>
+          <rect x="0"  y="18" width="22" height="4" rx="2" fill="currentColor" opacity="0.65"/>
+          <rect x="0"  y="30" width="14" height="4" rx="2" fill="currentColor" opacity="0.40"/>
+          <circle cx="38" cy="32" r="5" fill="#9f4f24"/>
+        </g>
+        <text x="58" y="39" font-family="'IBM Plex Sans','IBM Plex Sans SC',Inter,system-ui,sans-serif" font-size="24" font-weight="600" fill="currentColor" letter-spacing="-0.005em">obsidian vault pipeline<tspan fill="#9f4f24" font-weight="700">.</tspan></text>
+      </svg>
+    </div>
+    <div class="stage wm dark">
+      <svg viewBox="0 0 420 56" xmlns="http://www.w3.org/2000/svg" fill="none" aria-label="obsidian vault pipeline">
+        <g transform="translate(0,7)">
+          <rect x="0"  y="6"  width="32" height="4" rx="2" fill="currentColor"/>
+          <rect x="0"  y="18" width="22" height="4" rx="2" fill="currentColor" opacity="0.65"/>
+          <rect x="0"  y="30" width="14" height="4" rx="2" fill="currentColor" opacity="0.40"/>
+          <circle cx="38" cy="32" r="5" fill="#d97757"/>
+        </g>
+        <text x="58" y="39" font-family="'IBM Plex Sans','IBM Plex Sans SC',Inter,system-ui,sans-serif" font-size="24" font-weight="600" fill="currentColor" letter-spacing="-0.005em">obsidian vault pipeline<tspan fill="#d97757" font-weight="700">.</tspan></text>
+      </svg>
+    </div>
+  </div>
+
+  <h3 class="muted mono tiny" style="text-transform:uppercase;letter-spacing:0.08em;margin:1.25rem 0 0.5rem">Monogram — favicon, app icon, profile mark</h3>
+  <p class="muted tiny" style="margin:-0.25rem 0 0.5rem">Bars use <code>currentColor</code>, so they invert with the surface; the dot keeps its terracotta identity (slightly brighter on dark for legibility).</p>
+  <div class="grid2">
+    <div class="stage mono light">
+      <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" fill="none" aria-label="ovp">
+        <rect x="6"  y="9"  width="22" height="3.2" rx="1.6" fill="currentColor"/>
+        <rect x="6"  y="17" width="16" height="3.2" rx="1.6" fill="currentColor" opacity="0.65"/>
+        <rect x="6"  y="25" width="10" height="3.2" rx="1.6" fill="currentColor" opacity="0.40"/>
+        <circle cx="30" cy="26.6" r="4" fill="#9f4f24"/>
+      </svg>
+    </div>
+    <div class="stage mono dark">
+      <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" fill="none" aria-label="ovp">
+        <rect x="6"  y="9"  width="22" height="3.2" rx="1.6" fill="currentColor"/>
+        <rect x="6"  y="17" width="16" height="3.2" rx="1.6" fill="currentColor" opacity="0.65"/>
+        <rect x="6"  y="25" width="10" height="3.2" rx="1.6" fill="currentColor" opacity="0.40"/>
+        <circle cx="30" cy="26.6" r="4" fill="#d97757"/>
+      </svg>
+    </div>
+  </div>
+
+  <h3 class="muted mono tiny" style="text-transform:uppercase;letter-spacing:0.08em;margin:1.25rem 0 0.5rem">Construction (40 × 40 grid)</h3>
+  <div class="construction">
+    <div class="grid-bg">
+      <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" fill="none">
+        <!-- guides -->
+        <g stroke="#cdc4b6" stroke-width="0.15" stroke-dasharray="0.6 0.6">
+          <line x1="6" y1="0" x2="6" y2="40"/>
+          <line x1="34" y1="0" x2="34" y2="40"/>
+          <line x1="0" y1="11" x2="40" y2="11"/>
+          <line x1="0" y1="19" x2="40" y2="19"/>
+          <line x1="0" y1="27" x2="40" y2="27"/>
+          <circle cx="30" cy="26.6" r="6" stroke="#9f4f24" stroke-opacity="0.35"/>
+        </g>
+        <rect x="6"  y="9"  width="22" height="3.2" rx="1.6" fill="currentColor"/>
+        <rect x="6"  y="17" width="16" height="3.2" rx="1.6" fill="currentColor" opacity="0.65"/>
+        <rect x="6"  y="25" width="10" height="3.2" rx="1.6" fill="currentColor" opacity="0.40"/>
+        <circle cx="30" cy="26.6" r="4" fill="#9f4f24"/>
+      </svg>
+    </div>
+    <dl class="meta">
+      <dt>Bar widths</dt>
+      <dd>22 / 16 / 10 units — a 3:2 funnel ratio. Opacity drops 100 → 65 → 40 to read as compaction.</dd>
+      <dt>Dot</dt>
+      <dd>r=4 at (30, 26.6). 50% wider than a bar, anchored on the rightmost pipeline column.</dd>
+      <dt>Wordmark color</dt>
+      <dd>Bars use <code>currentColor</code>; dot is hard-coded <code>#9f4f24</code> (terracotta accent). Inverts cleanly on dark.</dd>
+      <dt>Type</dt>
+      <dd>IBM Plex Sans 600, lowercase, letter-spacing -0.005em, 24px in the wordmark SVG. Period rendered at weight 700 in terracotta.</dd>
+    </dl>
+  </div>
+
+  <h3 class="muted mono tiny" style="text-transform:uppercase;letter-spacing:0.08em;margin:1.25rem 0 0.5rem">Why this mark</h3>
+  <ul class="list-tight">
+    <li>It's a literal diagram of the brand's central claim — <em>auditable knowledge state runtime: Capture → Compile → Reuse.</em> The compaction is the system.</li>
+    <li>It only uses primitives the rest of the system already uses: rounded bars, a circle, the terracotta dot from <code>nav .brand .dot</code>.</li>
+    <li>It works at 16px favicon size (the bars stay readable as a stack) and at full-bleed (the construction grid scales).</li>
+    <li>It avoids the AI-slop traps OVP's docs explicitly resist: no gradient, no isometric cube, no "neuron" mesh, no obsidian-stone stock illustration.</li>
+  </ul>
+
+  <p class="muted tiny" style="margin-top:1rem">Caveat: still a proposal. The source repo has no logo. Confirm with the OVP author before treating as final.</p>
+</div>
+</body>
+</html>

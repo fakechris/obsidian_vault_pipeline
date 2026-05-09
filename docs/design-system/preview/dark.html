@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>OVP — Dark palette</title>
+<link rel="stylesheet" href="../ui_kits/ovp/ovp-ui.css">
+<style>
+  body { padding: 1.5rem; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1 { margin: 0 0 0.3rem; font-size: 1.6rem; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin-bottom: 1.25rem; max-width: 62ch; }
+
+  .swatch-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin-bottom: 1rem;
+  }
+  .swatch {
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+    background: var(--surface);
+  }
+  .swatch .top {
+    height: 80px; padding: 10px; display: flex; align-items: end;
+    color: white; font-family: 'JetBrains Mono', monospace; font-size: 0.78rem;
+    text-shadow: 0 1px 0 rgba(0,0,0,0.4);
+  }
+  .swatch .meta {
+    padding: 8px 10px; border-top: 1px solid var(--border);
+    font-size: 0.78rem; color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    display: flex; justify-content: space-between;
+  }
+  .swatch .meta .name { color: var(--text); }
+
+  .row-group { margin-top: 1.25rem; }
+  .row-group h3 { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-family:'JetBrains Mono',monospace; margin: 0 0 0.5rem; font-weight: 600; }
+
+  .community-row { display: flex; gap: 6px; align-items: stretch; }
+  .community-row .c {
+    flex: 1; height: 56px; border-radius: 10px;
+    display: flex; align-items: end; padding: 8px;
+    color: white; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="pill cyan">Substitution · proposal</span>
+  <h1 style="margin-top:0.5rem">Dark palette — "deep tech"</h1>
+  <p class="lede">A dark scheme provided as a substitution. Source repo hard-codes <code>color-scheme: light</code>; this scheme exists because the Atlas (3D graph) reads better on near-black, and because operator dashboards benefit from low-emission backgrounds at night. Toggle with <code>data-theme="dark"</code>; persisted in <code>localStorage['ovp-theme']</code>.</p>
+
+  <div class="row-group">
+    <h3>Surface tokens</h3>
+    <div class="swatch-grid">
+      <div class="swatch"><div class="top" style="background:#0a0e16">--bg</div><div class="meta"><span class="name">--bg</span><span>#0a0e16</span></div></div>
+      <div class="swatch"><div class="top" style="background:#11161f">--surface</div><div class="meta"><span class="name">--surface</span><span>#11161f</span></div></div>
+      <div class="swatch"><div class="top" style="background:#161c27">--surface-2</div><div class="meta"><span class="name">--surface-2</span><span>#161c27</span></div></div>
+      <div class="swatch"><div class="top" style="background:#1f2937">--border</div><div class="meta"><span class="name">--border</span><span>#1f2937</span></div></div>
+    </div>
+  </div>
+
+  <div class="row-group">
+    <h3>Text & accent</h3>
+    <div class="swatch-grid">
+      <div class="swatch"><div class="top" style="background:#11161f;color:#e6edf5;font-size:1rem">--text</div><div class="meta"><span class="name">--text</span><span>#e6edf5</span></div></div>
+      <div class="swatch"><div class="top" style="background:#11161f;color:#7d8aa0">--muted</div><div class="meta"><span class="name">--muted</span><span>#7d8aa0</span></div></div>
+      <div class="swatch"><div class="top" style="background:#3b82f6">--accent</div><div class="meta"><span class="name">--accent</span><span>#3b82f6</span></div></div>
+      <div class="swatch"><div class="top" style="background:#06b6d4">--accent-2</div><div class="meta"><span class="name">--accent-2</span><span>#06b6d4</span></div></div>
+    </div>
+  </div>
+
+  <div class="row-group">
+    <h3>Community swatches (`--c-1` … `--c-8`)</h3>
+    <div class="community-row">
+      <div class="c" style="background:#3b82f6">c-1</div>
+      <div class="c" style="background:#06b6d4">c-2</div>
+      <div class="c" style="background:#22c55e">c-3</div>
+      <div class="c" style="background:#eab308;color:#0a0e16">c-4</div>
+      <div class="c" style="background:#a78bfa">c-5</div>
+      <div class="c" style="background:#f472b6">c-6</div>
+      <div class="c" style="background:#14b8a6">c-7</div>
+      <div class="c" style="background:#94a3b8">c-8</div>
+    </div>
+    <p class="muted tiny" style="margin-top:0.5rem">Higher-chroma equivalents of the warm palette — tuned for dark-bg legibility on the Atlas. Light scheme uses muted earth tones in the same slots.</p>
+  </div>
+
+  <div class="row-group">
+    <h3>Component example</h3>
+    <div class="card">
+      <div style="display:flex;gap:0.5rem;align-items:baseline;margin-bottom:0.4rem">
+        <span class="pill">Topic</span>
+        <span class="pill cyan">Cluster #4</span>
+        <span class="muted tiny mono">QUAL 4.4 · 11 backlinks</span>
+      </div>
+      <h3 style="margin:0 0 4px;font-size:1.05rem">Local-first Knowledge Tooling</h3>
+      <p style="margin:0;font-size:0.92rem">Eleven notes binding <code>Obsidian</code>, <code>SQLite</code>, <code>Markdown</code>, and the Pinboard / Clipper ingest sources into one community. Two notes flagged <span class="pill warn" style="font-size:0.7rem;padding:0 6px">contradict</span> the SaaS-knowledge-base alternative.</p>
+    </div>
+    <div class="card warning">
+      <div class="muted tiny mono">OPEN QUESTION · /atlas</div>
+      <p style="margin:6px 0 0;font-size:0.92rem">Is QMD Authority or Projection? Two notes disagree; needs a Governance decision.</p>
+    </div>
+  </div>
+
+  <p class="muted tiny" style="margin-top:1rem">Caveat: this scheme is not in the source repo. Confirm with the OVP author before shipping.</p>
+</div>
+</body>
+</html>
