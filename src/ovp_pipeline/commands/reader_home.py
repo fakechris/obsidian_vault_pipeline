@@ -86,15 +86,13 @@ def _render_reader_home(payload: dict) -> str:
     )
 
     body = "".join([
-        "<section class='hero'>",
         "<h1>Knowledge Library</h1>",
-        "<p class='muted'>Discover, read, and follow the ideas in this vault.</p>",
+        "<p class='muted' style='margin-top:-2px'>Discover, read, and follow the ideas in this vault.</p>",
         f"<form method='get' action='{escape(search_href)}' class='form-inline'>",
         pack_input,
         "<input type='search' name='q' placeholder='Search by title, topic, source…' autofocus />",
         "<button type='submit'>Search</button>",
         "</form>",
-        "</section>",
         # Top Topics card includes the "See all N featured topics →"
         # link.  Pre-BL-051 this was a separate Curated Atlas card —
         # folded in because it was the same ranked list at a higher N.

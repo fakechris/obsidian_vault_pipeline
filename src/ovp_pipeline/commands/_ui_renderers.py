@@ -248,9 +248,9 @@ def _render_page_help(
         "<aside class='page-help'><details>"
         f"<summary>{escape(title)} — what is this?</summary>"
         "<dl>"
-        f"<dt>What this is</dt><dd>{what}</dd>"
-        f"<dt>What you can do</dt><dd>{can}</dd>"
-        f"<dt>What happens when you click</dt><dd>{effect}</dd>"
+        f"<dt>What this is</th><td>{what}</dd>"
+        f"<dt>What you can do</th><td>{can}</dd>"
+        f"<dt>What happens when you click</th><td>{effect}</dd>"
         "</dl></details></aside>"
     )
 
@@ -1302,12 +1302,12 @@ def _render_note_page(
         provenance_html = (
             "<section class='card'>"
             "<h2>Provenance</h2>"
-            "<dl class='meta-list'>"
-            "<div><dt>Original Source Note</dt><dd>"
+            "<table class='kv'>"
+            "<tr><th>Original Source Note</th><td>"
             f'<a href="{escape(_note_href(source_note["path"], requested_pack))}">{escape(source_note["title"])}</a>'
             f"<div class='muted'>{escape(source_note['path'])}</div>"
-            "</dd></div>"
-            "</dl>"
+            "</td></tr>"
+            "</table>"
             "</section>"
         )
     production_chain_html = ""
@@ -1321,15 +1321,15 @@ def _render_note_page(
         production_chain_html = (
             "<section class='card'>"
             "<h2>Production Chain</h2>"
-            "<dl class='meta-list'>"
-            f"<div><dt>Current Note</dt><dd>{escape(production_chain['note']['title'])}<div class='muted'>{escape(production_chain['note']['path'])}</div></dd></div>"
-            f"<div><dt>Chain Status</dt><dd>{escape(str(production_chain.get('chain_status') or ''))}</dd></div>"
-            f"<div><dt>Missing Stages</dt><dd>{escape(missing_stages)}</dd></div>"
-            f"<div><dt>Chain Summary</dt><dd>{escape(str(production_chain.get('chain_summary') or ''))}</dd></div>"
-            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(production_chain['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
-            "</dl>"
+            "<table class='kv'>"
+            f"<tr><th>Current Note</th><td>{escape(production_chain['note']['title'])}<div class='muted'>{escape(production_chain['note']['path'])}</div></td></tr>"
+            f"<tr><th>Chain Status</th><td>{escape(str(production_chain.get('chain_status') or ''))}</td></tr>"
+            f"<tr><th>Missing Stages</th><td>{escape(missing_stages)}</td></tr>"
+            f"<tr><th>Chain Summary</th><td>{escape(str(production_chain.get('chain_summary') or ''))}</td></tr>"
+            f"<tr><th>Source Notes</th><td>{_render_named_note_links(production_chain['source_notes'], requested_pack=requested_pack)}</td></tr>"
+            f"<tr><th>Derived Objects</th><td>{_render_object_links(production_chain['objects'], requested_pack=requested_pack)}</td></tr>"
+            f"<tr><th>Atlas / MOC Reach</th><td>{_render_named_note_links(production_chain['atlas_pages'], requested_pack=requested_pack)}</td></tr>"
+            "</table>"
             "</section>"
         )
     section_nav = "".join(
@@ -1344,10 +1344,8 @@ def _render_note_page(
     return _layout(
         f"Markdown Note: {relative_path}",
         (
-            "<section class='hero'>"
             "<h1>Markdown Note</h1>"
             f"<p class='muted'>{escape(relative_path)}</p>"
-            "</section>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "")
@@ -1779,17 +1777,17 @@ def _render_review_context_card(
     return (
         "<section class='card'>"
         f"<h2>{escape(title)}</h2>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Objects in scope</dt><dd>{int(context.get('object_count', 0))}</dd></div>"
-        f"<div><dt>Source notes</dt><dd>{int(context.get('source_note_count', 0))}</dd></div>"
-        f"<div><dt>Atlas / MOC pages</dt><dd>{int(context.get('moc_count', 0))}</dd></div>"
-        f"<div><dt>Open contradictions</dt><dd>{int(context.get('open_contradiction_count', 0))}</dd></div>"
-        f"<div><dt>Total contradictions</dt><dd>{int(context.get('contradiction_count', 0))}</dd></div>"
-        f"<div><dt>Stale summaries</dt><dd>{int(context.get('stale_summary_count', 0))}</dd></div>"
-        f"<div><dt>Latest event date</dt><dd>{latest_event_html}</dd></div>"
-        f"<div><dt>Contradiction objects</dt><dd>{escape(contradiction_object_ids)}</dd></div>"
-        f"<div><dt>Stale summary objects</dt><dd>{escape(stale_summary_ids)}</dd></div>"
-        "</dl>"
+        "<table class='kv'>"
+        f"<tr><th>Objects in scope</th><td>{int(context.get('object_count', 0))}</td></tr>"
+        f"<tr><th>Source notes</th><td>{int(context.get('source_note_count', 0))}</td></tr>"
+        f"<tr><th>Atlas / MOC pages</th><td>{int(context.get('moc_count', 0))}</td></tr>"
+        f"<tr><th>Open contradictions</th><td>{int(context.get('open_contradiction_count', 0))}</td></tr>"
+        f"<tr><th>Total contradictions</th><td>{int(context.get('contradiction_count', 0))}</td></tr>"
+        f"<tr><th>Stale summaries</th><td>{int(context.get('stale_summary_count', 0))}</td></tr>"
+        f"<tr><th>Latest event date</th><td>{latest_event_html}</td></tr>"
+        f"<tr><th>Contradiction objects</th><td>{escape(contradiction_object_ids)}</td></tr>"
+        f"<tr><th>Stale summary objects</th><td>{escape(stale_summary_ids)}</td></tr>"
+        "</table>"
         "</section>"
     )
 
@@ -1860,11 +1858,11 @@ def _render_production_summary_card(
     return (
         "<section class='card'>"
         f"<h2>{escape(title)}</h2>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Objects in scope</dt><dd>{int(summary['object_count'])}</dd></div>"
-        f"<div><dt>Top Source Notes</dt><dd>{_render_named_note_links(summary['top_source_notes'], requested_pack=requested_pack)}</dd></div>"
-        f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(summary['top_atlas_pages'], requested_pack=requested_pack)}</dd></div>"
-        "</dl>"
+        "<table class='kv'>"
+        f"<tr><th>Objects in scope</th><td>{int(summary['object_count'])}</td></tr>"
+        f"<tr><th>Top Source Notes</th><td>{_render_named_note_links(summary['top_source_notes'], requested_pack=requested_pack)}</td></tr>"
+        f"<tr><th>Atlas / MOC Reach</th><td>{_render_named_note_links(summary['top_atlas_pages'], requested_pack=requested_pack)}</td></tr>"
+        "</table>"
         f"<ul class='list-tight'>{count_items}{signal_items}</ul>"
         "</section>"
     )
@@ -1980,21 +1978,27 @@ def _render_dashboard(payload: dict) -> str:
         )
         or "<li class='muted'>No urgent maintenance items surfaced.</li>"
     )
+    def _tile(label, value, *, warn=False):
+        warn_cls = " warn" if warn else ""
+        return (
+            "<div class='card' style='margin:0'>"
+            f"<div class='muted tiny'>{label}</div>"
+            f"<div class='metric-num{warn_cls}' style='margin-top:4px'>{value}</div>"
+            "</div>"
+        )
     stats_cards = [
-        f"<div class='card'><h2>Objects Indexed</h2><p>{payload['objects']['count']}</p></div>",
-        f"<div class='card'><h2>Signal Count</h2><p>{payload['signals']['count']}</p></div>",
-        "<div class='card'><h2>Weak Point Count</h2>"
-        f"<p>{payload['production']['weak_point_count']}</p></div>",
+        _tile("Objects Indexed", payload['objects']['count']),
+        _tile("Signal Count", payload['signals']['count']),
+        _tile("Weak Point Count", payload['production']['weak_point_count']),
     ]
     if research_overview_supported:
         stats_cards[1:1] = [
-            "<div class='card'><h2>Contradictions Open</h2>"
-            f"<p>{payload['contradictions']['open_count']}</p></div>",
-            f"<div class='card'><h2>Event Count</h2><p>{payload['events']['count']}</p></div>",
-            "<div class='card'><h2>Stale Summary Count</h2>"
-            f"<p>{payload['stale_summaries']['count']}</p></div>",
-            "<div class='card'><h2>Evolution Candidates</h2>"
-            f"<p>{payload['evolution']['candidate_count']}</p></div>",
+            _tile("Contradictions Open", payload['contradictions']['open_count'],
+                  warn=int(payload['contradictions']['open_count']) > 0),
+            _tile("Event Count", payload['events']['count']),
+            _tile("Stale Summary Count", payload['stale_summaries']['count'],
+                  warn=int(payload['stale_summaries']['count']) > 0),
+            _tile("Evolution Candidates", payload['evolution']['candidate_count']),
         ]
     research_overview_card = (
         ""
@@ -2054,23 +2058,21 @@ def _render_dashboard(payload: dict) -> str:
     foyer_block = (
         "<section class='card'>"
         "<h2>Maintainer Foyer</h2>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Today</dt><dd>{escape(foyer_today_summary)}"
-        f" <a href='{escape(foyer_today_path)}'>see →</a></dd></div>"
-        f"<div><dt>Queue</dt><dd>{escape(foyer_queue_summary)}"
-        f" <a href='{escape(foyer_queue_path)}'>see →</a></dd></div>"
-        f"<div><dt>Last run</dt><dd>{last_run_summary} {last_run_link}</dd></div>"
-        "</dl>"
+        "<table class='kv'>"
+        f"<tr><th>Today</th><td>{escape(foyer_today_summary)}"
+        f" <a href='{escape(foyer_today_path)}'>see →</a></td></tr>"
+        f"<tr><th>Queue</th><td>{escape(foyer_queue_summary)}"
+        f" <a href='{escape(foyer_queue_path)}'>see →</a></td></tr>"
+        f"<tr><th>Last run</th><td>{last_run_summary} {last_run_link}</td></tr>"
+        "</table>"
         "</section>"
     )
 
     dashboard_body = "".join(
         [
-            "<section class='hero'>",
             "<h1>OVP Truth UI</h1>",
             "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
-            "</section>",
             foyer_block,
             runtime_card,
             runtime_state_card,
@@ -2123,7 +2125,10 @@ def _render_library_home(payload: dict) -> str:
     workbench_path = _shell_href("/ops", requested_pack)
     search_path = _shell_href("/search", requested_pack)
     map_card = (
-        f"<div class='card'><h2>Knowledge Map</h2><p><a href='{escape(map_path)}'>See how ideas connect</a></p></div>"
+        "<div class='card' style='margin:0'>"
+        "<div class='muted tiny'>Knowledge Map</div>"
+        f"<div style='margin-top:8px'><a href='{escape(map_path)}'>See how ideas connect →</a></div>"
+        "</div>"
         if _shell_supports_research_nav(requested_pack)
         else ""
     )
@@ -2133,13 +2138,13 @@ def _render_library_home(payload: dict) -> str:
     workbench_card = ""
     body = "".join(
         [
-            "<section class='hero'>",
             "<h1>Knowledge Library</h1>",
             "<p class='muted'>Browse the people, concepts, sources, and ideas in this vault.</p>",
-            "</section>",
             "<section class='grid stats'>",
-            f"<div class='card'><h2>Library Items</h2><p>{object_count}</p></div>",
-            f"<div class='card'><h2>Search Library</h2><p><a href='{escape(search_path)}'>Search by title, topic, or source</a></p></div>",
+            f"<div class='card'><div class='muted tiny'>Library Items</div>"
+            f"<div class='metric-num'>{object_count}</div></div>",
+            f"<div class='card'><div class='muted tiny'>Search Library</div>"
+            f"<div style='margin-top:8px'><a href='{escape(search_path)}'>Search by title, topic, or source →</a></div></div>",
             map_card,
             "</section>",
             "<section class='grid two-col'>",
@@ -2510,12 +2515,12 @@ def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
     return (
         "<section id='sources' class='card'><h2>Discoverable from</h2>"
         f"<p class='muted'>{escape(str(rail.get('summary') or 'No source links yet.'))}</p>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Evergreen</dt><dd>{evergreen_html}</dd></div>"
-        f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_html}</ul></dd></div>"
-        f"<div><dt>Atlas Pages</dt><dd><ul class='list-tight'>{atlas_html}</ul></dd></div>"
-        f"<div><dt>Related Objects</dt><dd><ul class='list-tight'>{related_html}</ul></dd></div>"
-        "</dl></section>"
+        "<table class='kv'>"
+        f"<tr><th>Evergreen</th><td>{evergreen_html}</td></tr>"
+        f"<tr><th>Source Notes</th><td><ul class='list-tight'>{source_html}</ul></td></tr>"
+        f"<tr><th>Atlas Pages</th><td><ul class='list-tight'>{atlas_html}</ul></td></tr>"
+        f"<tr><th>Related Objects</th><td><ul class='list-tight'>{related_html}</ul></td></tr>"
+        "</table></section>"
     )
 
 
@@ -2599,12 +2604,12 @@ def _render_source_chain_card(payload: dict, *, requested_pack: str) -> str:
         "<p class='muted'>The post-BL-029 pipeline lineage for this object: "
         "URL → active staging file → recorded provenance stages → canonical "
         "evergreen markdown.</p>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Source URL</dt><dd>{url_html}</dd></div>"
-        f"<div><dt>Source File</dt><dd>{source_file_html}</dd></div>"
-        f"<div><dt>Pipeline Stages</dt><dd>{stages_html}</dd></div>"
-        f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
-        "</dl></section>"
+        "<table class='kv'>"
+        f"<tr><th>Source URL</th><td>{url_html}</td></tr>"
+        f"<tr><th>Source File</th><td>{source_file_html}</td></tr>"
+        f"<tr><th>Pipeline Stages</th><td>{stages_html}</td></tr>"
+        f"<tr><th>Evergreen Markdown</th><td>{evergreen_html}</td></tr>"
+        "</table></section>"
     )
 
 
@@ -2746,13 +2751,22 @@ def _render_object_page(payload: dict) -> str:
                 f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>",
             ]
         )
+    def _obj_tile(label, value, *, warn=False):
+        warn_cls = " warn" if warn else ""
+        return (
+            "<div class='card' style='margin:0'>"
+            f"<div class='muted tiny'>{label}</div>"
+            f"<div class='metric-num{warn_cls}' style='margin-top:4px'>{value}</div>"
+            "</div>"
+        )
     stats_cards = [
-        f"<div class='card'><h2>Claims</h2><p>{payload['claim_count']}</p></div>",
-        f"<div class='card'><h2>Relations</h2><p>{payload['relation_count']}</p></div>",
+        _obj_tile("Claims", payload['claim_count']),
+        _obj_tile("Relations", payload['relation_count']),
     ]
     if research_shell_enabled:
         stats_cards.append(
-            f"<div class='card'><h2>Contradictions</h2><p>{payload['contradiction_count']}</p></div>"
+            _obj_tile("Contradictions", payload['contradiction_count'],
+                      warn=int(payload['contradiction_count']) > 0)
         )
     right_sections = []
     if research_shell_enabled:
@@ -2784,19 +2798,19 @@ def _render_object_page(payload: dict) -> str:
             _render_kind_profile_card(payload),
             _render_source_chain_card(payload, requested_pack=requested_pack),
             _render_source_backlink_rail(payload, requested_pack=requested_pack),
-            "<section class='card'><h2>Context</h2><dl class='meta-list'>"
-            f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
-            f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
-            f"<div><dt>Canonical Path</dt><dd>{canonical_path_html}</dd></div>"
-            "</dl></section>",
-            "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
-            f"<div><dt>Chain Status</dt><dd>{escape(str(payload['production_chain'].get('chain_status') or ''))}</dd></div>"
-            f"<div><dt>Missing Stages</dt><dd>{escape(', '.join(str(item).replace('_', ' ') for item in payload['production_chain'].get('missing_stages', [])) or 'None')}</dd></div>"
-            f"<div><dt>Chain Summary</dt><dd>{escape(str(payload['production_chain'].get('chain_summary') or ''))}</dd></div>"
-            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
-            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
-            "</dl></section>",
+            "<section class='card'><h2>Context</h2><table class='kv'>"
+            f"<tr><th>Object Kind</th><td>{escape(payload['context']['object_kind'])}</td></tr>"
+            f"<tr><th>Source Slug</th><td>{escape(payload['context']['source_slug'])}</td></tr>"
+            f"<tr><th>Canonical Path</th><td>{canonical_path_html}</td></tr>"
+            "</table></section>",
+            "<section class='card'><h2>Production Chain</h2><table class='kv'>"
+            f"<tr><th>Chain Status</th><td>{escape(str(payload['production_chain'].get('chain_status') or ''))}</td></tr>"
+            f"<tr><th>Missing Stages</th><td>{escape(', '.join(str(item).replace('_', ' ') for item in payload['production_chain'].get('missing_stages', [])) or 'None')}</td></tr>"
+            f"<tr><th>Chain Summary</th><td>{escape(str(payload['production_chain'].get('chain_summary') or ''))}</td></tr>"
+            f"<tr><th>Source Notes</th><td>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</td></tr>"
+            f"<tr><th>Evergreen Note</th><td>{evergreen_html}</td></tr>"
+            f"<tr><th>Atlas / MOC Reach</th><td>{_render_named_note_links(payload['production_chain']['atlas_pages'], requested_pack=requested_pack)}</td></tr>"
+            "</table></section>",
             f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>",
         ]
     )
@@ -2810,13 +2824,13 @@ def _render_object_page(payload: dict) -> str:
     return _layout(
         f"Object: {payload['object']['title']}",
         (
-            f"<section class='hero'><span class=\"pill\">{escape(str(reader_profile.get('kind_label') or payload['context']['object_kind']))}</span>"
-            f"<h1>{escape(str(reader_profile.get('headline') or payload['object']['title']))}</h1>"
-            f"<p>{escape(str(reader_profile.get('dek') or summary_text or 'No compiled summary yet.'))}</p>"
+            f"<div style='display:flex;gap:6px;flex-wrap:wrap;margin:0 0 4px'><span class=\"pill\">{escape(str(reader_profile.get('kind_label') or payload['context']['object_kind']))}</span></div>"
+            f"<h1 style='margin:4px 0 6px'>{escape(str(reader_profile.get('headline') or payload['object']['title']))}</h1>"
+            f"<p style='max-width:60ch'>{escape(str(reader_profile.get('dek') or summary_text or 'No compiled summary yet.'))}</p>"
             f"<p class='muted'>{escape(str(reader_profile.get('supporting_line') or payload['object']['object_id']))}"
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
+            + f"<div class='link-row'>{''.join(hero_links)}</div>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + assembly_contract_card
@@ -2943,11 +2957,11 @@ def _render_topic_page(payload: dict) -> str:
     return _layout(
         f"Topic: {payload['center']['title']}",
         (
-            f"<section class='hero'><h1>Topic: {escape(payload['center']['title'])}</h1>"
+            f"<h1 style='margin:4px 0 6px'>Topic: {escape(payload['center']['title'])}</h1>"
             f"<p class='muted'>{payload['neighbor_count']} neighbors, {payload['edge_count']} edges."
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
+            + f"<div class='link-row'>{''.join(hero_links)}</div>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + assembly_contract_card
@@ -6140,11 +6154,11 @@ def _render_run_detail_page(payload: dict) -> str:
         f"{_RUN_DETAIL_STYLE}"
         "<div class='run-header'>"
         "<dl>"
-        f"<dt>Run id</dt><dd><code>{escape(txn_id)}</code></dd>"
-        f"<dt>Workflow</dt><dd>{escape(workflow_type)}</dd>"
-        f"<dt>Started</dt><dd><code>{escape(started_at)}</code></dd>"
-        f"<dt>Completed</dt><dd><code>{escape(completed_at)}</code></dd>"
-        f"<dt>Events</dt><dd>{len(events)}</dd>"
+        f"<dt>Run id</th><td><code>{escape(txn_id)}</code></dd>"
+        f"<dt>Workflow</th><td>{escape(workflow_type)}</dd>"
+        f"<dt>Started</th><td><code>{escape(started_at)}</code></dd>"
+        f"<dt>Completed</th><td><code>{escape(completed_at)}</code></dd>"
+        f"<dt>Events</th><td>{len(events)}</dd>"
         "</dl></div>"
     )
 

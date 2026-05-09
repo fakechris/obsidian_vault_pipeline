@@ -291,30 +291,16 @@
 }
 .fullbleed-grid .pane.synth     { grid-column: 1 / 3; grid-row: 2 / 3; }
 
-/* ---------- META-LIST / TIMESTAMP / EMPTY ---------- */
-.meta-list { display: grid; gap: 0.6rem; margin: 0; }
-.meta-list dt { font-weight: 700; color: var(--text); }
-.meta-list dd { margin: 0; color: var(--muted); }
-
+/* ---------- TIMESTAMP / EMPTY (utility) ---------- */
 .timestamp {
   font-family: var(--ovp-font-mono);
   font-size: 0.82rem;
   color: var(--muted);
 }
+.empty { color: var(--muted); font-style: italic; }
 
-.empty {
-  color: var(--muted); font-style: italic;
-}
-
-/* ---------- HERO / FORM-INLINE (Reader home shell) ---------- */
-.hero { margin-bottom: 1.5rem; }
-.hero form.form-inline {
-  display: flex; gap: 0.6rem; margin-top: 0.8rem; align-items: center;
-}
-.hero form.form-inline input { flex: 1; }
+/* ---------- SECTION-STACK ---------- */
 .section-stack { display: grid; gap: 1rem; }
-.list-tight { margin: 0; padding-left: 1.1rem; }
-.list-tight li { margin-bottom: 0.4rem; }
 
 /* ---------- LINK-ROW (used on object/note pages) ---------- */
 .link-row {
