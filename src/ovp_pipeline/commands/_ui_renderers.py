@@ -86,7 +86,7 @@ def _ts(text) -> str:
     """
     if text is None or text == "":
         return "<span class='muted tiny'>—</span>"
-    return f"<span class='timestamp'>{escape(str(text))}</span>"
+    return f"<span class='muted tiny mono'>{escape(str(text))}</span>"
 
 
 def _render_limited_inline_links(
@@ -1408,8 +1408,9 @@ def _render_lineage_card(
     blocks: list[str] = [
         "<section class='card'><h2>Lineage</h2>",
         _LINEAGE_CARD_STYLE,
-        "<div class='lineage-flow'>",
-        f"<div class='lineage-row you'>{header}</div>",
+        "<div style='display:flex;flex-direction:column;gap:.4rem'>",
+        "<div style='padding:.5rem .7rem;border-left:3px solid var(--accent);"
+        f"background:var(--accent-soft);border-radius:0 4px 4px 0'>{header}</div>",
     ]
 
     # ── Raw source row ─────────────────────────────────────────
@@ -1424,9 +1425,12 @@ def _render_lineage_card(
             "" if path
             else " <span class='muted'>(archived — only stem available)</span>"
         )
-        blocks.append("<div class='lineage-arrow'>↑ derived from</div>")
         blocks.append(
-            "<div class='lineage-row'>"
+            "<div class='muted tiny' style='text-align:center;padding:.1rem 0'>"
+            "↑ derived from</div>"
+        )
+        blocks.append(
+            "<div style='padding:.5rem .7rem;border-left:3px solid var(--border-strong);background:var(--surface-2);border-radius:0 4px 4px 0'>"
             "<h3>Raw source</h3>"
             f"<div>{link}{archived_note}</div>"
             f"<div class='muted'>{path}</div>"
@@ -1445,10 +1449,10 @@ def _render_lineage_card(
             for eg in evergreens
         )
         blocks.append(
-            "<div class='lineage-arrow'>"
+            "<div class='muted tiny' style='text-align:center;padding:.1rem 0'>"
             f"↓ produced {len(evergreens)} evergreen(s)"
             "</div>"
-            "<div class='lineage-row'>"
+            "<div style='padding:.5rem .7rem;border-left:3px solid var(--border-strong);background:var(--surface-2);border-radius:0 4px 4px 0'>"
             "<h3>Evergreens</h3>"
             f"<ul>{items}</ul>"
             "</div>"
@@ -1466,10 +1470,10 @@ def _render_lineage_card(
             for cl in clusters
         )
         blocks.append(
-            "<div class='lineage-arrow'>"
+            "<div class='muted tiny' style='text-align:center;padding:.1rem 0'>"
             f"↓ grouped into {len(clusters)} cluster(s)"
             "</div>"
-            "<div class='lineage-row'>"
+            "<div style='padding:.5rem .7rem;border-left:3px solid var(--border-strong);background:var(--surface-2);border-radius:0 4px 4px 0'>"
             "<h3>Clusters (Louvain communities)</h3>"
             f"<ul>{items}</ul>"
             "</div>"
@@ -1487,10 +1491,10 @@ def _render_lineage_card(
             for cr in crystals
         )
         blocks.append(
-            "<div class='lineage-arrow'>"
+            "<div class='muted tiny' style='text-align:center;padding:.1rem 0'>"
             f"↓ synthesized into {len(crystals)} crystal(s)"
             "</div>"
-            "<div class='lineage-row'>"
+            "<div style='padding:.5rem .7rem;border-left:3px solid var(--border-strong);background:var(--surface-2);border-radius:0 4px 4px 0'>"
             "<h3>Crystals</h3>"
             f"<ul>{items}</ul>"
             "</div>"
@@ -1610,7 +1614,7 @@ def _render_search_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Reader Search</h1>",
-                "<form method='get' action='/search' class='form-inline'>",
+                "<form method='get' action='/search' style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 1rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' /> "
                     if requested_pack
@@ -1622,8 +1626,8 @@ def _render_search_page(payload: dict) -> str:
                 f"<p class='muted'>{escape(str(payload.get('reader_summary') or showing))}</p>",
                 "<p class='muted'>Objects are grouped by kind. Notes are grouped by source type.</p>",
                 "<section class='grid two-col'>",
-                f"<div class='section-stack'>{reader_group_html}{_pager(object_total, 'Objects')}</div>",
-                f"<div class='section-stack'>{source_group_html}{_pager(note_total, 'Notes')}</div>",
+                f"<div style='display:grid;gap:1rem'>{reader_group_html}{_pager(object_total, 'Objects')}</div>",
+                f"<div style='display:grid;gap:1rem'>{source_group_html}{_pager(note_total, 'Notes')}</div>",
                 "</section>",
             ]
         ),
@@ -1669,7 +1673,7 @@ def _render_evolution_review_form(
     link_type = str(item.get("link_type") or "")
     return "".join(
         [
-            "<form method='post' action='/ops/evolution/review' class='link-row'>",
+            "<form method='post' action='/ops/evolution/review' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
             f"<input type='hidden' name='evolution_id' value='{escape(str(item['evolution_id']))}' />",
             (
                 f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -2080,7 +2084,7 @@ def _render_dashboard(payload: dict) -> str:
             "<section class='grid stats'>",
             "".join(stats_cards),
             "</section>",
-            "<section class='section-stack'>",
+            "<section style='display:grid;gap:1rem'>",
             "<section class='card'><h2>Workflow Map</h2><p class='muted'>Start here if you do not yet know which route to open. Each group maps one common operator workflow onto the current shell.</p></section>",
             workflow_groups_html,
             "<section class='card'><h2>Where To Start</h2><p class='muted'>Use the workflow map above to choose a route, then inspect the attention queues and knowledge surfaces below.</p></section>",
@@ -2089,10 +2093,10 @@ def _render_dashboard(payload: dict) -> str:
             entry_sections_html,
             "</section>",
             "<section class='grid two-col'>",
-            "<div class='section-stack'>",
+            "<div style='display:grid;gap:1rem'>",
             "".join(left_sections),
             "</div>",
-            "<div class='section-stack'>",
+            "<div style='display:grid;gap:1rem'>",
             "".join(right_sections),
             "</div>",
             "</section>",
@@ -2241,25 +2245,25 @@ def _render_type_facet(
     chips: list[str] = []
     chips.append(
         f"<a href='{escape(_href(''))}'"
-        + (" class='chip active'" if not active_kind else " class='chip'")
+        + (" class='active'" if not active_kind else "")
         + ">All</a>"
     )
     for stat in sorted_stats:
         kind = str(stat["object_kind"])
         count = int(stat.get("count") or 0)
         label = display_label(kind)
-        cls = "chip active" if kind == active_kind else "chip"
+        cls_attr = " class='active'" if kind == active_kind else ""
         chips.append(
-            f"<a href='{escape(_href(kind))}' class='{cls}'>"
-            f"{escape(label)}<span class='count'>{count}</span>"
+            f"<a href='{escape(_href(kind))}'{cls_attr}>"
+            f"{escape(label)} <span class='muted tiny mono'>{count}</span>"
             "</a>"
         )
     return (
-        f"{_TYPE_FACET_STYLE}"
-        "<div class='type-facet'>"
-        "<h3>Filter by type</h3>"
-        + "".join(chips)
-        + "</div>"
+        "<div style='margin:.75rem 0 1rem'>"
+        "<h3 style='font-size:.85rem;font-weight:500;color:var(--muted);"
+        "margin:0 0 .35rem'>Filter by type</h3>"
+        f"<div class='subnav'>{''.join(chips)}</div>"
+        "</div>"
     )
 
 
@@ -2711,7 +2715,7 @@ def _render_object_page(payload: dict) -> str:
         for item in section_nav_items
     )
     contradiction_form = (
-        "<form method='post' action='/ops/contradictions/resolve' class='link-row'>"
+        "<form method='post' action='/ops/contradictions/resolve' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + "".join(
             f"<input type='hidden' name='contradiction_id' value='{escape(contradiction_id)}' />"
             for contradiction_id in payload["open_contradiction_ids"]
@@ -2731,7 +2735,7 @@ def _render_object_page(payload: dict) -> str:
         else "<p class='muted'>No open contradictions on this object.</p>"
     )
     summary_form = (
-        "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
+        "<form method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + f"<input type='hidden' name='object_id' value='{escape(payload['object']['object_id'])}' />"
         + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<button type='submit'>Rebuild This Summary</button>"
@@ -2830,19 +2834,19 @@ def _render_object_page(payload: dict) -> str:
             f"<p class='muted'>{escape(str(reader_profile.get('supporting_line') or payload['object']['object_id']))}"
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            + f"<div class='link-row'>{''.join(hero_links)}</div>"
+            + f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{''.join(hero_links)}</div>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + assembly_contract_card
             + f"<nav class='subnav'>{section_nav}</nav>"
             + f"<section class='grid stats'>{''.join(stats_cards)}</section>"
             "<section class='grid two-col'>"
-            "<div class='section-stack'>"
+            "<div style='display:grid;gap:1rem'>"
             f"<section id='summary' class='card'><h2>Compiled Summary</h2><p>{escape(summary_text)}</p></section>"
             f"{_render_compiled_sections(remaining_sections)}"
             f"<section id='claims' class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
             "</div>"
-            "<div class='section-stack'>"
+            "<div style='display:grid;gap:1rem'>"
             f"{''.join(right_sections)}"
             "</div>"
             "</section>"
@@ -2893,7 +2897,7 @@ def _render_topic_page(payload: dict) -> str:
         for item in payload.get("section_nav", [])
     )
     summary_form = (
-        "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
+        "<form method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + "".join(
             f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
             for object_id in payload["scoped_stale_summary_ids"]
@@ -2905,7 +2909,7 @@ def _render_topic_page(payload: dict) -> str:
         else "<p class='muted'>No stale summaries in this topic scope.</p>"
     )
     contradiction_entry = (
-        "<div class='link-row'>"
+        "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + f"<a href='{escape(payload['links']['contradictions_path'])}'>Review scoped contradictions</a>"
         + "</div>"
         if payload["scoped_open_contradiction_ids"]
@@ -2961,7 +2965,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<p class='muted'>{payload['neighbor_count']} neighbors, {payload['edge_count']} edges."
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            + f"<div class='link-row'>{''.join(hero_links)}</div>"
+            + f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{''.join(hero_links)}</div>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + assembly_contract_card
@@ -3046,7 +3050,7 @@ def _render_events_page(payload: dict) -> str:
                     )
                     + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
                     + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
-                    + "<div class='link-row'>"
+                    + "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                     + f"<a href='{escape(item['review_links']['topic_path'])}'>Topic</a>"
                     + f"<a href='{escape(item['review_links']['contradictions_path'])}'>Contradictions</a>"
                     + f"<a href='{escape(item['review_links']['summaries_path'])}'>Stale summaries</a>"
@@ -3061,7 +3065,7 @@ def _render_events_page(payload: dict) -> str:
         or "<li>None</li>"
     )
     summary_form = (
-        "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
+        "<form method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + "".join(
             f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
             for object_id in payload["scoped_stale_summary_ids"]
@@ -3076,10 +3080,10 @@ def _render_events_page(payload: dict) -> str:
     )
     contradiction_browser_path = _shell_href("/ops/contradictions", requested_pack)
     contradiction_entry = (
-        f"<div class='link-row'><a href='{escape(contradiction_query_path)}'>Review visible contradictions</a></div>"
+        f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'><a href='{escape(contradiction_query_path)}'>Review visible contradictions</a></div>"
         if payload["scoped_open_contradiction_ids"] and query
         else (
-            f"<div class='link-row'><a href='{escape(contradiction_browser_path)}'>Review visible contradictions</a></div>"
+            f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'><a href='{escape(contradiction_browser_path)}'>Review visible contradictions</a></div>"
             if payload["scoped_open_contradiction_ids"]
             else "<p class='muted'>No open contradictions in the visible event scope.</p>"
         )
@@ -3138,7 +3142,7 @@ def _render_events_page(payload: dict) -> str:
                 assembly_contract_card,
                 (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else ""),
                 _render_compiled_sections(remaining_sections),
-                f"<div class='link-row'>{type_breakdown}</div>",
+                f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{type_breakdown}</div>",
                 f"{_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack)}",
                 f"{_render_review_context_card(payload['review_context'])}",
                 f"{_render_review_history(payload['review_history'])}",
@@ -3275,7 +3279,7 @@ def _render_curated_atlas_page(payload: dict) -> str:
             # so each metric is its own readable unit instead of one
             # long en-dot-joined string.
             breakdown_chips = "".join(
-                f"<span class='timestamp' style='margin-right:0.6rem'>{escape(label_text)} "
+                f"<span class='muted tiny mono' style='margin-right:0.6rem'>{escape(label_text)} "
                 f"<strong style='color:var(--text-soft)'>{value:.2f}</strong></span>"
                 for label_text, value in [
                     ("size",         float(entry.get("size_norm", 0))),
@@ -3287,15 +3291,21 @@ def _render_curated_atlas_page(payload: dict) -> str:
                 ]
             )
             item_html_parts.append(
-                "<section class='card topic-entry'>"
-                "<div class='topic-entry-head'>"
-                f"<span class='topic-rank'>{int(entry.get('rank', 0))}</span>"
-                f"<h3 class='topic-title'>{link_html}</h3>"
-                f"<span class='pill'>score {score:.3f}</span> "
+                "<section class='card flush'>"
+                "<div class='card-head'>"
+                f"<span class='muted tiny mono' style='min-width:1.6rem;text-align:right'>"
+                f"{int(entry.get('rank', 0))}</span>"
+                f"<h3 style='margin:0;font-size:1.05rem;flex:1;min-width:0'>{link_html}</h3>"
+                f"<span class='pill'>score {score:.3f}</span>"
                 f"<span class='{kind_pill_class}'>{escape(kind_label)}</span>"
                 "</div>"
+                "<div class='card-body'>"
                 f"{teaser_html}"
-                f"<div class='topic-breakdown'>{breakdown_chips}</div>"
+                "<div style='margin-top:.6rem;padding-top:.5rem;"
+                "border-top:1px dashed var(--border);"
+                "display:flex;flex-wrap:wrap;font-size:.78rem;color:var(--muted)'>"
+                f"{breakdown_chips}</div>"
+                "</div>"
                 "</section>"
             )
         body_html = "".join(item_html_parts)
@@ -3306,7 +3316,7 @@ def _render_curated_atlas_page(payload: dict) -> str:
         f"<code>{escape(pack)}</code>, ranked by <code>crystal_scores</code>. "
         f"Generated {_ts(generated_at)}.</p>",
         f"<p class='muted'><a href='{escape(api_href)}'>JSON</a></p>",
-        "<form method='get' action='/topics' class='form-inline'>",
+        "<form method='get' action='/topics' style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 1rem'>",
         (
             f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
             if requested_pack
@@ -3597,7 +3607,7 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
                 cluster_pager,
-                f"<section class='card'><h2>Cluster Kinds</h2><div class='link-row'>{kind_counts}</div></section>",
+                f"<section class='card'><h2>Cluster Kinds</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{kind_counts}</div></section>",
                 f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>",
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
@@ -4007,8 +4017,8 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Next Reading Route</h2>{next_read_route}</section>"
             f"<section class='card'><h2>Neighborhood Groups</h2><ul class='list-tight'>{related_cluster_groups}</ul></section>"
             f"<section class='card'><h2>Related Clusters</h2><ul class='list-tight'>{related_clusters}</ul></section>"
-            f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
-            f"<section class='card'><h2>Object Kinds</h2><div class='link-row'>{object_kind_counts}</div></section>"
+            f"<section class='card'><h2>Edge Kinds</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{edge_kind_counts}</div></section>"
+            f"<section class='card'><h2>Object Kinds</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{object_kind_counts}</div></section>"
             f"<section class='card'><h2>Coverage</h2><p class='muted'>"
             f"{review_context['source_note_count']} source notes · "
             f"{review_context['moc_count']} atlas pages · "
@@ -4043,7 +4053,7 @@ def _render_evolution_browser_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Evolution Browser</h1>",
-                "<form method='get' action='/ops/evolution' class='link-row'>",
+                "<form method='get' action='/ops/evolution' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4066,7 +4076,7 @@ def _render_evolution_browser_page(payload: dict) -> str:
                 "<button type='submit'>Search</button>",
                 "</form>",
                 f"<p class='muted'>{payload['count']} evolution records in the current view.</p>",
-                f"<section class='card'><h2>Link Types</h2><div class='link-row'>{type_counts}</div></section>",
+                f"<section class='card'><h2>Link Types</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{type_counts}</div></section>",
                 f"<section class='card'><h2>Accepted Links</h2>{_render_evolution_links(payload['accepted_links'], empty_text='No accepted evolution links yet.')}</section>",
                 f"<section class='card'><h2>Rejected Links</h2>{_render_evolution_links(payload['rejected_links'], empty_text='No rejected evolution links yet.')}</section>",
                 f"<section class='card'><h2>Candidate Links</h2>{_render_evolution_candidates(payload['candidate_items'], reviewable=True, requested_pack=requested_pack, next_path=next_path)}</section>",
@@ -4129,15 +4139,15 @@ def _render_candidate_items(payload: dict) -> str:
             f"<p>{escape(str(item.get('definition') or ''))}</p>"
             "<div class='muted'>Similar active concepts</div>"
             f"<ul class='list-tight'>{similar_html}</ul>"
-            "<div class='link-row'>"
-            "<form method='post' action='/ops/candidates/review' class='link-row'>"
+            "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
+            "<form method='post' action='/ops/candidates/review' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
             f"{pack_hidden}"
             f"<input type='hidden' name='slug' value='{escape(slug)}' />"
             "<input type='hidden' name='action' value='promote' />"
             f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             "<button type='submit'>Promote</button>"
             "</form>"
-            "<form method='post' action='/ops/candidates/review' class='link-row'>"
+            "<form method='post' action='/ops/candidates/review' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
             f"{pack_hidden}"
             f"<input type='hidden' name='slug' value='{escape(slug)}' />"
             "<input type='hidden' name='action' value='merge' />"
@@ -4145,7 +4155,7 @@ def _render_candidate_items(payload: dict) -> str:
             f"<input type='text' name='target_slug' value='{escape(default_target)}' placeholder='target slug' />"
             "<button type='submit'>Merge</button>"
             "</form>"
-            "<form method='post' action='/ops/candidates/review' class='link-row'>"
+            "<form method='post' action='/ops/candidates/review' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
             f"{pack_hidden}"
             f"<input type='hidden' name='slug' value='{escape(slug)}' />"
             "<input type='hidden' name='action' value='reject' />"
@@ -4190,7 +4200,7 @@ def _render_candidates_pagination(payload: dict) -> str:
     current_start = offset + 1 if count else 0
     current_end = min(count, offset + limit)
     return (
-        "<div class='link-row'>"
+        "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         f"<span class='muted'>Showing {current_start}-{current_end} of {count}</span>"
         + "".join(links)
         + "</div>"
@@ -4325,7 +4335,7 @@ def _render_candidates_page(payload: dict) -> str:
                 "<p class='muted'>Review registry candidates before they become canonical Evergreen objects. "
                 "Promote creates an active note, merge rewrites candidate links into an existing object, "
                 "and reject removes the pending candidate artifact.</p>",
-                "<form method='get' action='/ops/queue/concepts' class='link-row'>",
+                "<form method='get' action='/ops/queue/concepts' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4337,7 +4347,7 @@ def _render_candidates_page(payload: dict) -> str:
                 "</form>",
                 f"<p class='muted'>{escape(str(payload.get('count') or 0))} candidate(s) in view.</p>",
                 pagination,
-                f"<section class='card'><h2>Status</h2><div class='link-row'>{status_counts}</div></section>",
+                f"<section class='card'><h2>Status</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{status_counts}</div></section>",
                 operator_rail,
                 warning_card,
                 f"<section class='card'><h2>Review Queue</h2>{_render_candidate_items(payload)}</section>",
@@ -4451,7 +4461,7 @@ def _render_signals_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/actions/enqueue' class='link-row'>"
+                "<form method='post' action='/ops/actions/enqueue' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 + f"<input type='hidden' name='signal_id' value='{escape(item['signal_id'])}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Queue action</button>"
@@ -4508,7 +4518,7 @@ def _render_signals_page(payload: dict) -> str:
                         " signal ledger."
                     ),
                 ),
-                "<form method='get' action='/ops/queue/signals' class='link-row'>",
+                "<form method='get' action='/ops/queue/signals' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4628,7 +4638,7 @@ def _render_briefing_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/actions/enqueue' class='link-row'>"
+                "<form method='post' action='/ops/actions/enqueue' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 + f"<input type='hidden' name='signal_id' value='{escape(str(item['signal_id']))}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Queue action</button>"
@@ -4761,7 +4771,7 @@ def _render_briefing_page(payload: dict) -> str:
                 f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
                 "<section class='card'><h2>Value Proof</h2>"
                 f"<p class='muted'>{escape(str(first_useful_sign_check.get('reason') or 'No value proof yet.'))}</p>"
-                "<div class='link-row'>"
+                "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 f"<span class='pill'>Status: {escape(str(first_useful_sign_check.get('status') or 'empty'))}</span>"
                 f"<span class='pill'>Evidence: {escape(str(first_useful_sign_check.get('evidence_count') or 0))}</span>"
                 f"<span class='pill'>Actionability: {escape(str(first_useful_sign_check.get('actionability') or 'review'))}</span>"
@@ -4793,7 +4803,7 @@ def _render_briefing_page(payload: dict) -> str:
                 f"{_safe_count(queue_summary.get('safe_queued_count'))} safe to auto-run, ",
                 f"{_safe_count(queue_summary.get('running_count'))} running, ",
                 f"{_safe_count(queue_summary.get('failed_count'))} failed.</p>",
-                "<form method='post' action='/ops/actions/run-batch' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-batch' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 "<input type='hidden' name='limit' value='5' />",
                 "<input type='hidden' name='safe_only' value='1' />",
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
@@ -4940,7 +4950,7 @@ def _render_actions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/actions/retry' class='link-row'>"
+                "<form method='post' action='/ops/actions/retry' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Retry</button>"
@@ -4949,7 +4959,7 @@ def _render_actions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/actions/dismiss' class='link-row'>"
+                "<form method='post' action='/ops/actions/dismiss' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Dismiss</button>"
@@ -4990,7 +5000,7 @@ def _render_actions_page(payload: dict) -> str:
                     ),
                 ),
                 "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m ovp_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>",
-                "<form method='post' action='/ops/actions/run-next' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-next' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4999,7 +5009,7 @@ def _render_actions_page(payload: dict) -> str:
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Run next queued action</button>",
                 "</form>",
-                "<form method='post' action='/ops/actions/run-batch' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-batch' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 "<input type='hidden' name='limit' value='5' />",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -5009,7 +5019,7 @@ def _render_actions_page(payload: dict) -> str:
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Run 5 queued actions</button>",
                 "</form>",
-                "<form method='post' action='/ops/actions/run-batch' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-batch' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 "<input type='hidden' name='limit' value='5' />",
                 "<input type='hidden' name='safe_only' value='1' />",
                 (
@@ -5020,7 +5030,7 @@ def _render_actions_page(payload: dict) -> str:
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Run 5 safe queued actions</button>",
                 "</form>",
-                "<form method='get' action='/ops/actions' class='link-row'>",
+                "<form method='get' action='/ops/actions' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -5194,7 +5204,7 @@ def _render_contradictions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/contradictions/resolve' class='link-row'>"
+                "<form method='post' action='/ops/contradictions/resolve' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 f"<input type='hidden' name='contradiction_id' value='{escape(item['contradiction_id'])}' />"
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 "<select name='status'>"
@@ -5271,7 +5281,7 @@ def _render_contradictions_page(payload: dict) -> str:
                 f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
                 "<section class='card'>",
                 "<h2>Batch Resolve</h2>",
-                "<form id='contradiction-batch-form' method='post' action='/ops/contradictions/resolve' class='link-row'>",
+                "<form id='contradiction-batch-form' method='post' action='/ops/contradictions/resolve' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<select name='status'>",
                 "<option value='resolved_keep_positive'>resolved_keep_positive</option>",
@@ -5330,7 +5340,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
                 if item["review_history"]
                 else ""
             )
-            + "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
+            + "<form method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
             + f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
             + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Rebuild Summary</button>"
@@ -5362,7 +5372,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
                 f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
                 "<section class='card'>",
                 "<h2>Batch Rebuild</h2>",
-                "<form id='summary-batch-form' method='post' action='/ops/summaries/rebuild' class='link-row'>",
+                "<form id='summary-batch-form' method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Rebuild Selected</button>",
                 "</form>",
@@ -5401,7 +5411,7 @@ def _render_reuse_report_fragment(payload: dict) -> str:
             + "</tbody></table>"
         )
     else:
-        weekly_html = "<p class='empty'>No reuse events recorded yet.</p>"
+        weekly_html = "<p class='muted'><em>No reuse events recorded yet.</em></p>"
 
     if never_reused:
         never_html = (
@@ -5507,7 +5517,7 @@ def _render_open_questions_fragment(payload: dict) -> str:
     rows = payload.get("questions") or []
     if not rows:
         return (
-            "<section class='open-questions'><p class='empty'>No open questions yet.</p></section>"
+            "<section class='open-questions'><p class='muted'><em>No open questions yet.</em></p></section>"
         )
     items = "".join(
         f"<li><strong>{escape(str(row.get('question') or ''))}</strong>"
@@ -5524,7 +5534,7 @@ def _render_open_questions_page(payload: dict) -> str:
 def _render_writing_prompts_fragment(payload: dict) -> str:
     body = str(payload.get("body") or "").strip()
     if not body:
-        return "<section class='writing-prompts'><p class='empty'>No writing prompts captured yet.</p></section>"
+        return "<section class='writing-prompts'><p class='muted'><em>No writing prompts captured yet.</em></p></section>"
     return f"<section class='writing-prompts'><pre>{escape(body)}</pre></section>"
 
 
@@ -5607,10 +5617,11 @@ def _render_pulse_fragment() -> str:
     appends frames into a tight scrolling list. Designed for the Workbench
     bottom pane; works equally well as a standalone iframe.
     """
-    # ``.pulse`` rules live in /static/ovp-pages.css (token-driven).
+    # ``.live-feed`` is the kit-style extension primitive defined in
+    # /static/ovp-pages.css for SSE event tails.
     return (
-        "<section class='pulse'>"
-        "<ul id='pulse-feed'><li class='empty'>Waiting for events…</li></ul>"
+        "<section class='live-feed'>"
+        "<ul id='pulse-feed'><li class='empty' style='color:var(--muted);font-style:italic;padding:.4rem'>Waiting for events…</li></ul>"
         "<script>(function(){"
         "var feed=document.getElementById('pulse-feed');"
         "var empty=feed.querySelector('.empty');"
@@ -5765,9 +5776,11 @@ def _render_timeline_page(payload: dict) -> str:
                 for s in samples
             )
             samples_html = (
-                f"<div class='samples'><h3>{_TIMELINE_NEW_EVERGREENS_LABEL} "
+                "<div style='margin:.4rem 0'>"
+                f"<h3 style='font-size:.95rem;margin:.4rem 0 .2rem 0'>"
+                f"{_TIMELINE_NEW_EVERGREENS_LABEL} "
                 f"(sample {len(samples)} of {by_type.get('evergreen_auto_promoted', 0)})</h3>"
-                f"<ul>{items}</ul></div>"
+                f"<ul class='list-tight' style='margin-left:1.2rem'>{items}</ul></div>"
             )
 
         errors_html = ""
@@ -5795,17 +5808,20 @@ def _render_timeline_page(payload: dict) -> str:
         if requested_pack:
             drill_path += "&pack=" + quote(requested_pack, safe="")
         drill_html = (
-            f"<div class='samples'><a href='{escape(drill_path)}'>"
+            "<div class='tiny' style='margin-top:.5rem'>"
+            f"<a href='{escape(drill_path)}'>"
             f"See all {total} events for {date} →</a></div>"
             if total
             else ""
         )
 
         sections.append(
-            "<section class='day-card'>"
-            f"<h2><a href='{escape(drill_path)}'>{date}</a></h2>"
-            f"<div class='day-meta'>{total} events</div>"
-            f"<div class='event-grid'>{pills_html}</div>"
+            "<section class='card'>"
+            f"<h2 style='margin:0 0 .3rem 0;font-size:1.1rem'>"
+            f"<a href='{escape(drill_path)}'>{date}</a></h2>"
+            f"<div class='muted tiny mono' style='margin-bottom:.7rem'>{total} events</div>"
+            "<div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(220px,1fr));"
+            f"gap:.4rem;margin-bottom:.7rem'>{pills_html}</div>"
             f"{samples_html}"
             f"{errors_html}"
             f"{drill_html}"
@@ -5900,7 +5916,7 @@ def _render_today_digest_page(payload: dict) -> str:
         f"<strong>{escape(date)}</strong> (UTC).  Click "
         f"<a href='/ops/timeline'>Timeline</a> for the multi-day view.</p>"
     )
-    sections.append("<div class='today-grid'>")
+    sections.append("<div class='grid stats' style='margin-top:1rem'>")
     for card in cards:
         card_id = str(card.get("id") or "")
         label = str(card.get("label") or card_id)
@@ -5909,8 +5925,11 @@ def _render_today_digest_page(payload: dict) -> str:
         samples = card.get("samples") or []
         see_all_path = str(card.get("see_all_path") or "")
 
-        empty_class = " empty" if total == 0 else ""
-        failures_class = " failures" if card_id == "failures" else ""
+        # Failures get the warn-tinted big number; empty totals fade to
+        # border-strong so they read as "nothing today" without
+        # distracting from cards that DO have activity.
+        warn_cls = " warn" if card_id == "failures" and total > 0 else ""
+        empty_style = "color:var(--border-strong)" if total == 0 else ""
 
         # Type breakdown — top-N types as a tail line.
         type_pills = ""
@@ -5929,27 +5948,28 @@ def _render_today_digest_page(payload: dict) -> str:
                 )
                 for s in samples
             )
-            sample_html = f"<div class='samples'><ul>{items}</ul></div>"
+            sample_html = (
+                "<div style='margin-top:.6rem;padding-top:.6rem;"
+                "border-top:1px solid var(--border)'>"
+                f"<ul class='list-tight tiny'>{items}</ul></div>"
+            )
 
-        # ``See all N →`` link drops the operator into the events
-        # dossier filtered to this card's date.  Only render when
-        # there is more to see than the per-card sample.
         see_all_html = ""
         if see_all_path and total > len(samples):
             see_all_html = (
-                f"<div class='see-all'>"
+                "<div class='tiny' style='margin-top:.5rem'>"
                 f"<a href='{escape(see_all_path)}'>See all {total} →</a>"
-                f"</div>"
+                "</div>"
             )
 
         sections.append(
-            f"<div class='today-card{empty_class}{failures_class}'>"
-            f"<h3>{escape(label)}</h3>"
-            f"<div class='total'>{total}</div>"
-            f"<div class='by-type'>{type_pills}</div>"
+            "<div class='card' style='margin:0'>"
+            f"<div class='muted tiny'>{escape(label)}</div>"
+            f"<div class='metric-num{warn_cls}' style='margin-top:4px;{empty_style}'>{total}</div>"
+            f"<div class='muted tiny' style='margin-top:6px'>{type_pills}</div>"
             f"{sample_html}"
             f"{see_all_html}"
-            f"</div>"
+            "</div>"
         )
     sections.append("</div>")
 
@@ -6053,7 +6073,7 @@ def _render_runs_index_page(payload: dict) -> str:
             day_runs = group.get("runs") or []
             sections.append(
                 f"<h3>{escape(date)} — {count} run{'s' if count != 1 else ''}</h3>"
-                "<table class='runs-table'>"
+                "<table class='data-table'>"
                 "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
                 "<th>Events</th><th>Run</th></tr></thead>"
                 f"<tbody>{''.join(_row_html(r) for r in day_runs)}</tbody>"
@@ -6062,7 +6082,7 @@ def _render_runs_index_page(payload: dict) -> str:
         runs_html = "".join(sections)
     else:
         runs_html = (
-            "<table class='runs-table'>"
+            "<table class='data-table'>"
             "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
             "<th>Events</th><th>Run</th></tr></thead>"
             f"<tbody>{''.join(_row_html(r) for r in runs)}</tbody>"
@@ -6152,7 +6172,7 @@ def _render_run_detail_page(payload: dict) -> str:
 
     header = (
         f"{_RUN_DETAIL_STYLE}"
-        "<div class='run-header'>"
+        "<div class='card'>"
         "<dl>"
         f"<dt>Run id</th><td><code>{escape(txn_id)}</code></dd>"
         f"<dt>Workflow</th><td>{escape(workflow_type)}</dd>"
@@ -6183,7 +6203,7 @@ def _render_run_detail_page(payload: dict) -> str:
 
     body = (
         f"{header}"
-        "<table class='event-rows'>"
+        "<table class='data-table'>"
         "<thead><tr><th>Time</th><th>Event</th><th>Subject</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
@@ -6340,10 +6360,11 @@ def _render_explore_fragment(object_id: str) -> str:
     Pulse fragment so the look-and-feel is consistent across SSE panes.
     """
     object_qs = quote(object_id, safe="")
-    # ``.agent-timeline`` rules live in /static/ovp-pages.css.
+    # Reuses the .live-feed kit-style extension; .tall removes the
+    # max-height cap so it fills the explore right pane.
     return (
-        "<section class='agent-timeline'>"
-        "<ul id='agent-feed'><li class='empty'>Waiting for agent decisions…</li></ul>"
+        "<section class='live-feed tall'>"
+        "<ul id='agent-feed'><li class='empty' style='color:var(--muted);font-style:italic;padding:.4rem'>Waiting for agent decisions…</li></ul>"
         "<script>(function(){"
         "var feed=document.getElementById('agent-feed');"
         "var empty=feed.querySelector('.empty');"

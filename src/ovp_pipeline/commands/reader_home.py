@@ -88,7 +88,7 @@ def _render_reader_home(payload: dict) -> str:
     body = "".join([
         "<h1>Knowledge Library</h1>",
         "<p class='muted' style='margin-top:-2px'>Discover, read, and follow the ideas in this vault.</p>",
-        f"<form method='get' action='{escape(search_href)}' class='form-inline'>",
+        f"<form method='get' action='{escape(search_href)}' style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 1rem'>",
         pack_input,
         "<input type='search' name='q' placeholder='Search by title, topic, source…' autofocus />",
         "<button type='submit'>Search</button>",

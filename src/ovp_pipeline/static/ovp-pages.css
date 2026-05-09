@@ -1,239 +1,123 @@
 /* ============================================================
-   OVP page-specific component styles
+   OVP — kit-style extension primitives.
    ----------------------------------------------------------------
-   The kit's ovp-ui.css covers .shell / .card / .pill / .nav and
-   the canonical primitives.  This stylesheet adds the OVP-specific
-   page components (lineage card, type facet, today digest, runs
-   index, run detail, pulse feed, agent timeline, day card,
-   workbench / explore shells) that previously lived as inline
-   <style> blocks scattered through commands/_ui_renderers.py.
+   Everything routes through kit primitives in ovp-ui.css FIRST:
+     .shell / .shell-head / .shell-body / .nav / .subnav /
+     .card / .card.flush + .card-head + .card-body / .pill /
+     .grid / .grid.stats / .grid.two-col / .grid.three /
+     .timeline + .row + .t + .dot / table.kv / .page-help /
+     .metric-num / .metric-num.warn / .muted / .tiny / .mono /
+     .ascii / .btn / .btn.secondary / .btn.ghost / .btn.icon /
+     .page / .page.wide / .page.full
 
-   All colors token-driven so light "Atelier" and dark "Vault" both
-   work; no hardcoded hex.
+   Only the four surfaces below exist because the kit truly does
+   not carry a primitive for them — and each is built explicitly
+   in the kit's design language (token-driven colors, IBM Plex
+   typography, kit radii, kit borders).  No hardcoded hex.
    ============================================================ */
 
-/* ---------- LINEAGE CARD (object page chain) ---------- */
-.lineage-flow { display: flex; flex-direction: column; gap: 0.4rem; }
-.lineage-row {
-  padding: 0.5rem 0.7rem;
-  border-left: 3px solid var(--border-strong);
-  background: var(--surface-2);
-  border-radius: 0 4px 4px 0;
-}
-.lineage-row.you {
-  border-left-color: var(--accent);
-  background: var(--accent-soft);
-}
-.lineage-row h3 { margin: 0.1rem 0; font-size: 0.95rem; }
-.lineage-row ul { margin: 0.2rem 0 0.2rem 1.2rem; }
-.lineage-row .muted { color: var(--muted); font-size: 0.82rem; }
-.lineage-arrow {
+/* ============================================================
+   1. .atlas-empty — positioned overlay on /map's 3D canvas.
+   Kit has no positioned-overlay primitive.
+   ============================================================ */
+.atlas-empty {
+  position: absolute; inset: 0; z-index: 7;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 2rem;
   color: var(--muted); text-align: center;
-  font-size: 0.9rem; padding: 0.1rem 0;
 }
-
-/* ---------- TYPE FACET (objects index chip rail) ---------- */
-.type-facet {
-  display: flex; flex-wrap: wrap; gap: 6px;
-  margin: 12px 0 16px 0;
-  padding: 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--ovp-radius-md, 12px);
-}
-.type-facet h3 {
-  width: 100%; margin: 0 0 4px 0;
-  font-size: 0.85rem; font-weight: 500;
-  color: var(--muted);
-}
-.type-facet a.chip {
-  display: inline-block; padding: 4px 10px;
-  font-size: 0.85rem; font-weight: 500;
-  border: 1px solid var(--border-strong);
-  border-radius: 14px;
-  background: var(--surface);
-  color: var(--text);
-  text-decoration: none;
-  transition: background 120ms, border-color 120ms;
-}
-.type-facet a.chip:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-.type-facet a.chip.active {
-  background: var(--accent);
-  color: var(--surface);
-  border-color: var(--accent);
-}
-.type-facet a.chip .count {
-  color: var(--muted);
-  font-size: 0.78rem; margin-left: 4px;
-}
-.type-facet a.chip.active .count { color: var(--accent-soft); }
-
-/* ---------- PULSE / AGENT-TIMELINE FEED (dark, mono) ---------- */
-.pulse, .agent-timeline {
+.atlas-empty .glyph {
   font-family: var(--ovp-font-mono);
-  font-size: 0.78rem;
+  font-size: 3rem; opacity: 0.4; margin-bottom: 1rem;
 }
-.pulse ul, .agent-timeline ul {
-  list-style: none; margin: 0; padding: 0.4rem;
-  max-height: 240px; overflow: auto;
-  background: var(--code-bg);
-  color: var(--code-text);
-  border-radius: 6px;
+.atlas-empty h2 {
+  color: var(--text); font-size: 1.2rem; margin: 0 0 0.5rem;
 }
-.agent-timeline ul { max-height: none; height: 100%; }
-.pulse li, .agent-timeline li {
-  margin: 0.1rem 0; white-space: pre-wrap;
-}
-.pulse li .ts, .agent-timeline li .ts {
-  color: var(--muted); margin-right: 0.4rem;
-}
-.pulse li .et, .agent-timeline li .tool {
-  color: var(--accent-2); margin-right: 0.4rem;
-}
-.pulse li .pk { color: var(--accent); margin-right: 0.4rem; }
-.pulse .empty, .agent-timeline .empty {
-  color: var(--muted); padding: 0.4rem;
-}
-
-/* ---------- DAY CARD (timeline page) ---------- */
-.day-card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1rem; margin-bottom: 1.2rem;
-  background: var(--surface-2);
-}
-.day-card h2 { margin: 0 0 0.3rem 0; font-size: 1.1rem; }
-.day-meta {
-  color: var(--muted); font-size: 0.85rem;
-  margin-bottom: 0.7rem; font-family: var(--ovp-font-mono);
-}
-.event-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 0.4rem; margin-bottom: 0.7rem;
-}
-.event-grid .pill {
-  background: var(--border);
-  color: var(--text);
-  padding: 0.18rem 0.55rem;
-  border-radius: 4px; font-size: 0.85rem;
-}
-.event-grid .pill.error {
-  background: var(--warn-bg);
-  color: var(--warn-text);
-  border: 1px solid var(--warn-border);
-}
-.event-grid .pill.highlight {
-  background: var(--accent-2-soft);
-  color: var(--accent-2);
-}
-.samples { margin: 0.4rem 0; }
-.samples h3 { font-size: 0.95rem; margin: 0.4rem 0 0.2rem 0; }
-.samples ul { margin: 0.1rem 0 0.4rem 1.2rem; }
-.errors li {
-  color: var(--warn-text);
-  font-family: var(--ovp-font-mono);
-  font-size: 0.8rem; margin-bottom: 0.2rem;
-}
-
-/* ---------- TODAY DIGEST CARDS ---------- */
-.today-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px; margin-top: 16px;
-}
-.today-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
-}
-.today-card h3 { margin: 0 0 8px 0; font-size: 1rem; }
-.today-card .total {
-  font-size: 2rem; font-weight: 600;
-  color: var(--text);
-}
-.today-card.failures .total { color: var(--warn-text); }
-.today-card.empty .total { color: var(--border-strong); }
-.today-card .by-type {
-  color: var(--muted); font-size: 0.85rem; margin-top: 4px;
-}
-.today-card .by-type code {
+.atlas-empty p { max-width: 32rem; line-height: 1.5; }
+.atlas-empty code {
   background: var(--code-bg); color: var(--code-text);
-  padding: 1px 6px; border-radius: 3px;
+  padding: 0.05rem 0.35rem; border-radius: 6px;
+  font-family: var(--ovp-font-mono); font-size: 0.92em;
 }
-.today-card .samples {
-  margin-top: 12px; padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
-.today-card .samples ul {
-  margin: 4px 0 0 0; padding-left: 18px; font-size: 0.85rem;
-}
-.today-card .samples li { margin: 2px 0; }
-.today-card .see-all { margin-top: 10px; font-size: 0.85rem; }
-.today-card .see-all a { color: var(--accent); text-decoration: none; }
-.today-card .see-all a:hover { text-decoration: underline; }
 
-/* ---------- RUNS INDEX TABLE ---------- */
-.runs-table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-.runs-table th, .runs-table td {
-  text-align: left; padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+/* ============================================================
+   2. table.data-table — multi-column tabular data
+   (kit ships only table.kv for 2-col label/value pairs).
+   Used by /ops/runs (Started · Workflow · Status · Events · Run)
+   and /ops/runs/<id>/timeline.
+   ============================================================ */
+table.data-table {
+  width: 100%; border-collapse: collapse;
+  margin-top: 1rem; font-size: 0.92rem;
 }
-.runs-table th {
-  background: var(--surface-2);
-  font-weight: 600; font-size: 0.85rem;
-  color: var(--muted);
-  font-family: var(--ovp-font-mono);
-  text-transform: uppercase; letter-spacing: 0.04em;
-}
-.runs-table td { font-size: 0.9rem; }
-.runs-table td code, .runs-table th code {
-  font-family: var(--ovp-font-mono); font-size: 0.8rem;
-  background: var(--code-bg); padding: 1px 5px; border-radius: 3px;
-}
-.runs-table .status-completed { color: var(--accent-2); font-weight: 600; }
-.runs-table .status-running   { color: var(--accent);   font-weight: 600; }
-.runs-table .status-stale     { color: var(--warn-text); font-weight: 600; }
-
-/* ---------- RUN DETAIL ---------- */
-.run-header {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 12px 16px; margin-bottom: 16px;
-}
-.run-header dl {
-  display: grid; grid-template-columns: max-content 1fr;
-  gap: 4px 16px; margin: 0; font-size: 0.9rem;
-}
-.run-header dt { color: var(--muted); font-weight: 600; }
-.run-header dd { margin: 0; }
-.event-rows { width: 100%; border-collapse: collapse; }
-.event-rows tr td {
-  padding: 6px 12px;
+table.data-table th,
+table.data-table td {
+  text-align: left; padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
-.event-rows td.ts {
+table.data-table th {
+  background: var(--surface-2);
+  font-family: var(--ovp-font-mono);
+  font-size: 0.78rem; font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+table.data-table td.ts {
   white-space: nowrap;
   font-family: var(--ovp-font-mono);
   font-size: 0.8rem; color: var(--muted);
 }
-.event-rows td.type { font-weight: 500; }
-.event-rows td.subject { color: var(--text-soft); }
-.event-rows tr.error td.type { color: var(--warn-text); }
-.event-rows tr.bracket td {
-  background: var(--accent-soft); font-weight: 500;
+table.data-table td code,
+table.data-table th code {
+  font-family: var(--ovp-font-mono); font-size: 0.8rem;
+  background: var(--code-bg); padding: 1px 5px; border-radius: 3px;
 }
-.event-rows tr.bracket-completed td {
-  background: var(--accent-2-soft);
+table.data-table .status-completed { color: var(--accent-2); font-weight: 600; }
+table.data-table .status-running   { color: var(--accent);   font-weight: 600; }
+table.data-table .status-stale     { color: var(--warn-text); font-weight: 600; }
+table.data-table tr.error td.type        { color: var(--warn-text); font-weight: 500; }
+table.data-table tr.bracket td           { background: var(--accent-soft); font-weight: 500; }
+table.data-table tr.bracket-completed td { background: var(--accent-2-soft); }
+
+/* ============================================================
+   3. .live-feed — dark-mono live event tail (SSE) for /ops/pulse
+   and /ops/explore agent timeline.  Kit has .ascii (mono pre-block)
+   but not a scrolling list-of-events surface.  Visual identity:
+   var(--code-bg) terminal background, var(--accent-2) for event
+   types, var(--accent) for pack tags.
+   ============================================================ */
+.live-feed {
+  font-family: var(--ovp-font-mono);
+  font-size: 0.78rem; line-height: 1.5;
+  background: var(--code-bg);
+  color: var(--code-text);
+  border: 1px solid var(--border);
+  border-radius: var(--ovp-radius-md, 12px);
+  padding: 0.5rem 0.7rem;
+  max-height: 240px; overflow: auto;
+}
+.live-feed.tall { max-height: none; height: 100%; }
+.live-feed ul { list-style: none; margin: 0; padding: 0; }
+.live-feed li {
+  margin: 0.1rem 0; white-space: pre-wrap;
+  display: flex; gap: 0.4rem; flex-wrap: wrap;
+}
+.live-feed .ts   { color: var(--muted); }
+.live-feed .et   { color: var(--accent-2); }
+.live-feed .tool { color: var(--accent-2); }
+.live-feed .pk   { color: var(--accent); }
+.live-feed .empty {
+  color: var(--muted); font-style: italic; padding: 0.4rem;
 }
 
-/* ---------- WORKBENCH / EXPLORE SHELL (full-bleed grid) ---------- */
+/* ============================================================
+   4. .fullbleed-shell / .fullbleed-grid — Workbench + Explore
+   multi-pane iframe grid that reaches viewport edges.  Kit's
+   .shell has rounded corners + shadow, not designed for full-
+   bleed — but tokens, font, accent colors stay kit-faithful.
+   ============================================================ */
 .fullbleed-shell {
   margin: 0; background: var(--bg); color: var(--text);
   font-family: var(--ovp-font-sans);
@@ -274,9 +158,7 @@
   grid-template-columns: 1fr 360px;
   grid-template-rows: 1fr 260px;
 }
-.fullbleed-grid .pane {
-  background: var(--surface); overflow: auto;
-}
+.fullbleed-grid .pane    { background: var(--surface); overflow: auto; }
 .fullbleed-grid .pane iframe {
   width: 100%; height: 100%; border: 0; display: block;
 }
@@ -286,67 +168,5 @@
 .fullbleed-grid .pane.act     { grid-row: 1 / 3; }
 .fullbleed-grid .pane.pulse   { grid-column: 1 / 4; grid-row: 3 / 4; }
 .fullbleed-grid .pane.canvas    { grid-row: 1 / 2; grid-column: 1 / 2; }
-.fullbleed-grid .pane.timeline  {
-  grid-row: 1 / 2; grid-column: 2 / 3; padding: 0.4rem;
-}
+.fullbleed-grid .pane.timeline  { grid-row: 1 / 2; grid-column: 2 / 3; padding: 0.4rem; }
 .fullbleed-grid .pane.synth     { grid-column: 1 / 3; grid-row: 2 / 3; }
-
-/* ---------- TIMESTAMP / EMPTY (utility) ---------- */
-.timestamp {
-  font-family: var(--ovp-font-mono);
-  font-size: 0.82rem;
-  color: var(--muted);
-}
-.empty { color: var(--muted); font-style: italic; }
-
-/* ---------- SECTION-STACK ---------- */
-.section-stack { display: grid; gap: 1rem; }
-
-/* ---------- LINK-ROW (used on object/note pages) ---------- */
-.link-row {
-  display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.9rem;
-}
-.link-row a {
-  color: var(--accent); text-decoration: none; font-weight: 600;
-}
-
-/* ---------- TOPIC ENTRY (Featured Topics list cards) ---------- */
-.topic-entry { padding: 1rem 1.1rem; }
-.topic-entry-head {
-  display: flex; align-items: baseline; flex-wrap: wrap;
-  gap: 0.55rem; margin-bottom: 0.5rem;
-}
-.topic-entry-head .topic-rank {
-  font-family: var(--ovp-font-mono);
-  font-size: 0.92rem; color: var(--muted);
-  min-width: 1.6rem; text-align: right; font-weight: 600;
-}
-.topic-entry-head .topic-title {
-  flex: 1; margin: 0; font-size: 1.05rem; line-height: 1.3;
-  font-weight: 600; min-width: 0;
-}
-.topic-entry-head .topic-title a {
-  color: var(--text); text-decoration: none;
-}
-.topic-entry-head .topic-title a:hover {
-  color: var(--accent); text-decoration: underline;
-}
-.topic-entry > p { margin: 0.4rem 0; line-height: 1.5; }
-.topic-breakdown {
-  margin-top: 0.6rem; padding-top: 0.5rem;
-  border-top: 1px dashed var(--border);
-  display: flex; flex-wrap: wrap;
-  font-size: 0.78rem; color: var(--muted);
-  gap: 0.1rem;
-}
-.topic-breakdown .timestamp { white-space: nowrap; }
-
-/* ---------- FORM-INLINE (utility) ---------- */
-form.form-inline {
-  display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;
-  margin: 0.5rem 0 1rem;
-}
-form.form-inline input[type="text"],
-form.form-inline input[type="search"] {
-  flex: 1; min-width: 12rem;
-}
