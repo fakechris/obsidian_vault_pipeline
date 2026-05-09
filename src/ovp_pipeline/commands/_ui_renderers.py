@@ -269,75 +269,56 @@ def _layout(
         if auto_refresh_seconds and auto_refresh_seconds > 0
         else ""
     )
+    brand_href = escape(_shell_href("/", requested_pack))
     return f"""<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 {refresh_meta}    <meta name="ovp-runtime-refresh" content="{int(auto_refresh_seconds or 0)}" />
     <title>{escape(title)}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/monogram.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+SC:wght@400;600&display=swap" />
+    <link rel="stylesheet" href="/static/ovp-tokens.css" />
+    <link rel="stylesheet" href="/static/ovp-ui.css" />
     <style>
-      :root {{
-        color-scheme: light;
-        --bg: #f7f6f2;
-        --surface: #fffdfa;
-        --border: #e7e1d8;
-        --text: #1f1a17;
-        --muted: #71675d;
-        --accent: #9f4f24;
-        --accent-soft: #f4dfd2;
-      }}
-      * {{ box-sizing: border-box; }}
-      body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; line-height: 1.5; background: var(--bg); color: var(--text); }}
-      main {{ max-width: 1180px; margin: 0 auto; padding: 1.5rem 1.5rem 3rem; }}
-      nav {{ margin-bottom: 1.5rem; display: flex; gap: 0.9rem; flex-wrap: wrap; }}
-      nav a {{ color: var(--accent); text-decoration: none; font-weight: 600; }}
-      nav a:hover {{ text-decoration: underline; }}
-      h1, h2, h3 {{ margin-bottom: 0.5rem; line-height: 1.2; }}
-      ul {{ padding-left: 1.2rem; }}
-      pre {{ background: #f4f4f5; padding: 1rem; border-radius: 8px; overflow-x: auto; }}
-      img {{ max-width: 100%; height: auto; display: block; border-radius: 12px; }}
-      input, select, button {{ font: inherit; }}
-      input, select {{ padding: 0.55rem 0.7rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }}
-      button {{ padding: 0.55rem 0.8rem; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }}
-      button:hover {{ opacity: 0.92; }}
-      .muted {{ color: var(--muted); }}
-      .page-help {{ background: #fbf7f0; border: 1px solid var(--border); border-radius: 12px; padding: .25rem .9rem; margin: .25rem 0 1rem; font-size: .92rem; }}
-      .page-help summary {{ cursor: pointer; padding: .55rem 0; color: var(--accent); font-weight: 600; }}
-      .page-help dl {{ margin: .25rem 0 .5rem; display: grid; grid-template-columns: max-content 1fr; gap: .25rem .9rem; }}
-      .page-help dt {{ color: var(--muted); }}
-      .page-help dd {{ margin: 0; }}
-      .hero {{ margin-bottom: 1.5rem; }}
-      .shell {{ background: var(--surface); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 12px 36px rgba(31, 26, 23, 0.06); }}
-      .shell-head {{ padding: 1.1rem 1.25rem 0; }}
-      .shell-body {{ padding: 0 1.25rem 1.25rem; }}
-      .card {{ border: 1px solid var(--border); background: var(--surface); border-radius: 16px; padding: 1rem; margin-bottom: 1rem; }}
-      .warning {{ border-color: #d48a2f; background: #fff8ec; }}
-      .grid {{ display: grid; gap: 1rem; }}
-      .stats {{ grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }}
-      .two-col {{ grid-template-columns: minmax(0, 2.1fr) minmax(280px, 1fr); align-items: start; }}
-      .pill {{ display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin-right: 0.5rem; }}
-      .link-row {{ display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.9rem; }}
-      .link-row a {{ color: var(--accent); text-decoration: none; font-weight: 600; }}
-      .subnav {{ display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.9rem; margin-bottom: 1rem; }}
-      .subnav a {{ color: var(--muted); text-decoration: none; padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }}
-      .subnav a:hover {{ color: var(--accent); border-color: var(--accent-soft); }}
-      .cross-link {{ font-size: 0.85rem; font-weight: 500; color: var(--muted); margin-left: auto; }}
-      .cross-link:hover {{ color: var(--accent); }}
-      nav {{ align-items: baseline; }}
-      .list-tight li {{ margin-bottom: 0.4rem; }}
-      .section-stack {{ display: grid; gap: 1rem; }}
-      .meta-list {{ display: grid; gap: 0.6rem; margin: 0; }}
-      .meta-list dt {{ font-weight: 700; }}
-      .meta-list dd {{ margin: 0; color: var(--muted); }}
-      @media (max-width: 780px) {{ .two-col {{ grid-template-columns: 1fr; }} main {{ padding: 1rem 1rem 2rem; }} }}
+      /* Page-local additions only — anything reusable belongs in
+         /static/ovp-ui.css so the kit stays diffable.  */
+      main.page {{ display: block; }}
+      .nav .brand-mark {{ display: inline-flex; align-items: center; gap: 0.45rem;
+        font-weight: 700; color: var(--text); margin-right: 0.4rem;
+        letter-spacing: -0.01em; font-size: 1.05rem; }}
+      .nav .brand-mark img {{ width: 22px; height: 22px; display: block;
+        border-radius: 0; }}
+      .nav .brand-mark .dot {{ color: var(--accent); }}
+      .nav .brand-mark:hover {{ text-decoration: none; opacity: 0.92; }}
+      @media (max-width: 780px) {{ main.page {{ padding: 1rem 1rem 2rem; }} }}
     </style>
+    <script>
+      // Pre-paint theme: read localStorage before first paint to
+      // avoid flash-of-wrong-theme.  ?theme=light|dark may pin
+      // server-side later; for now localStorage is the only source.
+      (function () {{
+        try {{
+          var saved = localStorage.getItem('ovp-theme');
+          if (saved === 'light' || saved === 'dark') {{
+            document.documentElement.dataset.theme = saved;
+          }}
+        }} catch (e) {{}}
+      }})();
+    </script>
   </head>
   <body>
-    <main>
+    <main class="page">
       <div class="shell">
         <div class="shell-head">
-          <nav>
+          <nav class="nav">
+            <a class="brand-mark" href="{brand_href}">
+              <img src="/static/monogram.svg" alt="" width="22" height="22" />
+              <span>obsidian vault pipeline<span class="dot">.</span></span>
+            </a>
             {nav_items}
             {cross_link}
           </nav>

@@ -216,34 +216,36 @@ def render_graph_map_force_graph(payload: dict[str, Any]) -> str:
 
 _FORCE_GRAPH_CSS = """
 .cluster-graph svg { width: 100%; height: auto; max-height: 560px;
-  background: #fbf9f5; border-radius: 12px; }
+  background: var(--graph-bg); border-radius: 12px; }
 .cluster-graph-toolbar { display: flex; align-items: center;
   flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0 0.75rem; }
 .cluster-graph-legend { display: inline-flex; flex-wrap: wrap;
   gap: 0.4rem; }
 .cluster-graph-legend .chip { display: inline-flex; align-items: center;
   gap: 0.3rem; padding: 0.15rem 0.55rem; border-radius: 999px;
-  border: 1px solid var(--border); background: white; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); cursor: pointer;
   appearance: none; font: inherit;
   font-size: 0.85rem; user-select: none; }
 .cluster-graph-legend .chip.muted { opacity: 0.4; }
 .cluster-graph-legend .chip-swatch { width: 10px; height: 10px;
   border-radius: 50%; display: inline-block; }
 .cluster-graph-reset { font-size: 0.85rem; padding: 0.25rem 0.7rem;
-  background: white; color: var(--text); border: 1px solid var(--border); }
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); }
 .cluster-graph-tooltip { position: absolute; pointer-events: none;
-  background: #1f1a17; color: #f7f6f2; padding: 0.5rem 0.7rem;
+  background: var(--text); color: var(--bg); padding: 0.5rem 0.7rem;
   border-radius: 6px; font-size: 0.85rem; max-width: 280px;
   line-height: 1.4; opacity: 0; transform: translate(-50%, -100%);
-  transition: opacity 120ms; z-index: 1000; }
+  transition: opacity 120ms; z-index: 1000;
+  font-family: var(--ovp-font-sans); }
 .cluster-graph-tooltip.visible { opacity: 1; }
-.cluster-graph-tooltip strong { color: #ffd9b8; }
+.cluster-graph-tooltip strong { color: var(--accent-soft); }
 .cluster-graph-edge { stroke-opacity: 0.55; }
 .cluster-graph-edge.faded { stroke-opacity: 0.06; }
 .cluster-graph-node { cursor: pointer; }
-.cluster-graph-node circle { stroke-width: 2; stroke: #fffdfa; }
-.cluster-graph-node.attention circle { stroke: #c2410c; }
-.cluster-graph-node text { font-size: 11px; fill: #1f1a17;
+.cluster-graph-node circle { stroke-width: 2; stroke: var(--surface); }
+.cluster-graph-node.attention circle { stroke: var(--graph-link-hi); }
+.cluster-graph-node text { font-size: 11px; fill: var(--text);
+  font-family: var(--ovp-font-sans);
   pointer-events: none; user-select: none; }
 """.strip()
 

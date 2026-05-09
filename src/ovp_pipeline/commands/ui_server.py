@@ -1613,12 +1613,18 @@ def create_server(
             # /ops/cluster?id=... force-directed graph.  This is the
             # only third-party JS the maintainer UI loads; if the CDN
             # is unreachable the page falls back to the tabular
-            # members/edges sections rendered server-side.
+            # members/edges sections rendered server-side.  Google
+            # Fonts is allowed for the IBM Plex stack: stylesheet
+            # arrives from fonts.googleapis.com, woff2 from
+            # fonts.gstatic.com.  Both fail soft to the
+            # ``ui-sans-serif, system-ui`` chain declared in
+            # ``--ovp-font-sans``.
             self.send_header(
                 "Content-Security-Policy",
                 "default-src 'self'; "
                 "script-src 'self' 'unsafe-inline' https://unpkg.com; "
-                "style-src 'self' 'unsafe-inline'",
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                "font-src 'self' https://fonts.gstatic.com",
             )
             self.end_headers()
             self.wfile.write(body)
