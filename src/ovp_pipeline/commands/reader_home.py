@@ -89,11 +89,9 @@ def _render_reader_home(payload: dict) -> str:
         "<section class='hero'>",
         "<h1>Knowledge Library</h1>",
         "<p class='muted'>Discover, read, and follow the ideas in this vault.</p>",
-        f"<form method='get' action='{escape(search_href)}' "
-        "style='margin-top:0.8rem; display:flex; gap:0.6rem;'>",
+        f"<form method='get' action='{escape(search_href)}' class='form-inline'>",
         pack_input,
-        "<input type='text' name='q' placeholder='Search by title, topic, source…' "
-        "style='flex:1;' autofocus />",
+        "<input type='search' name='q' placeholder='Search by title, topic, source…' autofocus />",
         "<button type='submit'>Search</button>",
         "</form>",
         "</section>",

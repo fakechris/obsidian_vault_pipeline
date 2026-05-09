@@ -76,6 +76,19 @@ _CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
 _INLINE_MEMBER_LINK_LIMIT = 8
 
 
+def _ts(text) -> str:
+    """Render a timestamp/date in the kit's mono-tiny-muted style.
+
+    Centralises the visual treatment of every ISO date / unix
+    timestamp / "generated at" line across the UI so they read as
+    one design language instead of as raw text.  Pass ``None`` /
+    ``""`` and you get the em-dash placeholder.
+    """
+    if text is None or text == "":
+        return "<span class='muted tiny'>—</span>"
+    return f"<span class='timestamp'>{escape(str(text))}</span>"
+
+
 def _render_limited_inline_links(
     items,
     render_link,
@@ -734,7 +747,7 @@ def _render_run_history_card(runtime: dict[str, object] | None) -> str:
             "<li>"
             f"<strong>{escape(run_id)}</strong> "
             f"<span class='pill'>{escape(status)}</span>"
-            f"<div class='muted'>Duration: {escape(duration)} · {escape(started_at)} → {escape(finished_at)}</div>"
+            f"<div class='muted'>Duration: {escape(duration)} · {_ts(started_at)} → {_ts(finished_at)}</div>"
             f"<div class='muted'>Scope: {escape(scope)}</div>"
             f"<div class='muted'>Work: {escape(work)}</div>"
             f"{steps_html}"
@@ -1599,13 +1612,13 @@ def _render_search_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Reader Search</h1>",
-                "<form method='get' action='/search'>",
+                "<form method='get' action='/search' class='form-inline'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' /> "
                     if requested_pack
                     else ""
                 ),
-                f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> ",
+                f"<input type='search' name='q' value='{escape(query)}' placeholder='Search vault' />",
                 "<button type='submit'>Search</button>",
                 "</form>",
                 f"<p class='muted'>{escape(str(payload.get('reader_summary') or showing))}</p>",
@@ -1695,7 +1708,7 @@ def _render_evolution_links(items: list[dict[str, object]], *, empty_text: str) 
                 else ""
             )
             + (
-                f"<div class='muted'>Reviewed at: {escape(str(item.get('timestamp') or ''))}</div>"
+                f"<div class='muted'>Reviewed at: {_ts(item.get('timestamp') or '')}</div>"
                 if item.get("timestamp")
                 else ""
             )
@@ -1792,7 +1805,7 @@ def _render_review_history(items: list[dict[str, object]], *, title: str = "Revi
     rows = "".join(
         "<li>"
         f"<span class='pill'>{escape(str(item['event_type']))}</span> "
-        f"{escape(str(item['timestamp']))}"
+        f"{_ts(item['timestamp'])}"
         + (
             f"<div class='muted'>Status: {escape(str(item['status']))}</div>"
             if item.get("status")
@@ -2030,7 +2043,7 @@ def _render_dashboard(payload: dict) -> str:
         last_run_summary = (
             f"{escape(str(last_run.get('workflow_type', '')))}"
             f" — <strong>{escape(str(last_run.get('status', '')))}</strong>"
-            f" <span class='muted'>{escape(str(last_run.get('started_at', ''))[:19])}</span>"
+            f" {_ts(str(last_run.get('started_at', ''))[:19])}"
         )
         last_run_link = (
             f"<a href='{escape(str(last_run.get('detail_href') or foyer_runs_path))}'>open →</a>"
@@ -3219,58 +3232,73 @@ def _render_curated_atlas_page(payload: dict) -> str:
             "Re-run <code>ovp-rescore-crystals</code> to refresh the Projection.</p></section>"
         )
     else:
+        # Each topic entry gets its own .card so the rank, title,
+        # score chip, kind chip, teaser, and 6-metric breakdown each
+        # have breathing room — the prior single-<ul> rendering
+        # collapsed all six lines onto one cramped row, which was
+        # the loudest "design unfinished" complaint on /topics.
         item_html_parts = []
         for entry in entries:
             kind = str(entry.get("crystal_kind", ""))
-            # 🌐 = synthesized topic, ⚖️ = open question (contradiction).
-            kind_marker = "🌐" if kind == "community" else ("⚖️" if kind == "contradiction" else "•")
             kind_label = (
                 "topic" if kind == "community" else
                 ("open question" if kind == "contradiction" else kind)
             )
+            kind_pill_class = "pill warn" if kind == "contradiction" else "pill"
             label = escape(str(entry.get("label", "(untitled)")))
             score = float(entry.get("score", 0.0))
             teaser = str(entry.get("teaser") or "")
             note_href = str(entry.get("note_href") or "")
-            breakdown = (
-                f"size {float(entry.get('size_norm', 0)):.2f} · "
-                f"credibility {float(entry.get('credibility_norm', 0)):.2f} · "
-                f"source-diversity {float(entry.get('source_diversity_norm', 0)):.2f} · "
-                f"contradiction {float(entry.get('contradiction_norm', 0)):.2f} · "
-                f"reuse-recency {float(entry.get('reuse_recency_norm', 0)):.2f} · "
-                f"evergreen-recency {float(entry.get('evergreen_recency_norm', 0)):.2f}"
-            )
-            teaser_html = (
-                f"<p>{escape(teaser)}</p>" if teaser else "<p class='muted'><em>(no teaser available)</em></p>"
-            )
             link_html = (
                 f"<a href='{escape(note_href)}'>{label}</a>" if note_href else label
             )
-            item_html_parts.append(
-                "<li>"
-                f"<div><strong>{int(entry.get('rank', 0))}. {kind_marker} {link_html}</strong> "
-                f"<span class='pill'>score {score:.3f}</span> "
-                f"<span class='pill'>{escape(kind_label)}</span></div>"
-                f"{teaser_html}"
-                f"<div class='muted'>{escape(breakdown)}</div>"
-                "</li>"
+            teaser_html = (
+                f"<p>{escape(teaser)}</p>"
+                if teaser
+                else "<p class='muted'><em>(no teaser available)</em></p>"
             )
-        items_html = "".join(item_html_parts)
-        body_html = f"<section class='card'><ul class='list-tight'>{items_html}</ul></section>"
+            # Breakdown rendered as a wrapped flex of mono-tiny chips
+            # so each metric is its own readable unit instead of one
+            # long en-dot-joined string.
+            breakdown_chips = "".join(
+                f"<span class='timestamp' style='margin-right:0.6rem'>{escape(label_text)} "
+                f"<strong style='color:var(--text-soft)'>{value:.2f}</strong></span>"
+                for label_text, value in [
+                    ("size",         float(entry.get("size_norm", 0))),
+                    ("credibility",  float(entry.get("credibility_norm", 0))),
+                    ("source-div",   float(entry.get("source_diversity_norm", 0))),
+                    ("contradict",   float(entry.get("contradiction_norm", 0))),
+                    ("reuse-rec",    float(entry.get("reuse_recency_norm", 0))),
+                    ("evergreen-rec",float(entry.get("evergreen_recency_norm", 0))),
+                ]
+            )
+            item_html_parts.append(
+                "<section class='card topic-entry'>"
+                "<div class='topic-entry-head'>"
+                f"<span class='topic-rank'>{int(entry.get('rank', 0))}</span>"
+                f"<h3 class='topic-title'>{link_html}</h3>"
+                f"<span class='pill'>score {score:.3f}</span> "
+                f"<span class='{kind_pill_class}'>{escape(kind_label)}</span>"
+                "</div>"
+                f"{teaser_html}"
+                f"<div class='topic-breakdown'>{breakdown_chips}</div>"
+                "</section>"
+            )
+        body_html = "".join(item_html_parts)
 
     header_lines = [
         "<h1>Featured Topics</h1>",
         f"<p class='muted'>Top {len(entries)} of {total_chains} synthesized topics in pack "
         f"<code>{escape(pack)}</code>, ranked by <code>crystal_scores</code>. "
-        f"Generated {escape(generated_at)}.</p>",
+        f"Generated {_ts(generated_at)}.</p>",
         f"<p class='muted'><a href='{escape(api_href)}'>JSON</a></p>",
-        "<form method='get' action='/topics'>",
+        "<form method='get' action='/topics' class='form-inline'>",
         (
             f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
             if requested_pack
             else ""
         ),
-        f"<label>top_n <input type='number' name='top_n' value='{top_n}' min='1' max='{int(payload.get('max_top_n', 100))}' /></label> ",
+        f"<label>top_n <input type='number' name='top_n' value='{top_n}' min='1' max='{int(payload.get('max_top_n', 100))}' style='width:5rem' /></label> ",
         "<button type='submit'>Refresh</button>",
         "</form>",
     ]
@@ -4698,7 +4726,7 @@ def _render_briefing_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Orientation Brief</h1>",
-                f"<p class='muted'>Generated at {escape(str(payload['generated_at']))}. "
+                f"<p class='muted'>Generated at {_ts(payload['generated_at'])}. "
                 f"{_safe_count(payload.get('recent_signal_count'))} recent signals, "
                 f"{_safe_count(payload.get('unresolved_issue_count'))} unresolved issues.",
                 (
@@ -4798,7 +4826,7 @@ def _render_actions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                f"<div class='muted'>Created at {escape(str(item['created_at']))}</div>"
+                f"<div class='muted'>Created at {_ts(item['created_at'])}</div>"
                 if item.get("created_at")
                 else ""
             )
@@ -5123,7 +5151,7 @@ def _render_contradictions_page(payload: dict) -> str:
             + (
                 "<details><summary>Review History</summary><ul class='list-tight'>"
                 + "".join(
-                    f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
+                    f"<li>{_ts(history['timestamp'])} <span class='pill'>{escape(str(history['event_type']))}</span>"
                     + (
                         f"<div class='muted'>Status: {escape(str(history['status']))}</div>"
                         if history.get("status")
@@ -5275,7 +5303,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
             + (
                 "<details><summary>Review History</summary><ul class='list-tight'>"
                 + "".join(
-                    f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
+                    f"<li>{_ts(history['timestamp'])} <span class='pill'>{escape(str(history['event_type']))}</span>"
                     + (
                         f"<div class='muted'>Rebuilt: {escape(', '.join(str(v) for v in history['rebuilt_object_ids']))}</div>"
                         if history.get("rebuilt_object_ids")
