@@ -5,7 +5,32 @@
 
 (function () {
   const data = window.OVP_GRAPH;
-  if (!data) { console.error("OVP_GRAPH missing"); return; }
+  // Vault is empty (no clusters / no nodes after filters) — keep the
+  // chrome rendered server-side and bail before three.js touches the
+  // canvas.  The #atlas-empty div is already shown by the server.
+  if (!data || !Array.isArray(data.nodes) || data.nodes.length === 0) {
+    const empty = document.getElementById("atlas-empty");
+    if (empty) empty.style.display = "flex";
+    // Tweaks/timeline rely on the simulation; hide them so they
+    // don't look broken on an empty vault.
+    ["tweaks", "detail"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = "none";
+    });
+    const tl = document.querySelector(".timeline-bar");
+    if (tl) tl.style.display = "none";
+    // Theme toggle still works — wire it stand-alone.
+    document.querySelectorAll('[data-theme-set]').forEach(b => {
+      b.addEventListener("click", () => {
+        const v = b.dataset.themeSet;
+        document.documentElement.setAttribute("data-theme", v);
+        document.querySelectorAll('[data-theme-set]').forEach(x =>
+          x.classList.toggle("active", x.dataset.themeSet === v));
+        try { localStorage.setItem("ovp-theme", v); } catch (e) {}
+      });
+    });
+    return;
+  }
 
   // ---------- THEME / TOKENS ----------
   const html = document.documentElement;
@@ -650,7 +675,7 @@
           <span>${c?c.name:""} · ${orig.backlinks} backlinks · absorbed ${orig.absorbedAt}</span>
         </div>
         <div class="actions">
-          <button class="btn">Open in vault →</button>
+          <button class="btn" id="btn-open-vault"${orig.path ? "" : " disabled"}>Open in vault →</button>
           <button class="btn ghost" id="btn-focus">Focus subgraph</button>
         </div>
       </div>
@@ -664,6 +689,12 @@
           </div>
         `).join("") : '<div class="muted tiny" style="padding:6px 8px">No links yet.</div>'}
       </div>`;
+    const btnOpen = document.getElementById("btn-open-vault");
+    if (btnOpen && orig.path) {
+      btnOpen.addEventListener("click", () => {
+        window.location.href = orig.path;
+      });
+    }
     document.getElementById("btn-focus").addEventListener("click", ()=>{
       state.isolatedCommunities.clear();
       state.isolatedCommunities.add(orig.community);

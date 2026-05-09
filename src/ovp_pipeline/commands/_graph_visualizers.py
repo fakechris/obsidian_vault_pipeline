@@ -1,21 +1,23 @@
 """Interactive graph visualisations for the maintainer surface.
 
-Hosts the D3-force layout used by both ``/ops/cluster?id=...``
-(``render_cluster_force_graph``) and the reader-side ``/map``
-(``render_graph_map_force_graph``).  The two call sites differ
-only in the empty-state copy and the kind of payload they hand
-in; the actual drawing / drag / zoom / legend behaviour is shared
-through the private ``_render_force_graph_section`` helper.
+Hosts the D3-force layout used by ``/ops/cluster?id=...``
+(``render_cluster_force_graph``).  Reader ``/map`` previously
+shared this surface via ``render_graph_map_force_graph``; that
+path was superseded by the 3D AtlasGraph (``three.js`` +
+``3d-force-graph``) rendered from ``_render_graph_atlas_page`` in
+``_ui_renderers.py`` — see plan ``reflective-munching-lynx``.
+Maintainer cluster detail keeps the 2D D3 view because the audit
+context is denser-information / lower-latency than 3D warrants.
 
 This is the first external JS dependency in the codebase: D3 v7 is
 loaded from ``unpkg.com``.  The tradeoff: building a smooth force-
 layout + drag/zoom + edge-encoding solver inline would be 200+ lines
 of vanilla JS and still lack D3-quality interactions.  D3 is ~280 KB,
-cached after first hit and shared across the two pages that use it.
+cached after first hit.
 
 Data flow:
     payload (Python dict)
-      → public renderer (cluster vs map) flattens to ``{nodes, edges}``
+      → ``render_cluster_force_graph`` flattens to ``{nodes, edges}``
       → ``_render_force_graph_section`` builds SVG container plus a
         ``<script type="application/json">`` block carrying
         ``{nodes, edges, edge_kinds, object_kinds}``
@@ -88,11 +90,11 @@ def _render_force_graph_section(
 ) -> str:
     """Inner helper — build the SVG mount + JSON data + bootstrap.
 
-    Both ``render_cluster_force_graph`` (single cluster) and
-    ``render_graph_map_force_graph`` (multi-cluster reader map)
-    funnel through here.  DOM ids stay ``cluster-graph-*`` because
-    they are internal CSS/JS handles — renaming would churn the
-    bootstrap string for no user-visible benefit.
+    Only ``render_cluster_force_graph`` funnels through here today
+    (the former multi-cluster reader-map path was retired when /map
+    moved to 3d-force-graph).  DOM ids stay ``cluster-graph-*``
+    because they are internal CSS/JS handles — renaming would churn
+    the bootstrap string for no user-visible benefit.
     """
     edge_kinds = sorted({e["edge_kind"] for e in edges_data})
     object_kinds = sorted({n["object_kind"] for n in nodes_data if n["object_kind"]})
@@ -175,42 +177,6 @@ def render_cluster_force_graph(payload: dict[str, Any]) -> str:
             "until the cluster has at least one member."
         ),
         aria_label="Cluster force-directed graph",
-    )
-
-
-def render_graph_map_force_graph(payload: dict[str, Any]) -> str:
-    """``/map`` reader-side force-directed view.
-
-    Unlike ``render_cluster_force_graph``, the input is a flat
-    ``{nodes, edges}`` covering every cluster the map is showing —
-    cluster identity is not visually encoded (the force solver
-    naturally pulls densely-connected nodes together; cluster-
-    specific drill-in is on ``/ops/cluster?id=...``).
-
-    Pre-computed orbital ``x`` / ``y`` on the ``/map`` payload are
-    intentionally ignored — the D3 force solver re-lays the graph
-    on every page load.  This is the whole point of the retrofit:
-    static positions stop reflecting graph topology as the corpus
-    grows.
-    """
-    nodes = payload.get("nodes") or []
-    edges = payload.get("edges") or []
-    return _render_force_graph_section(
-        nodes_data=[_node_payload(node) for node in nodes],
-        edges_data=[_edge_payload(edge) for edge in edges],
-        title="Knowledge Graph",
-        intro=(
-            "Drag a node to pin it (double-click to release).  "
-            "Wheel zooms; drag the background pans.  Click an "
-            "edge-kind chip to fade non-matching edges.  Click a "
-            "node to open its object page."
-        ),
-        empty_message=(
-            "No nodes in scope — try widening the search query, "
-            "removing the per-cluster cap, or seeding the graph "
-            "via ``ovp-knowledge-index``."
-        ),
-        aria_label="Knowledge graph force-directed view",
     )
 
 

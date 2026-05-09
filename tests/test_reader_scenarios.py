@@ -171,12 +171,13 @@ def test_reader_search_to_object(temp_vault):
 # ---------------------------------------------------------------------------
 
 def test_reader_graph_navigation(temp_vault):
-    """``/map`` post-D3-retrofit: ``/object?`` click-through paths
-    live in the inline JSON data block consumed by the D3 bootstrap,
-    not as ``href=`` attributes on the rendered HTML.  Pull one and
-    verify it loads — this preserves the original scenario intent
-    (reader can drill from the map into an object page) without
-    requiring a JS-aware browser harness.
+    """``/map`` post-AtlasGraph: per-node ``/object?`` click-through
+    paths live in the ``window.OVP_GRAPH`` JSON payload consumed by
+    ``/static/atlas-graph.js`` (which wires them onto the
+    "Open in vault →" button in the right-detail panel).  Extract
+    one path and confirm the underlying object route still loads —
+    preserves the scenario intent (reader can drill from the map
+    into an object page) without a JS-aware browser harness.
     """
     import json
 
@@ -188,21 +189,24 @@ def test_reader_graph_navigation(temp_vault):
     try:
         st, graph = _get(port, "/map")
         assert st == 200
-        assert "Knowledge" in graph
+        assert "Atlas" in graph
 
-        marker = "id='cluster-graph-data'>"
+        marker = 'id="ovp-atlas-data" type="application/json">'
         start = graph.index(marker) + len(marker)
         end = graph.index("</script>", start)
-        data = json.loads(graph[start:end].replace("<\\/", "</"))
+        raw = (
+            graph[start:end]
+            .replace("\\u003c", "<")
+            .replace("\\u003e", ">")
+            .replace("\\u0026", "&")
+        )
+        data = json.loads(raw)
         obj_paths = [
             node["path"]
             for node in data["nodes"]
             if isinstance(node.get("path"), str) and node["path"].startswith("/object?")
         ]
-        assert obj_paths, "/map JSON data should carry at least one /object? path"
-        # Body intentionally unused — only the status code matters
-        # for this scenario (the prior reader-side assertions covered
-        # /object page contents).
+        assert obj_paths, "/map atlas payload should carry at least one /object? path"
         st, _ = _get(port, obj_paths[0])
         assert st == 200
     finally:

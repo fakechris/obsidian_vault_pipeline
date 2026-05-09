@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import math
@@ -11,6 +12,42 @@ from typing import Any
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
+
+
+# ---- /map AtlasGraph kit-shape projection helpers ---------------
+# Mapping from internal object_kind to the kit's four type
+# buckets.  Anything outside the keys lands in ``evergreen`` so the
+# type filter stays well-defined.  ``open-question`` is the
+# renderable affordance for ``contradiction_crystal``.
+_ATLAS_TYPE_BY_OBJECT_KIND: dict[str, str] = {
+    "evergreen": "evergreen",
+    "interpretation": "deepdive",
+    "deep_dive": "deepdive",
+    "community_crystal": "topic",
+    "contradiction_crystal": "open-question",
+}
+
+# Edge-kind reduction. The kit only colors three semantic
+# categories: ``cite`` (with directional particles), ``contradict``
+# (warn-amber, the only thicker stroke), and ``ref`` (muted, the
+# default).  Registry edge kinds outside these collapse to ``ref``.
+_ATLAS_LINK_KINDS: dict[str, str] = {
+    "cite": "cite",
+    "cites": "cite",
+    "citation": "cite",
+    "contradict": "contradict",
+    "contradicts": "contradict",
+    "contradiction": "contradict",
+    "ref": "ref",
+    "reference": "ref",
+    "references": "ref",
+}
+
+
+def _atlas_community_slug(name: str) -> str:
+    """Lower-kebab slug, used for legend stable ids in the kit."""
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return s or "community"
 
 from ..assembly_recipe_registry import describe_assembly_recipe_contract
 from ..governance_registry import describe_governance_contract
@@ -4265,6 +4302,78 @@ def build_graph_map_payload(
             str(item["edge_kind"]),
         ),
     )
+
+    # AtlasGraph kit-shape projection — the dark 3D view at /map
+    # consumes ``atlas`` directly via ``window.OVP_GRAPH``. The
+    # existing ``nodes``/``edges``/``clusters`` keys above are kept
+    # for backward-compat with payload consumers (tests, /api, the
+    # 2D inspector still on /ops/cluster).  See
+    # docs/design-system/ui_kits/ovp/graph-data.js for the
+    # canonical kit shape this mirrors.
+    backlinks_in: dict[str, int] = {}
+    for edge in edge_items:
+        target = str(edge["target_object_id"])
+        backlinks_in[target] = backlinks_in.get(target, 0) + 1
+    atlas_communities = [
+        {
+            "id": str(cluster["cluster_id"]),
+            "name": str(cluster.get("display_title") or cluster["label"]),
+            "slug": _atlas_community_slug(
+                str(cluster.get("display_title") or cluster["label"])
+            ),
+            # The kit reads the trailing digit off ``var(--c-N)`` and
+            # uses the runtime-computed token, so the swatch follows
+            # the active theme.  Cycle through 1..8 by index.
+            "color": f"var(--c-{(idx % 8) + 1})",
+            "count": int(cluster.get("member_count") or 0),
+        }
+        for idx, cluster in enumerate(clusters)
+    ]
+    # ``absorbedAt`` is required by the kit's timeline scrubber.
+    # We don't yet surface a per-object absorbed-at on the cluster
+    # member dict; for v1 every node carries today's date so the
+    # timeline degenerates to a single bucket and the "Play history"
+    # affordance is harmless.  Stage 4 will surface real timestamps.
+    absorbed_default = _dt.date.today().isoformat()
+    atlas_nodes = [
+        {
+            "id": str(node["object_id"]),
+            "label": str(node["title"]),
+            "type": _ATLAS_TYPE_BY_OBJECT_KIND.get(
+                str(node.get("object_kind") or ""),
+                "evergreen",
+            ),
+            "community": (
+                str(node["cluster_ids"][0])
+                if node.get("cluster_ids")
+                else ""
+            ),
+            "quality": None,
+            "backlinks": int(backlinks_in.get(str(node["object_id"]), 0)),
+            "openQuestion": str(node.get("object_kind") or "")
+                == "contradiction_crystal",
+            "source": "manual",
+            "absorbedAt": absorbed_default,
+            "path": str(node.get("path") or ""),
+        }
+        for node in node_items
+    ]
+    atlas_links = [
+        {
+            "source": str(edge["source_object_id"]),
+            "target": str(edge["target_object_id"]),
+            "kind": _ATLAS_LINK_KINDS.get(
+                str(edge["edge_kind"]).lower(),
+                "ref",
+            ),
+        }
+        for edge in edge_items
+    ]
+    atlas_payload = {
+        "communities": atlas_communities,
+        "nodes": atlas_nodes,
+        "links": atlas_links,
+    }
     return {
         "screen": "graph/map",
         "requested_pack": requested_pack,
@@ -4318,6 +4427,7 @@ def build_graph_map_payload(
             "This spatial map is a reader projection over graph clusters and edges.",
             "Use it to see nearby ideas first; use the cluster browser for analytical/debug detail.",
         ],
+        "atlas": atlas_payload,
     }
 
 

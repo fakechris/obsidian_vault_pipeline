@@ -89,7 +89,7 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     _render_evolution_browser_page,
     _render_explore_fragment,
     _render_explore_page,
-    _render_graph_map_page,
+    _render_graph_atlas_page,
     _render_library_home,
     _render_note_page,
     _render_object_page,
@@ -857,7 +857,7 @@ def create_server(
                         resolved_vault, pack_name=pack_name, query=q,
                         show_all=show_all,
                     )
-                    self._write_html(_render_graph_map_page(payload, action_path="/graph"))
+                    self._write_html(_render_graph_atlas_page(payload, action_path="/graph"))
                     return
                 if path == "/map":
                     q = query.get("q", [""])[0]
@@ -871,7 +871,7 @@ def create_server(
                         resolved_vault, pack_name=pack_name, query=q,
                         show_all=show_all,
                     )
-                    self._write_html(_render_graph_map_page(payload, action_path="/map"))
+                    self._write_html(_render_graph_atlas_page(payload, action_path="/map"))
                     return
                 if path == "/api/cluster":
                     cluster_id = self._required(query, "id")

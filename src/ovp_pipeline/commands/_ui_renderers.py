@@ -27,7 +27,7 @@ from ..ui.view_models import (
     DEFAULT_CANDIDATE_BROWSER_LIMIT,
     build_runtime_home_payload,
 )
-from ._graph_visualizers import render_cluster_force_graph, render_graph_map_force_graph
+from ._graph_visualizers import render_cluster_force_graph
 
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
@@ -74,8 +74,6 @@ def _safe_redirect_path(location: str, *, fallback: str = "/") -> str:
     return stripped
 _CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
 _INLINE_MEMBER_LINK_LIMIT = 8
-_GRAPH_MAP_CLUSTER_PREVIEW_LIMIT = 6
-_GRAPH_MAP_NODE_LABEL_Y_OFFSET = 13
 
 
 def _render_limited_inline_links(
@@ -3586,107 +3584,230 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
     )
 
 
-def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str:
-    query = payload.get("query", "")
+def _render_graph_atlas_page(payload: dict, *, action_path: str = "/map") -> str:
+    """Full-bleed dark 3D Atlas at ``/map`` (and ``/graph``).
+
+    Replaces the prior 2D D3 ``_render_graph_map_page`` (which itself
+    superseded the static SVG view in ``bb7c961``).  Renders the
+    OVP design system kit chrome from
+    ``docs/design-system/ui_kits/ovp/graph.html`` and feeds it the
+    real vault's atlas projection from ``payload["atlas"]``
+    (``communities``, ``nodes``, ``links``).  Three.js + 3d-force-graph
+    load from unpkg; ``/static/atlas-graph.js`` does the assembly.
+
+    The Atlas is the design system's one approved dark surface
+    (BL-051 caveat in docs/design-system/SKILL.md §5).  The page
+    therefore defaults ``data-theme="dark"`` regardless of
+    ``localStorage['ovp-theme']`` for first paint, but the in-page
+    LIGHT/DARK toggle still writes through to localStorage so the
+    rest of the shell follows the operator's last choice.
+    """
     requested_pack = payload.get("requested_pack", "")
-    # Note: ``payload["layout"]`` is no longer read — the D3 force
-    # solver computes positions client-side.  ``build_graph_map_payload``
-    # still emits the field for shape stability but nothing on the
-    # server side consumes it after this commit.
-    summary = payload["map_summary"]
-    show_all = bool(summary.get("show_all"))
-    member_cap = int(summary.get("member_cap") or 0)
-    truncated = int(summary.get("truncated_clusters") or 0)
-    limit_note = (
-        f" Showing the first {summary['limit']} graph neighborhoods in this map."
-        if summary.get("is_limited")
-        else ""
+    query = payload.get("query", "")
+    atlas = payload.get("atlas") or {"communities": [], "nodes": [], "links": []}
+    summary = payload.get("map_summary") or {}
+    node_count = int(summary.get("node_count") or 0)
+    edge_count = int(summary.get("edge_count") or 0)
+    cluster_count = int(summary.get("cluster_count") or 0)
+
+    # XSS-safe inline JSON: escape characters that could break out of
+    # the surrounding ``<script>`` element or kill JSON parsing in
+    # certain HTML contexts.
+    atlas_json = (
+        json.dumps(atlas, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace(" ", "\\u2028")
+        .replace(" ", "\\u2029")
     )
-    if not show_all and truncated:
-        cap_note = (
-            f" Each neighborhood is capped at {member_cap} member ideas — "
-            f"{truncated} have more hidden."
-        )
-    else:
-        cap_note = ""
-    if not show_all and truncated:
-        # Append show_all=1 onto the same action; keep pack scope.
-        prefix = action_path
-        if requested_pack:
-            prefix = _shell_href(action_path, requested_pack)
-        sep = "&" if "?" in prefix else "?"
-        show_all_link = f"{prefix}{sep}show_all=1"
-        toggle_html = (
-            f"<p class='muted'>Showing a capped reading view. "
-            f"<a href='{escape(show_all_link)}'>Show all members →</a> "
-            "(slower, may overflow on big vaults)</p>"
-        )
-    elif show_all:
-        compact_link = (
-            _shell_href(action_path, requested_pack)
-            if requested_pack
-            else action_path
-        )
-        toggle_html = (
-            f"<p class='muted'>Showing every member node — "
-            f"<a href='{escape(compact_link)}'>back to compact view</a></p>"
-        )
-    else:
-        toggle_html = ""
-    clusters = (
-        "".join(
-            "<li>"
-            f"<a href='{escape(str(cluster['detail_path']))}'>{escape(str(cluster['title']))}</a>"
-            f" <span class='pill'>{escape(str(cluster['priority_band']))}</span>"
-            f" <span class='muted'>{cluster['member_count']} objects</span>"
-            f"<div class='muted'>{escape(str(cluster['summary']))}</div>"
-            "</li>"
-            for cluster in payload["clusters"][:_GRAPH_MAP_CLUSTER_PREVIEW_LIMIT]
-        )
-        or "<li class='muted'>No graph clusters found yet.</li>"
-    )
-    notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
-    map_section = render_graph_map_force_graph(payload)
-    return _layout(
-        "Knowledge Graph",
-        "".join(
-            [
-                "<h1>Knowledge Graph</h1>",
-                "<p class='muted'>A reader map of nearby concepts, claims, people, and sources in this vault."
-                f"{escape(limit_note)}{escape(cap_note)}</p>",
-                toggle_html,
-                f"<form method='get' action='{escape(action_path)}'>",
-                (
-                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
-                    if requested_pack
-                    else ""
-                ),
-                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter the map' /> ",
-                "<button type='submit'>Search</button>",
-                "</form>",
-                "<section class='grid stats'>",
-                f"<div class='card'><h2>Ideas</h2><p>{payload['map_summary']['node_count']}</p></div>",
-                f"<div class='card'><h2>Connections</h2><p>{payload['map_summary']['edge_count']}</p></div>",
-                f"<div class='card'><h2>Neighborhoods</h2><p>{payload['map_summary']['cluster_count']}</p></div>",
-                "</section>",
-                map_section,
-                "<section class='grid two-col'>",
-                "<section class='card'><h2>How To Read This Map</h2>"
-                "<ul class='list-tight'>"
-                "<li>Each dot is a knowledge object you can open.  Click it to jump to the object page.</li>"
-                "<li>Lines show accepted graph relations from the local projection — drag a node to pin it, double-click to release.</li>"
-                "<li>Densely connected groups settle into neighborhoods, but those are reading hints, not canonical truth boundaries.</li>"
-                "<li>For a cluster-specific view with internal-edge detail, open one from <em>Neighborhoods</em> below.</li>"
-                "</ul></section>",
-                "<section class='card'><h2>Neighborhoods</h2>"
-                f"<p><a href='{escape(_shell_href('/ops/clusters', requested_pack))}'>Open Cluster Browser</a></p>"
-                f"<ul class='list-tight'>{clusters}</ul></section>",
-                "</section>",
-                f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{notes}</ul></section>",
-            ]
-        ),
-        requested_pack=requested_pack,
-    )
+
+    library_href = escape(_shell_href("/", requested_pack))
+    ops_href = escape(_shell_href("/ops", requested_pack))
+    clusters_href = escape(_shell_href("/ops/clusters", requested_pack))
+    search_q = escape(query)
+    is_empty = node_count == 0
+    empty_visibility = "flex" if is_empty else "none"
+
+    return f"""<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atlas — Knowledge Graph</title>
+    <link rel="icon" type="image/svg+xml" href="/static/monogram.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="/static/ovp-tokens.css" />
+    <link rel="stylesheet" href="/static/atlas-graph.css" />
+    <style>
+      body {{ font-family: var(--ovp-font-sans); margin: 0;
+              background: var(--bg); color: var(--text); }}
+    </style>
+    <script>
+      // Atlas defaults to dark.  If localStorage already has a value,
+      // honour it — but read at first paint so there is no flash.
+      (function () {{
+        try {{
+          var saved = localStorage.getItem('ovp-theme');
+          if (saved === 'light' || saved === 'dark') {{
+            document.documentElement.dataset.theme = saved;
+          }}
+        }} catch (e) {{}}
+      }})();
+    </script>
+    <script id="ovp-atlas-data" type="application/json">{atlas_json}</script>
+    <script>
+      try {{
+        window.OVP_GRAPH = JSON.parse(
+          document.getElementById('ovp-atlas-data').textContent
+        );
+      }} catch (e) {{ console.error('atlas payload parse failed', e); }}
+      window.OVP_ATLAS_ROUTES = {{
+        library: "{library_href}",
+        ops: "{ops_href}",
+        clusters: "{clusters_href}",
+        action: "{escape(action_path)}",
+      }};
+    </script>
+  </head>
+  <body>
+    <div class="graph-page" id="graph-page">
+      <div id="graph-canvas"></div>
+
+      <header class="topbar">
+        <a class="brand" href="{library_href}">
+          <img src="/static/monogram.svg" width="20" height="20" alt="" />
+          <span>obsidian vault pipeline<span class="dot">.</span></span>
+          <span class="crumb">/ atlas · cluster graph</span>
+        </a>
+        <div class="search-wrap">
+          <span class="muted mono tiny">⌕</span>
+          <input id="search" type="text" value="{search_q}"
+                 placeholder="Find a node, topic, or community…" autocomplete="off" />
+          <span class="kbd">/</span>
+          <div class="search-results" id="search-results"></div>
+        </div>
+        <span class="spacer"></span>
+        <a class="nav-link" href="{library_href}">← Library</a>
+        <a class="nav-link" href="{ops_href}">Maintenance</a>
+        <div class="theme-toggle">
+          <button data-theme-set="light" id="th-light">LIGHT</button>
+          <button data-theme-set="dark"  id="th-dark" class="active">DARK</button>
+        </div>
+      </header>
+
+      <aside class="panel left-panel">
+        <h4>Communities</h4>
+        <div class="desc">Click to isolate · ⇧-click to multi-select</div>
+        <div id="legend"></div>
+        <div class="filter-section">
+          <h4>Node type</h4>
+          <label class="filter-row"><input type="checkbox" data-filter="evergreen"     checked />Evergreen<span class="badge" id="cnt-evergreen">0</span></label>
+          <label class="filter-row"><input type="checkbox" data-filter="deepdive"      checked />Deep dive<span class="badge" id="cnt-deepdive">0</span></label>
+          <label class="filter-row"><input type="checkbox" data-filter="topic"         checked />Topic<span class="badge" id="cnt-topic">0</span></label>
+          <label class="filter-row"><input type="checkbox" data-filter="open-question" checked />Open question<span class="badge" id="cnt-open-question">0</span></label>
+        </div>
+        <div class="filter-section">
+          <h4>Source</h4>
+          <label class="filter-row"><input type="checkbox" data-filter-src="manual"   checked />Manual</label>
+          <label class="filter-row"><input type="checkbox" data-filter-src="pinboard" checked />Pinboard</label>
+          <label class="filter-row"><input type="checkbox" data-filter-src="clipper"  checked />Clipper</label>
+          <label class="filter-row"><input type="checkbox" data-filter-src="github"   checked />GitHub</label>
+        </div>
+        <div class="filter-section">
+          <h4>Quality threshold</h4>
+          <input type="range" id="quality-slider" min="0" max="5" step="0.1" value="0" style="width:100%;accent-color:var(--accent)" />
+          <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--muted);font-family:var(--ovp-font-mono);margin-top:4px">
+            <span>≥ <span id="quality-val">0.0</span></span>
+            <span>5.0</span>
+          </div>
+        </div>
+      </aside>
+
+      <div class="hud">
+        <div class="chip"><strong id="hud-nodes">{node_count}</strong>nodes</div>
+        <div class="chip"><strong id="hud-links">{edge_count}</strong>links</div>
+        <div class="chip"><strong id="hud-comms">{cluster_count}</strong>communities</div>
+        <div class="chip" id="hud-mode"><strong>EXPAND</strong>double-click</div>
+      </div>
+
+      <div class="timeline-bar"></div>
+
+      <aside class="panel right-panel" id="detail">
+        <div class="detail-empty">
+          <div class="glyph">⌖</div>
+          <div>Click a node to inspect.</div>
+          <div style="margin-top:6px;font-size:0.78rem">Or hover to highlight neighbors.</div>
+        </div>
+      </aside>
+
+      <div class="panel tweaks" id="tweaks">
+        <h4>Tweaks</h4>
+        <div class="tweaks-row">
+          <span class="label">View</span>
+          <div class="seg" id="seg-dims">
+            <button data-dims="3" class="active">3D</button>
+            <button data-dims="2">2D</button>
+          </div>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Disclosure</span>
+          <div class="seg" id="seg-mode">
+            <button data-mode="dblclick" class="active">Dbl-click</button>
+            <button data-mode="hover">Hover</button>
+            <button data-mode="zoom">Zoom</button>
+          </div>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Show hulls</span>
+          <div class="seg" id="seg-hulls">
+            <button data-hulls="on" class="active">On</button>
+            <button data-hulls="off">Off</button>
+          </div>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Link strength</span>
+          <input type="range" id="link-strength" min="-300" max="-30" step="10" value="-150" />
+          <span class="val" id="link-strength-val">-150</span>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Node base size</span>
+          <input type="range" id="node-size" min="2" max="10" step="0.5" value="4.5" />
+          <span class="val" id="node-size-val">4.5</span>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Spin</span>
+          <div class="seg" id="seg-spin">
+            <button data-spin="off" class="active">Off</button>
+            <button data-spin="slow">Slow</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hover-label" id="hover-label">
+        <div class="ttl"></div>
+        <div class="sub"></div>
+      </div>
+
+      <div class="atlas-empty" id="atlas-empty" style="display: {empty_visibility}">
+        <div class="glyph">∅</div>
+        <h2>No nodes in scope</h2>
+        <p>Try widening the search query, removing the per-cluster cap with
+           <code>?show_all=1</code>, or seeding the graph via
+           <code>ovp-knowledge-index</code>.
+           The cluster browser at <a href="{clusters_href}">/ops/clusters</a>
+           lists every neighborhood currently in the projection.</p>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/three@0.155.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+    <script src="/static/atlas-graph.js"></script>
+  </body>
+</html>
+"""
 
 
 def _render_cluster_detail_page(payload: dict) -> str:
