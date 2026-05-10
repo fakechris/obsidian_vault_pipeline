@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>OVP — Atlas preview</title>
+<link rel="stylesheet" href="../ui_kits/ovp/ovp-ui.css">
+<style>
+  body { padding: 1.5rem; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1 { margin: 0 0 0.4rem; font-size: 1.6rem; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin-bottom: 1.25rem; max-width: 60ch; }
+  .frame {
+    position: relative;
+    border: 1px solid var(--border); border-radius: 16px;
+    background: radial-gradient(ellipse at 50% 40%, #0e1622 0%, #060a12 70%, #02040a 100%);
+    aspect-ratio: 16/10; overflow: hidden;
+    box-shadow: var(--shadow-shell);
+  }
+  .frame svg { display:block; width:100%; height:100%; }
+  .frame .badge {
+    position: absolute; top: 14px; left: 14px;
+    background: rgba(17,22,31,0.9); border: 1px solid var(--border);
+    color: var(--text); font-family: 'JetBrains Mono', monospace;
+    font-size: 0.74rem; letter-spacing: 0.06em;
+    padding: 6px 10px; border-radius: 999px;
+  }
+  .frame .legend-chip {
+    position: absolute; bottom: 14px; right: 14px;
+    display: flex; gap: 6px; padding: 6px 10px;
+    background: rgba(17,22,31,0.9); border: 1px solid var(--border);
+    border-radius: 999px;
+  }
+  .frame .legend-chip span {
+    width: 10px; height: 10px; border-radius: 999px; display: block;
+  }
+  .meta {
+    margin-top: 1rem;
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem;
+  }
+  .meta .card { margin: 0; }
+  .meta h4 { margin: 0 0 6px; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-family:'JetBrains Mono',monospace; font-weight:600; }
+  .meta p { margin: 0; font-size: 0.9rem; color: var(--text-soft); }
+  .cta {
+    margin-top: 1rem;
+    display: flex; gap: 0.5rem; align-items: center;
+  }
+  .legend-row { display:flex; gap:8px; align-items:center; font-size:0.85rem; padding:3px 0; }
+  .legend-row span.swatch { width:12px; height:12px; border-radius:3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="pill cyan">Atlas / new surface</span>
+  <h1 style="margin-top:0.5rem">3D Cluster Graph</h1>
+  <p class="lede">Lives at <code>/atlas</code>. The visual home for <code>community_crystal</code> and <code>contradiction_crystal</code> — a navigable map of the vault's notes by community, type, link kind, and absorption time.</p>
+
+  <div class="frame">
+    <span class="badge">ATLAS · /atlas</span>
+    <svg viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="hull1" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.22"/>
+          <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="hull2" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#22c55e" stop-opacity="0.22"/>
+          <stop offset="100%" stop-color="#22c55e" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="hull3" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.22"/>
+          <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="hull4" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.22"/>
+          <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <!-- hulls -->
+      <circle cx="220" cy="180" r="120" fill="url(#hull1)"/>
+      <circle cx="540" cy="160" r="110" fill="url(#hull2)"/>
+      <circle cx="280" cy="360" r="90"  fill="url(#hull3)"/>
+      <circle cx="580" cy="360" r="100" fill="url(#hull4)"/>
+
+      <!-- edges -->
+      <g stroke-opacity="0.5" fill="none">
+        <path d="M220,180 L260,150" stroke="#3b82f6" stroke-width="1.2"/>
+        <path d="M220,180 L180,210" stroke="#3b82f6" stroke-width="1.2"/>
+        <path d="M260,150 L180,210" stroke="#3b82f6" stroke-width="0.9"/>
+        <path d="M540,160 L500,130" stroke="#22c55e" stroke-width="0.9"/>
+        <path d="M540,160 L590,180" stroke="#22c55e" stroke-width="0.9"/>
+        <path d="M260,150 L500,130" stroke="#7d8aa0" stroke-width="0.7" stroke-dasharray="2 2"/>
+        <path d="M220,180 L580,360" stroke="#fbbf24" stroke-width="1.6"/>
+        <path d="M280,360 L580,360" stroke="#7d8aa0" stroke-width="0.7"/>
+        <path d="M280,360 L260,150" stroke="#7d8aa0" stroke-width="0.7"/>
+        <path d="M580,360 L540,160" stroke="#7d8aa0" stroke-width="0.7"/>
+        <path d="M580,360 L640,330" stroke="#06b6d4" stroke-width="0.8"/>
+      </g>
+
+      <!-- nodes -->
+      <g>
+        <!-- community A (blue: AI Research) -->
+        <circle cx="220" cy="180" r="11" fill="#3b82f6"/>
+        <circle cx="260" cy="150" r="6"  fill="#3b82f6"/>
+        <circle cx="180" cy="210" r="5"  fill="#3b82f6"/>
+        <circle cx="180" cy="160" r="4"  fill="#3b82f6"/>
+        <circle cx="245" cy="220" r="4"  fill="#3b82f6"/>
+        <text x="240" y="184" font-family="Inter, sans-serif" font-size="13" fill="#e6edf5" font-weight="600">AI Research</text>
+        <!-- community B (green: Programming) -->
+        <rect x="532" y="152" width="16" height="16" fill="#22c55e"/>
+        <circle cx="500" cy="130" r="5" fill="#22c55e"/>
+        <circle cx="590" cy="180" r="5" fill="#22c55e"/>
+        <circle cx="510" cy="190" r="4" fill="#22c55e"/>
+        <text x="555" y="166" font-family="Inter, sans-serif" font-size="13" fill="#e6edf5" font-weight="600">Six-term Vocabulary</text>
+        <!-- community C (purple: Writing) -->
+        <polygon points="280,348 290,360 280,372 270,360" fill="#a78bfa"/>
+        <circle cx="250" cy="370" r="4" fill="#a78bfa"/>
+        <circle cx="310" cy="340" r="4" fill="#a78bfa"/>
+        <text x="298" y="364" font-family="Inter, sans-serif" font-size="11" fill="#e6edf5" font-weight="600">Writing</text>
+        <!-- community D (cyan: Research Method) -->
+        <circle cx="580" cy="360" r="9" fill="#06b6d4"/>
+        <circle cx="540" cy="380" r="5" fill="#06b6d4"/>
+        <circle cx="620" cy="340" r="4" fill="#06b6d4"/>
+        <circle cx="640" cy="380" r="4" fill="#06b6d4"/>
+        <!-- open question (warn halo) -->
+        <circle cx="640" cy="380" r="9" fill="none" stroke="#fbbf24" stroke-opacity="0.4" stroke-width="3"/>
+        <polygon points="640,373 647,380 640,387 633,380" fill="#fbbf24"/>
+      </g>
+      <!-- HUD -->
+      <g font-family="JetBrains Mono, monospace" fill="#7d8aa0" font-size="10">
+        <text x="14" y="490">85 nodes · 142 links · 8 communities</text>
+      </g>
+    </svg>
+    <div class="legend-chip">
+      <span style="background:#3b82f6"></span>
+      <span style="background:#06b6d4"></span>
+      <span style="background:#22c55e"></span>
+      <span style="background:#eab308"></span>
+      <span style="background:#a78bfa"></span>
+      <span style="background:#f472b6"></span>
+    </div>
+  </div>
+
+  <div class="meta">
+    <div class="card">
+      <h4>Color</h4>
+      <p>Community = swatch (`--c-1…--c-8`). Edge color carries link kind.</p>
+    </div>
+    <div class="card">
+      <h4>Shape</h4>
+      <p>● evergreen · ▲ deep dive · ■ topic · ◆ open question (haloed) · ⬢ collapsed cluster.</p>
+    </div>
+    <div class="card">
+      <h4>Disclosure</h4>
+      <p>Clusters start collapsed; expand on double-click, hover, or zoom — set in Tweaks.</p>
+    </div>
+  </div>
+
+  <div class="cta">
+    <a class="btn" href="../ui_kits/ovp/graph.html">Open the live Atlas →</a>
+    <span class="muted tiny mono">graph.html · 3d-force-graph + three.js</span>
+  </div>
+</div>
+</body>
+</html>

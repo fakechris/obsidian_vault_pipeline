@@ -6,6 +6,7 @@ recursive-include 90-Templates *.md
 recursive-include src/ovp_pipeline *.py
 recursive-include src/ovp_pipeline *.yaml
 recursive-include src/ovp_pipeline *.yml
+recursive-include src/ovp_pipeline/static *
 graft .claude
 prune .git
 prune __pycache__

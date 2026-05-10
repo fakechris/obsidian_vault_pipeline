@@ -220,26 +220,27 @@ def test_ui_server_map_route_serves_readable_map_entry(temp_vault):
     status, body = _fetch_ui_html(temp_vault, "/map")
 
     assert status == 200
-    assert "Knowledge Graph" in body
-    # Post-retrofit: ``/map`` mounts the D3 force solver from
-    # ``_graph_visualizers.py``.  The static-SVG canvas
-    # (``graph-map-canvas`` id, server-computed orbital positions)
-    # is gone; the new mount is the shared ``cluster-graph-svg``
-    # element + ``cluster-graph-data`` JSON block.
-    assert "cluster-graph-svg" in body
-    assert "cluster-graph-data" in body
-    assert "https://unpkg.com/d3@7" in body
-    assert "Alpha" in body
-    assert "Beta" in body
-    assert "How To Read This Map" in body
-    assert "Open Cluster Browser" in body
-    assert "Showing the first 24 graph neighborhoods" in body
-    assert "action='/map'" in body
-    assert "action='/ops/clusters'" not in body
-    assert 'href="/">Library</a>' in body
-    assert 'href="/map">Map</a>' in body
-    assert 'href="/search">Search</a>' in body
-    assert 'href="/ops">Workbench</a>' not in body
+    # Post-AtlasGraph: ``/map`` is the dark 3D ``three.js`` +
+    # ``3d-force-graph`` view rendered by ``_render_graph_atlas_page``.
+    # The 2D D3 force solver moved back to ``/ops/cluster?id=…``.
+    assert "Atlas — Knowledge Graph" in body
+    assert 'data-theme="dark"' in body
+    assert 'id="graph-canvas"' in body
+    assert "/static/atlas-graph.js" in body
+    assert "/static/atlas-graph.css" in body
+    assert "https://unpkg.com/three@" in body
+    assert "https://unpkg.com/3d-force-graph@" in body
+    # Brand-mark + cross-shell nav still surface so the operator can
+    # back out to Library / Maintenance from the full-bleed shell.
+    assert 'href="/">' in body  # brand
+    assert "← Library" in body
+    assert "Maintenance" in body
+    # Atlas payload is injected as JSON for the JS bootstrap.
+    assert 'id="ovp-atlas-data"' in body
+    assert "window.OVP_GRAPH" in body
+    # The 2D D3 markers are gone from /map.
+    assert "cluster-graph-svg" not in body
+    assert "cluster-graph-data" not in body
 
 
 def test_ui_server_graph_route_serves_visual_graph_mvp(temp_vault):
@@ -247,19 +248,14 @@ def test_ui_server_graph_route_serves_visual_graph_mvp(temp_vault):
 
     status, body = _fetch_ui_html(temp_vault, "/graph")
 
+    # ``/graph`` is the legacy reader alias for ``/map``; both
+    # render the AtlasGraph after Stage 3.
     assert status == 200
-    assert "Knowledge Graph" in body
-    assert "cluster-graph-svg" in body
-    assert "cluster-graph-data" in body
-    assert "Alpha" in body
-    assert "Beta" in body
-    assert "Showing the first 24 graph neighborhoods" in body
-    assert "action='/graph'" in body
-    assert "action='/ops/clusters'" not in body
-    assert 'href="/">Library</a>' in body
-    assert 'href="/map">Map</a>' in body
-    assert 'href="/search">Search</a>' in body
-    assert 'href="/ops">Workbench</a>' not in body
+    assert 'data-theme="dark"' in body
+    assert 'id="graph-canvas"' in body
+    assert "/static/atlas-graph.js" in body
+    assert "https://unpkg.com/3d-force-graph@" in body
+    assert "cluster-graph-svg" not in body
 
 
 def test_render_reader_home_hides_unavailable_map_for_non_research_pack():
@@ -699,21 +695,20 @@ def test_render_source_backlink_rail_skips_non_dict_items():
     assert "bad-data" not in html
 
 
-def test_render_graph_map_force_view_omits_static_coords():
-    """Post-retrofit ``/map`` mounts the D3 force solver.
+def test_render_graph_atlas_page_emits_kit_chrome_and_payload():
+    """``/map`` mounts the 3D AtlasGraph (3d-force-graph + three.js).
 
-    The pre-retrofit assertion was that nodes without server-
-    computed ``x``/``y`` defaulted to ``0.0`` in the inline SVG
-    coordinates.  That whole code path is gone — the D3 solver
-    computes positions client-side, and the renderer hands it a
-    JSON payload with the raw nodes/edges.  Test pivots to:
-    nodes serialize into the ``cluster-graph-data`` JSON block,
-    no inline ``cx=``/``x1=`` coordinates leak through.
+    Successive retrofits in commit history:
+      1. Static SVG with server-computed orbital coords.
+      2. ``bb7c961`` D3 force solver (2D, ``cluster-graph-svg``).
+      3. AtlasGraph (this commit) — kit chrome rendered server-side,
+         ``window.OVP_GRAPH`` injected as JSON, three.js draws.
+    The 2D D3 path stays in ``_graph_visualizers.py`` for
+    ``/ops/cluster?id=...`` (denser maintainer audit context).
     """
-    import json
-    from ovp_pipeline.commands.ui_server import _render_graph_map_page
+    from ovp_pipeline.commands.ui_server import _render_graph_atlas_page
 
-    html = _render_graph_map_page(
+    html = _render_graph_atlas_page(
         {
             "query": "",
             "requested_pack": "",
@@ -723,53 +718,64 @@ def test_render_graph_map_force_view_omits_static_coords():
                 "is_limited": False,
                 "node_count": 2,
                 "edge_count": 1,
-                "cluster_count": 0,
+                "cluster_count": 1,
             },
             "clusters": [],
             "model_notes": [],
-            "nodes": [
-                {
-                    "object_id": "a",
-                    "path": "/object?id=a",
-                    "title": "A",
-                    "object_kind": "concept",
-                    "kind_label": "Concept",
-                    "degree": 1,
-                },
-                {
-                    "object_id": "b",
-                    "path": "/object?id=b",
-                    "title": "B",
-                    "object_kind": "concept",
-                    "kind_label": "Concept",
-                    "degree": 1,
-                },
-            ],
-            "edges": [
-                {
-                    "source_object_id": "a",
-                    "target_object_id": "b",
-                    "source_title": "A",
-                    "target_title": "B",
-                    "edge_kind": "related",
-                    "weight": 1.0,
-                }
-            ],
-        }
+            "nodes": [],
+            "edges": [],
+            "atlas": {
+                "communities": [
+                    {"id": "c1", "name": "AI", "slug": "ai",
+                     "color": "var(--c-1)", "count": 2},
+                ],
+                "nodes": [
+                    {"id": "a", "label": "A", "type": "evergreen",
+                     "community": "c1", "quality": None, "backlinks": 1,
+                     "openQuestion": False, "source": "manual",
+                     "absorbedAt": "2026-05-09", "path": "/object?id=a"},
+                    {"id": "b", "label": "B", "type": "evergreen",
+                     "community": "c1", "quality": None, "backlinks": 1,
+                     "openQuestion": False, "source": "manual",
+                     "absorbedAt": "2026-05-09", "path": "/object?id=b"},
+                ],
+                "links": [
+                    {"source": "a", "target": "b", "kind": "ref"},
+                ],
+            },
+        },
+        action_path="/map",
     )
 
-    assert "cluster-graph-svg" in html
-    assert "cluster-graph-data" in html
-    # No leftover inline coord attributes from the removed static-SVG path.
-    assert "cx='0.0'" not in html
-    assert "x1='0.0'" not in html
-    # The JSON data block must carry both seeded nodes so D3 has
-    # something to lay out.
-    start = html.index("id='cluster-graph-data'>") + len("id='cluster-graph-data'>")
+    # Kit chrome: dark theme, mount points the JS expects, libraries.
+    assert 'data-theme="dark"' in html
+    assert 'id="graph-canvas"' in html
+    assert "/static/atlas-graph.js" in html
+    assert "/static/atlas-graph.css" in html
+    assert "https://unpkg.com/three@" in html
+    assert "https://unpkg.com/3d-force-graph@" in html
+    # Payload injection — JSON.parse-able, no raw HTML breakouts.
+    assert 'id="ovp-atlas-data"' in html
+    assert "window.OVP_GRAPH" in html
+    # Stale 2D D3 markers must be gone from /map.
+    assert "cluster-graph-svg" not in html
+    assert "cluster-graph-data" not in html
+    # Atlas JSON payload must carry both seeded nodes — extract,
+    # decode the inline-script escapes, and confirm both ids land.
+    import json
+    start = html.index('id="ovp-atlas-data" type="application/json">')
+    start = html.index(">", start) + 1
     end = html.index("</script>", start)
-    data = json.loads(html[start:end].replace("<\\/", "</"))
+    raw = (
+        html[start:end]
+        .replace("\\u003c", "<")
+        .replace("\\u003e", ">")
+        .replace("\\u0026", "&")
+    )
+    data = json.loads(raw)
     assert {n["id"] for n in data["nodes"]} == {"a", "b"}
-    assert len(data["edges"]) == 1
+    assert len(data["links"]) == 1
+    assert data["communities"][0]["id"] == "c1"
 
 
 def test_ui_server_ops_route_renders_runtime_state_card(temp_vault):
@@ -1938,12 +1944,16 @@ def test_count_action_queue_by_status_returns_grouped_counts(temp_vault):
 
 
 def test_ops_cluster_detail_mounts_force_graph(temp_vault):
-    """``/ops/cluster?id=...`` injects the D3 force-directed graph.
+    """``/ops/cluster?id=...`` links to the unified Atlas force graph.
 
-    The page now opens with an interactive force-directed view above
-    the existing tabular sections.  The renderer ships a JSON
-    ``<script type="application/json">`` block carrying nodes +
-    edges, plus the D3 v7 CDN script tag and the bootstrap script.
+    Successive retrofits in commit history:
+      1. Static SVG (initial maintainer view).
+      2. ``ec79f24`` D3 force solver inline (``cluster-graph-svg``).
+      3. This commit: retire D3 entirely.  Cluster detail renders a
+         "Force-Directed View" CTA card linking into the dark Atlas
+         (``/map?community=<cluster_id>``); atlas-graph.js auto-
+         isolates that community on first paint, so /map and
+         /ops/cluster share one tech and one visual identity.
     Tabular sections (Members, Internal Edges) stay as the printable
     fallback.
     """
@@ -1984,16 +1994,20 @@ def test_ops_cluster_detail_mounts_force_graph(temp_vault):
         server.server_close()
         thread.join(timeout=5)
 
-    # Force-directed mount + D3 + JSON data block.
+    # CTA card replaces the inline D3 mount; the deep-link URL
+    # carries the cluster id so atlas-graph.js can pre-isolate.
     assert "Force-Directed View" in body
-    assert "cluster-graph-svg" in body
-    assert "cluster-graph-data" in body
-    assert "d3@7" in body or "d3.min.js" in body
+    assert "Open this cluster in the Atlas" in body
+    assert "/map?community=" in body
+    assert "cluster%3A%3Atest" in body or "cluster::test" in body
     # Tabular fallback still rendered.
     assert "Internal Edges" in body
     assert "<h2>Members</h2>" in body
-    # JSON block carries the seeded members.
-    assert '"id": "alpha"' in body or '"id":"alpha"' in body
+    # No D3 mount in the cluster page anymore (single force-graph
+    # tech across the app).
+    assert "cluster-graph-svg" not in body
+    assert "d3@7" not in body
+    assert "d3.min.js" not in body
 
 
 def test_ops_clusters_supports_offset_pagination(temp_vault):

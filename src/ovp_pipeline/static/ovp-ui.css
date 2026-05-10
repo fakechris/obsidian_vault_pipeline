@@ -1,0 +1,353 @@
+/* ============================================================
+   OVP UI Kit · component stylesheet (v2 · dual scheme)
+   Tokens load separately via _layout() → ovp-tokens.css (which
+   covers @font-face fallback names, palette, radii). The :root
+   / [data-theme="dark"] blocks below redefine and extend those
+   tokens with kit-specific additions (e.g. --graph-bg radial
+   gradient) that the canonical token file does not carry.
+   ============================================================ */
+
+/* ----- LIGHT (default) ----- */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f6f2; --bg-deep: #efece5;
+  --surface: #fffdfa; --surface-2: #fbf7f0;
+  --border: #e7e1d8; --border-strong: #cdc4b6;
+  --text: #1f1a17; --text-soft: #443a32; --muted: #71675d;
+  --accent: #9f4f24; --accent-soft: #f4dfd2;
+  --accent-2: #2563bb; --accent-2-soft: #dbe7f7;
+  --warn-border: #d48a2f; --warn-bg: #fff8ec; --warn-text: #a85e10;
+  --code-bg: #f4f4f5; --code-text: #1f1a17;
+  --graph-link: rgba(31,26,23,0.16);
+  --graph-link-hi: #9f4f24;
+  --graph-hull: rgba(159,79,36,0.10); --graph-hull-edge: rgba(159,79,36,0.55);
+  --graph-grid: rgba(31,26,23,0.04);
+  --c-1:#9f4f24; --c-2:#2563bb; --c-3:#2f7d52; --c-4:#b8862e;
+  --c-5:#6c4dab; --c-6:#b04545; --c-7:#2d6e87; --c-8:#645a52;
+  --shadow-shell: 0 12px 36px rgba(31,26,23,0.06);
+  --shadow-pop: 0 16px 48px rgba(31,26,23,0.12);
+  --graph-bg: radial-gradient(ellipse at 50% 40%, #fdfaf3 0%, #efece5 60%, #e2ddd2 100%);
+}
+
+/* ----- DARK ----- */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0e16; --bg-deep: #05080d;
+  --surface: #11161f; --surface-2: #161c27;
+  --border: #1f2937; --border-strong: #2c3a4f;
+  --text: #e6edf5; --text-soft: #c2cfde; --muted: #7d8aa0;
+  --accent: #3b82f6; --accent-soft: rgba(59,130,246,0.16);
+  --accent-2: #06b6d4; --accent-2-soft: rgba(6,182,212,0.16);
+  --warn-border: #f59e0b; --warn-bg: rgba(245,158,11,0.10); --warn-text: #fbbf24;
+  --code-bg: #0e1420; --code-text: #e6edf5;
+  --graph-link: rgba(125,138,160,0.28);
+  --graph-link-hi: #06b6d4;
+  --graph-hull: rgba(59,130,246,0.08); --graph-hull-edge: rgba(59,130,246,0.55);
+  --graph-grid: rgba(255,255,255,0.03);
+  --c-1:#3b82f6; --c-2:#06b6d4; --c-3:#22c55e; --c-4:#eab308;
+  --c-5:#a78bfa; --c-6:#f472b6; --c-7:#14b8a6; --c-8:#94a3b8;
+  --shadow-shell: 0 12px 36px rgba(0,0,0,0.55);
+  --shadow-pop: 0 18px 52px rgba(0,0,0,0.7);
+  --graph-bg: radial-gradient(ellipse at 50% 40%, #0e1622 0%, #060a12 60%, #02040a 100%);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: 'IBM Plex Sans', 'IBM Plex Sans SC', ui-sans-serif, system-ui, sans-serif;
+  font-size: 16px; line-height: 1.5;
+  background: var(--bg); color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  transition: background 200ms ease, color 200ms ease;
+}
+
+a { color: var(--accent); text-decoration: none; font-weight: 600; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3, h4 { margin: 0 0 0.5rem; line-height: 1.2; font-weight: 700; text-wrap: balance; }
+h1 { font-size: 1.75rem; letter-spacing: -0.01em; }
+h2 { font-size: 1.4rem; }
+h3 { font-size: 1.15rem; }
+
+p { margin: 0 0 0.75rem; text-wrap: pretty; }
+
+code { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 0.92em;
+       background: var(--code-bg); color: var(--code-text); padding: 0.05rem 0.35rem; border-radius: 6px; }
+pre  { font-family: 'IBM Plex Mono', ui-monospace, monospace; background: var(--code-bg);
+       color: var(--code-text); padding: 1rem; border-radius: 8px; overflow-x: auto; line-height: 1.45; }
+pre code { background: transparent; padding: 0; }
+
+/* ---------- LAYOUT ---------- */
+.page { max-width: 1180px; margin: 0 auto; padding: 1.5rem 1.5rem 3rem; }
+.page.wide { max-width: 1480px; }
+.page.full { max-width: none; padding: 0; }
+
+.shell {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 20px; box-shadow: var(--shadow-shell);
+  transition: background 200ms, border-color 200ms, box-shadow 200ms;
+}
+.shell-head { padding: 1.1rem 1.25rem 0; }
+.shell-body { padding: 0 1.25rem 1.25rem; }
+
+.nav {
+  display: flex; gap: 0.9rem; flex-wrap: wrap; align-items: baseline;
+  padding-bottom: 0.4rem; border-bottom: 1px solid var(--border);
+}
+.nav .brand { font-weight: 700; letter-spacing: -0.01em; color: var(--text);
+              font-size: 1.05rem; margin-right: 0.4rem; }
+.nav .brand .dot { color: var(--accent); }
+.nav a { color: var(--muted); font-weight: 500; }
+.nav a.active { color: var(--accent); font-weight: 600; }
+.nav .cross-link { margin-left: auto; font-size: 0.85rem; font-weight: 500; }
+
+.subnav { display: flex; gap: 0.6rem; flex-wrap: wrap; margin: 0.9rem 0 0.5rem; }
+.subnav a {
+  color: var(--muted); padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); font-weight: 500; font-size: 0.92rem;
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.subnav a:hover { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+.subnav a.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+.card {
+  border: 1px solid var(--border); background: var(--surface);
+  border-radius: 16px; padding: 1rem; margin-bottom: 1rem;
+  transition: background 200ms, border-color 200ms;
+}
+.card.warning { border: 1px solid var(--warn-border); background: var(--warn-bg); }
+/* Dark-mode elevation: shell + card both use --surface, which has
+   identical luminance in dark mode and produces a "flat slab" look.
+   Lift cards onto --surface-2 with a slightly stronger border so
+   each card reads as its own focal surface. */
+[data-theme="dark"] .card {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+[data-theme="dark"] .shell {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+/* The first card after an h1 (the "current state" / lead summary
+   on most pages) gets a subtle accent rail so the user has an
+   immediate focal point instead of a uniform dark wall. */
+.shell-body > h1 + .card,
+.shell-body > h1 + .muted + .card,
+.shell-body > h1 + p + .card {
+  border-left: 3px solid var(--accent);
+}
+.card.flush { padding: 0; overflow: hidden; }
+.card-head { padding: 0.85rem 1rem; border-bottom: 1px solid var(--border);
+             display: flex; align-items: center; flex-wrap: wrap;
+             gap: 0.5rem 0.6rem; }
+.card-head h3 { margin: 0; }
+.card-body { padding: 0.85rem 1rem; }
+.card-body > :first-child { margin-top: 0; }
+.card-body > :last-child { margin-bottom: 0; }
+
+.pill {
+  display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 0.78rem; font-weight: 600; letter-spacing: 0.01em;
+}
+.pill.muted { background: var(--border); color: var(--muted); }
+.pill.warn  { background: var(--warn-bg); color: var(--warn-text); border: 1px solid var(--warn-border); }
+.pill.cyan  { background: var(--accent-2-soft); color: var(--accent-2); }
+
+.muted { color: var(--muted); }
+.tiny { font-size: 0.82rem; }
+.mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+
+.grid { display: grid; gap: 1rem; }
+.grid.stats   { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.grid.two-col { grid-template-columns: minmax(0,2.1fr) minmax(280px,1fr); align-items: start; }
+.grid.three   { grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); }
+@media (max-width: 780px) { .grid.two-col { grid-template-columns: 1fr; } }
+
+button, .btn {
+  font: inherit; padding: 0.5rem 0.95rem; border-radius: 10px;
+  border: 1px solid var(--accent); background: var(--accent); color: white;
+  cursor: pointer; font-weight: 600; line-height: 1.4;
+  transition: opacity 120ms, background 120ms;
+}
+button:hover, .btn:hover { opacity: 0.92; text-decoration: none; }
+button.secondary, .btn.secondary { background: var(--surface); color: var(--accent); }
+button.ghost,     .btn.ghost     { background: transparent; border-color: var(--border); color: var(--text); }
+button.icon       { padding: 0.4rem; min-width: 32px; line-height: 1; }
+
+input[type="text"], input[type="search"], input[type="number"],
+input[type="date"], input[type="datetime-local"], input[type="email"],
+input[type="url"], select, textarea {
+  font: inherit; padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text);
+  line-height: 1.4;
+  transition: border-color 120ms;
+}
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent-soft); outline-offset: 1px;
+  border-color: var(--accent);
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: var(--icon-filter, none); opacity: 0.6; cursor: pointer;
+}
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator,
+[data-theme="dark"] input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+}
+
+/* Default form rhythm: any <form> in shell-body content gets the
+   same flex+gap layout the kit's design samples used.  Renderers
+   may override with their own inline style when a form needs a
+   non-standard layout (the inline style still wins). */
+.shell-body form {
+  display: flex; flex-wrap: wrap; gap: 0.6rem;
+  align-items: center; margin: 0.6rem 0 1rem;
+}
+.shell-body form label {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  color: var(--muted); font-size: 0.92rem;
+}
+.shell-body form input + button,
+.shell-body form select + button { margin-left: 0; }
+
+.page-help {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 12px; padding: 0.25rem 0.9rem;
+  margin: 0.5rem 0 1rem; font-size: 0.92rem;
+}
+.page-help summary {
+  cursor: pointer; padding: 0.55rem 0; color: var(--accent);
+  font-weight: 600; list-style: none;
+}
+.page-help summary::before {
+  content: "▸"; display: inline-block; margin-right: 6px;
+  transition: transform 120ms;
+}
+.page-help[open] summary::before { transform: rotate(90deg); }
+.page-help dl {
+  margin: 0.3rem 0 0.6rem;
+  display: grid; grid-template-columns: max-content 1fr;
+  gap: 0.3rem 0.9rem; font-size: 0.92rem;
+}
+.page-help dt { color: var(--muted); }
+.page-help dd { margin: 0; }
+
+.list-tight { margin: 0; padding-left: 1.1rem; }
+.list-tight li { margin-bottom: 0.4rem; }
+.list-tight li > strong:first-child + a { margin-left: 0.15rem; }
+.list-tight li .muted { display: block; margin-top: 0.15rem; }
+
+.divider { height: 1px; background: var(--border); margin: 1rem 0; border: 0; }
+
+/* Default vertical rhythm for shell-body content: ensure h1, h2,
+   .card, .ascii, section, table.data-table, .live-feed get
+   breathing room above each other so renderer markup never feels
+   crushed against a previous section. */
+.shell-body > h1 { margin-top: 0.5rem; margin-bottom: 0.25rem; }
+.shell-body > h1 + .muted { margin-top: 0; margin-bottom: 1rem; }
+.shell-body > h2,
+.shell-body > section > h2,
+.shell-body > .card > h2 { margin-top: 0; }
+.shell-body h2 { margin-top: 1.25rem; }
+.shell-body h3 { margin-top: 0.9rem; }
+.shell-body > section,
+.shell-body > .card,
+.shell-body > .grid,
+.shell-body > .ascii,
+.shell-body > .live-feed,
+.shell-body > .timeline,
+.shell-body > table { margin-top: 1rem; }
+.shell-body > details.page-help { margin-top: 0.5rem; margin-bottom: 1.25rem; }
+.shell-body > p + p,
+.shell-body > p + ul,
+.shell-body > p + .card { margin-top: 0.6rem; }
+
+/* Pill spacing: when pills sit inline with text or other pills,
+   ensure they don't crash into following content.  Featured-Topics
+   showed pills crashing the line below; this fixes it generically. */
+.pill + .pill { margin-left: 0.35rem; }
+.pill { margin-right: 0.05rem; vertical-align: 0.05em; }
+
+.metric-num { font-size: 1.6rem; font-weight: 700; line-height: 1; }
+.metric-num.warn { color: var(--warn-text); }
+
+table.kv { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+table.kv th, table.kv td {
+  text-align: left; padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border); vertical-align: top;
+}
+table.kv th { color: var(--muted); font-weight: 600; width: 30%; }
+table.kv tr:last-child th, table.kv tr:last-child td { border-bottom: 0; }
+
+.wikilink::before { content: "🎯 "; opacity: 0.7; }
+.wikilink.fallback::before { content: "🔍 "; opacity: 0.7; }
+
+.ascii {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  white-space: pre; font-size: 0.85rem; color: var(--muted);
+  line-height: 1.45; padding: 1rem; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--bg-deep); overflow-x: auto;
+}
+
+.timeline { display: grid; gap: 0.4rem; }
+.timeline .row {
+  display: grid; grid-template-columns: 80px 16px 1fr auto;
+  gap: 0.6rem; align-items: center; font-size: 0.92rem;
+  padding: 0.35rem 0; border-bottom: 1px dashed var(--border);
+}
+.timeline .row:last-child { border-bottom: 0; }
+.timeline .row .t { font-family: 'IBM Plex Mono', ui-monospace, monospace;
+                    font-size: 0.82rem; color: var(--muted); }
+.timeline .row .dot {
+  width: 10px; height: 10px; border-radius: 999px;
+  background: var(--accent); justify-self: center;
+}
+.timeline .row .dot.muted { background: var(--border-strong); }
+.timeline .row .dot.warn  { background: var(--warn-border); }
+
+/* ---------- SCREEN SWITCHER (UI-Kit only) ---------- */
+.screen-tabs {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--bg);
+  padding: 12px 0 12px;
+  margin: -1.5rem -1.5rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.screen-tabs-inner {
+  max-width: 1480px; margin: 0 auto;
+  padding: 0 1.5rem;
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+}
+.screen-tabs .label {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 0.78rem; color: var(--muted);
+  letter-spacing: 0.04em; margin-right: 6px;
+}
+.screen-tabs button {
+  background: var(--surface); color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 0.85rem; padding: 0.35rem 0.65rem; border-radius: 999px;
+}
+.screen-tabs button.active {
+  color: var(--accent); border-color: var(--accent); background: var(--accent-soft);
+}
+.screen-tabs .spacer { flex: 1; }
+.theme-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px; border: 1px solid var(--border);
+  border-radius: 999px; background: var(--surface);
+}
+.theme-toggle button {
+  border: 0; background: transparent; color: var(--muted);
+  padding: 0.25rem 0.6rem; font-size: 0.78rem; border-radius: 999px;
+  letter-spacing: 0.04em; font-family: 'IBM Plex Mono', ui-monospace, monospace;
+}
+.theme-toggle button.active { background: var(--accent); color: white; }
+
+.screen { display: none; }
+.screen.active { display: block; }

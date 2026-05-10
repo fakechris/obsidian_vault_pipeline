@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OVP — Type</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<style>
+  body { margin: 0; padding: 32px; }
+  .ovp-root { display: grid; gap: 18px; }
+  .row { display: grid; grid-template-columns: 96px 1fr; gap: 18px; align-items: baseline; padding: 14px 0; border-bottom: 1px solid var(--border); }
+  .row:last-child { border-bottom: 0; }
+  .label { font-family: var(--ovp-font-mono); font-size: 0.78rem; color: var(--muted); }
+  .meta { font-family: var(--ovp-font-mono); font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
+  .ovp-card { margin: 0; }
+</style>
+</head>
+<body class="ovp-root">
+  <div class="ovp-card">
+    <div style="font-family:var(--ovp-font-mono);font-size:0.78rem;color:var(--muted);letter-spacing:0.04em">DISPLAY · INTER (substitute for system-sans)</div>
+    <div class="row"><div class="label">3xl · 40</div><div><div style="font-size:2.5rem;font-weight:700;letter-spacing:-0.01em;line-height:1.1">obsidian vault pipeline</div><div class="meta">hero / wordmark · weight 700</div></div></div>
+    <div class="row"><div class="label">2xl · 28</div><div><h1 style="margin:0">An auditable knowledge runtime.</h1><div class="meta">page title (h1) · weight 700</div></div></div>
+    <div class="row"><div class="label">xl · 22</div><div><h2 style="margin:0">Featured Topics</h2><div class="meta">section heading (h2) · weight 700</div></div></div>
+    <div class="row"><div class="label">lg · 18</div><div><h3 style="margin:0">Source → Candidate → Canonical State</h3><div class="meta">card heading (h3) · weight 700</div></div></div>
+    <div class="row"><div class="label">base · 16</div><div><p style="margin:0;max-width:60ch">A Projection is rebuildable, derived state. Knowledge.db stores page FTS, structured links, and deterministic section embeddings — but it does not own canonical identity.</p><div class="meta">body · weight 400 · line-height 1.5 · text-wrap pretty</div></div></div>
+    <div class="row"><div class="label">sm · 14.7</div><div><div style="color:var(--muted);max-width:60ch">Reader vocabulary substitutes <code>Topic</code> for the storage term <code>community_crystal</code>. Rule BL-051.</div><div class="meta">help / caption · color muted</div></div></div>
+    <div class="row"><div class="label">xs · 13.6</div><div><div style="color:var(--muted)">→ Switch to Maintenance</div><div class="meta">cross-link / fine print</div></div></div>
+  </div>
+
+  <div class="ovp-card">
+    <div style="font-family:var(--ovp-font-mono);font-size:0.78rem;color:var(--muted);letter-spacing:0.04em">MONO · JETBRAINS MONO</div>
+    <pre style="margin-top:14px"><code>$ ovp --full
+[1/9] pinboard         <span class="ovp-pill">ready</span>
+[2/9] articles         <span class="ovp-pill">running</span>
+[3/9] absorb           <span class="ovp-pill">stale</span></code></pre>
+    <div class="meta" style="margin-top:8px">code blocks · 0.92em on bg #f4f4f5</div>
+  </div>
+</body>
+</html>

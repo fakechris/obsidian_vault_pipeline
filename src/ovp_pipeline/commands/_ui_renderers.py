@@ -27,7 +27,6 @@ from ..ui.view_models import (
     DEFAULT_CANDIDATE_BROWSER_LIMIT,
     build_runtime_home_payload,
 )
-from ._graph_visualizers import render_cluster_force_graph, render_graph_map_force_graph
 
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
@@ -74,8 +73,117 @@ def _safe_redirect_path(location: str, *, fallback: str = "/") -> str:
     return stripped
 _CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
 _INLINE_MEMBER_LINK_LIMIT = 8
-_GRAPH_MAP_CLUSTER_PREVIEW_LIMIT = 6
-_GRAPH_MAP_NODE_LABEL_Y_OFFSET = 13
+
+
+def _topic_entry_card(entry: dict, *, compact: bool = False) -> str:
+    """Shared topic-card markup used by Knowledge Library home and
+    Featured Topics.  Same card shape (rank · title · score pill ·
+    kind pill · teaser) so the two pages read as one component
+    family.  ``compact=True`` drops the 6-metric breakdown chips —
+    home uses compact, /topics uses full.
+
+    ``entry`` keys consumed:
+    rank · label · note_href · score · teaser · crystal_kind ·
+    size_norm/credibility_norm/source_diversity_norm/
+    contradiction_norm/reuse_recency_norm/evergreen_recency_norm
+    (only the breakdown keys are needed when compact=False).
+    """
+    kind = str(entry.get("crystal_kind", ""))
+    kind_label = (
+        "topic" if kind == "community"
+        else ("open question" if kind == "contradiction" else (kind or "topic"))
+    )
+    kind_pill_class = "pill warn" if kind == "contradiction" else "pill"
+    label = escape(str(entry.get("label", "(untitled)")))
+    score = float(entry.get("score", 0.0))
+    teaser = str(entry.get("teaser") or "")
+    note_href = str(entry.get("note_href") or "")
+    rank = int(entry.get("rank", 0) or 0)
+    link_html = (
+        f"<a href='{escape(note_href)}'>{label}</a>" if note_href else label
+    )
+    teaser_html = (
+        f"<p>{escape(teaser)}</p>"
+        if teaser
+        else "<p class='muted'><em>(no teaser available)</em></p>"
+    )
+    breakdown_html = ""
+    if not compact:
+        breakdown_chips = "".join(
+            f"<span class='muted tiny mono' style='margin-right:0.6rem'>{escape(label_text)} "
+            f"<strong style='color:var(--text-soft)'>{value:.2f}</strong></span>"
+            for label_text, value in [
+                ("size",          float(entry.get("size_norm", 0) or 0)),
+                ("credibility",   float(entry.get("credibility_norm", 0) or 0)),
+                ("source-div",    float(entry.get("source_diversity_norm", 0) or 0)),
+                ("contradict",    float(entry.get("contradiction_norm", 0) or 0)),
+                ("reuse-rec",     float(entry.get("reuse_recency_norm", 0) or 0)),
+                ("evergreen-rec", float(entry.get("evergreen_recency_norm", 0) or 0)),
+            ]
+        )
+        breakdown_html = (
+            "<div style='margin-top:.6rem;padding-top:.5rem;"
+            "border-top:1px dashed var(--border);"
+            "display:flex;flex-wrap:wrap;font-size:.78rem;color:var(--muted)'>"
+            f"{breakdown_chips}</div>"
+        )
+    rank_html = (
+        f"<span class='muted tiny mono' style='min-width:1.6rem;text-align:right'>{rank}</span>"
+        if rank
+        else ""
+    )
+    score_pill = (
+        f"<span class='pill'>score {score:.3f}</span>"
+        if score
+        else ""
+    )
+    kind_pill = (
+        f"<span class='{kind_pill_class}'>{escape(kind_label)}</span>"
+        if kind
+        else ""
+    )
+    return (
+        "<section class='card flush'>"
+        "<div class='card-head'>"
+        f"{rank_html}"
+        f"<h3 style='margin:0;font-size:1.05rem;flex:1;min-width:0'>{link_html}</h3>"
+        f"{score_pill}"
+        f"{kind_pill}"
+        "</div>"
+        "<div class='card-body'>"
+        f"{teaser_html}"
+        f"{breakdown_html}"
+        "</div>"
+        "</section>"
+    )
+
+
+def _ts(text) -> str:
+    """Render a timestamp/date in the kit's mono-tiny-muted style.
+
+    Centralises the visual treatment of every ISO date / unix
+    timestamp / "generated at" line across the UI so they read as
+    one design language instead of as raw text.  Pass ``None`` /
+    ``""`` and you get the em-dash placeholder.
+
+    Humanises ISO 8601 timestamps (``2026-05-10T01:08:56+00:00``)
+    to ``YYYY-MM-DD HH:MM:SS`` — drops the ``T`` separator, the
+    timezone suffix, and any sub-second precision.  Non-ISO input
+    falls through unchanged.
+    """
+    if text is None or text == "":
+        return "<span class='muted tiny'>—</span>"
+    raw = str(text)
+    rendered = raw
+    if len(raw) >= 19 and raw[4] == "-" and raw[7] == "-" and raw[10] in ("T", " "):
+        try:
+            from datetime import datetime as _dt
+
+            dt = _dt.fromisoformat(raw.replace("Z", "+00:00"))
+            rendered = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            rendered = raw
+    return f"<span class='muted tiny mono'>{escape(rendered)}</span>"
 
 
 def _render_limited_inline_links(
@@ -237,9 +345,9 @@ def _render_page_help(
         "<aside class='page-help'><details>"
         f"<summary>{escape(title)} — what is this?</summary>"
         "<dl>"
-        f"<dt>What this is</dt><dd>{what}</dd>"
-        f"<dt>What you can do</dt><dd>{can}</dd>"
-        f"<dt>What happens when you click</dt><dd>{effect}</dd>"
+        f"<dt>What this is</th><td>{what}</dd>"
+        f"<dt>What you can do</th><td>{can}</dd>"
+        f"<dt>What happens when you click</th><td>{effect}</dd>"
         "</dl></details></aside>"
     )
 
@@ -269,77 +377,71 @@ def _layout(
         if auto_refresh_seconds and auto_refresh_seconds > 0
         else ""
     )
+    brand_href = escape(_shell_href("/", requested_pack))
     return f"""<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 {refresh_meta}    <meta name="ovp-runtime-refresh" content="{int(auto_refresh_seconds or 0)}" />
     <title>{escape(title)}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/monogram.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+SC:wght@400;600&display=swap" />
+    <link rel="stylesheet" href="/static/ovp-tokens.css" />
+    <link rel="stylesheet" href="/static/ovp-ui.css" />
+    <link rel="stylesheet" href="/static/ovp-pages.css" />
     <style>
-      :root {{
-        color-scheme: light;
-        --bg: #f7f6f2;
-        --surface: #fffdfa;
-        --border: #e7e1d8;
-        --text: #1f1a17;
-        --muted: #71675d;
-        --accent: #9f4f24;
-        --accent-soft: #f4dfd2;
-      }}
-      * {{ box-sizing: border-box; }}
-      body {{ font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; line-height: 1.5; background: var(--bg); color: var(--text); }}
-      main {{ max-width: 1180px; margin: 0 auto; padding: 1.5rem 1.5rem 3rem; }}
-      nav {{ margin-bottom: 1.5rem; display: flex; gap: 0.9rem; flex-wrap: wrap; }}
-      nav a {{ color: var(--accent); text-decoration: none; font-weight: 600; }}
-      nav a:hover {{ text-decoration: underline; }}
-      h1, h2, h3 {{ margin-bottom: 0.5rem; line-height: 1.2; }}
-      ul {{ padding-left: 1.2rem; }}
-      pre {{ background: #f4f4f5; padding: 1rem; border-radius: 8px; overflow-x: auto; }}
-      img {{ max-width: 100%; height: auto; display: block; border-radius: 12px; }}
-      input, select, button {{ font: inherit; }}
-      input, select {{ padding: 0.55rem 0.7rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }}
-      button {{ padding: 0.55rem 0.8rem; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }}
-      button:hover {{ opacity: 0.92; }}
-      .muted {{ color: var(--muted); }}
-      .page-help {{ background: #fbf7f0; border: 1px solid var(--border); border-radius: 12px; padding: .25rem .9rem; margin: .25rem 0 1rem; font-size: .92rem; }}
-      .page-help summary {{ cursor: pointer; padding: .55rem 0; color: var(--accent); font-weight: 600; }}
-      .page-help dl {{ margin: .25rem 0 .5rem; display: grid; grid-template-columns: max-content 1fr; gap: .25rem .9rem; }}
-      .page-help dt {{ color: var(--muted); }}
-      .page-help dd {{ margin: 0; }}
-      .hero {{ margin-bottom: 1.5rem; }}
-      .shell {{ background: var(--surface); border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 12px 36px rgba(31, 26, 23, 0.06); }}
-      .shell-head {{ padding: 1.1rem 1.25rem 0; }}
-      .shell-body {{ padding: 0 1.25rem 1.25rem; }}
-      .card {{ border: 1px solid var(--border); background: var(--surface); border-radius: 16px; padding: 1rem; margin-bottom: 1rem; }}
-      .warning {{ border-color: #d48a2f; background: #fff8ec; }}
-      .grid {{ display: grid; gap: 1rem; }}
-      .stats {{ grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }}
-      .two-col {{ grid-template-columns: minmax(0, 2.1fr) minmax(280px, 1fr); align-items: start; }}
-      .pill {{ display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin-right: 0.5rem; }}
-      .link-row {{ display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.9rem; }}
-      .link-row a {{ color: var(--accent); text-decoration: none; font-weight: 600; }}
-      .subnav {{ display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.9rem; margin-bottom: 1rem; }}
-      .subnav a {{ color: var(--muted); text-decoration: none; padding: 0.35rem 0.6rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }}
-      .subnav a:hover {{ color: var(--accent); border-color: var(--accent-soft); }}
-      .cross-link {{ font-size: 0.85rem; font-weight: 500; color: var(--muted); margin-left: auto; }}
-      .cross-link:hover {{ color: var(--accent); }}
-      nav {{ align-items: baseline; }}
-      .list-tight li {{ margin-bottom: 0.4rem; }}
-      .section-stack {{ display: grid; gap: 1rem; }}
-      .meta-list {{ display: grid; gap: 0.6rem; margin: 0; }}
-      .meta-list dt {{ font-weight: 700; }}
-      .meta-list dd {{ margin: 0; color: var(--muted); }}
-      @media (max-width: 780px) {{ .two-col {{ grid-template-columns: 1fr; }} main {{ padding: 1rem 1rem 2rem; }} }}
+      /* Page-local additions only — anything reusable belongs in
+         /static/ovp-ui.css (kit-faithful) or /static/ovp-pages.css
+         (OVP-specific page components).  */
+      main.page {{ display: block; }}
+      .nav {{ align-items: center; }}
+      .nav .brand-mark {{ display: inline-flex; align-items: center; gap: 0.45rem;
+        font-weight: 700; color: var(--text); margin-right: 0.4rem;
+        letter-spacing: -0.01em; font-size: 1.05rem; line-height: 1; }}
+      .nav .brand-mark img {{ width: 22px; height: 22px; display: block;
+        border-radius: 0; }}
+      .nav .brand-mark .dot {{ color: var(--accent); }}
+      .nav .brand-mark:hover {{ text-decoration: none; opacity: 0.92; }}
+      .nav a {{ line-height: 1.4; }}
+      .nav .nav-tail {{ margin-left: auto; display: inline-flex; align-items: center;
+        gap: 0.6rem; }}
+      .nav .nav-tail .cross-link {{ margin-left: 0; }}
+      @media (max-width: 780px) {{ main.page {{ padding: 1rem 1rem 2rem; }} }}
     </style>
+    <script>
+      // Pre-paint theme: read localStorage before first paint to
+      // avoid flash-of-wrong-theme.  ?theme=light|dark may pin
+      // server-side later; for now localStorage is the only source.
+      (function () {{
+        try {{
+          var saved = localStorage.getItem('ovp-theme');
+          if (saved === 'light' || saved === 'dark') {{
+            document.documentElement.dataset.theme = saved;
+          }}
+        }} catch (e) {{}}
+      }})();
+    </script>
   </head>
   <body>
-    <main>
+    <main class="page">
       <div class="shell">
         <div class="shell-head">
-          <nav>
+          <nav class="nav">
+            <a class="brand-mark" href="{brand_href}">
+              <img src="/static/monogram.svg" alt="" width="22" height="22" />
+              <span>obsidian vault pipeline<span class="dot">.</span></span>
+            </a>
             {nav_items}
-            {cross_link}
+            <span class="nav-tail">
+              <span class="theme-toggle" role="group" aria-label="Theme">
+                <button type="button" data-theme-set="light" id="ovp-theme-light">LIGHT</button>
+                <button type="button" data-theme-set="dark"  id="ovp-theme-dark">DARK</button>
+              </span>
+              {cross_link}
+            </span>
           </nav>
         </div>
         <div class="shell-body">
@@ -347,6 +449,26 @@ def _layout(
         </div>
       </div>
     </main>
+    <script>
+      (function () {{
+        var root = document.documentElement;
+        var current = root.dataset.theme === 'dark' ? 'dark' : 'light';
+        var btnLight = document.getElementById('ovp-theme-light');
+        var btnDark  = document.getElementById('ovp-theme-dark');
+        function paint(t) {{
+          root.dataset.theme = t;
+          if (btnLight) btnLight.classList.toggle('active', t === 'light');
+          if (btnDark)  btnDark.classList.toggle('active',  t === 'dark');
+        }}
+        paint(current);
+        function setTheme(t) {{
+          paint(t);
+          try {{ localStorage.setItem('ovp-theme', t); }} catch (e) {{}}
+        }}
+        if (btnLight) btnLight.addEventListener('click', function () {{ setTheme('light'); }});
+        if (btnDark)  btnDark.addEventListener('click',  function () {{ setTheme('dark');  }});
+      }})();
+    </script>
   </body>
 </html>
 """
@@ -753,7 +875,7 @@ def _render_run_history_card(runtime: dict[str, object] | None) -> str:
             "<li>"
             f"<strong>{escape(run_id)}</strong> "
             f"<span class='pill'>{escape(status)}</span>"
-            f"<div class='muted'>Duration: {escape(duration)} · {escape(started_at)} → {escape(finished_at)}</div>"
+            f"<div class='muted'>Duration: {escape(duration)} · {_ts(started_at)} → {_ts(finished_at)}</div>"
             f"<div class='muted'>Scope: {escape(scope)}</div>"
             f"<div class='muted'>Work: {escape(work)}</div>"
             f"{steps_html}"
@@ -1308,12 +1430,12 @@ def _render_note_page(
         provenance_html = (
             "<section class='card'>"
             "<h2>Provenance</h2>"
-            "<dl class='meta-list'>"
-            "<div><dt>Original Source Note</dt><dd>"
+            "<table class='kv'>"
+            "<tr><th>Original Source Note</th><td>"
             f'<a href="{escape(_note_href(source_note["path"], requested_pack))}">{escape(source_note["title"])}</a>'
             f"<div class='muted'>{escape(source_note['path'])}</div>"
-            "</dd></div>"
-            "</dl>"
+            "</td></tr>"
+            "</table>"
             "</section>"
         )
     production_chain_html = ""
@@ -1327,15 +1449,15 @@ def _render_note_page(
         production_chain_html = (
             "<section class='card'>"
             "<h2>Production Chain</h2>"
-            "<dl class='meta-list'>"
-            f"<div><dt>Current Note</dt><dd>{escape(production_chain['note']['title'])}<div class='muted'>{escape(production_chain['note']['path'])}</div></dd></div>"
-            f"<div><dt>Chain Status</dt><dd>{escape(str(production_chain.get('chain_status') or ''))}</dd></div>"
-            f"<div><dt>Missing Stages</dt><dd>{escape(missing_stages)}</dd></div>"
-            f"<div><dt>Chain Summary</dt><dd>{escape(str(production_chain.get('chain_summary') or ''))}</dd></div>"
-            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(production_chain['source_notes'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Derived Objects</dt><dd>{_render_object_links(production_chain['objects'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(production_chain['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
-            "</dl>"
+            "<table class='kv'>"
+            f"<tr><th>Current Note</th><td>{escape(production_chain['note']['title'])}<div class='muted'>{escape(production_chain['note']['path'])}</div></td></tr>"
+            f"<tr><th>Chain Status</th><td>{escape(str(production_chain.get('chain_status') or ''))}</td></tr>"
+            f"<tr><th>Missing Stages</th><td>{escape(missing_stages)}</td></tr>"
+            f"<tr><th>Chain Summary</th><td>{escape(str(production_chain.get('chain_summary') or ''))}</td></tr>"
+            f"<tr><th>Source Notes</th><td>{_render_named_note_links(production_chain['source_notes'], requested_pack=requested_pack)}</td></tr>"
+            f"<tr><th>Derived Objects</th><td>{_render_object_links(production_chain['objects'], requested_pack=requested_pack)}</td></tr>"
+            f"<tr><th>Atlas / MOC Reach</th><td>{_render_named_note_links(production_chain['atlas_pages'], requested_pack=requested_pack)}</td></tr>"
+            "</table>"
             "</section>"
         )
     section_nav = "".join(
@@ -1350,10 +1472,8 @@ def _render_note_page(
     return _layout(
         f"Markdown Note: {relative_path}",
         (
-            "<section class='hero'>"
             "<h1>Markdown Note</h1>"
             f"<p class='muted'>{escape(relative_path)}</p>"
-            "</section>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "")
@@ -1372,20 +1492,11 @@ def _render_note_page(
 # render function doesn't ship a multi-line literal in the middle
 # of its body.  Scope is intentionally local — promoting these
 # styles to ``_layout`` would make them load on every page even
-# when the lineage card isn't rendered.
-_LINEAGE_CARD_STYLE = (
-    "<style>"
-    ".lineage-flow{display:flex;flex-direction:column;gap:.4rem}"
-    ".lineage-row{padding:.5rem .7rem;border-left:3px solid #c9bfae;"
-    "background:#fbf9f5;border-radius:0 4px 4px 0}"
-    ".lineage-row.you{border-left-color:#1c5e1c;background:#eef5e7}"
-    ".lineage-row h3{margin:.1rem 0;font-size:.95rem}"
-    ".lineage-row ul{margin:.2rem 0 .2rem 1.2rem}"
-    ".lineage-row .muted{color:#71675d;font-size:.82rem}"
-    ".lineage-arrow{color:#a59b8c;text-align:center;font-size:.9rem;"
-    "padding:.1rem 0}"
-    "</style>"
-)
+# when the lineage card isn't rendered.  Visual rules now live in
+# /static/ovp-pages.css (.lineage-flow / .lineage-row / .lineage-arrow);
+# this constant stays as an empty string so callers that interpolate
+# it stay shape-stable and we don't have to chase every f-string.
+_LINEAGE_CARD_STYLE = ""
 
 
 def _render_lineage_card(
@@ -1425,8 +1536,9 @@ def _render_lineage_card(
     blocks: list[str] = [
         "<section class='card'><h2>Lineage</h2>",
         _LINEAGE_CARD_STYLE,
-        "<div class='lineage-flow'>",
-        f"<div class='lineage-row you'>{header}</div>",
+        "<div style='display:flex;flex-direction:column;gap:.4rem'>",
+        "<div style='padding:.5rem .7rem;border-left:3px solid var(--accent);"
+        f"background:var(--accent-soft);border-radius:0 4px 4px 0'>{header}</div>",
     ]
 
     # ── Raw source row ─────────────────────────────────────────
@@ -1441,9 +1553,12 @@ def _render_lineage_card(
             "" if path
             else " <span class='muted'>(archived — only stem available)</span>"
         )
-        blocks.append("<div class='lineage-arrow'>↑ derived from</div>")
         blocks.append(
-            "<div class='lineage-row'>"
+            "<div class='muted tiny' style='text-align:center;padding:.1rem 0'>"
+            "↑ derived from</div>"
+        )
+        blocks.append(
+            "<div style='padding:.5rem .7rem;border-left:3px solid var(--border-strong);background:var(--surface-2);border-radius:0 4px 4px 0'>"
             "<h3>Raw source</h3>"
             f"<div>{link}{archived_note}</div>"
             f"<div class='muted'>{path}</div>"
@@ -1462,10 +1577,10 @@ def _render_lineage_card(
             for eg in evergreens
         )
         blocks.append(
-            "<div class='lineage-arrow'>"
+            "<div class='muted tiny' style='text-align:center;padding:.1rem 0'>"
             f"↓ produced {len(evergreens)} evergreen(s)"
             "</div>"
-            "<div class='lineage-row'>"
+            "<div style='padding:.5rem .7rem;border-left:3px solid var(--border-strong);background:var(--surface-2);border-radius:0 4px 4px 0'>"
             "<h3>Evergreens</h3>"
             f"<ul>{items}</ul>"
             "</div>"
@@ -1483,10 +1598,10 @@ def _render_lineage_card(
             for cl in clusters
         )
         blocks.append(
-            "<div class='lineage-arrow'>"
+            "<div class='muted tiny' style='text-align:center;padding:.1rem 0'>"
             f"↓ grouped into {len(clusters)} cluster(s)"
             "</div>"
-            "<div class='lineage-row'>"
+            "<div style='padding:.5rem .7rem;border-left:3px solid var(--border-strong);background:var(--surface-2);border-radius:0 4px 4px 0'>"
             "<h3>Clusters (Louvain communities)</h3>"
             f"<ul>{items}</ul>"
             "</div>"
@@ -1504,10 +1619,10 @@ def _render_lineage_card(
             for cr in crystals
         )
         blocks.append(
-            "<div class='lineage-arrow'>"
+            "<div class='muted tiny' style='text-align:center;padding:.1rem 0'>"
             f"↓ synthesized into {len(crystals)} crystal(s)"
             "</div>"
-            "<div class='lineage-row'>"
+            "<div style='padding:.5rem .7rem;border-left:3px solid var(--border-strong);background:var(--surface-2);border-radius:0 4px 4px 0'>"
             "<h3>Crystals</h3>"
             f"<ul>{items}</ul>"
             "</div>"
@@ -1627,20 +1742,20 @@ def _render_search_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Reader Search</h1>",
-                "<form method='get' action='/search'>",
+                "<form method='get' action='/search' style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 1rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' /> "
                     if requested_pack
                     else ""
                 ),
-                f"<input type='text' name='q' value='{escape(query)}' placeholder='Search vault' /> ",
+                f"<input type='search' name='q' value='{escape(query)}' placeholder='Search vault' />",
                 "<button type='submit'>Search</button>",
                 "</form>",
                 f"<p class='muted'>{escape(str(payload.get('reader_summary') or showing))}</p>",
                 "<p class='muted'>Objects are grouped by kind. Notes are grouped by source type.</p>",
                 "<section class='grid two-col'>",
-                f"<div class='section-stack'>{reader_group_html}{_pager(object_total, 'Objects')}</div>",
-                f"<div class='section-stack'>{source_group_html}{_pager(note_total, 'Notes')}</div>",
+                f"<div style='display:grid;gap:1rem'>{reader_group_html}{_pager(object_total, 'Objects')}</div>",
+                f"<div style='display:grid;gap:1rem'>{source_group_html}{_pager(note_total, 'Notes')}</div>",
                 "</section>",
             ]
         ),
@@ -1686,7 +1801,7 @@ def _render_evolution_review_form(
     link_type = str(item.get("link_type") or "")
     return "".join(
         [
-            "<form method='post' action='/ops/evolution/review' class='link-row'>",
+            "<form method='post' action='/ops/evolution/review' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
             f"<input type='hidden' name='evolution_id' value='{escape(str(item['evolution_id']))}' />",
             (
                 f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -1723,7 +1838,7 @@ def _render_evolution_links(items: list[dict[str, object]], *, empty_text: str) 
                 else ""
             )
             + (
-                f"<div class='muted'>Reviewed at: {escape(str(item.get('timestamp') or ''))}</div>"
+                f"<div class='muted'>Reviewed at: {_ts(item.get('timestamp') or '')}</div>"
                 if item.get("timestamp")
                 else ""
             )
@@ -1794,17 +1909,17 @@ def _render_review_context_card(
     return (
         "<section class='card'>"
         f"<h2>{escape(title)}</h2>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Objects in scope</dt><dd>{int(context.get('object_count', 0))}</dd></div>"
-        f"<div><dt>Source notes</dt><dd>{int(context.get('source_note_count', 0))}</dd></div>"
-        f"<div><dt>Atlas / MOC pages</dt><dd>{int(context.get('moc_count', 0))}</dd></div>"
-        f"<div><dt>Open contradictions</dt><dd>{int(context.get('open_contradiction_count', 0))}</dd></div>"
-        f"<div><dt>Total contradictions</dt><dd>{int(context.get('contradiction_count', 0))}</dd></div>"
-        f"<div><dt>Stale summaries</dt><dd>{int(context.get('stale_summary_count', 0))}</dd></div>"
-        f"<div><dt>Latest event date</dt><dd>{latest_event_html}</dd></div>"
-        f"<div><dt>Contradiction objects</dt><dd>{escape(contradiction_object_ids)}</dd></div>"
-        f"<div><dt>Stale summary objects</dt><dd>{escape(stale_summary_ids)}</dd></div>"
-        "</dl>"
+        "<table class='kv'>"
+        f"<tr><th>Objects in scope</th><td>{int(context.get('object_count', 0))}</td></tr>"
+        f"<tr><th>Source notes</th><td>{int(context.get('source_note_count', 0))}</td></tr>"
+        f"<tr><th>Atlas / MOC pages</th><td>{int(context.get('moc_count', 0))}</td></tr>"
+        f"<tr><th>Open contradictions</th><td>{int(context.get('open_contradiction_count', 0))}</td></tr>"
+        f"<tr><th>Total contradictions</th><td>{int(context.get('contradiction_count', 0))}</td></tr>"
+        f"<tr><th>Stale summaries</th><td>{int(context.get('stale_summary_count', 0))}</td></tr>"
+        f"<tr><th>Latest event date</th><td>{latest_event_html}</td></tr>"
+        f"<tr><th>Contradiction objects</th><td>{escape(contradiction_object_ids)}</td></tr>"
+        f"<tr><th>Stale summary objects</th><td>{escape(stale_summary_ids)}</td></tr>"
+        "</table>"
         "</section>"
     )
 
@@ -1820,7 +1935,7 @@ def _render_review_history(items: list[dict[str, object]], *, title: str = "Revi
     rows = "".join(
         "<li>"
         f"<span class='pill'>{escape(str(item['event_type']))}</span> "
-        f"{escape(str(item['timestamp']))}"
+        f"{_ts(item['timestamp'])}"
         + (
             f"<div class='muted'>Status: {escape(str(item['status']))}</div>"
             if item.get("status")
@@ -1875,11 +1990,11 @@ def _render_production_summary_card(
     return (
         "<section class='card'>"
         f"<h2>{escape(title)}</h2>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Objects in scope</dt><dd>{int(summary['object_count'])}</dd></div>"
-        f"<div><dt>Top Source Notes</dt><dd>{_render_named_note_links(summary['top_source_notes'], requested_pack=requested_pack)}</dd></div>"
-        f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(summary['top_atlas_pages'], requested_pack=requested_pack)}</dd></div>"
-        "</dl>"
+        "<table class='kv'>"
+        f"<tr><th>Objects in scope</th><td>{int(summary['object_count'])}</td></tr>"
+        f"<tr><th>Top Source Notes</th><td>{_render_named_note_links(summary['top_source_notes'], requested_pack=requested_pack)}</td></tr>"
+        f"<tr><th>Atlas / MOC Reach</th><td>{_render_named_note_links(summary['top_atlas_pages'], requested_pack=requested_pack)}</td></tr>"
+        "</table>"
         f"<ul class='list-tight'>{count_items}{signal_items}</ul>"
         "</section>"
     )
@@ -1995,21 +2110,27 @@ def _render_dashboard(payload: dict) -> str:
         )
         or "<li class='muted'>No urgent maintenance items surfaced.</li>"
     )
+    def _tile(label, value, *, warn=False):
+        warn_cls = " warn" if warn else ""
+        return (
+            "<div class='card' style='margin:0'>"
+            f"<div class='muted tiny'>{label}</div>"
+            f"<div class='metric-num{warn_cls}' style='margin-top:4px'>{value}</div>"
+            "</div>"
+        )
     stats_cards = [
-        f"<div class='card'><h2>Objects Indexed</h2><p>{payload['objects']['count']}</p></div>",
-        f"<div class='card'><h2>Signal Count</h2><p>{payload['signals']['count']}</p></div>",
-        "<div class='card'><h2>Weak Point Count</h2>"
-        f"<p>{payload['production']['weak_point_count']}</p></div>",
+        _tile("Objects Indexed", payload['objects']['count']),
+        _tile("Signal Count", payload['signals']['count']),
+        _tile("Weak Point Count", payload['production']['weak_point_count']),
     ]
     if research_overview_supported:
         stats_cards[1:1] = [
-            "<div class='card'><h2>Contradictions Open</h2>"
-            f"<p>{payload['contradictions']['open_count']}</p></div>",
-            f"<div class='card'><h2>Event Count</h2><p>{payload['events']['count']}</p></div>",
-            "<div class='card'><h2>Stale Summary Count</h2>"
-            f"<p>{payload['stale_summaries']['count']}</p></div>",
-            "<div class='card'><h2>Evolution Candidates</h2>"
-            f"<p>{payload['evolution']['candidate_count']}</p></div>",
+            _tile("Contradictions Open", payload['contradictions']['open_count'],
+                  warn=int(payload['contradictions']['open_count']) > 0),
+            _tile("Event Count", payload['events']['count']),
+            _tile("Stale Summary Count", payload['stale_summaries']['count'],
+                  warn=int(payload['stale_summaries']['count']) > 0),
+            _tile("Evolution Candidates", payload['evolution']['candidate_count']),
         ]
     research_overview_card = (
         ""
@@ -2058,7 +2179,7 @@ def _render_dashboard(payload: dict) -> str:
         last_run_summary = (
             f"{escape(str(last_run.get('workflow_type', '')))}"
             f" — <strong>{escape(str(last_run.get('status', '')))}</strong>"
-            f" <span class='muted'>{escape(str(last_run.get('started_at', ''))[:19])}</span>"
+            f" {_ts(str(last_run.get('started_at', ''))[:19])}"
         )
         last_run_link = (
             f"<a href='{escape(str(last_run.get('detail_href') or foyer_runs_path))}'>open →</a>"
@@ -2069,23 +2190,21 @@ def _render_dashboard(payload: dict) -> str:
     foyer_block = (
         "<section class='card'>"
         "<h2>Maintainer Foyer</h2>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Today</dt><dd>{escape(foyer_today_summary)}"
-        f" <a href='{escape(foyer_today_path)}'>see →</a></dd></div>"
-        f"<div><dt>Queue</dt><dd>{escape(foyer_queue_summary)}"
-        f" <a href='{escape(foyer_queue_path)}'>see →</a></dd></div>"
-        f"<div><dt>Last run</dt><dd>{last_run_summary} {last_run_link}</dd></div>"
-        "</dl>"
+        "<table class='kv'>"
+        f"<tr><th>Today</th><td>{escape(foyer_today_summary)}"
+        f" <a href='{escape(foyer_today_path)}'>see →</a></td></tr>"
+        f"<tr><th>Queue</th><td>{escape(foyer_queue_summary)}"
+        f" <a href='{escape(foyer_queue_path)}'>see →</a></td></tr>"
+        f"<tr><th>Last run</th><td>{last_run_summary} {last_run_link}</td></tr>"
+        "</table>"
         "</section>"
     )
 
     dashboard_body = "".join(
         [
-            "<section class='hero'>",
             "<h1>OVP Truth UI</h1>",
             "<p class='muted'>Read-only browser over <code>knowledge.db</code>. JSON APIs remain available at <code>/api/*</code>, including <code>/api/objects</code>.",
             f"{' Pack scope: ' + escape(requested_pack) + '.' if requested_pack else ''}</p>",
-            "</section>",
             foyer_block,
             runtime_card,
             runtime_state_card,
@@ -2093,7 +2212,7 @@ def _render_dashboard(payload: dict) -> str:
             "<section class='grid stats'>",
             "".join(stats_cards),
             "</section>",
-            "<section class='section-stack'>",
+            "<section style='display:grid;gap:1rem'>",
             "<section class='card'><h2>Workflow Map</h2><p class='muted'>Start here if you do not yet know which route to open. Each group maps one common operator workflow onto the current shell.</p></section>",
             workflow_groups_html,
             "<section class='card'><h2>Where To Start</h2><p class='muted'>Use the workflow map above to choose a route, then inspect the attention queues and knowledge surfaces below.</p></section>",
@@ -2102,10 +2221,10 @@ def _render_dashboard(payload: dict) -> str:
             entry_sections_html,
             "</section>",
             "<section class='grid two-col'>",
-            "<div class='section-stack'>",
+            "<div style='display:grid;gap:1rem'>",
             "".join(left_sections),
             "</div>",
-            "<div class='section-stack'>",
+            "<div style='display:grid;gap:1rem'>",
             "".join(right_sections),
             "</div>",
             "</section>",
@@ -2138,7 +2257,10 @@ def _render_library_home(payload: dict) -> str:
     workbench_path = _shell_href("/ops", requested_pack)
     search_path = _shell_href("/search", requested_pack)
     map_card = (
-        f"<div class='card'><h2>Knowledge Map</h2><p><a href='{escape(map_path)}'>See how ideas connect</a></p></div>"
+        "<div class='card' style='margin:0'>"
+        "<div class='muted tiny'>Knowledge Map</div>"
+        f"<div style='margin-top:8px'><a href='{escape(map_path)}'>See how ideas connect →</a></div>"
+        "</div>"
         if _shell_supports_research_nav(requested_pack)
         else ""
     )
@@ -2148,13 +2270,13 @@ def _render_library_home(payload: dict) -> str:
     workbench_card = ""
     body = "".join(
         [
-            "<section class='hero'>",
             "<h1>Knowledge Library</h1>",
             "<p class='muted'>Browse the people, concepts, sources, and ideas in this vault.</p>",
-            "</section>",
             "<section class='grid stats'>",
-            f"<div class='card'><h2>Library Items</h2><p>{object_count}</p></div>",
-            f"<div class='card'><h2>Search Library</h2><p><a href='{escape(search_path)}'>Search by title, topic, or source</a></p></div>",
+            f"<div class='card'><div class='muted tiny'>Library Items</div>"
+            f"<div class='metric-num'>{object_count}</div></div>",
+            f"<div class='card'><div class='muted tiny'>Search Library</div>"
+            f"<div style='margin-top:8px'><a href='{escape(search_path)}'>Search by title, topic, or source →</a></div></div>",
             map_card,
             "</section>",
             "<section class='grid two-col'>",
@@ -2171,21 +2293,8 @@ def _render_library_home(payload: dict) -> str:
 _OBJECTS_INDEX_PAGE_SIZES = (10, 50, 100, 200)
 
 
-_TYPE_FACET_STYLE = """
-<style>
-.type-facet { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 16px 0; padding: 12px; background: #fafaf6; border: 1px solid #e7e1d8; border-radius: 6px; }
-.type-facet h3 { width: 100%; margin: 0 0 4px 0; font-size: 0.85rem; font-weight: 500; color: #71675d; }
-.type-facet a.chip {
-  display: inline-block; padding: 4px 10px; font-size: 0.85rem;
-  border: 1px solid #d6cfc4; border-radius: 14px; background: #fff;
-  color: #1f1a17; text-decoration: none;
-}
-.type-facet a.chip:hover { background: #f4dfd2; border-color: #9f4f24; }
-.type-facet a.chip.active { background: #9f4f24; color: #fff; border-color: #9f4f24; font-weight: 500; }
-.type-facet a.chip .count { color: #71675d; font-size: 0.78rem; margin-left: 4px; }
-.type-facet a.chip.active .count { color: #f4dfd2; }
-</style>
-"""
+# Type-facet chip-rail rules now live in /static/ovp-pages.css.
+_TYPE_FACET_STYLE = ""
 
 # Default chip-rail size for the type facet.  12 covers the common
 # CORE_OBJECT_KINDS set with one or two long-tail entries; the long
@@ -2264,25 +2373,25 @@ def _render_type_facet(
     chips: list[str] = []
     chips.append(
         f"<a href='{escape(_href(''))}'"
-        + (" class='chip active'" if not active_kind else " class='chip'")
+        + (" class='active'" if not active_kind else "")
         + ">All</a>"
     )
     for stat in sorted_stats:
         kind = str(stat["object_kind"])
         count = int(stat.get("count") or 0)
         label = display_label(kind)
-        cls = "chip active" if kind == active_kind else "chip"
+        cls_attr = " class='active'" if kind == active_kind else ""
         chips.append(
-            f"<a href='{escape(_href(kind))}' class='{cls}'>"
-            f"{escape(label)}<span class='count'>{count}</span>"
+            f"<a href='{escape(_href(kind))}'{cls_attr}>"
+            f"{escape(label)} <span class='muted tiny mono'>{count}</span>"
             "</a>"
         )
     return (
-        f"{_TYPE_FACET_STYLE}"
-        "<div class='type-facet'>"
-        "<h3>Filter by type</h3>"
-        + "".join(chips)
-        + "</div>"
+        "<div style='margin:.75rem 0 1rem'>"
+        "<h3 style='font-size:.85rem;font-weight:500;color:var(--muted);"
+        "margin:0 0 .35rem'>Filter by type</h3>"
+        f"<div class='subnav'>{''.join(chips)}</div>"
+        "</div>"
     )
 
 
@@ -2538,12 +2647,12 @@ def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
     return (
         "<section id='sources' class='card'><h2>Discoverable from</h2>"
         f"<p class='muted'>{escape(str(rail.get('summary') or 'No source links yet.'))}</p>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Evergreen</dt><dd>{evergreen_html}</dd></div>"
-        f"<div><dt>Source Notes</dt><dd><ul class='list-tight'>{source_html}</ul></dd></div>"
-        f"<div><dt>Atlas Pages</dt><dd><ul class='list-tight'>{atlas_html}</ul></dd></div>"
-        f"<div><dt>Related Objects</dt><dd><ul class='list-tight'>{related_html}</ul></dd></div>"
-        "</dl></section>"
+        "<table class='kv'>"
+        f"<tr><th>Evergreen</th><td>{evergreen_html}</td></tr>"
+        f"<tr><th>Source Notes</th><td><ul class='list-tight'>{source_html}</ul></td></tr>"
+        f"<tr><th>Atlas Pages</th><td><ul class='list-tight'>{atlas_html}</ul></td></tr>"
+        f"<tr><th>Related Objects</th><td><ul class='list-tight'>{related_html}</ul></td></tr>"
+        "</table></section>"
     )
 
 
@@ -2627,12 +2736,12 @@ def _render_source_chain_card(payload: dict, *, requested_pack: str) -> str:
         "<p class='muted'>The post-BL-029 pipeline lineage for this object: "
         "URL → active staging file → recorded provenance stages → canonical "
         "evergreen markdown.</p>"
-        "<dl class='meta-list'>"
-        f"<div><dt>Source URL</dt><dd>{url_html}</dd></div>"
-        f"<div><dt>Source File</dt><dd>{source_file_html}</dd></div>"
-        f"<div><dt>Pipeline Stages</dt><dd>{stages_html}</dd></div>"
-        f"<div><dt>Evergreen Markdown</dt><dd>{evergreen_html}</dd></div>"
-        "</dl></section>"
+        "<table class='kv'>"
+        f"<tr><th>Source URL</th><td>{url_html}</td></tr>"
+        f"<tr><th>Source File</th><td>{source_file_html}</td></tr>"
+        f"<tr><th>Pipeline Stages</th><td>{stages_html}</td></tr>"
+        f"<tr><th>Evergreen Markdown</th><td>{evergreen_html}</td></tr>"
+        "</table></section>"
     )
 
 
@@ -2734,7 +2843,7 @@ def _render_object_page(payload: dict) -> str:
         for item in section_nav_items
     )
     contradiction_form = (
-        "<form method='post' action='/ops/contradictions/resolve' class='link-row'>"
+        "<form method='post' action='/ops/contradictions/resolve' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + "".join(
             f"<input type='hidden' name='contradiction_id' value='{escape(contradiction_id)}' />"
             for contradiction_id in payload["open_contradiction_ids"]
@@ -2754,7 +2863,7 @@ def _render_object_page(payload: dict) -> str:
         else "<p class='muted'>No open contradictions on this object.</p>"
     )
     summary_form = (
-        "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
+        "<form method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + f"<input type='hidden' name='object_id' value='{escape(payload['object']['object_id'])}' />"
         + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
         + "<button type='submit'>Rebuild This Summary</button>"
@@ -2774,13 +2883,22 @@ def _render_object_page(payload: dict) -> str:
                 f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>",
             ]
         )
+    def _obj_tile(label, value, *, warn=False):
+        warn_cls = " warn" if warn else ""
+        return (
+            "<div class='card' style='margin:0'>"
+            f"<div class='muted tiny'>{label}</div>"
+            f"<div class='metric-num{warn_cls}' style='margin-top:4px'>{value}</div>"
+            "</div>"
+        )
     stats_cards = [
-        f"<div class='card'><h2>Claims</h2><p>{payload['claim_count']}</p></div>",
-        f"<div class='card'><h2>Relations</h2><p>{payload['relation_count']}</p></div>",
+        _obj_tile("Claims", payload['claim_count']),
+        _obj_tile("Relations", payload['relation_count']),
     ]
     if research_shell_enabled:
         stats_cards.append(
-            f"<div class='card'><h2>Contradictions</h2><p>{payload['contradiction_count']}</p></div>"
+            _obj_tile("Contradictions", payload['contradiction_count'],
+                      warn=int(payload['contradiction_count']) > 0)
         )
     right_sections = []
     if research_shell_enabled:
@@ -2812,19 +2930,19 @@ def _render_object_page(payload: dict) -> str:
             _render_kind_profile_card(payload),
             _render_source_chain_card(payload, requested_pack=requested_pack),
             _render_source_backlink_rail(payload, requested_pack=requested_pack),
-            "<section class='card'><h2>Context</h2><dl class='meta-list'>"
-            f"<div><dt>Object Kind</dt><dd>{escape(payload['context']['object_kind'])}</dd></div>"
-            f"<div><dt>Source Slug</dt><dd>{escape(payload['context']['source_slug'])}</dd></div>"
-            f"<div><dt>Canonical Path</dt><dd>{canonical_path_html}</dd></div>"
-            "</dl></section>",
-            "<section class='card'><h2>Production Chain</h2><dl class='meta-list'>"
-            f"<div><dt>Chain Status</dt><dd>{escape(str(payload['production_chain'].get('chain_status') or ''))}</dd></div>"
-            f"<div><dt>Missing Stages</dt><dd>{escape(', '.join(str(item).replace('_', ' ') for item in payload['production_chain'].get('missing_stages', [])) or 'None')}</dd></div>"
-            f"<div><dt>Chain Summary</dt><dd>{escape(str(payload['production_chain'].get('chain_summary') or ''))}</dd></div>"
-            f"<div><dt>Source Notes</dt><dd>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</dd></div>"
-            f"<div><dt>Evergreen Note</dt><dd>{evergreen_html}</dd></div>"
-            f"<div><dt>Atlas / MOC Reach</dt><dd>{_render_named_note_links(payload['production_chain']['atlas_pages'], requested_pack=requested_pack)}</dd></div>"
-            "</dl></section>",
+            "<section class='card'><h2>Context</h2><table class='kv'>"
+            f"<tr><th>Object Kind</th><td>{escape(payload['context']['object_kind'])}</td></tr>"
+            f"<tr><th>Source Slug</th><td>{escape(payload['context']['source_slug'])}</td></tr>"
+            f"<tr><th>Canonical Path</th><td>{canonical_path_html}</td></tr>"
+            "</table></section>",
+            "<section class='card'><h2>Production Chain</h2><table class='kv'>"
+            f"<tr><th>Chain Status</th><td>{escape(str(payload['production_chain'].get('chain_status') or ''))}</td></tr>"
+            f"<tr><th>Missing Stages</th><td>{escape(', '.join(str(item).replace('_', ' ') for item in payload['production_chain'].get('missing_stages', [])) or 'None')}</td></tr>"
+            f"<tr><th>Chain Summary</th><td>{escape(str(payload['production_chain'].get('chain_summary') or ''))}</td></tr>"
+            f"<tr><th>Source Notes</th><td>{_render_named_note_links(payload['production_chain']['source_notes'], requested_pack=requested_pack)}</td></tr>"
+            f"<tr><th>Evergreen Note</th><td>{evergreen_html}</td></tr>"
+            f"<tr><th>Atlas / MOC Reach</th><td>{_render_named_note_links(payload['production_chain']['atlas_pages'], requested_pack=requested_pack)}</td></tr>"
+            "</table></section>",
             f"<section id='relations' class='card'><h2>Relations</h2><ul class='list-tight'>{relations}</ul></section>",
         ]
     )
@@ -2838,25 +2956,25 @@ def _render_object_page(payload: dict) -> str:
     return _layout(
         f"Object: {payload['object']['title']}",
         (
-            f"<section class='hero'><span class=\"pill\">{escape(str(reader_profile.get('kind_label') or payload['context']['object_kind']))}</span>"
-            f"<h1>{escape(str(reader_profile.get('headline') or payload['object']['title']))}</h1>"
-            f"<p>{escape(str(reader_profile.get('dek') or summary_text or 'No compiled summary yet.'))}</p>"
+            f"<div style='display:flex;gap:6px;flex-wrap:wrap;margin:0 0 4px'><span class=\"pill\">{escape(str(reader_profile.get('kind_label') or payload['context']['object_kind']))}</span></div>"
+            f"<h1 style='margin:4px 0 6px'>{escape(str(reader_profile.get('headline') or payload['object']['title']))}</h1>"
+            f"<p style='max-width:60ch'>{escape(str(reader_profile.get('dek') or summary_text or 'No compiled summary yet.'))}</p>"
             f"<p class='muted'>{escape(str(reader_profile.get('supporting_line') or payload['object']['object_id']))}"
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
+            + f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{''.join(hero_links)}</div>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + assembly_contract_card
             + f"<nav class='subnav'>{section_nav}</nav>"
             + f"<section class='grid stats'>{''.join(stats_cards)}</section>"
             "<section class='grid two-col'>"
-            "<div class='section-stack'>"
+            "<div style='display:grid;gap:1rem'>"
             f"<section id='summary' class='card'><h2>Compiled Summary</h2><p>{escape(summary_text)}</p></section>"
             f"{_render_compiled_sections(remaining_sections)}"
             f"<section id='claims' class='card'><h2>Claims</h2><ul class='list-tight'>{claims}</ul></section>"
             "</div>"
-            "<div class='section-stack'>"
+            "<div style='display:grid;gap:1rem'>"
             f"{''.join(right_sections)}"
             "</div>"
             "</section>"
@@ -2907,7 +3025,7 @@ def _render_topic_page(payload: dict) -> str:
         for item in payload.get("section_nav", [])
     )
     summary_form = (
-        "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
+        "<form method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + "".join(
             f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
             for object_id in payload["scoped_stale_summary_ids"]
@@ -2919,7 +3037,7 @@ def _render_topic_page(payload: dict) -> str:
         else "<p class='muted'>No stale summaries in this topic scope.</p>"
     )
     contradiction_entry = (
-        "<div class='link-row'>"
+        "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + f"<a href='{escape(payload['links']['contradictions_path'])}'>Review scoped contradictions</a>"
         + "</div>"
         if payload["scoped_open_contradiction_ids"]
@@ -2971,11 +3089,11 @@ def _render_topic_page(payload: dict) -> str:
     return _layout(
         f"Topic: {payload['center']['title']}",
         (
-            f"<section class='hero'><h1>Topic: {escape(payload['center']['title'])}</h1>"
+            f"<h1 style='margin:4px 0 6px'>Topic: {escape(payload['center']['title'])}</h1>"
             f"<p class='muted'>{payload['neighbor_count']} neighbors, {payload['edge_count']} edges."
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            + f"<div class='link-row'>{''.join(hero_links)}</div></section>"
+            + f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{''.join(hero_links)}</div>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + assembly_contract_card
@@ -3060,7 +3178,7 @@ def _render_events_page(payload: dict) -> str:
                     )
                     + f"<div class='muted'>Source Notes: {_render_named_note_links(item['provenance']['source_notes'], requested_pack=requested_pack)}</div>"
                     + f"<div class='muted'>Atlas / MOC: {_render_named_note_links(item['provenance']['mocs'], requested_pack=requested_pack)}</div>"
-                    + "<div class='link-row'>"
+                    + "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                     + f"<a href='{escape(item['review_links']['topic_path'])}'>Topic</a>"
                     + f"<a href='{escape(item['review_links']['contradictions_path'])}'>Contradictions</a>"
                     + f"<a href='{escape(item['review_links']['summaries_path'])}'>Stale summaries</a>"
@@ -3075,7 +3193,7 @@ def _render_events_page(payload: dict) -> str:
         or "<li>None</li>"
     )
     summary_form = (
-        "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
+        "<form method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         + "".join(
             f"<input type='hidden' name='object_id' value='{escape(object_id)}' />"
             for object_id in payload["scoped_stale_summary_ids"]
@@ -3090,10 +3208,10 @@ def _render_events_page(payload: dict) -> str:
     )
     contradiction_browser_path = _shell_href("/ops/contradictions", requested_pack)
     contradiction_entry = (
-        f"<div class='link-row'><a href='{escape(contradiction_query_path)}'>Review visible contradictions</a></div>"
+        f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'><a href='{escape(contradiction_query_path)}'>Review visible contradictions</a></div>"
         if payload["scoped_open_contradiction_ids"] and query
         else (
-            f"<div class='link-row'><a href='{escape(contradiction_browser_path)}'>Review visible contradictions</a></div>"
+            f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'><a href='{escape(contradiction_browser_path)}'>Review visible contradictions</a></div>"
             if payload["scoped_open_contradiction_ids"]
             else "<p class='muted'>No open contradictions in the visible event scope.</p>"
         )
@@ -3152,7 +3270,7 @@ def _render_events_page(payload: dict) -> str:
                 assembly_contract_card,
                 (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else ""),
                 _render_compiled_sections(remaining_sections),
-                f"<div class='link-row'>{type_breakdown}</div>",
+                f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{type_breakdown}</div>",
                 f"{_render_production_summary_card(payload['production_summary'], requested_pack=requested_pack)}",
                 f"{_render_review_context_card(payload['review_context'])}",
                 f"{_render_review_history(payload['review_history'])}",
@@ -3260,58 +3378,27 @@ def _render_curated_atlas_page(payload: dict) -> str:
             "Re-run <code>ovp-rescore-crystals</code> to refresh the Projection.</p></section>"
         )
     else:
-        item_html_parts = []
-        for entry in entries:
-            kind = str(entry.get("crystal_kind", ""))
-            # 🌐 = synthesized topic, ⚖️ = open question (contradiction).
-            kind_marker = "🌐" if kind == "community" else ("⚖️" if kind == "contradiction" else "•")
-            kind_label = (
-                "topic" if kind == "community" else
-                ("open question" if kind == "contradiction" else kind)
-            )
-            label = escape(str(entry.get("label", "(untitled)")))
-            score = float(entry.get("score", 0.0))
-            teaser = str(entry.get("teaser") or "")
-            note_href = str(entry.get("note_href") or "")
-            breakdown = (
-                f"size {float(entry.get('size_norm', 0)):.2f} · "
-                f"credibility {float(entry.get('credibility_norm', 0)):.2f} · "
-                f"source-diversity {float(entry.get('source_diversity_norm', 0)):.2f} · "
-                f"contradiction {float(entry.get('contradiction_norm', 0)):.2f} · "
-                f"reuse-recency {float(entry.get('reuse_recency_norm', 0)):.2f} · "
-                f"evergreen-recency {float(entry.get('evergreen_recency_norm', 0)):.2f}"
-            )
-            teaser_html = (
-                f"<p>{escape(teaser)}</p>" if teaser else "<p class='muted'><em>(no teaser available)</em></p>"
-            )
-            link_html = (
-                f"<a href='{escape(note_href)}'>{label}</a>" if note_href else label
-            )
-            item_html_parts.append(
-                "<li>"
-                f"<div><strong>{int(entry.get('rank', 0))}. {kind_marker} {link_html}</strong> "
-                f"<span class='pill'>score {score:.3f}</span> "
-                f"<span class='pill'>{escape(kind_label)}</span></div>"
-                f"{teaser_html}"
-                f"<div class='muted'>{escape(breakdown)}</div>"
-                "</li>"
-            )
-        items_html = "".join(item_html_parts)
-        body_html = f"<section class='card'><ul class='list-tight'>{items_html}</ul></section>"
+        # Each topic entry rendered via the shared _topic_entry_card
+        # helper.  Featured Topics uses the full density (with the
+        # 6-metric breakdown chips); the home page uses the same
+        # helper with compact=True.
+        body_html = "".join(
+            _topic_entry_card(entry, compact=False) for entry in entries
+        )
 
     header_lines = [
         "<h1>Featured Topics</h1>",
         f"<p class='muted'>Top {len(entries)} of {total_chains} synthesized topics in pack "
         f"<code>{escape(pack)}</code>, ranked by <code>crystal_scores</code>. "
-        f"Generated {escape(generated_at)}.</p>",
+        f"Generated {_ts(generated_at)}.</p>",
         f"<p class='muted'><a href='{escape(api_href)}'>JSON</a></p>",
-        "<form method='get' action='/topics'>",
+        "<form method='get' action='/topics' style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 1rem'>",
         (
             f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
             if requested_pack
             else ""
         ),
-        f"<label>top_n <input type='number' name='top_n' value='{top_n}' min='1' max='{int(payload.get('max_top_n', 100))}' /></label> ",
+        f"<label>top_n <input type='number' name='top_n' value='{top_n}' min='1' max='{int(payload.get('max_top_n', 100))}' style='width:5rem' /></label> ",
         "<button type='submit'>Refresh</button>",
         "</form>",
     ]
@@ -3596,7 +3683,7 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
                 f" Pack scope: {escape(requested_pack)}." if requested_pack else "",
                 f"{escape(limit_note)}</p>",
                 cluster_pager,
-                f"<section class='card'><h2>Cluster Kinds</h2><div class='link-row'>{kind_counts}</div></section>",
+                f"<section class='card'><h2>Cluster Kinds</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{kind_counts}</div></section>",
                 f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{model_notes}</ul></section>",
                 f"<section class='card'><ul class='list-tight'>{items}</ul></section>",
             ]
@@ -3605,107 +3692,237 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
     )
 
 
-def _render_graph_map_page(payload: dict, *, action_path: str = "/graph") -> str:
-    query = payload.get("query", "")
+def _render_graph_atlas_page(payload: dict, *, action_path: str = "/map") -> str:
+    """Full-bleed dark 3D Atlas at ``/map`` (and ``/graph``).
+
+    Replaces the prior 2D D3 ``_render_graph_map_page`` (which itself
+    superseded the static SVG view in ``bb7c961``).  Renders the
+    OVP design system kit chrome from
+    ``docs/design-system/ui_kits/ovp/graph.html`` and feeds it the
+    real vault's atlas projection from ``payload["atlas"]``
+    (``communities``, ``nodes``, ``links``).  Three.js + 3d-force-graph
+    load from unpkg; ``/static/atlas-graph.js`` does the assembly.
+
+    The Atlas is the design system's one approved dark surface
+    (BL-051 caveat in docs/design-system/SKILL.md §5).  The page
+    therefore defaults ``data-theme="dark"`` regardless of
+    ``localStorage['ovp-theme']`` for first paint, but the in-page
+    LIGHT/DARK toggle still writes through to localStorage so the
+    rest of the shell follows the operator's last choice.
+    """
     requested_pack = payload.get("requested_pack", "")
-    # Note: ``payload["layout"]`` is no longer read — the D3 force
-    # solver computes positions client-side.  ``build_graph_map_payload``
-    # still emits the field for shape stability but nothing on the
-    # server side consumes it after this commit.
-    summary = payload["map_summary"]
-    show_all = bool(summary.get("show_all"))
-    member_cap = int(summary.get("member_cap") or 0)
-    truncated = int(summary.get("truncated_clusters") or 0)
-    limit_note = (
-        f" Showing the first {summary['limit']} graph neighborhoods in this map."
-        if summary.get("is_limited")
-        else ""
+    query = payload.get("query", "")
+    atlas = payload.get("atlas") or {"communities": [], "nodes": [], "links": []}
+    summary = payload.get("map_summary") or {}
+    node_count = int(summary.get("node_count") or 0)
+    edge_count = int(summary.get("edge_count") or 0)
+    cluster_count = int(summary.get("cluster_count") or 0)
+
+    # XSS-safe inline JSON: escape characters that could break out of
+    # the surrounding ``<script>`` element or kill JSON parsing in
+    # certain HTML contexts.
+    atlas_json = (
+        json.dumps(atlas, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace(" ", "\\u2028")
+        .replace(" ", "\\u2029")
     )
-    if not show_all and truncated:
-        cap_note = (
-            f" Each neighborhood is capped at {member_cap} member ideas — "
-            f"{truncated} have more hidden."
-        )
-    else:
-        cap_note = ""
-    if not show_all and truncated:
-        # Append show_all=1 onto the same action; keep pack scope.
-        prefix = action_path
-        if requested_pack:
-            prefix = _shell_href(action_path, requested_pack)
-        sep = "&" if "?" in prefix else "?"
-        show_all_link = f"{prefix}{sep}show_all=1"
-        toggle_html = (
-            f"<p class='muted'>Showing a capped reading view. "
-            f"<a href='{escape(show_all_link)}'>Show all members →</a> "
-            "(slower, may overflow on big vaults)</p>"
-        )
-    elif show_all:
-        compact_link = (
-            _shell_href(action_path, requested_pack)
-            if requested_pack
-            else action_path
-        )
-        toggle_html = (
-            f"<p class='muted'>Showing every member node — "
-            f"<a href='{escape(compact_link)}'>back to compact view</a></p>"
-        )
-    else:
-        toggle_html = ""
-    clusters = (
-        "".join(
-            "<li>"
-            f"<a href='{escape(str(cluster['detail_path']))}'>{escape(str(cluster['title']))}</a>"
-            f" <span class='pill'>{escape(str(cluster['priority_band']))}</span>"
-            f" <span class='muted'>{cluster['member_count']} objects</span>"
-            f"<div class='muted'>{escape(str(cluster['summary']))}</div>"
-            "</li>"
-            for cluster in payload["clusters"][:_GRAPH_MAP_CLUSTER_PREVIEW_LIMIT]
-        )
-        or "<li class='muted'>No graph clusters found yet.</li>"
-    )
-    notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
-    map_section = render_graph_map_force_graph(payload)
-    return _layout(
-        "Knowledge Graph",
-        "".join(
-            [
-                "<h1>Knowledge Graph</h1>",
-                "<p class='muted'>A reader map of nearby concepts, claims, people, and sources in this vault."
-                f"{escape(limit_note)}{escape(cap_note)}</p>",
-                toggle_html,
-                f"<form method='get' action='{escape(action_path)}'>",
-                (
-                    f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
-                    if requested_pack
-                    else ""
-                ),
-                f"<input type='text' name='q' value='{escape(query)}' placeholder='Filter the map' /> ",
-                "<button type='submit'>Search</button>",
-                "</form>",
-                "<section class='grid stats'>",
-                f"<div class='card'><h2>Ideas</h2><p>{payload['map_summary']['node_count']}</p></div>",
-                f"<div class='card'><h2>Connections</h2><p>{payload['map_summary']['edge_count']}</p></div>",
-                f"<div class='card'><h2>Neighborhoods</h2><p>{payload['map_summary']['cluster_count']}</p></div>",
-                "</section>",
-                map_section,
-                "<section class='grid two-col'>",
-                "<section class='card'><h2>How To Read This Map</h2>"
-                "<ul class='list-tight'>"
-                "<li>Each dot is a knowledge object you can open.  Click it to jump to the object page.</li>"
-                "<li>Lines show accepted graph relations from the local projection — drag a node to pin it, double-click to release.</li>"
-                "<li>Densely connected groups settle into neighborhoods, but those are reading hints, not canonical truth boundaries.</li>"
-                "<li>For a cluster-specific view with internal-edge detail, open one from <em>Neighborhoods</em> below.</li>"
-                "</ul></section>",
-                "<section class='card'><h2>Neighborhoods</h2>"
-                f"<p><a href='{escape(_shell_href('/ops/clusters', requested_pack))}'>Open Cluster Browser</a></p>"
-                f"<ul class='list-tight'>{clusters}</ul></section>",
-                "</section>",
-                f"<section class='card'><h2>Model Notes</h2><ul class='list-tight'>{notes}</ul></section>",
-            ]
-        ),
-        requested_pack=requested_pack,
-    )
+
+    library_href = escape(_shell_href("/", requested_pack))
+    ops_href = escape(_shell_href("/ops", requested_pack))
+    clusters_href = escape(_shell_href("/ops/clusters", requested_pack))
+    search_q = escape(query)
+    is_empty = node_count == 0
+    empty_visibility = "flex" if is_empty else "none"
+
+    return f"""<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atlas — Knowledge Graph</title>
+    <link rel="icon" type="image/svg+xml" href="/static/monogram.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" />
+    <link rel="stylesheet" href="/static/ovp-tokens.css" />
+    <link rel="stylesheet" href="/static/atlas-graph.css" />
+    <style>
+      body {{ font-family: var(--ovp-font-sans); margin: 0;
+              background: var(--bg); color: var(--text); }}
+    </style>
+    <script>
+      // Atlas defaults to dark.  If localStorage already has a value,
+      // honour it — but read at first paint so there is no flash.
+      (function () {{
+        try {{
+          var saved = localStorage.getItem('ovp-theme');
+          if (saved === 'light' || saved === 'dark') {{
+            document.documentElement.dataset.theme = saved;
+          }}
+        }} catch (e) {{}}
+      }})();
+    </script>
+    <script id="ovp-atlas-data" type="application/json">{atlas_json}</script>
+    <script>
+      try {{
+        window.OVP_GRAPH = JSON.parse(
+          document.getElementById('ovp-atlas-data').textContent
+        );
+      }} catch (e) {{ console.error('atlas payload parse failed', e); }}
+      window.OVP_ATLAS_ROUTES = {{
+        library: "{library_href}",
+        ops: "{ops_href}",
+        clusters: "{clusters_href}",
+        action: "{escape(action_path)}",
+      }};
+    </script>
+  </head>
+  <body>
+    <div class="graph-page" id="graph-page">
+      <div id="graph-canvas"></div>
+
+      <header class="topbar">
+        <a class="brand" href="{library_href}">
+          <img src="/static/monogram.svg" width="20" height="20" alt="" />
+          <span>obsidian vault pipeline<span class="dot">.</span></span>
+          <span class="crumb">/ atlas · cluster graph</span>
+        </a>
+        <div class="search-wrap">
+          <span class="muted mono tiny">⌕</span>
+          <input id="search" type="text" value="{search_q}"
+                 placeholder="Find a node, topic, or community…" autocomplete="off" />
+          <span class="kbd">/</span>
+          <div class="search-results" id="search-results"></div>
+        </div>
+        <span class="spacer"></span>
+        <a class="nav-link" href="{library_href}">← Library</a>
+        <a class="nav-link" href="{ops_href}">Maintenance</a>
+        <div class="theme-toggle">
+          <button data-theme-set="light" id="th-light">LIGHT</button>
+          <button data-theme-set="dark"  id="th-dark" class="active">DARK</button>
+        </div>
+      </header>
+
+      <aside class="panel left-panel">
+        <h4>Communities</h4>
+        <div class="desc">Click to isolate · ⇧-click to multi-select</div>
+        <div id="legend"></div>
+        <div class="filter-section">
+          <h4>Node type</h4>
+          <label class="filter-row"><input type="checkbox" data-filter="evergreen"     checked />Evergreen<span class="badge" id="cnt-evergreen">0</span></label>
+          <label class="filter-row"><input type="checkbox" data-filter="deepdive"      checked />Deep dive<span class="badge" id="cnt-deepdive">0</span></label>
+          <label class="filter-row"><input type="checkbox" data-filter="topic"         checked />Topic<span class="badge" id="cnt-topic">0</span></label>
+          <label class="filter-row"><input type="checkbox" data-filter="open-question" checked />Open question<span class="badge" id="cnt-open-question">0</span></label>
+        </div>
+        <div class="filter-section">
+          <h4>Source</h4>
+          <label class="filter-row"><input type="checkbox" data-filter-src="manual"   checked />Manual</label>
+          <label class="filter-row"><input type="checkbox" data-filter-src="pinboard" checked />Pinboard</label>
+          <label class="filter-row"><input type="checkbox" data-filter-src="clipper"  checked />Clipper</label>
+          <label class="filter-row"><input type="checkbox" data-filter-src="github"   checked />GitHub</label>
+        </div>
+        <div class="filter-section">
+          <h4>Quality threshold</h4>
+          <input type="range" id="quality-slider" min="0" max="5" step="0.1" value="0" style="width:100%;accent-color:var(--accent)" />
+          <div style="display:flex;justify-content:space-between;font-size:0.72rem;color:var(--muted);font-family:var(--ovp-font-mono);margin-top:4px">
+            <span>≥ <span id="quality-val">0.0</span></span>
+            <span>5.0</span>
+          </div>
+        </div>
+      </aside>
+
+      <div class="hud">
+        <div class="chip"><strong id="hud-nodes">{node_count}</strong>nodes</div>
+        <div class="chip"><strong id="hud-links">{edge_count}</strong>links</div>
+        <div class="chip"><strong id="hud-comms">{cluster_count}</strong>communities</div>
+        <div class="chip" id="hud-mode"><strong>EXPAND</strong>double-click</div>
+      </div>
+
+      <div class="timeline-bar"></div>
+
+      <aside class="panel right-panel" id="detail">
+        <div class="detail-empty">
+          <div class="glyph">⌖</div>
+          <div>Click a node to inspect.</div>
+          <div style="margin-top:6px;font-size:0.78rem">Or hover to highlight neighbors.</div>
+        </div>
+      </aside>
+
+      <div class="panel tweaks" id="tweaks">
+        <h4>Tweaks</h4>
+        <div class="tweaks-row">
+          <span class="label">View</span>
+          <div class="seg" id="seg-dims">
+            <button data-dims="3" class="active">3D</button>
+            <button data-dims="2">2D</button>
+          </div>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Disclosure</span>
+          <div class="seg" id="seg-mode">
+            <button data-mode="dblclick" class="active">Dbl-click</button>
+            <button data-mode="hover">Hover</button>
+            <button data-mode="zoom">Zoom</button>
+          </div>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Communities</span>
+          <div class="seg" id="seg-super">
+            <button data-super="off" class="active">Expanded</button>
+            <button data-super="on">Collapsed</button>
+          </div>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Show hulls</span>
+          <div class="seg" id="seg-hulls">
+            <button data-hulls="on" class="active">On</button>
+            <button data-hulls="off">Off</button>
+          </div>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Link strength</span>
+          <input type="range" id="link-strength" min="-300" max="-30" step="10" value="-150" />
+          <span class="val" id="link-strength-val">-150</span>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Node base size</span>
+          <input type="range" id="node-size" min="2" max="12" step="0.5" value="6" />
+          <span class="val" id="node-size-val">6</span>
+        </div>
+        <div class="tweaks-row">
+          <span class="label">Spin</span>
+          <div class="seg" id="seg-spin">
+            <button data-spin="off" class="active">Off</button>
+            <button data-spin="slow">Slow</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hover-label" id="hover-label">
+        <div class="ttl"></div>
+        <div class="sub"></div>
+      </div>
+
+      <div class="atlas-empty" id="atlas-empty" style="display: {empty_visibility}">
+        <div class="glyph">∅</div>
+        <h2>No nodes in scope</h2>
+        <p>Try widening the search query, removing the per-cluster cap with
+           <code>?show_all=1</code>, or seeding the graph via
+           <code>ovp-knowledge-index</code>.
+           The cluster browser at <a href="{clusters_href}">/ops/clusters</a>
+           lists every neighborhood currently in the projection.</p>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/three@0.155.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+    <script src="/static/atlas-graph.js"></script>
+  </body>
+</html>
+"""
 
 
 def _render_cluster_detail_page(payload: dict) -> str:
@@ -3862,7 +4079,27 @@ def _render_cluster_detail_page(payload: dict) -> str:
     )
     review_context = payload["review_context"]
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
-    force_graph_section = render_cluster_force_graph(payload)
+    # Single force-graph stack across the app: every visual graph
+    # (atlas, cluster, future neighborhood views) goes through
+    # ``/map`` with ``?community=<cluster_id>`` so atlas-graph.js
+    # pre-isolates this cluster on first paint.  This retires the
+    # standalone D3 SVG mount that used to live here under
+    # ``render_cluster_force_graph`` — same tech, same visual identity
+    # as /map, no duplicate codepath.
+    cluster_id = str(cluster.get("cluster_id") or "")
+    atlas_href = _shell_href(
+        f"/map?community={quote(cluster_id, safe='')}",
+        requested_pack,
+    )
+    force_graph_section = (
+        "<section class='card'><h2>Force-Directed View</h2>"
+        "<p class='muted'>Cluster member graph renders in the dark "
+        "Atlas, scoped to this community.  Same tech and visual "
+        "identity as the global Knowledge Map — drag to pan, scroll "
+        "to zoom, double-click any node to return to the full atlas.</p>"
+        f"<p><a class='btn' href='{escape(atlas_href)}'>Open this cluster in the Atlas →</a></p>"
+        "</section>"
+    )
     return _layout(
         "Graph Cluster",
         (
@@ -3883,8 +4120,8 @@ def _render_cluster_detail_page(payload: dict) -> str:
             f"<section class='card'><h2>Next Reading Route</h2>{next_read_route}</section>"
             f"<section class='card'><h2>Neighborhood Groups</h2><ul class='list-tight'>{related_cluster_groups}</ul></section>"
             f"<section class='card'><h2>Related Clusters</h2><ul class='list-tight'>{related_clusters}</ul></section>"
-            f"<section class='card'><h2>Edge Kinds</h2><div class='link-row'>{edge_kind_counts}</div></section>"
-            f"<section class='card'><h2>Object Kinds</h2><div class='link-row'>{object_kind_counts}</div></section>"
+            f"<section class='card'><h2>Edge Kinds</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{edge_kind_counts}</div></section>"
+            f"<section class='card'><h2>Object Kinds</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{object_kind_counts}</div></section>"
             f"<section class='card'><h2>Coverage</h2><p class='muted'>"
             f"{review_context['source_note_count']} source notes · "
             f"{review_context['moc_count']} atlas pages · "
@@ -3919,7 +4156,7 @@ def _render_evolution_browser_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Evolution Browser</h1>",
-                "<form method='get' action='/ops/evolution' class='link-row'>",
+                "<form method='get' action='/ops/evolution' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -3942,7 +4179,7 @@ def _render_evolution_browser_page(payload: dict) -> str:
                 "<button type='submit'>Search</button>",
                 "</form>",
                 f"<p class='muted'>{payload['count']} evolution records in the current view.</p>",
-                f"<section class='card'><h2>Link Types</h2><div class='link-row'>{type_counts}</div></section>",
+                f"<section class='card'><h2>Link Types</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{type_counts}</div></section>",
                 f"<section class='card'><h2>Accepted Links</h2>{_render_evolution_links(payload['accepted_links'], empty_text='No accepted evolution links yet.')}</section>",
                 f"<section class='card'><h2>Rejected Links</h2>{_render_evolution_links(payload['rejected_links'], empty_text='No rejected evolution links yet.')}</section>",
                 f"<section class='card'><h2>Candidate Links</h2>{_render_evolution_candidates(payload['candidate_items'], reviewable=True, requested_pack=requested_pack, next_path=next_path)}</section>",
@@ -4005,15 +4242,15 @@ def _render_candidate_items(payload: dict) -> str:
             f"<p>{escape(str(item.get('definition') or ''))}</p>"
             "<div class='muted'>Similar active concepts</div>"
             f"<ul class='list-tight'>{similar_html}</ul>"
-            "<div class='link-row'>"
-            "<form method='post' action='/ops/candidates/review' class='link-row'>"
+            "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
+            "<form method='post' action='/ops/candidates/review' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
             f"{pack_hidden}"
             f"<input type='hidden' name='slug' value='{escape(slug)}' />"
             "<input type='hidden' name='action' value='promote' />"
             f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             "<button type='submit'>Promote</button>"
             "</form>"
-            "<form method='post' action='/ops/candidates/review' class='link-row'>"
+            "<form method='post' action='/ops/candidates/review' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
             f"{pack_hidden}"
             f"<input type='hidden' name='slug' value='{escape(slug)}' />"
             "<input type='hidden' name='action' value='merge' />"
@@ -4021,7 +4258,7 @@ def _render_candidate_items(payload: dict) -> str:
             f"<input type='text' name='target_slug' value='{escape(default_target)}' placeholder='target slug' />"
             "<button type='submit'>Merge</button>"
             "</form>"
-            "<form method='post' action='/ops/candidates/review' class='link-row'>"
+            "<form method='post' action='/ops/candidates/review' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
             f"{pack_hidden}"
             f"<input type='hidden' name='slug' value='{escape(slug)}' />"
             "<input type='hidden' name='action' value='reject' />"
@@ -4066,7 +4303,7 @@ def _render_candidates_pagination(payload: dict) -> str:
     current_start = offset + 1 if count else 0
     current_end = min(count, offset + limit)
     return (
-        "<div class='link-row'>"
+        "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
         f"<span class='muted'>Showing {current_start}-{current_end} of {count}</span>"
         + "".join(links)
         + "</div>"
@@ -4201,7 +4438,7 @@ def _render_candidates_page(payload: dict) -> str:
                 "<p class='muted'>Review registry candidates before they become canonical Evergreen objects. "
                 "Promote creates an active note, merge rewrites candidate links into an existing object, "
                 "and reject removes the pending candidate artifact.</p>",
-                "<form method='get' action='/ops/queue/concepts' class='link-row'>",
+                "<form method='get' action='/ops/queue/concepts' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4213,7 +4450,7 @@ def _render_candidates_page(payload: dict) -> str:
                 "</form>",
                 f"<p class='muted'>{escape(str(payload.get('count') or 0))} candidate(s) in view.</p>",
                 pagination,
-                f"<section class='card'><h2>Status</h2><div class='link-row'>{status_counts}</div></section>",
+                f"<section class='card'><h2>Status</h2><div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{status_counts}</div></section>",
                 operator_rail,
                 warning_card,
                 f"<section class='card'><h2>Review Queue</h2>{_render_candidate_items(payload)}</section>",
@@ -4327,7 +4564,7 @@ def _render_signals_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/actions/enqueue' class='link-row'>"
+                "<form method='post' action='/ops/actions/enqueue' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 + f"<input type='hidden' name='signal_id' value='{escape(item['signal_id'])}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Queue action</button>"
@@ -4384,7 +4621,7 @@ def _render_signals_page(payload: dict) -> str:
                         " signal ledger."
                     ),
                 ),
-                "<form method='get' action='/ops/queue/signals' class='link-row'>",
+                "<form method='get' action='/ops/queue/signals' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4504,7 +4741,7 @@ def _render_briefing_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/actions/enqueue' class='link-row'>"
+                "<form method='post' action='/ops/actions/enqueue' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 + f"<input type='hidden' name='signal_id' value='{escape(str(item['signal_id']))}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Queue action</button>"
@@ -4616,7 +4853,7 @@ def _render_briefing_page(payload: dict) -> str:
         "".join(
             [
                 "<h1>Orientation Brief</h1>",
-                f"<p class='muted'>Generated at {escape(str(payload['generated_at']))}. "
+                f"<p class='muted'>Generated at {_ts(payload['generated_at'])}. "
                 f"{_safe_count(payload.get('recent_signal_count'))} recent signals, "
                 f"{_safe_count(payload.get('unresolved_issue_count'))} unresolved issues.",
                 (
@@ -4637,7 +4874,7 @@ def _render_briefing_page(payload: dict) -> str:
                 f"<section class='card'><h2>First Useful Sign</h2><ul class='list-tight'>{first_useful_sign_html}</ul></section>",
                 "<section class='card'><h2>Value Proof</h2>"
                 f"<p class='muted'>{escape(str(first_useful_sign_check.get('reason') or 'No value proof yet.'))}</p>"
-                "<div class='link-row'>"
+                "<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 f"<span class='pill'>Status: {escape(str(first_useful_sign_check.get('status') or 'empty'))}</span>"
                 f"<span class='pill'>Evidence: {escape(str(first_useful_sign_check.get('evidence_count') or 0))}</span>"
                 f"<span class='pill'>Actionability: {escape(str(first_useful_sign_check.get('actionability') or 'review'))}</span>"
@@ -4669,7 +4906,7 @@ def _render_briefing_page(payload: dict) -> str:
                 f"{_safe_count(queue_summary.get('safe_queued_count'))} safe to auto-run, ",
                 f"{_safe_count(queue_summary.get('running_count'))} running, ",
                 f"{_safe_count(queue_summary.get('failed_count'))} failed.</p>",
-                "<form method='post' action='/ops/actions/run-batch' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-batch' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 "<input type='hidden' name='limit' value='5' />",
                 "<input type='hidden' name='safe_only' value='1' />",
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
@@ -4716,7 +4953,7 @@ def _render_actions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                f"<div class='muted'>Created at {escape(str(item['created_at']))}</div>"
+                f"<div class='muted'>Created at {_ts(item['created_at'])}</div>"
                 if item.get("created_at")
                 else ""
             )
@@ -4816,7 +5053,7 @@ def _render_actions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/actions/retry' class='link-row'>"
+                "<form method='post' action='/ops/actions/retry' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Retry</button>"
@@ -4825,7 +5062,7 @@ def _render_actions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/actions/dismiss' class='link-row'>"
+                "<form method='post' action='/ops/actions/dismiss' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 + f"<input type='hidden' name='action_id' value='{escape(str(item['action_id']))}' />"
                 + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 + "<button type='submit'>Dismiss</button>"
@@ -4866,7 +5103,7 @@ def _render_actions_page(payload: dict) -> str:
                     ),
                 ),
                 "<p class='muted'>Asynchronous queue consumption is opt-in. Run <code>python -m ovp_pipeline.commands.run_actions --vault-dir &lt;vault&gt; --loop</code> or start the UI with <code>--with-action-worker</code> to spawn a detached worker process.</p>",
-                "<form method='post' action='/ops/actions/run-next' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-next' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -4875,7 +5112,7 @@ def _render_actions_page(payload: dict) -> str:
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Run next queued action</button>",
                 "</form>",
-                "<form method='post' action='/ops/actions/run-batch' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-batch' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 "<input type='hidden' name='limit' value='5' />",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
@@ -4885,7 +5122,7 @@ def _render_actions_page(payload: dict) -> str:
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Run 5 queued actions</button>",
                 "</form>",
-                "<form method='post' action='/ops/actions/run-batch' class='link-row'>",
+                "<form method='post' action='/ops/actions/run-batch' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 "<input type='hidden' name='limit' value='5' />",
                 "<input type='hidden' name='safe_only' value='1' />",
                 (
@@ -4896,7 +5133,7 @@ def _render_actions_page(payload: dict) -> str:
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Run 5 safe queued actions</button>",
                 "</form>",
-                "<form method='get' action='/ops/actions' class='link-row'>",
+                "<form method='get' action='/ops/actions' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 (
                     f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
                     if requested_pack
@@ -5041,7 +5278,7 @@ def _render_contradictions_page(payload: dict) -> str:
             + (
                 "<details><summary>Review History</summary><ul class='list-tight'>"
                 + "".join(
-                    f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
+                    f"<li>{_ts(history['timestamp'])} <span class='pill'>{escape(str(history['event_type']))}</span>"
                     + (
                         f"<div class='muted'>Status: {escape(str(history['status']))}</div>"
                         if history.get("status")
@@ -5070,7 +5307,7 @@ def _render_contradictions_page(payload: dict) -> str:
                 else ""
             )
             + (
-                "<form method='post' action='/ops/contradictions/resolve' class='link-row'>"
+                "<form method='post' action='/ops/contradictions/resolve' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
                 f"<input type='hidden' name='contradiction_id' value='{escape(item['contradiction_id'])}' />"
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />"
                 "<select name='status'>"
@@ -5147,7 +5384,7 @@ def _render_contradictions_page(payload: dict) -> str:
                 f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
                 "<section class='card'>",
                 "<h2>Batch Resolve</h2>",
-                "<form id='contradiction-batch-form' method='post' action='/ops/contradictions/resolve' class='link-row'>",
+                "<form id='contradiction-batch-form' method='post' action='/ops/contradictions/resolve' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<select name='status'>",
                 "<option value='resolved_keep_positive'>resolved_keep_positive</option>",
@@ -5193,7 +5430,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
             + (
                 "<details><summary>Review History</summary><ul class='list-tight'>"
                 + "".join(
-                    f"<li>{escape(str(history['timestamp']))} <span class='pill'>{escape(str(history['event_type']))}</span>"
+                    f"<li>{_ts(history['timestamp'])} <span class='pill'>{escape(str(history['event_type']))}</span>"
                     + (
                         f"<div class='muted'>Rebuilt: {escape(', '.join(str(v) for v in history['rebuilt_object_ids']))}</div>"
                         if history.get("rebuilt_object_ids")
@@ -5206,7 +5443,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
                 if item["review_history"]
                 else ""
             )
-            + "<form method='post' action='/ops/summaries/rebuild' class='link-row'>"
+            + "<form method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>"
             + f"<input type='hidden' name='object_id' value='{escape(item['object_id'])}' />"
             + f"<input type='hidden' name='next' value='{escape(next_path)}' />"
             + "<button type='submit'>Rebuild Summary</button>"
@@ -5238,7 +5475,7 @@ def _render_stale_summaries_page(payload: dict) -> str:
                 f"<section class='card'><h2>Detection Notes</h2><ul class='list-tight'>{detection_notes}</ul></section>",
                 "<section class='card'>",
                 "<h2>Batch Rebuild</h2>",
-                "<form id='summary-batch-form' method='post' action='/ops/summaries/rebuild' class='link-row'>",
+                "<form id='summary-batch-form' method='post' action='/ops/summaries/rebuild' style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>",
                 f"<input type='hidden' name='next' value='{escape(next_path)}' />",
                 "<button type='submit'>Rebuild Selected</button>",
                 "</form>",
@@ -5277,7 +5514,7 @@ def _render_reuse_report_fragment(payload: dict) -> str:
             + "</tbody></table>"
         )
     else:
-        weekly_html = "<p class='empty'>No reuse events recorded yet.</p>"
+        weekly_html = "<p class='muted'><em>No reuse events recorded yet.</em></p>"
 
     if never_reused:
         never_html = (
@@ -5301,22 +5538,44 @@ def _render_reuse_report_fragment(payload: dict) -> str:
     )
 
 
-def _render_reuse_report_page(payload: dict) -> str:
-    fragment = _render_reuse_report_fragment(payload)
+def _render_fragment_shell(title: str, fragment: str) -> str:
+    """Minimal token-driven shell for fragment-only standalone pages.
+
+    Used by ``/reuse``, ``/open-questions``, ``/writing-prompts`` —
+    pages that render a single section into a centered card without
+    the full ``_layout()`` nav chrome.  Loads the same three
+    stylesheets as ``_layout()`` so light/dark + IBM Plex apply.
+    """
     return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>Reuse Report</title>"
-        "<style>"
-        "body{font-family:system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem}"
-        "table{border-collapse:collapse;width:100%}"
-        "th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}"
-        "th{background:#f4f4f4}"
-        "code{background:#f0f0f0;padding:0 .2rem;border-radius:3px}"
-        ".empty{color:#888;font-style:italic}"
-        "</style></head><body>"
-        f"{fragment}"
-        "</body></html>"
+        "<!doctype html>\n"
+        '<html lang="en" data-theme="light">\n'
+        "<head>\n"
+        "<meta charset='utf-8' />\n"
+        "<meta name='viewport' content='width=device-width, initial-scale=1' />\n"
+        f"<title>{escape(title)}</title>\n"
+        '<link rel="icon" type="image/svg+xml" href="/static/monogram.svg" />\n'
+        '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+        'family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&'
+        'display=swap" />\n'
+        '<link rel="stylesheet" href="/static/ovp-tokens.css" />\n'
+        '<link rel="stylesheet" href="/static/ovp-ui.css" />\n'
+        '<link rel="stylesheet" href="/static/ovp-pages.css" />\n'
+        "<style>main.page { max-width: 880px; padding-top: 2rem; }</style>\n"
+        "<script>(function(){try{var s=localStorage.getItem('ovp-theme');"
+        "if(s==='light'||s==='dark')document.documentElement.dataset.theme=s;}"
+        "catch(e){}})();</script>\n"
+        "</head>\n<body>\n"
+        '<main class="page">\n<div class="shell"><div class="shell-body">\n'
+        f'<h1 style="margin-top:0">{escape(title)}</h1>\n'
+        f"{fragment}\n"
+        "</div></div>\n</main>\n</body>\n</html>"
     )
+
+
+def _render_reuse_report_page(payload: dict) -> str:
+    return _render_fragment_shell("Reuse Report", _render_reuse_report_fragment(payload))
 
 
 def _build_open_questions_payload(vault_dir: Path) -> dict:
@@ -5361,7 +5620,7 @@ def _render_open_questions_fragment(payload: dict) -> str:
     rows = payload.get("questions") or []
     if not rows:
         return (
-            "<section class='open-questions'><p class='empty'>No open questions yet.</p></section>"
+            "<section class='open-questions'><p class='muted'><em>No open questions yet.</em></p></section>"
         )
     items = "".join(
         f"<li><strong>{escape(str(row.get('question') or ''))}</strong>"
@@ -5372,36 +5631,18 @@ def _render_open_questions_fragment(payload: dict) -> str:
 
 
 def _render_open_questions_page(payload: dict) -> str:
-    fragment = _render_open_questions_fragment(payload)
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>Open Questions</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem}"
-        ".empty{color:#888;font-style:italic}"
-        "li{margin:.4rem 0}small{color:#888;margin-left:.5rem}"
-        "</style></head><body>"
-        f"{fragment}</body></html>"
-    )
+    return _render_fragment_shell("Open Questions", _render_open_questions_fragment(payload))
 
 
 def _render_writing_prompts_fragment(payload: dict) -> str:
     body = str(payload.get("body") or "").strip()
     if not body:
-        return "<section class='writing-prompts'><p class='empty'>No writing prompts captured yet.</p></section>"
+        return "<section class='writing-prompts'><p class='muted'><em>No writing prompts captured yet.</em></p></section>"
     return f"<section class='writing-prompts'><pre>{escape(body)}</pre></section>"
 
 
 def _render_writing_prompts_page(payload: dict) -> str:
-    fragment = _render_writing_prompts_fragment(payload)
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>Writing Prompts</title>"
-        "<style>body{font-family:system-ui,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem}"
-        "pre{white-space:pre-wrap;background:#f7f7f7;padding:1rem;border-radius:4px}"
-        ".empty{color:#888;font-style:italic}"
-        "</style></head><body>"
-        f"{fragment}</body></html>"
-    )
+    return _render_fragment_shell("Writing Prompts", _render_writing_prompts_fragment(payload))
 
 
 _SHELL_BODY_OPEN = '<div class="shell-body">'
@@ -5479,19 +5720,11 @@ def _render_pulse_fragment() -> str:
     appends frames into a tight scrolling list. Designed for the Workbench
     bottom pane; works equally well as a standalone iframe.
     """
+    # ``.live-feed`` is the kit-style extension primitive defined in
+    # /static/ovp-pages.css for SSE event tails.
     return (
-        "<section class='pulse'>"
-        "<style>"
-        ".pulse{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;}"
-        ".pulse ul{list-style:none;margin:0;padding:.4rem;max-height:240px;overflow:auto;"
-        "background:#0e1116;color:#d6deeb;border-radius:6px;}"
-        ".pulse li{margin:.1rem 0;white-space:pre-wrap;}"
-        ".pulse li .ts{color:#7c8593;margin-right:.4rem;}"
-        ".pulse li .et{color:#82aaff;margin-right:.4rem;}"
-        ".pulse li .pk{color:#c792ea;margin-right:.4rem;}"
-        ".pulse .empty{color:#7c8593;padding:.4rem;}"
-        "</style>"
-        "<ul id='pulse-feed'><li class='empty'>Waiting for events…</li></ul>"
+        "<section class='live-feed'>"
+        "<ul id='pulse-feed'><li class='empty' style='color:var(--muted);font-style:italic;padding:.4rem'>Waiting for events…</li></ul>"
         "<script>(function(){"
         "var feed=document.getElementById('pulse-feed');"
         "var empty=feed.querySelector('.empty');"
@@ -5540,26 +5773,8 @@ _TIMELINE_ERROR_SUBJECT_MAX_CHARS = 140
 # ``_render_timeline_page`` doesn't ship a multi-line literal in the
 # middle of its body.  Inline rather than promoted to ``_layout`` —
 # the styles are scoped to one route, lifting them globally would
-# pollute every other page's CSS.
-_TIMELINE_DAY_CARD_STYLE = (
-    "<style>"
-    ".day-card{border:1px solid #ded6cd;border-radius:8px;"
-    "padding:1rem;margin-bottom:1.2rem;background:#fbf9f5}"
-    ".day-card h2{margin:0 0 .3rem 0;font-size:1.1rem}"
-    ".day-meta{color:#71675d;font-size:.85rem;margin-bottom:.7rem}"
-    ".event-grid{display:grid;grid-template-columns:repeat(auto-fit,"
-    "minmax(220px,1fr));gap:.4rem;margin-bottom:.7rem}"
-    ".event-grid .pill{background:#ede7df;padding:.18rem .55rem;"
-    "border-radius:4px;font-size:.85rem}"
-    ".event-grid .pill.error{background:#f5d7d4;color:#761b15}"
-    ".event-grid .pill.highlight{background:#dde9d3;color:#2c5316}"
-    ".samples{margin:.4rem 0}"
-    ".samples h3{font-size:.95rem;margin:.4rem 0 .2rem 0}"
-    ".samples ul{margin:.1rem 0 .4rem 1.2rem}"
-    ".errors li{color:#761b15;font-family:ui-monospace,monospace;"
-    "font-size:.8rem;margin-bottom:.2rem}"
-    "</style>"
-)
+# Timeline day-card rules now live in /static/ovp-pages.css.
+_TIMELINE_DAY_CARD_STYLE = ""
 
 
 def _render_timeline_page(payload: dict) -> str:
@@ -5664,9 +5879,11 @@ def _render_timeline_page(payload: dict) -> str:
                 for s in samples
             )
             samples_html = (
-                f"<div class='samples'><h3>{_TIMELINE_NEW_EVERGREENS_LABEL} "
+                "<div style='margin:.4rem 0'>"
+                f"<h3 style='font-size:.95rem;margin:.4rem 0 .2rem 0'>"
+                f"{_TIMELINE_NEW_EVERGREENS_LABEL} "
                 f"(sample {len(samples)} of {by_type.get('evergreen_auto_promoted', 0)})</h3>"
-                f"<ul>{items}</ul></div>"
+                f"<ul class='list-tight' style='margin-left:1.2rem'>{items}</ul></div>"
             )
 
         errors_html = ""
@@ -5694,17 +5911,20 @@ def _render_timeline_page(payload: dict) -> str:
         if requested_pack:
             drill_path += "&pack=" + quote(requested_pack, safe="")
         drill_html = (
-            f"<div class='samples'><a href='{escape(drill_path)}'>"
+            "<div class='tiny' style='margin-top:.5rem'>"
+            f"<a href='{escape(drill_path)}'>"
             f"See all {total} events for {date} →</a></div>"
             if total
             else ""
         )
 
         sections.append(
-            "<section class='day-card'>"
-            f"<h2><a href='{escape(drill_path)}'>{date}</a></h2>"
-            f"<div class='day-meta'>{total} events</div>"
-            f"<div class='event-grid'>{pills_html}</div>"
+            "<section class='card'>"
+            f"<h2 style='margin:0 0 .3rem 0;font-size:1.1rem'>"
+            f"<a href='{escape(drill_path)}'>{date}</a></h2>"
+            f"<div class='muted tiny mono' style='margin-bottom:.7rem'>{total} events</div>"
+            "<div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(220px,1fr));"
+            f"gap:.4rem;margin-bottom:.7rem'>{pills_html}</div>"
             f"{samples_html}"
             f"{errors_html}"
             f"{drill_html}"
@@ -5730,24 +5950,8 @@ _RUN_DETAIL_SUBJECT_MAX_CHARS = 120
 _TS_DISPLAY_LEN = 19
 
 
-_TODAY_DIGEST_STYLE = """
-<style>
-.today-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
-.today-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; }
-.today-card h3 { margin: 0 0 8px 0; font-size: 1rem; }
-.today-card .total { font-size: 2rem; font-weight: 600; color: #111827; }
-.today-card.failures .total { color: #b91c1c; }
-.today-card .by-type { color: #6b7280; font-size: 0.85rem; margin-top: 4px; }
-.today-card .by-type code { background: #f3f4f6; padding: 1px 6px; border-radius: 3px; }
-.today-card .samples { margin-top: 12px; padding-top: 12px; border-top: 1px solid #f3f4f6; }
-.today-card .samples ul { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.85rem; }
-.today-card .samples li { margin: 2px 0; }
-.today-card.empty .total { color: #d1d5db; }
-.today-card .see-all { margin-top: 10px; font-size: 0.85rem; }
-.today-card .see-all a { color: var(--accent); text-decoration: none; }
-.today-card .see-all a:hover { text-decoration: underline; }
-</style>
-"""
+# Today digest cards now live in /static/ovp-pages.css.
+_TODAY_DIGEST_STYLE = ""
 
 
 def _render_today_digest_page(payload: dict) -> str:
@@ -5815,7 +6019,7 @@ def _render_today_digest_page(payload: dict) -> str:
         f"<strong>{escape(date)}</strong> (UTC).  Click "
         f"<a href='/ops/timeline'>Timeline</a> for the multi-day view.</p>"
     )
-    sections.append("<div class='today-grid'>")
+    sections.append("<div class='grid stats' style='margin-top:1rem'>")
     for card in cards:
         card_id = str(card.get("id") or "")
         label = str(card.get("label") or card_id)
@@ -5824,8 +6028,11 @@ def _render_today_digest_page(payload: dict) -> str:
         samples = card.get("samples") or []
         see_all_path = str(card.get("see_all_path") or "")
 
-        empty_class = " empty" if total == 0 else ""
-        failures_class = " failures" if card_id == "failures" else ""
+        # Failures get the warn-tinted big number; empty totals fade to
+        # border-strong so they read as "nothing today" without
+        # distracting from cards that DO have activity.
+        warn_cls = " warn" if card_id == "failures" and total > 0 else ""
+        empty_style = "color:var(--border-strong)" if total == 0 else ""
 
         # Type breakdown — top-N types as a tail line.
         type_pills = ""
@@ -5844,27 +6051,28 @@ def _render_today_digest_page(payload: dict) -> str:
                 )
                 for s in samples
             )
-            sample_html = f"<div class='samples'><ul>{items}</ul></div>"
+            sample_html = (
+                "<div style='margin-top:.6rem;padding-top:.6rem;"
+                "border-top:1px solid var(--border)'>"
+                f"<ul class='list-tight tiny'>{items}</ul></div>"
+            )
 
-        # ``See all N →`` link drops the operator into the events
-        # dossier filtered to this card's date.  Only render when
-        # there is more to see than the per-card sample.
         see_all_html = ""
         if see_all_path and total > len(samples):
             see_all_html = (
-                f"<div class='see-all'>"
+                "<div class='tiny' style='margin-top:.5rem'>"
                 f"<a href='{escape(see_all_path)}'>See all {total} →</a>"
-                f"</div>"
+                "</div>"
             )
 
         sections.append(
-            f"<div class='today-card{empty_class}{failures_class}'>"
-            f"<h3>{escape(label)}</h3>"
-            f"<div class='total'>{total}</div>"
-            f"<div class='by-type'>{type_pills}</div>"
+            "<div class='card' style='margin:0'>"
+            f"<div class='muted tiny'>{escape(label)}</div>"
+            f"<div class='metric-num{warn_cls}' style='margin-top:4px;{empty_style}'>{total}</div>"
+            f"<div class='muted tiny' style='margin-top:6px'>{type_pills}</div>"
             f"{sample_html}"
             f"{see_all_html}"
-            f"</div>"
+            "</div>"
         )
     sections.append("</div>")
 
@@ -5872,18 +6080,8 @@ def _render_today_digest_page(payload: dict) -> str:
     return _layout(f"Today — {date}", body, requested_pack=requested_pack)
 
 
-_RUNS_INDEX_STYLE = """
-<style>
-.runs-table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-.runs-table th, .runs-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #f3f4f6; }
-.runs-table th { background: #f9fafb; font-weight: 500; font-size: 0.85rem; color: #6b7280; }
-.runs-table td { font-size: 0.9rem; }
-.runs-table .status-completed { color: #059669; font-weight: 500; }
-.runs-table .status-running { color: #2563eb; font-weight: 500; }
-.runs-table .status-stale { color: #ca8a04; font-weight: 500; }
-.runs-table code { font-size: 0.8rem; }
-</style>
-"""
+# Runs index table rules now live in /static/ovp-pages.css.
+_RUNS_INDEX_STYLE = ""
 
 
 def _render_runs_index_page(payload: dict) -> str:
@@ -5978,7 +6176,7 @@ def _render_runs_index_page(payload: dict) -> str:
             day_runs = group.get("runs") or []
             sections.append(
                 f"<h3>{escape(date)} — {count} run{'s' if count != 1 else ''}</h3>"
-                "<table class='runs-table'>"
+                "<table class='data-table'>"
                 "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
                 "<th>Events</th><th>Run</th></tr></thead>"
                 f"<tbody>{''.join(_row_html(r) for r in day_runs)}</tbody>"
@@ -5987,7 +6185,7 @@ def _render_runs_index_page(payload: dict) -> str:
         runs_html = "".join(sections)
     else:
         runs_html = (
-            "<table class='runs-table'>"
+            "<table class='data-table'>"
             "<thead><tr><th>Started</th><th>Workflow</th><th>Status</th>"
             "<th>Events</th><th>Run</th></tr></thead>"
             f"<tbody>{''.join(_row_html(r) for r in runs)}</tbody>"
@@ -6034,22 +6232,8 @@ def _render_runs_index_page(payload: dict) -> str:
     return _layout("Runs", body, requested_pack=requested_pack)
 
 
-_RUN_DETAIL_STYLE = """
-<style>
-.run-header { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; }
-.run-header dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; font-size: 0.9rem; }
-.run-header dt { color: #6b7280; }
-.run-header dd { margin: 0; }
-.event-rows { width: 100%; border-collapse: collapse; }
-.event-rows tr td { padding: 6px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
-.event-rows td.ts { white-space: nowrap; font-family: monospace; font-size: 0.8rem; color: #6b7280; }
-.event-rows td.type { font-weight: 500; }
-.event-rows td.subject { color: #374151; }
-.event-rows tr.error td.type { color: #b91c1c; }
-.event-rows tr.bracket td { background: #f0fdf4; font-weight: 500; }
-.event-rows tr.bracket-completed td { background: #ecfdf5; }
-</style>
-"""
+# Run detail rules now live in /static/ovp-pages.css.
+_RUN_DETAIL_STYLE = ""
 
 _BRACKET_EVENT_TYPES = frozenset({
     "transaction_started",
@@ -6091,13 +6275,13 @@ def _render_run_detail_page(payload: dict) -> str:
 
     header = (
         f"{_RUN_DETAIL_STYLE}"
-        "<div class='run-header'>"
+        "<div class='card'>"
         "<dl>"
-        f"<dt>Run id</dt><dd><code>{escape(txn_id)}</code></dd>"
-        f"<dt>Workflow</dt><dd>{escape(workflow_type)}</dd>"
-        f"<dt>Started</dt><dd><code>{escape(started_at)}</code></dd>"
-        f"<dt>Completed</dt><dd><code>{escape(completed_at)}</code></dd>"
-        f"<dt>Events</dt><dd>{len(events)}</dd>"
+        f"<dt>Run id</th><td><code>{escape(txn_id)}</code></dd>"
+        f"<dt>Workflow</th><td>{escape(workflow_type)}</dd>"
+        f"<dt>Started</th><td><code>{escape(started_at)}</code></dd>"
+        f"<dt>Completed</th><td><code>{escape(completed_at)}</code></dd>"
+        f"<dt>Events</th><td>{len(events)}</dd>"
         "</dl></div>"
     )
 
@@ -6122,7 +6306,7 @@ def _render_run_detail_page(payload: dict) -> str:
 
     body = (
         f"{header}"
-        "<table class='event-rows'>"
+        "<table class='data-table'>"
         "<thead><tr><th>Time</th><th>Event</th><th>Subject</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
@@ -6203,34 +6387,30 @@ def _render_workbench_page(*, object_id: str, requested_pack: str) -> str:
     pack_json = json.dumps(requested_pack).replace("</", "<\\/")
 
     return (
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<!doctype html>\n<html lang='en' data-theme='light'><head><meta charset='utf-8' />"
         "<meta name='viewport' content='width=device-width, initial-scale=1' />"
         "<title>Workbench</title>"
-        "<style>"
-        "*{box-sizing:border-box}"
-        "body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;background:#f7f6f2;color:#1f1a17}"
-        "header{padding:.6rem 1rem;border-bottom:1px solid #e7e1d8;display:flex;gap:1rem;align-items:center}"
-        "header h1{font-size:1rem;margin:0;color:#9f4f24}"
-        "header .meta{color:#71675d;font-size:.85rem}"
-        ".grid{display:grid;height:calc(100vh - 56px);"
-        "grid-template-columns:280px 1fr 280px;"
-        "grid-template-rows:1fr 1fr 220px;"
-        "gap:1px;background:#e7e1d8;}"
-        ".pane{background:#fffdfa;overflow:auto}"
-        ".pane iframe{width:100%;height:100%;border:0;display:block}"
-        ".pane.cand{grid-row:1/3}"
-        ".pane.obj{grid-row:1/2}"
-        ".pane.brief{grid-row:2/3}"
-        ".pane.act{grid-row:1/3}"
-        ".pane.pulse{grid-column:1/4;grid-row:3/4}"
-        "</style></head><body>"
+        "<link rel='icon' type='image/svg+xml' href='/static/monogram.svg' />"
+        "<link rel='preconnect' href='https://fonts.googleapis.com' />"
+        "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin />"
+        "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?"
+        "family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&"
+        "display=swap' />"
+        "<link rel='stylesheet' href='/static/ovp-tokens.css' />"
+        "<link rel='stylesheet' href='/static/ovp-ui.css' />"
+        "<link rel='stylesheet' href='/static/ovp-pages.css' />"
+        "<style>*{box-sizing:border-box}</style>"
+        "<script>(function(){try{var s=localStorage.getItem('ovp-theme');"
+        "if(s==='light'||s==='dark')document.documentElement.dataset.theme=s;}"
+        "catch(e){}})();</script>"
+        "</head><body class='fullbleed-shell'>"
         "<header>"
         "<h1>Workbench</h1>"
         f"<span class='meta'>object: <code id='wb-object'>{escape(object_id) or '∅'}</code></span>"
         f"<span class='meta'>pack: <code>{escape(requested_pack) or '∅'}</code></span>"
-        "<a href='/' style='margin-left:auto;color:#9f4f24;text-decoration:none'>← Shell</a>"
+        "<a href='/' style='margin-left:auto'>← Shell</a>"
         "</header>"
-        "<div class='grid'>"
+        "<div class='fullbleed-grid workbench'>"
         f"<section class='pane cand'><iframe id='pane-cand' src='{escape(cand_src)}'></iframe></section>"
         f"<section class='pane obj'><iframe id='pane-obj' src='{escape(object_src)}'></iframe></section>"
         f"<section class='pane brief'><iframe id='pane-brief' src='{escape(briefing_src)}'></iframe></section>"
@@ -6283,18 +6463,11 @@ def _render_explore_fragment(object_id: str) -> str:
     Pulse fragment so the look-and-feel is consistent across SSE panes.
     """
     object_qs = quote(object_id, safe="")
+    # Reuses the .live-feed kit-style extension; .tall removes the
+    # max-height cap so it fills the explore right pane.
     return (
-        "<section class='agent-timeline'>"
-        "<style>"
-        ".agent-timeline{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;}"
-        ".agent-timeline ul{list-style:none;margin:0;padding:.4rem;height:100%;overflow:auto;"
-        "background:#0e1116;color:#d6deeb;border-radius:6px;}"
-        ".agent-timeline li{margin:.1rem 0;white-space:pre-wrap;}"
-        ".agent-timeline li .ts{color:#7c8593;margin-right:.4rem;}"
-        ".agent-timeline li .tool{color:#82aaff;margin-right:.4rem;}"
-        ".agent-timeline .empty{color:#7c8593;padding:.4rem;}"
-        "</style>"
-        "<ul id='agent-feed'><li class='empty'>Waiting for agent decisions…</li></ul>"
+        "<section class='live-feed tall'>"
+        "<ul id='agent-feed'><li class='empty' style='color:var(--muted);font-style:italic;padding:.4rem'>Waiting for agent decisions…</li></ul>"
         "<script>(function(){"
         "var feed=document.getElementById('agent-feed');"
         "var empty=feed.querySelector('.empty');"
@@ -6338,31 +6511,29 @@ def _render_explore_page(*, object_id: str) -> str:
     canvas_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/ops/objects"
     synth_src = f"/object/fragment?id={quote(object_id, safe='')}" if object_id else "/ops/objects"
     return (
-        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<!doctype html>\n<html lang='en' data-theme='light'><head><meta charset='utf-8' />"
         "<meta name='viewport' content='width=device-width, initial-scale=1' />"
         "<title>Explore</title>"
-        "<style>"
-        "*{box-sizing:border-box}"
-        "body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;background:#f7f6f2;color:#1f1a17}"
-        "header{padding:.6rem 1rem;border-bottom:1px solid #e7e1d8;display:flex;gap:1rem;align-items:center}"
-        "header h1{font-size:1rem;margin:0;color:#9f4f24}"
-        "header .meta{color:#71675d;font-size:.85rem}"
-        ".grid{display:grid;height:calc(100vh - 56px);"
-        "grid-template-columns:1fr 360px;"
-        "grid-template-rows:1fr 260px;"
-        "gap:1px;background:#e7e1d8;}"
-        ".pane{background:#fffdfa;overflow:auto}"
-        ".pane iframe{width:100%;height:100%;border:0;display:block}"
-        ".pane.canvas{grid-row:1/2;grid-column:1/2}"
-        ".pane.timeline{grid-row:1/2;grid-column:2/3;padding:.4rem}"
-        ".pane.synth{grid-column:1/3;grid-row:2/3}"
-        "</style></head><body>"
+        "<link rel='icon' type='image/svg+xml' href='/static/monogram.svg' />"
+        "<link rel='preconnect' href='https://fonts.googleapis.com' />"
+        "<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin />"
+        "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?"
+        "family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&"
+        "display=swap' />"
+        "<link rel='stylesheet' href='/static/ovp-tokens.css' />"
+        "<link rel='stylesheet' href='/static/ovp-ui.css' />"
+        "<link rel='stylesheet' href='/static/ovp-pages.css' />"
+        "<style>*{box-sizing:border-box}</style>"
+        "<script>(function(){try{var s=localStorage.getItem('ovp-theme');"
+        "if(s==='light'||s==='dark')document.documentElement.dataset.theme=s;}"
+        "catch(e){}})();</script>"
+        "</head><body class='fullbleed-shell'>"
         "<header>"
         "<h1>Explore</h1>"
         f"<span class='meta'>object: <code id='ex-object'>{escape(object_id) or '∅'}</code></span>"
-        "<a href='/' style='margin-left:auto;color:#9f4f24;text-decoration:none'>← Shell</a>"
+        "<a href='/' style='margin-left:auto'>← Shell</a>"
         "</header>"
-        "<div class='grid'>"
+        "<div class='fullbleed-grid explore'>"
         f"<section class='pane canvas'><iframe id='pane-canvas' src='{escape(canvas_src)}'></iframe></section>"
         f"<section class='pane timeline'>{_render_explore_fragment(object_id)}</section>"
         f"<section class='pane synth'><iframe id='pane-synth' src='{escape(synth_src)}'></iframe></section>"
