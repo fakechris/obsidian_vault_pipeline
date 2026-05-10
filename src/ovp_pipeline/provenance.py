@@ -167,6 +167,11 @@ def bulk_upsert_provenance_ingest(
     if not rows:
         return
     try:
+        # Stream the row→tuple expansion through a generator so the
+        # rebuild's per-pack flush doesn't materialise both ``rows``
+        # (caller's list) and ``params`` (intermediate list of 9-tuples)
+        # at the same time.  ``executemany`` consumes the iterable
+        # lazily.
         conn.executemany(
             """
             INSERT INTO provenance
@@ -182,7 +187,7 @@ def bulk_upsert_provenance_ingest(
                   AND source_url = ?
              )
             """,
-            [
+            (
                 (
                     row["pack"],
                     row["object_id"],
@@ -195,7 +200,7 @@ def bulk_upsert_provenance_ingest(
                     row["source_url"],
                 )
                 for row in rows
-            ],
+            ),
         )
     except sqlite3.OperationalError as exc:
         logger.warning("bulk provenance ingest skipped: %s", exc)

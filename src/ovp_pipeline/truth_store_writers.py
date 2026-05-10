@@ -49,13 +49,17 @@ def insert_objects(
     calling — the rebuild does this in ``execute_truth_projection_builder``
     via the projection's pack-scoped clear.  This function only handles
     the insert phase.
+
+    ``rows`` is consumed lazily by sqlite3.Connection.executemany so
+    callers can pass a generator expression to avoid materialising
+    the full per-pack row set in memory.
     """
     conn.executemany(
         f"""
         INSERT INTO objects ({', '.join(OBJECT_ROW_COLUMNS)})
         VALUES ({', '.join(['?'] * len(OBJECT_ROW_COLUMNS))})
         """,
-        list(rows),
+        rows,
     )
 
 
@@ -102,11 +106,11 @@ def insert_claims(
     rows: Iterable[Sequence[Any]],
 ) -> None:
     """Bulk-insert claims rows.  Same caller-clears-first contract as
-    ``insert_objects``."""
+    ``insert_objects``; ``rows`` is consumed lazily."""
     conn.executemany(
         f"""
         INSERT INTO claims ({', '.join(CLAIM_ROW_COLUMNS)})
         VALUES ({', '.join(['?'] * len(CLAIM_ROW_COLUMNS))})
         """,
-        list(rows),
+        rows,
     )

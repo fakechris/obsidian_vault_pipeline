@@ -73,14 +73,16 @@ def bulk_insert_relations(
 
     Used by the rebuild path.  Caller is responsible for clearing the
     pack-scoped existing rows before calling — the projection rebuild
-    handles that elsewhere; this function only inserts.
+    handles that elsewhere; this function only inserts.  ``rows`` is
+    consumed lazily so the rebuild can stream a generator instead of
+    materialising the full pack-scoped relation set.
     """
     conn.executemany(
         f"""
         INSERT INTO relations ({', '.join(RELATION_ROW_COLUMNS_FULL)})
         VALUES ({', '.join(['?'] * len(RELATION_ROW_COLUMNS_FULL))})
         """,
-        list(rows),
+        rows,
     )
 
 

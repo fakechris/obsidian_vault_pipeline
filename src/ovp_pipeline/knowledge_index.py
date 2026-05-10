@@ -1097,7 +1097,7 @@ def rebuild_knowledge_index(
             # See ``docs/canonical-write-ownership.md``.
             insert_objects(
                 conn,
-                [row.to_row() for row in truth_projection.objects],
+                (row.to_row() for row in truth_projection.objects),
             )
             # BL-055: provenance spine.  Write one ``stage='ingest'``
             # row per object that has a source_url — but only when no
@@ -1126,7 +1126,7 @@ def rebuild_knowledge_index(
             )
             insert_claims(
                 conn,
-                [row.to_row() for row in truth_projection.claims],
+                (row.to_row() for row in truth_projection.claims),
             )
             conn.executemany(
                 """
@@ -1142,7 +1142,7 @@ def rebuild_knowledge_index(
             )
             bulk_insert_relations(
                 conn,
-                [row.to_row() for row in truth_projection.relations],
+                (row.to_row() for row in truth_projection.relations),
             )
             conn.executemany(
                 """
