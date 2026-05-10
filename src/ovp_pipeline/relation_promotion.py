@@ -35,6 +35,7 @@ from .knowledge_index import ensure_knowledge_db_current
 from .packs.base import BaseDomainPack
 from .promotion_audit import emit_promotion
 from .promotion_policy import LANE_AUTO, LANE_ESCALATE, LANE_REJECT, evaluate_relation
+from .relation_writer import upsert_relation_for_promotion
 from .runtime import VaultLayout
 from .state_lifecycle import State
 from .truth_store import EVIDENCE_STATUS_UNVERIFIED
@@ -84,28 +85,19 @@ def _ensure_relation_row(
     conn: sqlite3.Connection,
     candidate: SemanticRelationCandidate,
 ) -> None:
-    conn.execute(
-        """
-        INSERT INTO relations (
-          pack, source_object_id, target_object_id, relation_type,
-          evidence_source_slug, quote_text, locator, content_hash, retrieval_context,
-          status, verified_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            candidate.pack,
-            candidate.source_object_id,
-            candidate.target_object_id,
-            _effective_relation_type(candidate),
-            candidate.source_slug,
-            candidate.evidence_quote,
-            candidate.locator,
-            candidate.content_hash,
-            candidate.retrieval_context,
-            EVIDENCE_STATUS_UNVERIFIED,
-            "",
-        ),
+    upsert_relation_for_promotion(
+        conn,
+        pack=candidate.pack,
+        source_object_id=candidate.source_object_id,
+        target_object_id=candidate.target_object_id,
+        relation_type=_effective_relation_type(candidate),
+        evidence_source_slug=candidate.source_slug,
+        quote_text=candidate.evidence_quote,
+        locator=candidate.locator,
+        content_hash=candidate.content_hash,
+        retrieval_context=candidate.retrieval_context,
+        status=EVIDENCE_STATUS_UNVERIFIED,
+        verified_at="",
     )
 
 
@@ -223,24 +215,22 @@ def replay_relation_promotions(
     for key, event in latest.items():
         if key in existing_keys:
             continue
-        conn.execute(
-            """
-            INSERT INTO relations (
-              pack, source_object_id, target_object_id, relation_type,
-              evidence_source_slug, quote_text, locator, content_hash,
-              retrieval_context, status, verified_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                *key,
-                str(event.get("quote_text") or ""),
-                str(event.get("locator") or ""),
-                str(event.get("content_hash") or ""),
-                str(event.get("retrieval_context") or ""),
-                EVIDENCE_STATUS_UNVERIFIED,
-                "",
-            ),
+        # ``key`` is (pack, source_object_id, target_object_id,
+        # relation_type, evidence_source_slug) — see the SELECT
+        # above that built ``existing_keys``.
+        upsert_relation_for_promotion(
+            conn,
+            pack=key[0],
+            source_object_id=key[1],
+            target_object_id=key[2],
+            relation_type=key[3],
+            evidence_source_slug=key[4],
+            quote_text=str(event.get("quote_text") or ""),
+            locator=str(event.get("locator") or ""),
+            content_hash=str(event.get("content_hash") or ""),
+            retrieval_context=str(event.get("retrieval_context") or ""),
+            status=EVIDENCE_STATUS_UNVERIFIED,
+            verified_at="",
         )
         existing_keys.add(key)
         edge_id = str(event.get("edge_id") or "")

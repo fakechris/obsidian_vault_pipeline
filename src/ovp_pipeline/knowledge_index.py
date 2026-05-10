@@ -12,8 +12,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from .concept_registry import ConceptRegistry, ResolutionAction
 from .event_emitter import iter_for_index
 from .graph.frontmatter import FrontmatterParser, NoteMetadata
@@ -21,9 +19,14 @@ from .graph.link_parser import LinkParser
 from .identity import canonicalize_note_id
 from .packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from .projection_lifecycle import close_projection_repair_marker, write_projection_repair_marker
+from .provenance import bulk_upsert_provenance_ingest
+from .relation_writer import bulk_insert_relations
 from .runtime import VaultLayout, knowledge_db_write_lock, resolve_vault_dir
 from .truth_projection_registry import execute_truth_projection_builder, resolve_truth_projection_builder
 from .truth_store import TRUTH_STORE_SCHEMA
+from .truth_store_writers import insert_claims, insert_objects
+
+logger = logging.getLogger(__name__)
 
 SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
@@ -1088,12 +1091,13 @@ def rebuild_knowledge_index(
                 link_rows=object_link_rows,
                 pack_name=pack_name,
             )
-            conn.executemany(
-                """
-                INSERT INTO objects (pack, object_id, object_kind, title, canonical_path, source_slug, source_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                [row.to_row() for row in truth_projection.objects],
+            # BL-060: writes go through the canonical owner modules
+            # (``truth_store_writers``, ``provenance``, ``relation_writer``)
+            # so the single-writer invariant for canonical tables holds.
+            # See ``docs/canonical-write-ownership.md``.
+            insert_objects(
+                conn,
+                (row.to_row() for row in truth_projection.objects),
             )
             # BL-055: provenance spine.  Write one ``stage='ingest'``
             # row per object that has a source_url — but only when no
@@ -1101,46 +1105,28 @@ def rebuild_knowledge_index(
             # source_url) tuple.  Preservation in
             # ``INDEPENDENT_CANONICAL_TABLE_COLUMNS`` carries every
             # historical row across rebuilds (gemini PR #152 review
-            # fix); the dedup guard here keeps rebuild-noise from
-            # accumulating duplicate ingest rows for objects whose
-            # source URL hasn't changed.
+            # fix); the dedup guard inside ``bulk_upsert_provenance_ingest``
+            # keeps rebuild-noise from accumulating duplicate ingest
+            # rows for objects whose source URL hasn't changed.
             now_iso = _utc_now_text()
-            conn.executemany(
-                """
-                INSERT INTO provenance
-                  (pack, object_id, source_url, source_fingerprint,
-                   derived_via_stage, derived_at, parent_object_id,
-                   metadata_json)
-                SELECT ?, ?, ?, ?, 'ingest', ?, NULL, '{}'
-                 WHERE NOT EXISTS (
-                   SELECT 1 FROM provenance
-                    WHERE pack = ?
-                      AND object_id = ?
-                      AND derived_via_stage = 'ingest'
-                      AND source_url = ?
-                 )
-                """,
+            bulk_upsert_provenance_ingest(
+                conn,
                 [
-                    (
-                        row.pack,
-                        row.object_id,
-                        row.source_url,
-                        _source_fingerprint(row.source_url),
-                        now_iso,
-                        row.pack,
-                        row.object_id,
-                        row.source_url,
-                    )
+                    {
+                        "pack": row.pack,
+                        "object_id": row.object_id,
+                        "source_url": row.source_url,
+                        "source_fingerprint": _source_fingerprint(row.source_url),
+                        "derived_at": now_iso,
+                        "metadata_json": "{}",
+                    }
                     for row in truth_projection.objects
                     if row.source_url
                 ],
             )
-            conn.executemany(
-                """
-                INSERT INTO claims (pack, claim_id, object_id, claim_kind, claim_text, confidence)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                [row.to_row() for row in truth_projection.claims],
+            insert_claims(
+                conn,
+                (row.to_row() for row in truth_projection.claims),
             )
             conn.executemany(
                 """
@@ -1154,17 +1140,9 @@ def rebuild_knowledge_index(
                 """,
                 [row.to_row() for row in truth_projection.claim_evidence],
             )
-            conn.executemany(
-                """
-                INSERT INTO relations (
-                    pack, source_object_id, target_object_id, relation_type, evidence_source_slug,
-                    quote_text, locator, content_hash, retrieval_context,
-                    quote_start_line, quote_end_line, quote_start_char, quote_end_char,
-                    status, verified_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [row.to_row() for row in truth_projection.relations],
+            bulk_insert_relations(
+                conn,
+                (row.to_row() for row in truth_projection.relations),
             )
             conn.executemany(
                 """
