@@ -38,6 +38,22 @@
   function readToken(name) {
     return getComputedStyle(html).getPropertyValue(name).trim();
   }
+
+  // Escape anything that flows into ``innerHTML`` from the vault
+  // payload (community names, node labels, sources, dates, etc.).
+  // Vault content is technically authored by the user, but the
+  // graph runs in the same origin as the rest of the maintenance
+  // UI — a malicious or pasted-in label must not be able to break
+  // out of the surrounding HTML.
+  function esc(value) {
+    if (value === null || value === undefined) return "";
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
   function communityColor(cid) {
     const c = data.communities.find(x => x.id === cid);
     if (!c) return "#888";
@@ -480,8 +496,7 @@
       if (!n.__threeObj) return;
       n.__threeObj.children.forEach(c => {
         if (c.material && "opacity" in c.material) {
-          const want = neigh.has(n.id) ? 1.0 : 0.18;
-          c.material.opacity = c.material === c.material ? want : want;
+          c.material.opacity = neigh.has(n.id) ? 1.0 : 0.18;
         }
       });
     });
@@ -500,9 +515,9 @@
     const row = document.createElement("div");
     row.className = "legend-row";
     row.dataset.cid = c.id;
-    row.innerHTML = `<span class="swatch" style="background:${communityColor(c.id)}"></span>
-                     <span class="name">${c.name}</span>
-                     <span class="count">${c.count}</span>`;
+    row.innerHTML = `<span class="swatch" style="background:${esc(communityColor(c.id))}"></span>
+                     <span class="name">${esc(c.name)}</span>
+                     <span class="count">${esc(c.count)}</span>`;
     row.addEventListener("click", e => {
       if (e.shiftKey) {
         if (state.isolatedCommunities.has(c.id)) state.isolatedCommunities.delete(c.id);
@@ -589,11 +604,16 @@
     });
   }
 
-  // 2D / 3D toggle
+  // 2D / 3D toggle.  ``currentDimensions`` mirrors what the
+  // simulation is actually rendering so other handlers (e.g. the
+  // link-strength slider) can re-apply it without forcing the
+  // graph back to 3D when the user is in 2D mode.
+  let currentDimensions = 3;
   function setDimensions(n) {
-    Graph.numDimensions(+n);
+    currentDimensions = +n;
+    Graph.numDimensions(currentDimensions);
     const ctrl = Graph.controls();
-    if (+n === 2) {
+    if (currentDimensions === 2) {
       // top-down camera, disable rotation
       Graph.cameraPosition({ x: 0, y: 0, z: 420 }, { x: 0, y: 0, z: 0 }, 700);
       if (ctrl) { ctrl.enableRotate = false; }
@@ -608,7 +628,11 @@
   document.getElementById("link-strength").addEventListener("input", e => {
     document.getElementById("link-strength-val").textContent = e.target.value;
     Graph.d3Force("charge").strength(+e.target.value);
-    Graph.numDimensions(3); // poke
+    // Re-apply the active dimension count to nudge the simulation
+    // back into a stable layout — must use ``currentDimensions``,
+    // not a hard-coded 3, or 2D mode silently exits when the user
+    // drags the link-strength slider.
+    Graph.numDimensions(currentDimensions);
     Graph.d3ReheatSimulation();
   });
   document.getElementById("node-size").addEventListener("input", e => {
@@ -628,10 +652,10 @@
     } else {
       resultsEl.innerHTML = hits.map(n => {
         const c = data.communities.find(c=>c.id===n.community);
-        return `<div class="row" data-id="${n.id}">
-          <span class="swatch" style="background:${communityColor(n.community)}"></span>
-          <span>${n.label}</span>
-          <span class="meta">${c?c.name:""}</span>
+        return `<div class="row" data-id="${esc(n.id)}">
+          <span class="swatch" style="background:${esc(communityColor(n.community))}"></span>
+          <span>${esc(n.label)}</span>
+          <span class="meta">${esc(c?c.name:"")}</span>
         </div>`;
       }).join("");
       resultsEl.querySelectorAll(".row").forEach(r => {
@@ -684,12 +708,12 @@
       wrap.innerHTML = `
         <div class="detail-head">
           <div class="typewrap">
-            <span class="pill" style="background:${communityColor(c.id)};color:white">Community</span>
+            <span class="pill" style="background:${esc(communityColor(c.id))};color:white">Community</span>
           </div>
-          <h2>${c.name}</h2>
+          <h2>${esc(c.name)}</h2>
           <div class="community-line">
-            <span class="swatch" style="background:${communityColor(c.id)}"></span>
-            <span>${members.length} notes · collapsed view</span>
+            <span class="swatch" style="background:${esc(communityColor(c.id))}"></span>
+            <span>${esc(members.length)} notes · collapsed view</span>
           </div>
           <div class="actions">
             <button class="btn" id="btn-expand">Expand cluster</button>
@@ -699,10 +723,10 @@
         <div class="neighbors">
           <h5>Top notes by quality</h5>
           ${members.sort((a,b)=>(b.quality||0)-(a.quality||0)).slice(0,12).map(m=>`
-            <div class="nrow" data-id="${m.id}">
-              <span class="swatch" style="background:${communityColor(m.community)}"></span>
-              <span>${m.label}</span>
-              <span class="kindtag">${m.type}</span>
+            <div class="nrow" data-id="${esc(m.id)}">
+              <span class="swatch" style="background:${esc(communityColor(m.community))}"></span>
+              <span>${esc(m.label)}</span>
+              <span class="kindtag">${esc(m.type)}</span>
             </div>
           `).join("")}
         </div>`;
@@ -746,14 +770,14 @@
     wrap.innerHTML = `
       <div class="detail-head">
         <div class="typewrap">
-          <span class="pill ${orig.type==='open-question'?'warn':''}">${typeLabel}</span>
-          ${orig.quality?`<span class="muted tiny mono">QUAL ${orig.quality.toFixed(1)}</span>`:''}
-          <span class="muted tiny mono">SRC ${orig.source}</span>
+          <span class="pill ${orig.type==='open-question'?'warn':''}">${esc(typeLabel)}</span>
+          ${orig.quality?`<span class="muted tiny mono">QUAL ${esc(orig.quality.toFixed(1))}</span>`:''}
+          <span class="muted tiny mono">SRC ${esc(orig.source)}</span>
         </div>
-        <h2>${orig.label}</h2>
+        <h2>${esc(orig.label)}</h2>
         <div class="community-line">
-          <span class="swatch" style="background:${communityColor(orig.community)}"></span>
-          <span>${c?c.name:""} · ${orig.backlinks} backlinks · absorbed ${orig.absorbedAt}</span>
+          <span class="swatch" style="background:${esc(communityColor(orig.community))}"></span>
+          <span>${esc(c?c.name:"")} · ${esc(orig.backlinks)} backlinks · absorbed ${esc(orig.absorbedAt)}</span>
         </div>
         <div class="actions">
           <button class="btn" id="btn-open-vault"${orig.path ? "" : " disabled"}>Open in vault →</button>
@@ -761,12 +785,12 @@
         </div>
       </div>
       <div class="neighbors">
-        <h5>Linked notes (${neighbors.length})</h5>
+        <h5>Linked notes (${esc(neighbors.length)})</h5>
         ${neighbors.length ? neighbors.map(({other, kind})=>`
-          <div class="nrow" data-id="${other.id}">
-            <span class="swatch" style="background:${communityColor(other.community)}"></span>
-            <span>${other.label}</span>
-            <span class="kindtag ${kind==='contradict'?'contradict':''}">${kind}</span>
+          <div class="nrow" data-id="${esc(other.id)}">
+            <span class="swatch" style="background:${esc(communityColor(other.community))}"></span>
+            <span>${esc(other.label)}</span>
+            <span class="kindtag ${kind==='contradict'?'contradict':''}">${esc(kind)}</span>
           </div>
         `).join("") : '<div class="muted tiny" style="padding:6px 8px">No links yet.</div>'}
       </div>`;

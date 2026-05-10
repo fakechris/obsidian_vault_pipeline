@@ -4339,7 +4339,10 @@ def build_graph_map_payload(
     # member dict; for v1 every node carries today's date so the
     # timeline degenerates to a single bucket and the "Play history"
     # affordance is harmless.  Stage 4 will surface real timestamps.
-    absorbed_default = _dt.date.today().isoformat()
+    # Use UTC so day boundaries match the rest of this module — local
+    # timezone would shift fallback nodes between timeline buckets
+    # around UTC midnight.
+    absorbed_default = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
     atlas_nodes = [
         {
             "id": str(node["object_id"]),

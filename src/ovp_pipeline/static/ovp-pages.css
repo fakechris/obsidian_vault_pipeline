@@ -10,39 +10,20 @@
      .ascii / .btn / .btn.secondary / .btn.ghost / .btn.icon /
      .page / .page.wide / .page.full
 
-   Only the four surfaces below exist because the kit truly does
+   Only the three surfaces below exist because the kit truly does
    not carry a primitive for them — and each is built explicitly
    in the kit's design language (token-driven colors, IBM Plex
    typography, kit radii, kit borders).  No hardcoded hex.
+
+   Note: ``.atlas-empty`` lives in ``atlas-graph.css`` (the only
+   stylesheet ``/map`` loads).  This file used to carry a parallel
+   copy as well, but every page that loads ``ovp-pages.css`` is
+   already in the regular shell layout — none mount the WebGL
+   atlas — so the duplicate was dead code and prone to drift.
    ============================================================ */
 
 /* ============================================================
-   1. .atlas-empty — positioned overlay on /map's 3D canvas.
-   Kit has no positioned-overlay primitive.
-   ============================================================ */
-.atlas-empty {
-  position: absolute; inset: 0; z-index: 7;
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  padding: 2rem;
-  color: var(--muted); text-align: center;
-}
-.atlas-empty .glyph {
-  font-family: var(--ovp-font-mono);
-  font-size: 3rem; opacity: 0.4; margin-bottom: 1rem;
-}
-.atlas-empty h2 {
-  color: var(--text); font-size: 1.2rem; margin: 0 0 0.5rem;
-}
-.atlas-empty p { max-width: 32rem; line-height: 1.5; }
-.atlas-empty code {
-  background: var(--code-bg); color: var(--code-text);
-  padding: 0.05rem 0.35rem; border-radius: 6px;
-  font-family: var(--ovp-font-mono); font-size: 0.92em;
-}
-
-/* ============================================================
-   2. table.data-table — multi-column tabular data
+   1. table.data-table — multi-column tabular data
    (kit ships only table.kv for 2-col label/value pairs).
    Used by /ops/runs (Started · Workflow · Status · Events · Run)
    and /ops/runs/<id>/timeline.
@@ -82,7 +63,7 @@ table.data-table tr.bracket td           { background: var(--accent-soft); font-
 table.data-table tr.bracket-completed td { background: var(--accent-2-soft); }
 
 /* ============================================================
-   3. .live-feed — dark-mono live event tail (SSE) for /ops/pulse
+   2. .live-feed — dark-mono live event tail (SSE) for /ops/pulse
    and /ops/explore agent timeline.  Kit has .ascii (mono pre-block)
    but not a scrolling list-of-events surface.  Visual identity:
    var(--code-bg) terminal background, var(--accent-2) for event
@@ -113,7 +94,7 @@ table.data-table tr.bracket-completed td { background: var(--accent-2-soft); }
 }
 
 /* ============================================================
-   4. .fullbleed-shell / .fullbleed-grid — Workbench + Explore
+   3. .fullbleed-shell / .fullbleed-grid — Workbench + Explore
    multi-pane iframe grid that reaches viewport edges.  Kit's
    .shell has rounded corners + shadow, not designed for full-
    bleed — but tokens, font, accent colors stay kit-faithful.

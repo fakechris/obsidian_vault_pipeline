@@ -1774,8 +1774,10 @@ def create_server(
             this is a static-asset endpoint, not a generic file server.
             URL-decode before validation so percent-encoded traversal
             attempts (``%2e%2e``) hit the same checks as literal ones.
-            Hashed/binary assets get a 1-year immutable cache; CSS/JS
-            get ``no-cache`` while the design system is iterating.
+            Binary assets get a 1-day cache (no ``immutable``: filenames
+            aren't content-hashed yet, so revalidation must remain
+            possible).  CSS/JS get ``no-cache`` while the design system
+            is iterating.
             """
             asset_path = unquote(asset_path)
             if (
@@ -1800,8 +1802,13 @@ def create_server(
             except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
                 self._write_html("<h1>404</h1>", status=404)
                 return
+            # Static URLs are not yet content-hashed (no
+            # ``/static/<hash>/<name>`` versioning), so ``immutable``
+            # would freeze stale assets in users' browsers for the
+            # full TTL whenever we ship a release.  Drop ``immutable``
+            # and keep a short TTL until URL versioning lands.
             cache = (
-                "public, max-age=31536000, immutable"
+                "public, max-age=86400"
                 if suffix in {".woff2", ".woff", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico"}
                 else "no-cache"
             )

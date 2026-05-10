@@ -19,7 +19,7 @@
   --accent-2: #2563bb; --accent-2-soft: #dbe7f7;
   --warn-border: #d48a2f; --warn-bg: #fff8ec; --warn-text: #a85e10;
   --code-bg: #f4f4f5; --code-text: #1f1a17;
-  --graph-bg: #efece5; --graph-link: rgba(31,26,23,0.16);
+  --graph-link: rgba(31,26,23,0.16);
   --graph-link-hi: #9f4f24;
   --graph-hull: rgba(159,79,36,0.10); --graph-hull-edge: rgba(159,79,36,0.55);
   --graph-grid: rgba(31,26,23,0.04);
@@ -41,7 +41,7 @@
   --accent-2: #06b6d4; --accent-2-soft: rgba(6,182,212,0.16);
   --warn-border: #f59e0b; --warn-bg: rgba(245,158,11,0.10); --warn-text: #fbbf24;
   --code-bg: #0e1420; --code-text: #e6edf5;
-  --graph-bg: #05080d; --graph-link: rgba(125,138,160,0.28);
+  --graph-link: rgba(125,138,160,0.28);
   --graph-link-hi: #06b6d4;
   --graph-hull: rgba(59,130,246,0.08); --graph-hull-edge: rgba(59,130,246,0.55);
   --graph-grid: rgba(255,255,255,0.03);
