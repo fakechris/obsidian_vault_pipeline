@@ -68,6 +68,7 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+from ..provenance import bulk_upsert_provenance_ingest
 from ..runtime import (
     VaultLayout,
     format_utc_timestamp,
@@ -75,6 +76,7 @@ from ..runtime import (
     resolve_vault_dir,
     utc_now,
 )
+from ..truth_store_writers import update_object_source_url
 from .backfill_provenance import _build_evergreen_to_source_from_audit
 
 logger = logging.getLogger(__name__)
@@ -260,40 +262,34 @@ def main(argv: list[str] | None = None) -> int:
             counts[strategy] += 1
             if args.dry_run:
                 continue
-            conn.execute(
-                "UPDATE objects SET source_url = ? WHERE pack = ? AND object_id = ?",
-                (source_url, pack, object_id),
+            # BL-060: writes go through the canonical owner modules
+            # (``truth_store_writers`` for objects, ``provenance`` for
+            # the audit row).  See ``docs/canonical-write-ownership.md``.
+            update_object_source_url(
+                conn,
+                pack=pack,
+                object_id=object_id,
+                source_url=source_url,
+                source="ovp-backfill-objects-source-url",
             )
             counts["writes"] += 1
             if args.write_provenance:
-                # Idempotent — same dedup guard rebuild_knowledge_index
-                # uses; never inserts a duplicate ingest row for the same
-                # ``(pack, object_id, source_url)`` triple.
+                # Idempotent — same dedup guard ``rebuild_knowledge_index``
+                # uses (WHERE NOT EXISTS on
+                # ``(pack, object_id, source_url)`` regardless of
+                # derived_at) — never inserts a duplicate ingest row.
                 from .backfill_provenance import _make_fingerprint
 
-                derived_at = format_utc_timestamp(utc_now())
-                conn.execute(
-                    """
-                    INSERT INTO provenance
-                      (pack, object_id, source_url, source_fingerprint,
-                       derived_via_stage, derived_at, parent_object_id,
-                       metadata_json)
-                    SELECT ?, ?, ?, ?, 'ingest', ?, NULL,
-                           '{"via":"ovp-backfill-objects-source-url"}'
-                    WHERE NOT EXISTS (
-                      SELECT 1 FROM provenance
-                       WHERE pack = ?
-                         AND object_id = ?
-                         AND derived_via_stage = 'ingest'
-                         AND source_url = ?
-                    )
-                    """,
-                    (
-                        pack, object_id, source_url,
-                        _make_fingerprint(source_url),
-                        derived_at,
-                        pack, object_id, source_url,
-                    ),
+                bulk_upsert_provenance_ingest(
+                    conn,
+                    [{
+                        "pack": pack,
+                        "object_id": object_id,
+                        "source_url": source_url,
+                        "source_fingerprint": _make_fingerprint(source_url),
+                        "derived_at": format_utc_timestamp(utc_now()),
+                        "metadata_json": '{"via":"ovp-backfill-objects-source-url"}',
+                    }],
                 )
         if not args.dry_run:
             conn.commit()

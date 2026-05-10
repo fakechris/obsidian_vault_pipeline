@@ -329,20 +329,21 @@ _CANONICAL_WRITE_RE = re.compile(
 # ``knowledge_index.py`` (rebuild module) coexisting; matching by basename
 # would let the wrapper sneak through if it ever started writing.
 # Refer to docs/canonical-write-ownership.md before adding new entries.
+#
+# Post-BL-060 PR#2: only the three owner modules retain raw SQL.  Every
+# other writer calls into one of these via the public helpers.
 OWNER_FILES: set[str] = {
-    # Owner — provenance: existing helper handles every row.
-    "provenance.py",
-    # Owner candidates (BL-060 PR#2 will hoist into truth_store_writers / relation_writer):
-    "knowledge_index.py",         # rebuild's bulk inserts (objects, claims, relations, provenance)
-    "relation_promotion.py",      # _ensure_relation_row + replay_relation_promotions
+    "provenance.py",            # owner of `provenance` table
+    "truth_store_writers.py",   # owner of `objects` + `claims` tables
+    "relation_writer.py",       # owner of `relations` table
 }
 
-# Tech-debt ratchet — these existing bypass sites are tracked here until BL-060 PR#2
-# refactors them.  When a site is removed, drop its entry; the test prevents new ones.
-KNOWN_BYPASS: set[str] = {
-    # PR #185 root cause: backfill writes objects.source_url + provenance directly.
-    "commands/backfill_objects_source_url.py",
-}
+# Tech-debt ratchet — empty after BL-060 PR#2 refactored every prior bypass
+# (knowledge_index.py rebuild, relation_promotion.py _ensure_relation_row +
+# replay_relation_promotions, commands/backfill_objects_source_url.py).
+# This being empty is the load-bearing assertion: no module outside
+# ``OWNER_FILES`` may write a canonical table.
+KNOWN_BYPASS: set[str] = set()
 
 
 def test_canonical_writes_have_single_owner(repo_root):

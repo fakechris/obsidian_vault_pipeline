@@ -121,3 +121,85 @@ def upsert_provenance(
             "provenance write failed — unexpected (%s): %s",
             derived_via_stage, exc,
         )
+
+
+def bulk_upsert_provenance_ingest(
+    conn: sqlite3.Connection,
+    rows: list[dict[str, Any]],
+) -> None:
+    """BL-060 owner: bulk-write ``stage='ingest'`` rows with the
+    rebuild's stricter dedup semantics.
+
+    Unlike :func:`upsert_provenance` (which dedups on the PK
+    ``(pack, object_id, derived_via_stage, derived_at)`` so a re-emit
+    at a *different* derived_at creates a new row), the rebuild's
+    ingest pass dedups on the
+    ``(pack, object_id, derived_via_stage='ingest', source_url)``
+    tuple — re-running the rebuild at a later wall-clock should NOT
+    write a fresh ingest row when the source URL hasn't changed.
+    Otherwise rebuild noise would accumulate one ingest row per
+    rebuild forever.
+
+    This stricter dedup is implemented via ``WHERE NOT EXISTS`` rather
+    than the ``INSERT OR IGNORE`` used by ``upsert_provenance``.
+
+    Each ``rows`` dict carries:
+
+    * ``pack`` (str)
+    * ``object_id`` (str)
+    * ``source_url`` (str, non-empty — caller filters out empty URLs)
+    * ``source_fingerprint`` (str, 12-char SHA-256 prefix of source_url)
+    * ``derived_at`` (ISO timestamp)
+    * ``metadata_json`` (str, default ``"{}"``) — caller passes a
+      pre-serialised JSON string so this helper stays cheap
+
+    Used by:
+
+    * ``rebuild_knowledge_index`` — the per-pack flush of ingest rows
+    * ``ovp-backfill-objects-source-url --write-provenance`` — the
+      backfill CLI's audit row when it fills a previously-empty
+      ``source_url``
+
+    Best-effort: same exception-swallowing contract as
+    :func:`upsert_provenance` so a provenance write never aborts the
+    rebuild's transaction.
+    """
+    if not rows:
+        return
+    try:
+        conn.executemany(
+            """
+            INSERT INTO provenance
+              (pack, object_id, source_url, source_fingerprint,
+               derived_via_stage, derived_at, parent_object_id,
+               metadata_json)
+            SELECT ?, ?, ?, ?, 'ingest', ?, NULL, ?
+             WHERE NOT EXISTS (
+               SELECT 1 FROM provenance
+                WHERE pack = ?
+                  AND object_id = ?
+                  AND derived_via_stage = 'ingest'
+                  AND source_url = ?
+             )
+            """,
+            [
+                (
+                    row["pack"],
+                    row["object_id"],
+                    row["source_url"],
+                    row["source_fingerprint"],
+                    row["derived_at"],
+                    row.get("metadata_json", "{}"),
+                    row["pack"],
+                    row["object_id"],
+                    row["source_url"],
+                )
+                for row in rows
+            ],
+        )
+    except sqlite3.OperationalError as exc:
+        logger.warning("bulk provenance ingest skipped: %s", exc)
+    except sqlite3.DatabaseError as exc:
+        logger.warning("bulk provenance ingest failed — DB error: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — never abort caller
+        logger.warning("bulk provenance ingest failed — unexpected: %s", exc)
