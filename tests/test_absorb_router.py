@@ -326,24 +326,43 @@ def test_parse_response_create_kind_defaults_to_concept():
 def test_parse_response_rejects_empty_input():
     from ovp_pipeline.absorb_router import RouterResponseError, parse_router_response
 
-    with pytest.raises(RouterResponseError, match="empty"):
+    with pytest.raises(RouterResponseError, match=r"empty"):
         parse_router_response("")
 
 
-def test_parse_response_rejects_invalid_json():
+def test_parse_response_rejects_input_with_no_json_object():
+    """When no ``{...}`` span exists at all the regex extractor
+    produces a clear "no JSON object found" error.  Distinct from
+    the bad-JSON case below."""
     from ovp_pipeline.absorb_router import RouterResponseError, parse_router_response
 
-    with pytest.raises(RouterResponseError, match="not valid JSON"):
-        parse_router_response("{this is not json")
+    with pytest.raises(RouterResponseError, match=r"no JSON object found"):
+        parse_router_response("Sorry, I cannot help with that request.")
 
 
-def test_parse_response_rejects_top_level_array():
-    """Wrapper must be an object so future fields can be added without
-    breaking the parser."""
+def test_parse_response_rejects_invalid_json_inside_braces():
+    """A ``{...}`` span exists but the contents don't lex as JSON —
+    the parser surfaces ``json.JSONDecodeError`` wrapped in our
+    error type."""
     from ovp_pipeline.absorb_router import RouterResponseError, parse_router_response
 
-    with pytest.raises(RouterResponseError, match="JSON object"):
-        parse_router_response('[{"slug": "alpha"}]')
+    with pytest.raises(RouterResponseError, match=r"not valid JSON"):
+        parse_router_response("{this is not valid json content}")
+
+
+def test_parse_response_tolerates_conversational_preamble():
+    """Real LLMs sometimes prefix their JSON with ``Here is the JSON:``
+    or similar.  The regex extraction picks the first ``{...}`` span
+    and ignores prose around it."""
+    from ovp_pipeline.absorb_router import parse_router_response
+
+    wrapped = (
+        "Sure — here's the routing decision you asked for:\n\n"
+        + _GOLDEN_RESPONSE
+        + "\n\nLet me know if you want me to refine."
+    )
+    decision = parse_router_response(wrapped)
+    assert decision.updates[0].slug == "llm-eval-leakage"
 
 
 def test_parse_response_rejects_update_without_slug():
@@ -355,7 +374,7 @@ def test_parse_response_rejects_update_without_slug():
         "creates": [],
         "skip_reason": "",
     })
-    with pytest.raises(RouterResponseError, match="updates\\[0\\].slug is empty"):
+    with pytest.raises(RouterResponseError, match=r"updates\[0\]\.slug is empty"):
         parse_router_response(payload)
 
 
@@ -368,7 +387,7 @@ def test_parse_response_rejects_create_without_title():
         "creates": [{"rationale": "ok", "kind": "concept"}],
         "skip_reason": "",
     })
-    with pytest.raises(RouterResponseError, match="creates\\[0\\].title is empty"):
+    with pytest.raises(RouterResponseError, match=r"creates\[0\]\.title is empty"):
         parse_router_response(payload)
 
 
@@ -384,5 +403,5 @@ def test_parse_response_rejects_all_empty_decision():
         "creates": [],
         "skip_reason": "",
     })
-    with pytest.raises(RouterResponseError, match="empty"):
+    with pytest.raises(RouterResponseError, match=r"empty"):
         parse_router_response(payload)

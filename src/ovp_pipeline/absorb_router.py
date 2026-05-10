@@ -47,10 +47,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .runtime import VaultLayout, resolve_vault_dir
 
@@ -164,12 +166,20 @@ def build_evergreen_index(
                 """
             ).fetchall()
 
-        # Pre-load every (pack, object_id) → summary in one shot.  N
-        # SELECTs vs one IN-clause: the index is small (<10K objects
-        # typical), one fetchall is cheaper than per-row queries.
-        summary_rows = conn.execute(
-            "SELECT pack, object_id, summary_text FROM compiled_summaries"
-        ).fetchall()
+        # Pre-load every (pack, object_id) → summary in one shot.
+        # When ``pack_name`` is set, push the filter into SQL — large
+        # multi-pack vaults can have tens of thousands of summaries
+        # the caller will discard.
+        if pack_name:
+            summary_rows = conn.execute(
+                "SELECT pack, object_id, summary_text FROM compiled_summaries "
+                "WHERE pack = ?",
+                (pack_name,),
+            ).fetchall()
+        else:
+            summary_rows = conn.execute(
+                "SELECT pack, object_id, summary_text FROM compiled_summaries"
+            ).fetchall()
         summaries: dict[tuple[str, str], str] = {
             (pack, oid): summary_text or ""
             for (pack, oid, summary_text) in summary_rows
@@ -179,22 +189,45 @@ def build_evergreen_index(
         # determinism.  ``ROW_NUMBER() OVER PARTITION`` is the natural
         # SQLite window-function pattern — the per-object truncation
         # happens in SQL, not Python, so we don't pull every claim.
-        claims_rows = conn.execute(
-            """
-            SELECT pack, object_id, claim_text
-            FROM (
-              SELECT pack, object_id, claim_text,
-                ROW_NUMBER() OVER (
-                  PARTITION BY pack, object_id
-                  ORDER BY claim_id
-                ) AS rn
-              FROM claims
-            )
-            WHERE rn <= ?
-            ORDER BY pack, object_id, rn
-            """,
-            (max_claims_per_object,),
-        ).fetchall()
+        # Pack filter is pushed inside the inner SELECT so the window
+        # function only ranks the rows the caller will keep — without
+        # this, the cost on a 100K-claim multi-pack vault is dominated
+        # by sorting + ranking rows that get filtered away.
+        if pack_name:
+            claims_rows = conn.execute(
+                """
+                SELECT pack, object_id, claim_text
+                FROM (
+                  SELECT pack, object_id, claim_text,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY pack, object_id
+                      ORDER BY claim_id
+                    ) AS rn
+                  FROM claims
+                  WHERE pack = ?
+                )
+                WHERE rn <= ?
+                ORDER BY pack, object_id, rn
+                """,
+                (pack_name, max_claims_per_object),
+            ).fetchall()
+        else:
+            claims_rows = conn.execute(
+                """
+                SELECT pack, object_id, claim_text
+                FROM (
+                  SELECT pack, object_id, claim_text,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY pack, object_id
+                      ORDER BY claim_id
+                    ) AS rn
+                  FROM claims
+                )
+                WHERE rn <= ?
+                ORDER BY pack, object_id, rn
+                """,
+                (max_claims_per_object,),
+            ).fetchall()
 
     claims_by_object: dict[tuple[str, str], list[str]] = {}
     for (pack, oid, claim_text) in claims_rows:
@@ -344,19 +377,28 @@ def parse_router_response(response_text: str) -> RouterDecision:
     if not text:
         raise RouterResponseError("empty router response")
 
-    # The prompt explicitly forbids markdown wrappers, but LLMs
-    # sometimes emit ```json ... ``` anyway.  Strip the fence if
-    # present; reject anything else that's clearly not a JSON object.
-    if text.startswith("```"):
-        first_nl = text.find("\n")
-        if first_nl == -1:
-            raise RouterResponseError("router response is markdown-wrapped but has no body")
-        text = text[first_nl + 1 :]
-        if text.endswith("```"):
-            text = text[: -len("```")].rstrip()
+    # Locate the first ``{`` … last ``}`` span.  Mirrors the same
+    # extraction strategy ``auto_evergreen_extractor._parse_v2_response``
+    # uses (file:line truth_api/auto_evergreen_extractor.py:635) so
+    # both passes tolerate the same set of LLM cosmetics:
+    #
+    # * markdown fences (```json ... ```)
+    # * conversational preamble ("Here is the JSON: { ... }")
+    # * trailing commentary after the closing brace
+    #
+    # ``re.DOTALL`` so the body can contain newlines.  We don't try
+    # to count braces — if the LLM emits multiple top-level objects
+    # we accept the outer match and let ``json.loads`` reject any
+    # malformed concatenation.
+    json_match = re.search(r"\{.*\}", text, re.DOTALL)
+    if json_match is None:
+        raise RouterResponseError(
+            "no JSON object found in router response"
+        )
+    candidate = json_match.group()
 
     try:
-        payload = json.loads(text)
+        payload = json.loads(candidate)
     except json.JSONDecodeError as exc:
         raise RouterResponseError(f"router response is not valid JSON: {exc}") from exc
 
