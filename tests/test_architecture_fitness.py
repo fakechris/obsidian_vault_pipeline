@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -286,3 +287,119 @@ def test_readme_and_milestone_avoid_source_of_truth_language(repo_root):
     for path in docs:
         text = path.read_text(encoding="utf-8")
         assert "source of truth" not in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# BL-060: single-writer invariant for canonical tables
+# ---------------------------------------------------------------------------
+#
+# See `docs/canonical-write-ownership.md` for the owner-module map.  Every
+# INSERT / UPDATE / DELETE against a canonical table (`objects`, `provenance`,
+# `claims`, `relations`) must originate from the table's owner module.  Other
+# modules call the owner's helper.
+#
+# Phase 1 (this PR): enumerate the audited violations as `KNOWN_BYPASS` and
+# assert no new sites get added.  Phase 2 (BL-060 PR#2): refactor the
+# violations and shrink `KNOWN_BYPASS` to empty.
+
+CANONICAL_TABLES = ("objects", "provenance", "claims", "relations")
+
+# Regex matches SQL strings that mutate a canonical table.  Tolerates:
+#   INSERT / UPDATE / DELETE
+#   INSERT OR IGNORE / INSERT OR REPLACE
+#   "INTO" optional (DELETE FROM, UPDATE table) — handled by the alternation
+_CANONICAL_WRITE_RE = re.compile(
+    r"\b(?:INSERT(?:\s+OR\s+(?:IGNORE|REPLACE))?\s+INTO|UPDATE|DELETE\s+FROM)\s+("
+    + "|".join(CANONICAL_TABLES)
+    + r")\b",
+    re.IGNORECASE,
+)
+
+# Files allowed to issue raw canonical-table SQL.  Anything else fails the test.
+# Refer to docs/canonical-write-ownership.md before adding new entries.
+OWNER_FILES = {
+    # Owner — provenance: existing helper handles every row.
+    "provenance.py",
+    # Owner candidates (BL-060 PR#2 will hoist into truth_store_writers / relation_writer):
+    "knowledge_index.py",         # rebuild's bulk inserts (objects, claims, relations, provenance)
+    "relation_promotion.py",      # _ensure_relation_row + replay_relation_promotions
+}
+
+# Tech-debt ratchet — these existing bypass sites are tracked here until BL-060 PR#2
+# refactors them.  When a site is removed, drop its entry; the test prevents new ones.
+KNOWN_BYPASS = {
+    # PR #185 root cause: backfill writes objects.source_url + provenance directly.
+    "commands/backfill_objects_source_url.py",
+}
+
+
+def test_canonical_writes_have_single_owner(repo_root):
+    """BL-060: only owner modules may issue raw INSERT/UPDATE/DELETE on
+    canonical tables.  Non-owner modules must call the owner's helper.
+
+    Phase 1 (this PR): the existing violations in ``KNOWN_BYPASS`` are
+    grandfathered; the test only catches *new* violations.  Phase 2 of
+    BL-060 (PR#2) refactors the bypass sites and shrinks the set to empty.
+    """
+    src = repo_root / "src" / "ovp_pipeline"
+    new_violations: list[str] = []
+    grandfathered_seen: set[str] = set()
+
+    for py in sorted(src.rglob("*.py")):
+        rel = str(py.relative_to(src))
+        if rel == "__init__.py" or rel.endswith("/__init__.py"):
+            continue
+        text = py.read_text(encoding="utf-8")
+        # Strip comments + docstrings to avoid flagging mentions of SQL in prose.
+        # Cheap heuristic: walk the AST and only inspect string literals.  Any
+        # docstring (the first stmt of a module / class / function body) is
+        # skipped via ``ast.get_docstring()``.
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        sql_strings: list[str] = []
+        # Collect docstring node ids so we don't flag them.
+        doc_ids: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if (
+                    node.body
+                    and isinstance(node.body[0], ast.Expr)
+                    and isinstance(node.body[0].value, ast.Constant)
+                    and isinstance(node.body[0].value.value, str)
+                ):
+                    doc_ids.add(id(node.body[0].value))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if id(node) in doc_ids:
+                    continue
+                sql_strings.append(node.value)
+
+        joined = "\n".join(sql_strings)
+        if not _CANONICAL_WRITE_RE.search(joined):
+            continue
+
+        # File touches a canonical table.  Owner or grandfathered violation?
+        basename = py.name
+        if basename in OWNER_FILES:
+            continue
+        if rel in KNOWN_BYPASS:
+            grandfathered_seen.add(rel)
+            continue
+        new_violations.append(
+            f"{rel}: writes a canonical table but is neither an owner "
+            f"({sorted(OWNER_FILES)}) nor in KNOWN_BYPASS"
+        )
+
+    # Catch stale ratchet entries (file in KNOWN_BYPASS but no longer writes).
+    stale = sorted(KNOWN_BYPASS - grandfathered_seen)
+
+    assert not new_violations, (
+        "New canonical-write violations (see docs/canonical-write-ownership.md):\n"
+        + "\n".join(new_violations)
+    )
+    assert not stale, (
+        "KNOWN_BYPASS lists files that no longer write canonical tables; "
+        "remove them: " + ", ".join(stale)
+    )
