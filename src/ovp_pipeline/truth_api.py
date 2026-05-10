@@ -741,29 +741,35 @@ def _emit_promote_provenance(
     source_slug: str,
     note: str = "",
 ) -> None:
-    """BL-056: write one ``stage='promote'`` (or ``'merge'``) row to
-    the provenance audit log.  Reads the freshly-rebuilt
-    ``objects.source_url`` for ``target_slug`` so the promote row is
-    consistent with the ingest row written by the rebuild.
+    """BL-056 + BL-061: write one ``stage='promote'`` (or ``'merge'``)
+    provenance row + one ``change_type='promote'`` evergreen-revision
+    snapshot.  Both run in the same transaction so the audit pair is
+    atomic.
 
-    Best-effort.  ``provenance.upsert_provenance`` itself swallows
-    schema-not-present errors; this helper only protects against
-    the DB connect failing entirely (e.g. file permission flakes).
+    Reads the freshly-rebuilt ``objects.source_url`` and
+    ``canonical_path`` for ``target_slug`` so the rows reflect the
+    state after the rebuild step has landed.
+
+    Best-effort.  Both helpers swallow schema-not-present errors;
+    this function only protects against the DB connect failing
+    entirely (e.g. file permission flakes).
     """
-    import sqlite3
-
     from .provenance import upsert_provenance
-    from .runtime import VaultLayout
+    from .truth_store_writers import (
+        CHANGE_TYPE_PROMOTE,
+        record_evergreen_revision,
+    )
 
     layout = VaultLayout.from_vault(vault_dir)
     if not layout.knowledge_db.exists():
         return
     with sqlite3.connect(layout.knowledge_db) as conn:
         row = conn.execute(
-            "SELECT source_url FROM objects WHERE pack=? AND object_id=?",
+            "SELECT source_url, canonical_path FROM objects WHERE pack=? AND object_id=?",
             (pack_name, target_slug),
         ).fetchone()
-        source_url = (row or ("",))[0] or ""
+        source_url = (row or ("", ""))[0] or ""
+        canonical_path = (row or ("", ""))[1] or ""
         metadata: dict[str, Any] = {
             "lifecycle_action": lifecycle_action,
             "candidate_slug": source_slug,
@@ -779,6 +785,36 @@ def _emit_promote_provenance(
             parent_object_id=source_slug if source_slug != target_slug else None,
             metadata=metadata,
         )
+
+        # BL-061: snapshot the post-promote evergreen content into
+        # ``evergreen_revisions``.  Read the markdown directly off
+        # disk via canonical_path; rebuild has already written the
+        # objects row with the canonical absolute path, so this
+        # round-trips deterministically.
+        if canonical_path:
+            try:
+                content_md = Path(canonical_path).read_text(encoding="utf-8")
+            except OSError as exc:
+                LOGGER.warning(
+                    "evergreen revision snapshot skipped (cannot read %s): %s",
+                    canonical_path, exc,
+                )
+            else:
+                change_note_parts = [f"lifecycle={lifecycle_action}"]
+                if source_slug and source_slug != target_slug:
+                    change_note_parts.append(f"merged_from={source_slug}")
+                if note:
+                    change_note_parts.append(f"note={note}")
+                record_evergreen_revision(
+                    conn,
+                    pack=pack_name,
+                    object_id=target_slug,
+                    content_md=content_md,
+                    change_type=CHANGE_TYPE_PROMOTE,
+                    changed_by="ui:review_candidate_concept",
+                    change_note=" | ".join(change_note_parts),
+                )
+
         conn.commit()
 
 

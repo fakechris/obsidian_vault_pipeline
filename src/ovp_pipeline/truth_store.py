@@ -249,6 +249,34 @@ CREATE INDEX idx_provenance_source
   ON provenance(pack, source_url);
 CREATE INDEX idx_provenance_stage
   ON provenance(pack, derived_via_stage);
+
+-- BL-061: prose-level revision history for evergreens.  Where
+-- ``provenance`` answers "what stage produced this object?",
+-- ``evergreen_revisions`` answers "what did this object's content
+-- look like before the last LLM rewrite?".  Append-only;
+-- monotonically increasing ``version`` per ``(pack, object_id)``;
+-- writers populate it at every mutation site (extract / promote /
+-- editor_edit / llm_rewrite / rollback).
+--
+-- Owner: ``truth_store_writers.record_evergreen_revision`` (BL-060).
+-- Read patterns: ``/object?id=…&tab=history`` (latest N) +
+-- ``ovp-rollback-evergreen <slug> <version>`` (single row).
+CREATE TABLE evergreen_revisions (
+  pack TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  content_md TEXT NOT NULL,
+  change_type TEXT NOT NULL,
+  changed_by TEXT NOT NULL DEFAULT '',
+  derived_at TEXT NOT NULL,
+  change_note TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (pack, object_id, version)
+);
+
+CREATE INDEX idx_evergreen_revisions_object
+  ON evergreen_revisions(pack, object_id);
+CREATE INDEX idx_evergreen_revisions_changed_at
+  ON evergreen_revisions(derived_at);
 """
 
 CONTRADICTION_HEURISTIC_NOTE = (
