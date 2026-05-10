@@ -305,19 +305,31 @@ def test_readme_and_milestone_avoid_source_of_truth_language(repo_root):
 CANONICAL_TABLES = ("objects", "provenance", "claims", "relations")
 
 # Regex matches SQL strings that mutate a canonical table.  Tolerates:
-#   INSERT / UPDATE / DELETE
-#   INSERT OR IGNORE / INSERT OR REPLACE
-#   "INTO" optional (DELETE FROM, UPDATE table) — handled by the alternation
+#   INSERT / INSERT INTO / INSERT OR (IGNORE|REPLACE|ROLLBACK|ABORT|FAIL) INTO
+#   REPLACE INTO  — SQLite shorthand for INSERT OR REPLACE
+#   UPDATE / UPDATE OR (ROLLBACK|ABORT|REPLACE|FAIL|IGNORE)  — full SQLite UPDATE OR clause set
+#   DELETE FROM
+# The OR-clause alternation is permissive (any one-word identifier between
+# OR and INTO/table-name) so future SQLite variants still register.
 _CANONICAL_WRITE_RE = re.compile(
-    r"\b(?:INSERT(?:\s+OR\s+(?:IGNORE|REPLACE))?\s+INTO|UPDATE|DELETE\s+FROM)\s+("
+    r"\b(?:"
+    r"INSERT(?:\s+OR\s+\w+)?\s+INTO"
+    r"|REPLACE\s+INTO"
+    r"|UPDATE(?:\s+OR\s+\w+)?"
+    r"|DELETE\s+FROM"
+    r")\s+("
     + "|".join(CANONICAL_TABLES)
     + r")\b",
     re.IGNORECASE,
 )
 
 # Files allowed to issue raw canonical-table SQL.  Anything else fails the test.
+# Keys are repo-relative paths under ``src/ovp_pipeline/`` — basenames are
+# unsafe because we have ``commands/knowledge_index.py`` (CLI wrapper) and
+# ``knowledge_index.py`` (rebuild module) coexisting; matching by basename
+# would let the wrapper sneak through if it ever started writing.
 # Refer to docs/canonical-write-ownership.md before adding new entries.
-OWNER_FILES = {
+OWNER_FILES: set[str] = {
     # Owner — provenance: existing helper handles every row.
     "provenance.py",
     # Owner candidates (BL-060 PR#2 will hoist into truth_store_writers / relation_writer):
@@ -327,7 +339,7 @@ OWNER_FILES = {
 
 # Tech-debt ratchet — these existing bypass sites are tracked here until BL-060 PR#2
 # refactors them.  When a site is removed, drop its entry; the test prevents new ones.
-KNOWN_BYPASS = {
+KNOWN_BYPASS: set[str] = {
     # PR #185 root cause: backfill writes objects.source_url + provenance directly.
     "commands/backfill_objects_source_url.py",
 }
@@ -376,13 +388,18 @@ def test_canonical_writes_have_single_owner(repo_root):
                     continue
                 sql_strings.append(node.value)
 
-        joined = "\n".join(sql_strings)
-        if not _CANONICAL_WRITE_RE.search(joined):
+        # Search each string literal individually rather than joining them —
+        # joining with ``\n`` could glue a mutation verb at the end of one
+        # string to a canonical table name at the start of the next, producing
+        # phantom matches.
+        if not any(_CANONICAL_WRITE_RE.search(s) for s in sql_strings):
             continue
 
         # File touches a canonical table.  Owner or grandfathered violation?
-        basename = py.name
-        if basename in OWNER_FILES:
+        # Match against the relative path (rel), NOT py.name — basenames
+        # collide between top-level modules and their CLI wrappers under
+        # ``commands/``.
+        if rel in OWNER_FILES:
             continue
         if rel in KNOWN_BYPASS:
             grandfathered_seen.add(rel)
