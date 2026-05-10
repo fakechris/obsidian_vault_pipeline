@@ -405,3 +405,247 @@ def test_parse_response_rejects_all_empty_decision():
     })
     with pytest.raises(RouterResponseError, match=r"empty"):
         parse_router_response(payload)
+
+
+# ---------------------------------------------------------------------------
+# build_router_user_prompt
+# ---------------------------------------------------------------------------
+
+
+def test_build_user_prompt_renders_source_and_index():
+    from ovp_pipeline.absorb_router import (
+        IndexEntry,
+        build_router_user_prompt,
+    )
+
+    prompt_text = build_router_user_prompt(
+        source_path="50-Inbox/foo.md",
+        source_content="Article body about LLM evals.",
+        index=[
+            IndexEntry(
+                slug="llm-eval-leakage",
+                title="LLM eval leakage",
+                entity_type="failure_mode",
+                summary="Test contamination via memorisation.",
+                key_claims=("Models memorise public benchmarks.",),
+            ),
+        ],
+    )
+    assert "50-Inbox/foo.md" in prompt_text
+    assert "<source>" in prompt_text and "</source>" in prompt_text
+    assert "Article body about LLM evals." in prompt_text
+    assert "`llm-eval-leakage` (failure_mode)" in prompt_text
+    assert "Test contamination via memorisation." in prompt_text
+
+
+def test_build_user_prompt_handles_empty_index():
+    """Empty index → tell the router so it doesn't waste turns."""
+    from ovp_pipeline.absorb_router import build_router_user_prompt
+
+    prompt_text = build_router_user_prompt(
+        source_path="x.md",
+        source_content="body",
+        index=[],
+    )
+    # Specific phrasing isn't critical; the fact that we explain
+    # "no evergreens yet" + tell the router to use ``creates`` only is.
+    assert "creates" in prompt_text
+    # No bogus "vault has these slugs" block when there's nothing.
+    assert "已有的 evergreen 索引" not in prompt_text
+
+
+def test_build_user_prompt_truncates_long_source():
+    from ovp_pipeline.absorb_router import build_router_user_prompt
+
+    huge_body = "x" * 200_000
+    prompt_text = build_router_user_prompt(
+        source_path="x.md",
+        source_content=huge_body,
+        index=[],
+        max_source_chars=500,
+    )
+    # 500-char body + scaffolding ≪ 200K
+    assert len(prompt_text) < 5000
+
+
+# ---------------------------------------------------------------------------
+# route_source — happy path + audit emission
+# ---------------------------------------------------------------------------
+
+
+class _FakeLogger:
+    """Minimal PipelineLogger stub — collects emitted audit rows
+    in memory so assertions can read them back."""
+
+    def __init__(self):
+        self.events: list[tuple[str, dict]] = []
+
+    def log(self, event_type: str, data: dict):
+        self.events.append((event_type, dict(data)))
+
+
+class _FakeLLM:
+    """Returns a canned response.  Tests can override per-instance."""
+
+    def __init__(self, response_text: str):
+        self.response_text = response_text
+        self.calls: list[dict] = []
+
+    def generate(self, *, system_prompt: str, user_prompt: str, max_tokens: int) -> str:
+        self.calls.append({
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "max_tokens": max_tokens,
+        })
+        return self.response_text
+
+
+def test_route_source_happy_path_emits_ok_audit():
+    from ovp_pipeline.absorb_router import (
+        ABSORB_ROUTE_DECISION_EVENT,
+        IndexEntry,
+        ROUTE_STATUS_OK,
+        route_source,
+    )
+
+    llm = _FakeLLM(_GOLDEN_RESPONSE)
+    audit = _FakeLogger()
+    decision = route_source(
+        llm,
+        source_path="x.md",
+        source_content="body",
+        pipeline_logger=audit,
+        index=[
+            IndexEntry(
+                slug="llm-eval-leakage",
+                title="LLM eval leakage",
+                entity_type="failure_mode",
+                summary="Test contamination.",
+            ),
+        ],
+    )
+
+    # Decision returned + LLM was actually called once with both
+    # system + user prompts populated.
+    assert decision is not None
+    assert decision.updates[0].slug == "llm-eval-leakage"
+    assert len(llm.calls) == 1
+    assert llm.calls[0]["system_prompt"]   # system from registry
+    assert "x.md" in llm.calls[0]["user_prompt"]
+
+    # Audit row carries the right shape.
+    event_type, payload = audit.events[-1]
+    assert event_type == ABSORB_ROUTE_DECISION_EVENT
+    assert payload["status"] == ROUTE_STATUS_OK
+    assert payload["update_count"] == 1
+    assert payload["create_count"] == 1
+    assert payload["update_slugs"] == ["llm-eval-leakage"]
+    assert payload["prompt_version"] == "v2_router"
+
+
+def test_route_source_skip_decision_emits_skip_status():
+    from ovp_pipeline.absorb_router import (
+        ROUTE_STATUS_SKIP,
+        route_source,
+    )
+
+    skip_response = json.dumps({
+        "source_value_summary": "Promotional landing page",
+        "updates": [],
+        "creates": [],
+        "skip_reason": "Marketing copy with no extractable claims.",
+    })
+    llm = _FakeLLM(skip_response)
+    audit = _FakeLogger()
+    decision = route_source(
+        llm,
+        source_path="x.md",
+        source_content="body",
+        pipeline_logger=audit,
+        index=[],
+    )
+
+    assert decision is not None
+    assert decision.is_skip
+    assert audit.events[-1][1]["status"] == ROUTE_STATUS_SKIP
+    assert audit.events[-1][1]["skip_reason"].startswith("Marketing")
+
+
+def test_route_source_parse_error_returns_none_emits_audit():
+    """Malformed router response → returns ``None`` (caller falls
+    back) AND emits a ``parse_error`` audit row with a snippet of
+    the offending response.  Does NOT raise."""
+    from ovp_pipeline.absorb_router import (
+        ROUTE_STATUS_PARSE_ERROR,
+        route_source,
+    )
+
+    llm = _FakeLLM("Sorry I cannot help with that.")  # no JSON object
+    audit = _FakeLogger()
+    decision = route_source(
+        llm,
+        source_path="x.md",
+        source_content="body",
+        pipeline_logger=audit,
+        index=[],
+    )
+
+    assert decision is None
+    event_type, payload = audit.events[-1]
+    assert payload["status"] == ROUTE_STATUS_PARSE_ERROR
+    assert "no JSON object" in payload["error"]
+    # Snippet is bounded so a runaway response can't flood the log.
+    assert len(payload["raw_snippet"]) <= 240
+
+
+def test_route_source_llm_failure_returns_none_emits_audit():
+    """LLM client raising (network, auth, rate limit) → returns
+    ``None`` with a parse_error audit so the caller falls back."""
+    from ovp_pipeline.absorb_router import (
+        ROUTE_STATUS_PARSE_ERROR,
+        route_source,
+    )
+
+    class _RaisingLLM:
+        def generate(self, **_kwargs):
+            raise RuntimeError("simulated rate limit")
+
+    audit = _FakeLogger()
+    decision = route_source(
+        _RaisingLLM(),
+        source_path="x.md",
+        source_content="body",
+        pipeline_logger=audit,
+        index=[],
+    )
+    assert decision is None
+    payload = audit.events[-1][1]
+    assert payload["status"] == ROUTE_STATUS_PARSE_ERROR
+    assert "simulated rate limit" in payload["error"]
+
+
+def test_route_source_empty_response_returns_none_emits_audit():
+    from ovp_pipeline.absorb_router import route_source
+
+    audit = _FakeLogger()
+    decision = route_source(
+        _FakeLLM(""),
+        source_path="x.md",
+        source_content="body",
+        pipeline_logger=audit,
+        index=[],
+    )
+    assert decision is None
+    assert audit.events[-1][1]["error"] == "empty router response"
+
+
+def test_route_source_requires_index_or_vault_dir():
+    from ovp_pipeline.absorb_router import route_source
+
+    with pytest.raises(ValueError, match=r"index.*vault_dir"):
+        route_source(
+            _FakeLLM(""),
+            source_path="x.md",
+            source_content="body",
+            pipeline_logger=_FakeLogger(),
+        )
