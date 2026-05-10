@@ -1944,12 +1944,16 @@ def test_count_action_queue_by_status_returns_grouped_counts(temp_vault):
 
 
 def test_ops_cluster_detail_mounts_force_graph(temp_vault):
-    """``/ops/cluster?id=...`` injects the D3 force-directed graph.
+    """``/ops/cluster?id=...`` links to the unified Atlas force graph.
 
-    The page now opens with an interactive force-directed view above
-    the existing tabular sections.  The renderer ships a JSON
-    ``<script type="application/json">`` block carrying nodes +
-    edges, plus the D3 v7 CDN script tag and the bootstrap script.
+    Successive retrofits in commit history:
+      1. Static SVG (initial maintainer view).
+      2. ``ec79f24`` D3 force solver inline (``cluster-graph-svg``).
+      3. This commit: retire D3 entirely.  Cluster detail renders a
+         "Force-Directed View" CTA card linking into the dark Atlas
+         (``/map?community=<cluster_id>``); atlas-graph.js auto-
+         isolates that community on first paint, so /map and
+         /ops/cluster share one tech and one visual identity.
     Tabular sections (Members, Internal Edges) stay as the printable
     fallback.
     """
@@ -1990,16 +1994,20 @@ def test_ops_cluster_detail_mounts_force_graph(temp_vault):
         server.server_close()
         thread.join(timeout=5)
 
-    # Force-directed mount + D3 + JSON data block.
+    # CTA card replaces the inline D3 mount; the deep-link URL
+    # carries the cluster id so atlas-graph.js can pre-isolate.
     assert "Force-Directed View" in body
-    assert "cluster-graph-svg" in body
-    assert "cluster-graph-data" in body
-    assert "d3@7" in body or "d3.min.js" in body
+    assert "Open this cluster in the Atlas" in body
+    assert "/map?community=" in body
+    assert "cluster%3A%3Atest" in body or "cluster::test" in body
     # Tabular fallback still rendered.
     assert "Internal Edges" in body
     assert "<h2>Members</h2>" in body
-    # JSON block carries the seeded members.
-    assert '"id": "alpha"' in body or '"id":"alpha"' in body
+    # No D3 mount in the cluster page anymore (single force-graph
+    # tech across the app).
+    assert "cluster-graph-svg" not in body
+    assert "d3@7" not in body
+    assert "d3.min.js" not in body
 
 
 def test_ops_clusters_supports_offset_pagination(temp_vault):

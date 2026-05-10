@@ -141,9 +141,12 @@ TIMELINE_SNIPPET_CHARS = 200
 LINEAGE_SIBLING_EVERGREEN_LIMIT = 50
 DEFAULT_TRACEABILITY_BROWSER_LIMIT = 15
 DEFAULT_GRAPH_MAP_LIMIT = 24
-# BL-051: cap each cluster at 3 members in the visual map (~96 nodes
-# max with default 24 clusters).  ``?show_all=1`` lifts the cap.
-DEFAULT_GRAPH_MAP_MEMBER_CAP = 3
+# Cap each cluster's contribution to the default atlas view.  A cap
+# of 12 with 24 clusters gives up to ~288 nodes — dense enough that
+# the user sees a meaningful graph at first paint, but bounded so
+# the WebGL force simulation stays responsive on a typical laptop.
+# ``?show_all=1`` lifts the cap entirely for power users.
+DEFAULT_GRAPH_MAP_MEMBER_CAP = 12
 GRAPH_MAP_WIDTH = 960
 GRAPH_MAP_HEIGHT = 640
 GRAPH_MAP_CLUSTER_ORBIT_X_FACTOR = 0.26
@@ -4216,7 +4219,6 @@ def build_graph_map_payload(
 
     for cluster_index, cluster in enumerate(clusters):
         display_pack = str(cluster.get("pack") or requested_pack)
-        edge_pack = str(cluster.get("row_pack") or display_pack)
         cluster_count = max(1, len(clusters))
         cluster_angle = (2 * math.pi * cluster_index / cluster_count) if cluster_count > 1 else 0
         cluster_x = center_x + (math.cos(cluster_angle) * cluster_orbit_x if cluster_count > 1 else 0)
@@ -4262,12 +4264,15 @@ def build_graph_map_payload(
                 node["cluster_ids"].append(cluster["cluster_id"])
                 node["cluster_titles"].append(cluster.get("display_title") or cluster["label"])
 
-        member_ids = {str(member["object_id"]) for member in members if member.get("object_id")}
-        for edge in edges_by_pack.get(edge_pack, []):
+    # Edge collection runs once after every cluster has populated
+    # ``nodes`` so cross-community edges (source in cluster A, target
+    # in cluster B) survive — the previous per-cluster filter dropped
+    # any edge whose endpoints didn't both sit inside the same
+    # cluster's member list, leaving the atlas almost edge-less.
+    for edges_list in edges_by_pack.values():
+        for edge in edges_list:
             source_id = str(edge["source_object_id"])
             target_id = str(edge["target_object_id"])
-            if source_id not in member_ids or target_id not in member_ids:
-                continue
             if source_id not in nodes or target_id not in nodes:
                 continue
             key = (source_id, target_id, str(edge["edge_kind"]))

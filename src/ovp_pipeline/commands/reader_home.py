@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from html import escape
 
-from ._ui_renderers import _layout, _shell_href
+from ._ui_renderers import _layout, _shell_href, _topic_entry_card
 
 
 def _render_reader_home(payload: dict) -> str:
@@ -36,34 +36,41 @@ def _render_reader_home(payload: dict) -> str:
     recent_crystals = payload.get("recent_crystals") or []
     recent_days = int(payload.get("recent_days") or 7)
 
-    def _topic_li(item: dict) -> str:
-        href = escape(str(item.get("note_href") or ""))
-        label = escape(str(item.get("label") or "(untitled)"))
-        teaser = escape(str(item.get("teaser") or ""))
-        teaser_html = f"<div class='muted'>{teaser}</div>" if teaser else ""
-        rank = int(item.get("rank") or 0)
-        return (
-            "<li>"
-            f"<strong>{rank}.</strong> <a href='{href}'>{label}</a>"
-            f"{teaser_html}</li>"
+    def _recent_card(item: dict) -> str:
+        # Recent topics share the same compact card shape as Top
+        # Topics so the home page reads as one component family.
+        return _topic_entry_card(
+            {
+                "label": item.get("label") or "(untitled)",
+                "teaser": item.get("teaser") or "",
+                "note_href": item.get("note_href") or "",
+                "crystal_kind": item.get("crystal_kind") or "community",
+            },
+            compact=True,
         )
 
-    def _recent_li(item: dict) -> str:
-        href = escape(str(item.get("note_href") or ""))
-        label = escape(str(item.get("label") or "(untitled)"))
-        teaser = escape(str(item.get("teaser") or ""))
-        teaser_html = f"<div class='muted'>{teaser}</div>" if teaser else ""
-        return f"<li><a href='{href}'>{label}</a>{teaser_html}</li>"
-
     top_topics_html = (
-        "".join(_topic_li(item) for item in top_topics)
-        or "<li class='muted'>No topics synthesized yet. Run "
+        "".join(
+            _topic_entry_card(
+                {
+                    "rank": item.get("rank") or 0,
+                    "label": item.get("label") or "(untitled)",
+                    "teaser": item.get("teaser") or "",
+                    "note_href": item.get("note_href") or "",
+                    "score": float(item.get("score") or 0.0),
+                    "crystal_kind": item.get("crystal_kind") or "community",
+                },
+                compact=True,
+            )
+            for item in top_topics
+        )
+        or "<p class='muted'>No topics synthesized yet. Run "
            "<code>ovp-synthesize-community-crystals</code> then "
-           "<code>ovp-knowledge-index</code> to populate.</li>"
+           "<code>ovp-knowledge-index</code> to populate.</p>"
     )
     recent_html = (
-        "".join(_recent_li(item) for item in recent_crystals)
-        or f"<li class='muted'>No topics synthesized in the last {recent_days} days.</li>"
+        "".join(_recent_card(item) for item in recent_crystals)
+        or f"<p class='muted'>No topics synthesized in the last {recent_days} days.</p>"
     )
     see_all_html = (
         f"<p class='muted'><a href='{escape(atlas_href)}'>See all "
@@ -88,26 +95,23 @@ def _render_reader_home(payload: dict) -> str:
     body = "".join([
         "<h1>Knowledge Library</h1>",
         "<p class='muted' style='margin-top:-2px'>Discover, read, and follow the ideas in this vault.</p>",
-        f"<form method='get' action='{escape(search_href)}' style='display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.5rem 0 1rem'>",
+        f"<form method='get' action='{escape(search_href)}'>",
         pack_input,
         "<input type='search' name='q' placeholder='Search by title, topic, source…' autofocus />",
         "<button type='submit'>Search</button>",
         "</form>",
-        # Top Topics card includes the "See all N featured topics →"
-        # link.  Pre-BL-051 this was a separate Curated Atlas card —
-        # folded in because it was the same ranked list at a higher N.
-        "<section class='card'>",
+        # Top Topics + Recent Topics share the same card-shell shape
+        # used by /topics so the home and Featured Topics pages read
+        # as one component family — same rank/title/score-pill/teaser
+        # rhythm, just compact (no breakdown chips).
         "<h2>Top Topics</h2>",
         "<p class='muted'>The highest-scoring synthesized topics in your "
         f"vault — pack <code>{escape(pack)}</code>.</p>",
-        f"<ul class='list-tight'>{top_topics_html}</ul>",
+        top_topics_html,
         see_all_html,
-        "</section>",
         map_card,
-        "<section class='card'>",
         f"<h2>Recent Topics (last {recent_days} days)</h2>",
-        f"<ul class='list-tight'>{recent_html}</ul>",
-        "</section>",
+        recent_html,
     ])
     return _layout(
         "Knowledge Library",

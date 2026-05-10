@@ -46,12 +46,20 @@
   }
 
   // ---------- STATE ----------
+  // ``superNodeMode`` (off by default) is the only path that
+  // collapses a community into a single super-node.  Default view
+  // keeps every community expanded so the user sees the full graph
+  // density (objects + their cross-community links) at first paint.
+  // Double-click on a node now toggles community **isolation**, not
+  // collapse — focuses the view on that one community without
+  // creating a giant blob.
   const state = {
-    isolatedCommunities: new Set(),         // empty = all
+    isolatedCommunities: new Set(),         // empty = all communities visible
     types: new Set(["evergreen","deepdive","topic","open-question"]),
     sources: new Set(["manual","pinboard","clipper","github"]),
     qualityMin: 0,
-    expandedCommunities: new Set(),         // start collapsed
+    expandedCommunities: new Set(),         // populated below — all expanded by default
+    superNodeMode: false,                   // opt-in collapse via Tweaks panel
     mode: "dblclick",                       // dblclick | hover | zoom
     showHulls: true,
     spin: "off",
@@ -62,9 +70,22 @@
     playTimer: null,
   };
 
-  // Start with all communities collapsed (showing super-nodes)
+  // All communities expanded by default so the user sees a dense,
+  // navigable graph instead of 24 lonely super-nodes.
   data.communities.forEach(c => state.expandedCommunities.add(c.id));
-  // ^ Actually start expanded so users see the rich graph first.
+
+  // Deep-link support: ``/map?community=<cluster_id>`` from the
+  // cluster detail page pre-isolates that community so the user
+  // arrives focused on the cluster they were just reading about.
+  // Same shell, same tech as the unscoped /map view.
+  try {
+    const qs = new URLSearchParams(window.location.search);
+    const community = qs.get("community");
+    if (community
+        && data.communities.some(c => c.id === community)) {
+      state.isolatedCommunities = new Set([community]);
+    }
+  } catch (e) {}
 
   // ---------- PARSE DATES ----------
   const allDates = data.nodes.map(n => new Date(n.absorbedAt + "T12:00:00")).sort((a,b)=>a-b);
@@ -103,11 +124,18 @@
     const nodes = [];
     const idMap = {}; // original id -> rendered id
 
+    // A community renders as collapsed super-node only when global
+    // ``superNodeMode`` is on AND the user hasn't opted that one
+    // community into the expanded set.  When superNodeMode is off
+    // (default), every community renders as full member nodes.
     data.communities.forEach(c => {
       const members = passing.filter(n => n.community === c.id);
       if (members.length === 0) return;
 
-      if (state.expandedCommunities.has(c.id)) {
+      const collapsed =
+        state.superNodeMode && !state.expandedCommunities.has(c.id);
+
+      if (!collapsed) {
         members.forEach(n => {
           const out = {
             ...n,
@@ -118,7 +146,7 @@
           idMap[n.id] = n.id;
         });
       } else {
-        // Super node
+        // Super node — only reached when superNodeMode is on
         const sid = "S_" + c.id;
         nodes.push({
           id: sid,
@@ -359,37 +387,71 @@
     refreshHighlight();
   }
 
-  // double-click toggles expansion
+  // Double-click on any node now isolates the view to that node's
+  // community (or restores the full view if already isolated to it).
+  // This replaces the old "collapse to super-node" behaviour, which
+  // produced a giant blob with no visible structure.  Super-node
+  // collapse stays available via the explicit Tweaks toggle.
   el.addEventListener("dblclick", () => {
-    const node = state.hoverNodeId ? Graph.graphData().nodes.find(n => n.id === state.hoverNodeId) : null;
-    if (!node) return;
-    if (state.mode === "dblclick") {
-      if (node.__isSuper) {
-        state.expandedCommunities.add(node.community);
-      } else {
-        // collapse the parent community
-        state.expandedCommunities.delete(node.community);
+    const node = state.hoverNodeId
+      ? Graph.graphData().nodes.find(n => n.id === state.hoverNodeId)
+      : null;
+    if (!node || state.mode !== "dblclick") return;
+    if (node.__isSuper) {
+      // Super-node dblclick: drop super mode and isolate the
+      // community, so the user sees its members rather than a blob.
+      state.superNodeMode = false;
+      const segSuper = document.getElementById("seg-super");
+      if (segSuper) {
+        segSuper.querySelectorAll("button").forEach(b =>
+          b.classList.toggle("active", b.dataset.super === "off")
+        );
       }
-      rebuild();
+      state.isolatedCommunities = new Set([node.community]);
+    } else if (state.isolatedCommunities.has(node.community)
+               && state.isolatedCommunities.size === 1) {
+      // Already isolated to this community → restore full view.
+      state.isolatedCommunities.clear();
+    } else {
+      state.isolatedCommunities = new Set([node.community]);
     }
+    rebuild();
+    syncLegendDim();
   });
 
-  // zoom-based disclosure
+  function syncLegendDim() {
+    const legendEl = document.getElementById("legend");
+    if (!legendEl) return;
+    legendEl.querySelectorAll(".legend-row").forEach(r => {
+      const dim = state.isolatedCommunities.size
+        && !state.isolatedCommunities.has(r.dataset.cid);
+      r.classList.toggle("dim", dim);
+    });
+  }
+
+  // Zoom-based disclosure only applies when the user has opted into
+  // super-node mode AND chosen the zoom mode in Tweaks.  Otherwise
+  // every community is always expanded.
   Graph.onEngineTick(() => {
-    if (state.mode !== "zoom") return;
+    if (state.mode !== "zoom" || !state.superNodeMode) return;
     const pos = Graph.cameraPosition();
     const dist = Math.hypot(pos.x, pos.y, pos.z);
-    // expand all if close, collapse if far
     if (dist < 280) {
       let changed = false;
       data.communities.forEach(c => {
-        if (!state.expandedCommunities.has(c.id)) { state.expandedCommunities.add(c.id); changed = true; }
+        if (!state.expandedCommunities.has(c.id)) {
+          state.expandedCommunities.add(c.id);
+          changed = true;
+        }
       });
       if (changed) rebuild();
     } else if (dist > 520) {
       let changed = false;
       data.communities.forEach(c => {
-        if (state.expandedCommunities.has(c.id)) { state.expandedCommunities.delete(c.id); changed = true; }
+        if (state.expandedCommunities.has(c.id)) {
+          state.expandedCommunities.delete(c.id);
+          changed = true;
+        }
       });
       if (changed) rebuild();
     }
@@ -461,6 +523,9 @@
     });
     legend.appendChild(row);
   });
+  // If a deep-link pre-isolated a community, dim the rest now that
+  // the legend rows exist.
+  syncLegendDim();
 
   // type/source counts
   const typeCounts = {evergreen:0,deepdive:0,topic:0,"open-question":0};
@@ -507,6 +572,22 @@
   });
   bindSeg("seg-hulls", "hulls", v => { state.showHulls = (v === "on"); });
   bindSeg("seg-spin", "spin", v => { state.spin = v; });
+  // Communities: Expanded (default) shows every member node;
+  // Collapsed renders one super-node per community.  When the user
+  // toggles to Collapsed, drop everything from expandedCommunities so
+  // each community renders as a super-node.
+  const segSuper = document.getElementById("seg-super");
+  if (segSuper) {
+    bindSeg("seg-super", "super", v => {
+      state.superNodeMode = (v === "on");
+      if (v === "on") {
+        state.expandedCommunities.clear();
+      } else {
+        data.communities.forEach(c => state.expandedCommunities.add(c.id));
+      }
+      rebuild();
+    });
+  }
 
   // 2D / 3D toggle
   function setDimensions(n) {

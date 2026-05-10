@@ -27,7 +27,6 @@ from ..ui.view_models import (
     DEFAULT_CANDIDATE_BROWSER_LIMIT,
     build_runtime_home_payload,
 )
-from ._graph_visualizers import render_cluster_force_graph
 
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
@@ -74,6 +73,89 @@ def _safe_redirect_path(location: str, *, fallback: str = "/") -> str:
     return stripped
 _CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
 _INLINE_MEMBER_LINK_LIMIT = 8
+
+
+def _topic_entry_card(entry: dict, *, compact: bool = False) -> str:
+    """Shared topic-card markup used by Knowledge Library home and
+    Featured Topics.  Same card shape (rank · title · score pill ·
+    kind pill · teaser) so the two pages read as one component
+    family.  ``compact=True`` drops the 6-metric breakdown chips —
+    home uses compact, /topics uses full.
+
+    ``entry`` keys consumed:
+    rank · label · note_href · score · teaser · crystal_kind ·
+    size_norm/credibility_norm/source_diversity_norm/
+    contradiction_norm/reuse_recency_norm/evergreen_recency_norm
+    (only the breakdown keys are needed when compact=False).
+    """
+    kind = str(entry.get("crystal_kind", ""))
+    kind_label = (
+        "topic" if kind == "community"
+        else ("open question" if kind == "contradiction" else (kind or "topic"))
+    )
+    kind_pill_class = "pill warn" if kind == "contradiction" else "pill"
+    label = escape(str(entry.get("label", "(untitled)")))
+    score = float(entry.get("score", 0.0))
+    teaser = str(entry.get("teaser") or "")
+    note_href = str(entry.get("note_href") or "")
+    rank = int(entry.get("rank", 0) or 0)
+    link_html = (
+        f"<a href='{escape(note_href)}'>{label}</a>" if note_href else label
+    )
+    teaser_html = (
+        f"<p>{escape(teaser)}</p>"
+        if teaser
+        else "<p class='muted'><em>(no teaser available)</em></p>"
+    )
+    breakdown_html = ""
+    if not compact:
+        breakdown_chips = "".join(
+            f"<span class='muted tiny mono' style='margin-right:0.6rem'>{escape(label_text)} "
+            f"<strong style='color:var(--text-soft)'>{value:.2f}</strong></span>"
+            for label_text, value in [
+                ("size",          float(entry.get("size_norm", 0) or 0)),
+                ("credibility",   float(entry.get("credibility_norm", 0) or 0)),
+                ("source-div",    float(entry.get("source_diversity_norm", 0) or 0)),
+                ("contradict",    float(entry.get("contradiction_norm", 0) or 0)),
+                ("reuse-rec",     float(entry.get("reuse_recency_norm", 0) or 0)),
+                ("evergreen-rec", float(entry.get("evergreen_recency_norm", 0) or 0)),
+            ]
+        )
+        breakdown_html = (
+            "<div style='margin-top:.6rem;padding-top:.5rem;"
+            "border-top:1px dashed var(--border);"
+            "display:flex;flex-wrap:wrap;font-size:.78rem;color:var(--muted)'>"
+            f"{breakdown_chips}</div>"
+        )
+    rank_html = (
+        f"<span class='muted tiny mono' style='min-width:1.6rem;text-align:right'>{rank}</span>"
+        if rank
+        else ""
+    )
+    score_pill = (
+        f"<span class='pill'>score {score:.3f}</span>"
+        if score
+        else ""
+    )
+    kind_pill = (
+        f"<span class='{kind_pill_class}'>{escape(kind_label)}</span>"
+        if kind
+        else ""
+    )
+    return (
+        "<section class='card flush'>"
+        "<div class='card-head'>"
+        f"{rank_html}"
+        f"<h3 style='margin:0;font-size:1.05rem;flex:1;min-width:0'>{link_html}</h3>"
+        f"{score_pill}"
+        f"{kind_pill}"
+        "</div>"
+        "<div class='card-body'>"
+        f"{teaser_html}"
+        f"{breakdown_html}"
+        "</div>"
+        "</section>"
+    )
 
 
 def _ts(text) -> str:
@@ -3296,65 +3378,13 @@ def _render_curated_atlas_page(payload: dict) -> str:
             "Re-run <code>ovp-rescore-crystals</code> to refresh the Projection.</p></section>"
         )
     else:
-        # Each topic entry gets its own .card so the rank, title,
-        # score chip, kind chip, teaser, and 6-metric breakdown each
-        # have breathing room — the prior single-<ul> rendering
-        # collapsed all six lines onto one cramped row, which was
-        # the loudest "design unfinished" complaint on /topics.
-        item_html_parts = []
-        for entry in entries:
-            kind = str(entry.get("crystal_kind", ""))
-            kind_label = (
-                "topic" if kind == "community" else
-                ("open question" if kind == "contradiction" else kind)
-            )
-            kind_pill_class = "pill warn" if kind == "contradiction" else "pill"
-            label = escape(str(entry.get("label", "(untitled)")))
-            score = float(entry.get("score", 0.0))
-            teaser = str(entry.get("teaser") or "")
-            note_href = str(entry.get("note_href") or "")
-            link_html = (
-                f"<a href='{escape(note_href)}'>{label}</a>" if note_href else label
-            )
-            teaser_html = (
-                f"<p>{escape(teaser)}</p>"
-                if teaser
-                else "<p class='muted'><em>(no teaser available)</em></p>"
-            )
-            # Breakdown rendered as a wrapped flex of mono-tiny chips
-            # so each metric is its own readable unit instead of one
-            # long en-dot-joined string.
-            breakdown_chips = "".join(
-                f"<span class='muted tiny mono' style='margin-right:0.6rem'>{escape(label_text)} "
-                f"<strong style='color:var(--text-soft)'>{value:.2f}</strong></span>"
-                for label_text, value in [
-                    ("size",         float(entry.get("size_norm", 0))),
-                    ("credibility",  float(entry.get("credibility_norm", 0))),
-                    ("source-div",   float(entry.get("source_diversity_norm", 0))),
-                    ("contradict",   float(entry.get("contradiction_norm", 0))),
-                    ("reuse-rec",    float(entry.get("reuse_recency_norm", 0))),
-                    ("evergreen-rec",float(entry.get("evergreen_recency_norm", 0))),
-                ]
-            )
-            item_html_parts.append(
-                "<section class='card flush'>"
-                "<div class='card-head'>"
-                f"<span class='muted tiny mono' style='min-width:1.6rem;text-align:right'>"
-                f"{int(entry.get('rank', 0))}</span>"
-                f"<h3 style='margin:0;font-size:1.05rem;flex:1;min-width:0'>{link_html}</h3>"
-                f"<span class='pill'>score {score:.3f}</span>"
-                f"<span class='{kind_pill_class}'>{escape(kind_label)}</span>"
-                "</div>"
-                "<div class='card-body'>"
-                f"{teaser_html}"
-                "<div style='margin-top:.6rem;padding-top:.5rem;"
-                "border-top:1px dashed var(--border);"
-                "display:flex;flex-wrap:wrap;font-size:.78rem;color:var(--muted)'>"
-                f"{breakdown_chips}</div>"
-                "</div>"
-                "</section>"
-            )
-        body_html = "".join(item_html_parts)
+        # Each topic entry rendered via the shared _topic_entry_card
+        # helper.  Featured Topics uses the full density (with the
+        # 6-metric breakdown chips); the home page uses the same
+        # helper with compact=True.
+        body_html = "".join(
+            _topic_entry_card(entry, compact=False) for entry in entries
+        )
 
     header_lines = [
         "<h1>Featured Topics</h1>",
@@ -3839,6 +3869,13 @@ def _render_graph_atlas_page(payload: dict, *, action_path: str = "/map") -> str
           </div>
         </div>
         <div class="tweaks-row">
+          <span class="label">Communities</span>
+          <div class="seg" id="seg-super">
+            <button data-super="off" class="active">Expanded</button>
+            <button data-super="on">Collapsed</button>
+          </div>
+        </div>
+        <div class="tweaks-row">
           <span class="label">Show hulls</span>
           <div class="seg" id="seg-hulls">
             <button data-hulls="on" class="active">On</button>
@@ -4042,7 +4079,27 @@ def _render_cluster_detail_page(payload: dict) -> str:
     )
     review_context = payload["review_context"]
     model_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["model_notes"])
-    force_graph_section = render_cluster_force_graph(payload)
+    # Single force-graph stack across the app: every visual graph
+    # (atlas, cluster, future neighborhood views) goes through
+    # ``/map`` with ``?community=<cluster_id>`` so atlas-graph.js
+    # pre-isolates this cluster on first paint.  This retires the
+    # standalone D3 SVG mount that used to live here under
+    # ``render_cluster_force_graph`` — same tech, same visual identity
+    # as /map, no duplicate codepath.
+    cluster_id = str(cluster.get("cluster_id") or "")
+    atlas_href = _shell_href(
+        f"/map?community={quote(cluster_id, safe='')}",
+        requested_pack,
+    )
+    force_graph_section = (
+        "<section class='card'><h2>Force-Directed View</h2>"
+        "<p class='muted'>Cluster member graph renders in the dark "
+        "Atlas, scoped to this community.  Same tech and visual "
+        "identity as the global Knowledge Map — drag to pan, scroll "
+        "to zoom, double-click any node to return to the full atlas.</p>"
+        f"<p><a class='btn' href='{escape(atlas_href)}'>Open this cluster in the Atlas →</a></p>"
+        "</section>"
+    )
     return _layout(
         "Graph Cluster",
         (
