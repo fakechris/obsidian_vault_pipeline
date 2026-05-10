@@ -622,7 +622,14 @@ class EvergreenExtractor:
         or a registry/import failure.
         """
         try:
-            from .absorb_router import route_source
+            # Match the relative-vs-absolute import fallback the rest
+            # of this file uses (see lines 30-44) so a direct
+            # ``python3 auto_evergreen_extractor.py`` invocation
+            # doesn't ImportError.
+            try:
+                from .absorb_router import route_source
+            except ImportError:
+                from absorb_router import route_source  # type: ignore[no-redef]
 
             route_source(
                 self.llm,
