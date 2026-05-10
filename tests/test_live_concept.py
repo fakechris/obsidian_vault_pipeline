@@ -350,12 +350,14 @@ def test_patch_live_rejects_unknown_field(tmp_path):
 
 
 def test_patch_live_raises_on_missing_block(tmp_path):
+    """File is marked ``type: live-concept`` but has no ``live:``
+    block (e.g. operator deleted it by hand).  Patch refuses."""
     from ovp_pipeline.live_concept_fileops import patch_live
 
     path = tmp_path / "30-Projects" / "Tracking" / "noblock.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "---\ntype: note\n---\n\n# No live block\n",
+        "---\ntype: live-concept\n---\n\n# No live block\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match=r"no parseable"):
@@ -397,6 +399,174 @@ def test_delete_live_idempotent(tmp_path):
 # ---------------------------------------------------------------------------
 # Round-trip: set_live → parse_live_concept agrees
 # ---------------------------------------------------------------------------
+
+
+def test_patch_live_rejects_file_without_type_marker(tmp_path):
+    """Codex review fix: a non-live note that happens to carry a
+    ``live:`` key is not ours to claim — patch_live must refuse
+    rather than silently flipping ``type:`` to ``live-concept``."""
+    from ovp_pipeline.live_concept_fileops import patch_live
+
+    path = tmp_path / "30-Projects" / "Tracking" / "stray.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\ntype: note\nlive:\n  objective: not yours to touch\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"not type"):
+        patch_live(path, last_run_at="2026-05-10")
+
+
+def test_delete_live_refuses_non_live_concept_file(tmp_path):
+    """Codex review fix: ``delete_live`` only acts on files marked
+    ``type: live-concept``; a stray ``live:`` key in a regular note
+    survives untouched."""
+    from ovp_pipeline.live_concept_fileops import delete_live
+
+    path = tmp_path / "30-Projects" / "Tracking" / "stray.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = (
+        "---\ntype: note\nlive:\n  objective: not yours to touch\n---\n\nbody\n"
+    )
+    path.write_text(original, encoding="utf-8")
+    delete_live(path)
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_set_live_preserves_yaml_comments_on_other_keys(tmp_path):
+    """Codex review fix: re-rendering the whole metadata dict would
+    drop comments on adjacent keys.  The splice-based writer leaves
+    them verbatim."""
+    from ovp_pipeline.live_concept import LiveConceptFrontmatter
+    from ovp_pipeline.live_concept_fileops import set_live
+
+    path = tmp_path / "30-Projects" / "Tracking" / "commented.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\n"
+        "# operator-managed tag block — keep as-is\n"
+        "tags:\n"
+        "  - llm  # primary topic\n"
+        "  - eval\n"
+        "---\n\n# Commented\n",
+        encoding="utf-8",
+    )
+    set_live(path, LiveConceptFrontmatter(objective="Track."))
+    text = path.read_text(encoding="utf-8")
+    assert "# operator-managed tag block — keep as-is" in text
+    assert "# primary topic" in text
+
+
+def test_patch_live_preserves_yaml_comments_on_other_keys(tmp_path):
+    """Same verbatim contract on the patch path."""
+    from ovp_pipeline.live_concept import (
+        LiveConceptFrontmatter,
+        parse_live_concept,
+    )
+    from ovp_pipeline.live_concept_fileops import patch_live, set_live
+
+    path = tmp_path / "30-Projects" / "Tracking" / "patched.md"
+    set_live(path, LiveConceptFrontmatter(objective="Track."))
+    # Operator inserts a comment + tag block by hand in Obsidian.
+    text = path.read_text(encoding="utf-8")
+    text = text.replace(
+        "type: live-concept\n",
+        "type: live-concept\n# user-curated tags below\ntags:\n  - llm  # primary\n",
+    )
+    path.write_text(text, encoding="utf-8")
+    patch_live(path, last_attempt_at="2026-05-10T08:00:00Z")
+    after = path.read_text(encoding="utf-8")
+    assert "# user-curated tags below" in after
+    assert "# primary" in after
+    handle = parse_live_concept(path)
+    assert handle is not None
+    assert handle.frontmatter.last_attempt_at == "2026-05-10T08:00:00Z"
+
+
+def test_set_live_handles_fenced_yaml_frontmatter(tmp_path):
+    """Codex review fix: ``runtime.split_markdown_frontmatter`` reads
+    fenced YAML; the fileops writer must round-trip it without
+    breaking parser symmetry."""
+    from ovp_pipeline.live_concept import (
+        LiveConceptFrontmatter,
+        parse_live_concept,
+    )
+    from ovp_pipeline.live_concept_fileops import patch_live, set_live
+
+    path = tmp_path / "30-Projects" / "Tracking" / "fenced.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "```yaml\n---\ntags:\n  - llm\n---\n```\n\n# Fenced\n",
+        encoding="utf-8",
+    )
+    set_live(path, LiveConceptFrontmatter(objective="Track."))
+    text = path.read_text(encoding="utf-8")
+    # Fence preserved.
+    assert text.startswith("```yaml\n---\n")
+    assert "\n---\n```\n" in text
+    # And patch_live can still drive the runtime fields.
+    patch_live(path, last_attempt_at="2026-05-10T08:00:00Z")
+    handle = parse_live_concept(path)
+    assert handle is not None
+    assert handle.frontmatter.last_attempt_at == "2026-05-10T08:00:00Z"
+
+
+def test_patch_live_uses_supplied_lock(tmp_path):
+    """The ``acquire_lock`` parameter is the future hook for PR#2's
+    trigger scheduler.  Verify it's actually entered/exited per call
+    so PR#2 can wire a real ``filelock`` without surprises."""
+    from contextlib import contextmanager
+
+    from ovp_pipeline.live_concept import LiveConceptFrontmatter
+    from ovp_pipeline.live_concept_fileops import patch_live, set_live
+
+    calls: list[str] = []
+
+    @contextmanager
+    def tracking_lock(_path):
+        calls.append("enter")
+        try:
+            yield
+        finally:
+            calls.append("exit")
+
+    path = tmp_path / "30-Projects" / "Tracking" / "locked.md"
+    set_live(
+        path,
+        LiveConceptFrontmatter(objective="Track."),
+        acquire_lock=tracking_lock,
+    )
+    patch_live(
+        path,
+        last_run_at="2026-05-10T08:00:00Z",
+        acquire_lock=tracking_lock,
+    )
+    # set_live + patch_live = two enter/exit pairs.
+    assert calls == ["enter", "exit", "enter", "exit"]
+
+
+def test_parse_block_triggers_non_dict_falls_back_to_empty(tmp_path):
+    """Coverage gap from codex review: ``triggers: "weekly"`` (a
+    string instead of a dict) must not crash — the parser is liberal
+    on shape per the schema."""
+    from ovp_pipeline.live_concept import parse_live_concept_block
+
+    fm = parse_live_concept_block({
+        "objective": "x",
+        "triggers": "weekly",  # malformed — not a dict
+    })
+    assert fm is not None
+    assert fm.triggers == {}
+
+
+def test_parse_block_active_quoted_string_truthy(tmp_path):
+    """``active: "true"`` (quoted, so YAML parses as a string)
+    coerces to truthy.  Same liberal-on-shape pattern."""
+    from ovp_pipeline.live_concept import parse_live_concept_block
+
+    fm = parse_live_concept_block({"objective": "x", "active": "true"})
+    assert fm is not None
+    assert fm.is_active is True
 
 
 def test_round_trip_preserves_all_fields(tmp_path):
