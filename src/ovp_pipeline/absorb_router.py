@@ -517,6 +517,11 @@ ROUTER_MAX_OUTPUT_TOKENS = 2000
 # prompt and the user prompt scaffolding.
 ROUTER_MAX_SOURCE_CHARS = 30000
 
+# Cap on the ``raw_snippet`` field of a parse-error audit row.  Bounded
+# so a runaway LLM response (multi-MB hallucination) cannot bloat the
+# audit log when many sources fail in a row.
+ROUTER_AUDIT_RAW_SNIPPET_CHARS = 240
+
 
 def build_router_user_prompt(
     *,
@@ -567,7 +572,7 @@ def build_router_user_prompt(
 
 
 def _emit_route_decision_audit(
-    logger: Any,
+    pipeline_logger: Any,
     *,
     source_path: str,
     status: str,
@@ -575,14 +580,16 @@ def _emit_route_decision_audit(
     error: str = "",
     raw_snippet: str = "",
 ) -> None:
-    """Best-effort audit emit.  ``logger`` is expected to be a
-    ``PipelineLogger``-shaped object with ``.log(event_type, data)``;
+    """Best-effort audit emit.  ``pipeline_logger`` is expected to be
+    a ``PipelineLogger``-shaped object with ``.log(event_type, data)``;
     we duck-type rather than import to keep this module unaware of
     the article-processor module.
 
     Always swallows logger errors — the audit row is non-canonical
     and the routing path must not fail because the JSONL writer
-    flapped.
+    flapped.  Parameter is named ``pipeline_logger`` (not just
+    ``logger``) so it doesn't shadow the module-level ``logger``
+    used to report logger-call failures.
     """
     payload: dict[str, Any] = {
         "prompt_name": ROUTER_PROMPT_NAME,
@@ -601,16 +608,13 @@ def _emit_route_decision_audit(
     if error:
         payload["error"] = error
     if raw_snippet:
-        # Cap the snippet so a runaway LLM response doesn't bloat the
-        # audit log.  120 chars is enough to read what shape the
-        # response took.
-        payload["raw_snippet"] = raw_snippet[:240]
+        payload["raw_snippet"] = raw_snippet[:ROUTER_AUDIT_RAW_SNIPPET_CHARS]
     try:
-        logger.log(ABSORB_ROUTE_DECISION_EVENT, payload)
+        pipeline_logger.log(ABSORB_ROUTE_DECISION_EVENT, payload)
     except Exception as exc:  # noqa: BLE001 — best-effort audit
-        # Use the module-level logger here, not the pipeline logger
-        # we just failed to call.
-        globals()["logger"].warning(
+        # Direct module-level reference now that the parameter rename
+        # removed the shadow.
+        logger.warning(
             "absorb_route_decision audit emit failed: %s", exc,
         )
 
@@ -659,9 +663,10 @@ def route_source(
                 "route_source needs either an explicit `index` or a `vault_dir`"
             )
         index = build_evergreen_index(vault_dir, pack_name=pack_name)
-    # Materialise once — both the prompt builder and the audit emit
-    # may iterate the index, and a generator can only be consumed once.
-    index = list(index)
+    # ``index`` is consumed once below by ``build_router_user_prompt``
+    # via a single ``render_index_for_prompt`` pass — no extra
+    # materialisation needed.  ``build_evergreen_index`` already
+    # returns a list, and tests pass lists too.
 
     try:
         prompt = get_prompt(ROUTER_PROMPT_NAME, ROUTER_PROMPT_VERSION)
