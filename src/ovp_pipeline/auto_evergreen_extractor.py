@@ -345,6 +345,8 @@ class EvergreenExtractor:
         llm_client: LiteLLMClient,
         logger: PipelineLogger,
         vault_dir: Path | None = None,
+        *,
+        enable_router_shadow: bool | None = None,
     ):
         self.llm = llm_client
         self.logger = logger
@@ -354,6 +356,28 @@ class EvergreenExtractor:
         # data — so the prompt block silently disappears on a fresh
         # vault.
         self._entity_prime_block: str | None = None
+
+        # BL-062 PR#3: shadow-mode router.  When enabled, every
+        # ``extract_concepts`` call ALSO issues a Pass 1 router call
+        # (in addition to the legacy v2 monolithic extract) and emits
+        # an ``absorb_route_decision`` audit row.  The router decision
+        # is NOT yet used to drive extraction — that's a future PR
+        # once we have audit data showing the router's parse rate +
+        # decision quality on the live vault.
+        #
+        # Cost: shadow mode roughly **doubles** the per-source LLM
+        # spend (one extra Pass 1 call) since the router and v2
+        # extractor both fire.  Default off; set
+        # ``OVP_ABSORB_ROUTER_SHADOW=1`` (or pass
+        # ``enable_router_shadow=True``) to opt in for measurement
+        # runs.  Constructor argument wins over env var.
+        if enable_router_shadow is None:
+            self.enable_router_shadow = (
+                os.environ.get("OVP_ABSORB_ROUTER_SHADOW", "").strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
+        else:
+            self.enable_router_shadow = bool(enable_router_shadow)
 
     def _load_entity_prime_block(self) -> str:
         """Render the top-N entity aliases into a compact prompt block.
@@ -571,6 +595,15 @@ class EvergreenExtractor:
 具体可抽取的东西(只是观点反复 / 没有数字或案例 / 全部是常识),返回
 ``{{"units": [], "skip_reason": "..."}}`` 是被鼓励的输出。"""
 
+        # BL-062 PR#3: shadow-mode router.  Runs *before* the legacy
+        # v2 extract so the router sees the same content; failures
+        # are swallowed inside ``route_source`` (audit-only contract)
+        # so this can never affect the legacy path.  Cost: one extra
+        # LLM call per source — see ``__init__`` docstring on
+        # ``enable_router_shadow``.
+        if self.enable_router_shadow:
+            self._run_router_shadow(file_path=file_path, content=content)
+
         result_text = self.llm.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=user_prompt,
@@ -578,6 +611,42 @@ class EvergreenExtractor:
         )
 
         return self._parse_v2_response(result_text, file_path)
+
+    def _run_router_shadow(self, *, file_path: Path, content: str) -> None:
+        """Issue a Pass 1 router call alongside the legacy v2 extract.
+
+        Best-effort: any exception caught here is logged via
+        ``absorb_router_shadow_error`` and swallowed.  ``route_source``
+        already has its own audit-on-failure contract, so the only
+        thing that should escape is a programming bug in this wrapper
+        or a registry/import failure.
+        """
+        try:
+            # Match the relative-vs-absolute import fallback the rest
+            # of this file uses (see lines 30-44) so a direct
+            # ``python3 auto_evergreen_extractor.py`` invocation
+            # doesn't ImportError.
+            try:
+                from .absorb_router import route_source
+            except ImportError:
+                from absorb_router import route_source  # type: ignore[no-redef]
+
+            route_source(
+                self.llm,
+                source_path=str(file_path),
+                source_content=content,
+                pipeline_logger=self.logger,
+                vault_dir=self.vault_dir,
+                # ``pack_name=None`` matches the legacy extractor's
+                # cross-pack search semantics.  Future PRs may want
+                # pack-scoped routing for multi-pack vaults.
+                pack_name=None,
+            )
+        except Exception as exc:  # noqa: BLE001 — shadow must never break legacy path
+            self.logger.log("absorb_router_shadow_error", {
+                "source": str(file_path),
+                "error": str(exc),
+            })
 
     def _parse_v2_response(self, result_text: str, file_path: Path) -> list[dict]:
         """Parse the v2 JSON wrapper into the legacy concept-dict shape
