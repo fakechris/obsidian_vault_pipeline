@@ -81,8 +81,24 @@ body { overflow: hidden; }
 .topbar .spacer { flex: 1; }
 
 .theme-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px;
   background: var(--surface); border: 1px solid var(--border);
+  border-radius: 999px;
   box-shadow: var(--shadow-shell);
+}
+.theme-toggle button {
+  border: 0; background: transparent; color: var(--muted);
+  padding: 0.25rem 0.7rem; font-size: 0.78rem;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  font-family: var(--ovp-font-mono);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.theme-toggle button:hover { color: var(--text); }
+.theme-toggle button.active {
+  background: var(--accent); color: white;
 }
 
 .topbar .nav-link {

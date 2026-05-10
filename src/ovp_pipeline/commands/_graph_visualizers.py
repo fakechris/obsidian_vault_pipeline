@@ -209,10 +209,15 @@ _FORCE_GRAPH_CSS = """
 .cluster-graph-edge.faded { stroke-opacity: 0.06; }
 .cluster-graph-node { cursor: pointer; }
 .cluster-graph-node circle { stroke-width: 2; stroke: var(--surface); }
-.cluster-graph-node.attention circle { stroke: var(--graph-link-hi); }
+.cluster-graph-node.attention circle { stroke: var(--graph-link-hi); stroke-width: 3; }
 .cluster-graph-node text { font-size: 11px; fill: var(--text);
   font-family: var(--ovp-font-sans);
-  pointer-events: none; user-select: none; }
+  pointer-events: none; user-select: none;
+  paint-order: stroke fill;
+  stroke: var(--bg); stroke-width: 3px; stroke-linejoin: round;
+  opacity: 0; transition: opacity 120ms; }
+.cluster-graph-node:hover text,
+.cluster-graph-node.attention text { opacity: 1; }
 """.strip()
 
 

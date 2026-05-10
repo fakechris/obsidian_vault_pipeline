@@ -83,10 +83,25 @@ def _ts(text) -> str:
     timestamp / "generated at" line across the UI so they read as
     one design language instead of as raw text.  Pass ``None`` /
     ``""`` and you get the em-dash placeholder.
+
+    Humanises ISO 8601 timestamps (``2026-05-10T01:08:56+00:00``)
+    to ``YYYY-MM-DD HH:MM:SS`` — drops the ``T`` separator, the
+    timezone suffix, and any sub-second precision.  Non-ISO input
+    falls through unchanged.
     """
     if text is None or text == "":
         return "<span class='muted tiny'>—</span>"
-    return f"<span class='muted tiny mono'>{escape(str(text))}</span>"
+    raw = str(text)
+    rendered = raw
+    if len(raw) >= 19 and raw[4] == "-" and raw[7] == "-" and raw[10] in ("T", " "):
+        try:
+            from datetime import datetime as _dt
+
+            dt = _dt.fromisoformat(raw.replace("Z", "+00:00"))
+            rendered = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            rendered = raw
+    return f"<span class='muted tiny mono'>{escape(rendered)}</span>"
 
 
 def _render_limited_inline_links(
@@ -300,13 +315,18 @@ def _layout(
          /static/ovp-ui.css (kit-faithful) or /static/ovp-pages.css
          (OVP-specific page components).  */
       main.page {{ display: block; }}
+      .nav {{ align-items: center; }}
       .nav .brand-mark {{ display: inline-flex; align-items: center; gap: 0.45rem;
         font-weight: 700; color: var(--text); margin-right: 0.4rem;
-        letter-spacing: -0.01em; font-size: 1.05rem; }}
+        letter-spacing: -0.01em; font-size: 1.05rem; line-height: 1; }}
       .nav .brand-mark img {{ width: 22px; height: 22px; display: block;
         border-radius: 0; }}
       .nav .brand-mark .dot {{ color: var(--accent); }}
       .nav .brand-mark:hover {{ text-decoration: none; opacity: 0.92; }}
+      .nav a {{ line-height: 1.4; }}
+      .nav .nav-tail {{ margin-left: auto; display: inline-flex; align-items: center;
+        gap: 0.6rem; }}
+      .nav .nav-tail .cross-link {{ margin-left: 0; }}
       @media (max-width: 780px) {{ main.page {{ padding: 1rem 1rem 2rem; }} }}
     </style>
     <script>
@@ -333,7 +353,13 @@ def _layout(
               <span>obsidian vault pipeline<span class="dot">.</span></span>
             </a>
             {nav_items}
-            {cross_link}
+            <span class="nav-tail">
+              <span class="theme-toggle" role="group" aria-label="Theme">
+                <button type="button" data-theme-set="light" id="ovp-theme-light">LIGHT</button>
+                <button type="button" data-theme-set="dark"  id="ovp-theme-dark">DARK</button>
+              </span>
+              {cross_link}
+            </span>
           </nav>
         </div>
         <div class="shell-body">
@@ -341,6 +367,26 @@ def _layout(
         </div>
       </div>
     </main>
+    <script>
+      (function () {{
+        var root = document.documentElement;
+        var current = root.dataset.theme === 'dark' ? 'dark' : 'light';
+        var btnLight = document.getElementById('ovp-theme-light');
+        var btnDark  = document.getElementById('ovp-theme-dark');
+        function paint(t) {{
+          root.dataset.theme = t;
+          if (btnLight) btnLight.classList.toggle('active', t === 'light');
+          if (btnDark)  btnDark.classList.toggle('active',  t === 'dark');
+        }}
+        paint(current);
+        function setTheme(t) {{
+          paint(t);
+          try {{ localStorage.setItem('ovp-theme', t); }} catch (e) {{}}
+        }}
+        if (btnLight) btnLight.addEventListener('click', function () {{ setTheme('light'); }});
+        if (btnDark)  btnDark.addEventListener('click',  function () {{ setTheme('dark');  }});
+      }})();
+    </script>
   </body>
 </html>
 """
@@ -3806,8 +3852,8 @@ def _render_graph_atlas_page(payload: dict, *, action_path: str = "/map") -> str
         </div>
         <div class="tweaks-row">
           <span class="label">Node base size</span>
-          <input type="range" id="node-size" min="2" max="10" step="0.5" value="4.5" />
-          <span class="val" id="node-size-val">4.5</span>
+          <input type="range" id="node-size" min="2" max="12" step="0.5" value="6" />
+          <span class="val" id="node-size-val">6</span>
         </div>
         <div class="tweaks-row">
           <span class="label">Spin</span>

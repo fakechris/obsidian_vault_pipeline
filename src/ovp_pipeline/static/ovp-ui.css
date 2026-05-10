@@ -119,10 +119,34 @@ pre code { background: transparent; padding: 0; }
   transition: background 200ms, border-color 200ms;
 }
 .card.warning { border: 1px solid var(--warn-border); background: var(--warn-bg); }
+/* Dark-mode elevation: shell + card both use --surface, which has
+   identical luminance in dark mode and produces a "flat slab" look.
+   Lift cards onto --surface-2 with a slightly stronger border so
+   each card reads as its own focal surface. */
+[data-theme="dark"] .card {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+[data-theme="dark"] .shell {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
+/* The first card after an h1 (the "current state" / lead summary
+   on most pages) gets a subtle accent rail so the user has an
+   immediate focal point instead of a uniform dark wall. */
+.shell-body > h1 + .card,
+.shell-body > h1 + .muted + .card,
+.shell-body > h1 + p + .card {
+  border-left: 3px solid var(--accent);
+}
 .card.flush { padding: 0; overflow: hidden; }
 .card-head { padding: 0.85rem 1rem; border-bottom: 1px solid var(--border);
-             display: flex; align-items: baseline; gap: 0.6rem; }
+             display: flex; align-items: center; flex-wrap: wrap;
+             gap: 0.5rem 0.6rem; }
+.card-head h3 { margin: 0; }
 .card-body { padding: 0.85rem 1rem; }
+.card-body > :first-child { margin-top: 0; }
+.card-body > :last-child { margin-bottom: 0; }
 
 .pill {
   display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px;
@@ -144,25 +168,52 @@ pre code { background: transparent; padding: 0; }
 @media (max-width: 780px) { .grid.two-col { grid-template-columns: 1fr; } }
 
 button, .btn {
-  font: inherit; padding: 0.5rem 0.85rem; border-radius: 10px;
+  font: inherit; padding: 0.5rem 0.95rem; border-radius: 10px;
   border: 1px solid var(--accent); background: var(--accent); color: white;
-  cursor: pointer; font-weight: 600; transition: opacity 120ms, background 120ms;
+  cursor: pointer; font-weight: 600; line-height: 1.4;
+  transition: opacity 120ms, background 120ms;
 }
 button:hover, .btn:hover { opacity: 0.92; text-decoration: none; }
 button.secondary, .btn.secondary { background: var(--surface); color: var(--accent); }
 button.ghost,     .btn.ghost     { background: transparent; border-color: var(--border); color: var(--text); }
 button.icon       { padding: 0.4rem; min-width: 32px; line-height: 1; }
 
-input[type="text"], input[type="search"], select, textarea {
-  font: inherit; padding: 0.55rem 0.7rem;
+input[type="text"], input[type="search"], input[type="number"],
+input[type="date"], input[type="datetime-local"], input[type="email"],
+input[type="url"], select, textarea {
+  font: inherit; padding: 0.5rem 0.7rem;
   border: 1px solid var(--border); border-radius: 10px;
   background: var(--surface); color: var(--text);
+  line-height: 1.4;
   transition: border-color 120ms;
 }
 input:focus, select:focus, textarea:focus {
   outline: 2px solid var(--accent-soft); outline-offset: 1px;
   border-color: var(--accent);
 }
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: var(--icon-filter, none); opacity: 0.6; cursor: pointer;
+}
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator,
+[data-theme="dark"] input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+}
+
+/* Default form rhythm: any <form> in shell-body content gets the
+   same flex+gap layout the kit's design samples used.  Renderers
+   may override with their own inline style when a form needs a
+   non-standard layout (the inline style still wins). */
+.shell-body form {
+  display: flex; flex-wrap: wrap; gap: 0.6rem;
+  align-items: center; margin: 0.6rem 0 1rem;
+}
+.shell-body form label {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  color: var(--muted); font-size: 0.92rem;
+}
+.shell-body form input + button,
+.shell-body form select + button { margin-left: 0; }
 
 .page-help {
   background: var(--surface-2); border: 1px solid var(--border);
@@ -188,8 +239,39 @@ input:focus, select:focus, textarea:focus {
 
 .list-tight { margin: 0; padding-left: 1.1rem; }
 .list-tight li { margin-bottom: 0.4rem; }
+.list-tight li > strong:first-child + a { margin-left: 0.15rem; }
+.list-tight li .muted { display: block; margin-top: 0.15rem; }
 
 .divider { height: 1px; background: var(--border); margin: 1rem 0; border: 0; }
+
+/* Default vertical rhythm for shell-body content: ensure h1, h2,
+   .card, .ascii, section, table.data-table, .live-feed get
+   breathing room above each other so renderer markup never feels
+   crushed against a previous section. */
+.shell-body > h1 { margin-top: 0.5rem; margin-bottom: 0.25rem; }
+.shell-body > h1 + .muted { margin-top: 0; margin-bottom: 1rem; }
+.shell-body > h2,
+.shell-body > section > h2,
+.shell-body > .card > h2 { margin-top: 0; }
+.shell-body h2 { margin-top: 1.25rem; }
+.shell-body h3 { margin-top: 0.9rem; }
+.shell-body > section,
+.shell-body > .card,
+.shell-body > .grid,
+.shell-body > .ascii,
+.shell-body > .live-feed,
+.shell-body > .timeline,
+.shell-body > table { margin-top: 1rem; }
+.shell-body > details.page-help { margin-top: 0.5rem; margin-bottom: 1.25rem; }
+.shell-body > p + p,
+.shell-body > p + ul,
+.shell-body > p + .card { margin-top: 0.6rem; }
+
+/* Pill spacing: when pills sit inline with text or other pills,
+   ensure they don't crash into following content.  Featured-Topics
+   showed pills crashing the line below; this fixes it generically. */
+.pill + .pill { margin-left: 0.35rem; }
+.pill { margin-right: 0.05rem; vertical-align: 0.05em; }
 
 .metric-num { font-size: 1.6rem; font-weight: 700; line-height: 1; }
 .metric-num.warn { color: var(--warn-text); }

@@ -163,9 +163,9 @@
 
   Graph
     .backgroundColor("rgba(0,0,0,0)")
-    .nodeRelSize(1)
-    .nodeOpacity(0.95)
-    .linkOpacity(0.45)
+    .nodeRelSize(4)
+    .nodeOpacity(0.98)
+    .linkOpacity(0.55)
     .linkWidth(l => l.kind === "contradict" ? 1.4 : 0.6)
     .linkColor(l => {
       if (l.kind === "contradict") return readToken("--warn-text") || "#f59e0b";
