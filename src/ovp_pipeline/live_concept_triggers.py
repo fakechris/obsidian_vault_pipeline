@@ -257,7 +257,12 @@ def evaluate_ingest_matches(
     matches: list[IngestMatch] = []
     seen: set[tuple[str, str, str]] = set()
     for row in recent_route_decisions:
-        payload = row.get("payload") or {}
+        # Codex review fix: a malformed audit row whose ``payload`` is
+        # not a dict (e.g. legacy rows where the JSONL writer stored a
+        # bare list / string) would crash on ``.get`` — defensively
+        # narrow to dict before accessing keys.
+        payload_raw = row.get("payload")
+        payload = payload_raw if isinstance(payload_raw, dict) else {}
         update_slugs = payload.get("update_slugs") or []
         if not isinstance(update_slugs, list):
             continue
@@ -302,20 +307,50 @@ class ContradictionMatch:
     status: str
 
 
+_SUBJECT_SEGMENT_DELIMS = ("::", "/", ":", "|", "#")
+
+
+def _subject_key_segments(subject: str) -> tuple[str, ...]:
+    """Split a contradiction ``subject_key`` into atomic segments.
+
+    Subject keys ``list_contradictions`` returns can carry pack
+    prefixes or qualifiers; common shapes seen in OVP:
+
+    * ``"slug"`` — bare
+    * ``"pack::slug"`` — pack-prefixed
+    * ``"pack::slug::detail"`` — multi-level
+    * ``"slug/relation"`` — relation-qualified
+
+    Splitting on the union of delimiters yields atomic segments
+    we can require an *exact* match against, avoiding the
+    substring-collision risk codex flagged (e.g. scope ``"llm-eval"``
+    matching subject ``"large-llm-evals"`` accidentally).
+    """
+    parts = [subject]
+    for delim in _SUBJECT_SEGMENT_DELIMS:
+        out: list[str] = []
+        for piece in parts:
+            out.extend(piece.split(delim))
+        parts = out
+    return tuple(p.strip() for p in parts if p.strip())
+
+
 def evaluate_contradiction_matches(
     handle: LiveConceptHandle,
     *,
     open_contradictions: list[dict[str, Any]],
 ) -> list[ContradictionMatch]:
-    """For every open contradiction, return matches when its
-    ``subject_key`` mentions any of the concept's
+    """For every open contradiction, return matches when any segment
+    of its ``subject_key`` exactly equals one of the concept's
     ``scope_evergreens`` slugs.
 
-    Subject-key matching is substring-based: the subject keys
-    ``list_contradictions`` returns can carry pack prefixes /
-    qualifiers (e.g. ``"research-tech::llm-eval-leakage"``), so a
-    plain ``"llm-eval-leakage" in subject_key`` is more robust than
-    equality.
+    Segment-based matching (rather than plain ``slug in subject``)
+    avoids false positives where a short scope slug appears as a
+    substring of an unrelated subject — the codex-review fix that
+    pinned this contract.  The price is that operators who rely on
+    fuzzy / partial matches no longer get them, but the
+    ``scope_evergreens`` schema explicitly takes evergreen *slugs*
+    so exact-segment match is the right semantic.
 
     Returns an empty list when:
 
@@ -338,6 +373,10 @@ def evaluate_contradiction_matches(
     if not fm.scope_evergreens:
         return []
 
+    scope_set = {slug for slug in fm.scope_evergreens if slug}
+    if not scope_set:
+        return []
+
     matches: list[ContradictionMatch] = []
     seen_ids: set[str] = set()
     for c in open_contradictions:
@@ -347,8 +386,9 @@ def evaluate_contradiction_matches(
         if contradiction_id in seen_ids:
             continue
         subject = str(c.get("subject_key", ""))
+        segments = _subject_key_segments(subject)
         for slug in fm.scope_evergreens:
-            if slug and slug in subject:
+            if slug and slug in segments:
                 seen_ids.add(contradiction_id)
                 matches.append(ContradictionMatch(
                     contradiction_id=contradiction_id,

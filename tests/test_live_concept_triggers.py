@@ -369,16 +369,60 @@ def test_contradiction_match_inactive_concept_returns_empty():
     assert evaluate_contradiction_matches(handle, open_contradictions=rows) == []
 
 
+def test_contradiction_match_segment_avoids_substring_collision():
+    """Codex review fix: a short scope slug must not match a
+    longer, unrelated word containing it.  E.g. scope ``"llm-eval"``
+    must NOT fire on subject ``"large-llm-evals"``."""
+    handle = _handle(
+        triggers={"on_contradiction_against_view": True},
+        scope_evergreens=("llm-eval",),
+    )
+    rows = [_contradiction(cid="c1", subject="research::large-llm-evals")]
+    assert evaluate_contradiction_matches(handle, open_contradictions=rows) == []
+
+
+def test_contradiction_match_segment_handles_multi_level_subject():
+    """Multi-level pack-prefixed subject like
+    ``research-tech::llm-eval::leakage`` matches scope
+    ``llm-eval`` because the second segment equals exactly."""
+    handle = _handle(
+        triggers={"on_contradiction_against_view": True},
+        scope_evergreens=("llm-eval",),
+    )
+    rows = [_contradiction(cid="c1", subject="research-tech::llm-eval::leakage")]
+    matches = evaluate_contradiction_matches(handle, open_contradictions=rows)
+    assert len(matches) == 1
+    assert matches[0].matched_slug == "llm-eval"
+
+
+def test_ingest_match_handles_non_dict_payload():
+    """Codex review fix: a malformed audit row whose ``payload`` is
+    a non-dict (legacy / corrupted JSON) must not crash the
+    evaluator — silently dropped, scan continues."""
+    handle = _handle(
+        triggers={"on_ingest_match": {"concept_similarity_to": "llm-eval"}},
+    )
+    rows = [
+        {"event_type": "absorb_route_decision", "payload": "not-a-dict"},
+        {"event_type": "absorb_route_decision", "payload": ["also", "wrong"]},
+        {"event_type": "absorb_route_decision", "payload": 42},
+        _route_event(source="ok.md", update_slugs=["llm-eval"]),
+    ]
+    matches = evaluate_ingest_matches(handle, recent_route_decisions=rows)
+    assert len(matches) == 1
+    assert matches[0].source_path == "ok.md"
+
+
 def test_contradiction_match_dedupes_by_contradiction_id():
-    """Same contradiction id mentioned via two scope slugs is a
-    single match."""
+    """Same contradiction id seen twice (e.g. emitted by two
+    overlapping scope slugs) collapses to one match."""
     handle = _handle(
         triggers={"on_contradiction_against_view": True},
         scope_evergreens=("alpha", "beta"),
     )
     rows = [
-        _contradiction(cid="c1", subject="alpha-and-beta-mentioned"),
-        _contradiction(cid="c1", subject="alpha-and-beta-mentioned"),
+        _contradiction(cid="c1", subject="research::alpha"),
+        _contradiction(cid="c1", subject="research::alpha"),
     ]
     matches = evaluate_contradiction_matches(handle, open_contradictions=rows)
     assert len(matches) == 1

@@ -12,6 +12,32 @@ consumes the :class:`ConceptEvaluation` records produced here for
 human-readable reporting and for the operator to dry-run the
 trigger logic before PR#3 actually wires it to the agent.
 
+What "read-only" means here
+---------------------------
+
+User-data wise, the scan never mutates objects / claims / live-
+concept files.  But the underlying ``recent_audit_events`` /
+``list_contradictions`` calls go through
+:func:`knowledge_index._ensure_knowledge_db`, which is allowed to
+run a schema migration on the projection DB (e.g. v6 → v7) when
+the version sentinel is stale.  In practice this is benign — the
+projection is rebuilt deterministically from the canonical state
+— but a fresh-clone scan can take longer than expected on first
+run if a schema bump is pending.
+
+Pack scoping caveat
+-------------------
+
+``recent_audit_events`` doesn't accept a ``pack_name`` filter (the
+``audit_events`` table doesn't carry a pack column), and the
+``absorb_route_decision`` payload doesn't currently include the
+pack either.  Result: a multi-pack vault where the same
+``update_slug`` appears in two packs would fire ``on_ingest_match``
+across both.  Mitigation today is operator hygiene (use
+pack-prefixed slugs in ``concept_similarity_to`` /
+``scope_evergreens``); a proper fix is out of scope for PR#2 but
+tracked as a note for the future enhancement (`BL-064` candidate).
+
 Why split orchestrator from evaluators
 --------------------------------------
 
@@ -77,7 +103,16 @@ class ConceptEvaluation:
 def _parse_audit_timestamp(text: str) -> datetime | None:
     """Parse the ``audit_events.timestamp`` column into a UTC-aware
     datetime.  Returns ``None`` on parse failure so the caller can
-    drop the row silently instead of aborting the whole scan."""
+    drop the row silently instead of aborting the whole scan.
+
+    Naive timestamps are treated as UTC.  This is correct for OVP
+    today — every writer uses
+    :func:`runtime.format_utc_timestamp` which emits Z-suffixed
+    strings — but if a future writer ever drops the suffix, the
+    cutoff comparison would silently shift by the operator's local
+    offset.  Codex review flagged this as a hypothesis worth
+    documenting.
+    """
     if not text:
         return None
     try:

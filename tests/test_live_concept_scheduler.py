@@ -143,14 +143,14 @@ def test_evaluate_all_concepts_dedupes_contradictions_across_scope(tmp_path, mon
             return [
                 {
                     "contradiction_id": "c1",
-                    "subject_key": "research::beta-evergreen-x",
+                    "subject_key": "research::beta-evergreen",
                     "status": "open",
                     "positive_claim_ids": [],
                     "negative_claim_ids": [],
                 },
                 {
                     "contradiction_id": "c1",  # duplicate emission
-                    "subject_key": "research::beta-evergreen-x",
+                    "subject_key": "research::beta-evergreen",
                     "status": "open",
                     "positive_claim_ids": [],
                     "negative_claim_ids": [],
