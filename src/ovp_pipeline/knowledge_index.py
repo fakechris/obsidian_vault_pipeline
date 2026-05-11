@@ -1982,24 +1982,37 @@ def sync_audit_events_from_jsonl(vault_dir: Path) -> dict[str, object]:
 
     This helper:
 
-    1. Connects to the existing knowledge.db (no temp DB swap).
-    2. Reads every JSONL row via the same ``_collect_audit_rows``
+    1. Resolves the layout WITHOUT calling :func:`_ensure_knowledge_db`
+       — that helper would trigger a full rebuild on a stale schema
+       version, defeating the "fast no-rebuild" promise (codex P2).
+    2. Returns ``{"status": "skipped"}`` when the DB doesn't exist
+       (fresh vault) or when the projection schema is too old to
+       safely write to.  Operator must run a full
+       ``ovp-knowledge-index`` first in either case.
+    3. Reads every JSONL row via the same ``_collect_audit_rows``
        path the rebuild uses, so semantics are identical.
-    3. Truncates ``audit_events`` and re-inserts in one transaction.
+    4. Truncates ``audit_events`` and re-inserts in one transaction.
 
     Idempotent (truncate-and-insert; running it twice produces the
-    same final state).  Best-effort: returns ``{"status": "skipped"}``
-    when the DB doesn't exist (fresh vault, never rebuilt).
-
-    Doesn't touch any other table.  Doesn't write provenance.
-    Doesn't refresh embeddings.  This is purely a projection-sync
-    operation against the audit ledger.
+    same final state).  Doesn't touch any other table.  Doesn't
+    write provenance.  Doesn't refresh embeddings.  Pure projection-
+    sync operation against the audit ledger.
     """
-    _, layout = _ensure_knowledge_db(vault_dir)
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
     if not layout.knowledge_db.exists():
         return {
             "status": "skipped",
             "reason": "knowledge.db does not exist; run ovp-knowledge-index first",
+            "db_path": str(layout.knowledge_db),
+        }
+    if not _knowledge_db_supports_pack_schema(layout.knowledge_db):
+        return {
+            "status": "skipped",
+            "reason": (
+                "knowledge.db schema is incompatible with current code; "
+                "run ovp-knowledge-index for a full rebuild first"
+            ),
             "db_path": str(layout.knowledge_db),
         }
     audit_rows = _collect_audit_rows(layout)

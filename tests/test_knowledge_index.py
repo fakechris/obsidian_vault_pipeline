@@ -1244,14 +1244,41 @@ def test_sync_audit_events_from_jsonl_round_trips(temp_vault):
 
 def test_sync_audit_events_skips_when_db_missing(tmp_path):
     """Fresh vault that's never been rebuilt — sync returns a
-    ``skipped`` status rather than creating an empty DB by accident.
-    Operator should run ``ovp-knowledge-index`` first."""
+    ``skipped`` status rather than creating an empty DB or
+    triggering a full 20-min rebuild (codex P2)."""
     from ovp_pipeline.knowledge_index import sync_audit_events_from_jsonl
     payload = sync_audit_events_from_jsonl(tmp_path)
-    # The function may or may not return "skipped" depending on whether
-    # _ensure_knowledge_db creates the DB; either way we just verify
-    # it didn't crash and returned a status field.
-    assert "status" in payload
+    assert payload["status"] == "skipped"
+    assert "does not exist" in payload["reason"]
+
+
+def test_sync_audit_events_does_not_trigger_full_rebuild(temp_vault, monkeypatch):
+    """Codex P2 regression: ``--audit-sync-only`` must never call
+    ``rebuild_knowledge_index`` even when the DB is stale / missing.
+    Pre-fix the helper went through ``_ensure_knowledge_db`` which
+    silently rebuilds on schema mismatch — defeating the "fast
+    no-rebuild" promise of the audit-sync flag."""
+    from ovp_pipeline import knowledge_index
+    from ovp_pipeline.knowledge_index import (
+        sync_audit_events_from_jsonl,
+    )
+
+    # Detect any rebuild attempt by patching the rebuild entrypoint
+    # to record + raise.
+    calls: list[str] = []
+
+    def fake_rebuild(*args, **kwargs):
+        calls.append("rebuild_knowledge_index")
+        raise RuntimeError("audit-sync must not trigger rebuild")
+
+    monkeypatch.setattr(
+        knowledge_index, "rebuild_knowledge_index", fake_rebuild,
+    )
+
+    # On a fresh vault (no DB), sync must skip cleanly.
+    payload = sync_audit_events_from_jsonl(temp_vault)
+    assert payload["status"] == "skipped"
+    assert calls == [], "audit-sync invoked rebuild on missing DB"
 
 
 def test_recent_audit_events_filters_by_event_type_in_sql(temp_vault):
