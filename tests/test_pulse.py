@@ -219,7 +219,10 @@ def test_pulse_fragment_returns_html(temp_vault: Path, running_server) -> None:
     with _NO_PROXY_OPENER.open(url, timeout=5) as response:
         body = response.read().decode("utf-8")
     assert "EventSource('/ops/pulse/stream')" in body
-    assert "<section class='pulse'>" in body
+    # Post-PR#189 the pulse fragment renders through the
+    # ``.live-feed`` kit primitive (ovp-pages.css) instead of a
+    # ``.pulse`` class — same content, kit-faithful CSS.
+    assert "<section class='live-feed'>" in body
 
 
 def test_pulse_page_renders(temp_vault: Path, running_server) -> None:
@@ -227,4 +230,7 @@ def test_pulse_page_renders(temp_vault: Path, running_server) -> None:
     with _NO_PROXY_OPENER.open(url, timeout=5) as response:
         body = response.read().decode("utf-8")
     assert "<title>Pulse</title>" in body
-    assert "<section class='pulse'>" in body
+    # Post-PR#189 the pulse fragment renders through the
+    # ``.live-feed`` kit primitive (ovp-pages.css) instead of a
+    # ``.pulse`` class — same content, kit-faithful CSS.
+    assert "<section class='live-feed'>" in body

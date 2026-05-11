@@ -184,9 +184,14 @@ class TestRenderer:
         assert "RAG vs long context" in html
         # JSON link points at the canonical /api/topics route.
         assert "/api/topics" in html
-        # Score breakdown surfaced as muted line
-        assert "size 0.60" in html
-        assert "credibility 0.70" in html
+        # Score breakdown surfaced as muted line.  Post-PR#189 the
+        # values are wrapped in <strong> for visual emphasis, so the
+        # label and value aren't adjacent in the raw HTML — check
+        # for the label + value separately.
+        assert "size " in html
+        assert ">0.60</strong>" in html
+        assert "credibility " in html
+        assert ">0.70</strong>" in html
 
     def test_empty_html_shows_hint(self, tmp_path):
         vault = _setup_vault(tmp_path, seed=False)

@@ -1,0 +1,194 @@
+# M20 — Cognitive Surface (vault talks back + programmable tasks)
+
+**Date:** 2026-05-11
+**Status:** Active
+**Depends on:** M14 (Curated Atlas), M16 (Reader/Maintainer split)
+**Independent of:** M18 (trust-aware compiler), M19 (live concept) — runs in parallel
+
+## Origin
+
+Two 2026-05-09 strategy articles on Obsidian + LLM workflows surfaced
+the same gap from different angles:
+
+- **Article 1** ("Your Obsidian Vault Is Probably Dead") — vaults
+  accumulate but never push insights at the user.  Goal: *vault talks
+  back*.  Daily synthesis, surfaced tensions, recurring themes.
+- **Article 2** ("Obsidian Business Operating System") — vaults can
+  also accept structured task files dropped into a QUEUE folder and
+  produce results in a GENERATED folder.  Goal: *vault does work*.
+
+Both diagnose the same missing surface: OVP's `community_crystals`,
+`crystal_scores`, `contradiction_crystals`, `open_questions`, and
+`production_chain` already compute everything the user needs — but
+the user has to walk into `/topics` or `/ops/queue/contradictions`
+to find it.  Synthesis is **placed**, not **pushed**.  M20 closes
+that gap.
+
+This is OVP's **missing surface, not missing feature**.
+
+## Non-Goals
+
+M20 explicitly does **not** scope:
+
+- Article 2's five "business systems" (client ops, financial
+  tracking, content production, performance analytics).  OVP is a
+  knowledge OS for researchers, not a business OS for solo
+  founders — those framings would dilute focus.
+- New capture adapters (voice / Whisper / Telegram).  Deferred
+  to a separate milestone if demand materialises.
+- An external N8N orchestration layer — OVP's runtime + DAG +
+  handler_registry already cover that role with tighter coupling.
+- Belief-evolution timeline (article 1's `/evolution?topic=` idea).
+  Deferred to a follow-up; the data substrate (`evergreen_links`,
+  `supersedes`) exists but the surface is lower priority than
+  daily digest.
+
+## Three Backlog Items
+
+| ID | Stage | Description |
+|---|---|---|
+| BL-075 | 0 | `00-Polaris/USER.md` + `OVP_RULES.md` + a small loader so every LLM call point can pull the two files as a system-prompt prefix. Zero-risk foundation for BL-076/077 — makes every existing LLM call site smarter without touching their logic. |
+| BL-076 | 1 | `50-Inbox/02-Tasks/` watcher.  Filename prefix maps to a handler (`RESEARCH-*` → research skill, `SYNTHESIZE-*` → synthesis skill, `DIGEST-*` → daily-digest skill).  Handlers run with USER + RULES context, deposit output to `40-Resources/Generated/YYYY-MM/`.  Original task file archives to `70-Archive/tasks/`. Reuses AutoPilot's existing inotify path; adds a new handler family. |
+| BL-077 | 3 | Daily `/digest` synthesis.  `DIGEST-daily.md` task auto-enqueued by an AutoPilot cron at 06:00.  Aggregates last 24h crystals + top-N open questions + top-N contradictions + USER focus into a ~200-word brief at `40-Resources/Generated/digests/YYYY-MM-DD.md`.  Reader home shell adds a "Today's digest →" banner card pointing at the latest digest. |
+
+## Why These Three (and not the other 2 stages)
+
+The full proposal had 5 stages — only 3 land in M20:
+
+| Stage | Status | Reason |
+|---|---|---|
+| 0 — USER.md + OVP_RULES | In M20 (BL-075) | Half-day, zero-risk, multiplies value of everything below. |
+| 1 — QUEUE → GENERATED | In M20 (BL-076) | Foundation for every push feature.  Also generalises AutoPilot from "ingest articles" to "accept tasks". |
+| 2 — Skill files migration | **Deferred** | Internal developer ergonomics — refactor of where prompts live.  User-visible value lower than 0/1/3.  Revisit after M20 ships and the QUEUE pattern proves itself. |
+| 3 — Daily digest | In M20 (BL-077) | The flagship "vault talks back" feature.  Built on BL-076 as just another QUEUE cron task — proves the architecture, not a parallel path. |
+| 4 — Auto USER profile | **Deferred** | Has over-fit risk — LLM may misread recent activity and bias the digest.  Better to ship hand-authored USER.md first, watch how it drifts, then automate later. |
+| 5 — Belief evolution | **Deferred** | Lower priority surface; defer until 0+1+3 land. |
+
+## Architecture
+
+### BL-075 — Context loader
+
+New module `src/ovp_pipeline/context_loader.py`:
+
+```python
+def load_llm_context(vault_dir: Path) -> str:
+    """Read 00-Polaris/USER.md + OVP_RULES.md and concatenate
+    as a system-prompt prefix.  Returns "" when either file is
+    missing (graceful degradation — every existing call site
+    continues to work)."""
+```
+
+Wired into the small set of LLM call sites that need user-aware
+behaviour: `auto_evergreen_extractor`, `community_crystals`,
+`contradiction_crystals`, and the new task handlers from BL-076.
+**Not** wired into call sites where user context doesn't apply
+(e.g. `route_source` Pass 1, which is a pure structural classifier).
+
+### BL-076 — Task dispatcher
+
+```
+50-Inbox/02-Tasks/RESEARCH-claude-code-mcp.md
+50-Inbox/02-Tasks/SYNTHESIZE-multi-agent-failures.md
+50-Inbox/02-Tasks/DIGEST-daily.md       ← system-generated by cron
+                            │
+              [filename prefix dispatcher]
+                            │
+                            ▼
+40-Resources/Generated/YYYY-MM/research-claude-code-mcp.md
+40-Resources/Generated/digests/2026-05-11.md
+                            │
+                  [original task → 70-Archive/tasks/]
+```
+
+Handler registry shape:
+
+```python
+TASK_HANDLERS = {
+    "RESEARCH":   handle_research_task,
+    "SYNTHESIZE": handle_synthesize_task,
+    "CONTRADICT": handle_contradict_task,
+    "DIGEST":     handle_digest_task,
+}
+```
+
+Rate limit: max 12 tasks / 24h / pack (configurable; protects
+against runaway LLM cost when a user drops 100 task files at once).
+
+Audit: every dispatch writes a `task_dispatched` event to
+`pipeline.jsonl` with task path, handler, duration, output path,
+and LLM token counts.
+
+### BL-077 — Daily digest
+
+`DIGEST-daily.md` is enqueued by an AutoPilot cron at 06:00 local
+time (or on-demand via `ovp-digest --today`).  The handler
+queries:
+
+- Last 24h `community_crystals` (synthesized today)
+- Top-N `crystal_scores` rows where `crystal_kind='contradiction'`
+- Top-N open `community_crystals` rows where the chain has any
+  contradiction tension
+- `00-Polaris/USER.md` "Current Focus" section
+- Last 7 days of `query_log` (which topics the user actually asked
+  about)
+
+LLM produces a ~200-word brief in three sections:
+
+1. **Tensions worth sitting with** — 2-3 contradictions from
+   top-scoring rows
+2. **Themes you keep circling** — 2-3 communities the user has
+   touched repeatedly via query / open / write in the last 7d
+3. **Unanswered questions** — 2-3 open contradictions still in
+   `status='open'`
+
+Reader Knowledge Library home (`/`) gets a new `<section class='card'>`
+banner above Top Topics: "Today's digest →" linking to the
+markdown file under `40-Resources/Generated/digests/`.
+
+## Cost Estimate
+
+| Component | Frequency | Tokens / run | $/run (Sonnet) | Monthly $ |
+|---|---|---|---|---|
+| BL-075 context loader | Per LLM call | +200 tokens prefix | +$0.001 | ~$0.30 amortised |
+| BL-076 user tasks | Variable | 2-4K input / 1-2K output | ~$0.02 | $5-30 (10-50 tasks/wk) |
+| BL-077 daily digest | 1×/day | 8K input / 600 output | ~$0.03 | ~$1 |
+| **Total** | | | | **~$6-35/mo** |
+
+Cheaper than the earlier $55-105 estimate because:
+
+1. Skill files (Stage 2) deferred — no per-skill setup cost
+2. Auto-USER (Stage 4) deferred — no weekly inference run
+3. Digest uses cached query_log instead of re-embedding
+
+## Success Metrics (4-week check)
+
+Read at week 4 after BL-077 ships:
+
+- **Digest open rate ≥ 50%** — user opens `40-Resources/Generated/digests/`
+  on at least 14 of 28 days.  Below that = digest is noise, kill BL-077.
+- **Task dispatch count ≥ 5/week** — user actually uses
+  `50-Inbox/02-Tasks/` to drop work.  Below that = QUEUE isn't
+  a habit, keep BL-076 but stop investing in handler variety.
+- **Zero RULES violations** — `OVP_RULES.md` autonomous-action
+  contract holds across all task dispatches.  Verify via
+  `pipeline.jsonl` audit grep.
+
+Below any one of these = pause M20 expansion and reassess before
+queueing M21.
+
+## Out of Scope (recorded as future BLs if M20 succeeds)
+
+- BL-075 (future): Skill files migration (stage 2)
+- BL-076 (future): Auto-USER profile inference (stage 4)
+- BL-077 (future): Belief evolution timeline (stage 5)
+- BL-078 (future): Voice / Whisper capture adapter
+- BL-079 (future): Multi-device task fan-out via gbrain
+
+## Implementation Order
+
+1. **Plan + BACKLOG** (this doc, BACKLOG entries) — 0.5 day
+2. **BL-075** (USER.md template, OVP_RULES, context_loader, wire 4 call sites) — 0.5 day
+3. **BL-076** (task watcher, handler registry, 3 initial handlers, rate-limit, tests) — 2 days
+4. **BL-077** (digest handler, cron entry, Reader home banner card, tests) — 2 days
+
+Total: ~5 days end-to-end.  Each BL ships its own PR.

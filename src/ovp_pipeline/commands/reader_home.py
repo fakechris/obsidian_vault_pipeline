@@ -92,6 +92,30 @@ def _render_reader_home(payload: dict) -> str:
         else ""
     )
 
+    # M20 / BL-077: surface the latest daily digest as a banner card
+    # above the Top Topics list.  payload["digest"] is populated when
+    # 40-Resources/Generated/digests/ contains at least one file.
+    digest_card = ""
+    digest_info = payload.get("digest") or {}
+    if digest_info.get("href"):
+        digest_date = escape(str(digest_info.get("date") or ""))
+        digest_href = escape(str(digest_info["href"]))
+        digest_teaser = escape(str(digest_info.get("teaser") or "").strip())
+        teaser_html = (
+            f"<p class='muted' style='margin:0.35rem 0 0.6rem'>{digest_teaser}</p>"
+            if digest_teaser
+            else ""
+        )
+        digest_card = (
+            "<section class='card'>"
+            "<h2 style='margin-top:0'>Today's digest"
+            f"<span class='muted tiny mono' style='margin-left:0.6rem'>{digest_date}</span>"
+            "</h2>"
+            f"{teaser_html}"
+            f"<p><a href='{digest_href}'>Open digest →</a></p>"
+            "</section>"
+        )
+
     body = "".join([
         "<h1>Knowledge Library</h1>",
         "<p class='muted' style='margin-top:-2px'>Discover, read, and follow the ideas in this vault.</p>",
@@ -100,6 +124,7 @@ def _render_reader_home(payload: dict) -> str:
         "<input type='search' name='q' placeholder='Search by title, topic, source…' autofocus />",
         "<button type='submit'>Search</button>",
         "</form>",
+        digest_card,
         # Top Topics + Recent Topics share the same card-shell shape
         # used by /topics so the home and Featured Topics pages read
         # as one component family — same rank/title/score-pill/teaser

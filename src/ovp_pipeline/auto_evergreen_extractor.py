@@ -604,13 +604,29 @@ class EvergreenExtractor:
         if self.enable_router_shadow:
             self._run_router_shadow(file_path=file_path, content=content)
 
+        system_prompt = self._compose_system_prompt()
         result_text = self.llm.generate(
-            system_prompt=self.SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_tokens=self._MAX_OUTPUT_TOKENS,
         )
 
         return self._parse_v2_response(result_text, file_path)
+
+    def _compose_system_prompt(self) -> str:
+        """Prepend the M20 user/rules context to ``SYSTEM_PROMPT``.
+
+        Graceful degradation: when ``vault_dir`` is unset or neither
+        ``USER.md`` nor ``OVP_RULES.md`` exists, returns the bare
+        ``SYSTEM_PROMPT`` so legacy callers see no behavioural change.
+        """
+        if self.vault_dir is None:
+            return self.SYSTEM_PROMPT
+        from .context_loader import load_llm_context
+        prefix = load_llm_context(self.vault_dir)
+        if not prefix:
+            return self.SYSTEM_PROMPT
+        return prefix + "\n" + self.SYSTEM_PROMPT
 
     def _build_router_llm(self) -> Any:
         """Return the LLM client to use for the BL-062 Pass 1 router.

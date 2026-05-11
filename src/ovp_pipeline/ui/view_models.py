@@ -5490,7 +5490,51 @@ def build_reader_home_payload(
         "map_supported": _supports_research_shell(pack_name),
         "search_href": _scoped_path("/search", pack_name=requested_pack),
         "map_href": _scoped_path("/map", pack_name=requested_pack),
+        # M20 / BL-077: latest digest summary for the Reader home
+        # banner card.  Empty dict when no digest has been generated.
+        "digest": _build_latest_digest_info(
+            Path(vault_dir), requested_pack=requested_pack,
+        ),
     }
+
+
+def _build_latest_digest_info(
+    vault_dir: Path, *, requested_pack: str
+) -> dict[str, str]:
+    """Look up the most recent file under
+    ``40-Resources/Generated/digests/`` and return a small dict the
+    Reader home banner card consumes.  Empty dict when the folder
+    is missing or empty."""
+    folder = Path(vault_dir) / "40-Resources" / "Generated" / "digests"
+    if not folder.exists():
+        return {}
+    candidates = sorted(folder.glob("*.md"))
+    if not candidates:
+        return {}
+    latest = candidates[-1]
+    # Filename is ``YYYY-MM-DD.md`` — extract the date part.
+    date_str = latest.stem
+    # Teaser: skip the heading + blank line, grab the first
+    # paragraph of the digest body.
+    teaser = ""
+    try:
+        body = latest.read_text(encoding="utf-8")
+        for line in body.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("---"):
+                continue
+            teaser = line
+            break
+        if len(teaser) > 220:
+            teaser = teaser[:217].rstrip() + "…"
+    except OSError:
+        teaser = ""
+    rel = str(latest.relative_to(vault_dir))
+    href = _scoped_path(
+        f"/note?path={quote(rel, safe='')}",
+        pack_name=requested_pack,
+    )
+    return {"date": date_str, "href": href, "teaser": teaser}
 
 
 def build_curated_atlas_payload(
