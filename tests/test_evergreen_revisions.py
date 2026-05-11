@@ -366,6 +366,55 @@ def test_record_promote_audit_pair_writes_revision_without_objects_row(temp_vaul
     assert changed_by == "cli:auto_promote"
 
 
+def test_record_promote_audit_pair_resolves_slug_mismatched_path(temp_vault):
+    """Codex P2 regression: when the merge target's evergreen file
+    has a name that doesn't match its slug (frontmatter ``note_id``
+    set independently of filename), passing the canonical_path
+    resolved via the ``objects`` table must let the helper still
+    snapshot the revision.  Previously the BL-067 hook fell back to
+    ``evergreen_dir/{slug}.md`` which doesn't exist in this case
+    and the snapshot was silently skipped."""
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import record_promote_audit_pair
+
+    # File name diverges from slug — common after BL-053 renames
+    # or when operators set frontmatter ``note_id`` by hand.
+    evergreen_dir = temp_vault / "10-Knowledge" / "Evergreen"
+    evergreen_dir.mkdir(parents=True, exist_ok=True)
+    target_file = evergreen_dir / "Original-Display-Title.md"
+    target_file.write_text(
+        "---\nnote_id: llm-eval\ntitle: LLM Eval\ntype: evergreen\n"
+        "date: 2026-04-13\n---\n\n# Original Display Title\n\nBody.\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    # Auditing with the actual file path (resolved by caller's
+    # three-step fallback chain) writes the revision correctly.
+    record_promote_audit_pair(
+        temp_vault,
+        pack_name="default_knowledge",
+        target_slug="llm-eval",
+        canonical_path=str(target_file),
+        source_url="",
+        lifecycle_action="merge",
+        source_slug="llm-eval-leakage",
+        changed_by="cli:auto_promote",
+    )
+
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT object_id, change_type FROM evergreen_revisions"
+        ).fetchall()
+    assert len(rows) == 1, (
+        f"merge against slug-mismatched file path must still snapshot "
+        f"revision; got {rows}"
+    )
+    assert rows[0] == ("llm-eval", "promote")
+
+
 def test_record_promote_audit_pair_handles_merge_case(temp_vault):
     """BL-067 + dedup-guard regression: when ``promote_candidate``
     delegates to ``merge_candidate`` (near-duplicate detected), the
