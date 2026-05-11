@@ -1257,13 +1257,94 @@ class AutoEvergreenExtractor:
                                             )
                                     except Exception:  # noqa: BLE001
                                         source_url = ""
+
+                                    # Honour the actual mutation outcome.
+                                    # ``promote_candidate`` may transparently
+                                    # delegate to ``merge_candidate`` when the
+                                    # dedup-guard finds a near-duplicate active
+                                    # slug; in that case ``mutation.action ==
+                                    # 'merge'``, ``mutation.target_slug`` is
+                                    # the *existing* active slug, and the
+                                    # candidate's ``{concept_name}.md`` file
+                                    # was deleted rather than promoted.
+                                    # Auditing against ``concept_name`` /
+                                    # ``output_path`` would write provenance
+                                    # for a non-existent object and skip the
+                                    # revision snapshot entirely.
+                                    actual_target_slug = (
+                                        mutation.target_slug
+                                        or mutation.slug
+                                        or concept_name
+                                    )
+                                    actual_action = mutation.action or "promote"
+                                    # Find a real evergreen path with a
+                                    # three-step fallback chain:
+                                    #
+                                    # 1. The mutation's ``touched_files``
+                                    #    carries the new file path on the
+                                    #    promote branch.  Merge branch
+                                    #    typically doesn't populate it.
+                                    # 2. Slug-named file under ``evergreen_dir``
+                                    #    — the canonical naming convention
+                                    #    works for ~99% of slugs.
+                                    # 3. ``objects.canonical_path`` from the
+                                    #    truth store — works when the file's
+                                    #    actual name diverges from the slug
+                                    #    (e.g. frontmatter ``note_id`` set
+                                    #    independently of filename, BL-053
+                                    #    rename leftovers).  Required for the
+                                    #    merge case where the target evergreen
+                                    #    pre-existed with a non-slug filename.
+                                    audit_canonical_path = ""
+                                    eg_prefix = str(self.evergreen_dir) + "/"
+                                    for touched in mutation.touched_files:
+                                        t = str(touched)
+                                        if t.startswith(eg_prefix) and t.endswith(".md"):
+                                            audit_canonical_path = t
+                                            break
+                                    if not audit_canonical_path:
+                                        candidate_path = (
+                                            self.evergreen_dir / f"{actual_target_slug}.md"
+                                        )
+                                        if candidate_path.is_file():
+                                            audit_canonical_path = str(candidate_path)
+                                    if not audit_canonical_path:
+                                        try:
+                                            import sqlite3 as _sqlite3
+                                            from .runtime import VaultLayout
+                                            db = VaultLayout.from_vault(
+                                                self.vault_dir,
+                                            ).knowledge_db
+                                            if db.exists():
+                                                with _sqlite3.connect(db) as _conn:
+                                                    row = _conn.execute(
+                                                        "SELECT canonical_path FROM "
+                                                        "objects WHERE pack=? "
+                                                        "AND object_id=?",
+                                                        (pack_name, actual_target_slug),
+                                                    ).fetchone()
+                                                    if row and row[0]:
+                                                        audit_canonical_path = str(row[0])
+                                        except Exception:  # noqa: BLE001
+                                            pass
+                                    if not audit_canonical_path:
+                                        # Last-resort fallback so the
+                                        # provenance row still lands even when
+                                        # the revision snapshot can't read
+                                        # the file.  Helper skips the
+                                        # revision (best-effort) and writes
+                                        # only the provenance row.
+                                        audit_canonical_path = str(
+                                            self.evergreen_dir / f"{actual_target_slug}.md"
+                                        )
+
                                     record_promote_audit_pair(
                                         self.vault_dir,
                                         pack_name=pack_name,
-                                        target_slug=concept_name,
-                                        canonical_path=str(output_path),
+                                        target_slug=actual_target_slug,
+                                        canonical_path=audit_canonical_path,
                                         source_url=source_url,
-                                        lifecycle_action="promote",
+                                        lifecycle_action=actual_action,
                                         source_slug=concept_name,
                                         changed_by="cli:auto_promote",
                                     )

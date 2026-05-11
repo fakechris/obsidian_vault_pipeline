@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -114,6 +115,245 @@ class IndexEntry:
     key_claims: tuple[str, ...] = ()
 
 
+def _decode_embedding_blob(blob: bytes) -> list[float]:
+    """Decode a float32 BLOB stored in ``page_embeddings.embedding_blob``
+    into a Python list.  Empty / malformed input → ``[]`` so callers
+    can skip silently rather than raise."""
+    if not blob:
+        return []
+    try:
+        from array import array
+        decoded = array("f")
+        decoded.frombytes(blob)
+        return list(decoded)
+    except (TypeError, ValueError):
+        return []
+
+
+def _load_evergreen_vectors_for_pack(
+    db_path: Path,
+    embedding_model: str,
+    pack_name: str | None,
+) -> dict[str, list[float]]:
+    """Load ``slug → mean-vector`` for every evergreen with embeddings
+    in the given pack (or all packs when ``None``), restricted to
+    the active embedding model.
+
+    Joins ``page_embeddings`` to ``objects`` so we can filter by
+    pack — the page_embeddings table itself has no pack column.
+    Mean-vector aggregates across all chunks per slug, matching the
+    existing :func:`embedding_dedup._load_page_vectors` pattern.
+
+    Returns an empty dict when:
+
+    * the DB is missing
+    * the ``page_embeddings`` table is empty
+    * no row matches the embedding-model filter (rare: vault built
+      with the hash backend on a Qwen-only client, or vice versa)
+    """
+    if not db_path.exists():
+        return {}
+    # Build SQL once + conditionally append the pack filter.  Cleaner
+    # than the previous two-branch literal duplication, easier to
+    # extend when more filters appear.
+    sql = (
+        "SELECT pe.slug, pe.embedding_blob "
+        "FROM page_embeddings pe "
+        "JOIN objects o ON pe.slug = o.object_id "
+        "WHERE pe.embedding_model = ?"
+    )
+    params: tuple[Any, ...] = (embedding_model,)
+    if pack_name:
+        sql += " AND o.pack = ?"
+        params = (embedding_model, pack_name)
+    try:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        # ``page_embeddings`` or ``objects`` missing — old vault that
+        # hasn't been rebuilt since BL-039.  Fall back to None
+        # (caller goes alphabetical) rather than crash.
+        return {}
+
+    slug_chunks: dict[str, list[list[float]]] = {}
+    for slug, blob in rows:
+        vec = _decode_embedding_blob(blob)
+        if not vec:
+            continue
+        slug_chunks.setdefault(str(slug), []).append(vec)
+
+    # Aggregate chunks per slug.  The mean of L2-normalised vectors
+    # is NOT itself L2-normalised — without re-normalising the
+    # downstream cosine (which is dot-product assuming unit vectors)
+    # systematically under-scores evergreens with many chunks.  Bot
+    # review flagged this as the load-bearing correctness bug on
+    # multi-chunk evergreens.  Re-normalise here so the dot-product
+    # = cosine identity holds.
+    #
+    # Perf: ``zip(*chunks)`` + ``sum`` is roughly 6× faster than the
+    # previous nested ``for chunk: for i, v in enumerate(chunk)``
+    # accumulator at vault scale.  At 9K slugs the loaded chunks
+    # already cost ~1s in SQLite + decode; this shaves another ~5s.
+    out: dict[str, list[float]] = {}
+    for slug, chunks in slug_chunks.items():
+        if not chunks:
+            continue
+        dim = len(chunks[0])
+        valid_chunks = [c for c in chunks if len(c) == dim]
+        if not valid_chunks:
+            continue
+        n = len(valid_chunks)
+        if n == 1:
+            mean_vec = valid_chunks[0]
+        else:
+            mean_vec = [s / n for s in (sum(col) for col in zip(*valid_chunks))]
+        # L2-normalise so cosine = dot product holds downstream.
+        norm = math.sqrt(sum(x * x for x in mean_vec))
+        if norm <= 0:
+            continue  # all-zero mean → no useful signal; skip slug
+        out[slug] = [x / norm for x in mean_vec]
+    return out
+
+
+def rank_evergreens_by_source(
+    source_content: str,
+    vault_dir: Path | str,
+    *,
+    top_k: int,
+    pack_name: str | None = None,
+) -> list[str]:
+    """BL-069 — embedding-based top-K pre-filter for the router.
+
+    Steps:
+
+    1. Embed ``source_content`` via :func:`embedding.embed_text`
+       (Qwen3-Embedding-0.6B on Apple Silicon; hash fallback
+       otherwise).
+    2. Load evergreen vectors restricted to the same embedding model
+       (mixing hash 128-dim with Qwen 1024-dim would crash).
+    3. Cosine similarity (= dot product, since both sides are
+       L2-normalised by the embed_text contract).
+    4. Return the top ``top_k`` slugs in descending similarity order.
+
+    Why slug-level rather than chunk-level:  per-slug mean is a
+    coarser signal but matches today's index-entry granularity
+    (the router sees one entry per evergreen, not one per chunk).
+    A per-chunk variant is a future optimisation when we have
+    audit data showing slug-level misses for long evergreens.
+
+    Returns an empty list when:
+
+    * ``source_content`` is empty or whitespace-only
+    * ``top_k`` ≤ 0
+    * the embedding subsystem fails to load (missing dep, etc.)
+    * no evergreen vector matches the active embedding model
+    * the embedded source vector has a different dimensionality
+      than the stored vectors (model mismatch — fall back signal)
+
+    The caller (:func:`route_source`) treats an empty result as
+    "no top-K pre-filter, use alphabetical instead" rather than
+    "no evergreens at all" — so this never silently shrinks the
+    router's view.
+    """
+    if not source_content or not source_content.strip():
+        return []
+    if top_k <= 0:
+        return []
+    try:
+        from .embedding import embed_text, get_model_name
+    except ImportError:
+        return []
+
+    try:
+        source_blob = embed_text(source_content)
+    except Exception as exc:  # noqa: BLE001 — embedding init may fail in unusual envs
+        logger.warning("BL-069: source embed failed: %s", exc)
+        return []
+    source_vec = _decode_embedding_blob(source_blob)
+    if not source_vec:
+        return []
+    # Reject zero-norm source vectors.  The BLAKE2b hash backend
+    # (``local-hash-v1``) tokenises via ``[a-z0-9]+`` and produces
+    # an all-zero vector for inputs with no ASCII alphanumerics
+    # (e.g. Chinese-only sources).  Without this guard every
+    # dot-product would tie at 0 and the caller would record an
+    # arbitrary DB-order ranking as ``embedding_topk`` — codex P2.
+    # Returning empty here makes ``route_source`` fall back to the
+    # alphabetical strategy (the documented behaviour for "no
+    # ranking signal").
+    source_norm = math.sqrt(sum(x * x for x in source_vec))
+    if source_norm <= 0:
+        logger.info(
+            "BL-069: source embedding has zero norm "
+            "(likely CJK-only source on the hash backend); "
+            "falling back to alphabetical.",
+        )
+        return []
+
+    try:
+        model_name = get_model_name()
+    except Exception:  # noqa: BLE001
+        return []
+
+    resolved = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved)
+    vectors = _load_evergreen_vectors_for_pack(
+        layout.knowledge_db, model_name, pack_name,
+    )
+    if not vectors:
+        return []
+
+    # Dimensionality sanity check — when the hash backend (128-dim)
+    # produces the source vector but the vault was built with Qwen
+    # (1024-dim) we'd silently produce garbage scores.  Skip with a
+    # warning so the caller falls back to alphabetical.
+    sample_vec = next(iter(vectors.values()))
+    if len(source_vec) != len(sample_vec):
+        logger.warning(
+            "BL-069: source embedding dim %d != evergreen dim %d; "
+            "falling back to alphabetical (model=%r)",
+            len(source_vec), len(sample_vec), model_name,
+        )
+        return []
+
+    # Dot product = cosine (both sides L2-normalised: source by the
+    # embed_text contract, evergreens by ``_load_evergreen_vectors_for_pack``
+    # after mean-aggregation).  ``sum([...])`` materialises a list once
+    # which lets CPython's specialised int/float ops outpace the
+    # ``score += a*b`` accumulator by ~2× at 9K × 1024-d scale (bot
+    # review perf finding).  Total scoring is ~0.3s on M-series.
+    src_len = len(source_vec)
+    scored: list[tuple[str, float]] = []
+    for slug, vec in vectors.items():
+        if len(vec) != src_len:
+            continue
+        score = sum([a * b for a, b in zip(source_vec, vec)])
+        scored.append((slug, score))
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [slug for slug, _ in scored[:top_k]]
+
+
+def _resolve_router_index_strategy() -> str:
+    """Read ``OVP_ROUTER_INDEX_STRATEGY`` env var.
+
+    Valid values: ``"embedding_topk"`` (default) | ``"alphabetical"``.
+    Unknown values fall back to embedding_topk with a warning —
+    the env var is operator-facing and a typo shouldn't silently
+    revert to the worse strategy.
+    """
+    raw = (os.environ.get("OVP_ROUTER_INDEX_STRATEGY") or "").strip().lower()
+    if raw in {"", "embedding_topk", "embedding", "topk"}:
+        return "embedding_topk"
+    if raw in {"alphabetical", "alpha", "ordered"}:
+        return "alphabetical"
+    logger.warning(
+        "OVP_ROUTER_INDEX_STRATEGY=%r is not recognised; "
+        "valid: embedding_topk | alphabetical.  Defaulting to embedding_topk.",
+        raw,
+    )
+    return "embedding_topk"
+
+
 def _truncate(text: str, max_chars: int) -> str:
     """Cut to ``max_chars`` keeping word boundaries when easy.  Adds
     ``…`` when truncated.  Whitespace-collapses first."""
@@ -139,6 +379,7 @@ def build_evergreen_index(
     max_claims_per_object: int = DEFAULT_MAX_CLAIMS_PER_OBJECT,
     max_claim_chars: int = DEFAULT_MAX_CLAIM_CHARS,
     max_entries: int | None = None,
+    priority_slugs: list[str] | None = None,
 ) -> list[IndexEntry]:
     """Return the compact index the Pass 1 router consumes.
 
@@ -159,6 +400,15 @@ def build_evergreen_index(
     callers pass a positive integer to keep the rendered prompt
     inside the router model's context budget — see
     :data:`DEFAULT_MAX_INDEX_ENTRIES` for the rationale + tradeoff.
+
+    ``priority_slugs`` (BL-069) reorders the returned entries so
+    the supplied slugs come first in the given order; remaining
+    entries follow in the default lexicographic order.  Combined
+    with ``max_entries`` this lets the caller seed the index from
+    an external ranker (e.g. embedding-based top-K) and still rely
+    on this function for the per-entry summary/claims rendering.
+    Slugs in ``priority_slugs`` that don't exist in ``objects`` are
+    silently dropped — the ranker may have stale slugs.
 
     Best-effort empty list when the DB is missing — callers
     (router, debug CLIs) should treat an empty index as
@@ -279,6 +529,18 @@ def build_evergreen_index(
             summary=summary,
             key_claims=key_claims,
         ))
+    if priority_slugs:
+        # Move priority slugs to the front in the supplied order.
+        # Non-priority entries stay in their existing lexicographic
+        # order behind the priority block — when ``max_entries``
+        # trims the tail, the priority slugs survive.
+        priority_index = {slug: i for i, slug in enumerate(priority_slugs)}
+        priority_set = set(priority_slugs)
+        priority_entries = [e for e in entries if e.slug in priority_set]
+        non_priority_entries = [e for e in entries if e.slug not in priority_set]
+        priority_entries.sort(key=lambda e: priority_index[e.slug])
+        entries = priority_entries + non_priority_entries
+
     if max_entries is not None and max_entries >= 0:
         entries = entries[:max_entries]
     return entries
@@ -632,6 +894,7 @@ def _emit_route_decision_audit(
     decision: RouterDecision | None,
     error: str = "",
     raw_snippet: str = "",
+    index_strategy: str = "",
 ) -> None:
     """Best-effort audit emit.  ``pipeline_logger`` is expected to be
     a ``PipelineLogger``-shaped object with ``.log(event_type, data)``;
@@ -643,6 +906,13 @@ def _emit_route_decision_audit(
     flapped.  Parameter is named ``pipeline_logger`` (not just
     ``logger``) so it doesn't shadow the module-level ``logger``
     used to report logger-call failures.
+
+    ``index_strategy`` (BL-069) records how the index was selected:
+    ``"embedding_topk"`` (BL-069 dense pre-filter found candidates),
+    ``"alphabetical_fallback"`` (BL-069 ranker returned nothing →
+    fell back to BL-068 alphabetical), ``"alphabetical"`` (operator
+    forced via env var), or ``"explicit"`` (caller passed
+    ``index=`` directly, e.g. tests).
     """
     payload: dict[str, Any] = {
         "prompt_name": ROUTER_PROMPT_NAME,
@@ -650,6 +920,8 @@ def _emit_route_decision_audit(
         "source": source_path,
         "status": status,
     }
+    if index_strategy:
+        payload["index_strategy"] = index_strategy
     if decision is not None:
         payload["source_value_summary"] = decision.source_value_summary
         payload["update_count"] = len(decision.updates)
@@ -738,6 +1010,7 @@ def route_source(
     """
     from .prompt_registry import get_prompt
 
+    index_strategy_used = "explicit"
     if index is None:
         if vault_dir is None:
             raise ValueError(
@@ -751,8 +1024,35 @@ def route_source(
             if max_index_entries is not None
             else _resolve_max_index_entries()
         )
+        # BL-069: embedding-based top-K pre-filter.  When the
+        # strategy is ``embedding_topk`` (default) and an embedding
+        # ranker can produce at least one match, seed
+        # ``priority_slugs`` with the top-K so the router sees the
+        # most-topically-relevant evergreens first.  Empty ranker
+        # output → silent fallback to alphabetical (the prior
+        # BL-068 behaviour); operator can force alphabetical via
+        # ``OVP_ROUTER_INDEX_STRATEGY=alphabetical``.
+        priority_slugs: list[str] | None = None
+        strategy = _resolve_router_index_strategy()
+        if strategy == "embedding_topk":
+            ranked = rank_evergreens_by_source(
+                source_content,
+                vault_dir,
+                top_k=effective_cap,
+                pack_name=pack_name,
+            )
+            if ranked:
+                priority_slugs = ranked
+                index_strategy_used = "embedding_topk"
+            else:
+                index_strategy_used = "alphabetical_fallback"
+        else:
+            index_strategy_used = "alphabetical"
         index = build_evergreen_index(
-            vault_dir, pack_name=pack_name, max_entries=effective_cap,
+            vault_dir,
+            pack_name=pack_name,
+            max_entries=effective_cap,
+            priority_slugs=priority_slugs,
         )
     # ``index`` is consumed once below by ``build_router_user_prompt``
     # via a single ``render_index_for_prompt`` pass — no extra
@@ -768,6 +1068,7 @@ def route_source(
             status=ROUTE_STATUS_PROMPT_REGISTRY_ERROR,
             decision=None,
             error=f"prompt registry: {exc}",
+            index_strategy=index_strategy_used,
         )
         return None
 
@@ -791,6 +1092,7 @@ def route_source(
             status=ROUTE_STATUS_REQUEST_ERROR,
             decision=None,
             error=f"llm.generate: {exc}",
+            index_strategy=index_strategy_used,
         )
         return None
 
@@ -801,6 +1103,7 @@ def route_source(
             status=ROUTE_STATUS_EMPTY_RESPONSE,
             decision=None,
             error="empty router response",
+            index_strategy=index_strategy_used,
         )
         return None
 
@@ -814,6 +1117,7 @@ def route_source(
             decision=None,
             error=str(exc),
             raw_snippet=response_text,
+            index_strategy=index_strategy_used,
         )
         return None
 
@@ -822,5 +1126,6 @@ def route_source(
         source_path=source_path,
         status=ROUTE_STATUS_SKIP if decision.is_skip else ROUTE_STATUS_OK,
         decision=decision,
+        index_strategy=index_strategy_used,
     )
     return decision

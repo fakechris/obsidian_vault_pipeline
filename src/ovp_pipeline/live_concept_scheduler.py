@@ -224,7 +224,24 @@ def evaluate_all_concepts(
     cutoff = current - timedelta(hours=max(since_hours, 0))
 
     vault_path = Path(vault_dir) if not isinstance(vault_dir, Path) else vault_dir
-    all_audit = recent_audit_events(vault_path, limit=audit_event_limit)
+    # Push both filters into SQL.  Pre-fix this function fetched the
+    # most-recent ``limit`` rows of *any* event_type and post-
+    # filtered to ``absorb_route_decision`` in Python — so on a noisy
+    # log where ``audit_event_limit`` worth of rows were dominated by
+    # entity-backfill / atlas-update events, every relevant routing
+    # decision from the past day could be silently truncated and
+    # Live Concepts wouldn't fire.  Pushing event_type + cutoff into
+    # SQLite means ``audit_event_limit`` budgets routing rows
+    # directly.
+    cutoff_iso = (
+        cutoff.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    all_audit = recent_audit_events(
+        vault_path,
+        limit=audit_event_limit,
+        event_type=ABSORB_ROUTE_DECISION_EVENT,
+        since=cutoff_iso,
+    )
     route_events = _filter_recent_route_decisions(all_audit, cutoff=cutoff)
 
     evaluations: list[ConceptEvaluation] = []
