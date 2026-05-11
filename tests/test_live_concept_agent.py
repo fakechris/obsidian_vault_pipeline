@@ -111,6 +111,38 @@ def test_patch_agent_section_refuses_my_take(tmp_path):
         patch_agent_section(path, "My take", "agent trying to hijack")
 
 
+def test_patch_agent_section_tolerates_inline_html_comment(tmp_path):
+    """Codex P2 regression: BL-063 PR#1 example file documents
+    headings annotated with ownership comments like
+    ``## Current synthesis  <!-- agent-owned -->``.  The section
+    matcher must find these (so agent replaces them) instead of
+    treating them as missing and appending a duplicate."""
+    from ovp_pipeline.live_concept_fileops import patch_agent_section
+
+    path = tmp_path / "30-Projects" / "Tracking" / "x.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\ntype: live-concept\nlive:\n  objective: x\n---\n\n"
+        "# X\n\n"
+        "## My take  <!-- user-owned section; agent never writes here -->\n\n"
+        "User text.\n\n"
+        "## Current synthesis  <!-- agent-owned -->\n\n"
+        "Old synthesis placeholder.\n",
+        encoding="utf-8",
+    )
+    changed = patch_agent_section(
+        path, "Current synthesis", "- New bullet from agent\n",
+    )
+    assert changed is True
+    text = path.read_text(encoding="utf-8")
+    # Exactly ONE Current synthesis section — not duplicated.
+    assert text.count("## Current synthesis") == 1
+    assert "Old synthesis placeholder" not in text
+    assert "- New bullet from agent" in text
+    # User section still untouched.
+    assert "User text." in text
+
+
 def test_patch_agent_section_idempotent_no_change(tmp_path):
     """Writing the same content twice → second call is a no-op."""
     from ovp_pipeline.live_concept_fileops import patch_agent_section

@@ -129,10 +129,14 @@ def _read_body_sections(path: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return out
-    # Cheap H2 split — same convention as live_concept_fileops.
+    # H2 split — tolerant of inline HTML-comment ownership markers
+    # like ``## Current synthesis  <!-- agent-owned -->`` (the BL-063
+    # PR#1 example file's documented style).  Codex P2 caught that
+    # the exact-line matcher missed these and the agent would
+    # double-write the section instead of replacing.
     for name in AGENT_OWNED_SECTIONS:
         pattern = re.compile(
-            r"^## " + re.escape(name) + r"\s*$(.*?)(?=^## |^# |\Z)",
+            r"^## " + re.escape(name) + r"(?:\s*<!--[^>]*-->)?\s*$(.*?)(?=^## |^# |\Z)",
             re.MULTILINE | re.DOTALL,
         )
         match = pattern.search(text)
