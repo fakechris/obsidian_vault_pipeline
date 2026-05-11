@@ -461,6 +461,135 @@ def patch_live(
         return new_fm
 
 
+# ---------------------------------------------------------------------------
+# BL-063 PR#3 — section-aware patch helpers for the body
+# ---------------------------------------------------------------------------
+
+# The three agent-owned sections the PR#3 agent is allowed to
+# rewrite.  Section ownership is by heading title (case-sensitive
+# H2).  Pre-PR#3 the operator's section ``## My take`` could
+# technically appear anywhere; the agent contract is "touch ONLY
+# the headings in this allowlist; leave everything else (frontmatter,
+# H1, My take, body prose between sections) byte-for-byte intact".
+AGENT_OWNED_SECTIONS = (
+    "Current synthesis",
+    "Recent evidence",
+    "Tensions",
+)
+
+# The user-owned section that the agent must never touch.  Kept as
+# a separate constant so refactors can grep both lists at once.
+USER_OWNED_SECTIONS = ("My take",)
+
+
+def _find_section_range(body: str, section_title: str) -> tuple[int, int] | None:
+    """Find a level-2 section's range in the body.
+
+    Returns ``(start_line_idx, end_line_idx)`` where ``end`` is
+    exclusive — slice ``lines[start:end]`` includes the heading
+    line + every line up to (but not including) the next H1/H2.
+
+    Title matching is exact and case-sensitive — Obsidian
+    convention is title-cased section headings, and treating
+    "## current synthesis" and "## Current synthesis" as different
+    sections is the safer default for a single-writer contract.
+
+    Returns ``None`` when the section doesn't exist in the body.
+    """
+    lines = body.splitlines()
+    target_line = f"## {section_title}"
+    start: int | None = None
+    for i, line in enumerate(lines):
+        if line.rstrip() == target_line:
+            start = i
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        stripped = lines[j].lstrip()
+        if stripped.startswith("# ") or stripped.startswith("## "):
+            end = j
+            break
+    return (start, end)
+
+
+def patch_agent_section(
+    path: Path,
+    section_title: str,
+    new_content: str,
+    *,
+    acquire_lock: Any = _default_lock,
+) -> bool:
+    """Replace one agent-owned H2 section's body in a Live Concept file.
+
+    The section heading itself (``## <section_title>``) is preserved;
+    only the lines between this heading and the next H1/H2 are
+    replaced with ``new_content`` (which should NOT include the
+    heading).  When the section doesn't exist yet, it's appended at
+    the end of the body (after a blank line) — the typical first-
+    run path.
+
+    Refuses to write to anything outside :data:`AGENT_OWNED_SECTIONS`
+    so a buggy agent can't accidentally rewrite ``## My take`` or
+    the frontmatter.
+
+    Returns ``True`` when a write happened, ``False`` when nothing
+    changed (e.g. ``new_content`` matched the existing section
+    verbatim).
+
+    Frontmatter (``live:`` block included) is preserved byte-for-
+    byte — this helper only touches body lines belonging to the
+    named section.  Same single-writer-at-section-granularity
+    contract that :func:`patch_live` enforces at frontmatter-key
+    granularity.
+    """
+    if section_title not in AGENT_OWNED_SECTIONS:
+        raise ValueError(
+            f"section {section_title!r} is not in the agent-owned allowlist "
+            f"{AGENT_OWNED_SECTIONS}; agent body editor refuses to write here"
+        )
+    with acquire_lock(path):
+        text = _read_file(path)
+        if not text:
+            raise ValueError(
+                f"cannot patch_agent_section: {path} does not exist"
+            )
+        raw, body, fence = _split_frontmatter(text)
+        section_range = _find_section_range(body, section_title)
+        # Normalise new content — strip trailing whitespace, end with
+        # exactly one newline so adjacent sections don't double up.
+        new_block_lines = [f"## {section_title}"]
+        new_body = new_content.rstrip("\n")
+        if new_body:
+            new_block_lines.append("")
+            new_block_lines.extend(new_body.splitlines())
+        new_block_lines.append("")  # blank line before next section
+
+        body_lines = body.splitlines()
+        if section_range is None:
+            # Section doesn't exist — append at end of body.
+            existing = body_lines
+            while existing and not existing[-1].strip():
+                existing.pop()
+            if existing:
+                existing.append("")  # blank line separator
+            new_body_lines = existing + new_block_lines
+        else:
+            start, end = section_range
+            new_body_lines = body_lines[:start] + new_block_lines + body_lines[end:]
+
+        new_body_str = "\n".join(new_body_lines)
+        if not new_body_str.endswith("\n"):
+            new_body_str += "\n"
+
+        new_text = _join_frontmatter(raw, new_body_str, fence)
+        if new_text == text:
+            return False
+        path.write_text(new_text, encoding="utf-8")
+        return True
+
+
 def delete_live(path: Path, *, acquire_lock: Any = _default_lock) -> None:
     """Make the file passive: strip the ``live:`` block + the
     ``type: live-concept`` marker.  Body content is preserved
