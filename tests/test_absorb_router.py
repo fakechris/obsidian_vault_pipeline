@@ -643,10 +643,11 @@ def test_route_source_parse_error_returns_none_emits_audit():
 
 
 def test_route_source_llm_failure_returns_none_emits_audit():
-    """LLM client raising (network, auth, rate limit) → returns
-    ``None`` with a parse_error audit so the caller falls back."""
+    """LLM client raising (network, auth, rate limit, context-cap) →
+    returns ``None`` with a ``request_error`` audit so dashboards
+    can tell provider failures apart from JSON-parsing failures."""
     from ovp_pipeline.absorb_router import (
-        ROUTE_STATUS_PARSE_ERROR,
+        ROUTE_STATUS_REQUEST_ERROR,
         route_source,
     )
 
@@ -664,12 +665,17 @@ def test_route_source_llm_failure_returns_none_emits_audit():
     )
     assert decision is None
     payload = audit.events[-1][1]
-    assert payload["status"] == ROUTE_STATUS_PARSE_ERROR
+    assert payload["status"] == ROUTE_STATUS_REQUEST_ERROR
     assert "simulated rate limit" in payload["error"]
 
 
 def test_route_source_empty_response_returns_none_emits_audit():
-    from ovp_pipeline.absorb_router import route_source
+    """LLM returns 200 with empty body → ``empty_response`` audit
+    (distinct from request errors AND from parse failures)."""
+    from ovp_pipeline.absorb_router import (
+        ROUTE_STATUS_EMPTY_RESPONSE,
+        route_source,
+    )
 
     audit = _FakeLogger()
     decision = route_source(
@@ -680,7 +686,40 @@ def test_route_source_empty_response_returns_none_emits_audit():
         index=[],
     )
     assert decision is None
-    assert audit.events[-1][1]["error"] == "empty router response"
+    payload = audit.events[-1][1]
+    assert payload["status"] == ROUTE_STATUS_EMPTY_RESPONSE
+    assert payload["error"] == "empty router response"
+
+
+def test_route_source_prompt_registry_failure_emits_specific_status(monkeypatch):
+    """Missing/broken prompt template → ``prompt_registry_error``
+    (OVP-side config bug, distinct from provider problems).
+    Test patches ``get_prompt`` to simulate a registry KeyError."""
+    from ovp_pipeline import absorb_router
+    from ovp_pipeline.absorb_router import (
+        ROUTE_STATUS_PROMPT_REGISTRY_ERROR,
+        route_source,
+    )
+
+    def _broken_get_prompt(*_a, **_kw):
+        raise KeyError("prompt 'absorb_router' missing from registry")
+
+    monkeypatch.setattr(
+        "ovp_pipeline.prompt_registry.get_prompt", _broken_get_prompt,
+    )
+
+    audit = _FakeLogger()
+    decision = route_source(
+        _FakeLLM("won't be called"),
+        source_path="x.md",
+        source_content="body",
+        pipeline_logger=audit,
+        index=[],
+    )
+    assert decision is None
+    payload = audit.events[-1][1]
+    assert payload["status"] == ROUTE_STATUS_PROMPT_REGISTRY_ERROR
+    assert "prompt 'absorb_router' missing" in payload["error"]
 
 
 def test_route_source_requires_index_or_vault_dir():

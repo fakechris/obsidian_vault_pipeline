@@ -518,10 +518,33 @@ def parse_router_response(response_text: str) -> RouterDecision:
 # audit log) already render audit_events generically.
 ABSORB_ROUTE_DECISION_EVENT = "absorb_route_decision"
 
-# Status values stored in the audit row's payload.  Free-form for
-# forward-compat but please add new values here when introducing them.
+# Status values stored in the audit row's payload.  Pre-BL-068, the
+# single ``parse_error`` bucket covered four distinct failure modes
+# (prompt registry, request failure, empty response, real JSON parse
+# error), making observability tooling unable to triage without
+# grepping the free-form ``error`` field.  Split into specific
+# statuses so a follow-up dashboard can chart by cause:
+#
+# * ``ok`` — call succeeded, response parsed as a valid RouterDecision
+# * ``skip`` — router explicitly chose "no work to do" (empty
+#   updates + creates, ``skip_reason`` populated)
+# * ``prompt_registry_error`` — OVP-side config bug: prompt file
+#   missing / unreadable / not in registry
+# * ``request_error`` — LLM provider rejected the call BEFORE
+#   producing a response (4xx/5xx/timeout/network).  Most common
+#   subtypes: context-window-exceeded, rate-limit, server-down.
+# * ``empty_response`` — LLM accepted the request and returned 200
+#   but the response body was empty (provider degraded / null
+#   completion / over-trimmed by max_tokens=0 type config).
+# * ``parse_error`` — got a real LLM response but it isn't valid
+#   JSON, or is JSON but doesn't match the RouterDecision schema.
+#   This is the only state that indicates a model-quality problem
+#   (the LLM is hallucinating non-conforming output).
 ROUTE_STATUS_OK = "ok"
 ROUTE_STATUS_SKIP = "skip"
+ROUTE_STATUS_PROMPT_REGISTRY_ERROR = "prompt_registry_error"
+ROUTE_STATUS_REQUEST_ERROR = "request_error"
+ROUTE_STATUS_EMPTY_RESPONSE = "empty_response"
 ROUTE_STATUS_PARSE_ERROR = "parse_error"
 
 
@@ -742,7 +765,7 @@ def route_source(
         _emit_route_decision_audit(
             pipeline_logger,
             source_path=source_path,
-            status=ROUTE_STATUS_PARSE_ERROR,
+            status=ROUTE_STATUS_PROMPT_REGISTRY_ERROR,
             decision=None,
             error=f"prompt registry: {exc}",
         )
@@ -765,7 +788,7 @@ def route_source(
         _emit_route_decision_audit(
             pipeline_logger,
             source_path=source_path,
-            status=ROUTE_STATUS_PARSE_ERROR,
+            status=ROUTE_STATUS_REQUEST_ERROR,
             decision=None,
             error=f"llm.generate: {exc}",
         )
@@ -775,7 +798,7 @@ def route_source(
         _emit_route_decision_audit(
             pipeline_logger,
             source_path=source_path,
-            status=ROUTE_STATUS_PARSE_ERROR,
+            status=ROUTE_STATUS_EMPTY_RESPONSE,
             decision=None,
             error="empty router response",
         )

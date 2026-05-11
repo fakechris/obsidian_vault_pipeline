@@ -223,13 +223,16 @@ def test_shadow_router_llm_exception_does_not_break_legacy(tmp_path, monkeypatch
     assert llm.generate.call_count == 2
 
     audit = _read_audit_events(log.log_file)
-    parse_errors = [
+    # Post-BL-068-fix: LLM raising is ``request_error``, not
+    # ``parse_error``.  Distinguishing provider failures from JSON
+    # parsing failures lets dashboards triage by cause.
+    request_errors = [
         r for r in audit
         if r.get("event_type") == "absorb_route_decision"
-        and r.get("status") == "parse_error"
+        and r.get("status") == "request_error"
     ]
-    assert len(parse_errors) == 1
-    assert "simulated rate limit" in parse_errors[0]["error"]
+    assert len(request_errors) == 1
+    assert "simulated rate limit" in request_errors[0]["error"]
 
 
 def test_shadow_unexpected_exception_logs_shadow_error(tmp_path, monkeypatch):
