@@ -1509,20 +1509,117 @@ def _is_under_path(path: Path, parent: Path) -> bool:
 
 
 def _reject_intake_source_target(layout: VaultLayout, path: Path) -> None:
+    """Block paths still in the work-in-progress intake stages.
+
+    Pre-BL-071 this also blocked ``50-Inbox/03-Processed/`` — but
+    that's the **post-BL-029 absorb input layer** by design.  BL-058
+    explicitly documents "absorb v2 reads the raw directly" and
+    BL-066's github intake already routes 03-Processed files through
+    absorb via :func:`_is_github_source_markdown`.  BL-071 generalises
+    that to every intake-only source under 03-Processed (clippings,
+    pinboard-staged articles, hand-curated raw files) so the
+    operator can run ``ovp-absorb --file 50-Inbox/03-Processed/.../X.md``
+    end-to-end without forcing a deep-dive synthesis step that no
+    longer exists.
+
+    The three stages that **stay blocked**:
+
+    * ``Clippings/`` — the Obsidian web-clipper landing zone.  Files
+      here haven't been renamed / image-resolved / dedup-checked yet.
+    * ``50-Inbox/01-Raw/`` — staged for intake but not yet processed.
+      Image download + frontmatter parse haven't run.
+    * ``50-Inbox/02-Processing/`` — currently being processed by
+      ``auto_article_processor``; absorb would race the move-to-
+      processed step.
+
+    03-Processed is the durable "ready for absorb" layer.  Absorb
+    against files there is allowed; the
+    :func:`_is_intake_only_source_markdown` filter still gates which
+    of them are absorb-eligible (empty intake stubs, deep-dives, and
+    archive-only files are skipped at the per-target check).
+    """
     for source_root in (
         layout.clippings_dir,
         layout.raw_dir,
         layout.processing_dir,
-        layout.processed_dir,
     ):
         if _is_under_path(path, source_root):
             raise ValueError(
-                f"absorb target is an intake source and must go through source lifecycle first: {path}"
+                "absorb target is an intake source and must go through "
+                f"source lifecycle first: {path}"
             )
 
 
 _GITHUB_SOURCE_FRONTMATTER_MARKER = "source_type: github-project"
 _GITHUB_SKIPPED_MARKER = "extraction_status: skipped"
+
+# BL-071: minimum body length for a 03-Processed source to be
+# considered absorb-eligible.  Empty intake stubs (the file was
+# created by the lifecycle move but the body was never resolved)
+# would otherwise waste a router LLM call to produce
+# ``units=[], skip_reason="empty"``.  ~200 chars is below any real
+# article's first paragraph; lower than that is almost certainly a
+# stub.
+_INTAKE_SOURCE_MIN_BODY_CHARS = 200
+
+
+def _is_intake_only_source_markdown(path: Path) -> bool:
+    """BL-071: return True when ``path`` is an intake-only source in
+    ``50-Inbox/03-Processed/`` that's worth running through absorb.
+
+    Detection rules:
+
+    * File must have ``---`` YAML frontmatter.
+    * Frontmatter must carry a ``source:`` URL (or ``source_url:``
+      via the BL-066 convention) — distinguishes intake products
+      from hand-written notes that happen to live under
+      ``03-Processed/`` for organisational reasons.
+    * Must NOT carry ``extraction_status: skipped`` — the BL-066
+      audit-trail marker for empty enrichments.
+    * Body must be longer than :data:`_INTAKE_SOURCE_MIN_BODY_CHARS`
+      so we don't waste router LLM calls on empty stubs.
+    * Filename must NOT match ``*_深度解读.md`` — those are the
+      legacy deep-dive layer (already handled by the ``targets``
+      glob in :func:`_collect_absorb_targets`).
+
+    Reads at most 8 KB to keep the per-file cost bounded — the
+    frontmatter + first-paragraph check fits comfortably.  Body
+    length check uses the truncated read; underestimates long
+    articles' length but never overestimates a stub's, so it stays
+    conservative on the "is this absorb-eligible?" side.
+    """
+    name = path.name
+    if name.endswith("_深度解读.md"):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            head = fh.read(8 * 1024)
+    except (OSError, UnicodeDecodeError):
+        return False
+    if not head.startswith("---"):
+        return False
+    fence_end = head.find("\n---", 3)
+    if fence_end < 0:
+        return False
+    fm_block = head[:fence_end]
+    body = head[fence_end + 4 :].lstrip()
+    if _GITHUB_SKIPPED_MARKER in fm_block:
+        return False
+    # Source URL field — accepts both ``source:`` (clippings,
+    # articles, pinboard) and ``source_url:`` (BL-066 github,
+    # paper).  Cheap substring check to avoid YAML-parsing every
+    # candidate.
+    has_source = (
+        "\nsource:" in fm_block
+        or fm_block.startswith("source:")
+        or "\nsource_url:" in fm_block
+        or fm_block.startswith("source_url:")
+    )
+    if not has_source:
+        return False
+    if len(body) < _INTAKE_SOURCE_MIN_BODY_CHARS:
+        return False
+    return True
 
 
 def _is_github_source_markdown(path: Path) -> bool:
@@ -1615,13 +1712,23 @@ def _collect_absorb_targets(
         _reject_intake_source_target(layout, directory)
         if not directory.exists():
             return []
-        # Pick up both the legacy deep-dive layer and BL-066 github
-        # sources that landed in the same staging dir (e.g. when
-        # absorb is invoked with ``--directory 50-Inbox/03-Processed``
-        # directly).
+        # Three target shapes are absorb-eligible:
+        # 1. Legacy deep-dive layer (``*_深度解读.md``) — pre-BL-029.
+        # 2. BL-066 github-project sources via the marker check.
+        # 3. BL-071 intake-only sources in 03-Processed (clippings,
+        #    pinboard-staged articles) that have a real body — the
+        #    "absorb v2 reads the raw directly" target shape from
+        #    BL-058's design.  Earlier intake stages stay blocked
+        #    by ``_reject_intake_source_target``.
+        is_processed_dir = _is_under_path(directory, layout.processed_dir)
         targets = sorted(directory.glob("*_深度解读.md"))
         for candidate in sorted(directory.glob("*.md")):
-            if candidate not in targets and _is_github_source_markdown(candidate):
+            if candidate in targets:
+                continue
+            if _is_github_source_markdown(candidate):
+                targets.append(candidate)
+                continue
+            if is_processed_dir and _is_intake_only_source_markdown(candidate):
                 targets.append(candidate)
         for target in targets:
             _reject_intake_source_target(layout, target)
