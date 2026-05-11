@@ -162,6 +162,173 @@ def test_index_max_entries_truncates_after_sort(temp_vault):
     assert empty == []
 
 
+def test_build_index_priority_slugs_reorders_to_front(temp_vault):
+    """BL-069: ``priority_slugs`` moves the supplied slugs to the
+    front in the given order; remaining entries keep their default
+    lexicographic order behind the priority block.  Combined with
+    ``max_entries`` this lets the embedding ranker put topically-
+    relevant evergreens above the cap."""
+    from ovp_pipeline.absorb_router import build_evergreen_index
+
+    _seed_index_fixtures(temp_vault)
+    entries = build_evergreen_index(
+        temp_vault,
+        priority_slugs=["gamma", "alpha"],
+    )
+    # gamma first, alpha second (priority order), then beta (alpha-sort).
+    assert [e.slug for e in entries] == ["gamma", "alpha", "beta"]
+
+
+def test_build_index_priority_slugs_combined_with_max_entries(temp_vault):
+    """``priority_slugs`` survives ``max_entries`` truncation — the
+    priority block is at the front so the cap drops the *trailing*
+    alphabetical entries, not the priority ones."""
+    from ovp_pipeline.absorb_router import build_evergreen_index
+
+    _seed_index_fixtures(temp_vault)
+    entries = build_evergreen_index(
+        temp_vault,
+        priority_slugs=["gamma"],
+        max_entries=2,
+    )
+    # gamma (priority) + alpha (first non-priority alphabetically).
+    assert [e.slug for e in entries] == ["gamma", "alpha"]
+
+
+def test_build_index_priority_slugs_with_unknown_slug(temp_vault):
+    """Slugs in ``priority_slugs`` that don't exist in ``objects``
+    are silently dropped — the ranker may have stale slugs."""
+    from ovp_pipeline.absorb_router import build_evergreen_index
+
+    _seed_index_fixtures(temp_vault)
+    entries = build_evergreen_index(
+        temp_vault,
+        priority_slugs=["nonexistent-slug", "beta"],
+    )
+    assert [e.slug for e in entries] == ["beta", "alpha", "gamma"]
+
+
+def test_resolve_router_index_strategy_reads_env(monkeypatch):
+    """BL-069: env var picks strategy; unknown values fall back to
+    embedding_topk (default) with a warning rather than silently
+    reverting to the worse strategy."""
+    from ovp_pipeline.absorb_router import _resolve_router_index_strategy
+
+    monkeypatch.delenv("OVP_ROUTER_INDEX_STRATEGY", raising=False)
+    assert _resolve_router_index_strategy() == "embedding_topk"
+
+    monkeypatch.setenv("OVP_ROUTER_INDEX_STRATEGY", "alphabetical")
+    assert _resolve_router_index_strategy() == "alphabetical"
+
+    monkeypatch.setenv("OVP_ROUTER_INDEX_STRATEGY", "alpha")
+    assert _resolve_router_index_strategy() == "alphabetical"
+
+    monkeypatch.setenv("OVP_ROUTER_INDEX_STRATEGY", "embedding_topk")
+    assert _resolve_router_index_strategy() == "embedding_topk"
+
+    monkeypatch.setenv("OVP_ROUTER_INDEX_STRATEGY", "garbage")
+    assert _resolve_router_index_strategy() == "embedding_topk"
+
+
+def test_rank_evergreens_empty_source_returns_empty():
+    """Empty / whitespace-only source content → empty ranking.
+    Caller treats this as "fall back to alphabetical"."""
+    from ovp_pipeline.absorb_router import rank_evergreens_by_source
+
+    assert rank_evergreens_by_source("", "/nonexistent", top_k=10) == []
+    assert rank_evergreens_by_source("   \n  ", "/nonexistent", top_k=10) == []
+    assert rank_evergreens_by_source("anything", "/nonexistent", top_k=0) == []
+
+
+def test_rank_evergreens_missing_db_returns_empty(tmp_path):
+    """No knowledge.db (fresh vault, never rebuilt) → empty ranking,
+    no exception.  Caller falls back to alphabetical."""
+    from ovp_pipeline.absorb_router import rank_evergreens_by_source
+
+    assert rank_evergreens_by_source(
+        "real content", tmp_path, top_k=10,
+    ) == []
+
+
+def test_rank_evergreens_returns_relevant_slugs_first(temp_vault, monkeypatch):
+    """BL-069 happy path: embed source + cosine top-K returns the
+    evergreens whose vectors are nearest.  We monkeypatch the
+    embedding model to a deterministic stub so the test doesn't
+    require Qwen at test-time."""
+    from ovp_pipeline.absorb_router import rank_evergreens_by_source
+    from ovp_pipeline.runtime import VaultLayout
+    import array as _array
+
+    _seed_index_fixtures(temp_vault)
+    # Inject deterministic 4-d unit vectors keyed by slug into the
+    # page_embeddings table so cosine ranking has known winners.
+    db = VaultLayout.from_vault(temp_vault).knowledge_db
+    vectors = {
+        "alpha": [1.0, 0.0, 0.0, 0.0],  # aligned with source vec
+        "beta":  [0.0, 1.0, 0.0, 0.0],  # orthogonal
+        "gamma": [0.7071, 0.7071, 0.0, 0.0],  # 45° to source
+    }
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM page_embeddings")
+        for slug, vec in vectors.items():
+            blob = _array.array("f", vec).tobytes()
+            conn.execute(
+                "INSERT INTO page_embeddings (slug, chunk_index, section_title, "
+                "chunk_text, embedding_blob, embedding_model) "
+                "VALUES (?, 0, '', '', ?, 'stub-test-4d')",
+                (slug, blob),
+            )
+        conn.commit()
+
+    # Force the embed_text + get_model_name pair to produce a known
+    # 4-d source vector with the same model name as the stored rows.
+    import ovp_pipeline.embedding as emb
+    monkeypatch.setattr(
+        emb, "embed_text",
+        lambda _text: _array.array("f", [1.0, 0.0, 0.0, 0.0]).tobytes(),
+    )
+    monkeypatch.setattr(emb, "get_model_name", lambda: "stub-test-4d")
+
+    ranked = rank_evergreens_by_source(
+        "anything", temp_vault, top_k=3,
+    )
+    # alpha (cos=1.0) > gamma (cos=0.707) > beta (cos=0.0)
+    assert ranked == ["alpha", "gamma", "beta"]
+
+
+def test_rank_evergreens_dimensionality_mismatch_returns_empty(temp_vault, monkeypatch):
+    """If the source embedder produces a different dim than the
+    stored vectors (model mismatch — hash 128-d on a Qwen 1024-d
+    vault), the ranker returns empty so the caller falls back to
+    alphabetical rather than producing garbage scores."""
+    from ovp_pipeline.absorb_router import rank_evergreens_by_source
+    from ovp_pipeline.runtime import VaultLayout
+    import array as _array
+
+    _seed_index_fixtures(temp_vault)
+    db = VaultLayout.from_vault(temp_vault).knowledge_db
+    # Stored: 4-d vectors.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM page_embeddings")
+        conn.execute(
+            "INSERT INTO page_embeddings (slug, chunk_index, section_title, "
+            "chunk_text, embedding_blob, embedding_model) "
+            "VALUES ('alpha', 0, '', '', ?, 'stub-test-4d')",
+            (_array.array("f", [1.0, 0.0, 0.0, 0.0]).tobytes(),),
+        )
+        conn.commit()
+
+    import ovp_pipeline.embedding as emb
+    # Source embedder returns 8-d — incompatible with stored 4-d.
+    monkeypatch.setattr(
+        emb, "embed_text",
+        lambda _text: _array.array("f", [0.5] * 8).tobytes(),
+    )
+    monkeypatch.setattr(emb, "get_model_name", lambda: "stub-test-4d")
+
+    assert rank_evergreens_by_source("x", temp_vault, top_k=10) == []
+
+
 def test_resolve_max_index_entries_reads_env(monkeypatch):
     """BL-068: ``OVP_ROUTER_MAX_INDEX_ENTRIES`` env var overrides
     the default cap.  Invalid values fall back to default rather
