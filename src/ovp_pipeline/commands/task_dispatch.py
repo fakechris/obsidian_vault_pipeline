@@ -499,7 +499,19 @@ def _print_handlers() -> None:
         print(f"  {prefix:12}  {desc}")
 
 
+def _register_extension_handlers() -> None:
+    """Import sibling modules whose import side effect is to call
+    ``register_handler``.  Kept lazy so ``task_dispatch`` itself
+    stays cheap to import (e.g. for unit tests that don't need the
+    digest handler's sqlite dependency)."""
+    try:
+        from . import digest_handler  # noqa: F401  side-effect: registers DIGEST
+    except Exception:  # pragma: no cover - import failures are non-fatal
+        logger.warning("digest_handler import failed; DIGEST prefix unavailable")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _register_extension_handlers()
     parser = argparse.ArgumentParser(
         description="Run a vault task file from 50-Inbox/02-Tasks/.",
     )
