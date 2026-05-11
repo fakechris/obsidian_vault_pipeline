@@ -250,9 +250,8 @@ def test_collect_targets_directory_skips_intake_detection_outside_processed(tmp_
 
 def test_collect_targets_file_path_under_processed_is_allowed(tmp_path):
     """Single-file mode: ``ovp-absorb --file 50-Inbox/03-Processed/.../X.md``
-    no longer raises.  The eligibility check happens downstream
-    (extract_concepts), so this just verifies the reject guard
-    doesn't fire on the path."""
+    no longer raises.  When the file passes the eligibility filter,
+    it's returned as the single target."""
     from ovp_pipeline.auto_evergreen_extractor import _collect_absorb_targets
     from ovp_pipeline.runtime import VaultLayout
 
@@ -260,3 +259,122 @@ def test_collect_targets_file_path_under_processed_is_allowed(tmp_path):
     f = tmp_path / "50-Inbox" / "03-Processed" / "2026-05" / "x.md"
     _make_clipping(f)
     assert _collect_absorb_targets(layout, file_path=f) == [f]
+
+
+def test_collect_targets_file_path_skips_ineligible_processed_stub(tmp_path):
+    """Codex P2 #1 regression: single-file mode against an
+    ineligible 03-Processed file (empty stub, no source URL,
+    extraction_status:skipped) must return an empty target list
+    so the caller doesn't waste a router LLM call.  Pre-fix the
+    eligibility filter only ran in directory mode; single-file
+    passed any 03-Processed path straight through."""
+    from ovp_pipeline.auto_evergreen_extractor import _collect_absorb_targets
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(tmp_path)
+    stub = tmp_path / "50-Inbox" / "03-Processed" / "2026-05" / "stub.md"
+    stub.parent.mkdir(parents=True, exist_ok=True)
+    stub.write_text(
+        "---\ntitle: Stub\nsource: https://example.com\n---\n\n# Stub\n",
+        encoding="utf-8",
+    )
+    assert _collect_absorb_targets(layout, file_path=stub) == []
+
+
+def test_collect_targets_file_path_outside_processed_keeps_legacy_behaviour(tmp_path):
+    """Files outside 03-Processed (e.g. legacy ``20-Areas/.../topic_深度解读.md``)
+    don't go through the BL-071 eligibility filter — they're handled
+    by the deep-dive globs as before.  Pre-fix passed everything
+    through verbatim; post-fix this branch must still NOT filter
+    deep-dives."""
+    from ovp_pipeline.auto_evergreen_extractor import _collect_absorb_targets
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(tmp_path)
+    dd = tmp_path / "20-Areas" / "AI-Research" / "Topics" / "2026-05" / "x_深度解读.md"
+    dd.parent.mkdir(parents=True, exist_ok=True)
+    dd.write_text("---\ntitle: DD\n---\n\n# DD\n\n" + ("body " * 100), encoding="utf-8")
+    assert _collect_absorb_targets(layout, file_path=dd) == [dd]
+
+
+def test_process_directory_picks_up_intake_sources(tmp_path):
+    """Codex P2 #2 regression: ``run_absorb_workflow(directory=...)``
+    with no ``progress_callback`` routes through
+    ``AutoEvergreenExtractor.process_directory`` whose own scan
+    (pre-BL-071 fix) only saw deep-dives + github.  ``--dir
+    03-Processed/<month>/`` would silently process zero clippings.
+
+    This test exercises ``process_directory`` directly with mocked
+    ``process_file`` so we only assert the scan-set decision."""
+    from ovp_pipeline.auto_evergreen_extractor import AutoEvergreenExtractor
+    from ovp_pipeline.runtime import VaultLayout
+
+    month = tmp_path / "50-Inbox" / "03-Processed" / "2026-05"
+    month.mkdir(parents=True)
+    deep_dive = month / "a_深度解读.md"
+    deep_dive.write_text(
+        "---\ntitle: DD\n---\n\n# DD\n\n" + ("body " * 100), encoding="utf-8",
+    )
+    intake = month / "b_clipping.md"
+    _make_clipping(intake, body_chars=500)
+    stub = month / "c_stub.md"
+    stub.write_text(
+        "---\ntitle: Stub\nsource: https://example.com\n---\n\n# Stub\n",
+        encoding="utf-8",
+    )
+
+    class _Logger:
+        def log(self, *_a, **_kw):
+            pass
+
+    extractor = AutoEvergreenExtractor(tmp_path, _Logger())
+    scanned: list[str] = []
+
+    def fake_process_file(file_path, *, dry_run, auto_promote, promote_threshold):
+        scanned.append(file_path.name)
+        return {
+            "file": str(file_path),
+            "concepts_extracted": 0,
+            "candidates_added": 0,
+            "concepts_promoted": 0,
+            "concepts_created": 0,
+            "concepts_skipped": 0,
+        }
+
+    extractor.process_file = fake_process_file  # type: ignore[assignment]
+    extractor.process_directory(month)
+    # Stub is filtered out; deep-dive + clipping are processed.
+    assert sorted(scanned) == ["a_深度解读.md", "b_clipping.md"]
+
+
+def test_collect_processed_sources_includes_intake_in_recent_scan(tmp_path):
+    """Codex P2 #3 regression: ``_collect_processed_github_sources``
+    (used by ``--recent N``) used to filter exclusively by the
+    github detector.  Recent non-github intake sources were
+    invisible to the recent scan.  Now both detectors apply."""
+    from ovp_pipeline.auto_evergreen_extractor import _collect_processed_github_sources
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(tmp_path)
+    month = tmp_path / "50-Inbox" / "03-Processed" / "2026-05"
+    month.mkdir(parents=True)
+
+    github = month / "a_github.md"
+    github.write_text(
+        "---\nsource_type: github-project\nsource_url: https://github.com/x/y\n"
+        "---\n\n# Repo\n\n" + ("body " * 200), encoding="utf-8",
+    )
+    clipping = month / "b_clipping.md"
+    _make_clipping(clipping, body_chars=500)
+    deep_dive = month / "c_深度解读.md"
+    deep_dive.write_text(
+        "---\ntitle: DD\n---\n\n# DD\n\n" + ("body " * 100), encoding="utf-8",
+    )
+
+    sources = _collect_processed_github_sources(layout)
+    names = sorted(s.name for s in sources)
+    # github source + intake-only clipping picked up.  Deep-dive
+    # excluded — that's the legacy 20-Areas scan's job.
+    assert "a_github.md" in names
+    assert "b_clipping.md" in names
+    assert "c_深度解读.md" not in names

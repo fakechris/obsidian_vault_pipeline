@@ -1449,9 +1449,22 @@ class AutoEvergreenExtractor:
             return []
 
         # 处理深度解读文件 + BL-066 github-project 源(后者无 _深度解读 后缀)
+        # + BL-071 intake-only sources under 03-Processed (clippings,
+        # pinboard articles).  Same three-shape detection as
+        # ``_collect_absorb_targets(directory=...)`` so the two paths
+        # produce identical target sets — pre-BL-071 they drifted apart
+        # because ``process_directory`` skipped the broader detector,
+        # making ``--dir 03-Processed/.../<month>`` find zero targets
+        # for non-github sources (codex P2 #2).
+        is_processed_dir = _is_under_path(directory, self.layout.processed_dir)
         files = list(directory.glob("*_深度解读.md"))
         for candidate in directory.glob("*.md"):
-            if candidate not in files and _is_github_source_markdown(candidate):
+            if candidate in files:
+                continue
+            if _is_github_source_markdown(candidate):
+                files.append(candidate)
+                continue
+            if is_processed_dir and _is_intake_only_source_markdown(candidate):
                 files.append(candidate)
 
         results = []
@@ -1660,14 +1673,25 @@ def _collect_processed_github_sources(
     month_names: set[str] | None = None,
     cutoff: datetime | None = None,
 ) -> list[Path]:
-    """Scan ``50-Inbox/03-Processed/<YYYY-MM>/`` for github-source
-    markdowns (BL-066).  Used by the ``recent`` branch of
-    ``_collect_absorb_targets`` so github intakes flow into absorb on
-    the same schedule as deep-dives.
+    """Scan ``50-Inbox/03-Processed/<YYYY-MM>/`` for absorb-eligible
+    intake sources.  Used by the ``recent`` branch of
+    :func:`_collect_absorb_targets` so intake products flow into
+    absorb on the same schedule as deep-dives.
 
-    ``month_names`` filters which month dirs to scan; ``cutoff`` filters
-    by file mtime.  When both are None, returns all github sources
-    under processed_dir.
+    Despite the name (kept for backwards compat with older callers),
+    BL-071 widens the scan to BOTH:
+
+    * BL-066 github-project sources (:func:`_is_github_source_markdown`)
+    * BL-071 broader intake sources — clippings, pinboard articles,
+      hand-curated raws with a source URL
+      (:func:`_is_intake_only_source_markdown`)
+
+    Pre-BL-071 the ``--recent N`` branch silently ignored every
+    non-github intake (codex P2 #3).
+
+    ``month_names`` filters which month dirs to scan; ``cutoff``
+    filters by file mtime.  When both are ``None``, returns every
+    eligible source under processed_dir.
     """
     if not layout.processed_dir.exists():
         return []
@@ -1688,7 +1712,10 @@ def _collect_processed_github_sources(
                     continue
                 if modified_at < cutoff:
                     continue
-            if not _is_github_source_markdown(candidate):
+            if not (
+                _is_github_source_markdown(candidate)
+                or _is_intake_only_source_markdown(candidate)
+            ):
                 continue
             key = str(candidate.resolve())
             if key in seen:
@@ -1707,6 +1734,21 @@ def _collect_absorb_targets(
 ) -> list[Path]:
     if file_path:
         _reject_intake_source_target(layout, file_path)
+        # BL-071: when the single file lives under 03-Processed, run
+        # the eligibility filter so callers that auto-iterate (e.g.
+        # commands/absorb.py's per-file ``run_absorb_workflow``)
+        # don't waste a router LLM call on empty stubs / archive
+        # files / non-source notes (codex P2 #1).  Deep-dive files
+        # and BL-066 github sources are accepted as before.
+        if _is_under_path(file_path, layout.processed_dir):
+            name = file_path.name
+            is_deep_dive = name.endswith("_深度解读.md")
+            if not (
+                is_deep_dive
+                or _is_github_source_markdown(file_path)
+                or _is_intake_only_source_markdown(file_path)
+            ):
+                return []
         return [file_path]
     if directory:
         _reject_intake_source_target(layout, directory)
