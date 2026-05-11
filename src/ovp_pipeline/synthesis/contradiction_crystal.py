@@ -451,9 +451,17 @@ def synthesize_contradiction_crystals(
             user_prompt = _build_user_prompt(
                 subject, pos_evergreens, neg_evergreens,
             )
+            # M20 / BL-075: prepend user identity + autonomous-action
+            # rules.  See community_crystal.py for the rationale.
+            from ..context_loader import load_llm_context
+            context_prefix = load_llm_context(vault_dir)
+            system_prompt = (
+                context_prefix + "\n" + _SYSTEM_PROMPT
+                if context_prefix else _SYSTEM_PROMPT
+            )
             try:
                 body_md = llm_client.call(
-                    _SYSTEM_PROMPT, user_prompt, max_tokens=max_tokens,
+                    system_prompt, user_prompt, max_tokens=max_tokens,
                 )
             except Exception as exc:
                 logger.warning(
