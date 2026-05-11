@@ -732,23 +732,36 @@ def _emit_extract_provenance(
         conn.commit()
 
 
-def _emit_promote_provenance(
+def record_promote_audit_pair(
     vault_dir: Path,
     *,
     pack_name: str,
     target_slug: str,
+    canonical_path: str,
+    source_url: str,
     lifecycle_action: str,
     source_slug: str,
+    changed_by: str,
     note: str = "",
 ) -> None:
-    """BL-056 + BL-061: write one ``stage='promote'`` (or ``'merge'``)
-    provenance row + one ``change_type='promote'`` evergreen-revision
-    snapshot.  Both run in the same transaction so the audit pair is
-    atomic.
+    """BL-056 + BL-061 audit pair, callable from any code path that
+    just wrote (or merged into) an evergreen file.
 
-    Reads the freshly-rebuilt ``objects.source_url`` and
-    ``canonical_path`` for ``target_slug`` so the rows reflect the
-    state after the rebuild step has landed.
+    Writes one ``stage='promote'`` (or ``'merge'``) provenance row +
+    one ``change_type='promote'`` evergreen-revision snapshot, both
+    in the same transaction so the audit pair is atomic.
+
+    Caller supplies ``canonical_path`` directly — used to read the
+    snapshot content — and ``source_url`` for the provenance row.
+    This makes the helper usable from the CLI auto-promote path
+    (BL-067) which writes the evergreen file *before* the DB
+    rebuild populates ``objects.canonical_path``.
+
+    ``changed_by`` differentiates the callsite for audit replay:
+
+    * ``"ui:review_candidate_concept"`` — manual review via UI/MCP
+    * ``"cli:auto_promote"`` — ``ovp-absorb --auto-promote`` CLI
+      (BL-067 closes this gap)
 
     Best-effort.  Both helpers swallow schema-not-present errors;
     this function only protects against the DB connect failing
@@ -764,12 +777,6 @@ def _emit_promote_provenance(
     if not layout.knowledge_db.exists():
         return
     with sqlite3.connect(layout.knowledge_db) as conn:
-        row = conn.execute(
-            "SELECT source_url, canonical_path FROM objects WHERE pack=? AND object_id=?",
-            (pack_name, target_slug),
-        ).fetchone()
-        source_url = (row or ("", ""))[0] or ""
-        canonical_path = (row or ("", ""))[1] or ""
         metadata: dict[str, Any] = {
             "lifecycle_action": lifecycle_action,
             "candidate_slug": source_slug,
@@ -787,10 +794,11 @@ def _emit_promote_provenance(
         )
 
         # BL-061: snapshot the post-promote evergreen content into
-        # ``evergreen_revisions``.  Read the markdown directly off
-        # disk via canonical_path; rebuild has already written the
-        # objects row with the canonical absolute path, so this
-        # round-trips deterministically.
+        # ``evergreen_revisions``.  Caller passes ``canonical_path``
+        # directly so this works regardless of whether the DB
+        # rebuild has populated ``objects.canonical_path`` yet
+        # (BL-067 enables firing this from the CLI immediately
+        # after the file is written, before the rebuild runs).
         if canonical_path:
             try:
                 content_md = Path(canonical_path).read_text(encoding="utf-8")
@@ -811,11 +819,51 @@ def _emit_promote_provenance(
                     object_id=target_slug,
                     content_md=content_md,
                     change_type=CHANGE_TYPE_PROMOTE,
-                    changed_by="ui:review_candidate_concept",
+                    changed_by=changed_by,
                     change_note=" | ".join(change_note_parts),
                 )
 
         conn.commit()
+
+
+def _emit_promote_provenance(
+    vault_dir: Path,
+    *,
+    pack_name: str,
+    target_slug: str,
+    lifecycle_action: str,
+    source_slug: str,
+    note: str = "",
+) -> None:
+    """Internal wrapper for the UI/MCP review path.
+
+    Looks up ``canonical_path`` + ``source_url`` from ``objects``
+    (rebuild has just run, so they're populated) and delegates to
+    :func:`record_promote_audit_pair`.  The CLI auto-promote path
+    (BL-067) skips the lookup and calls the helper directly with
+    the known output path.
+    """
+    layout = VaultLayout.from_vault(vault_dir)
+    if not layout.knowledge_db.exists():
+        return
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        row = conn.execute(
+            "SELECT source_url, canonical_path FROM objects WHERE pack=? AND object_id=?",
+            (pack_name, target_slug),
+        ).fetchone()
+    source_url = (row or ("", ""))[0] or ""
+    canonical_path = (row or ("", ""))[1] or ""
+    record_promote_audit_pair(
+        vault_dir,
+        pack_name=pack_name,
+        target_slug=target_slug,
+        canonical_path=canonical_path,
+        source_url=source_url,
+        lifecycle_action=lifecycle_action,
+        source_slug=source_slug,
+        changed_by="ui:review_candidate_concept",
+        note=note,
+    )
 
 
 def review_candidate_concept(

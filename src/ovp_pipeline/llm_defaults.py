@@ -29,6 +29,39 @@ API_BASE_FALLBACKS = (
     "ANTHROPIC_BASE_URL",
 )
 
+# BL-068: router-specific overrides.  When set, the BL-062 shadow
+# router (and a future BL-062-PR4 "router-as-primary" path) targets
+# a different model / endpoint than the main absorb extractor.
+#
+# Motivation: the absorb extractor wants the highest-quality model
+# available (per-target extraction quality matters most), but the
+# cheap Pass 1 router needs a different trade-off — large input
+# context (to fit a 1000-evergreen index), low cost-per-call, and
+# can tolerate lower output quality (the router only decides
+# update-vs-create, not the actual content).
+#
+# Concretely: MiniMax M2.7-highspeed has a ~2K-token input cap that
+# makes the router prompt impossible.  Pointing the router at e.g.
+# DeepSeek-V4-Flash (1M context, OpenAI-compatible) via SenseNova
+# unblocks the live-vault shadow run without changing the absorb
+# extractor's model.
+#
+# Env vars (all four optional; setting just ``OVP_ROUTER_MODEL`` is
+# fine if the main api_base/api_key already point at a compatible
+# endpoint):
+#
+# * ``OVP_ROUTER_MODEL`` — model name (without provider prefix; the
+#   prefix is inferred from ``OVP_ROUTER_API_TYPE``)
+# * ``OVP_ROUTER_API_BASE`` — endpoint URL (e.g.
+#   ``https://token.sensenova.cn/v1`` for SenseNova OpenAI-compat)
+# * ``OVP_ROUTER_API_KEY`` — secret; falls back to the main key
+# * ``OVP_ROUTER_API_TYPE`` — ``"openai"`` or ``"anthropic"``;
+#   defaults to ``"anthropic"`` for backwards-compat
+ROUTER_MODEL_ENV = "OVP_ROUTER_MODEL"
+ROUTER_API_BASE_ENV = "OVP_ROUTER_API_BASE"
+ROUTER_API_KEY_ENV = "OVP_ROUTER_API_KEY"
+ROUTER_API_TYPE_ENV = "OVP_ROUTER_API_TYPE"
+
 PROXY_ENV_VARS = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -83,6 +116,59 @@ def resolve_api_base(explicit: str | None = None, default: str = DEFAULT_MINIMAX
         if value:
             return value
     return default
+
+
+def resolve_router_llm_config() -> dict[str, str] | None:
+    """Return router LLM config when **any** of the BL-068 env vars
+    are set; otherwise ``None`` (caller falls back to the main
+    extractor's LLM client).
+
+    Soft-merge contract: each field independently overrides — set
+    only ``OVP_ROUTER_MODEL`` to keep the same endpoint but switch
+    models, or set ``OVP_ROUTER_API_BASE`` + ``OVP_ROUTER_API_KEY``
+    to point at a different provider while inheriting the model
+    name from the main config.  The api_type defaults to
+    ``"anthropic"`` (matches the main extractor) unless explicitly
+    set to ``"openai"`` for OpenAI-compatible providers like
+    SenseNova.
+
+    Security: when ``OVP_ROUTER_API_BASE`` overrides the endpoint,
+    the api_key does **not** inherit from the main vault config —
+    setting only ``OVP_ROUTER_API_BASE`` without
+    ``OVP_ROUTER_API_KEY`` returns an empty key so the operator
+    sees an auth failure on the new endpoint rather than
+    accidentally leaking the main key to an unintended provider.
+    When the base is *not* overridden (e.g. operator just wants a
+    different model on the same provider), inheriting the main key
+    is safe and convenient.
+
+    The returned dict is shaped to pass straight into
+    :class:`auto_evergreen_extractor.LiteLLMClient`'s kwargs.
+    """
+    model = (os.environ.get(ROUTER_MODEL_ENV) or "").strip()
+    api_base = (os.environ.get(ROUTER_API_BASE_ENV) or "").strip()
+    api_key = (os.environ.get(ROUTER_API_KEY_ENV) or "").strip()
+    api_type = (os.environ.get(ROUTER_API_TYPE_ENV) or "").strip()
+
+    if not any((model, api_base, api_key, api_type)):
+        return None
+
+    # Key resolution rules:
+    # 1. Explicit OVP_ROUTER_API_KEY wins.
+    # 2. Otherwise, only inherit the main key when the endpoint
+    #    is unchanged (same api_base) — avoids leaking the main
+    #    key to a different provider when the operator forgot the
+    #    router key.
+    resolved_key = api_key
+    if not resolved_key and not api_base:
+        resolved_key = resolve_api_key() or ""
+
+    return {
+        "model": model or DEFAULT_MINIMAX_MODEL,
+        "api_base": api_base or resolve_api_base(),
+        "api_key": resolved_key,
+        "api_type": api_type or "anthropic",
+    }
 
 
 def _proxy_mode(env: Mapping[str, str]) -> str:

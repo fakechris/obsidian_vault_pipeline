@@ -223,13 +223,16 @@ def test_shadow_router_llm_exception_does_not_break_legacy(tmp_path, monkeypatch
     assert llm.generate.call_count == 2
 
     audit = _read_audit_events(log.log_file)
-    parse_errors = [
+    # Post-BL-068-fix: LLM raising is ``request_error``, not
+    # ``parse_error``.  Distinguishing provider failures from JSON
+    # parsing failures lets dashboards triage by cause.
+    request_errors = [
         r for r in audit
         if r.get("event_type") == "absorb_route_decision"
-        and r.get("status") == "parse_error"
+        and r.get("status") == "request_error"
     ]
-    assert len(parse_errors) == 1
-    assert "simulated rate limit" in parse_errors[0]["error"]
+    assert len(request_errors) == 1
+    assert "simulated rate limit" in request_errors[0]["error"]
 
 
 def test_shadow_unexpected_exception_logs_shadow_error(tmp_path, monkeypatch):
@@ -277,3 +280,120 @@ def test_shadow_unexpected_exception_logs_shadow_error(tmp_path, monkeypatch):
     ]
     assert len(shadow_errors) == 1
     assert "simulated registry failure" in shadow_errors[0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# BL-068: router LLM config (separate model for the router)
+# ---------------------------------------------------------------------------
+
+
+def test_build_router_llm_returns_main_when_no_override(tmp_path, monkeypatch):
+    """Default behavior: with no ``OVP_ROUTER_*`` env vars set, the
+    router uses the same LLM client as the main extractor — no new
+    client constructed, no spend on a second provider."""
+    for var in (
+        "OVP_ROUTER_MODEL",
+        "OVP_ROUTER_API_BASE",
+        "OVP_ROUTER_API_KEY",
+        "OVP_ROUTER_API_TYPE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    extractor, llm, _ = _make_extractor(tmp_path, llm_responses=[])
+    assert extractor._build_router_llm() is llm
+
+
+def test_build_router_llm_constructs_override_when_env_set(
+    tmp_path, monkeypatch,
+):
+    """BL-068: setting ``OVP_ROUTER_*`` env vars yields a new
+    ``LiteLLMClient`` wired to the override config.  Verifies the
+    operator can swap router model independently of main extractor —
+    the load-bearing fix for MiniMax-2K-cap on the router prompt."""
+    from ovp_pipeline.auto_evergreen_extractor import LiteLLMClient
+
+    monkeypatch.setenv("OVP_ROUTER_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("OVP_ROUTER_API_BASE", "https://token.sensenova.cn/v1")
+    monkeypatch.setenv("OVP_ROUTER_API_KEY", "sk-test-router")
+    monkeypatch.setenv("OVP_ROUTER_API_TYPE", "openai")
+    extractor, llm, _ = _make_extractor(tmp_path, llm_responses=[])
+    router_llm = extractor._build_router_llm()
+    assert router_llm is not llm
+    assert isinstance(router_llm, LiteLLMClient)
+    assert router_llm.api_base == "https://token.sensenova.cn/v1"
+    assert router_llm.model == "openai/deepseek-v4-flash"
+
+
+def test_router_config_does_not_leak_main_key_to_different_endpoint(monkeypatch):
+    """Security contract: when ``OVP_ROUTER_API_BASE`` overrides the
+    endpoint, the main vault's api_key must NOT be inherited.  The
+    operator must explicitly set ``OVP_ROUTER_API_KEY`` for the new
+    endpoint, or auth fails with a visible error rather than
+    silently shipping the main key to an unintended provider."""
+    from ovp_pipeline.llm_defaults import resolve_router_llm_config
+
+    # Simulate a main vault config with a real key.
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "sk-main-secret")
+    # Operator overrides ONLY the endpoint (forgets the router key).
+    monkeypatch.setenv(
+        "OVP_ROUTER_API_BASE", "https://different.provider.com/v1",
+    )
+    monkeypatch.delenv("OVP_ROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OVP_ROUTER_MODEL", raising=False)
+    monkeypatch.delenv("OVP_ROUTER_API_TYPE", raising=False)
+
+    cfg = resolve_router_llm_config()
+    assert cfg is not None
+    assert cfg["api_base"] == "https://different.provider.com/v1"
+    assert cfg["api_key"] == "", (
+        "main key must not leak to a different endpoint"
+    )
+
+
+def test_router_config_inherits_main_key_when_base_unchanged(monkeypatch):
+    """Inverse of the leak-prevention rule: when the endpoint is NOT
+    overridden (operator just wants to test a different model on
+    the same provider), inheriting the main key is the convenient
+    behavior — no need to repeat the same secret in env."""
+    from ovp_pipeline.llm_defaults import resolve_router_llm_config
+
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "sk-main-secret")
+    monkeypatch.setenv("OVP_ROUTER_MODEL", "different-model-same-provider")
+    monkeypatch.delenv("OVP_ROUTER_API_BASE", raising=False)
+    monkeypatch.delenv("OVP_ROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OVP_ROUTER_API_TYPE", raising=False)
+
+    cfg = resolve_router_llm_config()
+    assert cfg is not None
+    assert cfg["api_key"] == "sk-main-secret"
+
+
+def test_build_router_llm_falls_back_to_main_on_construct_error(
+    tmp_path, monkeypatch,
+):
+    """Best-effort contract: if the override config fails to build
+    a client (e.g. missing dep / bad config), the shadow path falls
+    back to the main LLM and emits ``absorb_router_llm_build_error``
+    rather than killing the main extract path."""
+    from ovp_pipeline import auto_evergreen_extractor
+
+    monkeypatch.setenv("OVP_ROUTER_MODEL", "x")
+    monkeypatch.setenv("OVP_ROUTER_API_BASE", "https://example.com")
+    monkeypatch.setenv("OVP_ROUTER_API_KEY", "sk-test")
+
+    class BoomLLM:
+        def __init__(self, *_a, **_kw):
+            raise RuntimeError("simulated litellm init failure")
+
+    monkeypatch.setattr(
+        auto_evergreen_extractor, "LiteLLMClient", BoomLLM,
+    )
+
+    extractor, llm, log = _make_extractor(tmp_path, llm_responses=[])
+    assert extractor._build_router_llm() is llm
+    audit = _read_audit_events(log.log_file)
+    build_errors = [
+        r for r in audit
+        if r.get("event_type") == "absorb_router_llm_build_error"
+    ]
+    assert len(build_errors) == 1
+    assert "simulated litellm init failure" in build_errors[0]["error"]

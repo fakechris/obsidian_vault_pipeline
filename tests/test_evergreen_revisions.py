@@ -255,6 +255,54 @@ def _seed_v2_candidate(temp_vault):
     return candidate
 
 
+def test_record_promote_audit_pair_writes_revision_without_objects_row(temp_vault):
+    """BL-067 contract: the helper accepts canonical_path directly so
+    the CLI auto-promote path (which writes the evergreen file BEFORE
+    the DB rebuild populates ``objects.canonical_path``) can fire the
+    revision hook without depending on the projection lookup."""
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import record_promote_audit_pair
+
+    evergreen_dir = temp_vault / "10-Knowledge" / "Evergreen"
+    evergreen_dir.mkdir(parents=True, exist_ok=True)
+    evergreen_path = evergreen_dir / "Alpha-Cli.md"
+    evergreen_path.write_text(
+        "---\nnote_id: alpha-cli\ntitle: Alpha CLI\ntype: evergreen\n"
+        "date: 2026-04-13\n---\n\n# Alpha CLI\n\nFresh promote body.\n",
+        encoding="utf-8",
+    )
+    # Rebuild so the evergreen_revisions table exists.  The new
+    # evergreen lands in ``objects`` after rebuild — but we'll use a
+    # different slug name in record_promote_audit_pair to prove the
+    # helper doesn't depend on the projection lookup.
+    rebuild_knowledge_index(temp_vault)
+
+    record_promote_audit_pair(
+        temp_vault,
+        pack_name="default_knowledge",
+        target_slug="alpha-cli",
+        canonical_path=str(evergreen_path),
+        source_url="https://example.com/source",
+        lifecycle_action="promote",
+        source_slug="alpha-cli",
+        changed_by="cli:auto_promote",
+        note="",
+    )
+
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT version, change_type, changed_by FROM evergreen_revisions "
+            "WHERE object_id = 'alpha-cli' ORDER BY version"
+        ).fetchall()
+    assert len(rows) == 1
+    version, change_type, changed_by = rows[0]
+    assert version == 1
+    assert change_type == "promote"
+    assert changed_by == "cli:auto_promote"
+
+
 def test_promote_writes_evergreen_revision(temp_vault):
     """End-to-end: a successful promote produces both a
     ``stage='promote'`` provenance row (BL-056) AND a

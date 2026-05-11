@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sqlite3
 from collections.abc import Iterable
@@ -69,6 +70,26 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_SUMMARY_CHARS = 200
 DEFAULT_MAX_CLAIMS_PER_OBJECT = 3
 DEFAULT_MAX_CLAIM_CHARS = 160
+
+# BL-068: cap on number of evergreens fed to the Pass 1 router.
+# At ~300 chars/entry the index renders to ~300KB at the default cap,
+# which fits provider context budgets:
+#
+# * Claude Sonnet 4.7 (200K tokens) — fine
+# * DeepSeek V4 Flash (1M chars/tokens, SenseNova) — fine
+# * MiniMax M2.7-highspeed (~2K input cap) — still too big; that
+#   model cannot host the router and operators should swap via
+#   ``OVP_ROUTER_MODEL`` env var (see llm_defaults.py)
+#
+# When the vault has more than the cap (the live OVP vault has
+# ~9.5K), the router only sees the first N alphabetically.  That's
+# a real limitation: UPDATE candidates whose slug sorts after the
+# cap silently become CREATEs.  The proper fix is an
+# embedding-based pre-filter (top-N most-similar to the source) —
+# tracked as a future enhancement, requires sharing absorb's
+# embedding pipeline with the router.  For now the cap exists to
+# keep the API call making sense rather than failing every time.
+DEFAULT_MAX_INDEX_ENTRIES = 1000
 
 
 @dataclass(frozen=True)
@@ -117,6 +138,7 @@ def build_evergreen_index(
     max_summary_chars: int = DEFAULT_MAX_SUMMARY_CHARS,
     max_claims_per_object: int = DEFAULT_MAX_CLAIMS_PER_OBJECT,
     max_claim_chars: int = DEFAULT_MAX_CLAIM_CHARS,
+    max_entries: int | None = None,
 ) -> list[IndexEntry]:
     """Return the compact index the Pass 1 router consumes.
 
@@ -131,6 +153,12 @@ def build_evergreen_index(
     objects appear.  When ``None``, all packs in the truth store
     are surfaced (matches today's `auto_evergreen_extractor`
     cross-pack search).
+
+    ``max_entries`` caps the slug count fed to the router.  ``None``
+    means no cap (legacy behaviour, used by tests).  Production
+    callers pass a positive integer to keep the rendered prompt
+    inside the router model's context budget — see
+    :data:`DEFAULT_MAX_INDEX_ENTRIES` for the rationale + tradeoff.
 
     Best-effort empty list when the DB is missing — callers
     (router, debug CLIs) should treat an empty index as
@@ -251,6 +279,8 @@ def build_evergreen_index(
             summary=summary,
             key_claims=key_claims,
         ))
+    if max_entries is not None and max_entries >= 0:
+        entries = entries[:max_entries]
     return entries
 
 
@@ -488,10 +518,33 @@ def parse_router_response(response_text: str) -> RouterDecision:
 # audit log) already render audit_events generically.
 ABSORB_ROUTE_DECISION_EVENT = "absorb_route_decision"
 
-# Status values stored in the audit row's payload.  Free-form for
-# forward-compat but please add new values here when introducing them.
+# Status values stored in the audit row's payload.  Pre-BL-068, the
+# single ``parse_error`` bucket covered four distinct failure modes
+# (prompt registry, request failure, empty response, real JSON parse
+# error), making observability tooling unable to triage without
+# grepping the free-form ``error`` field.  Split into specific
+# statuses so a follow-up dashboard can chart by cause:
+#
+# * ``ok`` — call succeeded, response parsed as a valid RouterDecision
+# * ``skip`` — router explicitly chose "no work to do" (empty
+#   updates + creates, ``skip_reason`` populated)
+# * ``prompt_registry_error`` — OVP-side config bug: prompt file
+#   missing / unreadable / not in registry
+# * ``request_error`` — LLM provider rejected the call BEFORE
+#   producing a response (4xx/5xx/timeout/network).  Most common
+#   subtypes: context-window-exceeded, rate-limit, server-down.
+# * ``empty_response`` — LLM accepted the request and returned 200
+#   but the response body was empty (provider degraded / null
+#   completion / over-trimmed by max_tokens=0 type config).
+# * ``parse_error`` — got a real LLM response but it isn't valid
+#   JSON, or is JSON but doesn't match the RouterDecision schema.
+#   This is the only state that indicates a model-quality problem
+#   (the LLM is hallucinating non-conforming output).
 ROUTE_STATUS_OK = "ok"
 ROUTE_STATUS_SKIP = "skip"
+ROUTE_STATUS_PROMPT_REGISTRY_ERROR = "prompt_registry_error"
+ROUTE_STATUS_REQUEST_ERROR = "request_error"
+ROUTE_STATUS_EMPTY_RESPONSE = "empty_response"
 ROUTE_STATUS_PARSE_ERROR = "parse_error"
 
 
@@ -619,6 +672,33 @@ def _emit_route_decision_audit(
         )
 
 
+def _resolve_max_index_entries() -> int:
+    """Read ``OVP_ROUTER_MAX_INDEX_ENTRIES`` env var with a sensible
+    default.  Invalid values (non-numeric, negative) fall back to the
+    default rather than raising — the env var is operator-facing and
+    a typo shouldn't abort the absorb pass."""
+    raw = (os.environ.get("OVP_ROUTER_MAX_INDEX_ENTRIES") or "").strip()
+    if not raw:
+        return DEFAULT_MAX_INDEX_ENTRIES
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "OVP_ROUTER_MAX_INDEX_ENTRIES=%r is not an integer; "
+            "falling back to default %d",
+            raw, DEFAULT_MAX_INDEX_ENTRIES,
+        )
+        return DEFAULT_MAX_INDEX_ENTRIES
+    if value < 0:
+        logger.warning(
+            "OVP_ROUTER_MAX_INDEX_ENTRIES=%d is negative; "
+            "falling back to default %d",
+            value, DEFAULT_MAX_INDEX_ENTRIES,
+        )
+        return DEFAULT_MAX_INDEX_ENTRIES
+    return value
+
+
 def route_source(
     llm_client: Any,
     *,
@@ -630,6 +710,7 @@ def route_source(
     index: Iterable[IndexEntry] | None = None,
     max_output_tokens: int = ROUTER_MAX_OUTPUT_TOKENS,
     max_source_chars: int = ROUTER_MAX_SOURCE_CHARS,
+    max_index_entries: int | None = None,
 ) -> RouterDecision | None:
     """BL-062 Pass 1: send the source + evergreen index to the
     router LLM, parse the response, emit an audit row.  Returns the
@@ -662,7 +743,17 @@ def route_source(
             raise ValueError(
                 "route_source needs either an explicit `index` or a `vault_dir`"
             )
-        index = build_evergreen_index(vault_dir, pack_name=pack_name)
+        # BL-068: cap the index to fit the router model's context
+        # budget.  Explicit kwarg wins; env var
+        # ``OVP_ROUTER_MAX_INDEX_ENTRIES`` falls through to default.
+        effective_cap = (
+            max_index_entries
+            if max_index_entries is not None
+            else _resolve_max_index_entries()
+        )
+        index = build_evergreen_index(
+            vault_dir, pack_name=pack_name, max_entries=effective_cap,
+        )
     # ``index`` is consumed once below by ``build_router_user_prompt``
     # via a single ``render_index_for_prompt`` pass — no extra
     # materialisation needed.  ``build_evergreen_index`` already
@@ -674,7 +765,7 @@ def route_source(
         _emit_route_decision_audit(
             pipeline_logger,
             source_path=source_path,
-            status=ROUTE_STATUS_PARSE_ERROR,
+            status=ROUTE_STATUS_PROMPT_REGISTRY_ERROR,
             decision=None,
             error=f"prompt registry: {exc}",
         )
@@ -697,7 +788,7 @@ def route_source(
         _emit_route_decision_audit(
             pipeline_logger,
             source_path=source_path,
-            status=ROUTE_STATUS_PARSE_ERROR,
+            status=ROUTE_STATUS_REQUEST_ERROR,
             decision=None,
             error=f"llm.generate: {exc}",
         )
@@ -707,7 +798,7 @@ def route_source(
         _emit_route_decision_audit(
             pipeline_logger,
             source_path=source_path,
-            status=ROUTE_STATUS_PARSE_ERROR,
+            status=ROUTE_STATUS_EMPTY_RESPONSE,
             decision=None,
             error="empty router response",
         )
