@@ -23,7 +23,15 @@ logger = logging.getLogger(__name__)
 
 
 class _CallableLLMClient:
-    """Adapt LiteLLMClient.generate(...) → .call(...) for entity_extractor."""
+    """Adapt LiteLLMClient.generate(...) → .call(...) for entity_extractor.
+
+    Exposes BOTH ``.call(...)`` (for legacy consumers like
+    ``entity_extractor``) AND ``.generate(...)`` (for the duck-typed
+    interface BL-062 router + BL-063 PR#3 agent use).  Both names
+    are aliases for the same underlying tuple-shape-tolerant call;
+    keeping both names live so the adapter is callable from either
+    convention without re-fetching the inner client.
+    """
 
     def __init__(self, inner: Any) -> None:
         self._inner = inner
@@ -38,6 +46,23 @@ class _CallableLLMClient:
         else:
             text = out
         return text or ""
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 3000,
+    ) -> str:
+        """Alias for :meth:`call` so the BL-062 router and BL-063
+        PR#3 agent (which both use the ``.generate(...)`` shape) can
+        consume this adapter without unwrapping ``._inner``.
+
+        Codex P1: without this alias, ``ovp-live-concept-scan --fire``
+        would AttributeError on every real-config run because
+        :func:`get_litellm_client` returns this adapter, not the
+        bare ``LiteLLMClient``.
+        """
+        return self.call(system_prompt, user_prompt, max_tokens=max_tokens)
 
 
 def get_litellm_client(vault_dir: Path | None = None) -> _CallableLLMClient | None:

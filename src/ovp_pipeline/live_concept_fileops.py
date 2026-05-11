@@ -482,6 +482,33 @@ AGENT_OWNED_SECTIONS = (
 USER_OWNED_SECTIONS = ("My take",)
 
 
+def _heading_title(line: str) -> str | None:
+    """Return the title text of an H2 heading line, stripping inline
+    HTML comments + trailing whitespace.  Returns ``None`` for lines
+    that aren't H2 headings.
+
+    The BL-063 PR#1 example file shows headings like:
+
+        ## Current synthesis  <!-- agent-owned -->
+        ## My take  <!-- user-owned section; agent never writes here -->
+
+    Codex P2: pre-fix the section-range matcher did exact-line
+    string compare and missed these annotated headings, so the
+    agent's first run appended a duplicate ``## Current synthesis``
+    section instead of replacing the existing one.  Stripping the
+    HTML comment before comparison makes the matcher tolerant of
+    the documented annotation style.
+    """
+    if not line.startswith("## "):
+        return None
+    title = line[3:]
+    # Strip from first HTML comment marker to end-of-line.
+    comment_idx = title.find("<!--")
+    if comment_idx >= 0:
+        title = title[:comment_idx]
+    return title.strip() or None
+
+
 def _find_section_range(body: str, section_title: str) -> tuple[int, int] | None:
     """Find a level-2 section's range in the body.
 
@@ -489,18 +516,20 @@ def _find_section_range(body: str, section_title: str) -> tuple[int, int] | None
     exclusive — slice ``lines[start:end]`` includes the heading
     line + every line up to (but not including) the next H1/H2.
 
-    Title matching is exact and case-sensitive — Obsidian
-    convention is title-cased section headings, and treating
-    "## current synthesis" and "## Current synthesis" as different
-    sections is the safer default for a single-writer contract.
+    Title matching is exact and case-sensitive on the heading text
+    *after* stripping inline HTML comments (so
+    ``## Current synthesis  <!-- agent-owned -->`` matches
+    ``Current synthesis``).  Obsidian convention is title-cased
+    section headings; treating "## current synthesis" and
+    "## Current synthesis" as different sections is the safer
+    default for a single-writer contract.
 
     Returns ``None`` when the section doesn't exist in the body.
     """
     lines = body.splitlines()
-    target_line = f"## {section_title}"
     start: int | None = None
     for i, line in enumerate(lines):
-        if line.rstrip() == target_line:
+        if _heading_title(line) == section_title:
             start = i
             break
     if start is None:
