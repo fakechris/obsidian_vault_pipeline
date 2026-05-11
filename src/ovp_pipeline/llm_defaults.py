@@ -132,6 +132,16 @@ def resolve_router_llm_config() -> dict[str, str] | None:
     set to ``"openai"`` for OpenAI-compatible providers like
     SenseNova.
 
+    Security: when ``OVP_ROUTER_API_BASE`` overrides the endpoint,
+    the api_key does **not** inherit from the main vault config —
+    setting only ``OVP_ROUTER_API_BASE`` without
+    ``OVP_ROUTER_API_KEY`` returns an empty key so the operator
+    sees an auth failure on the new endpoint rather than
+    accidentally leaking the main key to an unintended provider.
+    When the base is *not* overridden (e.g. operator just wants a
+    different model on the same provider), inheriting the main key
+    is safe and convenient.
+
     The returned dict is shaped to pass straight into
     :class:`auto_evergreen_extractor.LiteLLMClient`'s kwargs.
     """
@@ -143,10 +153,20 @@ def resolve_router_llm_config() -> dict[str, str] | None:
     if not any((model, api_base, api_key, api_type)):
         return None
 
+    # Key resolution rules:
+    # 1. Explicit OVP_ROUTER_API_KEY wins.
+    # 2. Otherwise, only inherit the main key when the endpoint
+    #    is unchanged (same api_base) — avoids leaking the main
+    #    key to a different provider when the operator forgot the
+    #    router key.
+    resolved_key = api_key
+    if not resolved_key and not api_base:
+        resolved_key = resolve_api_key() or ""
+
     return {
         "model": model or DEFAULT_MINIMAX_MODEL,
         "api_base": api_base or resolve_api_base(),
-        "api_key": api_key or resolve_api_key() or "",
+        "api_key": resolved_key,
         "api_type": api_type or "anthropic",
     }
 

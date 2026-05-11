@@ -323,6 +323,50 @@ def test_build_router_llm_constructs_override_when_env_set(
     assert router_llm.model == "openai/deepseek-v4-flash"
 
 
+def test_router_config_does_not_leak_main_key_to_different_endpoint(monkeypatch):
+    """Security contract: when ``OVP_ROUTER_API_BASE`` overrides the
+    endpoint, the main vault's api_key must NOT be inherited.  The
+    operator must explicitly set ``OVP_ROUTER_API_KEY`` for the new
+    endpoint, or auth fails with a visible error rather than
+    silently shipping the main key to an unintended provider."""
+    from ovp_pipeline.llm_defaults import resolve_router_llm_config
+
+    # Simulate a main vault config with a real key.
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "sk-main-secret")
+    # Operator overrides ONLY the endpoint (forgets the router key).
+    monkeypatch.setenv(
+        "OVP_ROUTER_API_BASE", "https://different.provider.com/v1",
+    )
+    monkeypatch.delenv("OVP_ROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OVP_ROUTER_MODEL", raising=False)
+    monkeypatch.delenv("OVP_ROUTER_API_TYPE", raising=False)
+
+    cfg = resolve_router_llm_config()
+    assert cfg is not None
+    assert cfg["api_base"] == "https://different.provider.com/v1"
+    assert cfg["api_key"] == "", (
+        "main key must not leak to a different endpoint"
+    )
+
+
+def test_router_config_inherits_main_key_when_base_unchanged(monkeypatch):
+    """Inverse of the leak-prevention rule: when the endpoint is NOT
+    overridden (operator just wants to test a different model on
+    the same provider), inheriting the main key is the convenient
+    behavior — no need to repeat the same secret in env."""
+    from ovp_pipeline.llm_defaults import resolve_router_llm_config
+
+    monkeypatch.setenv("AUTO_VAULT_API_KEY", "sk-main-secret")
+    monkeypatch.setenv("OVP_ROUTER_MODEL", "different-model-same-provider")
+    monkeypatch.delenv("OVP_ROUTER_API_BASE", raising=False)
+    monkeypatch.delenv("OVP_ROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OVP_ROUTER_API_TYPE", raising=False)
+
+    cfg = resolve_router_llm_config()
+    assert cfg is not None
+    assert cfg["api_key"] == "sk-main-secret"
+
+
 def test_build_router_llm_falls_back_to_main_on_construct_error(
     tmp_path, monkeypatch,
 ):

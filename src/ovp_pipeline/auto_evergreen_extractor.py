@@ -1224,14 +1224,25 @@ class AutoEvergreenExtractor:
                             # revision history.  ``changed_by`` tags the
                             # callsite for audit replay.
                             try:
-                                from .truth_api import record_promote_audit_pair
+                                from .truth_api import (
+                                    _truth_pack_name,
+                                    record_promote_audit_pair,
+                                )
                             except ImportError:
                                 record_promote_audit_pair = None  # type: ignore[assignment]
+                                _truth_pack_name = None  # type: ignore[assignment]
                             if record_promote_audit_pair is not None:
                                 try:
+                                    # Pack resolution: prefer registry's
+                                    # ``pack_name`` attr (multi-pack vaults
+                                    # carry it); fall back to the
+                                    # truth_api default resolver which
+                                    # mirrors the rest of the codebase.
                                     pack_name = getattr(
                                         registry, "pack_name", None,
-                                    ) or "default_knowledge"
+                                    )
+                                    if not pack_name and _truth_pack_name is not None:
+                                        pack_name = _truth_pack_name(None)
                                     source_url = ""
                                     try:
                                         # Pull source_url out of the candidate
