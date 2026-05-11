@@ -607,35 +607,34 @@ def test_absorb_file_and_dir_filters_direct_dir_to_deduped_deep_dives(temp_vault
     assert calls == [deep_dive]
 
 
-def test_source_lifecycle_archive_failure_is_reported_without_dropping_deep_dive(temp_vault, monkeypatch):
+def test_source_lifecycle_post_bl029_uses_archived_path_as_absorb_target(temp_vault, monkeypatch):
+    """Post-BL-029 ``AutoArticleProcessor`` is intake-only:
+    ``process_single_source`` returns ``status='intake_only'`` with
+    the archived 03-Processed path in ``source_path``.  The lifecycle
+    wrapper must pass that path through as the absorb target (no
+    deep-dive synthesis between)."""
     from ovp_pipeline.commands import absorb
     from ovp_pipeline.runtime import VaultLayout
 
     layout = VaultLayout.from_vault(temp_vault)
-    layout.processing_dir.mkdir(parents=True, exist_ok=True)
-    source = layout.processing_dir / "Article.md"
+    layout.raw_dir.mkdir(parents=True, exist_ok=True)
+    source = layout.raw_dir / "Article.md"
     source.write_text("# Article\n", encoding="utf-8")
-    deep_dive = temp_vault / "20-Areas" / "AI-Research" / "Topics" / "2026-04" / "Article_深度解读.md"
+    archived = layout.processed_dir / "2026-05" / "Article.md"
 
     class FakeAutoArticleProcessor:
         def __init__(self, vault_dir: Path, logger, txn):
             self.layout = VaultLayout.from_vault(vault_dir)
             self.logger = logger
 
-        def init_llm(self) -> None:
-            pass
-
-        def process_single_file(self, file_path: Path, *, dry_run: bool) -> dict:
+        def process_single_source(self, file_path: Path, *, dry_run: bool) -> dict:
             assert file_path == source
             assert dry_run is False
-            return {"status": "completed", "output_path": str(deep_dive)}
-
-        def _archive_source_to_processed(self, file_path: Path) -> Path:
-            assert file_path == source
-            raise OSError("archive denied")
-
-        def _restore_source_to_raw(self, file_path: Path) -> Path:
-            raise AssertionError("completed sources should not be restored")
+            return {
+                "status": "intake_only",
+                "output_path": None,
+                "source_path": str(archived),
+            }
 
     monkeypatch.setattr(absorb, "AutoArticleProcessor", FakeAutoArticleProcessor)
     failures: list[dict[str, str]] = []
@@ -647,11 +646,84 @@ def test_source_lifecycle_archive_failure_is_reported_without_dropping_deep_dive
         failures=failures,
     )
 
-    assert targets == [deep_dive]
-    assert failures == [
-        {
-            "source": str(source),
-            "stage": "archive_to_processed",
-            "error": "archive denied",
-        }
-    ]
+    assert targets == [archived]
+    assert failures == []
+
+
+def test_source_lifecycle_records_failure_when_no_archive(temp_vault, monkeypatch):
+    """When intake fails (e.g. url-dedup skip, or processor error
+    leaves no archive), the source is reported in ``failures`` rather
+    than silently dropped — caller surfaces partial results."""
+    from ovp_pipeline.commands import absorb
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.raw_dir.mkdir(parents=True, exist_ok=True)
+    source = layout.raw_dir / "Article.md"
+    source.write_text("# Article\n", encoding="utf-8")
+
+    class FakeAutoArticleProcessor:
+        def __init__(self, vault_dir: Path, logger, txn):
+            self.layout = VaultLayout.from_vault(vault_dir)
+            self.logger = logger
+
+        def process_single_source(self, file_path: Path, *, dry_run: bool) -> dict:
+            return {
+                "status": "skipped",
+                "output_path": None,
+                "source_path": None,
+                "error": "url-dedup matched existing source",
+            }
+
+    monkeypatch.setattr(absorb, "AutoArticleProcessor", FakeAutoArticleProcessor)
+    failures: list[dict[str, str]] = []
+
+    targets = absorb.run_source_lifecycle_for_absorb_targets(
+        temp_vault,
+        [source],
+        dry_run=False,
+        failures=failures,
+    )
+
+    assert targets == []
+    assert len(failures) == 1
+    assert failures[0]["source"] == str(source)
+    assert failures[0]["status"] == "skipped"
+
+
+def test_source_lifecycle_passes_through_already_processed_files(temp_vault, monkeypatch):
+    """A file already in 03-Processed needs no lifecycle move — it
+    becomes the absorb target directly.  This is the common path
+    after ``ovp --incremental`` has staged sources but absorb hasn't
+    been run yet."""
+    from ovp_pipeline.commands import absorb
+    from ovp_pipeline.runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(temp_vault)
+    processed = layout.processed_dir / "2026-05"
+    processed.mkdir(parents=True, exist_ok=True)
+    source = processed / "Article.md"
+    source.write_text("# Article\n", encoding="utf-8")
+
+    class FakeAutoArticleProcessor:
+        def __init__(self, vault_dir: Path, logger, txn):
+            self.layout = VaultLayout.from_vault(vault_dir)
+            self.logger = logger
+
+        def process_single_source(self, file_path: Path, *, dry_run: bool) -> dict:
+            raise AssertionError(
+                "already-processed sources must not re-run the intake lifecycle"
+            )
+
+    monkeypatch.setattr(absorb, "AutoArticleProcessor", FakeAutoArticleProcessor)
+    failures: list[dict[str, str]] = []
+
+    targets = absorb.run_source_lifecycle_for_absorb_targets(
+        temp_vault,
+        [source],
+        dry_run=False,
+        failures=failures,
+    )
+
+    assert targets == [source]
+    assert failures == []

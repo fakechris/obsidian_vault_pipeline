@@ -289,38 +289,62 @@ def run_source_lifecycle_for_absorb_targets(
     dry_run: bool,
     failures: list[dict[str, str]] | None = None,
 ) -> list[Path]:
+    """Drive raw sources through the intake lifecycle, returning the
+    archived 03-Processed paths to feed to absorb v2.
+
+    Post-BL-029 (commit ``bde1b8b``), :class:`AutoArticleProcessor`
+    is intake-only — the legacy 13-section LLM deep-dive layer is
+    gone, so ``process_single_file`` returns ``status="intake_only"``
+    instead of ``"completed"`` and never produces an ``output_path``.
+    The function calls ``process_single_source``, which:
+
+    * URL-dedups against the active staging chain (BL-058)
+    * Migrates Clippings → 01-Raw → 02-Processing
+    * Downloads remote images
+    * Parses frontmatter
+    * Archives to ``50-Inbox/03-Processed/YYYY-MM/``
+
+    The archived path *is* the absorb target — absorb v2 reads the
+    raw markdown directly via ``run_absorb_workflow``.  Files
+    already inside 03-Processed are pass-through (no lifecycle
+    needed).
+    """
     layout = VaultLayout.from_vault(vault_dir)
     logger = PipelineLogger(layout.pipeline_log)
     txn = TransactionManager(layout.transactions_dir)
-    clippings = ClippingsProcessor(layout.vault_dir, logger, txn)
     processor = AutoArticleProcessor(layout.vault_dir, logger, txn)
-    if not dry_run:
-        processor.init_llm()
 
-    deep_dive_targets: list[Path] = []
+    absorb_targets: list[Path] = []
     for target in targets:
         for source in _expand_markdown_sources(target):
-            working_source = source
-            if _is_under(source, layout.clippings_dir):
-                if dry_run:
-                    continue
-                working_source = _move_clipping_to_raw(layout, clippings, source)
-
             if dry_run:
                 continue
 
-            if _is_under(working_source, layout.raw_dir):
-                working_source = processor._stage_source_for_processing(working_source)
+            # Already archived → no lifecycle move needed.  This is
+            # the common case after BL-058 decoupled intake from
+            # absorb: operator runs ``ovp --incremental`` to stage
+            # sources, then ``ovp-absorb --file …`` (or --dir on
+            # 03-Processed/…) when ready to write evergreens.
+            if _is_under(source, layout.processed_dir):
+                absorb_targets.append(source)
+                continue
 
-            result = processor.process_single_file(working_source, dry_run=False)
-            if result.get("status") == "completed" and result.get("output_path"):
-                deep_dive_targets.append(Path(str(result["output_path"])))
-                if _is_under(working_source, layout.processing_dir):
-                    _safe_archive_source_to_processed(processor, logger, failures, working_source)
-            elif _is_under(working_source, layout.processing_dir) and working_source.exists():
-                _safe_restore_source_to_raw(processor, logger, failures, working_source)
+            result = processor.process_single_source(source, dry_run=False)
+            status = result.get("status") or ""
+            archived = result.get("source_path") or result.get("output_path")
+            if status in ("completed", "intake_only") and archived:
+                absorb_targets.append(Path(str(archived)))
+            elif failures is not None:
+                # Skipped (url-dedup) / errored — surface to caller so
+                # absorb's payload reports the partial result rather
+                # than silently dropping rows.
+                failures.append({
+                    "source": str(source),
+                    "status": status or "unknown",
+                    "error": str(result.get("error") or "no archive produced"),
+                })
 
-    return deep_dive_targets
+    return absorb_targets
 
 
 def _merge_absorb_payloads(payloads: list[dict]) -> dict:
