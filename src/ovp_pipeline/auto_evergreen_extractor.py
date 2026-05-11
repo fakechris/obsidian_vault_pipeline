@@ -1309,24 +1309,45 @@ class AutoEvergreenExtractor:
                                         if candidate_path.is_file():
                                             audit_canonical_path = str(candidate_path)
                                     if not audit_canonical_path:
+                                        # Last DB-backed lookup for the
+                                        # canonical_path: the truth
+                                        # ``objects`` table can carry a
+                                        # filename that differs from the
+                                        # slug (frontmatter ``note_id``
+                                        # set independently).  sqlite3 +
+                                        # VaultLayout are already
+                                        # available at module level (see
+                                        # _truth_pack_name lookup above),
+                                        # so this is purely a DB-level
+                                        # operation — only catch
+                                        # sqlite3-class errors + log so
+                                        # the fitness ratchet for silent
+                                        # ImportError fallbacks stays
+                                        # green.
+                                        import sqlite3 as _sqlite3
+                                        db = self.layout.knowledge_db
                                         try:
-                                            import sqlite3 as _sqlite3
-                                            from .runtime import VaultLayout
-                                            db = VaultLayout.from_vault(
-                                                self.vault_dir,
-                                            ).knowledge_db
                                             if db.exists():
                                                 with _sqlite3.connect(db) as _conn:
                                                     row = _conn.execute(
-                                                        "SELECT canonical_path FROM "
-                                                        "objects WHERE pack=? "
-                                                        "AND object_id=?",
+                                                        "SELECT canonical_path "
+                                                        "FROM objects "
+                                                        "WHERE pack=? AND object_id=?",
                                                         (pack_name, actual_target_slug),
                                                     ).fetchone()
                                                     if row and row[0]:
                                                         audit_canonical_path = str(row[0])
-                                        except Exception:  # noqa: BLE001
-                                            pass
+                                        except _sqlite3.OperationalError as exc:
+                                            # Schema missing / table not
+                                            # yet rebuilt — fall through
+                                            # to the slug-named path
+                                            # below.  Logged at debug so
+                                            # operator can spot stale
+                                            # projections.
+                                            self.logger.log(
+                                                "auto_promote_canonical_lookup_skipped",
+                                                {"slug": actual_target_slug, "error": str(exc)},
+                                            )
                                     if not audit_canonical_path:
                                         # Last-resort fallback so the
                                         # provenance row still lands even when

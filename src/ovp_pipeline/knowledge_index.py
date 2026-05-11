@@ -1970,6 +1970,75 @@ def knowledge_index_stats(vault_dir: Path, *, pack_name: str | None = None) -> d
     return stats
 
 
+def sync_audit_events_from_jsonl(vault_dir: Path) -> dict[str, object]:
+    """BL-070: re-ingest ``audit_events`` from the JSONL logs without
+    a full projection rebuild.
+
+    A full ``rebuild_knowledge_index`` on a 9K-evergreen vault takes
+    20+ minutes because it re-embeds every chunk.  Operators doing
+    shadow-mode batches (BL-062) want their audit data queryable
+    via SQL within seconds of an ``ovp-absorb`` run — not at the
+    next scheduled rebuild.
+
+    This helper:
+
+    1. Resolves the layout WITHOUT calling :func:`_ensure_knowledge_db`
+       — that helper would trigger a full rebuild on a stale schema
+       version, defeating the "fast no-rebuild" promise (codex P2).
+    2. Returns ``{"status": "skipped"}`` when the DB doesn't exist
+       (fresh vault) or when the projection schema is too old to
+       safely write to.  Operator must run a full
+       ``ovp-knowledge-index`` first in either case.
+    3. Reads every JSONL row via the same ``_collect_audit_rows``
+       path the rebuild uses, so semantics are identical.
+    4. Truncates ``audit_events`` and re-inserts in one transaction.
+
+    Idempotent (truncate-and-insert; running it twice produces the
+    same final state).  Doesn't touch any other table.  Doesn't
+    write provenance.  Doesn't refresh embeddings.  Pure projection-
+    sync operation against the audit ledger.
+    """
+    resolved_vault = resolve_vault_dir(vault_dir)
+    layout = VaultLayout.from_vault(resolved_vault)
+    if not layout.knowledge_db.exists():
+        return {
+            "status": "skipped",
+            "reason": "knowledge.db does not exist; run ovp-knowledge-index first",
+            "db_path": str(layout.knowledge_db),
+        }
+    if not _knowledge_db_supports_pack_schema(layout.knowledge_db):
+        return {
+            "status": "skipped",
+            "reason": (
+                "knowledge.db schema is incompatible with current code; "
+                "run ovp-knowledge-index for a full rebuild first"
+            ),
+            "db_path": str(layout.knowledge_db),
+        }
+    audit_rows = _collect_audit_rows(layout)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        conn.execute("DELETE FROM audit_events")
+        conn.executemany(
+            "INSERT INTO audit_events (source_log, event_type, slug, "
+            "session_id, timestamp, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
+            audit_rows,
+        )
+        conn.commit()
+    # Count per event_type for quick verification — surfaces e.g.
+    # "absorb_route_decision: 7" so the operator can confirm the
+    # shadow data is queryable.
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        type_counts = dict(conn.execute(
+            "SELECT event_type, COUNT(*) FROM audit_events GROUP BY event_type"
+        ).fetchall())
+    return {
+        "status": "synced",
+        "audit_events_indexed": len(audit_rows),
+        "type_counts": type_counts,
+        "db_path": str(layout.knowledge_db),
+    }
+
+
 def recent_audit_events(
     vault_dir: Path,
     limit: int = 20,

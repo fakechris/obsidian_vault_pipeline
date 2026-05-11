@@ -15,6 +15,7 @@ from ..knowledge_index import (
     rebuild_knowledge_index,
     search_knowledge_index,
     serve_knowledge_index,
+    sync_audit_events_from_jsonl,
 )
 from ..packs.loader import DEFAULT_WORKFLOW_PACK_NAME
 from ..runtime import resolve_vault_dir
@@ -36,6 +37,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-log", help="Filter audit events by source log")
     parser.add_argument("--tools-json", action="store_true", help="Emit tool discovery JSON")
     parser.add_argument("--serve", action="store_true", help="Serve read-only knowledge tools over stdio JSONL")
+    parser.add_argument(
+        "--audit-sync-only",
+        action="store_true",
+        help=(
+            "BL-070: re-ingest audit_events from pipeline.jsonl WITHOUT a "
+            "full rebuild.  Fast (~seconds) sync for shadow-mode batches "
+            "between scheduled rebuilds.  Truncates and re-inserts the "
+            "table; no embeddings, no projection rebuild."
+        ),
+    )
     parser.add_argument("--limit", type=int, default=5, help="Maximum number of query results")
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
     args = parser.parse_args(argv)
@@ -109,6 +120,24 @@ def main(argv: list[str] | None = None) -> int:
             for key in ("pages", "links", "raw_records", "timeline_events", "audit_events", "embedding_chunks"):
                 print(f"{key}: {stats[key]}")
             print(f"db path: {stats['db_path']}")
+        return 0
+
+    if args.audit_sync_only:
+        payload = sync_audit_events_from_jsonl(vault_dir)
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(f"audit sync: {payload.get('status', '?')}")
+            if payload.get("status") == "synced":
+                print(f"  audit_events_indexed: {payload['audit_events_indexed']}")
+                print(f"  db path: {payload['db_path']}")
+                tc = payload.get("type_counts", {})
+                if tc:
+                    print("  type counts:")
+                    for t, n in sorted(tc.items(), key=lambda x: -x[1])[:10]:
+                        print(f"    {t}: {n}")
+            elif payload.get("reason"):
+                print(f"  reason: {payload['reason']}")
         return 0
 
     if args.audit_recent is not None:

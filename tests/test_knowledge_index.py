@@ -1178,6 +1178,109 @@ date: 2026-04-07
     assert [event["event_type"] for event in events] == ["newer", "older"]
 
 
+def test_sync_audit_events_from_jsonl_round_trips(temp_vault):
+    """BL-070: ``sync_audit_events_from_jsonl`` re-ingests audit
+    rows from the JSONL logs without a full rebuild.  This test
+    pins the contract: append a row to pipeline.jsonl, run sync,
+    and verify it's queryable from SQL — same behaviour as a full
+    rebuild for the audit_events table but ~100× faster."""
+    from ovp_pipeline.knowledge_index import (
+        rebuild_knowledge_index,
+        sync_audit_events_from_jsonl,
+    )
+    from ovp_pipeline.runtime import VaultLayout
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    note.write_text(
+        "---\nnote_id: alpha\ntitle: Alpha\ntype: evergreen\n"
+        "date: 2026-04-07\n---\n\n# Alpha\n",
+        encoding="utf-8",
+    )
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.pipeline_log.parent.mkdir(parents=True, exist_ok=True)
+    layout.pipeline_log.write_text(
+        json.dumps({
+            "timestamp": "2026-04-07T12:00:00Z",
+            "session_id": "s1",
+            "event_type": "absorb_route_decision",
+            "slug": "",
+            "status": "ok",
+            "update_slugs": ["alpha"],
+        }) + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    # Append a NEW row after the initial rebuild — this is the
+    # shadow-mode workflow: absorb runs emit JSONL between
+    # scheduled rebuilds.
+    with layout.pipeline_log.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "timestamp": "2026-04-07T13:00:00Z",
+            "session_id": "s2",
+            "event_type": "absorb_route_decision",
+            "slug": "",
+            "status": "ok",
+            "update_slugs": ["beta"],
+        }) + "\n")
+
+    payload = sync_audit_events_from_jsonl(temp_vault)
+    assert payload["status"] == "synced"
+    # 2 absorb_route_decision rows in the JSONL → 2 in the DB.
+    assert payload["type_counts"]["absorb_route_decision"] == 2
+
+    # Spot-check by querying via the public API.
+    from ovp_pipeline.knowledge_index import recent_audit_events
+    events = recent_audit_events(
+        temp_vault, limit=10, event_type="absorb_route_decision",
+    )
+    assert len(events) == 2
+    timestamps = sorted(e["timestamp"] for e in events)
+    assert timestamps == [
+        "2026-04-07T12:00:00Z",
+        "2026-04-07T13:00:00Z",
+    ]
+
+
+def test_sync_audit_events_skips_when_db_missing(tmp_path):
+    """Fresh vault that's never been rebuilt — sync returns a
+    ``skipped`` status rather than creating an empty DB or
+    triggering a full 20-min rebuild (codex P2)."""
+    from ovp_pipeline.knowledge_index import sync_audit_events_from_jsonl
+    payload = sync_audit_events_from_jsonl(tmp_path)
+    assert payload["status"] == "skipped"
+    assert "does not exist" in payload["reason"]
+
+
+def test_sync_audit_events_does_not_trigger_full_rebuild(temp_vault, monkeypatch):
+    """Codex P2 regression: ``--audit-sync-only`` must never call
+    ``rebuild_knowledge_index`` even when the DB is stale / missing.
+    Pre-fix the helper went through ``_ensure_knowledge_db`` which
+    silently rebuilds on schema mismatch — defeating the "fast
+    no-rebuild" promise of the audit-sync flag."""
+    from ovp_pipeline import knowledge_index
+    from ovp_pipeline.knowledge_index import (
+        sync_audit_events_from_jsonl,
+    )
+
+    # Detect any rebuild attempt by patching the rebuild entrypoint
+    # to record + raise.
+    calls: list[str] = []
+
+    def fake_rebuild(*args, **kwargs):
+        calls.append("rebuild_knowledge_index")
+        raise RuntimeError("audit-sync must not trigger rebuild")
+
+    monkeypatch.setattr(
+        knowledge_index, "rebuild_knowledge_index", fake_rebuild,
+    )
+
+    # On a fresh vault (no DB), sync must skip cleanly.
+    payload = sync_audit_events_from_jsonl(temp_vault)
+    assert payload["status"] == "skipped"
+    assert calls == [], "audit-sync invoked rebuild on missing DB"
+
+
 def test_recent_audit_events_filters_by_event_type_in_sql(temp_vault):
     """BL-069 regression: ``recent_audit_events`` accepts an
     ``event_type`` filter that's pushed into the SQL WHERE clause
