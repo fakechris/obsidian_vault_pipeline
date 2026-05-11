@@ -47,9 +47,9 @@ M20 explicitly does **not** scope:
 
 | ID | Stage | Description |
 |---|---|---|
-| BL-072 | 0 | `00-Polaris/USER.md` + `OVP_RULES.md` + a small loader so every LLM call point can pull the two files as a system-prompt prefix. Zero-risk foundation for BL-073/074 — makes every existing LLM call site smarter without touching their logic. |
-| BL-073 | 1 | `50-Inbox/02-Tasks/` watcher.  Filename prefix maps to a handler (`RESEARCH-*` → research skill, `SYNTHESIZE-*` → synthesis skill, `DIGEST-*` → daily-digest skill).  Handlers run with USER + RULES context, deposit output to `40-Resources/Generated/YYYY-MM/`.  Original task file archives to `70-Archive/tasks/`. Reuses AutoPilot's existing inotify path; adds a new handler family. |
-| BL-074 | 3 | Daily `/digest` synthesis.  `DIGEST-daily.md` task auto-enqueued by an AutoPilot cron at 06:00.  Aggregates last 24h crystals + top-N open questions + top-N contradictions + USER focus into a ~200-word brief at `40-Resources/Generated/digests/YYYY-MM-DD.md`.  Reader home shell adds a "Today's digest →" banner card pointing at the latest digest. |
+| BL-075 | 0 | `00-Polaris/USER.md` + `OVP_RULES.md` + a small loader so every LLM call point can pull the two files as a system-prompt prefix. Zero-risk foundation for BL-076/077 — makes every existing LLM call site smarter without touching their logic. |
+| BL-076 | 1 | `50-Inbox/02-Tasks/` watcher.  Filename prefix maps to a handler (`RESEARCH-*` → research skill, `SYNTHESIZE-*` → synthesis skill, `DIGEST-*` → daily-digest skill).  Handlers run with USER + RULES context, deposit output to `40-Resources/Generated/YYYY-MM/`.  Original task file archives to `70-Archive/tasks/`. Reuses AutoPilot's existing inotify path; adds a new handler family. |
+| BL-077 | 3 | Daily `/digest` synthesis.  `DIGEST-daily.md` task auto-enqueued by an AutoPilot cron at 06:00.  Aggregates last 24h crystals + top-N open questions + top-N contradictions + USER focus into a ~200-word brief at `40-Resources/Generated/digests/YYYY-MM-DD.md`.  Reader home shell adds a "Today's digest →" banner card pointing at the latest digest. |
 
 ## Why These Three (and not the other 2 stages)
 
@@ -57,16 +57,16 @@ The full proposal had 5 stages — only 3 land in M20:
 
 | Stage | Status | Reason |
 |---|---|---|
-| 0 — USER.md + OVP_RULES | In M20 (BL-072) | Half-day, zero-risk, multiplies value of everything below. |
-| 1 — QUEUE → GENERATED | In M20 (BL-073) | Foundation for every push feature.  Also generalises AutoPilot from "ingest articles" to "accept tasks". |
+| 0 — USER.md + OVP_RULES | In M20 (BL-075) | Half-day, zero-risk, multiplies value of everything below. |
+| 1 — QUEUE → GENERATED | In M20 (BL-076) | Foundation for every push feature.  Also generalises AutoPilot from "ingest articles" to "accept tasks". |
 | 2 — Skill files migration | **Deferred** | Internal developer ergonomics — refactor of where prompts live.  User-visible value lower than 0/1/3.  Revisit after M20 ships and the QUEUE pattern proves itself. |
-| 3 — Daily digest | In M20 (BL-074) | The flagship "vault talks back" feature.  Built on BL-073 as just another QUEUE cron task — proves the architecture, not a parallel path. |
+| 3 — Daily digest | In M20 (BL-077) | The flagship "vault talks back" feature.  Built on BL-076 as just another QUEUE cron task — proves the architecture, not a parallel path. |
 | 4 — Auto USER profile | **Deferred** | Has over-fit risk — LLM may misread recent activity and bias the digest.  Better to ship hand-authored USER.md first, watch how it drifts, then automate later. |
 | 5 — Belief evolution | **Deferred** | Lower priority surface; defer until 0+1+3 land. |
 
 ## Architecture
 
-### BL-072 — Context loader
+### BL-075 — Context loader
 
 New module `src/ovp_pipeline/context_loader.py`:
 
@@ -80,11 +80,11 @@ def load_llm_context(vault_dir: Path) -> str:
 
 Wired into the small set of LLM call sites that need user-aware
 behaviour: `auto_evergreen_extractor`, `community_crystals`,
-`contradiction_crystals`, and the new task handlers from BL-073.
+`contradiction_crystals`, and the new task handlers from BL-076.
 **Not** wired into call sites where user context doesn't apply
 (e.g. `route_source` Pass 1, which is a pure structural classifier).
 
-### BL-073 — Task dispatcher
+### BL-076 — Task dispatcher
 
 ```
 50-Inbox/02-Tasks/RESEARCH-claude-code-mcp.md
@@ -118,7 +118,7 @@ Audit: every dispatch writes a `task_dispatched` event to
 `pipeline.jsonl` with task path, handler, duration, output path,
 and LLM token counts.
 
-### BL-074 — Daily digest
+### BL-077 — Daily digest
 
 `DIGEST-daily.md` is enqueued by an AutoPilot cron at 06:00 local
 time (or on-demand via `ovp-digest --today`).  The handler
@@ -149,9 +149,9 @@ markdown file under `40-Resources/Generated/digests/`.
 
 | Component | Frequency | Tokens / run | $/run (Sonnet) | Monthly $ |
 |---|---|---|---|---|
-| BL-072 context loader | Per LLM call | +200 tokens prefix | +$0.001 | ~$0.30 amortised |
-| BL-073 user tasks | Variable | 2-4K input / 1-2K output | ~$0.02 | $5-30 (10-50 tasks/wk) |
-| BL-074 daily digest | 1×/day | 8K input / 600 output | ~$0.03 | ~$1 |
+| BL-075 context loader | Per LLM call | +200 tokens prefix | +$0.001 | ~$0.30 amortised |
+| BL-076 user tasks | Variable | 2-4K input / 1-2K output | ~$0.02 | $5-30 (10-50 tasks/wk) |
+| BL-077 daily digest | 1×/day | 8K input / 600 output | ~$0.03 | ~$1 |
 | **Total** | | | | **~$6-35/mo** |
 
 Cheaper than the earlier $55-105 estimate because:
@@ -162,13 +162,13 @@ Cheaper than the earlier $55-105 estimate because:
 
 ## Success Metrics (4-week check)
 
-Read at week 4 after BL-074 ships:
+Read at week 4 after BL-077 ships:
 
 - **Digest open rate ≥ 50%** — user opens `40-Resources/Generated/digests/`
-  on at least 14 of 28 days.  Below that = digest is noise, kill BL-074.
+  on at least 14 of 28 days.  Below that = digest is noise, kill BL-077.
 - **Task dispatch count ≥ 5/week** — user actually uses
   `50-Inbox/02-Tasks/` to drop work.  Below that = QUEUE isn't
-  a habit, keep BL-073 but stop investing in handler variety.
+  a habit, keep BL-076 but stop investing in handler variety.
 - **Zero RULES violations** — `OVP_RULES.md` autonomous-action
   contract holds across all task dispatches.  Verify via
   `pipeline.jsonl` audit grep.
@@ -187,8 +187,8 @@ queueing M21.
 ## Implementation Order
 
 1. **Plan + BACKLOG** (this doc, BACKLOG entries) — 0.5 day
-2. **BL-072** (USER.md template, OVP_RULES, context_loader, wire 4 call sites) — 0.5 day
-3. **BL-073** (task watcher, handler registry, 3 initial handlers, rate-limit, tests) — 2 days
-4. **BL-074** (digest handler, cron entry, Reader home banner card, tests) — 2 days
+2. **BL-075** (USER.md template, OVP_RULES, context_loader, wire 4 call sites) — 0.5 day
+3. **BL-076** (task watcher, handler registry, 3 initial handlers, rate-limit, tests) — 2 days
+4. **BL-077** (digest handler, cron entry, Reader home banner card, tests) — 2 days
 
 Total: ~5 days end-to-end.  Each BL ships its own PR.
