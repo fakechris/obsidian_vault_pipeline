@@ -139,6 +139,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Only show concepts where at least one trigger would fire.",
     )
     parser.add_argument(
+        "--fire",
+        action="store_true",
+        help=(
+            "BL-063 PR#3: actually invoke the agent on fired concepts "
+            "instead of just reporting.  Each agent run hits an LLM, "
+            "rewrites the agent-owned sections, and stamps lastRunAt + "
+            "lastRunSummary.  Implies --only-fired."
+        ),
+    )
+    parser.add_argument(
+        "--max-fires",
+        type=int,
+        default=10,
+        help="Cap on how many agent runs to issue in one scan "
+             "(default 10).  Backstop against runaway cost when many "
+             "triggers fire at once.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit JSON output instead of human-readable text.",
@@ -153,8 +171,15 @@ def main(argv: list[str] | None = None) -> int:
         since_hours=args.since_hours,
         now=now,
     )
-    if args.only_fired:
+    fire_mode = args.fire
+    if args.only_fired or fire_mode:
         evaluations = [e for e in evaluations if e.has_any_trigger]
+
+    outcomes: list[dict] = []
+    if fire_mode and evaluations:
+        outcomes = _fire_agent_for_evaluations(
+            vault_dir, evaluations, max_fires=args.max_fires,
+        )
 
     if args.json:
         payload = {
@@ -163,12 +188,98 @@ def main(argv: list[str] | None = None) -> int:
             "since_hours": args.since_hours,
             "scanned_at": now.isoformat().replace("+00:00", "Z"),
             "evaluation_count": len(evaluations),
+            "fire_mode": fire_mode,
             "evaluations": [_evaluation_to_dict(e) for e in evaluations],
+            "fire_outcomes": outcomes,
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         _print_text_report(evaluations)
+        if outcomes:
+            print()
+            print(f"Fired {len(outcomes)} agent run(s):")
+            for o in outcomes:
+                marker = "✓" if o["status"] == "ok" else "✗"
+                summary = o.get("summary", "") or o.get("error", "")
+                print(f"  {marker} {o['slug']} → {o['status']}  {summary[:80]}")
     return 0
+
+
+def _fire_agent_for_evaluations(
+    vault_dir: Path,
+    evaluations: list[ConceptEvaluation],
+    *,
+    max_fires: int,
+) -> list[dict]:
+    """For each evaluation that has any trigger firing, invoke the
+    BL-063 PR#3 agent.  Caps total fires at ``max_fires`` to avoid
+    runaway LLM costs when many concepts trigger at once.
+
+    Each agent run:
+    1. Stamps lastAttemptAt on the live concept frontmatter
+       (backoff anchor).
+    2. Calls the synthesis LLM with concept context.
+    3. Writes section deltas via patch_agent_section.
+    4. Stamps lastRunAt + lastRunSummary on success, lastRunError
+       on failure.
+    5. Emits a ``live_concept_agent_run`` audit event.
+
+    Best-effort: one concept failing does not abort the batch.
+    Returns one outcome dict per fire so the JSON output / text
+    report can surface per-concept status.
+    """
+    from ..auto_article_processor import PipelineLogger
+    from ..live_concept_agent import fire_agent_for_concept
+    from ..llm_client import get_litellm_client
+    from ..runtime import VaultLayout
+
+    layout = VaultLayout.from_vault(vault_dir)
+    pipeline_logger = PipelineLogger(layout.pipeline_log)
+    llm_client = get_litellm_client(vault_dir)
+    if llm_client is None:
+        return [{
+            "slug": e.handle.slug,
+            "status": "skip",
+            "error": "no API key configured; agent cannot run",
+        } for e in evaluations[:max_fires]]
+
+    out: list[dict] = []
+    for e in evaluations[:max_fires]:
+        outcome = fire_agent_for_concept(
+            e.handle,
+            llm_client=llm_client,
+            recent_route_decisions=[
+                # The trigger evaluator stored IngestMatch dataclasses;
+                # the agent prompt prefers the raw audit shape.  Build
+                # a minimal payload-shaped row so the prompt template
+                # gets what it expects.
+                {"payload": {
+                    "source": m.source_path,
+                    "update_slugs": [m.matched_slug],
+                    "create_titles": [],
+                    "source_value_summary": "",
+                }}
+                for m in e.ingest_matches
+            ],
+            open_contradictions=[
+                {
+                    "contradiction_id": m.contradiction_id,
+                    "subject_key": m.subject_key,
+                    "positive_claim_ids": [],
+                    "negative_claim_ids": [],
+                }
+                for m in e.contradiction_matches
+            ],
+            pipeline_logger=pipeline_logger,
+        )
+        out.append({
+            "slug": outcome.handle.slug,
+            "status": outcome.status,
+            "summary": outcome.summary,
+            "error": outcome.error,
+            "sections_written": outcome.sections_written,
+        })
+    return out
 
 
 if __name__ == "__main__":
