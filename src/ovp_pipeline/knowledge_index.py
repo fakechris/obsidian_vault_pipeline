@@ -1970,6 +1970,62 @@ def knowledge_index_stats(vault_dir: Path, *, pack_name: str | None = None) -> d
     return stats
 
 
+def sync_audit_events_from_jsonl(vault_dir: Path) -> dict[str, object]:
+    """BL-070: re-ingest ``audit_events`` from the JSONL logs without
+    a full projection rebuild.
+
+    A full ``rebuild_knowledge_index`` on a 9K-evergreen vault takes
+    20+ minutes because it re-embeds every chunk.  Operators doing
+    shadow-mode batches (BL-062) want their audit data queryable
+    via SQL within seconds of an ``ovp-absorb`` run — not at the
+    next scheduled rebuild.
+
+    This helper:
+
+    1. Connects to the existing knowledge.db (no temp DB swap).
+    2. Reads every JSONL row via the same ``_collect_audit_rows``
+       path the rebuild uses, so semantics are identical.
+    3. Truncates ``audit_events`` and re-inserts in one transaction.
+
+    Idempotent (truncate-and-insert; running it twice produces the
+    same final state).  Best-effort: returns ``{"status": "skipped"}``
+    when the DB doesn't exist (fresh vault, never rebuilt).
+
+    Doesn't touch any other table.  Doesn't write provenance.
+    Doesn't refresh embeddings.  This is purely a projection-sync
+    operation against the audit ledger.
+    """
+    _, layout = _ensure_knowledge_db(vault_dir)
+    if not layout.knowledge_db.exists():
+        return {
+            "status": "skipped",
+            "reason": "knowledge.db does not exist; run ovp-knowledge-index first",
+            "db_path": str(layout.knowledge_db),
+        }
+    audit_rows = _collect_audit_rows(layout)
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        conn.execute("DELETE FROM audit_events")
+        conn.executemany(
+            "INSERT INTO audit_events (source_log, event_type, slug, "
+            "session_id, timestamp, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
+            audit_rows,
+        )
+        conn.commit()
+    # Count per event_type for quick verification — surfaces e.g.
+    # "absorb_route_decision: 7" so the operator can confirm the
+    # shadow data is queryable.
+    with sqlite3.connect(layout.knowledge_db) as conn:
+        type_counts = dict(conn.execute(
+            "SELECT event_type, COUNT(*) FROM audit_events GROUP BY event_type"
+        ).fetchall())
+    return {
+        "status": "synced",
+        "audit_events_indexed": len(audit_rows),
+        "type_counts": type_counts,
+        "db_path": str(layout.knowledge_db),
+    }
+
+
 def recent_audit_events(
     vault_dir: Path,
     limit: int = 20,
