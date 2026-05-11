@@ -296,6 +296,81 @@ def test_rank_evergreens_returns_relevant_slugs_first(temp_vault, monkeypatch):
     assert ranked == ["alpha", "gamma", "beta"]
 
 
+def test_rank_evergreens_zero_norm_source_returns_empty(temp_vault, monkeypatch):
+    """Codex P2 regression: under the BLAKE2b hash fallback,
+    Chinese-only sources tokenise to no ``[a-z0-9]+`` matches and
+    produce an all-zero embedding.  Without the zero-norm guard
+    every dot-product would tie at 0 and route_source would record
+    an arbitrary DB order as ``embedding_topk``.  This test pins
+    the contract: zero-norm source vector → empty ranking →
+    caller falls back to alphabetical."""
+    from ovp_pipeline.absorb_router import rank_evergreens_by_source
+    from ovp_pipeline.runtime import VaultLayout
+    import array as _array
+
+    _seed_index_fixtures(temp_vault)
+    db = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM page_embeddings")
+        conn.execute(
+            "INSERT INTO page_embeddings (slug, chunk_index, section_title, "
+            "chunk_text, embedding_blob, embedding_model) "
+            "VALUES ('alpha', 0, '', '', ?, 'stub-test-4d')",
+            (_array.array("f", [1.0, 0.0, 0.0, 0.0]).tobytes(),),
+        )
+        conn.commit()
+
+    import ovp_pipeline.embedding as emb
+    # Hash backend on Chinese-only source: all-zero vector.
+    monkeypatch.setattr(
+        emb, "embed_text",
+        lambda _text: _array.array("f", [0.0, 0.0, 0.0, 0.0]).tobytes(),
+    )
+    monkeypatch.setattr(emb, "get_model_name", lambda: "stub-test-4d")
+
+    assert rank_evergreens_by_source("中文", temp_vault, top_k=10) == []
+
+
+def test_load_evergreen_vectors_l2_normalizes_mean(temp_vault):
+    """Bot review HIGH: mean of L2-normalised vectors is NOT itself
+    L2-normalised; downstream cosine assumes unit-length so without
+    re-normalising the score for multi-chunk evergreens
+    systematically under-shoots.  This test seeds two unit-length
+    chunks with opposite tilts on the same slug and asserts the
+    aggregated vector has unit norm."""
+    from ovp_pipeline.absorb_router import _load_evergreen_vectors_for_pack
+    from ovp_pipeline.runtime import VaultLayout
+    import array as _array
+    import math
+
+    _seed_index_fixtures(temp_vault)
+    db = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM page_embeddings")
+        # Two unit-norm chunks: (1,0,0,0) + (0,1,0,0).  Mean is
+        # (0.5, 0.5, 0, 0), norm 1/sqrt(2) ≈ 0.707.  After
+        # re-normalisation the vector must have norm 1.0.
+        for chunk_idx, vec in enumerate([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ]):
+            conn.execute(
+                "INSERT INTO page_embeddings (slug, chunk_index, section_title, "
+                "chunk_text, embedding_blob, embedding_model) "
+                "VALUES ('alpha', ?, '', '', ?, 'stub-l2-test')",
+                (chunk_idx, _array.array("f", vec).tobytes()),
+            )
+        conn.commit()
+
+    vectors = _load_evergreen_vectors_for_pack(db, "stub-l2-test", None)
+    assert "alpha" in vectors
+    vec = vectors["alpha"]
+    norm = math.sqrt(sum(x * x for x in vec))
+    assert abs(norm - 1.0) < 1e-6, (
+        f"aggregated vector must be L2-normalised; got norm={norm}"
+    )
+
+
 def test_rank_evergreens_dimensionality_mismatch_returns_empty(temp_vault, monkeypatch):
     """If the source embedder produces a different dim than the
     stored vectors (model mismatch — hash 128-d on a Qwen 1024-d

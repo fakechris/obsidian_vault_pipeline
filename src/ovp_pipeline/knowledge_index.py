@@ -286,6 +286,23 @@ INDEPENDENT_CANONICAL_TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
         "prompt_version",
         "superseded_by_synthesized_at",
     ),
+    # BL-061: prose-level evergreen revision history.  Same
+    # treatment as ``provenance`` — an immutable append-only audit
+    # log that must survive projection rebuilds, otherwise every
+    # ``ovp-knowledge-index`` invocation would wipe BL-061's
+    # rollback semantics.  Discovered post-PR-#193 review: revisions
+    # written by ``review_candidate_concept`` or ``cli:auto_promote``
+    # were silently lost on the next rebuild.
+    "evergreen_revisions": (
+        "pack",
+        "object_id",
+        "version",
+        "content_md",
+        "change_type",
+        "changed_by",
+        "derived_at",
+        "change_note",
+    ),
 }
 
 
@@ -1953,22 +1970,51 @@ def knowledge_index_stats(vault_dir: Path, *, pack_name: str | None = None) -> d
     return stats
 
 
-def recent_audit_events(vault_dir: Path, limit: int = 20, source_log: str | None = None) -> list[dict[str, object]]:
-    _, layout = _ensure_knowledge_db(vault_dir)
-    query = """
-        SELECT source_log, event_type, slug, session_id, timestamp, payload_json
-        FROM audit_events
+def recent_audit_events(
+    vault_dir: Path,
+    limit: int = 20,
+    source_log: str | None = None,
+    *,
+    event_type: str | None = None,
+    since: str | None = None,
+) -> list[dict[str, object]]:
+    """Tail recent ``audit_events`` rows, ordered newest-first.
+
+    ``event_type`` filters at the SQL layer — important for
+    consumers like the BL-063 Live Concept scheduler that only care
+    about one event kind (``absorb_route_decision``).  Pre-fix
+    those callers fetched ``limit=500`` then filtered in Python,
+    which silently dropped relevant rows when the recent log was
+    dominated by other event types.
+
+    ``since`` is an ISO-8601 timestamp (e.g. ``"2026-05-10T00:00:00Z"``)
+    pushed into a ``timestamp >= ?`` clause.  Lets time-window
+    consumers (Live Concept's ``since_hours`` argument) push the
+    cutoff down to SQLite instead of filtering Python-side.
     """
-    params: tuple[object, ...]
+    _, layout = _ensure_knowledge_db(vault_dir)
+    query = (
+        "SELECT source_log, event_type, slug, session_id, timestamp, "
+        "payload_json FROM audit_events"
+    )
+    clauses: list[str] = []
+    params: list[object] = []
     if source_log:
-        query += " WHERE source_log = ?"
-        params = (source_log, limit)
-    else:
-        params = (limit,)
+        clauses.append("source_log = ?")
+        params.append(source_log)
+    if event_type:
+        clauses.append("event_type = ?")
+        params.append(event_type)
+    if since:
+        clauses.append("timestamp >= ?")
+        params.append(since)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY timestamp DESC, rowid DESC LIMIT ?"
+    params.append(limit)
 
     with sqlite3.connect(layout.knowledge_db) as conn:
-        rows = conn.execute(query, params).fetchall()
+        rows = conn.execute(query, tuple(params)).fetchall()
 
     return [
         {

@@ -85,6 +85,41 @@ def test_evaluate_all_concepts_skips_paused(tmp_path, monkeypatch):
     assert slugs == {"alpha", "beta"}
 
 
+def test_evaluate_all_concepts_pushes_filters_into_sql(tmp_path, monkeypatch):
+    """Codex/bot regression: pre-fix the scheduler fetched the most
+    recent N audit_events of *any* event_type, then post-filtered to
+    ``absorb_route_decision`` in Python.  On a noisy log the relevant
+    routing decisions could be silently truncated.  Now the scheduler
+    pushes both ``event_type`` and a ``since`` cutoff into the SQL
+    call — this test asserts those kwargs are forwarded."""
+    from ovp_pipeline import live_concept_scheduler
+
+    _seed_vault(tmp_path)
+    captured_kwargs: dict = {}
+
+    def fake_recent_audit_events(_vault, **kwargs):
+        captured_kwargs.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        live_concept_scheduler,
+        "recent_audit_events",
+        fake_recent_audit_events,
+    )
+    monkeypatch.setattr(
+        live_concept_scheduler, "list_contradictions", lambda *a, **kw: [],
+    )
+    live_concept_scheduler.evaluate_all_concepts(
+        tmp_path,
+        since_hours=24,
+        now=datetime(2026, 5, 11, 9, 30, tzinfo=timezone.utc),
+    )
+    assert captured_kwargs.get("event_type") == "absorb_route_decision"
+    assert "since" in captured_kwargs
+    # since cutoff = now - 24h.
+    assert captured_kwargs["since"] == "2026-05-10T09:30:00Z"
+
+
 def test_evaluate_all_concepts_filters_route_events_by_window(tmp_path, monkeypatch):
     """Audit rows older than ``cutoff = now - since_hours`` are
     dropped before the evaluator sees them."""

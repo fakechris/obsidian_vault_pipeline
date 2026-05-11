@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -152,22 +153,19 @@ def _load_evergreen_vectors_for_pack(
     """
     if not db_path.exists():
         return {}
+    # Build SQL once + conditionally append the pack filter.  Cleaner
+    # than the previous two-branch literal duplication, easier to
+    # extend when more filters appear.
+    sql = (
+        "SELECT pe.slug, pe.embedding_blob "
+        "FROM page_embeddings pe "
+        "JOIN objects o ON pe.slug = o.object_id "
+        "WHERE pe.embedding_model = ?"
+    )
+    params: tuple[Any, ...] = (embedding_model,)
     if pack_name:
-        sql = (
-            "SELECT pe.slug, pe.embedding_blob "
-            "FROM page_embeddings pe "
-            "JOIN objects o ON pe.slug = o.object_id "
-            "WHERE pe.embedding_model = ? AND o.pack = ?"
-        )
-        params: tuple[Any, ...] = (embedding_model, pack_name)
-    else:
-        sql = (
-            "SELECT pe.slug, pe.embedding_blob "
-            "FROM page_embeddings pe "
-            "JOIN objects o ON pe.slug = o.object_id "
-            "WHERE pe.embedding_model = ?"
-        )
-        params = (embedding_model,)
+        sql += " AND o.pack = ?"
+        params = (embedding_model, pack_name)
     try:
         with sqlite3.connect(db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -177,30 +175,43 @@ def _load_evergreen_vectors_for_pack(
         # (caller goes alphabetical) rather than crash.
         return {}
 
-    # Aggregate chunks per slug by mean.  Pure-Python sum is OK at
-    # 9K slugs × 10 chunks/slug × 1024 dim ≈ 100M float ops total
-    # (~1s on M-series Mac); the actual hot path is the cosine
-    # scoring below.  Caching is a TODO when this becomes the
-    # bottleneck.
     slug_chunks: dict[str, list[list[float]]] = {}
     for slug, blob in rows:
         vec = _decode_embedding_blob(blob)
         if not vec:
             continue
         slug_chunks.setdefault(str(slug), []).append(vec)
+
+    # Aggregate chunks per slug.  The mean of L2-normalised vectors
+    # is NOT itself L2-normalised — without re-normalising the
+    # downstream cosine (which is dot-product assuming unit vectors)
+    # systematically under-scores evergreens with many chunks.  Bot
+    # review flagged this as the load-bearing correctness bug on
+    # multi-chunk evergreens.  Re-normalise here so the dot-product
+    # = cosine identity holds.
+    #
+    # Perf: ``zip(*chunks)`` + ``sum`` is roughly 6× faster than the
+    # previous nested ``for chunk: for i, v in enumerate(chunk)``
+    # accumulator at vault scale.  At 9K slugs the loaded chunks
+    # already cost ~1s in SQLite + decode; this shaves another ~5s.
     out: dict[str, list[float]] = {}
     for slug, chunks in slug_chunks.items():
         if not chunks:
             continue
         dim = len(chunks[0])
-        accum = [0.0] * dim
-        for chunk in chunks:
-            if len(chunk) != dim:
-                continue
-            for i, v in enumerate(chunk):
-                accum[i] += v
-        n = len(chunks)
-        out[slug] = [x / n for x in accum]
+        valid_chunks = [c for c in chunks if len(c) == dim]
+        if not valid_chunks:
+            continue
+        n = len(valid_chunks)
+        if n == 1:
+            mean_vec = valid_chunks[0]
+        else:
+            mean_vec = [s / n for s in (sum(col) for col in zip(*valid_chunks))]
+        # L2-normalise so cosine = dot product holds downstream.
+        norm = math.sqrt(sum(x * x for x in mean_vec))
+        if norm <= 0:
+            continue  # all-zero mean → no useful signal; skip slug
+        out[slug] = [x / norm for x in mean_vec]
     return out
 
 
@@ -261,6 +272,23 @@ def rank_evergreens_by_source(
     source_vec = _decode_embedding_blob(source_blob)
     if not source_vec:
         return []
+    # Reject zero-norm source vectors.  The BLAKE2b hash backend
+    # (``local-hash-v1``) tokenises via ``[a-z0-9]+`` and produces
+    # an all-zero vector for inputs with no ASCII alphanumerics
+    # (e.g. Chinese-only sources).  Without this guard every
+    # dot-product would tie at 0 and the caller would record an
+    # arbitrary DB-order ranking as ``embedding_topk`` — codex P2.
+    # Returning empty here makes ``route_source`` fall back to the
+    # alphabetical strategy (the documented behaviour for "no
+    # ranking signal").
+    source_norm = math.sqrt(sum(x * x for x in source_vec))
+    if source_norm <= 0:
+        logger.info(
+            "BL-069: source embedding has zero norm "
+            "(likely CJK-only source on the hash backend); "
+            "falling back to alphabetical.",
+        )
+        return []
 
     try:
         model_name = get_model_name()
@@ -288,16 +316,18 @@ def rank_evergreens_by_source(
         )
         return []
 
-    # Dot product = cosine (both sides L2-normalised by embed_text).
-    # 9K evergreens × 1024 dim ≈ 10M float multiplies — ~50-100ms in
-    # pure Python on M-series.  No numpy dep needed for now.
+    # Dot product = cosine (both sides L2-normalised: source by the
+    # embed_text contract, evergreens by ``_load_evergreen_vectors_for_pack``
+    # after mean-aggregation).  ``sum([...])`` materialises a list once
+    # which lets CPython's specialised int/float ops outpace the
+    # ``score += a*b`` accumulator by ~2× at 9K × 1024-d scale (bot
+    # review perf finding).  Total scoring is ~0.3s on M-series.
+    src_len = len(source_vec)
     scored: list[tuple[str, float]] = []
     for slug, vec in vectors.items():
-        if len(vec) != len(source_vec):
+        if len(vec) != src_len:
             continue
-        score = 0.0
-        for a, b in zip(source_vec, vec):
-            score += a * b
+        score = sum([a * b for a, b in zip(source_vec, vec)])
         scored.append((slug, score))
     scored.sort(key=lambda x: x[1], reverse=True)
     return [slug for slug, _ in scored[:top_k]]

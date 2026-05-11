@@ -1257,13 +1257,50 @@ class AutoEvergreenExtractor:
                                             )
                                     except Exception:  # noqa: BLE001
                                         source_url = ""
+
+                                    # Honour the actual mutation outcome.
+                                    # ``promote_candidate`` may transparently
+                                    # delegate to ``merge_candidate`` when the
+                                    # dedup-guard finds a near-duplicate active
+                                    # slug; in that case ``mutation.action ==
+                                    # 'merge'``, ``mutation.target_slug`` is
+                                    # the *existing* active slug, and the
+                                    # candidate's ``{concept_name}.md`` file
+                                    # was deleted rather than promoted.
+                                    # Auditing against ``concept_name`` /
+                                    # ``output_path`` would write provenance
+                                    # for a non-existent object and skip the
+                                    # revision snapshot entirely.
+                                    actual_target_slug = (
+                                        mutation.target_slug
+                                        or mutation.slug
+                                        or concept_name
+                                    )
+                                    actual_action = mutation.action or "promote"
+                                    # Find a real evergreen path: prefer one
+                                    # the mutation touched (promote case
+                                    # carries the new file path; merge case
+                                    # may not), else fall back to the
+                                    # canonical naming convention.
+                                    audit_canonical_path = ""
+                                    eg_prefix = str(self.evergreen_dir) + "/"
+                                    for touched in mutation.touched_files:
+                                        t = str(touched)
+                                        if t.startswith(eg_prefix) and t.endswith(".md"):
+                                            audit_canonical_path = t
+                                            break
+                                    if not audit_canonical_path:
+                                        audit_canonical_path = str(
+                                            self.evergreen_dir / f"{actual_target_slug}.md"
+                                        )
+
                                     record_promote_audit_pair(
                                         self.vault_dir,
                                         pack_name=pack_name,
-                                        target_slug=concept_name,
-                                        canonical_path=str(output_path),
+                                        target_slug=actual_target_slug,
+                                        canonical_path=audit_canonical_path,
                                         source_url=source_url,
-                                        lifecycle_action="promote",
+                                        lifecycle_action=actual_action,
                                         source_slug=concept_name,
                                         changed_by="cli:auto_promote",
                                     )

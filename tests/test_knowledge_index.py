@@ -1178,6 +1178,53 @@ date: 2026-04-07
     assert [event["event_type"] for event in events] == ["newer", "older"]
 
 
+def test_recent_audit_events_filters_by_event_type_in_sql(temp_vault):
+    """BL-069 regression: ``recent_audit_events`` accepts an
+    ``event_type`` filter that's pushed into the SQL WHERE clause
+    so callers like the Live Concept scheduler can budget their
+    ``limit`` against only the rows they actually care about.
+    Pre-fix the post-filter happened Python-side and the noisy
+    log could starve the relevant event type before the limit was
+    hit."""
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index, recent_audit_events
+    from ovp_pipeline.runtime import VaultLayout
+
+    note = temp_vault / "10-Knowledge" / "Evergreen" / "Alpha.md"
+    note.write_text(
+        "---\nnote_id: alpha\ntitle: Alpha\ntype: evergreen\n"
+        "date: 2026-04-07\n---\n\n# Alpha\n",
+        encoding="utf-8",
+    )
+    layout = VaultLayout.from_vault(temp_vault)
+    layout.pipeline_log.parent.mkdir(parents=True, exist_ok=True)
+    # Two noise events + one target event, in timestamp order.
+    layout.pipeline_log.write_text(
+        "\n".join([
+            json.dumps({"timestamp": "2026-04-07T10:00:00Z", "session_id": "s",
+                        "event_type": "noise_a", "slug": "alpha"}),
+            json.dumps({"timestamp": "2026-04-07T11:00:00Z", "session_id": "s",
+                        "event_type": "noise_b", "slug": "alpha"}),
+            json.dumps({"timestamp": "2026-04-07T12:00:00Z", "session_id": "s",
+                        "event_type": "target_kind", "slug": "alpha"}),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    # event_type filter returns only the matching row even though
+    # noise events are newer / would otherwise dominate.
+    events = recent_audit_events(
+        temp_vault, limit=10, event_type="target_kind",
+    )
+    assert [e["event_type"] for e in events] == ["target_kind"]
+
+    # since filter excludes older rows.
+    since_events = recent_audit_events(
+        temp_vault, limit=10, since="2026-04-07T11:30:00Z",
+    )
+    assert [e["event_type"] for e in since_events] == ["target_kind"]
+
+
 def test_knowledge_index_cli_read_modes_return_json(temp_vault, capsys):
     from ovp_pipeline.commands.knowledge_index import main
     from ovp_pipeline.runtime import VaultLayout

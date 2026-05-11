@@ -255,6 +255,69 @@ def _seed_v2_candidate(temp_vault):
     return candidate
 
 
+def test_revisions_survive_knowledge_index_rebuild(temp_vault):
+    """BL-061 regression: ``evergreen_revisions`` is canonical audit
+    history — rebuilding the projection DB must NOT wipe it.
+
+    Pre-fix the table wasn't in
+    ``knowledge_index.INDEPENDENT_CANONICAL_TABLE_COLUMNS``, so every
+    ``ovp-knowledge-index`` invocation silently dropped every
+    revision row alongside the rebuild's temp DB copy.  This test
+    seeds one revision, rebuilds, and asserts the row is still
+    there — same shape as the BL-055 ``provenance`` regression test
+    elsewhere in this file.
+    """
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_store_writers import (
+        CHANGE_TYPE_PROMOTE,
+        record_evergreen_revision,
+    )
+
+    evergreen_dir = temp_vault / "10-Knowledge" / "Evergreen"
+    evergreen_dir.mkdir(parents=True, exist_ok=True)
+    (evergreen_dir / "Alpha.md").write_text(
+        "---\nnote_id: alpha\ntitle: Alpha\ntype: evergreen\n"
+        "date: 2026-04-13\n---\n\n# Alpha\n\nBody.\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)  # initial rebuild creates the table
+
+    # Seed one revision so we have something for the rebuild to
+    # preserve.
+    db = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db) as conn:
+        record_evergreen_revision(
+            conn,
+            pack="default_knowledge",
+            object_id="alpha",
+            content_md="# Alpha\n\nFirst snapshot.\n",
+            change_type=CHANGE_TYPE_PROMOTE,
+            changed_by="test:setup",
+        )
+        conn.commit()
+
+    # Trigger a second rebuild — this is the load-bearing step.
+    # Pre-fix it would copy temp_db → real_db without including
+    # ``evergreen_revisions`` in the preserve allowlist, so the
+    # row would be lost.
+    rebuild_knowledge_index(temp_vault)
+
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute(
+            "SELECT pack, object_id, version, change_type, changed_by "
+            "FROM evergreen_revisions WHERE object_id = 'alpha'"
+        ).fetchall()
+    assert len(rows) == 1, (
+        f"revision survived count = {len(rows)}; expected 1.  "
+        f"This means evergreen_revisions is being wiped by rebuild."
+    )
+    pack, object_id, version, change_type, changed_by = rows[0]
+    assert (pack, object_id, change_type, changed_by) == (
+        "default_knowledge", "alpha", "promote", "test:setup",
+    )
+
+
 def test_record_promote_audit_pair_writes_revision_without_objects_row(temp_vault):
     """BL-067 contract: the helper accepts canonical_path directly so
     the CLI auto-promote path (which writes the evergreen file BEFORE
@@ -301,6 +364,61 @@ def test_record_promote_audit_pair_writes_revision_without_objects_row(temp_vaul
     assert version == 1
     assert change_type == "promote"
     assert changed_by == "cli:auto_promote"
+
+
+def test_record_promote_audit_pair_handles_merge_case(temp_vault):
+    """BL-067 + dedup-guard regression: when ``promote_candidate``
+    delegates to ``merge_candidate`` (near-duplicate detected), the
+    audit pair must write the provenance row + revision snapshot
+    against ``mutation.target_slug`` (the existing active object),
+    NOT the candidate's slug.  The candidate's evergreen file was
+    deleted by the merge — pointing canonical_path at it would
+    silently skip the revision snapshot.  This test simulates the
+    merge case end-to-end."""
+    from ovp_pipeline.knowledge_index import rebuild_knowledge_index
+    from ovp_pipeline.runtime import VaultLayout
+    from ovp_pipeline.truth_api import record_promote_audit_pair
+
+    # Seed the existing active evergreen (the merge *target*).
+    evergreen_dir = temp_vault / "10-Knowledge" / "Evergreen"
+    evergreen_dir.mkdir(parents=True, exist_ok=True)
+    target_path = evergreen_dir / "Llm-Eval.md"
+    target_path.write_text(
+        "---\nnote_id: llm-eval\ntitle: LLM Eval\ntype: evergreen\n"
+        "date: 2026-04-13\n---\n\n# LLM Eval\n\nTarget body.\n",
+        encoding="utf-8",
+    )
+    rebuild_knowledge_index(temp_vault)
+
+    # Caller (auto_evergreen_extractor BL-067 hook) sees that
+    # mutation.target_slug=llm-eval (active slug) and
+    # mutation.slug=llm-eval-leakage (the candidate that got merged
+    # away).  Audit must target the active slug.
+    record_promote_audit_pair(
+        temp_vault,
+        pack_name="default_knowledge",
+        target_slug="llm-eval",
+        canonical_path=str(target_path),
+        source_url="https://example.com/leakage-paper",
+        lifecycle_action="merge",
+        source_slug="llm-eval-leakage",
+        changed_by="cli:auto_promote",
+    )
+
+    db_path = VaultLayout.from_vault(temp_vault).knowledge_db
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT pack, object_id, change_type, change_note FROM evergreen_revisions"
+        ).fetchall()
+    assert len(rows) == 1
+    pack, object_id, change_type, change_note = rows[0]
+    # Revision is keyed on the merge TARGET, not the original candidate.
+    assert (pack, object_id) == ("default_knowledge", "llm-eval")
+    assert change_type == "promote"
+    # change_note carries the merge lineage so audit replay knows
+    # this revision came from a merge, not a fresh promote.
+    assert "lifecycle=merge" in change_note
+    assert "merged_from=llm-eval-leakage" in change_note
 
 
 def test_promote_writes_evergreen_revision(temp_vault):
