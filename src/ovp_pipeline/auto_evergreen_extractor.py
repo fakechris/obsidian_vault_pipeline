@@ -612,6 +612,46 @@ class EvergreenExtractor:
 
         return self._parse_v2_response(result_text, file_path)
 
+    def _build_router_llm(self) -> Any:
+        """Return the LLM client to use for the BL-062 Pass 1 router.
+
+        BL-068: honors ``OVP_ROUTER_{MODEL,API_BASE,API_KEY,API_TYPE}``
+        env vars so the router can target a different model than the
+        main extractor.  Useful when the main model's input cap is
+        too small for the router's ~1000-evergreen index prompt
+        (MiniMax M2.7-highspeed has a 2K-token limit that makes the
+        router unreachable), or when the operator wants to test a
+        cheaper / larger-context Pass-1-only model like DeepSeek-V4-
+        Flash (1M context, OpenAI-compatible via SenseNova).
+
+        Falls back to ``self.llm`` (the main absorb extractor's
+        client) when no router-specific env var is set.  Failure to
+        construct the override client also falls back — the shadow
+        path is best-effort and must never abort the main extract.
+        """
+        try:
+            from .llm_defaults import resolve_router_llm_config
+        except ImportError:  # noqa: BLE001 — keep direct-script invocation working
+            from llm_defaults import resolve_router_llm_config  # type: ignore[no-redef]
+
+        cfg = resolve_router_llm_config()
+        if not cfg:
+            return self.llm
+        try:
+            return LiteLLMClient(
+                model=cfg["model"],
+                api_type=cfg["api_type"],
+                api_key=cfg["api_key"] or None,
+                api_base=cfg["api_base"] or None,
+            )
+        except Exception as exc:  # noqa: BLE001 — fall back; never block shadow
+            self.logger.log("absorb_router_llm_build_error", {
+                "error": str(exc),
+                "model": cfg.get("model", ""),
+                "api_base": cfg.get("api_base", ""),
+            })
+            return self.llm
+
     def _run_router_shadow(self, *, file_path: Path, content: str) -> None:
         """Issue a Pass 1 router call alongside the legacy v2 extract.
 
@@ -620,6 +660,10 @@ class EvergreenExtractor:
         already has its own audit-on-failure contract, so the only
         thing that should escape is a programming bug in this wrapper
         or a registry/import failure.
+
+        BL-068: router uses its own LLM client when
+        ``OVP_ROUTER_*`` env vars are set; otherwise reuses
+        ``self.llm`` (the main extractor's client).
         """
         try:
             # Match the relative-vs-absolute import fallback the rest
@@ -631,8 +675,9 @@ class EvergreenExtractor:
             except ImportError:
                 from absorb_router import route_source  # type: ignore[no-redef]
 
+            router_llm = self._build_router_llm()
             route_source(
-                self.llm,
+                router_llm,
                 source_path=str(file_path),
                 source_content=content,
                 pipeline_logger=self.logger,
@@ -1168,6 +1213,60 @@ class AutoEvergreenExtractor:
                                 upsert_promotions_in_file(file_path, [concept_name])
                             except Exception:
                                 pass
+
+                            # BL-067: write the BL-056 promote provenance
+                            # row + BL-061 evergreen-revision snapshot for
+                            # this CLI auto-promote.  The UI/MCP review
+                            # path already does this via
+                            # ``review_candidate_concept`` → the helper
+                            # in truth_api; the CLI path was missing the
+                            # call, so auto-promoted evergreens had no
+                            # revision history.  ``changed_by`` tags the
+                            # callsite for audit replay.
+                            try:
+                                from .truth_api import record_promote_audit_pair
+                            except ImportError:
+                                record_promote_audit_pair = None  # type: ignore[assignment]
+                            if record_promote_audit_pair is not None:
+                                try:
+                                    pack_name = getattr(
+                                        registry, "pack_name", None,
+                                    ) or "default_knowledge"
+                                    source_url = ""
+                                    try:
+                                        # Pull source_url out of the candidate
+                                        # metadata so the provenance row carries
+                                        # it.  Best-effort: missing source_url
+                                        # is fine (legacy candidates / hand
+                                        # edits don't always have it).
+                                        candidate_meta = concept.get("source") or {}
+                                        if isinstance(candidate_meta, dict):
+                                            source_url = str(
+                                                candidate_meta.get("source_url") or ""
+                                            )
+                                    except Exception:  # noqa: BLE001
+                                        source_url = ""
+                                    record_promote_audit_pair(
+                                        self.vault_dir,
+                                        pack_name=pack_name,
+                                        target_slug=concept_name,
+                                        canonical_path=str(output_path),
+                                        source_url=source_url,
+                                        lifecycle_action="promote",
+                                        source_slug=concept_name,
+                                        changed_by="cli:auto_promote",
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    # Audit failure must never abort the
+                                    # absorb workflow — the file is already
+                                    # promoted on disk.  Log + carry on.
+                                    self.logger.log(
+                                        "auto_promote_audit_error",
+                                        {
+                                            "concept": concept_name,
+                                            "error": str(exc),
+                                        },
+                                    )
                         else:
                             from .promote_candidates import write_candidate_file
 

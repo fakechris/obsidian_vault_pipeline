@@ -140,6 +140,50 @@ def test_index_caps_claims_per_object(temp_vault):
     assert alpha.key_claims[0].startswith("alpha claim 0")
 
 
+def test_index_max_entries_truncates_after_sort(temp_vault):
+    """BL-068: ``max_entries`` caps the number of evergreens fed to
+    the router so the rendered prompt fits the model's context.
+    Cap is applied AFTER the lexicographic sort, so the first N
+    slugs survive deterministically across runs."""
+    from ovp_pipeline.absorb_router import build_evergreen_index
+
+    _seed_index_fixtures(temp_vault)
+    # Fixture has alpha, beta, gamma (3 objects).  Cap to 2 → first two.
+    entries = build_evergreen_index(temp_vault, max_entries=2)
+    assert [e.slug for e in entries] == ["alpha", "beta"]
+
+    # max_entries=None means no cap (legacy behavior, used by tests).
+    full = build_evergreen_index(temp_vault, max_entries=None)
+    assert len(full) >= 3
+
+    # max_entries=0 keeps the function returning an empty list rather
+    # than raising — best-effort contract for misconfigured env var.
+    empty = build_evergreen_index(temp_vault, max_entries=0)
+    assert empty == []
+
+
+def test_resolve_max_index_entries_reads_env(monkeypatch):
+    """BL-068: ``OVP_ROUTER_MAX_INDEX_ENTRIES`` env var overrides
+    the default cap.  Invalid values fall back to default rather
+    than raising."""
+    from ovp_pipeline.absorb_router import (
+        DEFAULT_MAX_INDEX_ENTRIES,
+        _resolve_max_index_entries,
+    )
+
+    monkeypatch.delenv("OVP_ROUTER_MAX_INDEX_ENTRIES", raising=False)
+    assert _resolve_max_index_entries() == DEFAULT_MAX_INDEX_ENTRIES
+
+    monkeypatch.setenv("OVP_ROUTER_MAX_INDEX_ENTRIES", "500")
+    assert _resolve_max_index_entries() == 500
+
+    monkeypatch.setenv("OVP_ROUTER_MAX_INDEX_ENTRIES", "not-a-number")
+    assert _resolve_max_index_entries() == DEFAULT_MAX_INDEX_ENTRIES
+
+    monkeypatch.setenv("OVP_ROUTER_MAX_INDEX_ENTRIES", "-5")
+    assert _resolve_max_index_entries() == DEFAULT_MAX_INDEX_ENTRIES
+
+
 def test_index_pack_name_filter_excludes_other_packs(temp_vault):
     """Setting ``pack_name`` scopes the index to one pack."""
     from ovp_pipeline.absorb_router import build_evergreen_index

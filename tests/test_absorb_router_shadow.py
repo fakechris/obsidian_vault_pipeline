@@ -277,3 +277,76 @@ def test_shadow_unexpected_exception_logs_shadow_error(tmp_path, monkeypatch):
     ]
     assert len(shadow_errors) == 1
     assert "simulated registry failure" in shadow_errors[0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# BL-068: router LLM config (separate model for the router)
+# ---------------------------------------------------------------------------
+
+
+def test_build_router_llm_returns_main_when_no_override(tmp_path, monkeypatch):
+    """Default behavior: with no ``OVP_ROUTER_*`` env vars set, the
+    router uses the same LLM client as the main extractor — no new
+    client constructed, no spend on a second provider."""
+    for var in (
+        "OVP_ROUTER_MODEL",
+        "OVP_ROUTER_API_BASE",
+        "OVP_ROUTER_API_KEY",
+        "OVP_ROUTER_API_TYPE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    extractor, llm, _ = _make_extractor(tmp_path, llm_responses=[])
+    assert extractor._build_router_llm() is llm
+
+
+def test_build_router_llm_constructs_override_when_env_set(
+    tmp_path, monkeypatch,
+):
+    """BL-068: setting ``OVP_ROUTER_*`` env vars yields a new
+    ``LiteLLMClient`` wired to the override config.  Verifies the
+    operator can swap router model independently of main extractor —
+    the load-bearing fix for MiniMax-2K-cap on the router prompt."""
+    from ovp_pipeline.auto_evergreen_extractor import LiteLLMClient
+
+    monkeypatch.setenv("OVP_ROUTER_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("OVP_ROUTER_API_BASE", "https://token.sensenova.cn/v1")
+    monkeypatch.setenv("OVP_ROUTER_API_KEY", "sk-test-router")
+    monkeypatch.setenv("OVP_ROUTER_API_TYPE", "openai")
+    extractor, llm, _ = _make_extractor(tmp_path, llm_responses=[])
+    router_llm = extractor._build_router_llm()
+    assert router_llm is not llm
+    assert isinstance(router_llm, LiteLLMClient)
+    assert router_llm.api_base == "https://token.sensenova.cn/v1"
+    assert router_llm.model == "openai/deepseek-v4-flash"
+
+
+def test_build_router_llm_falls_back_to_main_on_construct_error(
+    tmp_path, monkeypatch,
+):
+    """Best-effort contract: if the override config fails to build
+    a client (e.g. missing dep / bad config), the shadow path falls
+    back to the main LLM and emits ``absorb_router_llm_build_error``
+    rather than killing the main extract path."""
+    from ovp_pipeline import auto_evergreen_extractor
+
+    monkeypatch.setenv("OVP_ROUTER_MODEL", "x")
+    monkeypatch.setenv("OVP_ROUTER_API_BASE", "https://example.com")
+    monkeypatch.setenv("OVP_ROUTER_API_KEY", "sk-test")
+
+    class BoomLLM:
+        def __init__(self, *_a, **_kw):
+            raise RuntimeError("simulated litellm init failure")
+
+    monkeypatch.setattr(
+        auto_evergreen_extractor, "LiteLLMClient", BoomLLM,
+    )
+
+    extractor, llm, log = _make_extractor(tmp_path, llm_responses=[])
+    assert extractor._build_router_llm() is llm
+    audit = _read_audit_events(log.log_file)
+    build_errors = [
+        r for r in audit
+        if r.get("event_type") == "absorb_router_llm_build_error"
+    ]
+    assert len(build_errors) == 1
+    assert "simulated litellm init failure" in build_errors[0]["error"]
