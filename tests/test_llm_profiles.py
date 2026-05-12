@@ -285,3 +285,133 @@ def test_explicit_yaml_overrides_env_vars(
     # api_key isn't auto-pulled from env into yaml-defined profiles —
     # the LiteLLM client picks it up from the environment directly.
     assert cfg.api_key is None
+
+
+# ── codex P2 + CodeRabbit P1 / Major fixes ────────────────────
+
+
+def test_loader_honors_ovp_vault_dir_env(
+    vault_with_yaml: Path,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """When launched outside the vault, ``load_profiles()`` with no
+    explicit ``vault_dir`` falls through to ``resolve_vault_dir``
+    which reads ``OVP_VAULT_DIR``.  Without this, the loader would
+    miss the operator's yaml and silently use the env-var fallback
+    (codex review P2)."""
+    monkeypatch.setenv("OVP_VAULT_DIR", str(vault_with_yaml))
+    # CWD is somewhere else (tmp_path).  No .ovp/ here.
+    monkeypatch.chdir(tmp_path)
+    book = load_profiles()
+    assert book.source == "yaml"
+    assert "fast" in book.profiles
+
+
+def test_minimax_legacy_fallback_normalises_model(tmp_path, monkeypatch):
+    """Legacy vault with ``AUTO_VAULT_MODEL=minimax/M2.7-highspeed``
+    + the standard MiniMax Anthropic base should normalise to
+    ``anthropic/M2.7-highspeed`` — matches what existing
+    LiteLLMClient consumers expect (codex review P2)."""
+    monkeypatch.delenv("OVP_VAULT_DIR", raising=False)
+    monkeypatch.delenv("VAULT_DIR", raising=False)
+    monkeypatch.setenv("AUTO_VAULT_MODEL", "minimax/M2.7-highspeed")
+    monkeypatch.setenv("AUTO_VAULT_API_BASE", "https://api.minimaxi.com/anthropic")
+    monkeypatch.chdir(tmp_path)
+    cfg = resolve_profile("balanced")
+    assert cfg.provider == "anthropic"
+    assert cfg.model == "M2.7-highspeed"
+    assert cfg.litellm_model == "anthropic/M2.7-highspeed"
+
+
+def test_profile_book_mappings_are_read_only(vault_with_yaml: Path):
+    """CodeRabbit Major — ``ProfileBook`` advertised immutability
+    but the inner mappings were plain dicts.  Now wrapped in
+    ``MappingProxyType``."""
+    book = load_profiles(vault_with_yaml)
+    with pytest.raises(TypeError):
+        book.profiles["injected"] = None  # type: ignore[index]
+    with pytest.raises(TypeError):
+        book.default_for["chat"] = "evil"  # type: ignore[index]
+
+
+def test_nonpositive_max_tokens_rejected(tmp_path: Path):
+    """CodeRabbit P1 — ``max_tokens: 0`` would disable output caps
+    if accepted verbatim.  Falls back to the default."""
+    cfg = tmp_path / CONFIG_REL
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        """
+profiles:
+  balanced:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    max_tokens: 0
+    temperature: 0.7
+""",
+        encoding="utf-8",
+    )
+    book = load_profiles(tmp_path)
+    assert book.profiles["balanced"].max_tokens > 0
+
+
+def test_nonpositive_daily_cap_rejected(tmp_path: Path):
+    cfg = tmp_path / CONFIG_REL
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        """
+profiles:
+  balanced:
+    provider: anthropic
+    model: claude-sonnet-4-6
+limits:
+  chat_daily_tokens_per_pack: -1
+""",
+        encoding="utf-8",
+    )
+    book = load_profiles(tmp_path)
+    assert book.limits.chat_daily_tokens_per_pack > 0
+
+
+def test_api_type_defaults_to_provider(tmp_path: Path):
+    """CodeRabbit Major — operators switching to openai-style
+    providers shouldn't have to manually set ``api_type`` on every
+    profile.  When omitted, it derives from ``provider``."""
+    cfg = tmp_path / CONFIG_REL
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        """
+profiles:
+  custom-openai:
+    provider: openai
+    model: gpt-5
+  custom-anthropic:
+    provider: anthropic
+    model: claude-opus-4-7
+""",
+        encoding="utf-8",
+    )
+    book = load_profiles(tmp_path)
+    assert book.profiles["custom-openai"].api_type == "openai"
+    assert book.profiles["custom-anthropic"].api_type == "anthropic"
+
+
+def test_openai_provider_litellm_model_format(tmp_path: Path):
+    """CodeRabbit nitpick — exercise a non-Anthropic provider end
+    to end so provider-switch regressions don't pass unnoticed."""
+    cfg = tmp_path / CONFIG_REL
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        """
+profiles:
+  fast:
+    provider: openai
+    model: gpt-5-mini
+    api_base: https://api.openai.com/v1
+""",
+        encoding="utf-8",
+    )
+    cfg2 = resolve_profile("fast", vault_dir=tmp_path)
+    assert cfg2.provider == "openai"
+    assert cfg2.api_type == "openai"
+    assert cfg2.litellm_model == "openai/gpt-5-mini"

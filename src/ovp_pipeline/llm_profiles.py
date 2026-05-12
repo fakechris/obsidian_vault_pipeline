@@ -37,6 +37,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Mapping
 
 import yaml
@@ -44,9 +45,11 @@ import yaml
 from ovp_pipeline.llm_defaults import (
     DEFAULT_MINIMAX_API_BASE,
     DEFAULT_MINIMAX_MODEL,
+    normalize_model_for_api_base,
     resolve_api_base,
     resolve_api_key,
 )
+from ovp_pipeline.runtime import resolve_vault_dir
 
 logger = logging.getLogger(__name__)
 
@@ -63,17 +66,25 @@ DEFAULT_USE_CASES: Final[tuple[str, ...]] = (
     "router",
 )
 
+# Per-field defaults — referenced both by :class:`ProfileConfig` and
+# the yaml parser so the two stay in sync (CodeRabbit M2).
+_DEFAULT_MAX_TOKENS: Final[int] = 4000
+_DEFAULT_TEMPERATURE: Final[float] = 0.7
+_DEFAULT_API_TYPE: Final[str] = "anthropic"
+
 # Built-in defaults — used when ``.ovp/llm_profiles.yaml`` is
 # missing.  Three abstract tiers; only the Balanced tier is
 # materialised from env vars so legacy vaults keep working.  Fast
 # and Deep need explicit yaml entries to point at real providers.
 _FALLBACK_PROFILE_NAME: Final[str] = "balanced"
-_FALLBACK_USE_CASE_MAP: Final[Mapping[str, str]] = {
-    "chat": "balanced",
-    "extraction": "balanced",
-    "digest": "balanced",
-    "router": "balanced",
-}
+_FALLBACK_USE_CASE_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "chat": "balanced",
+        "extraction": "balanced",
+        "digest": "balanced",
+        "router": "balanced",
+    }
+)
 
 # Per-pack-per-day input+output token cap.  Conservative default
 # the operator can raise in yaml after watching real usage.
@@ -95,11 +106,11 @@ class ProfileConfig:
     name: str
     provider: str
     model: str
-    max_tokens: int = 4000
-    temperature: float = 0.7
+    max_tokens: int = _DEFAULT_MAX_TOKENS
+    temperature: float = _DEFAULT_TEMPERATURE
     api_base: str | None = None
     api_key: str | None = None
-    api_type: str = "anthropic"
+    api_type: str = _DEFAULT_API_TYPE
     cost_per_1k_in: float = 0.0
     cost_per_1k_out: float = 0.0
 
@@ -190,8 +201,8 @@ def load_profiles(vault_dir: Path | str | None = None) -> ProfileBook:
     limits = _parse_limits(data.get("limits") or {})
 
     return ProfileBook(
-        profiles=profiles,
-        default_for=default_for,
+        profiles=MappingProxyType(dict(profiles)),
+        default_for=MappingProxyType(dict(default_for)),
         limits=limits,
         source="yaml",
     )
@@ -231,16 +242,7 @@ def profile_for_use_case(
     book = load_profiles(vault_dir)
     profile_name = book.default_for.get(use_case)
     if profile_name is None or profile_name not in book.profiles:
-        # Conservative fallback: the first profile defined, which
-        # is "balanced" in both the fallback book and the M21 plan's
-        # example yaml.
-        if _FALLBACK_PROFILE_NAME in book.profiles:
-            return book.profiles[_FALLBACK_PROFILE_NAME]
-        # Edge case: operator yaml has profiles but none called
-        # "balanced".  Pick deterministically — sorted-name first —
-        # so two callers in the same vault agree.
-        first = sorted(book.profiles)[0]
-        return book.profiles[first]
+        return book.profiles[_pick_fallback_name(book.profiles)]
     return book.profiles[profile_name]
 
 
@@ -258,17 +260,35 @@ _CACHE: dict[Path, tuple[float, str]] = {}
 
 
 def _config_path(vault_dir: Path | str | None) -> Path:
-    base = Path(vault_dir) if vault_dir else Path.cwd()
-    return base / CONFIG_REL
+    """Resolve to an absolute path to the yaml config.
+
+    When ``vault_dir`` is ``None``, defer to :func:`resolve_vault_dir`
+    so CLI calls launched outside the vault still find the operator's
+    ``.ovp/llm_profiles.yaml`` (codex review P2) — the same resolver
+    every other ``ovp-*`` command uses.  Calling ``.resolve()`` keeps
+    the ``_CACHE`` key stable across ``os.chdir`` (CodeRabbit P1).
+    """
+    base = resolve_vault_dir(vault_dir)
+    return (base / CONFIG_REL).resolve()
 
 
 def _read_capped(path: Path) -> str:
     """Return ``path`` content or ``""`` when missing/unreadable."""
     try:
-        mtime = path.stat().st_mtime
+        st = path.stat()
     except OSError:
         return ""
 
+    if st.st_size > MAX_BYTES:
+        # Check size *before* slurping the file (CodeRabbit M3).
+        logger.warning(
+            "llm_profiles: %s exceeded %d bytes; using fallback",
+            path,
+            MAX_BYTES,
+        )
+        return ""
+
+    mtime = st.st_mtime
     cached = _CACHE.get(path)
     if cached is not None and cached[0] == mtime:
         return cached[1]
@@ -277,14 +297,6 @@ def _read_capped(path: Path) -> str:
         raw_bytes = path.read_bytes()
     except OSError as exc:
         logger.debug("llm_profiles: failed to read %s: %s", path, exc)
-        return ""
-
-    if len(raw_bytes) > MAX_BYTES:
-        logger.warning(
-            "llm_profiles: %s exceeded %d bytes; using fallback",
-            path,
-            MAX_BYTES,
-        )
         return ""
 
     try:
@@ -323,15 +335,22 @@ def _parse_profiles(
                 name,
             )
             continue
+        api_type = _coerce_optional_str(body.get("api_type")) or provider
         result[name] = ProfileConfig(
             name=name,
             provider=provider,
             model=model,
-            max_tokens=_coerce_int(body.get("max_tokens"), 4000),
-            temperature=_coerce_float(body.get("temperature"), 0.7),
+            max_tokens=_coerce_positive_int(
+                body.get("max_tokens"),
+                _DEFAULT_MAX_TOKENS,
+            ),
+            temperature=_coerce_float(
+                body.get("temperature"),
+                _DEFAULT_TEMPERATURE,
+            ),
             api_base=_coerce_optional_str(body.get("api_base")),
             api_key=_coerce_optional_str(body.get("api_key")),
-            api_type=str(body.get("api_type") or "anthropic"),
+            api_type=api_type,
             cost_per_1k_in=_coerce_float(
                 body.get("cost_per_1k_in"),
                 0.0,
@@ -367,27 +386,37 @@ def _parse_default_for(
     # Ensure every canonical use case has an entry — fall back to
     # the first available profile if the yaml didn't list it.
     if profiles:
-        first_profile = (
-            _FALLBACK_PROFILE_NAME if _FALLBACK_PROFILE_NAME in profiles else sorted(profiles)[0]
-        )
+        first_profile = _pick_fallback_name(profiles)
         for use_case in DEFAULT_USE_CASES:
             result.setdefault(use_case, first_profile)
     return result
+
+
+def _pick_fallback_name(profiles: Mapping[str, ProfileConfig]) -> str:
+    """Pick a deterministic fallback profile name (CodeRabbit M6).
+
+    Prefer ``balanced`` when present; otherwise the first profile
+    sorted by name so two callers in the same vault agree.  Caller
+    must guarantee ``profiles`` is non-empty.
+    """
+    if _FALLBACK_PROFILE_NAME in profiles:
+        return _FALLBACK_PROFILE_NAME
+    return sorted(profiles)[0]
 
 
 def _parse_limits(raw: object) -> ProfileLimits:
     if not isinstance(raw, Mapping):
         return ProfileLimits()
     return ProfileLimits(
-        chat_input_tokens_per_request=_coerce_int(
+        chat_input_tokens_per_request=_coerce_positive_int(
             raw.get("chat_input_tokens_per_request"),
             _FALLBACK_INPUT_CAP,
         ),
-        chat_output_tokens_per_request=_coerce_int(
+        chat_output_tokens_per_request=_coerce_positive_int(
             raw.get("chat_output_tokens_per_request"),
             _FALLBACK_OUTPUT_CAP,
         ),
-        chat_daily_tokens_per_pack=_coerce_int(
+        chat_daily_tokens_per_pack=_coerce_positive_int(
             raw.get("chat_daily_tokens_per_pack"),
             _FALLBACK_DAILY_TOKEN_CAP,
         ),
@@ -405,6 +434,19 @@ def _coerce_int(value: object, default: int) -> int:
         except ValueError:
             return default
     return default
+
+
+def _coerce_positive_int(value: object, default: int) -> int:
+    """Like :func:`_coerce_int`, but reject ``<= 0`` (CodeRabbit P1).
+
+    ``max_tokens: 0`` and ``chat_daily_tokens_per_pack: -1`` would
+    silently disable caps if accepted verbatim; falling back to the
+    default is safer than honoring nonsensical values.
+    """
+    coerced = _coerce_int(value, default)
+    if coerced <= 0:
+        return default
+    return coerced
 
 
 def _coerce_float(value: object, default: float) -> float:
@@ -432,31 +474,42 @@ def _fallback_book() -> ProfileBook:
 
     Legacy vaults without ``.ovp/llm_profiles.yaml`` still get a
     usable ``balanced`` profile so :func:`profile_for_use_case`
-    never raises.  Provider defaults to ``anthropic`` (matches
-    ``llm_defaults.DEFAULT_MINIMAX_MODEL``'s prefix); model defaults
-    to ``DEFAULT_MINIMAX_MODEL``.
+    never raises.  Model defaults to ``DEFAULT_MINIMAX_MODEL`` and
+    is routed through :func:`normalize_model_for_api_base` so the
+    ``minimax/<m>`` legacy shape (with the Anthropic-compatible
+    MiniMax endpoint as base) collapses to ``anthropic/<m>`` —
+    matching what existing ``LiteLLMClient`` consumers expect
+    (codex review P2).
     """
     api_key = resolve_api_key()
     api_base = resolve_api_base(default=DEFAULT_MINIMAX_API_BASE)
     raw_model = (os.environ.get("AUTO_VAULT_MODEL") or "").strip()
-    model = raw_model or DEFAULT_MINIMAX_MODEL
-    provider, _, bare_model = model.partition("/")
+    # Always run through the same normalizer LiteLLMClient uses so
+    # the fallback profile produces a model string downstream code
+    # actually accepts.
+    normalised = normalize_model_for_api_base(
+        raw_model or None,
+        api_type=_DEFAULT_API_TYPE,
+        api_base=api_base,
+        default_model=DEFAULT_MINIMAX_MODEL,
+    )
+    provider, _, bare_model = normalised.partition("/")
     if not bare_model:
-        bare_model, provider = provider, "anthropic"
+        bare_model, provider = provider, _DEFAULT_API_TYPE
 
     balanced = ProfileConfig(
         name=_FALLBACK_PROFILE_NAME,
         provider=provider,
         model=bare_model,
-        max_tokens=4000,
-        temperature=0.7,
+        max_tokens=_DEFAULT_MAX_TOKENS,
+        temperature=_DEFAULT_TEMPERATURE,
         api_base=api_base,
         api_key=api_key,
-        api_type="anthropic",
+        api_type=provider or _DEFAULT_API_TYPE,
     )
     return ProfileBook(
-        profiles={_FALLBACK_PROFILE_NAME: balanced},
-        default_for=dict(_FALLBACK_USE_CASE_MAP),
+        profiles=MappingProxyType({_FALLBACK_PROFILE_NAME: balanced}),
+        default_for=MappingProxyType(dict(_FALLBACK_USE_CASE_MAP)),
         limits=ProfileLimits(),
         source="fallback",
     )
