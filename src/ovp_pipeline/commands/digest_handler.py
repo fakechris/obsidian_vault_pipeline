@@ -157,6 +157,12 @@ def _collect_digest_inputs(vault_dir: Path, pack: str) -> dict[str, Any]:
             data = json.loads(blob or "[]")
         except (TypeError, ValueError, json.JSONDecodeError):
             return []
+        # TEXT columns have no structural constraint, so a row with
+        # ``null`` or an object would raise TypeError on the list
+        # comprehension below and abort digest generation
+        # (rev-bot 208 round-2 #5).
+        if not isinstance(data, list):
+            return []
         return [str(item) for item in data if item]
 
     return {
@@ -278,31 +284,47 @@ def _build_sources_section(inputs: dict[str, Any]) -> str:
     """
     from ..synthesis._shared import crystal_safe_id
 
+    def _safe_wikilink_text(value: Any) -> str:
+        """Strip wikilink delimiters from a label/slug.
+
+        ``]]`` would close the link early; ``|`` would split it into
+        ``[[target|label|extra]]`` and confuse Obsidian's parser;
+        newlines would break out of the surrounding list item.  Pre-
+        fix, ``subject`` / ``label`` values flowed in raw from
+        crystal frontmatter, so a stray ``]]`` in a subject key
+        broke every digest below that link (rev-bot 208 round-2 #6).
+        """
+        return (
+            str(value or "")
+            .replace("[", " ")
+            .replace("]", " ")
+            .replace("|", " ")
+            .replace("\n", " ")
+            .strip()
+        )
+
     crystal_links: list[str] = []
     evergreen_slugs: list[str] = []
 
     for item in inputs.get("tensions", []):
         safe = crystal_safe_id("contradiction", str(item.get("id") or ""))
         if safe:
-            crystal_links.append(
-                f"[[{safe}|⚠ {item.get('subject', safe)}]]"
-            )
+            label = _safe_wikilink_text(item.get("subject", safe)) or safe
+            crystal_links.append(f"[[{safe}|⚠ {label}]]")
         evergreen_slugs.extend(item.get("source_object_ids", []))
 
     for item in inputs.get("themes", []):
         safe = crystal_safe_id("community", str(item.get("cluster_id") or ""))
         if safe:
-            crystal_links.append(
-                f"[[{safe}|◆ {item.get('label', safe)}]]"
-            )
+            label = _safe_wikilink_text(item.get("label", safe)) or safe
+            crystal_links.append(f"[[{safe}|◆ {label}]]")
         evergreen_slugs.extend(item.get("source_evergreen_slugs", []))
 
     for item in inputs.get("open_questions", []):
         safe = crystal_safe_id("contradiction", str(item.get("id") or ""))
         if safe:
-            crystal_links.append(
-                f"[[{safe}|? {item.get('subject', safe)}]]"
-            )
+            label = _safe_wikilink_text(item.get("subject", safe)) or safe
+            crystal_links.append(f"[[{safe}|? {label}]]")
         evergreen_slugs.extend(item.get("source_object_ids", []))
 
     # Dedupe while preserving order so the reader sees crystals
@@ -330,7 +352,9 @@ def _build_sources_section(inputs: dict[str, Any]) -> str:
         EVERGREEN_CAP = 24
         shown = deduped_slugs[:EVERGREEN_CAP]
         for slug in shown:
-            parts.append(f"- [[{slug}]]")
+            safe_slug = _safe_wikilink_text(slug)
+            if safe_slug:
+                parts.append(f"- [[{safe_slug}]]")
         if len(deduped_slugs) > EVERGREEN_CAP:
             parts.append(
                 f"- *…and {len(deduped_slugs) - EVERGREEN_CAP} more.*"

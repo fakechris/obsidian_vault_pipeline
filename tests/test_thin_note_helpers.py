@@ -10,8 +10,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from ovp_pipeline.commands._ui_renderers import (
     _resolve_effective_type,
     _render_thin_note_preamble,
@@ -53,7 +51,7 @@ def test_empty_frontmatter_returns_empty():
 # ── threshold escape on Live Concept preamble ────────────────────
 
 
-def test_live_concept_preamble_escapes_threshold(tmp_path: Path):
+def test_live_concept_preamble_escapes_threshold():
     """If a Live Concept's ``threshold`` is a string (e.g. an
     operator inserted ``"<script>alert(1)</script>"``), the
     preamble must escape it like every other frontmatter field."""
@@ -77,7 +75,7 @@ def test_live_concept_preamble_escapes_threshold(tmp_path: Path):
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
 
-def test_live_concept_preamble_threshold_numeric_renders(tmp_path: Path):
+def test_live_concept_preamble_threshold_numeric_renders():
     """The common case — a numeric threshold — still renders
     cleanly after the str/escape coercion."""
     md = (

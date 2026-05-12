@@ -1743,10 +1743,7 @@ def _render_note_page(
                 f"<p class='muted'>{escape(relative_path)}</p>"
                 + preamble_html
                 + f"<section class='card'>{note_html}</section>"
-                + "<details class='page-help'>"
-                + "<summary>Frontmatter</summary>"
-                + f"{frontmatter_html}"
-                + "</details>"
+                + _render_frontmatter_details(frontmatter_html)
             ),
             requested_pack=requested_pack,
         )
@@ -1824,12 +1821,24 @@ def _render_note_page(
             + f"{provenance_html}"
             + f"{production_chain_html}"
             + f"{_render_compiled_sections(remaining_sections)}"
-            + "<details class='page-help'>"
-            + "<summary>Frontmatter</summary>"
-            + f"{frontmatter_html}"
-            + "</details>"
+            + _render_frontmatter_details(frontmatter_html)
         ),
         requested_pack=requested_pack,
+    )
+
+
+def _render_frontmatter_details(frontmatter_html: str) -> str:
+    """Wrap rendered frontmatter HTML in a collapsed ``<details>``
+    disclosure, or return ``""`` when the file has no frontmatter
+    so the page doesn't show an empty expandable block (rev-bot
+    208 round-2 #4)."""
+    if not frontmatter_html or not frontmatter_html.strip():
+        return ""
+    return (
+        "<details class='page-help'>"
+        "<summary>Frontmatter</summary>"
+        f"{frontmatter_html}"
+        "</details>"
     )
 
 

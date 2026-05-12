@@ -49,6 +49,7 @@ from typing import Any
 from .live_concept import LiveConceptHandle
 from .live_concept_fileops import (
     AGENT_OWNED_SECTIONS,
+    _split_frontmatter,
     patch_agent_section,
     patch_live,
     read_section_body,
@@ -130,14 +131,15 @@ def _read_body_sections(path: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return out
-    # Routes through ``live_concept_fileops.read_section_body`` so
-    # the agent's section reader and the patcher use the same
-    # heading matcher.  Pre-PR#208 these were two implementations
-    # (regex here, lines-based scan in fileops) that could drift —
-    # the regex's ``[^>]*`` was also fragile when an inline HTML
-    # comment contained ``>`` (rev-bot 205.1).
+    # Mirror ``patch_agent_section``'s flow: split frontmatter off
+    # first, then pass body-only to ``read_section_body``.  This
+    # avoids any chance of a YAML key like ``## something`` (legal
+    # in some quoted-scalar contexts) confusing the heading matcher
+    # — and keeps the agent's reader semantically aligned with its
+    # writer (rev-bot 208 round-2 #8).
+    _, body, _ = _split_frontmatter(text)
     for name in AGENT_OWNED_SECTIONS:
-        out[name] = read_section_body(text, name)
+        out[name] = read_section_body(body, name)
     return out
 
 
