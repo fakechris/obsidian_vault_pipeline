@@ -1,4 +1,6 @@
-# M21 — Chat Surface (anchored vault conversation)
+# M21 — Anchored Inquiry Surface
+
+*Ask the vault about what you are reading.*
 
 **Date:** 2026-05-12
 **Status:** Active (plan only — no code yet)
@@ -7,31 +9,82 @@ QUEUE pattern, SSE infra from `/pulse/stream`)
 **Independent of:** M18 (trust-aware compiler), M19 (live concept),
 upcoming hygiene PRs
 
+## Product primitive: anchored inquiry, not chat
+
+Chat is a **UI form**, not the product primitive.  The OVP product
+primitive M21 introduces is **anchored inquiry**:
+
+> When the operator reads an OVP artifact (note, object, topic,
+> digest, live concept) they should be able to ask the vault
+> about it, get an answer grounded in real vault context, see
+> exactly what was used, and optionally hand the result back into
+> the absorb / promote flow.
+
+The primary entry surface is "Ask about this" on `/note`,
+`/object`, `/topic`, and digest pages — *not* a standalone chat
+page.  A standalone `/chat` entry exists as a fallback for
+"general inquiry without an anchor", but anchored inquiry is what
+M21 optimises for.
+
+The success metric is **anchor-bound inquiry ratio ≥ 60%**.  If
+most M21 sessions are anchorless general chat, the surface has
+collapsed into a generic ChatGPT clone and the milestone has
+failed.
+
 ## Origin
 
-PR #208 round-3 review opened up the next product question: when the
-operator reads an OVP artifact (a note, an object, a digest, a
-live concept), there's no way to *interrogate* it.  Today's options
-are:
+PR #208 round-3 review opened up the next product question: when
+the operator reads an OVP artifact, there's no way to
+*interrogate* it.  Today's options are:
 
 * Open `ovp-query` in a terminal — single-shot, no history, no
-  awareness of which page the operator was looking at.
+  awareness of which page the operator was looking at, no
+  context manifest, no write-back path.
 * Drop a `RESEARCH-*.md` task into `50-Inbox/02-Tasks/` — async,
   one-shot, no follow-up.
 
-Neither lets the operator *converse* with the vault about the
-thing in front of them.
+2026-05-12 Codex reviews (two passes) framed the boundary:
 
-Codex review from 2026-05-12 framed the gap exactly:
+> M21 is OVP's next Reuse / Interpretation surface.  The product
+> win is anchor-aware conversation: "I'm reading this artifact —
+> talk to me about it using the vault context behind it".
 
-> Chat is not "add a chat box".  It is OVP's next Reuse /
-> Interpretation surface.  The product win is anchor-aware
-> conversation: "I'm reading this artifact — talk to me about it
-> using the vault context behind it".
+> Don't make this a chat app.  Make it the anchored-inquiry
+> primitive.  Chat history, list views, search are M21b/M21c —
+> not blockers for the first useful thing.
 
 This document is the M21 plan that locks the surface down before
 any code is written.  Same convention as M20 — plan first, BL items
 follow, implementation goes in PR order.
+
+## Why not just `ovp-query --anchor`?
+
+A reasonable question.  Short answer: `ovp-query` is a primitive
+M21 reuses, but it cannot become M21 itself.  Detailed comparison:
+
+| Capability | `ovp-query` today | `ovp-query --anchor` (hypothetical) | M21 anchored inquiry |
+|---|---|---|---|
+| Single-shot Q&A | ✅ | ✅ | ✅ |
+| Anchor-aware context | ❌ | ✅ (would be the extension) | ✅ |
+| Multi-turn history within a session | ❌ | ❌ | ✅ |
+| Persistent transcript (canonical markdown) | ❌ | ❌ | ✅ |
+| Per-turn context manifest (audit trail) | ❌ | ❌ | ✅ |
+| Reader-UI surface with streaming | ❌ | ❌ | ✅ |
+| Write-back into absorb / promote flow | ❌ | ❌ | ✅ |
+| Cost guardrail w/ daily soft cap | partial | partial | ✅ |
+| Per-turn vault retrieval (FTS + semantic + crystals) | ❌ | partial | ✅ |
+
+**What M21 must *not* duplicate from `ovp-query`:** the retrieval
+internals.  M21's context binder (BL-083) wraps `ovp-query`'s
+existing FTS, semantic search, and crystal-score helpers — it
+does not implement a parallel RAG stack.  If the binder needs a
+capability `ovp-query` already has, the right move is to refactor
+the shared helper out of `ovp-query` into a module both can call,
+not to re-implement.
+
+The product primitives that M21 cannot get from `ovp-query` —
+turn history, write-back, manifest, Reader UI — are exactly the
+ones that justify a new milestone instead of a flag.
 
 ## Non-Goals (locked)
 
@@ -58,20 +111,28 @@ M21 v1 explicitly does **not** ship:
   the Maintainer vocabulary creep BL-052 spent a milestone
   cleaning up.
 
-## What `chat` actually is, in OVP vocabulary
+## What an anchored inquiry session is, in OVP vocabulary
 
-| OVP layer | Chat artifact |
+| OVP layer | Inquiry artifact |
 |---|---|
 | **Source** | The user's typed messages (capture: keyboard) |
 | **Candidate** | The assistant's streamed reply *during* generation (`.pending`) |
 | **Canonical State** | Persisted transcript markdown under `40-Resources/Chats/` |
 | **Projection** | `chats` table in `knowledge.db` (rebuildable index over the markdown) |
-| **Access Surface** | `/chat`, `/chats`, "💬 Chat about this" buttons |
-| **Governance** | `.ovp/llm_profiles.yaml` limits + `visibility: private` opt-out |
+| **Access Surface** | "Ask about this" on `/note` / `/object` / `/topic` / digest; `/chat` standalone fallback; `/chats` list (M21c) |
+| **Governance** | `.ovp/llm_profiles.yaml` limits + `visibility: unindexed` opt-out + audit-ledger token accounting |
 
-Chats are **canonical**, not projection.  Operator can edit / link /
-delete them in Obsidian.  Wikilinks inside chat bodies show up in
-the graph and backlinks.
+Sessions are **canonical artifacts, not canonical knowledge**.
+Operator can edit / link / delete them in Obsidian.  Wikilinks
+inside session bodies show up in the graph and backlinks.
+
+> **Hard rule.**  An inquiry transcript is canonical *artifact*,
+> not canonical *knowledge*.  Anything that should enter the
+> knowledge state (`objects` / `claims` / `evergreens` / atlas)
+> must go through the existing `task → absorb → promote → review`
+> pipeline.  The write-back hook in BL-084b is how an inquiry
+> turn enters that pipeline; assistant prose itself is never
+> auto-promoted.
 
 ## Architecture
 
@@ -120,25 +181,75 @@ the graph and backlinks.
 │  knowledge.db.chats: chat_id, anchor_path, model,   │
 │  profile, status, visibility, started_at,           │
 │  last_message_at, turn_count, file_path.            │
-│  page_fts indexes body (private excluded).          │
+│  page_fts indexes body (unindexed excluded).        │
 │  Rebuildable: ovp-knowledge-index sweeps the dir.   │
 └─────────────────────────────────────────────────────┘
 ```
 
-## Eight Backlog Items
+## Three phases — ship in this order
 
-| ID | Stage | Effort | Description |
-|---|---|---|---|
-| BL-081 | provider | 0.5d | `.ovp/llm_profiles.yaml` + `llm_profiles.py` loader.  4 built-in profiles (fast/balanced/deep/custom).  Per-use-case defaults + per-pack limits. |
-| BL-082 | persistence | 1d | `40-Resources/Chats/` markdown schema + `chat_fileops.py`: read / append_turn / mark_interrupted / pending lock.  Schema fixed before any handler writes. |
-| BL-083 | context | 1d | `context_binder.py` — anchor → manifest.  Four anchor kinds.  Token-budget cap.  Manifest serialised as HTML comment in transcript so it survives operator edits. |
-| BL-084 | runtime | 1d | `chat_handler.py` headless runner + `ovp-chat new --anchor note:<path>` CLI.  Non-streaming first.  Cost guardrail enforced before call (input cap + output cap + daily soft cap). |
-| BL-085 | projection | 0.5d | `knowledge.db.chats` table + sync (`ovp-knowledge-index --audit-sync-only`-style fast path).  `page_fts` integration (privacy-aware). |
-| BL-086 | UI runtime | 1.5d | Reader `/chat` page + SSE `/chat/stream?id=…` + Fast/Balanced/Deep/Custom dropdown + "Context anchored to X" indicator + mid-stream interrupt + resume. |
-| BL-087 | UI entry | 1d | "💬 Chat about this" button on `/note`, `/object`, `/topic`.  Anchor auto-bound from page context. |
-| BL-088 | UI list | 0.5d | Reader `/chats` list view grouped by status (active / pinned / archived).  Private chats hidden.  No Maintainer mirror. |
+The eight original BLs split into three sub-milestones.  The
+**first phase ships the primitive**; each later phase adds an
+optional surface that builds on it.  Don't ship M21b until
+M21a's anchored CLI proves the primitive on the live vault; don't
+ship M21c until M21b's Reader UI has produced ≥ a week of real
+sessions.
 
-**Total v1:** ~7 days end-to-end.  Each BL ships its own PR.
+### M21a — Anchored Inquiry MVP (~3.5 days)
+
+Goal: an operator can ask the vault about the artifact they're
+reading and get a grounded, audited, optionally-rerunnable answer
+— without a Reader UI.  CLI-first, like `ovp-task` was before
+`/chat` ever existed.
+
+| BL | Effort | What |
+|---|---|---|
+| BL-081 | 0.5d | Provider profiles + loader |
+| BL-082 | 1d | Inquiry markdown schema + fileops |
+| BL-083 | 1d | Context binder — **anchor + per-turn retrieval** |
+| BL-084 | 1d | Headless handler + `ovp-ask` CLI |
+| **BL-084b** | included in BL-084 | **Write-back hook** — assistant turn can emit `ABSORB-chat-<id>-turn-<n>.md` into `50-Inbox/02-Tasks/` |
+
+**Acceptance for M21a:** `ovp-ask --anchor note:<path> --message
+"..."` on the live vault produces (a) a grounded answer, (b) a
+full manifest in the transcript, (c) audit events for the token
+spend, and (d) optionally a write-back task that enters the
+existing absorb / promote flow.
+
+### M21b — Conversational Reader UI (~3 days)
+
+Goal: lift the MVP into the Reader surface.  Adds turn history
+within a session, streaming, "Ask about this" entry, interrupt
+recovery.
+
+| BL | Effort | What |
+|---|---|---|
+| BL-086 | 1.5d | Reader `/chat` page + SSE + Fast/Balanced/Deep dropdown + interrupt recovery |
+| BL-087 | 1d | "Ask about this" buttons on `/note` / `/object` / `/topic` / digest |
+| (continued) | 0.5d | Composer support for follow-up turns w/ history binding |
+
+**Acceptance for M21b:** the operator can start an inquiry from a
+Reader page, see streaming tokens, ask follow-ups, and have the
+session land cleanly in the M21a transcript schema (Stop → status:
+interrupted, no torn writes).
+
+### M21c — History and Library (~1 day)
+
+Goal: enough surface to find old sessions and rebuild the
+projection if the DB is wiped.
+
+| BL | Effort | What |
+|---|---|---|
+| BL-085 | 0.5d | `knowledge.db.chats` projection + visibility-aware FTS |
+| BL-088 | 0.5d | Reader `/chats` list view (active / pinned / archived) |
+
+**Acceptance for M21c:** `ovp-knowledge-index` can rebuild the
+`chats` projection from the markdown corpus; `/chats` lists
+indexed sessions only; `/search` finds session bodies for
+indexed sessions only.
+
+**Total v1 (all three phases):** ~7.5 days.  Each BL ships its
+own PR.  M21a alone is a useful, evaluable milestone.
 
 ## Architecture details
 
@@ -211,7 +322,7 @@ type: chat
 schema_version: 1
 chat_id: chat-a7b3
 status: active                  # active | pinned | archived
-visibility: indexed             # indexed | private
+visibility: indexed             # indexed | unindexed
 save_policy: persistent         # persistent | ephemeral
 anchor:
   kind: note                    # note | object | crystal | standalone
@@ -276,48 +387,127 @@ Status `interrupted` writes a partial assistant turn with a footer:
 `read_chat`, `append_turn`, `mark_interrupted`, `_pending_block`
 (write to `.pending` first, atomic rename on commit).
 
-### BL-083 — Context binder
+### BL-083 — Context binder (two-layer: anchor + retrieval)
 
 `src/ovp_pipeline/context_binder.py`:
 
 ```python
 @dataclass(frozen=True)
-class ContextManifest:
-    anchor_kind: str               # note|object|crystal|standalone
-    anchor_ref: str
+class AnchorContext:
+    """Fixed per-session.  Built once when the inquiry opens."""
+    kind: str                          # note|object|crystal|standalone
+    ref: str
     included_anchor: str
     included_evergreens: tuple[str, ...]
     included_crystals: tuple[str, ...]
+    token_estimate: int
+
+@dataclass(frozen=True)
+class RetrievalContext:
+    """Rebuilt per turn from the user's question.  Wraps the
+    existing ``ovp-query`` retrieval stack — does NOT reimplement
+    FTS / semantic / crystal-scoring."""
+    query: str
+    included_objects: tuple[str, ...]
+    included_crystals: tuple[str, ...]
+    included_contradictions: tuple[str, ...]
+    token_estimate: int
+
+@dataclass(frozen=True)
+class ContextManifest:
+    anchor: AnchorContext
+    retrieval: RetrievalContext
     omitted_count: int
     omitted_reason: str
-    token_estimate: int
-    context_built_at: str          # ISO
+    token_estimate_total: int
+    context_built_at: str              # ISO
 
 def build_chat_context(
     vault_dir: Path,
     *,
     anchor_kind: str,
     anchor_ref: str,
+    user_message: str,
     profile_input_cap: int,
 ) -> tuple[str, ContextManifest]:
     """Return (system_prompt_body, manifest).
-    system_prompt_body is what the chat handler concatenates after
-    BL-075's USER+RULES prefix."""
+
+    Two-layer construction:
+
+    1. Anchor context (fixed per session): from the artifact the
+       operator is reading.
+    2. Retrieval context (rebuilt per turn): from
+       ``ovp-query``'s existing helpers, scoped by ``user_message``.
+
+    The same `_compute_query_results` helper that backs
+    ``ovp-query`` is the source of truth for retrieval.  If the
+    binder needs functionality that's currently locked inside
+    ``query_tool``, the right refactor is to move that helper
+    into a shared module both can import — not to fork retrieval.
+
+    ``system_prompt_body`` is what the inquiry handler
+    concatenates after BL-075's USER+RULES prefix."""
 ```
 
-Per anchor:
+#### Anchor layer (per session, built once)
 
-| Anchor | Context included (descending priority) |
+| Anchor | Anchor context (descending priority) |
 |---|---|
 | `note` | note body + wikilinked evergreen bodies + same-cluster neighbours |
 | `object` | evergreen body + claims + source notes + cluster neighbours |
 | `crystal` | crystal body + every underlying evergreen + projection scores |
-| `standalone` | only USER + RULES (BL-075 prefix); user pastes manually |
+| `standalone` | empty (USER + RULES from BL-075 is still prepended outside the manifest) |
 
-Token budget cap = `profile_input_cap - len(USER+RULES) - len(turn
-history) - margin`.  Over budget: drop neighbours first → drop
-distant evergreens → keep anchor + most-cited wikilinks.  Always
-record the drop in the manifest's `omitted_items`.
+#### Retrieval layer (per turn, from user message)
+
+For each user turn, the binder calls into `ovp-query`'s existing
+retrieval pipeline:
+
+* **FTS** — `page_fts MATCH <query>` over indexed pages + crystals
+* **Semantic** — `page_embeddings` cosine over the same scope
+* **Open contradictions** — `contradictions WHERE status='open'`
+  AND any matched object id
+* **Crystal scores** — top-N from `crystal_scores` whose
+  `subject_key` matches the query
+
+These are existing helpers, not new code.  The binder's job is
+*selection + budgeting*, not retrieval.  It picks the top results
+per source up to a per-turn retrieval-context budget and records
+them in `RetrievalContext.included_*`.
+
+This is what lets the operator ask "does the vault have anything
+against this?" and have the binder pull `contradictions` rows the
+anchor doesn't reach.
+
+#### Token budgeting
+
+```
+total_budget = profile_input_cap
+             - len(USER + RULES prefix)
+             - len(turn_history)
+             - margin
+
+anchor_budget    = min(total_budget * 0.6, anchor_context_max)
+retrieval_budget = total_budget - anchor_budget
+```
+
+Over budget on either layer: drop in this order — cluster
+neighbours → distant evergreens → low-score retrieval hits.
+Always keep the literal anchor body itself.  Every drop recorded
+in `manifest.omitted_*` with the reason.
+
+#### Manifest is a read-only audit snapshot
+
+Codex review #7: the manifest persisted into the transcript is an
+**audit record**, not a context-loading directive.  The handler
+**never** reads an old manifest to reconstruct context.  Every
+turn, the binder builds a fresh `ContextManifest` from current
+vault state and writes a fresh manifest into the new assistant
+turn.  Operators editing manifests in Obsidian has no effect on
+the next turn's context — only on what future audits show.
+
+This prevents schema drift and prevents operators from
+inadvertently changing system behaviour via markdown edits.
 
 ### BL-084 — Headless chat handler
 
@@ -333,47 +523,108 @@ def run_turn(
     anchor_ref: str = "",
     profile: str = "balanced",
     stream: bool = False,
-    private: bool = False,
+    visibility: str = "indexed",    # "indexed" | "unindexed"
 ) -> ChatTurnResult:
     """..."""
 ```
 
-CLI:
+CLI (matches the renamed product primitive — `ovp-ask`):
 
 ```bash
-ovp-chat new   --anchor note:40-Resources/.../digests/2026-05-12-digest-daily.md \
-               --profile balanced \
-               --message "What does the system say about ..."
-ovp-chat reply --id chat-a7b3 --message "Follow-up"
-ovp-chat list  [--status active|pinned|archived]
-ovp-chat show  --id chat-a7b3
+ovp-ask new   --anchor note:40-Resources/.../digests/2026-05-12-digest-daily.md \
+              --profile balanced \
+              --message "What does the system say about ..."
+ovp-ask reply --id chat-a7b3 --message "Follow-up"
+ovp-ask list  [--status active|pinned|archived]
+ovp-ask show  --id chat-a7b3
 ```
 
-Cost guardrail — three gates, all soft (return clear error, never
-silent fail):
+#### Cost guardrail — three gates, audit-ledger backed
+
+Codex review #5: token accounting must be **append-only** so the
+daily cap can't drift between transcript frontmatter, projection
+row, and reality.  All three sources of truth for cost belong to
+the `audit_events` ledger — the projection (BL-085) and the
+transcript frontmatter (BL-082) are *display* derivatives.
+
+Three gates, all soft (return clear error, never silent fail):
 
 1. **Per-request input cap** — `profile.max_input_tokens`.  Reject
    before calling the LLM.
 2. **Per-response output cap** — passed as `max_tokens` to the
    provider.
-3. **Per-pack daily soft cap** — read from
-   `chats` projection (`SUM(daily_token_usage)` over today).
+3. **Per-pack daily soft cap** — computed by summing
+   `audit_events.payload_json` `input_tokens + output_tokens`
+   over the current UTC day for events of type
+   `chat_turn_completed` and `chat_turn_failed` (counts spend
+   even on failed attempts; failures still cost).  **Unindexed
+   sessions still count** — privacy is about reuse, not cost.
    Over cap → reject with `"chat daily token cap reached
    (NNN/MMM); resume tomorrow or raise the limit in
    .ovp/llm_profiles.yaml"`.
 
-`audit_events` emits `chat_turn_completed` / `chat_turn_failed` /
-`chat_cap_hit` rows.  Same shape as `task_dispatched`.
+`audit_events` emits:
 
-### BL-085 — Projection table
+| event_type | When | Payload (recorded for visibility=indexed) |
+|---|---|---|
+| `chat_turn_completed` | LLM call returned | profile, pack, visibility, input_tokens, output_tokens, anchor_kind |
+| `chat_turn_failed` | LLM call errored | profile, pack, visibility, input_tokens (estimated), error_class |
+| `chat_cap_hit` | Cap rejection | profile, pack, visibility, cap_kind, cap_value, today_total |
+
+For `visibility: unindexed` rows the audit payload still records
+the **counts** (so the cap stays honest) but omits the inquiry
+body, response body, and any retrieved-object identifiers.
+
+#### Write-back hook (BL-084b — bundled with BL-084)
+
+Codex review #3 vetoed shipping evergreen extraction from
+transcripts in v1, but required an **explicit write-back path**
+so insights from inquiry can re-enter the knowledge pipeline.
+The hook is intentionally minimal and routes through OVP's
+existing absorb / promote / review machinery — never a parallel
+fast-path into `objects`.
+
+Surface (CLI in M21a, UI button in M21b):
+
+```bash
+ovp-ask absorb --id chat-a7b3 --turn 2
+```
+
+What it does:
+
+1. Read the assistant body for turn N of session `chat-a7b3`
+2. Write a new task file
+   `50-Inbox/02-Tasks/ABSORB-chat-<chat_id>-turn-<n>.md` carrying:
+   * `type: task`, `subtype: absorb-chat`
+   * frontmatter pointing back at the originating chat + turn
+   * the assistant prose as the task body, prefixed with a header
+     `# Captured from inquiry <chat_id> turn <n>`
+3. Emit `chat_writeback_handoff` audit event with `chat_id`,
+   `turn`, `task_path`
+4. **Stop there.**  The existing AutoPilot / task dispatcher
+   picks up the file and runs the standard `absorb → promote →
+   review` flow.  Nothing in M21 writes to `objects`, `claims`,
+   `evergreens`, or atlas.
+
+> **Invariant.**  Inquiry transcripts are canonical artifacts,
+> not canonical knowledge.  The write-back hook is the *only*
+> path from inquiry into knowledge state, and it is the same
+> path operator-written notes take.  Inquiry can't shortcut
+> review.
+
+Default behaviour: **off**.  The operator must explicitly call
+`ovp-ask absorb` (or click the button in M21b).  No turn enters
+the absorb queue automatically.
+
+### BL-085 — Projection table + visibility-aware FTS
 
 ```sql
 CREATE TABLE chats (
   chat_id TEXT PRIMARY KEY,
   pack TEXT NOT NULL,
   file_path TEXT NOT NULL,
-  status TEXT NOT NULL,           -- active|pinned|archived
-  visibility TEXT NOT NULL,       -- indexed|private
+  status TEXT NOT NULL,           -- active | pinned | archived
+  visibility TEXT NOT NULL,       -- indexed | unindexed
   anchor_kind TEXT NOT NULL,
   anchor_ref TEXT NOT NULL,
   profile TEXT NOT NULL,
@@ -387,12 +638,51 @@ CREATE TABLE chats (
 CREATE INDEX idx_chats_pack_last ON chats(pack, last_message_at DESC);
 ```
 
-`page_fts` indexes the chat body **only when** `visibility =
-'indexed'`.  Private chats never appear in `/search`.
+The `chats` table is a **display / metadata** projection for the
+`/chats` list view (BL-088).  Full-text search lives elsewhere.
 
-Rebuild: `ovp-knowledge-index` sweeps `40-Resources/Chats/`, parses
-frontmatter, replaces the projection rows.  No mutable state in
-the DB.
+#### Visibility field — Codex review #6
+
+Internal field stays `visibility`.  Allowed values are
+`indexed` (default) and `unindexed`.  The word "private" never
+appears in code or UI — it overpromises.  UI copy (composer
+toggle):
+
+> **Don't index or reuse this inquiry.**  OVP won't include this
+> session in search, the inquiry list, or future context-binder
+> retrieval.  The selected LLM provider still receives the
+> current request.
+
+#### FTS integration — Codex review #8
+
+`/search` is `page_fts JOIN pages_index`.  Adding a chat body to
+`/search` therefore requires **two** writes per session:
+
+1. `pages_index` shadow row with synthetic slug
+   `chat:<chat_id>`, `kind: 'chat'`, title from frontmatter
+2. `page_fts` row with the concatenated assistant + user prose
+
+Both writes happen **only** when `visibility = 'indexed'`.
+`unindexed` sessions:
+
+* live on disk as canonical markdown
+* have a `chats` row (so the operator can find them via direct
+  navigation or `ovp-ask show`)
+* are **never** written to `pages_index` or `page_fts`
+* are **never** considered by `context_binder`'s retrieval layer
+  (BL-083)
+
+#### Rebuild
+
+`ovp-knowledge-index` sweeps `40-Resources/Chats/**.md`, parses
+frontmatter, and replaces:
+
+* `chats` rows
+* `pages_index` shadow rows for indexed sessions
+* `page_fts` rows for indexed sessions
+
+No mutable state in the DB; everything derives from the markdown
+corpus + the audit-events ledger.
 
 ### BL-086 — Reader `/chat` page + SSE
 
@@ -422,13 +712,28 @@ Layout:
 │   ## User · 11:02:01                        │
 │   ...                                       │
 ├─────────────────────────────────────────────┤
-│ [composer with model dropdown + send]       │
+│ [composer with profile dropdown + send]     │
 │   profile: Balanced ▼                       │
-│   ◯ private (don't index)                   │
+│   ◯ Don't index or reuse                    │
 └─────────────────────────────────────────────┘
 ```
 
-Interrupt path:
+#### Profile dropdown — Codex review #9
+
+The Reader UI dropdown only ever shows:
+
+```
+Fast · Balanced · Deep
+```
+
+No raw provider/model strings.  No "Custom" entry in the Reader
+dropdown.  Operators who need a custom profile add it to
+`.ovp/llm_profiles.yaml` and select it via `ovp-ask --profile
+my-custom`; the Reader UI doesn't expose the picker.  Goal: keep
+the product mental model abstract (cost / quality tier) so casual
+operators never see "anthropic/claude-sonnet-4-6" in chrome.
+
+#### Interrupt path
 
 1. User clicks **Stop** mid-stream → `POST /chat/message?abort=1`
 2. Server cancels the SSE stream
@@ -437,19 +742,21 @@ Interrupt path:
 4. User can `POST /chat/message` again to retry — new assistant
    turn appended, old interrupted turn stays as history
 
-### BL-087 — "💬 Chat about this" button
+### BL-087 — "Ask about this" button
 
 `_render_note_page` (M20 thin shell + full shell both): add a
 button next to the H1.
 
 ```html
 <a class="btn ghost" href="/chat?anchor=note:<path>">
-  💬 Chat about this
+  Ask about this
 </a>
 ```
 
-Same on `_render_object_page` and `_render_topic_page`.  Anchor is
-auto-bound; new chat starts with the anchor manifest pre-loaded.
+Same on `_render_object_page`, `_render_topic_page`, and the
+digest preamble card.  Anchor is auto-bound; new session starts
+with the anchor manifest pre-loaded; first user message triggers
+the BL-083 retrieval layer.
 
 ### BL-088 — `/chats` Reader list
 
@@ -473,14 +780,15 @@ Each row: anchor pill (note/object/crystal/standalone) + last-
 message timestamp + profile pill (Fast/Balanced/Deep) + turn
 count.  Click → `/chat?id=<chat_id>`.
 
-Private chats **never** appear in this list.  Operator gets to
-them via direct file path or `ovp-chat show --id …`.  UI text on
-the composer's "private" checkbox is honest:
+**Unindexed sessions never appear in this list.**  Operator
+reaches them via direct file path or `ovp-ask show --id …`.  The
+composer toggle that produces them carries the honest copy from
+BL-085:
 
-> "Private chats are not indexed by OVP and won't appear in
-> search, the chats list, or the context binder.  They are still
-> sent to the LLM provider — privacy means **OVP doesn't reuse
-> them**, not 'this stays on your machine'."
+> **Don't index or reuse this inquiry.**  OVP won't include this
+> session in search, the inquiry list, or future context-binder
+> retrieval.  The selected LLM provider still receives the
+> current request.
 
 ## Cost Estimate
 
@@ -496,20 +804,50 @@ via `.ovp/llm_profiles.yaml` once they have data.
 
 ## Success Metrics (4-week check)
 
-Read at **2026-06-09** (4 weeks after BL-088 ships, assuming v1
-goes live around 2026-05-19):
+Read at **2026-06-16** (4 weeks after BL-088 ships, assuming v1
+goes live around 2026-05-19; date moves with reality).  Codex
+review #10 split these into *usage* metrics (does the operator
+return?) and *quality / trust* metrics (is the system honest?).
+Both bands must hit for the milestone to be considered worth
+keeping; missing either band = pause M22 expansion, ship a
+fix-up PR, reassess.
 
-* **Chat creation rate ≥ 3/week** — the operator actually uses
-  it.  Below that = surface didn't take, kill /chat (keep
-  fileops + handler as a CLI).
-* **Anchor-bound chat ratio ≥ 50%** — most chats start from an
-  artifact, not standalone.  Below = the entry-point buttons
-  aren't doing their job.
-* **Average turn count per chat ≥ 3** — conversations actually
-  develop.  Below = users single-shot it and bounce.
-* **Zero cap-bypass exceptions** — no cost guardrail bypassed.
-* **Zero context-manifest losses** — every assistant turn in
-  the corpus has a manifest comment.  Verify via grep.
+#### Usage band
+
+* **Inquiry creation rate ≥ 3/week** — the operator actually
+  uses it.  Below = surface didn't take; demote `/chat` UI,
+  keep CLI.
+* **Anchor-bound inquiry ratio ≥ 60%** — most sessions start
+  from an artifact.  Below = entry-point buttons aren't doing
+  their job and we've shipped a ChatGPT clone.
+* **Average turn count per session ≥ 3** — conversations
+  develop.  Below = users single-shot it.
+* **Write-back handoff count ≥ 1/week** — at least one inquiry
+  feeds into the absorb pipeline.  Below = inquiries are
+  isolated thought experiments; consider redesigning the
+  write-back surface.
+
+#### Quality / trust band
+
+* **Manifest completeness 100%** — every assistant turn has an
+  inline manifest comment.  Verified via grep on the corpus.
+* **Unresolved-wikilink rate 0** — every `[[slug]]` the assistant
+  emits resolves against the vault or is flagged as speculative.
+* **Out-of-context flagging present** — when the model uses
+  knowledge outside the manifest, the answer says so.  Sampled
+  manually each week.
+* **Zero cap-bypass exceptions** — no audit ledger entry shows
+  a turn that exceeded the cap without being rejected.
+* **Zero unindexed-session leaks** — no unindexed session
+  appears in `pages_index`, `page_fts`, or `chats` list view.
+  Verified via SQL audit each week.
+
+> **Red line.**  The assistant must never imply it has seen
+> context that the manifest doesn't record.  This is the single
+> non-negotiable trust property of the surface.  If quality
+> sampling finds even one fabricated-context turn, the
+> system-prompt frame is broken and M21 stops shipping new
+> features until it's fixed.
 
 Below any one of these = **pause M22 expansion**, ship a single
 fix-up PR, reassess.
@@ -529,16 +867,34 @@ fix-up PR, reassess.
 
 ## Implementation order (BL order = PR order)
 
+Three phases — each is independently shippable, and **the
+operator can decide to stop after M21a** if the CLI primitive
+proves enough.
+
 ```
-BL-081 ──┐
-         ├──→ BL-082 ──→ BL-083 ──→ BL-084 ──→ BL-085 ──┐
-         │                                              │
-         │                                              ├──→ BL-086 ──→ BL-087 ──→ BL-088
-         └─────────────── (none required) ──────────────┘
+M21a (Anchored Inquiry MVP)
+  BL-081 ──┬──→ BL-082 ──→ BL-083 ──→ BL-084 (+BL-084b write-back)
+           │
+           └── (Provider profiles depended on by everything below)
+
+M21b (Reader UI)
+              ──→ BL-086 ──→ BL-087
+
+M21c (History library)
+                                       ──→ BL-085 ──→ BL-088
 ```
 
-Each PR is independently shippable.  After BL-084 the chat CLI
-works end-to-end on the live vault — UI sits on top.
+Acceptance gates:
+
+* After **BL-084**, the operator can ask the live vault about an
+  artifact from the CLI, audit the manifest, see the cost ledger,
+  and hand insights back to absorb via `ovp-ask absorb`.  **This
+  alone is the M21a milestone**; demote to optional if Reader UI
+  doesn't earn its keep in evaluation.
+* After **BL-087**, the operator can do the same from any Reader
+  page.  M21b complete.
+* After **BL-088**, sessions are searchable and listable from
+  the Reader.  M21c complete.
 
 ## Cross-references
 
@@ -582,5 +938,5 @@ works end-to-end on the live vault — UI sits on top.
 | Anchor strictness is soft (model flags departures) | Hard limits make the surface useless for follow-up questions.  Operator decides. |
 | Three-tier cost guardrail v1 (input + output + daily) | Not distrust — defends against streaming retries, big-anchor accidents, multi-tab triggers. |
 | No auto-archive | Chats are thinking trails; archival is operator-directed. |
-| `private: true` is OVP-side opt-out, not provider opt-out | Honest naming.  Privacy = "OVP won't reuse this".  Provider transmission still happens. |
+| Visibility field uses `indexed | unindexed`; "private" banned in code + UI | Codex review #6 — "private" overpromises.  What we actually offer: OVP won't reuse / index.  Provider still receives the request.  Honest naming. |
 | Reader-side `/chats`, no `/ops/chats` | Chat is consumer surface; Maintainer doesn't need a vocabulary mirror. |
