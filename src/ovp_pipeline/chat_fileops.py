@@ -282,18 +282,6 @@ def _split_frontmatter(text: str) -> tuple[str, str]:
     return raw, body
 
 
-def _read_top_level_value(raw: str, key: str) -> Any:
-    if not raw.strip():
-        return None
-    try:
-        parsed = yaml.safe_load(raw)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return parsed.get(key)
-
-
 def parse_chat(path: Path) -> ChatFrontmatter | None:
     """Read ``path`` and return a :class:`ChatFrontmatter`, or
     ``None`` when the file isn't a chat transcript.
