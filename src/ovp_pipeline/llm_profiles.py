@@ -148,7 +148,7 @@ class ProfileBook:
     default_for: Mapping[str, str]
     limits: ProfileLimits
     source: str = "fallback"  # "yaml" | "fallback"
-    extras: Mapping[str, object] = field(default_factory=dict)
+    extras: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
 
 # ---------------------------------------------------------------
