@@ -138,35 +138,52 @@ inside session bodies show up in the graph and backlinks.
 
 ```
 ┌─ Capture ───────────────────────────────────────────┐
-│  User clicks "💬 Chat about this" on /note,         │
-│  /object, /topic — or opens /chat standalone.       │
+│  User clicks "Ask about this" on /note, /object,    │
+│  /topic, or digest page — or opens /chat as a       │
+│  standalone fallback.                               │
 └─────────────────────────────────────────────────────┘
        │
        ▼
-┌─ Context bind  (BL-083) ────────────────────────────┐
-│  anchor (note | object | crystal | standalone)      │
-│      │                                              │
-│      ▼                                              │
-│  context_binder.build_manifest(anchor)              │
-│    → {included_anchor, included_evergreens,         │
-│       included_crystals, omitted_items,             │
-│       token_estimate, context_built_at}             │
-│  + load_llm_context() (USER + RULES from M20)       │
+┌─ Context bind  (BL-083 — two layers) ───────────────┐
+│  ANCHOR layer (fixed per session):                  │
+│    note | object | crystal | standalone             │
+│    → AnchorContext(included_anchor,                 │
+│       included_evergreens, included_crystals,       │
+│       token_estimate)                               │
+│  RETRIEVAL layer (rebuilt per turn from user msg):  │
+│    → wraps ovp-query FTS / semantic /               │
+│      crystal_scores / contradictions helpers        │
+│    → RetrievalContext(query, included_objects,      │
+│       included_crystals, included_contradictions,   │
+│       token_estimate)                               │
+│  + load_llm_context()  (USER + RULES from M20)      │
+│  Manifest serialised into transcript = audit only;  │
+│  next turn always rebuilds context fresh.           │
 └─────────────────────────────────────────────────────┘
        │
        ▼
 ┌─ Conversation runtime  (BL-084 + BL-086) ───────────┐
-│  Profile resolves to provider+model+limits via      │
-│  .ovp/llm_profiles.yaml (BL-081).                   │
+│  Profile → provider+model+limits via                │
+│  .ovp/llm_profiles.yaml (BL-081).  No raw provider  │
+│  strings in Reader UI — Fast/Balanced/Deep only.    │
 │  System prompt = BL-075 prefix + handler frame.     │
 │  litellm.completion(stream=True) → SSE token push.  │
-│  Cost guardrail enforced before call.               │
+│  Cost guardrail reads append-only audit_events      │
+│  ledger; gates check input cap + output cap +       │
+│  per-pack daily soft cap before the LLM call.       │
+│  Write-back hook: ovp-ask absorb writes             │
+│  ABSORB-chat-<id>-turn-<n>.md into the existing     │
+│  absorb queue (BL-084b).                            │
 └─────────────────────────────────────────────────────┘
        │
        ▼
 ┌─ Persistence  (BL-082) ─────────────────────────────┐
-│  40-Resources/Chats/YYYY-MM/<slug>-<short-hash>.md  │
-│  Frontmatter: type / status / visibility / anchor   │
+│  40-Resources/Chats/YYYY-MM/<topic-slug>-<short-    │
+│  hash>.md                                           │
+│  Frontmatter: type / status / visibility / anchor / │
+│    profile / model / started_at / last_message_at / │
+│    turn_count (NO token counts — those live in the  │
+│    audit ledger).                                   │
 │  Body:                                              │
 │    ## User · <ISO>                                  │
 │    ## Assistant · <ISO> · turn-N                    │
@@ -180,8 +197,14 @@ inside session bodies show up in the graph and backlinks.
 ┌─ Projection  (BL-085) ──────────────────────────────┐
 │  knowledge.db.chats: chat_id, anchor_path, model,   │
 │  profile, status, visibility, started_at,           │
-│  last_message_at, turn_count, file_path.            │
-│  page_fts indexes body (unindexed excluded).        │
+│  last_message_at, turn_count, file_path,            │
+│  input_tokens, output_tokens (lifetime totals,      │
+│  metadata only — cap math reads the ledger).        │
+│  For visibility: indexed sessions also write a      │
+│  pages_index shadow row + page_fts row so /search   │
+│  finds them.  visibility: unindexed sessions get    │
+│  a chats row only — never reach search, never reach │
+│  the context binder's retrieval layer.              │
 │  Rebuildable: ovp-knowledge-index sweeps the dir.   │
 └─────────────────────────────────────────────────────┘
 ```
@@ -303,12 +326,17 @@ vaults see no change.
 operator notes on "when to use which profile".  **Not parsed**.
 Documentation only.
 
-UI: chat composer shows dropdown
+UI: inquiry composer shows the dropdown
+
+```text
+Fast · Balanced · Deep
 ```
-Fast · Balanced · Deep · Custom →
-```
-"Custom" reveals the raw provider/model picker.  Default profile is
-chosen by `default_for.chat`.
+
+No Custom entry in the Reader UI — raw provider/model strings
+stay out of chrome.  Operators who need a custom profile add it
+to `.ovp/llm_profiles.yaml` and pass `ovp-ask --profile
+my-custom` on the CLI.  Default profile is chosen by
+`default_for.chat`.
 
 ### BL-082 — Chat markdown schema
 
@@ -334,9 +362,10 @@ temperature: 0.7
 started_at: "2026-05-12T11:00:00Z"
 last_message_at: "2026-05-12T11:23:45Z"
 turn_count: 6
-daily_token_usage:
-  input: 14823
-  output: 3201
+# NOTE: token spend is NOT stored in frontmatter.  Source of truth
+# is the append-only `audit_events` ledger (chat_turn_completed +
+# chat_turn_failed) — the daily-cap check in BL-084 reads from
+# there, never from the transcript or the projection.
 ---
 ```
 
@@ -484,7 +513,7 @@ anchor doesn't reach.
 ```
 total_budget = profile_input_cap
              - len(USER + RULES prefix)
-             - len(turn_history)
+             - len(turn_history_window)        ← rolling, see below
              - margin
 
 anchor_budget    = min(total_budget * 0.6, anchor_context_max)
@@ -495,6 +524,39 @@ Over budget on either layer: drop in this order — cluster
 neighbours → distant evergreens → low-score retrieval hits.
 Always keep the literal anchor body itself.  Every drop recorded
 in `manifest.omitted_*` with the reason.
+
+#### Turn-history compression (rolling window + summary)
+
+Without compression, by turn 8–10 the turn history alone would
+consume the retrieval budget and the binder would stop pulling
+fresh vault context.  Strategy:
+
+```
+TURN_HISTORY_VERBATIM_K = 4    # keep last N turn pairs verbatim
+TURN_HISTORY_SUMMARY_MAX_TOKENS = 600
+```
+
+* Most recent `K` user/assistant pairs are included verbatim
+  (verbatim window).
+* Earlier turns are folded into a single rolling summary
+  paragraph:
+
+  ```
+  ## Earlier in this conversation
+  <one-paragraph LLM summary, max 600 tokens>
+  ```
+
+* The summary is cached per `chat_id`; it's regenerated only
+  when the verbatim window slides (i.e. on every K+1th turn),
+  using a cheap Fast-profile LLM call.
+* When the summary is regenerated, a `chat_summary_rebuilt`
+  audit event records the old/new token counts so the operator
+  can see the compression overhead.
+
+This keeps the binder's behaviour stable across long
+conversations: anchor + retrieval stay budget-honest, and the
+operator never sees the surface degrade to "model can no longer
+see the vault" after a long thread.
 
 #### Manifest is a read-only audit snapshot
 
@@ -632,6 +694,10 @@ CREATE TABLE chats (
   started_at TEXT NOT NULL,
   last_message_at TEXT NOT NULL,
   turn_count INTEGER NOT NULL,
+  -- Lifetime totals.  Metadata only — used by /chats list view
+  -- to show "this session has cost ~$0.12 total".  Daily cap math
+  -- is computed independently by summing audit_events; never
+  -- read from this table.
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0
 );
@@ -639,7 +705,13 @@ CREATE INDEX idx_chats_pack_last ON chats(pack, last_message_at DESC);
 ```
 
 The `chats` table is a **display / metadata** projection for the
-`/chats` list view (BL-088).  Full-text search lives elsewhere.
+`/chats` list view (BL-088).  Full-text search lives elsewhere
+(`pages_index` + `page_fts`).  Cost guardrail in BL-084 reads
+the audit-events ledger directly — `chats.input_tokens` /
+`output_tokens` are display derivatives and **not** the source of
+truth for cap enforcement.  This dependency direction is what
+lets BL-084 ship before BL-085 (M21a runs without the projection;
+M21c adds it for the list view).
 
 #### Visibility field — Codex review #6
 
@@ -812,7 +884,7 @@ Both bands must hit for the milestone to be considered worth
 keeping; missing either band = pause M22 expansion, ship a
 fix-up PR, reassess.
 
-#### Usage band
+### Usage band
 
 * **Inquiry creation rate ≥ 3/week** — the operator actually
   uses it.  Below = surface didn't take; demote `/chat` UI,
@@ -827,7 +899,7 @@ fix-up PR, reassess.
   isolated thought experiments; consider redesigning the
   write-back surface.
 
-#### Quality / trust band
+### Quality / trust band
 
 * **Manifest completeness 100%** — every assistant turn has an
   inline manifest comment.  Verified via grep on the corpus.
@@ -841,6 +913,31 @@ fix-up PR, reassess.
 * **Zero unindexed-session leaks** — no unindexed session
   appears in `pages_index`, `page_fts`, or `chats` list view.
   Verified via SQL audit each week.
+
+### Flywheel band (write-back conversion)
+
+Closes the loop from inquiry back into the OVP knowledge state.
+A surface that gets used and produces honest answers but never
+re-enters the knowledge graph hasn't earned its keep — it's a
+better ChatGPT, not OVP's next reuse node.
+
+* **Write-back → absorb candidate ratio ≥ 50%** — of
+  `chat_writeback_handoff` events, the resulting
+  `ABSORB-chat-*` task should reach the `candidates` queue at
+  least half the time.  Below = either operators handoff junk
+  (reduce by training prompts), or absorb routes most of them as
+  duplicates (good problem — means inquiry is converging on
+  known evergreens; consider relaxing the rule once root cause
+  identified).
+* **Candidate → evergreen promotion ratio ≥ 20%** — of
+  inquiry-derived candidates, at least 1-in-5 should clear
+  promote review.  Below = inquiry isn't producing distillable
+  insight, just commentary.
+* **Time-to-knowledge ≤ 1 week median** — from
+  `chat_writeback_handoff` audit event to either evergreen
+  promote OR explicit dismissal.  Stuck candidates without a
+  decision suggest the operator started something they didn't
+  finish.
 
 > **Red line.**  The assistant must never imply it has seen
 > context that the manifest doesn't record.  This is the single
@@ -871,7 +968,7 @@ Three phases — each is independently shippable, and **the
 operator can decide to stop after M21a** if the CLI primitive
 proves enough.
 
-```
+```text
 M21a (Anchored Inquiry MVP)
   BL-081 ──┬──→ BL-082 ──→ BL-083 ──→ BL-084 (+BL-084b write-back)
            │
@@ -883,6 +980,12 @@ M21b (Reader UI)
 M21c (History library)
                                        ──→ BL-085 ──→ BL-088
 ```
+
+**Dependency note:** BL-084's daily cap reads from
+`audit_events` (the append-only ledger), **not** from BL-085's
+projection.  That's why BL-085 sits in M21c and not before
+BL-084 — the order in the diagram matches the actual data-flow
+dependency.
 
 Acceptance gates:
 
@@ -938,5 +1041,5 @@ Acceptance gates:
 | Anchor strictness is soft (model flags departures) | Hard limits make the surface useless for follow-up questions.  Operator decides. |
 | Three-tier cost guardrail v1 (input + output + daily) | Not distrust — defends against streaming retries, big-anchor accidents, multi-tab triggers. |
 | No auto-archive | Chats are thinking trails; archival is operator-directed. |
-| Visibility field uses `indexed | unindexed`; "private" banned in code + UI | Codex review #6 — "private" overpromises.  What we actually offer: OVP won't reuse / index.  Provider still receives the request.  Honest naming. |
+| Visibility field uses `indexed` or `unindexed`; "private" banned in code + UI | Codex review #6 — "private" overpromises.  What we actually offer: OVP won't reuse / index.  Provider still receives the request.  Honest naming. |
 | Reader-side `/chats`, no `/ops/chats` | Chat is consumer surface; Maintainer doesn't need a vocabulary mirror. |
