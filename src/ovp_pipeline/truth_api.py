@@ -27,6 +27,7 @@ from ._truth_helpers import (  # noqa: F401 — re-exported public constants
     _CANDIDATE_STRONG_SOURCE_COUNT,
     _CJK_RE,
     _EVOLUTION_CANDIDATE_CACHE,
+    _EVOLUTION_CANDIDATE_LOCK,
     _FENCED_FRONTMATTER_RE,
     _LEGACY_AUTO_QUEUE_SIGNAL_TYPES,
     _NOTE_CAPTURE_EVENT_TYPES,
@@ -5826,16 +5827,27 @@ def _all_evolution_candidates(
         _truth_pack_name(pack_name),
         normalized_object_ids,
     )
+    # Double-checked locking: hot-path cache lookups stay parallel
+    # (no lock held when the value is already present); the lock
+    # only serialises the cold compute so two callers arriving
+    # during the same ~4-minute miss never duplicate work.  See
+    # PR #208 review feedback (rev-bot 208.1) — pre-fix the lock
+    # was applied at the handler level, which forced every hot-path
+    # request to wait its turn even though the cache was warm.
     cached = _EVOLUTION_CANDIDATE_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    result = _compute_evolution_candidates(
-        resolved_vault,
-        object_ids=list(normalized_object_ids),
-        pack_name=pack_name,
-    )
-    _EVOLUTION_CANDIDATE_CACHE[cache_key] = result
-    return result
+    with _EVOLUTION_CANDIDATE_LOCK:
+        cached = _EVOLUTION_CANDIDATE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        result = _compute_evolution_candidates(
+            resolved_vault,
+            object_ids=list(normalized_object_ids),
+            pack_name=pack_name,
+        )
+        _EVOLUTION_CANDIDATE_CACHE[cache_key] = result
+        return result
 
 
 def list_evolution_candidates(

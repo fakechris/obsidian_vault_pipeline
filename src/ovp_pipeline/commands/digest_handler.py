@@ -306,20 +306,12 @@ def _build_sources_section(inputs: dict[str, Any]) -> str:
         evergreen_slugs.extend(item.get("source_object_ids", []))
 
     # Dedupe while preserving order so the reader sees crystals
-    # first in the order they appeared in the brief.
-    seen: set[str] = set()
-    deduped_crystals: list[str] = []
-    for link in crystal_links:
-        if link not in seen:
-            seen.add(link)
-            deduped_crystals.append(link)
-
-    seen_slugs: set[str] = set()
-    deduped_slugs: list[str] = []
-    for slug in evergreen_slugs:
-        if slug and slug not in seen_slugs:
-            seen_slugs.add(slug)
-            deduped_slugs.append(slug)
+    # first in the order they appeared in the brief.  ``dict.fromkeys``
+    # is the idiomatic Python 3.7+ ordered-set (rev-bot 208.3).
+    deduped_crystals = list(dict.fromkeys(crystal_links))
+    deduped_slugs = [
+        slug for slug in dict.fromkeys(evergreen_slugs) if slug
+    ]
 
     if not deduped_crystals and not deduped_slugs:
         return ""
@@ -352,11 +344,7 @@ def handle_digest(ctx: TaskContext) -> TaskResult:
     inputs = _collect_digest_inputs(ctx.vault_dir, ctx.pack)
     user_focus = load_user_profile(ctx.vault_dir)
     user_prompt = _build_digest_user_prompt(inputs, user_focus)
-    prefix = ctx.llm_prefix()
-    sys_prompt = (
-        prefix + "\n" + _DIGEST_SYSTEM_PROMPT
-        if prefix else _DIGEST_SYSTEM_PROMPT
-    )
+    sys_prompt = ctx.compose_system_prompt(_DIGEST_SYSTEM_PROMPT)
 
     # ``type: digest`` frontmatter tells the /note renderer to use
     # the thin shell (no evergreen scaffolding) — see

@@ -5512,18 +5512,38 @@ def _build_latest_digest_info(
     if not candidates:
         return {}
     latest = candidates[-1]
-    # Filename is ``YYYY-MM-DD.md`` — extract the date part.
-    date_str = latest.stem
-    # Teaser: skip the heading + blank line, grab the first
-    # paragraph of the digest body.
+    # The task dispatcher writes ``YYYY-MM-DD-<prefix>-<slug>.md``
+    # (e.g. ``2026-05-11-digest-daily.md``).  Use the first 10
+    # characters of the filename to recover the date label; the
+    # earlier ``latest.stem`` extraction shipped the whole name into
+    # the home banner (rev-bot 206.1).
+    date_str = latest.name[:10]
+    # Teaser: skip the YAML frontmatter block and the H1 heading,
+    # then return the first non-blank paragraph of the digest body.
+    # Earlier this loop skipped any line starting with ``---`` or
+    # ``#`` individually, which kept it inside the frontmatter and
+    # returned ``type: digest`` as the teaser for every newly
+    # generated digest (Codex P2 / rev-bot 206 follow-up).
     teaser = ""
     try:
         body = latest.read_text(encoding="utf-8")
-        for line in body.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or line.startswith("---"):
+        lines = body.splitlines()
+        # Strip the leading frontmatter block (--- ... ---) if present.
+        if lines and lines[0].strip() == "---":
+            try:
+                close_idx = next(
+                    i for i, line in enumerate(lines[1:], start=1)
+                    if line.strip() == "---"
+                )
+                lines = lines[close_idx + 1:]
+            except StopIteration:
+                # Malformed frontmatter — bail to empty teaser.
+                lines = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
                 continue
-            teaser = line
+            teaser = stripped
             break
         if len(teaser) > 220:
             teaser = teaser[:217].rstrip() + "…"

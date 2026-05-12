@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,12 @@ _EVOLUTION_CANDIDATE_CACHE: dict[
     tuple[str, tuple[tuple[str, int, int], ...], str, tuple[str, ...]],
     list[dict[str, Any]],
 ] = {}
+# Serialises *miss* path of ``_all_evolution_candidates`` only —
+# concurrent cache hits stay parallel.  Without this, two callers
+# arriving during a cold start (background prewarm + first
+# ``/ops/evolution`` request) would both spend ~4 minutes computing
+# the same payload.  See PR #208 review feedback (rev-bot 208.1).
+_EVOLUTION_CANDIDATE_LOCK = threading.Lock()
 
 CONTRADICTION_STATUS_EXPLANATIONS = {
     "open": "Active contradiction awaiting review.",

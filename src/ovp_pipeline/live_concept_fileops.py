@@ -543,6 +543,26 @@ def _find_section_range(body: str, section_title: str) -> tuple[int, int] | None
     return (start, end)
 
 
+def read_section_body(body: str, section_title: str) -> str:
+    """Return the body of an H2 section, without its heading.
+
+    Empty string when the section doesn't exist.  Routes through
+    :func:`_find_section_range` so heading matching is exactly the
+    same as :func:`patch_agent_section`'s — pre-PR#208 the agent's
+    section reader had its own regex (``^## name(?:\\s*<!--[^>]*-->)?``)
+    that drifted from the fileops matcher and was fragile against
+    HTML comments containing ``>``.  rev-bot 205.1 caught both
+    points; consolidating here removes both.
+    """
+    rng = _find_section_range(body, section_title)
+    if rng is None:
+        return ""
+    start, end = rng
+    lines = body.splitlines()
+    # Skip the heading line itself — caller wants body only.
+    return "\n".join(lines[start + 1:end]).strip()
+
+
 def patch_agent_section(
     path: Path,
     section_title: str,

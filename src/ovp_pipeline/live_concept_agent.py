@@ -51,6 +51,7 @@ from .live_concept_fileops import (
     AGENT_OWNED_SECTIONS,
     patch_agent_section,
     patch_live,
+    read_section_body,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,19 +130,14 @@ def _read_body_sections(path: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return out
-    # H2 split — tolerant of inline HTML-comment ownership markers
-    # like ``## Current synthesis  <!-- agent-owned -->`` (the BL-063
-    # PR#1 example file's documented style).  Codex P2 caught that
-    # the exact-line matcher missed these and the agent would
-    # double-write the section instead of replacing.
+    # Routes through ``live_concept_fileops.read_section_body`` so
+    # the agent's section reader and the patcher use the same
+    # heading matcher.  Pre-PR#208 these were two implementations
+    # (regex here, lines-based scan in fileops) that could drift —
+    # the regex's ``[^>]*`` was also fragile when an inline HTML
+    # comment contained ``>`` (rev-bot 205.1).
     for name in AGENT_OWNED_SECTIONS:
-        pattern = re.compile(
-            r"^## " + re.escape(name) + r"(?:\s*<!--[^>]*-->)?\s*$(.*?)(?=^## |^# |\Z)",
-            re.MULTILINE | re.DOTALL,
-        )
-        match = pattern.search(text)
-        if match:
-            out[name] = match.group(1).strip()
+        out[name] = read_section_body(text, name)
     return out
 
 

@@ -1435,6 +1435,36 @@ _THIN_NOTE_PATH_PREFIXES: tuple[str, ...] = (
 )
 
 
+def _resolve_effective_type(frontmatter: dict[str, object]) -> str:
+    """Pick the surviving "thin shell" type from a note's
+    frontmatter.  Returns the canonical type string when it matches
+    one of ``_THIN_NOTE_TYPES`` (or it can be inferred structurally
+    from a ``live:`` block), otherwise the raw ``type:`` value.
+
+    Precedence (highest first):
+
+    1. ``type:`` itself — matches a thin type as-is.
+    2. ``original_note_type:`` — protects against a stale
+       ``note_type_normalize`` run that rewrote the type to
+       ``article`` before the M19/M20 canonical-set fix (PR #207).
+    3. Presence of a ``live:`` block — structural marker for the
+       Live Concept primitive.
+
+    Single source of truth for ``_is_thin_note`` *and*
+    ``_render_thin_note_preamble``; see rev-bot PR #208 comment
+    208.2.
+    """
+    type_value = str(frontmatter.get("type") or "").strip().lower()
+    if type_value in _THIN_NOTE_TYPES:
+        return type_value
+    original_type = str(frontmatter.get("original_note_type") or "").strip().lower()
+    if original_type in _THIN_NOTE_TYPES:
+        return original_type
+    if isinstance(frontmatter.get("live"), dict):
+        return "live-concept"
+    return type_value
+
+
 def _is_thin_note(relative_path: str, markdown: str) -> bool:
     """Decide whether ``/note?path=<relative_path>`` should render
     the thin shell (header + body) instead of the full evergreen
@@ -1442,21 +1472,11 @@ def _is_thin_note(relative_path: str, markdown: str) -> bool:
 
     Detection signals (any one is sufficient):
 
-    1. The file lives under a path prefix listed in
-       ``_THIN_NOTE_PATH_PREFIXES``.
-    2. The frontmatter ``type:`` value sits in ``_THIN_NOTE_TYPES``.
-    3. The frontmatter ``original_note_type:`` value sits in
-       ``_THIN_NOTE_TYPES`` — protects against a stale
-       ``note_type_normalize`` run that rewrote the type to
-       ``article`` before the M19/M20 canonical-set fix landed
-       (see PR #207).
-    4. A ``live:`` block is present in the frontmatter — that's the
-       structural marker the Live Concept primitive uses, so the
-       page renders correctly even if the ``type:`` key was lost.
+    * file path under ``_THIN_NOTE_PATH_PREFIXES``
+    * ``_resolve_effective_type`` lands on a thin type
 
-    Files outside all four keep the existing full-scaffold
-    behaviour so evergreens, deep-dives, and atlas pages render
-    unchanged.
+    Files outside both keep the existing full-scaffold behaviour
+    so evergreens, deep-dives, and atlas pages render unchanged.
     """
     normalised = (relative_path or "").replace("\\", "/")
     if any(normalised.startswith(prefix) for prefix in _THIN_NOTE_PATH_PREFIXES):
@@ -1465,15 +1485,7 @@ def _is_thin_note(relative_path: str, markdown: str) -> bool:
         frontmatter, _ = _parse_frontmatter(markdown)
     except Exception:
         return False
-    type_value = str(frontmatter.get("type") or "").strip().lower()
-    if type_value in _THIN_NOTE_TYPES:
-        return True
-    original_type = str(frontmatter.get("original_note_type") or "").strip().lower()
-    if original_type in _THIN_NOTE_TYPES:
-        return True
-    if isinstance(frontmatter.get("live"), dict):
-        return True
-    return False
+    return _resolve_effective_type(frontmatter) in _THIN_NOTE_TYPES
 
 
 def _render_thin_note_preamble(
@@ -1494,18 +1506,7 @@ def _render_thin_note_preamble(
     except Exception:
         frontmatter = {}
 
-    # Use the type that survived normalisation, or fall back to
-    # the recorded original_note_type, or detect structurally from
-    # a ``live:`` block.  This is the same precedence
-    # ``_is_thin_note`` uses to decide whether to enter the thin
-    # shell at all.
-    type_value = str(frontmatter.get("type") or "").strip().lower()
-    if type_value not in _THIN_NOTE_TYPES:
-        original_type = str(frontmatter.get("original_note_type") or "").strip().lower()
-        if original_type in _THIN_NOTE_TYPES:
-            type_value = original_type
-        elif isinstance(frontmatter.get("live"), dict):
-            type_value = "live-concept"
+    type_value = _resolve_effective_type(frontmatter)
 
     if type_value == "digest":
         return _render_digest_preamble(frontmatter)
@@ -1593,7 +1594,11 @@ def _render_live_concept_preamble(
     if isinstance(triggers.get("on_ingest_match"), dict):
         ig = triggers["on_ingest_match"]
         target = escape(str(ig.get("concept_similarity_to") or ""))
-        threshold = ig.get("threshold")
+        # ``threshold`` is operator-supplied via YAML frontmatter and
+        # may not be numeric (Codex P2: a crafted live-concept could
+        # inject markup here otherwise — coerce to string + escape
+        # like the surrounding fields).
+        threshold = escape(str(ig.get("threshold")))
         trigger_items.append(
             f"<li><strong>on_ingest_match</strong> — when an absorbed "
             f"source matches <code>{target}</code> (cosine ≥ {threshold})</li>"

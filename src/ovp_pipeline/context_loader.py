@@ -124,6 +124,27 @@ def load_llm_context(vault_dir: Path | str) -> str:
     return "\n\n".join(parts) + "\n"
 
 
+def inject_llm_context(
+    vault_dir: Path | str, base_system_prompt: str
+) -> str:
+    """Prepend USER + RULES context to a handler's static system prompt.
+
+    Boilerplate de-dup for every LLM call site that wants user-aware
+    behaviour: the extractor, the two crystal synthesizers, the
+    digest handler, and the three task-dispatcher handlers all used
+    to inline ``prefix + "\\n" + STATIC if prefix else STATIC``.
+    See rev-bot 206.2 — this is the single helper.
+
+    Returns the static prompt unchanged when neither USER.md nor
+    OVP_RULES.md exists in the vault, so legacy callers keep their
+    previous behaviour.
+    """
+    prefix = load_llm_context(vault_dir)
+    if not prefix:
+        return base_system_prompt
+    return prefix + "\n" + base_system_prompt
+
+
 def clear_cache() -> None:
     """Drop the mtime cache.  Used by tests; production code can
     just edit the file — mtime change invalidates automatically."""

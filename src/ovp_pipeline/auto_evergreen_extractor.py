@@ -622,11 +622,8 @@ class EvergreenExtractor:
         """
         if self.vault_dir is None:
             return self.SYSTEM_PROMPT
-        from .context_loader import load_llm_context
-        prefix = load_llm_context(self.vault_dir)
-        if not prefix:
-            return self.SYSTEM_PROMPT
-        return prefix + "\n" + self.SYSTEM_PROMPT
+        from .context_loader import inject_llm_context
+        return inject_llm_context(self.vault_dir, self.SYSTEM_PROMPT)
 
     def _build_router_llm(self) -> Any:
         """Return the LLM client to use for the BL-062 Pass 1 router.
