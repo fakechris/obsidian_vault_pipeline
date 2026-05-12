@@ -1,0 +1,54 @@
+# OVP LLM profiles template (M21 / BL-081).
+#
+# Copy to ``.ovp/llm_profiles.yaml`` at the vault root and adjust to
+# the providers / models / limits you actually want.  ``.ovp/`` is
+# gitignored so secrets and per-vault overrides stay local.
+#
+# Three abstract profiles map to real provider/model pairs.  The
+# Reader UI surfaces the abstract names (Fast / Balanced / Deep)
+# only — raw provider/model strings stay out of chrome.  Operators
+# who need a custom profile add a new entry here and reference it
+# via ``ovp-ask --profile <name>`` on the CLI.
+#
+# Cost-per-1k fields are informational — used by the /chats list
+# view (BL-088) to show a friendly dollar estimate.  Cap enforcement
+# counts tokens via the audit-events ledger, not dollars.
+#
+# Missing or unreadable: the loader falls back to a single
+# ``balanced`` profile sourced from the AUTO_VAULT_* env vars.
+# Legacy vaults see no behavioural change.
+
+profiles:
+  fast:
+    provider: anthropic
+    model: MiniMax-M2.7-highspeed
+    api_base: https://api.minimaxi.com/anthropic
+    max_tokens: 1500
+    temperature: 0.6
+    cost_per_1k_in: 0.0001
+    cost_per_1k_out: 0.0003
+  balanced:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    max_tokens: 4000
+    temperature: 0.7
+    cost_per_1k_in: 0.003
+    cost_per_1k_out: 0.015
+  deep:
+    provider: anthropic
+    model: claude-opus-4-7
+    max_tokens: 6000
+    temperature: 0.7
+    cost_per_1k_in: 0.015
+    cost_per_1k_out: 0.075
+
+default_for:
+  chat: balanced
+  extraction: fast
+  digest: balanced
+  router: fast
+
+limits:
+  chat_input_tokens_per_request: 16000
+  chat_output_tokens_per_request: 4000
+  chat_daily_tokens_per_pack: 200000
