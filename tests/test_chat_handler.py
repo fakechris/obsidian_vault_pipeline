@@ -636,3 +636,83 @@ def test_cap_rejection_leaves_no_orphan_transcript(tmp_path: Path, _stub_litellm
 def test_writeback_rejects_malicious_chat_id(tmp_path: Path, bad_id: str):
     with pytest.raises(ValueError, match="not a valid chat identifier"):
         writeback_to_absorb_queue(tmp_path, chat_id=bad_id, turn_number=2)
+
+
+# ── CodeRabbit Major — exact turn-number match ────────────────
+
+
+def test_extract_assistant_turn_exact_match_not_substring(tmp_path: Path):
+    """``--turn 1`` must NOT match a header for ``turn-10``.
+    Substring matching here misroutes content into the write-back
+    queue (CodeRabbit Major)."""
+    chat = tmp_path / "x.md"
+    chat.write_text(
+        "---\ntype: chat\nchat_id: chat-abc\n---\n\n"
+        "## Assistant · 2026-05-12T11:00:00Z · turn-10\n\n"
+        "<!-- context-manifest\n  token_estimate: 10\n-->\n\n"
+        "Reply for turn 10.\n\n",
+        encoding="utf-8",
+    )
+    # Looking for turn 1 — should NOT find turn-10's body.
+    body = _extract_assistant_turn(chat, 1)
+    assert body == ""
+
+
+def test_extract_assistant_turn_finds_target_after_higher_numbered_turn(tmp_path: Path):
+    """Higher-numbered turns before the target shouldn't trip the
+    matcher early."""
+    chat = tmp_path / "x.md"
+    chat.write_text(
+        "---\ntype: chat\nchat_id: chat-abc\n---\n\n"
+        "## Assistant · 2026-05-12T11:00:00Z · turn-2\n\n"
+        "<!-- context-manifest\n  token_estimate: 10\n-->\n\n"
+        "Real body for turn 2.\n\n",
+        encoding="utf-8",
+    )
+    body = _extract_assistant_turn(chat, 2)
+    assert "Real body for turn 2." in body
+
+
+# ── CodeRabbit Major — input cap stays input-only ─────────────
+
+
+def test_input_cap_does_not_count_output_estimate(tmp_path: Path):
+    """A 15k-token prompt with a 4k output budget must NOT trip a
+    16k input cap.  CodeRabbit Major — input cap is input-only;
+    output tokens count only against the daily projection."""
+    check_cost_guardrail(
+        tmp_path,
+        estimated_input_tokens=15_000,
+        estimated_output_tokens=4_000,
+        profile=_profile(),
+        limits=_limits(input_cap=16_000, output_cap=4_000, daily_cap=200_000),
+    )  # no raise — 15k <= 16k
+
+
+def test_daily_cap_includes_output_estimate(tmp_path: Path):
+    """The daily projection adds the output budget — a request
+    whose reply would push us past the daily cap is rejected."""
+    log = tmp_path / "60-Logs" / "pipeline.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text(
+        json.dumps(
+            {
+                "ts": _today_iso(),
+                "event_type": "chat_turn_completed",
+                "input_tokens": 90_000,
+                "output_tokens": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # 90k existing + 6k input + 6k output projected = 102k > 100k.
+    with pytest.raises(ChatCapExceeded) as exc:
+        check_cost_guardrail(
+            tmp_path,
+            estimated_input_tokens=6_000,
+            estimated_output_tokens=6_000,
+            profile=_profile(),
+            limits=_limits(input_cap=50_000, daily_cap=100_000),
+        )
+    assert exc.value.cap_kind == "daily"

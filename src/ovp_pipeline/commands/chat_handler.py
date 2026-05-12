@@ -186,15 +186,27 @@ def check_cost_guardrail(
     profile: ProfileConfig,
     limits: ProfileLimits,
     pack: str = "",
+    estimated_output_tokens: int = 0,
 ) -> None:
     """Enforce the three-tier cap before the LLM call.
+
+    Two separate budgets, two separate caps:
+
+    * ``estimated_input_tokens`` — counts toward the per-request
+      input cap.  Input-only by design so a legitimately-large
+      prompt with a modest output budget doesn't get rejected
+      against an input cap it never approached.
+    * ``estimated_output_tokens`` — added on top of input for the
+      *daily* projection only.  Lets the daily cap reject a
+      request whose reply (not just prompt) would push the day
+      past the limit.
 
     Raises :class:`ChatCapExceeded` with ``cap_kind`` set to the
     specific cap that fired.  Reading from the audit-events ledger
     keeps cap math single-sourced — projection rows (BL-085) are
     derivatives and never consulted here.
     """
-    # 1. Per-request input cap.
+    # 1. Per-request INPUT cap (CodeRabbit Major — keep input-only).
     if estimated_input_tokens > limits.chat_input_tokens_per_request:
         _emit_cap_hit(
             vault_dir,
@@ -218,23 +230,26 @@ def check_cost_guardrail(
     # 2. Per-response output cap.  Honored by passing max_tokens
     #    to the provider; nothing to enforce here.
 
-    # 3. Per-pack daily soft cap, summed from audit events.
+    # 3. Per-pack daily soft cap, summed from audit events.  Includes
+    #    the in-flight request's expected OUTPUT tokens too so a
+    #    long reply doesn't sneak past the daily budget.
     today_total = _today_total_tokens(vault_dir, pack)
     daily_cap = limits.chat_daily_tokens_per_pack
-    if today_total + estimated_input_tokens > daily_cap:
+    projected = today_total + estimated_input_tokens + estimated_output_tokens
+    if projected > daily_cap:
         _emit_cap_hit(
             vault_dir,
             cap_kind="daily",
             profile_name=profile.name,
             pack=pack,
             cap_value=daily_cap,
-            today_total=today_total,
+            today_total=projected,
         )
         raise ChatCapExceeded(
             cap_kind="daily",
             message=(
                 f"chat daily token cap reached "
-                f"({today_total}/{daily_cap}); "
+                f"({projected}/{daily_cap}); "
                 "resume tomorrow or raise the limit in "
                 ".ovp/llm_profiles.yaml"
             ),
@@ -514,10 +529,10 @@ def run_turn(
     # would push us past the daily cap is refused up front.  No
     # files have been written yet — refusal is clean.
     estimated_input = manifest.token_estimate_total + len(user_message) // 4
-    estimated_total = estimated_input + limits.chat_output_tokens_per_request
     check_cost_guardrail(
         vault,
-        estimated_input_tokens=estimated_total,
+        estimated_input_tokens=estimated_input,
+        estimated_output_tokens=limits.chat_output_tokens_per_request,
         profile=profile,
         limits=limits,
         pack=pack,
@@ -739,7 +754,11 @@ def _extract_assistant_turn(chat_path: Path, turn_number: int) -> str:
     if not chat_path.is_file():
         return ""
     text = chat_path.read_text(encoding="utf-8")
-    suffix_marker = f"turn-{turn_number}"
+    # CodeRabbit Major — match ``turn-N`` on word boundaries so
+    # ``--turn 1`` doesn't accidentally absorb ``turn-10``.  The
+    # word-boundary regex also matches the trailing ``· interrupted``
+    # / ``· error`` suffixes the header writer appends.
+    suffix_marker = re.compile(rf"\bturn-{turn_number}\b")
     lines = text.splitlines()
 
     in_target = False
@@ -754,7 +773,7 @@ def _extract_assistant_turn(chat_path: Path, turn_number: int) -> str:
             if in_target:
                 # Next assistant turn — stop.
                 break
-            if suffix_marker in raw:
+            if suffix_marker.search(raw):
                 in_target = True
             continue
         if not in_target:
