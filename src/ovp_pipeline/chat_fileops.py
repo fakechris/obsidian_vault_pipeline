@@ -40,6 +40,8 @@ What this module does NOT own
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import hashlib
 import io
 import logging
@@ -80,6 +82,11 @@ _SLUG_MAX_LEN: Final[int] = 48
 # 6 chars = 24 bits = ~16M possible suffixes per (month, topic),
 # vanishingly unlikely to collide for the volumes M21 will see.
 _HASH_LEN: Final[int] = 6
+
+# Bound on ``ensure_unique_path`` retries.  A real collision past
+# the first dozen attempts is an operational signal — escalate
+# rather than spin forever (CodeRabbit M).
+_MAX_PATH_SUFFIX: Final[int] = 1000
 
 # Valid frontmatter values.  Kept here so BL-085's projection
 # constraint stays single-sourced with the fileops contract.
@@ -199,7 +206,7 @@ def ensure_unique_path(path: Path) -> Path:
     stem = path.stem
     suffix = path.suffix
     parent = path.parent
-    for n in range(2, 1000):
+    for n in range(2, _MAX_PATH_SUFFIX):
         candidate = parent / f"{stem}-{n}{suffix}"
         if not candidate.exists():
             return candidate
@@ -299,15 +306,30 @@ def parse_chat(path: Path) -> ChatFrontmatter | None:
     if not path.is_file():
         return None
     raw, _ = _split_frontmatter(path.read_text(encoding="utf-8"))
-    if not raw:
-        return None
-    if _read_top_level_value(raw, "type") != CHAT_TYPE:
+    return _parse_frontmatter(raw)
+
+
+def _parse_frontmatter(raw: str) -> ChatFrontmatter | None:
+    """Parse a frontmatter string into a :class:`ChatFrontmatter`.
+
+    Returns ``None`` when:
+
+    * raw is empty / blank
+    * yaml is malformed
+    * top-level isn't a mapping
+    * ``type:`` isn't :data:`CHAT_TYPE`
+
+    Single yaml.safe_load call — :func:`append_turn` reuses this on
+    a string it already split, avoiding the double-read CodeRabbit
+    flagged.
+    """
+    if not raw or not raw.strip():
         return None
     try:
-        parsed = yaml.safe_load(raw) or {}
+        parsed = yaml.safe_load(raw)
     except yaml.YAMLError:
         return None
-    if not isinstance(parsed, dict):
+    if not isinstance(parsed, dict) or parsed.get("type") != CHAT_TYPE:
         return None
 
     anchor_blob = parsed.get("anchor") or {}
@@ -435,8 +457,8 @@ def create_chat_file(
         profile=profile,
         model=model,
         temperature=temperature,
-        started_at=when.isoformat().replace("+00:00", "Z"),
-        last_message_at=when.isoformat().replace("+00:00", "Z"),
+        started_at=_to_iso_utc(when),
+        last_message_at=_to_iso_utc(when),
         turn_count=0,
     )
 
@@ -460,7 +482,23 @@ def create_chat_file(
 
 
 def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return _to_iso_utc(datetime.now(timezone.utc))
+
+
+def _to_iso_utc(when: datetime) -> str:
+    """Render ``when`` as an ISO-8601 UTC string with a ``Z`` suffix.
+
+    Tz-naive datetimes are assumed to be UTC (the OVP convention).
+    Tz-aware non-UTC datetimes are converted to UTC first so the
+    Z-suffix replacement actually applies (CodeRabbit catch — naive
+    or non-UTC inputs previously emitted offset strings inconsistent
+    with the schema's implicit UTC contract).
+    """
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    else:
+        when = when.astimezone(timezone.utc)
+    return when.isoformat().replace("+00:00", "Z")
 
 
 def _render_turn(
@@ -479,7 +517,23 @@ def _render_turn(
     ... -->`` HTML comment before the body — present on assistant
     turns, omitted on user turns.  Interrupted assistant turns get
     a ``status: interrupted, reason: <r>`` comment instead.
+
+    Codex review P2: a successful assistant turn (``role ==
+    "assistant" and status == "ok"``) MUST carry a non-empty
+    manifest.  This is the audit-snapshot contract — operators
+    can't later check what context backed a reply if the manifest
+    is missing.  Callers that have nothing to record should pass
+    an explicit single-line manifest like
+    ``["note: no retrieval context"]``.
     """
+    if role == "assistant" and status == "ok" and not manifest_lines:
+        raise ValueError(
+            "manifest_lines is required for successful assistant turns "
+            "(audit contract — pass an explicit single-line manifest "
+            'such as ["note: no retrieval context"] if there is '
+            "nothing to record)"
+        )
+
     if role == "user":
         header = f"## User · {timestamp}"
     else:
@@ -539,6 +593,13 @@ def append_turn(
     * ``path`` doesn't exist or isn't a chat transcript
     * ``role`` isn't ``"user"`` or ``"assistant"``
     * ``status`` isn't ``"ok"`` / ``"interrupted"`` / ``"error"``
+
+    Concurrent-append safety: the entire read-modify-write goes
+    under a per-chat advisory lock (``flock`` on a sibling
+    ``.lock`` file).  Two simultaneous appends serialise; both
+    turns land and ``turn_count`` reflects both.  Without this
+    lock the later writer would drop the earlier turn (codex
+    review P2).
     """
     if role not in _ROLE_VALUES:
         raise ValueError(f"unknown role {role!r}; expected one of {sorted(_ROLE_VALUES)}")
@@ -549,54 +610,55 @@ def append_turn(
     if not path.is_file():
         raise ValueError(f"cannot append_turn: {path} does not exist")
 
-    text = path.read_text(encoding="utf-8")
-    raw, body_text = _split_frontmatter(text)
-    if not raw:
-        raise ValueError(f"cannot append_turn: {path} has no frontmatter")
-    if _read_top_level_value(raw, "type") != CHAT_TYPE:
-        raise ValueError(f"cannot append_turn: {path} is not type: {CHAT_TYPE}")
-    fm_current = parse_chat(path)
-    if fm_current is None:
-        raise ValueError(f"cannot append_turn: {path} frontmatter is malformed")
+    with _per_chat_lock(path):
+        text = path.read_text(encoding="utf-8")
+        raw, body_text = _split_frontmatter(text)
+        if not raw:
+            raise ValueError(f"cannot append_turn: {path} has no frontmatter")
+        # Single yaml.safe_load via _parse_frontmatter — no double
+        # parse (CodeRabbit M).
+        fm_current = _parse_frontmatter(raw)
+        if fm_current is None:
+            raise ValueError(f"cannot append_turn: {path} is not a valid chat transcript")
 
-    ts = (timestamp or _iso_now()).strip()
-    new_turn = _render_turn(
-        role=role,
-        body=body,
-        timestamp=ts,
-        turn_number=turn_number,
-        status=status,
-        interruption_reason=interruption_reason,
-        manifest_lines=manifest_lines,
-    )
-
-    updated_fm = fm_current
-    if update_frontmatter:
-        updated_fm = ChatFrontmatter(
-            chat_id=fm_current.chat_id,
-            status=fm_current.status,
-            visibility=fm_current.visibility,
-            save_policy=fm_current.save_policy,
-            anchor=fm_current.anchor,
-            profile=fm_current.profile,
-            model=fm_current.model,
-            temperature=fm_current.temperature,
-            started_at=fm_current.started_at,
-            last_message_at=ts,
-            turn_count=fm_current.turn_count + 1,
-            schema_version=fm_current.schema_version,
+        ts = (timestamp or _iso_now()).strip()
+        new_turn = _render_turn(
+            role=role,
+            body=body,
+            timestamp=ts,
+            turn_number=turn_number,
+            status=status,
+            interruption_reason=interruption_reason,
+            manifest_lines=manifest_lines,
         )
-        new_raw = _ordered_dump(_frontmatter_to_yaml_dict(updated_fm))
-    else:
-        new_raw = raw
 
-    if not body_text.endswith("\n"):
-        body_text = body_text + "\n"
-    new_body = body_text + new_turn
-    new_text = f"---\n{new_raw}\n---\n\n{new_body.lstrip(chr(10))}"
+        updated_fm = fm_current
+        if update_frontmatter:
+            updated_fm = ChatFrontmatter(
+                chat_id=fm_current.chat_id,
+                status=fm_current.status,
+                visibility=fm_current.visibility,
+                save_policy=fm_current.save_policy,
+                anchor=fm_current.anchor,
+                profile=fm_current.profile,
+                model=fm_current.model,
+                temperature=fm_current.temperature,
+                started_at=fm_current.started_at,
+                last_message_at=ts,
+                turn_count=fm_current.turn_count + 1,
+                schema_version=fm_current.schema_version,
+            )
+            new_raw = _ordered_dump(_frontmatter_to_yaml_dict(updated_fm))
+        else:
+            new_raw = raw
 
-    _atomic_write(path, new_text)
-    return updated_fm
+        if not body_text.endswith("\n"):
+            body_text = body_text + "\n"
+        new_body = body_text + new_turn
+        new_text = f"---\n{new_raw}\n---\n\n{new_body.lstrip(chr(10))}"
+
+        _atomic_write(path, new_text)
+        return updated_fm
 
 
 def mark_interrupted(
@@ -630,6 +692,46 @@ def mark_interrupted(
 # ---------------------------------------------------------------
 # Atomic write + pending block
 # ---------------------------------------------------------------
+
+
+@contextmanager
+def _per_chat_lock(path: Path) -> Iterator[None]:
+    """Serialise concurrent appends against the same chat file.
+
+    Acquires an exclusive ``flock`` on ``<path>.lock`` (a sibling
+    sentinel file) so two threads / processes writing the same
+    transcript take turns rather than overwriting each other.
+    Codex review P2: without this, two simultaneous appends both
+    read the file at the same revision and one ``os.replace``
+    overwrites the other's turn.
+
+    Implementation notes:
+
+    * Lock file lives next to the transcript so it shares the
+      filesystem and lives in the same directory ownership.
+    * fcntl LOCK_EX blocks until the prior holder releases —
+      sufficient for the M21 use case (operator triggers one
+      append per UI action; UI debounce + per-chat lock is enough
+      to serialise legitimate concurrent calls and detect bugs
+      that fire two appends "simultaneously").
+    * Lock file is left in place after release — the next append
+      reuses it; cleanup is a future detail when archival lands.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError as exc:
+                if exc.errno not in (errno.ENOENT, errno.EBADF):
+                    raise
+    finally:
+        os.close(fd)
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -693,19 +795,25 @@ def pending_chat_block(path: Path) -> Iterator["PendingChat"]:
                 timestamp=state.timestamp,
             )
     except BaseException:
-        try:
-            mark_interrupted(
-                path,
-                partial_body=state.buffer,
-                turn_number=state.turn_number,
-                reason=state.reason or "exception",
-                timestamp=state.timestamp,
-            )
-        except Exception:
-            logger.exception(
-                "chat_fileops: failed to write interrupted turn for %s",
-                path,
-            )
+        # Codex review P2: if the body already committed before
+        # raising, don't write a duplicate interrupted turn.  The
+        # commit already produced a status: ok turn + bumped
+        # turn_count; a second mark_interrupted here would duplicate
+        # the response and double the counter.
+        if not state._committed:
+            try:
+                mark_interrupted(
+                    path,
+                    partial_body=state.buffer,
+                    turn_number=state.turn_number,
+                    reason=state.reason or "exception",
+                    timestamp=state.timestamp,
+                )
+            except Exception:
+                logger.exception(
+                    "chat_fileops: failed to write interrupted turn for %s",
+                    path,
+                )
         raise
 
 

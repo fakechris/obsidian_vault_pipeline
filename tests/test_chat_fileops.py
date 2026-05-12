@@ -230,7 +230,7 @@ def test_append_turn_rejects_bad_role(tmp_path: Path):
 def test_append_turn_refuses_non_chat_file(tmp_path: Path):
     other = tmp_path / "x.md"
     other.write_text("---\ntype: evergreen\n---\n\nbody\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="not type: chat"):
+    with pytest.raises(ValueError, match="not a valid chat transcript"):
         append_turn(other, role="user", body="hi")
 
 
@@ -309,7 +309,8 @@ def test_atomic_write_leaves_no_temp_files_on_success(tmp_path: Path):
     path, _ = create_chat_file(tmp_path)
     append_turn(path, role="user", body="x", timestamp="2026-05-12T11:01:00Z")
     siblings = list(path.parent.iterdir())
-    # Only the canonical .md file should remain — no .tmp leftovers.
+    # Only the canonical .md file + the .lock sentinel remain — no
+    # .tmp leftovers.
     suffixes = {p.suffix for p in siblings}
     assert ".tmp" not in suffixes
 
@@ -318,3 +319,145 @@ def test_chats_dir_constant_matches_plan():
     """Lock the path so future BL changes notice a relocation."""
     assert CHATS_DIR == "40-Resources/Chats"
     assert CHAT_TYPE == "chat"
+
+
+# ── codex P2 — concurrent append safety ───────────────────────
+
+
+def test_concurrent_appends_serialize_via_per_chat_lock(tmp_path: Path):
+    """Two threaded appends against the same chat must both land.
+
+    Codex review P2: without the per-chat ``flock``, the later
+    writer's ``os.replace`` would drop the earlier writer's turn.
+    The test fires two appends concurrently and asserts both
+    turns appear + ``turn_count`` ends at exactly 2.
+    """
+    import threading
+
+    path, _ = create_chat_file(tmp_path)
+
+    results: list[Exception | None] = [None, None]
+
+    def append_one(idx: int, label: str, ts: str) -> None:
+        try:
+            append_turn(
+                path,
+                role="user",
+                body=f"message-{label}",
+                timestamp=ts,
+            )
+        except Exception as exc:  # pragma: no cover - test failure
+            results[idx] = exc
+
+    t1 = threading.Thread(
+        target=append_one,
+        args=(0, "alpha", "2026-05-12T11:00:01Z"),
+    )
+    t2 = threading.Thread(
+        target=append_one,
+        args=(1, "beta", "2026-05-12T11:00:02Z"),
+    )
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert results == [None, None]
+    text = path.read_text(encoding="utf-8")
+    assert "message-alpha" in text
+    assert "message-beta" in text
+    fm = parse_chat(path)
+    assert fm is not None
+    assert fm.turn_count == 2
+
+
+# ── codex P2 — manifest required for assistant ok turn ────────
+
+
+def test_assistant_ok_turn_requires_manifest(tmp_path: Path):
+    """Codex P2 — audit contract: every successful assistant turn
+    must carry a non-empty manifest snapshot.  Skipping it would
+    leave the operator unable to audit which context backed the
+    reply."""
+    path, _ = create_chat_file(tmp_path)
+    with pytest.raises(ValueError, match="manifest_lines is required"):
+        append_turn(
+            path,
+            role="assistant",
+            body="answer",
+            turn_number=1,
+            # No manifest_lines passed
+        )
+
+
+def test_assistant_ok_turn_accepts_explicit_no_context_manifest(
+    tmp_path: Path,
+):
+    """Operators that have nothing meaningful to record can pass
+    a single-line manifest like ``["note: no retrieval context"]``
+    — keeps the audit trail honest without forcing real context."""
+    path, _ = create_chat_file(tmp_path)
+    append_turn(
+        path,
+        role="assistant",
+        body="standalone answer",
+        timestamp="2026-05-12T11:00:02Z",
+        turn_number=1,
+        manifest_lines=["note: no retrieval context"],
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "no retrieval context" in text
+
+
+# ── codex P2 — no duplicate turn after commit ─────────────────
+
+
+def test_pending_block_no_duplicate_after_commit(tmp_path: Path):
+    """Codex P2 — if the body raises *after* ``pending.commit()``
+    succeeded, do NOT also write an interrupted turn.  The commit
+    already produced a status: ok turn + bumped turn_count.
+    Double-writing would duplicate the response."""
+    path, _ = create_chat_file(tmp_path)
+
+    class PostCommitFailure(RuntimeError):
+        pass
+
+    with pytest.raises(PostCommitFailure):
+        with pending_chat_block(path) as pending:
+            pending.turn_number = 1
+            pending.timestamp = "2026-05-12T11:00:05Z"
+            pending.append("real answer")
+            pending.commit(manifest_lines=["token_estimate: 10"])
+            raise PostCommitFailure("downstream blew up")
+
+    fm = parse_chat(path)
+    assert fm is not None
+    # Exactly one assistant turn, not two.
+    assert fm.turn_count == 1
+    text = path.read_text(encoding="utf-8")
+    assert text.count("## Assistant · 2026-05-12T11:00:05Z") == 1
+    assert "interrupted" not in text
+
+
+# ── CodeRabbit — UTC handling ─────────────────────────────────
+
+
+def test_naive_started_at_emits_utc_iso(tmp_path: Path):
+    """A naive datetime passed to ``create_chat_file`` is treated as
+    UTC, so ``started_at`` / ``last_message_at`` end with ``Z``."""
+    naive = datetime(2026, 5, 12, 11, 0, 0)  # no tzinfo
+    _, fm = create_chat_file(tmp_path, started_at=naive)
+    assert fm.started_at.endswith("Z")
+    assert fm.last_message_at.endswith("Z")
+    assert "+00:00" not in fm.started_at
+
+
+def test_non_utc_aware_started_at_normalises_to_utc(tmp_path: Path):
+    """A non-UTC tz-aware datetime is converted to UTC, not pasted
+    as ``+05:00`` (which would break the implicit-UTC schema)."""
+    from datetime import timedelta
+
+    nyc = timezone(timedelta(hours=-5))
+    when = datetime(2026, 5, 12, 6, 0, 0, tzinfo=nyc)  # 11:00 UTC
+    _, fm = create_chat_file(tmp_path, started_at=when)
+    assert fm.started_at == "2026-05-12T11:00:00Z"
