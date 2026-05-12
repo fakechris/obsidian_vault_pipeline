@@ -93,8 +93,22 @@ class TaskContext:
         self.llm_client = llm_client
 
     def llm_prefix(self) -> str:
-        """USER.md + OVP_RULES.md as a system-prompt prefix."""
+        """USER.md + OVP_RULES.md as a system-prompt prefix.
+
+        Retained for backwards-compatibility with handlers that
+        format the prefix themselves; new handlers should prefer
+        :meth:`compose_system_prompt` so the inject-prefix
+        boilerplate doesn't repeat (rev-bot 206.2).
+        """
         return load_llm_context(self.vault_dir)
+
+    def compose_system_prompt(self, handler_prompt: str) -> str:
+        """Return the handler's static prompt with USER + RULES
+        prepended.  Returns the handler prompt unchanged when the
+        vault has neither file."""
+        from ..context_loader import inject_llm_context
+
+        return inject_llm_context(self.vault_dir, handler_prompt)
 
 
 class TaskResult:
@@ -388,11 +402,7 @@ def handle_research(ctx: TaskContext) -> TaskResult:
         "Operator notes (free-form, may be empty):\n"
         f"```\n{ctx.body.strip()}\n```\n"
     )
-    prefix = ctx.llm_prefix()
-    sys_prompt = (
-        prefix + "\n" + _RESEARCH_SYSTEM_PROMPT
-        if prefix else _RESEARCH_SYSTEM_PROMPT
-    )
+    sys_prompt = ctx.compose_system_prompt(_RESEARCH_SYSTEM_PROMPT)
     body_md = ctx.llm_client.call(sys_prompt, user_prompt, max_tokens=3500)
     body_md = (body_md or "").strip() + "\n"
     footer = (
@@ -427,11 +437,7 @@ def handle_synthesize(ctx: TaskContext) -> TaskResult:
         "Operator notes (vault excerpts, questions, scope):\n"
         f"```\n{ctx.body.strip()}\n```\n"
     )
-    prefix = ctx.llm_prefix()
-    sys_prompt = (
-        prefix + "\n" + _SYNTHESIZE_SYSTEM_PROMPT
-        if prefix else _SYNTHESIZE_SYSTEM_PROMPT
-    )
+    sys_prompt = ctx.compose_system_prompt(_SYNTHESIZE_SYSTEM_PROMPT)
     body_md = ctx.llm_client.call(sys_prompt, user_prompt, max_tokens=2500)
     body_md = (body_md or "").strip() + "\n"
     footer = (
@@ -470,11 +476,7 @@ def handle_contradict(ctx: TaskContext) -> TaskResult:
         "Operator notes (claims, sources, suspected tensions):\n"
         f"```\n{ctx.body.strip()}\n```\n"
     )
-    prefix = ctx.llm_prefix()
-    sys_prompt = (
-        prefix + "\n" + _CONTRADICT_SYSTEM_PROMPT
-        if prefix else _CONTRADICT_SYSTEM_PROMPT
-    )
+    sys_prompt = ctx.compose_system_prompt(_CONTRADICT_SYSTEM_PROMPT)
     body_md = ctx.llm_client.call(sys_prompt, user_prompt, max_tokens=3000)
     body_md = (body_md or "").strip() + "\n"
     footer = (

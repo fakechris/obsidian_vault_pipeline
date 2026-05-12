@@ -51,6 +51,10 @@ CANONICAL_NOTE_TYPES: frozenset[str] = frozenset(
         # 00-Polaris/USER.md; read by context_loader as LLM prefix.
         # Same rationale — type signal must survive normalisation.
         "user-profile",
+        # M20 BL-077: daily digest output from ``digest_handler``.
+        # Renders through the thin /note shell — the type signal
+        # is the discriminator.
+        "digest",
     }
 )
 

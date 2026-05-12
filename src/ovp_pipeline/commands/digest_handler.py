@@ -84,7 +84,12 @@ def _collect_digest_inputs(vault_dir: Path, pack: str) -> dict[str, Any]:
         # Top-scoring tensions (contradictions).
         tensions = conn.execute(
             """
-            SELECT cs.crystal_id, cs.score, cc.subject_key, cc.body_md
+            SELECT
+                cs.crystal_id,
+                cs.score,
+                cc.subject_key,
+                cc.body_md,
+                cc.source_object_ids_json
               FROM crystal_scores cs
               JOIN contradiction_crystals cc
                 ON cc.pack = cs.pack
@@ -101,7 +106,12 @@ def _collect_digest_inputs(vault_dir: Path, pack: str) -> dict[str, Any]:
         # Recently synthesized community crystals.
         themes = conn.execute(
             """
-            SELECT cc.cluster_id, cc.synthesized_at, gc.label, cc.body_md
+            SELECT
+                cc.cluster_id,
+                cc.synthesized_at,
+                gc.label,
+                cc.body_md,
+                cc.source_evergreen_slugs_json
               FROM community_crystals cc
               JOIN graph_clusters gc
                 ON gc.pack = cc.pack AND gc.cluster_id = cc.cluster_id
@@ -119,7 +129,12 @@ def _collect_digest_inputs(vault_dir: Path, pack: str) -> dict[str, Any]:
         tension_ids = {row[0] for row in tensions}
         open_qs_all = conn.execute(
             """
-            SELECT contradiction_id, subject_key, body_md, synthesized_at
+            SELECT
+                contradiction_id,
+                subject_key,
+                body_md,
+                synthesized_at,
+                source_object_ids_json
               FROM contradiction_crystals
              WHERE pack = ?
                AND superseded_by_synthesized_at = ''
@@ -137,6 +152,19 @@ def _collect_digest_inputs(vault_dir: Path, pack: str) -> dict[str, Any]:
         cleaned = " ".join((text or "").split())
         return cleaned[:max_chars]
 
+    def _decode_slugs(blob: str) -> list[str]:
+        try:
+            data = json.loads(blob or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        # TEXT columns have no structural constraint, so a row with
+        # ``null`` or an object would raise TypeError on the list
+        # comprehension below and abort digest generation
+        # (rev-bot 208 round-2 #5).
+        if not isinstance(data, list):
+            return []
+        return [str(item) for item in data if item]
+
     return {
         "tensions": [
             {
@@ -144,6 +172,7 @@ def _collect_digest_inputs(vault_dir: Path, pack: str) -> dict[str, Any]:
                 "score": row[1],
                 "subject": row[2],
                 "teaser": _teaser(row[3]),
+                "source_object_ids": _decode_slugs(row[4]),
             }
             for row in tensions
         ],
@@ -153,6 +182,7 @@ def _collect_digest_inputs(vault_dir: Path, pack: str) -> dict[str, Any]:
                 "synthesized_at": row[1],
                 "label": row[2],
                 "teaser": _teaser(row[3]),
+                "source_evergreen_slugs": _decode_slugs(row[4]),
             }
             for row in themes
         ],
@@ -161,6 +191,7 @@ def _collect_digest_inputs(vault_dir: Path, pack: str) -> dict[str, Any]:
                 "id": row[0],
                 "subject": row[1],
                 "teaser": _teaser(row[2]),
+                "source_object_ids": _decode_slugs(row[4]),
             }
             for row in open_questions
         ],
@@ -239,15 +270,116 @@ def _today_utc_date() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+def _build_sources_section(inputs: dict[str, Any]) -> str:
+    """Render a ``## Sources`` block linking back to every crystal +
+    evergreen the digest was synthesised from.
+
+    Obsidian-flavoured wikilinks so clicking inside Obsidian jumps
+    straight to the source.  In the ovp-ui ``/note`` renderer the
+    same wikilinks resolve via ``_replace_wikilinks_with_markdown_links``,
+    so the same markdown works in both surfaces.
+
+    Empty when no inputs carry source ids (e.g. on the empty-vault
+    stub digest), so the digest doesn't render an empty heading.
+    """
+    from ..synthesis._shared import crystal_safe_id
+
+    def _safe_wikilink_text(value: Any) -> str:
+        """Strip wikilink delimiters from a label/slug.
+
+        ``]]`` would close the link early; ``|`` would split it into
+        ``[[target|label|extra]]`` and confuse Obsidian's parser;
+        newlines would break out of the surrounding list item.  Pre-
+        fix, ``subject`` / ``label`` values flowed in raw from
+        crystal frontmatter, so a stray ``]]`` in a subject key
+        broke every digest below that link (rev-bot 208 round-2 #6).
+        """
+        return (
+            str(value or "")
+            .replace("[", " ")
+            .replace("]", " ")
+            .replace("|", " ")
+            .replace("\n", " ")
+            .strip()
+        )
+
+    crystal_links: list[str] = []
+    evergreen_slugs: list[str] = []
+
+    for item in inputs.get("tensions", []):
+        safe = crystal_safe_id("contradiction", str(item.get("id") or ""))
+        if safe:
+            label = _safe_wikilink_text(item.get("subject", safe)) or safe
+            crystal_links.append(f"[[{safe}|⚠ {label}]]")
+        evergreen_slugs.extend(item.get("source_object_ids", []))
+
+    for item in inputs.get("themes", []):
+        safe = crystal_safe_id("community", str(item.get("cluster_id") or ""))
+        if safe:
+            label = _safe_wikilink_text(item.get("label", safe)) or safe
+            crystal_links.append(f"[[{safe}|◆ {label}]]")
+        evergreen_slugs.extend(item.get("source_evergreen_slugs", []))
+
+    for item in inputs.get("open_questions", []):
+        safe = crystal_safe_id("contradiction", str(item.get("id") or ""))
+        if safe:
+            label = _safe_wikilink_text(item.get("subject", safe)) or safe
+            crystal_links.append(f"[[{safe}|? {label}]]")
+        evergreen_slugs.extend(item.get("source_object_ids", []))
+
+    # Dedupe while preserving order so the reader sees crystals
+    # first in the order they appeared in the brief.  ``dict.fromkeys``
+    # is the idiomatic Python 3.7+ ordered-set (rev-bot 208.3).
+    deduped_crystals = list(dict.fromkeys(crystal_links))
+    deduped_slugs = [
+        slug for slug in dict.fromkeys(evergreen_slugs) if slug
+    ]
+
+    if not deduped_crystals and not deduped_slugs:
+        return ""
+
+    parts: list[str] = ["\n## Sources\n"]
+    if deduped_crystals:
+        parts.append("**Crystals**")
+        for link in deduped_crystals:
+            parts.append(f"- {link}")
+        parts.append("")
+    if deduped_slugs:
+        parts.append("**Underlying evergreens**")
+        # Cap at a generous N so a digest grounded in 30 evergreens
+        # doesn't bury the brief.  Reader can always open the
+        # crystal to see the full member list.
+        EVERGREEN_CAP = 24
+        shown = deduped_slugs[:EVERGREEN_CAP]
+        for slug in shown:
+            safe_slug = _safe_wikilink_text(slug)
+            if safe_slug:
+                parts.append(f"- [[{safe_slug}]]")
+        if len(deduped_slugs) > EVERGREEN_CAP:
+            parts.append(
+                f"- *…and {len(deduped_slugs) - EVERGREEN_CAP} more.*"
+            )
+        parts.append("")
+    return "\n".join(parts) + "\n"
+
+
 def handle_digest(ctx: TaskContext) -> TaskResult:
     """Aggregate vault signals + compose the daily digest."""
     inputs = _collect_digest_inputs(ctx.vault_dir, ctx.pack)
     user_focus = load_user_profile(ctx.vault_dir)
     user_prompt = _build_digest_user_prompt(inputs, user_focus)
-    prefix = ctx.llm_prefix()
-    sys_prompt = (
-        prefix + "\n" + _DIGEST_SYSTEM_PROMPT
-        if prefix else _DIGEST_SYSTEM_PROMPT
+    sys_prompt = ctx.compose_system_prompt(_DIGEST_SYSTEM_PROMPT)
+
+    # ``type: digest`` frontmatter tells the /note renderer to use
+    # the thin shell (no evergreen scaffolding) — see
+    # ``_THIN_NOTE_TYPES`` in ``commands/_ui_renderers.py``.
+    frontmatter = (
+        "---\n"
+        "type: digest\n"
+        "schema_version: 1\n"
+        f"generated_at: {_today_utc_date()}\n"
+        f"pack: {ctx.pack}\n"
+        "---\n\n"
     )
 
     # Empty vault: skip the LLM call entirely, write a stub digest
@@ -255,7 +387,8 @@ def handle_digest(ctx: TaskContext) -> TaskResult:
     # token spend and a guaranteed-bland generic response.
     if not any((inputs["tensions"], inputs["themes"], inputs["open_questions"])):
         body_md = (
-            f"# Digest — {_today_utc_date()}\n\n"
+            frontmatter
+            + f"# Digest — {_today_utc_date()}\n\n"
             "Nothing new to surface today.  No contradictions, "
             "themes, or open questions in this pack.\n\n"
             "Either the vault is still warming up (run "
@@ -269,19 +402,21 @@ def handle_digest(ctx: TaskContext) -> TaskResult:
         )
         composed = (composed or "").strip()
         body_md = (
-            f"# Digest — {_today_utc_date()}\n\n{composed}\n"
+            frontmatter
+            + f"# Digest — {_today_utc_date()}\n\n{composed}\n"
         )
 
+    sources_md = _build_sources_section(inputs)
     footer = (
         "\n---\n\n"
-        f"**Generated by DIGEST handler on {_today_utc_date()} "
+        f"*Generated by DIGEST handler on {_today_utc_date()} "
         f"from `50-Inbox/02-Tasks/{ctx.task_path.name}`. "
         f"Tensions: {len(inputs['tensions'])}, "
         f"Themes: {len(inputs['themes'])}, "
-        f"Open questions: {len(inputs['open_questions'])}.**\n"
+        f"Open questions: {len(inputs['open_questions'])}.*\n"
     )
     return TaskResult(
-        body_md=body_md + footer,
+        body_md=body_md + sources_md + footer,
         subdir=DIGESTS_SUBDIR,
         metadata={
             "tensions": len(inputs["tensions"]),

@@ -429,12 +429,8 @@ def synthesize_community_crystals(
             # rules so the synthesizer adopts the user's voice and
             # respects the contract.  Graceful degradation when the
             # vault has neither file (legacy vaults see no change).
-            from ..context_loader import load_llm_context
-            context_prefix = load_llm_context(vault_dir)
-            system_prompt = (
-                context_prefix + "\n" + _SYSTEM_PROMPT
-                if context_prefix else _SYSTEM_PROMPT
-            )
+            from ..context_loader import inject_llm_context
+            system_prompt = inject_llm_context(vault_dir, _SYSTEM_PROMPT)
             try:
                 body_md = llm_client.call(
                     system_prompt, user_prompt, max_tokens=max_tokens,

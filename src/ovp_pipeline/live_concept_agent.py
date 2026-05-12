@@ -49,8 +49,10 @@ from typing import Any
 from .live_concept import LiveConceptHandle
 from .live_concept_fileops import (
     AGENT_OWNED_SECTIONS,
+    _split_frontmatter,
     patch_agent_section,
     patch_live,
+    read_section_body,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,19 +131,15 @@ def _read_body_sections(path: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return out
-    # H2 split — tolerant of inline HTML-comment ownership markers
-    # like ``## Current synthesis  <!-- agent-owned -->`` (the BL-063
-    # PR#1 example file's documented style).  Codex P2 caught that
-    # the exact-line matcher missed these and the agent would
-    # double-write the section instead of replacing.
+    # Mirror ``patch_agent_section``'s flow: split frontmatter off
+    # first, then pass body-only to ``read_section_body``.  This
+    # avoids any chance of a YAML key like ``## something`` (legal
+    # in some quoted-scalar contexts) confusing the heading matcher
+    # — and keeps the agent's reader semantically aligned with its
+    # writer (rev-bot 208 round-2 #8).
+    _, body, _ = _split_frontmatter(text)
     for name in AGENT_OWNED_SECTIONS:
-        pattern = re.compile(
-            r"^## " + re.escape(name) + r"(?:\s*<!--[^>]*-->)?\s*$(.*?)(?=^## |^# |\Z)",
-            re.MULTILINE | re.DOTALL,
-        )
-        match = pattern.search(text)
-        if match:
-            out[name] = match.group(1).strip()
+        out[name] = read_section_body(body, name)
     return out
 
 

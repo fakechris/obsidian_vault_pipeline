@@ -7,6 +7,7 @@ import secrets
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -568,15 +569,20 @@ def create_server(
                         pack_name=pack_name, route_path="/ops/evolution", api=True
                     ):
                         return
-                    self._write_json(
-                        build_evolution_browser_payload(
-                            resolved_vault,
-                            pack_name=pack_name,
-                            query=q,
-                            status=status,
-                            link_type=link_type,
-                        )
+                    # Cache miss/hit serialisation is handled inside
+                    # ``_all_evolution_candidates`` (double-checked
+                    # locking around ``_EVOLUTION_CANDIDATE_CACHE``),
+                    # so request handlers no longer need to hold a
+                    # handler-level lock and cache hits stay fully
+                    # concurrent.
+                    api_payload = build_evolution_browser_payload(
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
+                        status=status,
+                        link_type=link_type,
                     )
+                    self._write_json(api_payload)
                     return
                 if path == "/ops/evolution":
                     q = query.get("q", [""])[0]
@@ -1853,6 +1859,19 @@ def _spawn_action_worker_process(vault_dir: Path | str, *, interval_seconds: flo
 
 
 def _prewarm_ui_caches(vault_dir: Path | str) -> None:
+    """Warm the evolution-browser payload cache.
+
+    On the live operator vault this single call costs ~4 minutes
+    (``_compute_evolution_candidates`` reads every open-contradiction
+    claim's source markdown to extract dates, in an N*M nested loop).
+    Running it synchronously inside ``main()`` blocks port-binding
+    and makes every ``ovp-ui`` restart feel broken.
+
+    Deduplication with concurrent request handlers happens one layer
+    down inside ``_all_evolution_candidates``'s double-checked lock
+    around ``_EVOLUTION_CANDIDATE_CACHE`` — so the background prewarm
+    can race against the first ``/ops/evolution`` request safely.
+    """
     try:
         build_evolution_browser_payload(vault_dir, status="all")
     except Exception as exc:
@@ -1861,7 +1880,21 @@ def _prewarm_ui_caches(vault_dir: Path | str) -> None:
 
 
 def _start_ui_prewarm(vault_dir: Path | str) -> None:
-    _prewarm_ui_caches(vault_dir)
+    """Kick off the prewarm in a daemon thread.
+
+    The HTTP server can start accepting requests immediately.  The
+    first request to ``/ops/evolution`` may wait briefly if the
+    background thread hasn't finished yet — but every other page is
+    free.  Crash-tolerant: prewarm failures are logged inside
+    ``_prewarm_ui_caches`` and don't bring the server down.
+    """
+    thread = threading.Thread(
+        target=_prewarm_ui_caches,
+        args=(vault_dir,),
+        name="ovp-ui-prewarm",
+        daemon=True,
+    )
+    thread.start()
 
 
 def main(argv: list[str] | None = None) -> int:

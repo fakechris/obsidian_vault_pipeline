@@ -27,6 +27,7 @@ from ._truth_helpers import (  # noqa: F401 — re-exported public constants
     _CANDIDATE_STRONG_SOURCE_COUNT,
     _CJK_RE,
     _EVOLUTION_CANDIDATE_CACHE,
+    _evolution_candidate_lock,
     _FENCED_FRONTMATTER_RE,
     _LEGACY_AUTO_QUEUE_SIGNAL_TYPES,
     _NOTE_CAPTURE_EVENT_TYPES,
@@ -5826,16 +5827,27 @@ def _all_evolution_candidates(
         _truth_pack_name(pack_name),
         normalized_object_ids,
     )
+    # Double-checked locking, scoped per cache_key so two misses
+    # for different keys never block each other (rev-bot 208 round-2
+    # #9): the hot-path lookup stays lock-free, and the lock the
+    # cold path acquires is specific to *this* cache_key so a
+    # full-vault prewarm doesn't stall an unrelated pack-scoped or
+    # object-scoped request.
     cached = _EVOLUTION_CANDIDATE_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    result = _compute_evolution_candidates(
-        resolved_vault,
-        object_ids=list(normalized_object_ids),
-        pack_name=pack_name,
-    )
-    _EVOLUTION_CANDIDATE_CACHE[cache_key] = result
-    return result
+    key_lock = _evolution_candidate_lock(cache_key)
+    with key_lock:
+        cached = _EVOLUTION_CANDIDATE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        result = _compute_evolution_candidates(
+            resolved_vault,
+            object_ids=list(normalized_object_ids),
+            pack_name=pack_name,
+        )
+        _EVOLUTION_CANDIDATE_CACHE[cache_key] = result
+        return result
 
 
 def list_evolution_candidates(

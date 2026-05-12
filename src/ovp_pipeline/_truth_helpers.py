@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,43 @@ _EVOLUTION_CANDIDATE_CACHE: dict[
     tuple[str, tuple[tuple[str, int, int], ...], str, tuple[str, ...]],
     list[dict[str, Any]],
 ] = {}
+# Per-cache-key locks.  ``_EVOLUTION_LOCK_REGISTRY_LOCK`` guards
+# *just* the registry's own insert path — once a per-key lock
+# exists, every miss for the same key acquires that lock and
+# blocks ONLY the duplicate.  Misses for different keys
+# (different vault / pack scope / object filter) proceed in
+# parallel.  rev-bot 208 round-2 #9 caught that a single global
+# lock would block unrelated pack-scoped or object-scoped misses
+# behind the full-vault prewarm's ~4-min compute.
+_EVOLUTION_CANDIDATE_LOCK_REGISTRY: dict[
+    tuple[str, tuple[tuple[str, int, int], ...], str, tuple[str, ...]],
+    "threading.Lock",
+] = {}
+_EVOLUTION_LOCK_REGISTRY_LOCK = threading.Lock()
+
+
+def _evolution_candidate_lock(
+    cache_key: tuple[
+        str, tuple[tuple[str, int, int], ...], str, tuple[str, ...]
+    ],
+) -> "threading.Lock":
+    """Return (creating if needed) the per-key lock guarding
+    ``_EVOLUTION_CANDIDATE_CACHE[cache_key]``'s cold-miss path.
+
+    Registry-insert is itself guarded by a tiny global lock — the
+    work it serialises is a single dict lookup + insert, not the
+    multi-minute compute the per-key lock then guards.
+    """
+    existing = _EVOLUTION_CANDIDATE_LOCK_REGISTRY.get(cache_key)
+    if existing is not None:
+        return existing
+    with _EVOLUTION_LOCK_REGISTRY_LOCK:
+        existing = _EVOLUTION_CANDIDATE_LOCK_REGISTRY.get(cache_key)
+        if existing is not None:
+            return existing
+        lock = threading.Lock()
+        _EVOLUTION_CANDIDATE_LOCK_REGISTRY[cache_key] = lock
+        return lock
 
 CONTRADICTION_STATUS_EXPLANATIONS = {
     "open": "Active contradiction awaiting review.",

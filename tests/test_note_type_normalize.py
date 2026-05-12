@@ -20,9 +20,18 @@ def _write(path: Path, text: str) -> None:
     path.write_text(dedent(text).lstrip(), encoding="utf-8")
 
 
-def test_canonical_set_contains_eight_values():
+def test_canonical_set_contains_legacy_and_m19_m20_types():
+    # The original eight legacy canonical types stay in the set;
+    # PR #207 added ``live-concept`` and ``user-profile`` and
+    # PR #208 added ``digest`` so the M19/M20 surface types
+    # survive normalisation (see
+    # ``tests/test_note_type_normalize_user_profile.py``).
     assert CANONICAL_NOTE_TYPES == frozenset(
-        {"raw", "deep_dive", "evergreen", "moc", "daily_view", "article", "project", "essay"}
+        {
+            "raw", "deep_dive", "evergreen", "moc", "daily_view",
+            "article", "project", "essay",
+            "live-concept", "user-profile", "digest",
+        }
     )
 
 
