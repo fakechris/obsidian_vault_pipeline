@@ -41,6 +41,16 @@ CANONICAL_NOTE_TYPES: frozenset[str] = frozenset(
         "article",
         "project",
         "essay",
+        # M19 BL-063: user-declared interpretation surface.  Lives at
+        # 30-Projects/Tracking/<slug>.md; agent maintains the synthesis
+        # sections, user owns ``## My take``.  Must not be normalised
+        # to ``article`` (would erase the type signal the live-concept
+        # discovery walk depends on).
+        "live-concept",
+        # M20 BL-075: user profile + autonomous-action rules.  Lives at
+        # 00-Polaris/USER.md; read by context_loader as LLM prefix.
+        # Same rationale — type signal must survive normalisation.
+        "user-profile",
     }
 )
 
