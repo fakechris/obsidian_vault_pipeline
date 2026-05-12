@@ -48,13 +48,14 @@ LLM summary call itself is BL-084's responsibility.
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 
 from ovp_pipeline.context_loader import load_llm_context
-from ovp_pipeline.runtime import resolve_vault_dir
+from ovp_pipeline.runtime import resolve_vault_dir, split_markdown_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,15 @@ SYSTEM_FRAME_MARGIN_TOKENS: int = 1500
 TURN_HISTORY_VERBATIM_K: int = 4
 TURN_HISTORY_SUMMARY_MAX_TOKENS: int = 600
 
+# Token estimates per selected item.  Named to keep the budget math
+# explicit (CodeRabbit M — replace magic numbers).
+_TOKENS_PER_LINKED_EVERGREEN: int = 200
+_TOKENS_PER_RETRIEVAL_ROW: int = 300
+
+# Compiled once — used by ``_select_anchor_evergreens`` to harvest
+# ``[[wikilinks]]`` from the anchor body.
+_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+?)(?:\|[^\]]+)?\]\]")
+
 
 # ── Anchor kinds ────────────────────────────────────────────────
 
@@ -112,14 +122,40 @@ class AnchorContext:
 
 
 @dataclass(frozen=True)
+class RetrievalHit:
+    """One vault hit selected for the retrieval layer.
+
+    ``slug`` + ``kind`` go into the manifest; ``title`` + ``snippet``
+    + ``path`` end up in the prompt body so the LLM sees actual
+    evidence text, not just a list of links (codex review P2).
+    """
+
+    slug: str
+    kind: str  # "object" | "crystal" | "contradiction"
+    title: str = ""
+    path: str = ""
+    snippet: str = ""
+
+
+@dataclass(frozen=True)
 class RetrievalContext:
     """Per-turn context, rebuilt from the user's message."""
 
     query: str
-    included_objects: tuple[str, ...] = ()
-    included_crystals: tuple[str, ...] = ()
-    included_contradictions: tuple[str, ...] = ()
+    hits: tuple[RetrievalHit, ...] = ()
     token_estimate: int = 0
+
+    @property
+    def included_objects(self) -> tuple[str, ...]:
+        return tuple(h.slug for h in self.hits if h.kind == "object")
+
+    @property
+    def included_crystals(self) -> tuple[str, ...]:
+        return tuple(h.slug for h in self.hits if h.kind == "crystal")
+
+    @property
+    def included_contradictions(self) -> tuple[str, ...]:
+        return tuple(h.slug for h in self.hits if h.kind == "contradiction")
 
 
 @dataclass(frozen=True)
@@ -329,12 +365,7 @@ def build_anchor_context(
     evergreens: tuple[str, ...] = ()
     crystals: tuple[str, ...] = ()
     if remaining > 0:
-        evergreens = _select_anchor_evergreens(
-            vault,
-            anchor_kind,
-            anchor_ref,
-            remaining,
-        )
+        evergreens = _select_anchor_evergreens(body, remaining)
         crystals = _select_anchor_crystals(
             vault,
             anchor_kind,
@@ -352,6 +383,45 @@ def build_anchor_context(
     )
 
 
+def _resolve_anchor_path(vault: Path, ref: str) -> Path | None:
+    """Resolve ``ref`` to an absolute path inside ``vault``, or ``None``.
+
+    Codex review P1: ``vault / "/etc/passwd"`` resolves to
+    ``/etc/passwd`` (absolute paths override the left operand) and
+    ``vault / "../etc/passwd"`` escapes the vault root.  Since
+    chat frontmatter stores ``anchor.path`` as an unchecked
+    string, a crafted session could otherwise read arbitrary
+    local files into the system prompt.  This helper:
+
+    * rejects absolute refs
+    * rejects refs whose resolved path doesn't sit under the
+      resolved vault root
+    * returns ``None`` on either failure so callers degrade
+      cleanly to "no anchor body" rather than raising
+    """
+    if not ref:
+        return None
+    candidate_rel = Path(ref)
+    if candidate_rel.is_absolute():
+        logger.warning(
+            "context_binder: rejecting absolute anchor ref %r",
+            ref,
+        )
+        return None
+    resolved_vault = vault.resolve()
+    candidate = (resolved_vault / candidate_rel).resolve()
+    try:
+        candidate.relative_to(resolved_vault)
+    except ValueError:
+        logger.warning(
+            "context_binder: rejecting out-of-vault anchor ref %r " "(resolved to %s)",
+            ref,
+            candidate,
+        )
+        return None
+    return candidate
+
+
 def _load_anchor_body(
     vault: Path,
     kind: str,
@@ -364,67 +434,58 @@ def _load_anchor_body(
     * ``crystal`` — vault-relative path or crystal slug.
 
     Returns ``""`` when the artifact can't be loaded — the handler
-    still answers from retrieval + USER + RULES.
+    still answers from retrieval + USER + RULES.  Strips
+    frontmatter before returning so the prompt budget reflects
+    real content, not YAML metadata (CodeRabbit M).
     """
-    if not ref:
+    candidate = _resolve_anchor_path(vault, ref)
+    if candidate is None:
         return ""
-    candidate = vault / ref
-    if candidate.is_file():
-        try:
-            return candidate.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.debug(
-                "context_binder: failed to read anchor %s: %s",
-                candidate,
-                exc,
-            )
-            return ""
-    logger.debug(
-        "context_binder: anchor %s (kind=%s) not found at %s",
-        ref,
-        kind,
-        candidate,
-    )
-    return ""
+    if not candidate.is_file():
+        logger.debug(
+            "context_binder: anchor %s (kind=%s) not found at %s",
+            ref,
+            kind,
+            candidate,
+        )
+        return ""
+    try:
+        raw = candidate.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.debug(
+            "context_binder: failed to read anchor %s: %s",
+            candidate,
+            exc,
+        )
+        return ""
+    _, body = split_markdown_frontmatter(raw)
+    return body
 
 
 def _select_anchor_evergreens(
-    vault: Path,
-    kind: str,
-    ref: str,
+    body: str,
     budget_tokens: int,
 ) -> tuple[str, ...]:
-    """Return slugs of evergreens the anchor links to.
+    """Return slugs of evergreens the anchor body links to.
 
-    Defensive against a missing knowledge.db — returns ``()``
-    rather than raising.  The actual list comes from the existing
-    discovery helpers, scoped to slugs that the anchor body
-    mentions.  Future BLs (#085 + projection rebuild) will wire
-    in the full evergreen-link join.
+    First-version implementation: parses ``[[wikilink]]`` targets
+    out of the already-loaded anchor body — discovers links
+    without needing the DB.  The retrieval layer fills in
+    semantically-related items the anchor doesn't explicitly link
+    to.  CodeRabbit M: takes ``body`` directly to avoid the
+    redundant disk read.
     """
-    # First-version implementation: parse [[wikilink]] targets out
-    # of the anchor body — discovers links without needing the DB.
-    # The retrieval layer fills in semantically-related items the
-    # anchor doesn't explicitly link to.
-    if budget_tokens <= 0 or not ref:
+    if budget_tokens <= 0 or not body:
         return ()
-    body = _load_anchor_body(vault, kind, ref)
-    if not body:
-        return ()
-    import re as _re
-
     found: list[str] = []
     seen: set[str] = set()
-    for match in _re.finditer(r"\[\[([^\]|#]+?)(?:\|[^\]]+)?\]\]", body):
+    for match in _WIKILINK_RE.finditer(body):
         slug = match.group(1).strip()
         if not slug or slug in seen:
             continue
         seen.add(slug)
         found.append(slug)
-        # Char-count proxy: each evergreen reference costs a couple
-        # hundred tokens of body in the real prompt.  Bound the
-        # selection here based on the budget.
-        if len(found) * 200 >= budget_tokens:
+        if len(found) * _TOKENS_PER_LINKED_EVERGREEN >= budget_tokens:
             break
     return tuple(found)
 
@@ -481,36 +542,49 @@ def build_retrieval_context(
         # Don't take down the inquiry surface when the DB isn't
         # ready — degrade to anchor-only.
         logger.warning(
-            "context_binder: discover_related failed (%s); " "retrieval layer empty",
+            "context_binder: discover_related failed (%s); retrieval layer empty",
             exc,
         )
         return RetrievalContext(query=query)
 
-    object_slugs: list[str] = []
-    crystal_slugs: list[str] = []
+    hits: list[RetrievalHit] = []
     used_tokens = 0
-    # Rough estimate: each row contributes ~300 tokens of body to
-    # the prompt.  Bound by the budget.
-    per_row_tokens = 300
     for row in rows:
-        slug = str(row.get("slug") or row.get("path") or "").strip()
-        if not slug:
+        slug = str(row.get("slug") or "").strip()
+        path = str(row.get("path") or "").strip()
+        if not slug and not path:
             continue
-        if used_tokens + per_row_tokens > budget_tokens:
+        if not slug:
+            slug = path
+        if used_tokens + _TOKENS_PER_RETRIEVAL_ROW > budget_tokens:
             break
-        # Some rows are crystals; classify by ``kind`` if present.
-        kind = str(row.get("kind") or row.get("object_kind") or "")
-        if "crystal" in kind:
-            crystal_slugs.append(slug)
+        # Codex review P2: ``row['kind']`` is the *retrieval mode*
+        # (``lexical`` / ``semantic`` / ``fts``), not the object
+        # kind.  Use ``object_kind`` for classification — that's
+        # the annotation discover_related adds for crystals.
+        object_kind = str(row.get("object_kind") or "")
+        if "contradiction" in object_kind:
+            hit_kind = "contradiction"
+        elif "crystal" in object_kind:
+            hit_kind = "crystal"
         else:
-            object_slugs.append(slug)
-        used_tokens += per_row_tokens
+            hit_kind = "object"
+        snippet = str(row.get("snippet") or row.get("excerpt") or "").strip()
+        title = str(row.get("title") or slug).strip()
+        hits.append(
+            RetrievalHit(
+                slug=slug,
+                kind=hit_kind,
+                title=title,
+                path=path,
+                snippet=snippet,
+            )
+        )
+        used_tokens += _TOKENS_PER_RETRIEVAL_ROW
 
     return RetrievalContext(
         query=query,
-        included_objects=tuple(object_slugs),
-        included_crystals=tuple(crystal_slugs),
-        included_contradictions=(),  # filled in by BL-084 / BL-085
+        hits=tuple(hits),
         token_estimate=used_tokens,
     )
 
@@ -587,29 +661,25 @@ def _render_system_prompt(
     if prefix:
         parts.append(prefix.rstrip())
     if anchor.included_anchor:
-        parts.append(
-            f"# Anchor — {anchor.kind}: {anchor.ref}\n\n" f"{anchor.included_anchor.rstrip()}"
-        )
+        parts.append(f"# Anchor — {anchor.kind}: {anchor.ref}\n\n{anchor.included_anchor.rstrip()}")
         if anchor.included_evergreens:
             parts.append(
                 "## Linked evergreens\n\n"
                 + "\n".join(f"- [[{slug}]]" for slug in anchor.included_evergreens)
             )
-    if (
-        retrieval.included_objects
-        or retrieval.included_crystals
-        or retrieval.included_contradictions
-    ):
-        bullets: list[str] = []
-        if retrieval.included_objects:
-            bullets.extend(f"- object: [[{slug}]]" for slug in retrieval.included_objects)
-        if retrieval.included_crystals:
-            bullets.extend(f"- crystal: [[{slug}]]" for slug in retrieval.included_crystals)
-        if retrieval.included_contradictions:
-            bullets.extend(
-                f"- contradiction: [[{slug}]]" for slug in retrieval.included_contradictions
-            )
-        parts.append("# Retrieval — vault hits for this turn\n\n" + "\n".join(bullets))
+    if retrieval.hits:
+        # Codex review P2: emit the snippet / title / path text the
+        # retrieval stack returned — not just a list of [[slugs]] —
+        # so the LLM has actual evidence to reason over.
+        blocks: list[str] = []
+        for hit in retrieval.hits:
+            header = f"### {hit.kind}: {hit.title or hit.slug}"
+            ref_line = f"slug: [[{hit.slug}]]"
+            if hit.path:
+                ref_line += f"   ·   path: {hit.path}"
+            body_line = hit.snippet or "(no snippet)"
+            blocks.append(f"{header}\n\n{ref_line}\n\n{body_line}")
+        parts.append("# Retrieval — vault hits for this turn\n\n" + "\n\n".join(blocks))
     return "\n\n".join(parts) + ("\n" if parts else "")
 
 
@@ -626,8 +696,10 @@ def _summarise_omissions(
     """
     omitted = 0
     reasons: list[str] = []
-    # Anchor pressure: if the body had to be truncated.
-    if anchor.token_estimate > 0 and anchor.token_estimate >= anchor_budget:
+    # Anchor pressure: if the body was actually trimmed.  Strict
+    # ``>`` instead of ``>=`` (CodeRabbit) so an anchor that fits
+    # exactly doesn't read as truncated.
+    if anchor.token_estimate > 0 and anchor.token_estimate > anchor_budget:
         omitted += 1
         reasons.append("anchor_truncated_to_budget")
     # Retrieval pressure: if we filled near the budget, treat the
@@ -659,11 +731,12 @@ def _truncate_to_tokens(text: str, budget_tokens: int) -> str:
 
 
 __all__ = [
-    "ANCHOR_KINDS",
     "ANCHOR_BUDGET_FRACTION",
+    "ANCHOR_KINDS",
     "AnchorContext",
     "ContextManifest",
     "RetrievalContext",
+    "RetrievalHit",
     "SYSTEM_FRAME_MARGIN_TOKENS",
     "TURN_HISTORY_SUMMARY_MAX_TOKENS",
     "TURN_HISTORY_VERBATIM_K",

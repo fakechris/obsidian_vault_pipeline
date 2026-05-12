@@ -14,6 +14,7 @@ from ovp_pipeline.context_binder import (
     AnchorContext,
     ContextManifest,
     RetrievalContext,
+    RetrievalHit,
     TurnPair,
     build_anchor_context,
     build_chat_context,
@@ -227,7 +228,7 @@ def test_manifest_to_lines_round_trips_core_fields():
     )
     retrieval = RetrievalContext(
         query="q",
-        included_objects=("obj-1",),
+        hits=(RetrievalHit(slug="obj-1", kind="object", title="Obj 1"),),
         token_estimate=300,
     )
     manifest = ContextManifest(
@@ -297,3 +298,152 @@ def test_should_rebuild_summary_when_window_slides():
     assert should_rebuild_summary(3, _pairs(5))
     assert not should_rebuild_summary(5, _pairs(5))
     assert not should_rebuild_summary(5, [])
+
+
+# ── codex P1 — path traversal ──────────────────────────────────
+
+
+def test_anchor_ref_absolute_path_rejected(tmp_path: Path):
+    """Codex P1 — anchor.path stored as an unchecked string must
+    not be allowed to read outside the vault.  Absolute refs are
+    rejected and degrade to empty body."""
+    # Pre-populate a "secret" file outside the vault.
+    secret = tmp_path.parent / "secret.txt"
+    secret.write_text("SHOULD-NOT-LEAK", encoding="utf-8")
+    try:
+        ctx = build_anchor_context(
+            tmp_path,
+            anchor_kind="note",
+            anchor_ref=str(secret),  # absolute path
+            budget_tokens=10_000,
+        )
+        assert ctx.included_anchor == ""
+    finally:
+        secret.unlink(missing_ok=True)
+
+
+def test_anchor_ref_dotdot_escape_rejected(tmp_path: Path):
+    """A relative ref that resolves outside the vault root also
+    degrades to empty body."""
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("SHOULD-NOT-LEAK", encoding="utf-8")
+    try:
+        ctx = build_anchor_context(
+            tmp_path,
+            anchor_kind="note",
+            anchor_ref=f"../{outside.name}",
+            budget_tokens=10_000,
+        )
+        assert "SHOULD-NOT-LEAK" not in ctx.included_anchor
+        assert ctx.included_anchor == ""
+    finally:
+        outside.unlink(missing_ok=True)
+
+
+# ── codex P2 — retrieval snippet inclusion ─────────────────────
+
+
+def test_retrieval_hits_include_snippets_in_prompt(tmp_path: Path, monkeypatch):
+    """Codex P2 — retrieved evidence text (title + snippet) must
+    land in the prompt body, not just a list of [[slug]] links."""
+
+    def fake_discover(*args, **kwargs):
+        return [
+            {
+                "slug": "memory-emergence",
+                "path": "10-Knowledge/Evergreen/memory-emergence.md",
+                "title": "Memory emergence",
+                "snippet": "Emergent memory arises from cross-claim contradiction.",
+                "object_kind": "evergreen",
+                "kind": "lexical",  # retrieval *mode*, not object_kind
+                "score": 0.9,
+            }
+        ]
+
+    from ovp_pipeline import context_binder
+
+    monkeypatch.setattr("ovp_pipeline.discovery.discover_related", fake_discover)
+
+    body, _ = context_binder.build_chat_context(
+        tmp_path,
+        anchor_kind="standalone",
+        anchor_ref="",
+        user_message="how does memory emerge?",
+        profile_input_cap=16_000,
+    )
+    # Title + snippet must appear in the prompt body.
+    assert "Memory emergence" in body
+    assert "Emergent memory arises" in body
+
+
+# ── codex P2 — crystal classification via object_kind ─────────
+
+
+def test_crystal_hits_routed_to_included_crystals(tmp_path: Path, monkeypatch):
+    """Codex P2 — discover_related sets ``kind`` to the retrieval
+    mode (``lexical``/``semantic``); the object type comes from
+    ``object_kind``.  Crystal hits must classify as ``crystal``,
+    not ``object``."""
+
+    def fake_discover(*args, **kwargs):
+        return [
+            {
+                "slug": "cluster::abc",
+                "object_kind": "community_crystal",
+                "kind": "semantic",  # retrieval mode (wrong source)
+                "title": "Cluster — abc",
+                "snippet": "Body of the crystal.",
+            },
+            {
+                "slug": "contradiction-4ca412",
+                "object_kind": "contradiction_crystal",
+                "kind": "lexical",
+                "title": "Contradiction — 4ca412",
+                "snippet": "Conflicting claims.",
+            },
+            {
+                "slug": "ai-agent",
+                "object_kind": "evergreen",
+                "kind": "fts",
+                "title": "AI Agent",
+                "snippet": "An AI Agent is ...",
+            },
+        ]
+
+    from ovp_pipeline import context_binder
+
+    monkeypatch.setattr("ovp_pipeline.discovery.discover_related", fake_discover)
+
+    _, manifest = context_binder.build_chat_context(
+        tmp_path,
+        anchor_kind="standalone",
+        anchor_ref="",
+        user_message="memory emergence",
+        profile_input_cap=16_000,
+    )
+    assert manifest.retrieval.included_crystals == ("cluster::abc",)
+    assert manifest.retrieval.included_contradictions == ("contradiction-4ca412",)
+    assert manifest.retrieval.included_objects == ("ai-agent",)
+
+
+# ── CodeRabbit — frontmatter strip before token budgeting ─────
+
+
+def test_anchor_body_strips_frontmatter_before_budgeting(tmp_path: Path):
+    """Frontmatter shouldn't count against the anchor token budget.
+    Loading uses split_markdown_frontmatter so the body returned is
+    just the prose."""
+    note = tmp_path / "20-Areas/x.md"
+    note.parent.mkdir(parents=True)
+    note.write_text(
+        "---\ntype: article\ntitle: X\ndate: 2026-05-12\n---\n\n" "# X\n\nReal content.\n",
+        encoding="utf-8",
+    )
+    ctx = build_anchor_context(
+        tmp_path,
+        anchor_kind="note",
+        anchor_ref="20-Areas/x.md",
+        budget_tokens=10_000,
+    )
+    assert "Real content." in ctx.included_anchor
+    assert "type: article" not in ctx.included_anchor
