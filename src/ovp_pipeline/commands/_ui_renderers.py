@@ -127,8 +127,14 @@ def _topic_entry_card(entry: dict, *, compact: bool = False) -> str:
             "display:flex;flex-wrap:wrap;font-size:.78rem;color:var(--muted)'>"
             f"{breakdown_chips}</div>"
         )
+    # Rank lives in a small muted-mono line above the title rather
+    # than in a reserved left-column inside the card-head.  Pre-fix
+    # the 1.6rem rank column shifted the title's left edge ~25px in
+    # from the .card-body's left padding — so the title visually
+    # didn't line up with the teaser below it.  Post-fix everything
+    # in the card shares the same left edge.
     rank_html = (
-        f"<span class='muted tiny mono' style='min-width:1.6rem;text-align:right'>{rank}</span>"
+        f"<div class='muted tiny mono'>#{rank}</div>"
         if rank
         else ""
     )
@@ -145,8 +151,10 @@ def _topic_entry_card(entry: dict, *, compact: bool = False) -> str:
     return (
         "<section class='card flush'>"
         "<div class='card-head'>"
+        "<div style='flex:1;min-width:0'>"
         f"{rank_html}"
-        f"<h3 style='margin:0;font-size:1.05rem;flex:1;min-width:0'>{link_html}</h3>"
+        f"<h3 style='margin:0;font-size:1.05rem'>{link_html}</h3>"
+        "</div>"
         f"{score_pill}"
         f"{kind_pill}"
         "</div>"
@@ -1408,6 +1416,302 @@ def _render_markdown_note(
     return _render_frontmatter(frontmatter), html_body
 
 
+_THIN_NOTE_TYPES: frozenset[str] = frozenset({
+    # Generated / autonomous-action outputs and user-declared
+    # interpretation surfaces don't have provenance, production
+    # chains, source notes, or inbound captures.  Rendering the
+    # full evergreen scaffold around them produces a page of empty
+    # cards with the actual content buried at the bottom.
+    "digest",
+    "live-concept",
+    "user-profile",
+})
+
+_THIN_NOTE_PATH_PREFIXES: tuple[str, ...] = (
+    # Everything under GENERATED is by definition agent-produced
+    # content, not a Canonical-State object — apply the thin shell
+    # even if the frontmatter type is missing or unrecognised.
+    "40-Resources/Generated/",
+)
+
+
+def _is_thin_note(relative_path: str, markdown: str) -> bool:
+    """Decide whether ``/note?path=<relative_path>`` should render
+    the thin shell (header + body) instead of the full evergreen
+    scaffold.
+
+    Detection signals (any one is sufficient):
+
+    1. The file lives under a path prefix listed in
+       ``_THIN_NOTE_PATH_PREFIXES``.
+    2. The frontmatter ``type:`` value sits in ``_THIN_NOTE_TYPES``.
+    3. The frontmatter ``original_note_type:`` value sits in
+       ``_THIN_NOTE_TYPES`` — protects against a stale
+       ``note_type_normalize`` run that rewrote the type to
+       ``article`` before the M19/M20 canonical-set fix landed
+       (see PR #207).
+    4. A ``live:`` block is present in the frontmatter — that's the
+       structural marker the Live Concept primitive uses, so the
+       page renders correctly even if the ``type:`` key was lost.
+
+    Files outside all four keep the existing full-scaffold
+    behaviour so evergreens, deep-dives, and atlas pages render
+    unchanged.
+    """
+    normalised = (relative_path or "").replace("\\", "/")
+    if any(normalised.startswith(prefix) for prefix in _THIN_NOTE_PATH_PREFIXES):
+        return True
+    try:
+        frontmatter, _ = _parse_frontmatter(markdown)
+    except Exception:
+        return False
+    type_value = str(frontmatter.get("type") or "").strip().lower()
+    if type_value in _THIN_NOTE_TYPES:
+        return True
+    original_type = str(frontmatter.get("original_note_type") or "").strip().lower()
+    if original_type in _THIN_NOTE_TYPES:
+        return True
+    if isinstance(frontmatter.get("live"), dict):
+        return True
+    return False
+
+
+def _render_thin_note_preamble(
+    relative_path: str, markdown: str, *, requested_pack: str = ""
+) -> str:
+    """Type-aware "what is this page" card.
+
+    Goal: someone who lands on a digest or Live Concept page knows
+    immediately what the file is, where it came from, and what to
+    do next.  The user complaint that prompted this was "I don't
+    see any links and I'm not sure what made this appear".
+
+    Returns ``""`` when no preamble applies, so the thin shell can
+    concatenate unconditionally.
+    """
+    try:
+        frontmatter, _ = _parse_frontmatter(markdown)
+    except Exception:
+        frontmatter = {}
+
+    # Use the type that survived normalisation, or fall back to
+    # the recorded original_note_type, or detect structurally from
+    # a ``live:`` block.  This is the same precedence
+    # ``_is_thin_note`` uses to decide whether to enter the thin
+    # shell at all.
+    type_value = str(frontmatter.get("type") or "").strip().lower()
+    if type_value not in _THIN_NOTE_TYPES:
+        original_type = str(frontmatter.get("original_note_type") or "").strip().lower()
+        if original_type in _THIN_NOTE_TYPES:
+            type_value = original_type
+        elif isinstance(frontmatter.get("live"), dict):
+            type_value = "live-concept"
+
+    if type_value == "digest":
+        return _render_digest_preamble(frontmatter)
+    if type_value == "live-concept":
+        return _render_live_concept_preamble(
+            relative_path, frontmatter, requested_pack=requested_pack,
+        )
+    if type_value == "user-profile":
+        return _render_user_profile_preamble()
+    if relative_path.startswith("40-Resources/Generated/"):
+        return _render_generated_preamble(relative_path, frontmatter)
+    return ""
+
+
+def _render_digest_preamble(frontmatter: dict[str, object]) -> str:
+    generated = escape(str(frontmatter.get("generated_at") or ""))
+    pack = escape(str(frontmatter.get("pack") or ""))
+    return (
+        "<section class='card'>"
+        "<h2 style='margin-top:0'>About this digest</h2>"
+        "<p>An automated daily synthesis written by the OVP "
+        "<code>DIGEST</code> handler.  It reads the top-scoring "
+        "contradictions, recently-synthesised community crystals, "
+        "and open questions from <code>knowledge.db</code>, then "
+        "asks the LLM to write a ~200-word brief in your voice "
+        "(from <code>00-Polaris/USER.md</code>).</p>"
+        "<table class='kv'>"
+        f"<tr><th>Generated</th><td>{generated}</td></tr>"
+        f"<tr><th>Pack</th><td><code>{pack}</code></td></tr>"
+        "<tr><th>Pipeline</th><td>"
+        "<code>ovp-digest --enqueue-daily</code> → "
+        "<code>50-Inbox/02-Tasks/DIGEST-daily.md</code> → "
+        "<code>ovp-task --process-pending</code></td></tr>"
+        "<tr><th>Schedule</th><td>"
+        "Runs daily at 06:00 via <code>~/Library/LaunchAgents/com.ovp.digest.plist</code>"
+        "</td></tr>"
+        "</table>"
+        "<p class='muted tiny'>Wikilinks at the bottom under "
+        "<strong>Sources</strong> jump straight to the underlying "
+        "crystals and evergreens.</p>"
+        "</section>"
+    )
+
+
+def _render_live_concept_preamble(
+    relative_path: str,
+    frontmatter: dict[str, object],
+    *,
+    requested_pack: str = "",
+) -> str:
+    live = frontmatter.get("live") if isinstance(frontmatter.get("live"), dict) else {}
+    objective = str(live.get("objective") or "").strip()
+    active = bool(live.get("active", True))
+    scope = live.get("scope_evergreens") or []
+    if not isinstance(scope, list):
+        scope = []
+    scope_slugs = [str(s) for s in scope if s]
+    triggers = live.get("triggers") if isinstance(live.get("triggers"), dict) else {}
+    last_run_at = str(live.get("lastRunAt") or "").strip()
+    last_summary = str(live.get("lastRunSummary") or "").strip()
+    last_error = str(live.get("lastRunError") or "").strip()
+
+    objective_html = (
+        f"<p>{escape(objective)}</p>" if objective else
+        "<p class='muted'><em>(no objective declared)</em></p>"
+    )
+
+    scope_html = ""
+    if scope_slugs:
+        items = "".join(
+            f"<li><a href='{escape(_note_href(f'10-Knowledge/Evergreen/{slug}.md', requested_pack))}'>{escape(slug)}</a></li>"
+            for slug in scope_slugs
+        )
+        scope_html = (
+            "<tr><th>Scope evergreens</th>"
+            f"<td><ul class='list-tight' style='margin:0'>{items}</ul></td></tr>"
+        )
+    else:
+        scope_html = (
+            "<tr><th>Scope evergreens</th>"
+            "<td class='muted'>(none declared)</td></tr>"
+        )
+
+    trigger_items: list[str] = []
+    if isinstance(triggers.get("on_ingest_match"), dict):
+        ig = triggers["on_ingest_match"]
+        target = escape(str(ig.get("concept_similarity_to") or ""))
+        threshold = ig.get("threshold")
+        trigger_items.append(
+            f"<li><strong>on_ingest_match</strong> — when an absorbed "
+            f"source matches <code>{target}</code> (cosine ≥ {threshold})</li>"
+        )
+    if triggers.get("on_contradiction_against_view"):
+        trigger_items.append(
+            "<li><strong>on_contradiction_against_view</strong> — when "
+            "the truth store records a contradiction against any "
+            "scope evergreen</li>"
+        )
+    if triggers.get("weekly_resynthesis"):
+        when = escape(str(triggers["weekly_resynthesis"]))
+        trigger_items.append(
+            f"<li><strong>weekly_resynthesis</strong> — recurring at "
+            f"<code>{when}</code></li>"
+        )
+    triggers_html = (
+        "<tr><th>Triggers</th><td><ul class='list-tight' style='margin:0'>"
+        + "".join(trigger_items)
+        + "</ul></td></tr>"
+        if trigger_items else
+        "<tr><th>Triggers</th><td class='muted'>(no triggers configured)</td></tr>"
+    )
+
+    last_run_html = ""
+    if last_run_at:
+        status_pill = (
+            "<span class='pill warn'>error</span>"
+            if last_error else
+            "<span class='pill'>ok</span>"
+        )
+        summary_block = (
+            f"<div class='muted'>{escape(last_summary)}</div>"
+            if last_summary else ""
+        )
+        error_block = (
+            f"<div class='muted'>Last error: {escape(last_error)}</div>"
+            if last_error else ""
+        )
+        last_run_html = (
+            f"<tr><th>Last agent run</th><td>"
+            f"{_ts(last_run_at)} {status_pill}{summary_block}{error_block}"
+            "</td></tr>"
+        )
+    else:
+        last_run_html = (
+            "<tr><th>Last agent run</th>"
+            "<td class='muted'>(never — run "
+            "<code>ovp-live-concept-scan --fire</code> to populate "
+            "the agent sections below)</td></tr>"
+        )
+
+    active_pill = (
+        "<span class='pill'>active</span>" if active
+        else "<span class='pill muted'>inactive</span>"
+    )
+
+    return (
+        "<section class='card'>"
+        "<h2 style='margin-top:0'>About this Live Concept "
+        f"{active_pill}</h2>"
+        "<p>A user-declared <strong>Interpretation surface</strong> — "
+        "an evolving view on one topic that the agent maintains "
+        "from scope evergreens.  You own <code>## My take</code>; "
+        "the agent owns <code>## Current synthesis</code>, "
+        "<code>## Recent evidence</code>, and "
+        "<code>## Tensions</code>.</p>"
+        f"{objective_html}"
+        "<table class='kv'>"
+        f"<tr><th>File</th><td><code>{escape(relative_path)}</code></td></tr>"
+        f"{scope_html}"
+        f"{triggers_html}"
+        f"{last_run_html}"
+        "<tr><th>Refresh</th><td>"
+        "<code>ovp-live-concept-scan --fire</code> "
+        "(or wait for the next trigger to fire)"
+        "</td></tr>"
+        "</table>"
+        "<p class='muted tiny'>Edit <code>## My take</code> directly "
+        "in Obsidian.  Add or remove scope evergreens by editing "
+        "<code>live.scope_evergreens</code> in the frontmatter.</p>"
+        "</section>"
+    )
+
+
+def _render_user_profile_preamble() -> str:
+    return (
+        "<section class='card'>"
+        "<h2 style='margin-top:0'>About this profile</h2>"
+        "<p>Your operator profile.  Read by "
+        "<code>context_loader.load_llm_context</code> and prepended "
+        "as a system-prompt prefix to every LLM call site that "
+        "needs user-aware behaviour (extractor, crystal synthesizers, "
+        "task handlers, digest).</p>"
+        "<p class='muted tiny'>Edit freely.  Changes take effect on "
+        "the next LLM call — no restart needed.</p>"
+        "</section>"
+    )
+
+
+def _render_generated_preamble(
+    relative_path: str, frontmatter: dict[str, object]
+) -> str:
+    return (
+        "<section class='card'>"
+        "<h2 style='margin-top:0'>About this generated artifact</h2>"
+        "<p>Produced by a QUEUE task handler "
+        "(<code>RESEARCH</code> / <code>SYNTHESIZE</code> / "
+        "<code>CONTRADICT</code>) from a "
+        "<code>50-Inbox/02-Tasks/</code> file.</p>"
+        "<p class='muted tiny'>To regenerate, drop a new "
+        "<code>&lt;PREFIX&gt;-&lt;slug&gt;.md</code> into "
+        "<code>50-Inbox/02-Tasks/</code> and run "
+        "<code>ovp-task --process-pending</code>.</p>"
+        "</section>"
+    )
+
+
 def _render_note_page(
     vault_dir: Path, relative_path: str, markdown: str, payload: dict | None = None
 ) -> str:
@@ -1415,6 +1719,33 @@ def _render_note_page(
     frontmatter_html, note_html = _render_markdown_note(
         vault_dir, markdown, requested_pack=requested_pack
     )
+
+    # Thin shell for digest / live-concept / user-profile / anything
+    # under 40-Resources/Generated/.  Header → preamble → body →
+    # frontmatter (collapsed).  No source-chain / production-chain /
+    # inbound-capture cards because those concepts don't apply to
+    # agent-produced surfaces.  The preamble card explains *where*
+    # the file came from and *what to do with it*, which the user
+    # complained was missing on digest + Live Concept pages.
+    if _is_thin_note(relative_path, markdown):
+        preamble_html = _render_thin_note_preamble(
+            relative_path, markdown, requested_pack=requested_pack,
+        )
+        return _layout(
+            f"Markdown Note: {relative_path}",
+            (
+                "<h1>Markdown Note</h1>"
+                f"<p class='muted'>{escape(relative_path)}</p>"
+                + preamble_html
+                + f"<section class='card'>{note_html}</section>"
+                + "<details class='page-help'>"
+                + "<summary>Frontmatter</summary>"
+                + f"{frontmatter_html}"
+                + "</details>"
+            ),
+            requested_pack=requested_pack,
+        )
+
     source_note = None
     production_chain = None
     compiled_sections: list[dict[str, object]] = []
@@ -1469,20 +1800,29 @@ def _render_note_page(
         requested_pack=requested_pack,
     )
     operator_rail_card = _render_operator_rail(payload or {})
+    # Body-first ordering: the actual note content (``note_html``)
+    # leads the page so readers don't scroll past empty scaffold to
+    # find what they came for.  Scaffolding cards (lineage,
+    # provenance, production-chain, compiled-section probes) sit
+    # after the body.  Frontmatter is collapsed into a <details>
+    # below the body — it's metadata, not lede.
     return _layout(
         f"Markdown Note: {relative_path}",
         (
             "<h1>Markdown Note</h1>"
             f"<p class='muted'>{escape(relative_path)}</p>"
+            + (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "")
+            + f"<section class='card'>{note_html}</section>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
-            + (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "")
-            + f"{frontmatter_html}"
             + f"{lineage_html}"
             + f"{provenance_html}"
             + f"{production_chain_html}"
             + f"{_render_compiled_sections(remaining_sections)}"
-            + f"<section class='card'>{note_html}</section>"
+            + "<details class='page-help'>"
+            + "<summary>Frontmatter</summary>"
+            + f"{frontmatter_html}"
+            + "</details>"
         ),
         requested_pack=requested_pack,
     )

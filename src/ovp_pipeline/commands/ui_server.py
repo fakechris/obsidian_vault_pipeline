@@ -569,15 +569,18 @@ def create_server(
                         pack_name=pack_name, route_path="/ops/evolution", api=True
                     ):
                         return
-                    self._write_json(
-                        build_evolution_browser_payload(
+                    # Serialised with the prewarm thread — first
+                    # caller pays the ~4-min cost, the rest hit the
+                    # in-process cache inside ``_all_evolution_candidates``.
+                    with _EVOLUTION_PREWARM_LOCK:
+                        api_payload = build_evolution_browser_payload(
                             resolved_vault,
                             pack_name=pack_name,
                             query=q,
                             status=status,
                             link_type=link_type,
                         )
-                    )
+                    self._write_json(api_payload)
                     return
                 if path == "/ops/evolution":
                     q = query.get("q", [""])[0]
@@ -588,13 +591,14 @@ def create_server(
                         pack_name=pack_name, route_path="/ops/evolution", api=False
                     ):
                         return
-                    payload = build_evolution_browser_payload(
-                        resolved_vault,
-                        pack_name=pack_name,
-                        query=q,
-                        status=status,
-                        link_type=link_type,
-                    )
+                    with _EVOLUTION_PREWARM_LOCK:
+                        payload = build_evolution_browser_payload(
+                            resolved_vault,
+                            pack_name=pack_name,
+                            query=q,
+                            status=status,
+                            link_type=link_type,
+                        )
                     self._write_html(_render_evolution_browser_page(payload))
                     return
                 if path == "/api/object":
@@ -1853,23 +1857,35 @@ def _spawn_action_worker_process(vault_dir: Path | str, *, interval_seconds: flo
     )
 
 
+# Serialises any caller of ``build_evolution_browser_payload`` across
+# the background prewarm thread and concurrent request threads.  The
+# first thread to enter does the expensive computation (populating the
+# in-process cache inside ``_all_evolution_candidates``).  Subsequent
+# threads wait on the lock, then their own ``build_*`` call returns
+# from cache in ~milliseconds.  Avoids the race the PR #208 review
+# flagged where two ~4-minute computations could run in parallel.
+_EVOLUTION_PREWARM_LOCK = threading.Lock()
+
+
 def _prewarm_ui_caches(vault_dir: Path | str) -> None:
     """Warm the evolution-browser payload cache.
 
     On the live operator vault this single call costs ~4 minutes
     (``_compute_evolution_candidates`` reads every open-contradiction
-    claim's source markdown to extract dates, in an N×M nested loop).
+    claim's source markdown to extract dates, in an N*M nested loop).
     Running it synchronously inside ``main()`` blocks port-binding
     and makes every ``ovp-ui`` restart feel broken.
 
-    The function itself stays callable so the background thread (or
-    a future on-demand warmer) can invoke it the same way.
+    The function itself stays callable so the background thread or
+    a request handler can invoke it the same way — both go through
+    ``_EVOLUTION_PREWARM_LOCK`` and dedupe to a single computation.
     """
-    try:
-        build_evolution_browser_payload(vault_dir, status="all")
-    except Exception as exc:
-        print(f"ui server cache pre-warming failed: {exc}", file=sys.stderr)
-        return
+    with _EVOLUTION_PREWARM_LOCK:
+        try:
+            build_evolution_browser_payload(vault_dir, status="all")
+        except Exception as exc:
+            print(f"ui server cache pre-warming failed: {exc}", file=sys.stderr)
+            return
 
 
 def _start_ui_prewarm(vault_dir: Path | str) -> None:
@@ -1877,9 +1893,11 @@ def _start_ui_prewarm(vault_dir: Path | str) -> None:
 
     The HTTP server can start accepting requests immediately.  The
     first request to ``/ops/evolution`` may wait briefly if the
-    thread hasn't finished yet — but every other page is free.
-    Crash-tolerant: prewarm failures are logged inside
-    ``_prewarm_ui_caches`` and don't bring the server down.
+    background thread hasn't finished yet (handled via the shared
+    ``_EVOLUTION_PREWARM_LOCK`` so two computations never run in
+    parallel).  Every other page is free.  Crash-tolerant: prewarm
+    failures are logged inside ``_prewarm_ui_caches`` and don't bring
+    the server down.
     """
     thread = threading.Thread(
         target=_prewarm_ui_caches,

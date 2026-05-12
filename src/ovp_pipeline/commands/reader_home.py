@@ -78,11 +78,15 @@ def _render_reader_home(payload: dict) -> str:
         if atlas_available
         else ""
     )
+    # Knowledge Map renders flush with the rest of the home sections:
+    # a naked ``<h2>`` followed by content prose.  No outer card so
+    # the visual rhythm matches Top Topics / Recent Topics — those
+    # also lead with an ``<h2>`` and list .card.flush items below.
     map_card = (
-        "<section class='card'><h2>Knowledge Map</h2>"
+        "<h2>Knowledge Map</h2>"
         "<p class='muted'>See how ideas connect — entities, concepts, "
         "references woven into one graph.</p>"
-        f"<p><a href='{escape(map_href)}'>Open the Map →</a></p></section>"
+        f"<p><a href='{escape(map_href)}'>Open the Map →</a></p>"
         if map_supported
         else ""
     )
@@ -92,9 +96,12 @@ def _render_reader_home(payload: dict) -> str:
         else ""
     )
 
-    # M20 / BL-077: surface the latest daily digest as a banner card
-    # above the Top Topics list.  payload["digest"] is populated when
+    # M20 / BL-077: surface the latest daily digest at the top of
+    # the home page.  payload["digest"] is populated when
     # 40-Resources/Generated/digests/ contains at least one file.
+    # Renders flush — naked <h2> + content prose — so the rhythm
+    # matches every other section on the home (Top Topics, Map,
+    # Recent Topics).  No outer card wrapping.
     digest_card = ""
     digest_info = payload.get("digest") or {}
     if digest_info.get("href"):
@@ -102,18 +109,16 @@ def _render_reader_home(payload: dict) -> str:
         digest_href = escape(str(digest_info["href"]))
         digest_teaser = escape(str(digest_info.get("teaser") or "").strip())
         teaser_html = (
-            f"<p class='muted' style='margin:0.35rem 0 0.6rem'>{digest_teaser}</p>"
+            f"<p class='muted'>{digest_teaser}</p>"
             if digest_teaser
             else ""
         )
         digest_card = (
-            "<section class='card'>"
-            "<h2 style='margin-top:0'>Today's digest"
+            "<h2>Today's digest"
             f"<span class='muted tiny mono' style='margin-left:0.6rem'>{digest_date}</span>"
             "</h2>"
             f"{teaser_html}"
             f"<p><a href='{digest_href}'>Open digest →</a></p>"
-            "</section>"
         )
 
     body = "".join([

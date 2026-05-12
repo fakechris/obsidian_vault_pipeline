@@ -25,6 +25,10 @@ def test_live_concept_is_canonical():
     assert "live-concept" in CANONICAL_NOTE_TYPES
 
 
+def test_digest_is_canonical():
+    assert "digest" in CANONICAL_NOTE_TYPES
+
+
 def test_normalize_user_profile_returns_self():
     mapping = load_mapping()
     assert mapping.normalize("user-profile") == "user-profile"
@@ -33,3 +37,8 @@ def test_normalize_user_profile_returns_self():
 def test_normalize_live_concept_returns_self():
     mapping = load_mapping()
     assert mapping.normalize("live-concept") == "live-concept"
+
+
+def test_normalize_digest_returns_self():
+    mapping = load_mapping()
+    assert mapping.normalize("digest") == "digest"
