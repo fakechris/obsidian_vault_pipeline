@@ -68,6 +68,7 @@ from ..truth_api import (
 from ._ui_renderers import (  # noqa: F401 — all renderers
     _append_query_param,
     _build_open_questions_payload,
+    _layout,
     _build_runtime_home_payload_from_query,
     _build_writing_prompts_payload,
     _event_matches_object,
@@ -126,7 +127,6 @@ from ._ui_renderers import (  # noqa: F401 — all renderers
     set_request_path,
 )
 
-
 _CRYSTAL_NOTE_PREFIX = "40-Resources/Crystals/"
 
 
@@ -150,14 +150,14 @@ def _crystal_kind_and_id_from_note_path(relative_path: str) -> tuple[str, str] |
     rel = relative_path.replace("\\", "/").lstrip("./")
     if not rel.startswith(_CRYSTAL_NOTE_PREFIX):
         return None
-    stem = rel[len(_CRYSTAL_NOTE_PREFIX):]
+    stem = rel[len(_CRYSTAL_NOTE_PREFIX) :]
     if not stem.endswith(".md"):
         return None
-    stem = stem[:-len(".md")]
+    stem = stem[: -len(".md")]
     if not stem:
         return None
     if stem.startswith("contradiction-"):
-        safe_id = stem[len("contradiction-"):]
+        safe_id = stem[len("contradiction-") :]
         if not safe_id:
             return None
         return ("contradiction_crystal", f"contradiction::{safe_id}")
@@ -165,7 +165,9 @@ def _crystal_kind_and_id_from_note_path(relative_path: str) -> tuple[str, str] |
 
 
 def _maybe_emit_crystal_note_reuse(
-    vault_dir: Path | str, relative_path: str, pack_name: str | None,
+    vault_dir: Path | str,
+    relative_path: str,
+    pack_name: str | None,
 ) -> None:
     """Best-effort: when a Reader ``/note?path=`` request resolves a
     synthesized-crystal markdown, write a ``reuse_events`` row so
@@ -181,6 +183,7 @@ def _maybe_emit_crystal_note_reuse(
         return
     try:
         from ..reuse_emitter import emit_crystal_reuse_events
+
         emit_crystal_reuse_events(
             vault_dir,
             pack=(pack_name or DEFAULT_PACK_NAME),
@@ -215,56 +218,58 @@ def _parse_optional_int(query: dict[str, list[str]], key: str) -> int | None:
 # A request to any of these gets a 301 redirect so existing bookmarks /
 # inline JS hrefs keep working.  ``/api/*`` paths are deliberately not
 # in the table — APIs are unchanged in this migration.
-_LEGACY_MAINTAINER_PATHS: frozenset[str] = frozenset({
-    "/candidates",
-    "/candidates/review",
-    "/candidates/fragment",
-    "/contradictions",
-    "/contradictions/resolve",
-    "/signals",
-    "/actions",
-    "/actions/run-next",
-    "/actions/run-batch",
-    "/actions/retry",
-    "/actions/dismiss",
-    "/actions/enqueue",
-    "/actions/fragment",
-    "/evolution",
-    "/evolution/review",
-    "/production",
-    "/pulse",
-    "/pulse/fragment",
-    "/pulse/stream",
-    "/events",
-    "/reuse/fragment",
-    "/open-questions/fragment",
-    "/writing-prompts/fragment",
-    "/summaries",
-    "/summaries/rebuild",
-    "/briefing",
-    "/briefing/fragment",
-    "/workbench",
-    "/clusters",
-    "/cluster",
-    "/objects",
-})
+_LEGACY_MAINTAINER_PATHS: frozenset[str] = frozenset(
+    {
+        "/candidates",
+        "/candidates/review",
+        "/candidates/fragment",
+        "/contradictions",
+        "/contradictions/resolve",
+        "/signals",
+        "/actions",
+        "/actions/run-next",
+        "/actions/run-batch",
+        "/actions/retry",
+        "/actions/dismiss",
+        "/actions/enqueue",
+        "/actions/fragment",
+        "/evolution",
+        "/evolution/review",
+        "/production",
+        "/pulse",
+        "/pulse/fragment",
+        "/pulse/stream",
+        "/events",
+        "/reuse/fragment",
+        "/open-questions/fragment",
+        "/writing-prompts/fragment",
+        "/summaries",
+        "/summaries/rebuild",
+        "/briefing",
+        "/briefing/fragment",
+        "/workbench",
+        "/clusters",
+        "/cluster",
+        "/objects",
+    }
+)
 
 
 # Suffix → Content-Type map for the /static/<path> endpoint.  Kept
 # narrow so the route can never be coaxed into serving arbitrary
 # files: any suffix not in this map returns 404.
 _STATIC_CONTENT_TYPES: dict[str, str] = {
-    ".css":   "text/css; charset=utf-8",
-    ".js":    "application/javascript; charset=utf-8",
-    ".svg":   "image/svg+xml",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
     ".woff2": "font/woff2",
-    ".woff":  "font/woff",
-    ".png":   "image/png",
-    ".jpg":   "image/jpeg",
-    ".jpeg":  "image/jpeg",
-    ".webp":  "image/webp",
-    ".ico":   "image/x-icon",
-    ".txt":   "text/plain; charset=utf-8",
+    ".woff": "font/woff",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".txt": "text/plain; charset=utf-8",
 }
 
 
@@ -323,7 +328,7 @@ def create_server(
             # set_request_path() so static loads don't pollute the
             # Reader/Maintainer shell-selection thread-local.
             if path.startswith("/static/"):
-                self._serve_static(path[len("/static/"):])
+                self._serve_static(path[len("/static/") :])
                 return
 
             # BL-050: shell selection is decided by URL prefix.  The
@@ -335,7 +340,8 @@ def create_server(
                 if path == "/":
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_reader_home_payload(
-                        resolved_vault, pack_name=pack_name,
+                        resolved_vault,
+                        pack_name=pack_name,
                     )
                     self._write_html(_render_reader_home(payload))
                     return
@@ -437,9 +443,7 @@ def create_server(
                     # both — preferring ``object_kind`` — so existing
                     # bookmarks and chip-rail links keep filtering.
                     object_kind = (
-                        query.get("object_kind", [""])[0]
-                        or query.get("kind", [""])[0]
-                        or None
+                        query.get("object_kind", [""])[0] or query.get("kind", [""])[0] or None
                     )
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_objects_index_payload(
@@ -773,9 +777,7 @@ def create_server(
                     return
                 if path == "/ops/queue":
                     pack_name = query.get("pack", [""])[0] or None
-                    payload = build_queue_overview_payload(
-                        resolved_vault, pack_name=pack_name
-                    )
+                    payload = build_queue_overview_payload(resolved_vault, pack_name=pack_name)
                     self._write_html(_render_queue_overview_page(payload))
                     return
                 if path == "/api/production":
@@ -846,7 +848,9 @@ def create_server(
                         return
                     self._write_json(
                         build_graph_map_payload(
-                            resolved_vault, pack_name=pack_name, query=q,
+                            resolved_vault,
+                            pack_name=pack_name,
+                            query=q,
                             show_all=show_all,
                         )
                     )
@@ -860,7 +864,9 @@ def create_server(
                     ):
                         return
                     payload = build_graph_map_payload(
-                        resolved_vault, pack_name=pack_name, query=q,
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
                         show_all=show_all,
                     )
                     self._write_html(_render_graph_atlas_page(payload, action_path="/graph"))
@@ -874,7 +880,9 @@ def create_server(
                     ):
                         return
                     payload = build_graph_map_payload(
-                        resolved_vault, pack_name=pack_name, query=q,
+                        resolved_vault,
+                        pack_name=pack_name,
+                        query=q,
                         show_all=show_all,
                     )
                     self._write_html(_render_graph_atlas_page(payload, action_path="/map"))
@@ -969,7 +977,9 @@ def create_server(
                     # crystal, emit a reuse event so crystal_scoring's
                     # ``reuse_recency_norm`` has a producer.  Best-effort.
                     _maybe_emit_crystal_note_reuse(
-                        resolved_vault, relative_path, pack_name,
+                        resolved_vault,
+                        relative_path,
+                        pack_name,
                     )
                     self._write_html(
                         _render_note_page(resolved_vault, relative_path, markdown, payload)
@@ -1062,7 +1072,9 @@ def create_server(
                     raw_days = query.get("days", [""])[0]
                     days = int(raw_days) if raw_days.isdigit() else None
                     payload = build_timeline_payload(
-                        resolved_vault, pack_name=pack_name, days=days,
+                        resolved_vault,
+                        pack_name=pack_name,
+                        days=days,
                     )
                     if path == "/api/timeline":
                         self._write_json(payload)
@@ -1089,7 +1101,9 @@ def create_server(
                     raw_limit = query.get("limit", [""])[0]
                     limit = int(raw_limit) if raw_limit.isdigit() else None
                     payload = build_runs_index_payload(
-                        resolved_vault, pack_name=pack_name, limit=limit,
+                        resolved_vault,
+                        pack_name=pack_name,
+                        limit=limit,
                     )
                     if path == "/api/runs":
                         self._write_json(payload)
@@ -1104,7 +1118,9 @@ def create_server(
                     txn_id = path.split("/", 3)[-1] if path.count("/") >= 3 else ""
                     pack_name = query.get("pack", [""])[0] or None
                     payload = build_run_detail_payload(
-                        resolved_vault, txn_id, pack_name=pack_name,
+                        resolved_vault,
+                        txn_id,
+                        pack_name=pack_name,
                     )
                     if is_api:
                         self._write_json(payload)
@@ -1152,6 +1168,9 @@ def create_server(
                         max_polls=max_polls,
                         object_id=object_id or None,
                     )
+                    return
+                if path == "/chat":
+                    self._handle_chat_page_get(query, csrf_token)
                     return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
@@ -1230,7 +1249,8 @@ def create_server(
                         return
                     self._resolve_contradiction_action(form)
                     self._redirect(
-                        self._form_first(form, "next").strip() or "/ops/queue/contradictions?status=resolved"
+                        self._form_first(form, "next").strip()
+                        or "/ops/queue/contradictions?status=resolved"
                     )
                     return
                 if path == "/api/summaries/rebuild":
@@ -1351,6 +1371,9 @@ def create_server(
                     payload = self._dismiss_action(form)
                     self._redirect(str(payload["next_path"]))
                     return
+                if path == "/chat/message":
+                    self._handle_chat_message_post(form, csrf_token)
+                    return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
                 self.send_error(400, str(exc))
@@ -1385,6 +1408,135 @@ def create_server(
             else:
                 self._write_html(_render_unsupported_route_page(route_path, requested_pack))
             return True
+
+        # ── BL-086: Reader /chat ───────────────────────────────
+
+        def _handle_chat_page_get(self, query: dict[str, list[str]], csrf: str) -> None:
+            """Render ``/chat?id=<chat_id>&anchor=<kind:ref>``.
+
+            For an existing session, the transcript is loaded.
+            For a new session, the composer pre-binds the anchor
+            passed by BL-087's entry buttons.
+            """
+            from ovp_pipeline.commands._chat_page import (
+                render_chat_page_body,
+            )
+            from ovp_pipeline.commands.chat_handler import _find_chat_by_id
+            from ovp_pipeline.commands._chat_page import _profile_options  # noqa: F401
+
+            chat_id = (query.get("id", [""])[0] or "").strip()
+            anchor_raw = (query.get("anchor", [""])[0] or "").strip()
+            anchor_title = (query.get("title", [""])[0] or "").strip()
+
+            chat_path = None
+            if chat_id:
+                chat_path = _find_chat_by_id(resolved_vault, chat_id)
+
+            anchor_kind = "standalone"
+            anchor_ref = ""
+            if anchor_raw and not chat_path:
+                if ":" in anchor_raw:
+                    anchor_kind, _, anchor_ref = anchor_raw.partition(":")
+                else:
+                    anchor_kind, anchor_ref = "note", anchor_raw
+
+            body = render_chat_page_body(
+                resolved_vault,
+                chat_id=chat_id or None,
+                chat_path=chat_path,
+                anchor_kind=anchor_kind,
+                anchor_ref=anchor_ref,
+                anchor_title=anchor_title,
+                csrf_token=csrf,
+            )
+            self._write_html(_layout("Ask the vault", body))
+
+        def _handle_chat_message_post(self, form: dict[str, list[str]], csrf: str) -> None:
+            """Handle POST ``/chat/message`` — runs one inquiry turn.
+
+            Synchronous v1: full page refresh after each turn.  SSE
+            streaming is a follow-up.
+            """
+            from ovp_pipeline.commands._chat_page import (
+                chat_page_redirect_target,
+                render_chat_page_body,
+            )
+            from ovp_pipeline.commands.chat_handler import (
+                ChatCapExceeded,
+                run_turn,
+            )
+
+            chat_id = self._form_first(form, "chat_id").strip() or None
+            anchor_raw = self._form_first(form, "anchor").strip()
+            message = self._form_first(form, "message").strip()
+            profile = self._form_first(form, "profile").strip() or "balanced"
+            visibility = self._form_first(form, "visibility").strip() or "indexed"
+
+            if not message:
+                self._write_html(
+                    _layout(
+                        "Ask the vault",
+                        render_chat_page_body(
+                            resolved_vault,
+                            chat_id=chat_id,
+                            error_message="Message cannot be empty.",
+                            csrf_token=csrf,
+                        ),
+                    ),
+                    status=400,
+                )
+                return
+
+            anchor_kind = "standalone"
+            anchor_ref = ""
+            if anchor_raw:
+                if ":" in anchor_raw:
+                    anchor_kind, _, anchor_ref = anchor_raw.partition(":")
+                else:
+                    anchor_kind, anchor_ref = "note", anchor_raw
+
+            try:
+                result = run_turn(
+                    resolved_vault,
+                    chat_id=chat_id,
+                    user_message=message,
+                    anchor_kind=anchor_kind,
+                    anchor_ref=anchor_ref,
+                    profile_name=profile if not chat_id else None,
+                    visibility=visibility,
+                )
+            except ChatCapExceeded as exc:
+                self._write_html(
+                    _layout(
+                        "Ask the vault",
+                        render_chat_page_body(
+                            resolved_vault,
+                            chat_id=chat_id,
+                            anchor_kind=anchor_kind,
+                            anchor_ref=anchor_ref,
+                            profile=profile,
+                            error_message=str(exc),
+                            csrf_token=csrf,
+                        ),
+                    ),
+                    status=429,
+                )
+                return
+            except ValueError as exc:
+                self._write_html(
+                    _layout(
+                        "Ask the vault",
+                        render_chat_page_body(
+                            resolved_vault,
+                            chat_id=chat_id,
+                            error_message=str(exc),
+                            csrf_token=csrf,
+                        ),
+                    ),
+                    status=400,
+                )
+                return
+            self._redirect(chat_page_redirect_target(result.chat_id))
 
         def _resolve_contradiction_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             contradiction_ids = [
@@ -1800,10 +1952,7 @@ def create_server(
                 self._write_html("<h1>404</h1>", status=404)
                 return
             try:
-                resource = (
-                    importlib_resources.files("ovp_pipeline")
-                    .joinpath("static", asset_path)
-                )
+                resource = importlib_resources.files("ovp_pipeline").joinpath("static", asset_path)
                 body = resource.read_bytes()
             except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
                 self._write_html("<h1>404</h1>", status=404)
