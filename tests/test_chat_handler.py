@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from ovp_pipeline.commands.chat_handler import (
     ChatCapExceeded,
+    _collect_turn_messages,
     _extract_assistant_turn,
     _find_chat_by_id,
     _parse_anchor,
@@ -20,6 +22,11 @@ from ovp_pipeline.llm_profiles import (
     ProfileConfig,
     ProfileLimits,
 )
+
+
+def _today_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 # ── _parse_anchor ───────────────────────────────────────────────
 
@@ -80,8 +87,7 @@ def test_cost_guardrail_daily_cap_reads_audit_log(tmp_path: Path):
     should trip the cap."""
     log = tmp_path / "60-Logs" / "pipeline.jsonl"
     log.parent.mkdir(parents=True)
-    today = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
-    today_iso = today.strftime("%Y-%m-%dT%H:%M:%SZ")
+    today_iso = _today_iso()
     log.write_text(
         json.dumps(
             {
@@ -112,11 +118,7 @@ def test_cost_guardrail_failures_still_count(tmp_path: Path):
     flapping provider can't bypass the budget."""
     log = tmp_path / "60-Logs" / "pipeline.jsonl"
     log.parent.mkdir(parents=True)
-    today_iso = (
-        __import__("datetime")
-        .datetime.now(__import__("datetime").timezone.utc)
-        .strftime("%Y-%m-%dT%H:%M:%SZ")
-    )
+    today_iso = _today_iso()
     events = []
     for _ in range(5):
         events.append(
@@ -320,11 +322,7 @@ def test_run_turn_propagates_cap_error(tmp_path: Path, _stub_litellm, monkeypatc
     # Seed the audit log so today's total > daily cap.
     log = tmp_path / "60-Logs" / "pipeline.jsonl"
     log.parent.mkdir(parents=True)
-    today_iso = (
-        __import__("datetime")
-        .datetime.now(__import__("datetime").timezone.utc)
-        .strftime("%Y-%m-%dT%H:%M:%SZ")
-    )
+    today_iso = _today_iso()
     log.write_text(
         json.dumps(
             {
@@ -455,3 +453,186 @@ def test_find_chat_by_id_locates_session(tmp_path: Path, _stub_litellm):
     result = run_turn(tmp_path, user_message="hi")
     found = _find_chat_by_id(tmp_path, result.chat_id)
     assert found == result.chat_path
+
+
+# ── codex P2 — turn history in reply prompts ──────────────────
+
+
+def test_reply_passes_prior_turns_to_llm(tmp_path: Path, monkeypatch):
+    """Codex P2 — ``ovp-ask reply`` must include prior turns in
+    the LLM call.  We capture the messages list and verify the
+    second turn sees both the first user message + assistant
+    reply."""
+    captured: list[dict] = []
+
+    def _capture(**kwargs):
+        captured.append(kwargs)
+
+        class _Msg:
+            content = "Follow-up reply."
+
+        class _Choice:
+            message = _Msg()
+
+        return type(
+            "_R",
+            (),
+            {"choices": [_Choice()], "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        )()
+
+    fake = type("LiteLLM", (), {"completion": _capture})
+    monkeypatch.setitem(__import__("sys").modules, "litellm", fake)
+    from ovp_pipeline import llm_defaults
+
+    monkeypatch.setattr(
+        llm_defaults,
+        "completion_with_litellm_policy",
+        lambda fn, kwargs, **_: fn(**dict(kwargs)),
+    )
+
+    first = run_turn(tmp_path, user_message="first question")
+    run_turn(tmp_path, chat_id=first.chat_id, user_message="follow-up")
+
+    # Two captured calls: new + reply.  The reply's messages list
+    # must include the prior user+assistant pair.
+    assert len(captured) == 2
+    reply_messages = captured[1]["messages"]
+    roles = [m["role"] for m in reply_messages]
+    # system + history(user + assistant) + new user
+    assert roles == ["system", "user", "assistant", "user"]
+    assert "first question" in reply_messages[1]["content"]
+    assert reply_messages[-1]["content"] == "follow-up"
+
+
+def test_collect_turn_messages_skips_interrupted(tmp_path: Path, _stub_litellm):
+    """Interrupted assistant turns must NOT enter the LLM history —
+    they have no useful reply text and would confuse a follow-up."""
+    from ovp_pipeline.chat_fileops import mark_interrupted
+
+    result = run_turn(tmp_path, user_message="alpha")
+    # Inject an interrupted turn on top.
+    mark_interrupted(
+        result.chat_path,
+        partial_body="half a sentence",
+        turn_number=99,
+        reason="client_disconnected",
+    )
+    messages = _collect_turn_messages(result.chat_path)
+    # Only the ok user + assistant from the first turn.
+    assert all(m["content"] != "half a sentence" for m in messages)
+    assert sum(1 for m in messages if m["role"] == "user") == 1
+    assert sum(1 for m in messages if m["role"] == "assistant") == 1
+
+
+# ── codex P2 — profile preserved on reply ─────────────────────
+
+
+def test_reply_preserves_original_profile(tmp_path: Path, _stub_litellm, monkeypatch):
+    """A session created with ``--profile deep`` and a follow-up
+    ``ovp-ask reply --id X`` (no ``--profile``) must keep using
+    ``deep``, not silently downgrade to the chat default."""
+    # Stub a yaml so "deep" exists as a profile.
+    cfg = tmp_path / ".ovp" / "llm_profiles.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        """
+profiles:
+  balanced:
+    provider: anthropic
+    model: claude-sonnet-4-6
+  deep:
+    provider: anthropic
+    model: claude-opus-4-7
+default_for:
+  chat: balanced
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OVP_VAULT_DIR", str(tmp_path))
+
+    first = run_turn(tmp_path, user_message="hi", profile_name="deep")
+    assert first.frontmatter.profile == "deep"
+
+    # Reply with no profile override.
+    second = run_turn(tmp_path, chat_id=first.chat_id, user_message="follow-up")
+    assert second.profile_name == "deep"
+    assert second.model.endswith("/claude-opus-4-7")
+
+
+# ── codex P2 — _extract_assistant_turn stops on transcript headers only
+
+
+def test_extract_assistant_turn_keeps_h2_subsections(tmp_path: Path):
+    """A response containing ``## Next steps`` as a body subsection
+    must NOT be truncated at that line — only real transcript
+    headers (``## User ·`` / ``## Assistant ·``) end the turn."""
+    chat = tmp_path / "x.md"
+    chat.write_text(
+        "---\ntype: chat\nchat_id: chat-abc\n---\n\n"
+        "## User · 2026-05-12T11:00:01Z\n\nWhat next?\n\n"
+        "## Assistant · 2026-05-12T11:00:02Z · turn-2\n\n"
+        "<!-- context-manifest\n  token_estimate: 10\n-->\n\n"
+        "Here is the answer.\n\n## Next steps\n\nDo X then Y.\n\n"
+        "## Pros and cons\n\nMore detail.\n\n"
+        "## User · 2026-05-12T11:00:05Z\n\nthanks\n",
+        encoding="utf-8",
+    )
+    body = _extract_assistant_turn(chat, 2)
+    assert "Here is the answer." in body
+    assert "## Next steps" in body
+    assert "Do X then Y." in body
+    assert "## Pros and cons" in body
+    # The next User header *does* terminate the turn.
+    assert "thanks" not in body
+
+
+# ── CodeRabbit Critical — no orphan transcript on cap fail ────
+
+
+def test_cap_rejection_leaves_no_orphan_transcript(tmp_path: Path, _stub_litellm, monkeypatch):
+    """When the cost guardrail fires on a new session, no chat
+    file should be created — refusal must be clean (CodeRabbit
+    Critical)."""
+    from ovp_pipeline.commands import chat_handler
+    from ovp_pipeline.llm_profiles import ProfileBook
+    from ovp_pipeline.llm_profiles import load_profiles as real_load
+
+    def _tiny(*args, **kwargs):
+        book = real_load(*args, **kwargs)
+        return ProfileBook(
+            profiles=book.profiles,
+            default_for=book.default_for,
+            limits=ProfileLimits(
+                chat_input_tokens_per_request=1,  # forces input-cap hit
+                chat_output_tokens_per_request=1,
+                chat_daily_tokens_per_pack=1_000_000,
+            ),
+            source=book.source,
+        )
+
+    monkeypatch.setattr(chat_handler, "load_profiles", _tiny)
+
+    with pytest.raises(ChatCapExceeded):
+        run_turn(tmp_path, user_message="this will be too big")
+
+    # The chats directory was never created — no orphan transcript.
+    chats_dir = tmp_path / "40-Resources" / "Chats"
+    assert not chats_dir.exists() or not list(chats_dir.rglob("*.md"))
+
+
+# ── CodeRabbit Major — chat_id validation in writeback ────────
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "../../../etc/passwd",
+        "chat-abc/../malicious",
+        "chat-abc\nID",
+        "",
+        "not-a-chat-id",
+    ],
+)
+def test_writeback_rejects_malicious_chat_id(tmp_path: Path, bad_id: str):
+    with pytest.raises(ValueError, match="not a valid chat identifier"):
+        writeback_to_absorb_queue(tmp_path, chat_id=bad_id, turn_number=2)

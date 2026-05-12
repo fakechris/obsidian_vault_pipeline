@@ -30,6 +30,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -68,6 +69,12 @@ logger = logging.getLogger(__name__)
 # Vault-relative location for write-back tasks.  Matches M20's
 # task-dispatcher convention (BL-076).
 _TASKS_DIR = "50-Inbox/02-Tasks"
+
+# Sanity regex on operator-supplied chat_id.  CodeRabbit Major —
+# without this, a chat_id of ``../../../etc/passwd`` would land
+# inside the task filename and escape the tasks directory.  All
+# chat ids minted by :func:`new_chat_id` match this pattern.
+_CHAT_ID_RE = re.compile(r"\Achat-[A-Za-z0-9_.-]+\Z")
 
 # Audit-events vocabulary (also documented in the plan doc).
 _EVENT_TURN_COMPLETED = "chat_turn_completed"
@@ -277,12 +284,14 @@ def _call_llm(
     system_prompt: str,
     user_message: str,
     max_output_tokens: int,
+    history: list[dict[str, str]] | None = None,
 ) -> tuple[str, int, int]:
     """Synchronous LLM call.  Returns (reply, input_tokens, output_tokens).
 
-    Streaming is deferred to BL-086 (the Reader-side SSE pipe).
-    Counts come from the LiteLLM response usage dict; falls back
-    to a char-count proxy when the provider doesn't return usage.
+    ``history`` is prior turns as ``{role, content}`` dicts in
+    chronological order — the handler reads them from the
+    transcript so follow-up turns see the conversation (codex P2).
+    Streaming is deferred to BL-086.
     """
     try:
         import litellm  # type: ignore
@@ -291,12 +300,14 @@ def _call_llm(
             "litellm is required for ovp-ask; install with `pip install litellm`"
         ) from exc
 
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
     kwargs: dict[str, Any] = {
         "model": profile.litellm_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
+        "messages": messages,
         "temperature": profile.temperature,
         "max_tokens": max_output_tokens,
         "timeout": DEFAULT_LITELLM_TIMEOUT_SECONDS,
@@ -317,10 +328,107 @@ def _call_llm(
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
     if not input_tokens:
-        input_tokens = max(1, (len(system_prompt) + len(user_message)) // 4)
+        history_chars = sum(len(m["content"]) for m in (history or []))
+        input_tokens = max(1, (len(system_prompt) + history_chars + len(user_message)) // 4)
     if not output_tokens:
         output_tokens = max(1, len(reply) // 4)
     return reply, input_tokens, output_tokens
+
+
+def _collect_turn_messages(chat_path: Path) -> list[dict[str, str]]:
+    """Parse the transcript into a ``[{role, content}, ...]`` list.
+
+    Walks ``## User · <ts>`` and ``## Assistant · <ts> · turn-N``
+    headers (transcript-only — bodies may contain other ``## ...``
+    subsections like ``## Next steps``).  Manifest comments and
+    interrupted-turn placeholders are stripped.
+
+    Returns oldest-first so the LLM sees the conversation in
+    order.  Empty list when there are no prior turns.
+    """
+    if not chat_path.is_file():
+        return []
+    text = chat_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    turns: list[dict[str, str]] = []
+    current_role: str | None = None
+    current_status: str = "ok"
+    current_body: list[str] = []
+    in_block_comment = False
+
+    def _flush() -> None:
+        if current_role is None:
+            return
+        # Skip interrupted / error turns — they have no useful
+        # reply text for the LLM to follow.
+        if current_status != "ok":
+            return
+        body = "\n".join(current_body).strip()
+        if body:
+            turns.append({"role": current_role, "content": body})
+
+    for raw in lines:
+        if _is_user_header(raw):
+            _flush()
+            current_role = "user"
+            current_status = "ok"
+            current_body = []
+            in_block_comment = False
+            continue
+        if _is_assistant_header(raw):
+            _flush()
+            current_role = "assistant"
+            current_status = _assistant_status(raw)
+            current_body = []
+            in_block_comment = False
+            continue
+        if current_role is None:
+            continue
+        line = raw
+        # Strip inline HTML comment blocks (the manifest snapshot
+        # + interrupt marker).  Multi-line comments are tracked
+        # across lines; single-line comments are dropped in place
+        # rather than dropping the whole line (CodeRabbit M).
+        if in_block_comment:
+            if "-->" in line:
+                line = line.split("-->", 1)[1]
+                in_block_comment = False
+            else:
+                continue
+        # Strip every fully-closed <!-- ... --> pair on this line.
+        while "<!--" in line and "-->" in line:
+            start = line.index("<!--")
+            end = line.index("-->", start) + len("-->")
+            line = line[:start] + line[end:]
+        if "<!--" in line and "-->" not in line:
+            # Block comment started — keep the prefix, swallow the rest.
+            line = line.split("<!--", 1)[0]
+            in_block_comment = True
+        current_body.append(line)
+    _flush()
+    return turns
+
+
+_USER_HEADER_RE = re.compile(r"^##\s+User\s+·\s+")
+_ASSISTANT_HEADER_RE = re.compile(r"^##\s+Assistant\s+·\s+")
+
+
+def _is_user_header(line: str) -> bool:
+    return bool(_USER_HEADER_RE.match(line))
+
+
+def _is_assistant_header(line: str) -> bool:
+    return bool(_ASSISTANT_HEADER_RE.match(line))
+
+
+def _assistant_status(header: str) -> str:
+    """Read the suffix of an Assistant header to detect interrupted / error."""
+    if " · interrupted" in header:
+        return "interrupted"
+    if " · error" in header:
+        return "error"
+    return "ok"
 
 
 # ---------------------------------------------------------------
@@ -357,12 +465,67 @@ def run_turn(
         raise ValueError("user_message cannot be empty")
 
     vault = resolve_vault_dir(vault_dir)
-    profile = _resolve_chat_profile(profile_name, vault)
     book = load_profiles(vault)
     limits = book.limits
 
-    # Resolve or create the session.
-    if chat_path is None and chat_id is None:
+    # Phase 1 — resolve session + profile + anchor BEFORE the cap
+    # check.  CodeRabbit Critical: no orphan transcript can be
+    # created when the cap subsequently fires.
+    existing_fm: ChatFrontmatter | None = None
+    if chat_path is not None or chat_id is not None:
+        if chat_path is None:
+            chat_path = _find_chat_by_id(vault, chat_id or "")
+        if chat_path is None or not chat_path.is_file():
+            raise ValueError(f"chat session not found: chat_id={chat_id!r}, chat_path={chat_path}")
+        existing_fm = parse_chat(chat_path)
+        if existing_fm is None:
+            raise ValueError(f"chat_path {chat_path} is not a valid chat transcript")
+        # Take anchor + visibility from the existing session.
+        anchor_kind = existing_fm.anchor.kind
+        anchor_ref = existing_fm.anchor.path
+        visibility = existing_fm.visibility
+
+    # Codex P2: a reply with no explicit ``--profile`` reuses the
+    # session's original profile so a Deep session doesn't silently
+    # downgrade to Balanced on follow-up turns.
+    if profile_name is None and existing_fm is not None and existing_fm.profile:
+        profile = _resolve_chat_profile(existing_fm.profile, vault)
+    else:
+        profile = _resolve_chat_profile(profile_name, vault)
+
+    # Phase 2 — collect prior turns for the LLM messages list
+    # (codex P2: replies must see the conversation, not just the
+    # latest message).  Manifest-stripping happens in the helper.
+    history_messages: list[dict[str, str]] = []
+    if existing_fm is not None and chat_path is not None:
+        history_messages = _collect_turn_messages(chat_path)
+
+    # Phase 3 — build context.
+    system_prompt, manifest = build_chat_context(
+        vault,
+        anchor_kind=anchor_kind,
+        anchor_ref=anchor_ref,
+        user_message=user_message,
+        profile_input_cap=limits.chat_input_tokens_per_request,
+    )
+
+    # Phase 4 — cost guardrail.  Includes the expected output
+    # tokens for this turn (CodeRabbit M) so a request whose reply
+    # would push us past the daily cap is refused up front.  No
+    # files have been written yet — refusal is clean.
+    estimated_input = manifest.token_estimate_total + len(user_message) // 4
+    estimated_total = estimated_input + limits.chat_output_tokens_per_request
+    check_cost_guardrail(
+        vault,
+        estimated_input_tokens=estimated_total,
+        profile=profile,
+        limits=limits,
+        pack=pack,
+    )
+
+    # Phase 5 — now safe to create the new transcript (or use
+    # the existing one).
+    if existing_fm is None:
         anchor = ChatAnchor(
             kind=anchor_kind,
             path=anchor_ref,
@@ -378,40 +541,7 @@ def run_turn(
             topic=user_message,
         )
     else:
-        if chat_path is None:
-            # Find the transcript by chat_id by sweeping CHATS_DIR.
-            chat_path = _find_chat_by_id(vault, chat_id or "")
-        if chat_path is None or not chat_path.is_file():
-            raise ValueError(
-                f"chat session not found: chat_id={chat_id!r}, " f"chat_path={chat_path}"
-            )
-        fm = parse_chat(chat_path)
-        if fm is None:
-            raise ValueError(f"chat_path {chat_path} is not a valid chat transcript")
-        # Take anchor + profile + visibility from the existing session
-        # so a reply doesn't drift from the operator's first choice.
-        anchor_kind = fm.anchor.kind
-        anchor_ref = fm.anchor.path
-        visibility = fm.visibility
-
-    # Build context for this turn.
-    system_prompt, manifest = build_chat_context(
-        vault,
-        anchor_kind=anchor_kind,
-        anchor_ref=anchor_ref,
-        user_message=user_message,
-        profile_input_cap=limits.chat_input_tokens_per_request,
-    )
-
-    # Cost guardrail (input + daily).  Output cap is enforced by
-    # passing max_tokens; nothing to check here.
-    check_cost_guardrail(
-        vault,
-        estimated_input_tokens=manifest.token_estimate_total + len(user_message) // 4,
-        profile=profile,
-        limits=limits,
-        pack=pack,
-    )
+        fm = existing_fm
 
     # Append the user turn before the LLM call so the operator's
     # message is preserved even if the LLM call later errors out.
@@ -421,12 +551,13 @@ def run_turn(
         body=user_message,
     )
 
-    # LLM call.
+    # LLM call — pass prior turns + the new user message together.
     audit_event_ids: list[str] = []
     try:
         reply, input_tokens, output_tokens = _call_llm(
             profile,
             system_prompt=system_prompt,
+            history=history_messages,
             user_message=user_message,
             max_output_tokens=limits.chat_output_tokens_per_request,
         )
@@ -545,6 +676,12 @@ def writeback_to_absorb_queue(
     """
     if turn_number < 1:
         raise ValueError(f"turn_number must be >= 1, got {turn_number}")
+    # CodeRabbit Major — refuse a chat_id that doesn't match the
+    # ``chat-<alnum>`` shape minted by new_chat_id.  Stops
+    # operator-supplied ``../../etc/passwd`` from escaping the
+    # tasks directory via the filename interpolation below.
+    if not _CHAT_ID_RE.match(chat_id):
+        raise ValueError(f"chat_id {chat_id!r} is not a valid chat identifier")
     vault = resolve_vault_dir(vault_dir)
     if chat_path is None:
         chat_path = _find_chat_by_id(vault, chat_id)
@@ -591,42 +728,51 @@ def writeback_to_absorb_queue(
 def _extract_assistant_turn(chat_path: Path, turn_number: int) -> str:
     """Return the body of the Nth assistant turn from ``chat_path``.
 
-    Parsing is plain-text: scan for ``## Assistant`` headers with
-    ``turn-<N>`` in the suffix.  Skips the inline
-    ``<!-- context-manifest ... -->`` HTML comment.  Returns
-    ``""`` when the turn isn't found.
+    Codex P2: stop only on real transcript headers (``## User ·``
+    or ``## Assistant ·``), not every H2 — assistant prose often
+    contains ``## Next steps`` / ``## Pros & cons`` style
+    subsections.  HTML comments are stripped in place so a single-
+    line comment doesn't drop the surrounding prose.
+
+    Returns ``""`` when the turn isn't found.
     """
     if not chat_path.is_file():
         return ""
     text = chat_path.read_text(encoding="utf-8")
-    marker = "## Assistant"
     suffix_marker = f"turn-{turn_number}"
     lines = text.splitlines()
 
     in_target = False
     collected: list[str] = []
-    skip_until_close = False
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("## "):
+    in_block_comment = False
+    for raw in lines:
+        if _is_user_header(raw):
             if in_target:
-                # Hit the next H2 — stop collecting.
                 break
-            if line.startswith(marker) and suffix_marker in line:
+            continue
+        if _is_assistant_header(raw):
+            if in_target:
+                # Next assistant turn — stop.
+                break
+            if suffix_marker in raw:
                 in_target = True
-                continue
+            continue
         if not in_target:
             continue
-        if skip_until_close:
+        line = raw
+        if in_block_comment:
             if "-->" in line:
-                skip_until_close = False
-            continue
+                line = line.split("-->", 1)[1]
+                in_block_comment = False
+            else:
+                continue
+        while "<!--" in line and "-->" in line:
+            start = line.index("<!--")
+            end = line.index("-->", start) + len("-->")
+            line = line[:start] + line[end:]
         if "<!--" in line and "-->" not in line:
-            skip_until_close = True
-            continue
-        if "<!--" in line and "-->" in line:
-            # Single-line comment — drop it.
-            continue
+            line = line.split("<!--", 1)[0]
+            in_block_comment = True
         collected.append(line)
     return "\n".join(collected).strip()
 
@@ -662,6 +808,9 @@ def _cmd_new(args: argparse.Namespace) -> int:
     except ChatCapExceeded as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     print(f"chat_id: {result.chat_id}")
     print(f"path: {result.chat_path}")
     print(f"profile: {result.profile_name}  model: {result.model}")
