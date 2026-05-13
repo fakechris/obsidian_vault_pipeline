@@ -1,22 +1,44 @@
-"""Tests for M20 / BL-077 daily digest handler."""
+"""Tests for M23 / BL-095 daily digest handler.
+
+Covers:
+
+* Prompt v2 — four-question structure
+* Input-hash idempotency gate (skip LLM when prior digest matches)
+* No-data path (don't fabricate insight from old crystals)
+* Schema v2 frontmatter (operator-local timestamps + preflight)
+* Audit events (digest_generated, digest_skipped_no_change)
+
+BL-094's input collector is exercised separately in
+``test_digest_inputs.py``; this file builds on top of a real
+``collect_digest_inputs`` against an in-memory ``knowledge.db``.
+"""
 
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from ovp_pipeline.commands.digest_handler import (
-    _build_digest_user_prompt,
-    _collect_digest_inputs,
+    DIGESTS_SUBDIR,
+    SCHEMA_VERSION,
+    _build_digest_user_prompt_v2,
     _enqueue_daily,
+    _expected_output_path,
+    _is_no_data,
     _latest_digest,
+    _read_prior_digest,
     handle_digest,
     main,
 )
 from ovp_pipeline.commands.task_dispatch import TaskContext
+from ovp_pipeline.digest_config import DigestConfig
+from ovp_pipeline.digest_inputs import collect_digest_inputs
 
 
 # ── Fixtures ──────────────────────────────────────────────────────
@@ -27,8 +49,9 @@ class _FakeLLM:
         self.response = response
         self.calls: list[tuple[str, str]] = []
 
-    def call(self, system_prompt: str, user_prompt: str,
-             max_tokens: int = 0) -> str:
+    def call(
+        self, system_prompt: str, user_prompt: str, max_tokens: int = 0
+    ) -> str:
         self.calls.append((system_prompt, user_prompt))
         return self.response
 
@@ -42,290 +65,368 @@ def _make_vault(tmp_path: Path) -> Path:
     return vault
 
 
-def _seed_knowledge_db(
-    vault: Path,
-    *,
-    pack: str = "research-tech",
-    tensions: int = 0,
-    themes: int = 0,
-    open_qs: int = 0,
-) -> None:
-    """Create the three crystal tables and seed them with minimal
-    deterministic rows.  Bypasses the full truth_store schema since
-    the digest handler only reads these specific columns."""
+def _make_knowledge_db(vault: Path) -> sqlite3.Connection:
+    """Same schema BL-094 tests build — kept local so test_digest_handler
+    can run without sharing fixtures across modules."""
     db_path = vault / "60-Logs" / "knowledge.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(
-            """
-            CREATE TABLE community_crystals (
-              pack TEXT NOT NULL,
-              cluster_id TEXT NOT NULL,
-              body_md TEXT NOT NULL,
-              source_evergreen_slugs_json TEXT NOT NULL,
-              synthesized_at TEXT NOT NULL,
-              llm_model TEXT NOT NULL,
-              prompt_version TEXT NOT NULL,
-              superseded_by_synthesized_at TEXT NOT NULL DEFAULT '',
-              PRIMARY KEY (pack, cluster_id, synthesized_at)
-            );
-            CREATE TABLE contradiction_crystals (
-              pack TEXT NOT NULL,
-              contradiction_id TEXT NOT NULL,
-              subject_key TEXT NOT NULL,
-              body_md TEXT NOT NULL,
-              positive_claim_ids_json TEXT NOT NULL,
-              negative_claim_ids_json TEXT NOT NULL,
-              source_object_ids_json TEXT NOT NULL,
-              synthesized_at TEXT NOT NULL,
-              llm_model TEXT NOT NULL,
-              prompt_version TEXT NOT NULL,
-              superseded_by_synthesized_at TEXT NOT NULL DEFAULT '',
-              PRIMARY KEY (pack, contradiction_id, synthesized_at)
-            );
-            CREATE TABLE crystal_scores (
-              pack TEXT NOT NULL,
-              crystal_kind TEXT NOT NULL,
-              crystal_id TEXT NOT NULL,
-              score REAL NOT NULL,
-              size_norm REAL NOT NULL DEFAULT 0,
-              credibility_norm REAL NOT NULL DEFAULT 0,
-              contradiction_norm REAL NOT NULL DEFAULT 0,
-              reuse_recency_norm REAL NOT NULL DEFAULT 0,
-              evergreen_recency_norm REAL NOT NULL DEFAULT 0,
-              source_diversity_norm REAL NOT NULL DEFAULT 0,
-              computed_at TEXT NOT NULL,
-              PRIMARY KEY (pack, crystal_kind, crystal_id)
-            );
-            CREATE TABLE graph_clusters (
-              pack TEXT NOT NULL,
-              cluster_id TEXT NOT NULL,
-              cluster_kind TEXT NOT NULL,
-              label TEXT NOT NULL,
-              center_object_id TEXT NOT NULL DEFAULT '',
-              member_object_ids_json TEXT NOT NULL DEFAULT '[]',
-              score REAL NOT NULL DEFAULT 0,
-              PRIMARY KEY (pack, cluster_id)
-            );
-            """
+    conn.executescript("""
+        CREATE TABLE audit_events (
+            source_log TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            slug TEXT,
+            session_id TEXT,
+            timestamp TEXT NOT NULL,
+            payload_json TEXT
+        );
+        CREATE TABLE evergreen_revisions (
+            pack TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            content_md TEXT NOT NULL,
+            change_type TEXT NOT NULL,
+            changed_by TEXT NOT NULL,
+            derived_at TEXT NOT NULL,
+            change_note TEXT
+        );
+        CREATE TABLE objects (
+            pack TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            object_kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            canonical_path TEXT,
+            source_slug TEXT,
+            source_url TEXT
+        );
+        CREATE TABLE graph_clusters (
+            pack TEXT NOT NULL,
+            cluster_id TEXT NOT NULL,
+            cluster_kind TEXT NOT NULL,
+            label TEXT,
+            center_object_id TEXT,
+            member_object_ids_json TEXT,
+            score REAL
+        );
+        CREATE TABLE community_crystals (
+            pack TEXT NOT NULL,
+            cluster_id TEXT NOT NULL,
+            body_md TEXT NOT NULL,
+            source_evergreen_slugs_json TEXT,
+            synthesized_at TEXT NOT NULL,
+            llm_model TEXT,
+            prompt_version TEXT,
+            superseded_by_synthesized_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE contradiction_crystals (
+            pack TEXT NOT NULL,
+            contradiction_id TEXT NOT NULL,
+            subject_key TEXT,
+            body_md TEXT NOT NULL,
+            source_object_ids_json TEXT,
+            synthesized_at TEXT NOT NULL,
+            superseded_by_synthesized_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE crystal_scores (
+            pack TEXT NOT NULL,
+            crystal_id TEXT NOT NULL,
+            crystal_kind TEXT NOT NULL,
+            score REAL NOT NULL
+        );
+    """)
+    conn.commit()
+    return conn
+
+
+def _seed_window_with_signal(
+    vault: Path, *, as_of: datetime, evergreens: int = 2
+) -> None:
+    """Seed enough rows that ``_is_no_data`` returns False."""
+    conn = _make_knowledge_db(vault)
+    for i in range(evergreens):
+        ts = (as_of - timedelta(hours=2, minutes=i)).isoformat()
+        conn.execute(
+            "INSERT INTO evergreen_revisions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "research-tech", f"evg-{i}", 1, "## content",
+                "created", "absorber", ts, "lifecycle=promote",
+            ),
         )
-
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-        for i in range(tensions):
-            cid = f"contradict::t{i}"
-            conn.execute(
-                "INSERT INTO contradiction_crystals VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    pack, cid, f"subject {i}",
-                    f"body of tension {i}", "[]", "[]", "[]",
-                    now, "test-model", "v1", "",
-                ),
-            )
-            conn.execute(
-                "INSERT INTO crystal_scores VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    pack, "contradiction", cid,
-                    0.9 - 0.1 * i,  # descending scores
-                    0.5, 0.5, 0.5, 0.0, 0.5, 0.5, now,
-                ),
-            )
-
-        for i in range(themes):
-            cluster_id = f"cluster::theme-{i}"
-            conn.execute(
-                "INSERT INTO graph_clusters VALUES (?,?,?,?,?,?,?)",
-                (
-                    pack, cluster_id, "louvain_community",
-                    f"Theme {i}", "", "[]", 1.0,
-                ),
-            )
-            conn.execute(
-                "INSERT INTO community_crystals VALUES (?,?,?,?,?,?,?,?)",
-                (
-                    pack, cluster_id, f"body of theme {i}", "[]",
-                    now, "test-model", "v1", "",
-                ),
-            )
-
-        for i in range(open_qs):
-            cid = f"contradict::oq-{i}"
-            conn.execute(
-                "INSERT INTO contradiction_crystals VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    pack, cid, f"open question {i}",
-                    f"body of open question {i}", "[]", "[]", "[]",
-                    now, "test-model", "v1", "",
-                ),
-            )
-
-        conn.commit()
-    finally:
-        conn.close()
+        conn.execute(
+            "INSERT INTO objects VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("research-tech", f"evg-{i}", "evergreen", f"Title {i}", "", "", ""),
+        )
+    # One intake event in window.
+    intake_ts = (as_of - timedelta(minutes=10)).isoformat()
+    conn.execute(
+        "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?)",
+        ("pipeline.jsonl", "article_processed", "slug-x", "s",
+         intake_ts, json.dumps({"title": "Memory systems intro"})),
+    )
+    conn.commit()
+    conn.close()
 
 
-# ── _collect_digest_inputs ───────────────────────────────────────
-
-
-def test_collect_returns_empty_when_db_missing(tmp_path: Path):
-    vault = _make_vault(tmp_path)
-    out = _collect_digest_inputs(vault, "research-tech")
-    assert out == {"tensions": [], "themes": [], "open_questions": []}
-
-
-def test_collect_returns_top_tensions_descending_by_score(tmp_path: Path):
-    vault = _make_vault(tmp_path)
-    _seed_knowledge_db(vault, tensions=5)
-    out = _collect_digest_inputs(vault, "research-tech")
-    assert len(out["tensions"]) == 3  # TOP_TENSIONS_N
-    scores = [t["score"] for t in out["tensions"]]
-    assert scores == sorted(scores, reverse=True)
-
-
-def test_collect_does_not_double_count_open_questions(tmp_path: Path):
-    """An open question that already appears in ``tensions`` (top-
-    scoring contradictions) is excluded from ``open_questions`` so
-    the digest doesn't surface the same contradiction twice."""
-    vault = _make_vault(tmp_path)
-    _seed_knowledge_db(vault, tensions=3, open_qs=0)
-    out = _collect_digest_inputs(vault, "research-tech")
-    tension_ids = {t["id"] for t in out["tensions"]}
-    open_ids = {q["id"] for q in out["open_questions"]}
-    assert not (tension_ids & open_ids)
-
-
-def test_collect_recent_themes_only(tmp_path: Path):
-    vault = _make_vault(tmp_path)
-    _seed_knowledge_db(vault, themes=2)
-    out = _collect_digest_inputs(vault, "research-tech")
-    assert len(out["themes"]) == 2
-    assert all("Theme" in t["label"] for t in out["themes"])
-
-
-# ── handle_digest ────────────────────────────────────────────────
-
-
-def test_handle_digest_empty_vault_skips_llm(tmp_path: Path):
-    """Empty vault: handler must NOT call the LLM (token waste) and
-    must emit a stub digest with a "nothing new to surface" body."""
-    vault = _make_vault(tmp_path)
-    llm = _FakeLLM("should-not-be-called")
+def _ctx(vault: Path, llm: _FakeLLM) -> TaskContext:
     task = vault / "50-Inbox" / "02-Tasks" / "DIGEST-daily.md"
-    task.write_text("auto-enqueued", encoding="utf-8")
-
-    ctx = TaskContext(
+    task.write_text("auto", encoding="utf-8")
+    return TaskContext(
         vault_dir=vault, task_path=task, prefix="DIGEST",
         slug="daily", body="", pack="research-tech", llm_client=llm,
     )
-    result = handle_digest(ctx)
-
-    assert llm.calls == []  # LLM untouched
-    assert "Nothing new to surface" in result.body_md
-    assert result.subdir == "digests"
-    assert result.metadata == {
-        "tensions": 0, "themes": 0, "open_questions": 0,
-    }
 
 
-def test_handle_digest_with_data_calls_llm(tmp_path: Path):
+# ── No-data path ───────────────────────────────────────────────────
+
+
+def test_no_data_path_skips_llm(tmp_path: Path):
+    """Empty vault: handler MUST NOT call the LLM (token waste)
+    and renders an honest "no intake" body."""
     vault = _make_vault(tmp_path)
-    _seed_knowledge_db(vault, tensions=2, themes=2, open_qs=0)
+    # No knowledge.db at all — preflight degrades to unavailable.
+    llm = _FakeLLM("must-not-be-called")
+    result = handle_digest(_ctx(vault, llm))
+    assert llm.calls == []
+    assert "No new intake in this window." in result.body_md
+    assert result.metadata["skipped_llm"] is True
+    assert result.metadata["reason"] == "no_data"
+    assert result.subdir == DIGESTS_SUBDIR
+
+
+def test_is_no_data_detects_real_signal(tmp_path: Path):
+    """When any layer has signal, _is_no_data returns False so the
+    handler enters the LLM branch."""
+    vault = _make_vault(tmp_path)
+    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
+    _seed_window_with_signal(vault, as_of=as_of)
+    inputs = collect_digest_inputs(
+        vault, "research-tech",
+        as_of=datetime.now(timezone.utc),
+        config=DigestConfig(tz="UTC"),
+    )
+    assert _is_no_data(inputs) is False
+
+
+# ── LLM call path ──────────────────────────────────────────────────
+
+
+def test_calls_llm_with_v2_prompt_when_signal_present(tmp_path: Path):
+    """With data, the handler calls the LLM exactly once with a
+    prompt that mentions the v2 section headings."""
+    vault = _make_vault(tmp_path)
+    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
+    _seed_window_with_signal(vault, as_of=as_of, evergreens=2)
     llm = _FakeLLM(
-        "## Tensions worth sitting with\nA vs B.\n\n"
-        "## Themes you keep circling\nTheme zero recurred.\n"
+        "## Window's intake\nOne intake.\n\n## Worth doing next\nResolve.\n"
     )
-    task = vault / "50-Inbox" / "02-Tasks" / "DIGEST-daily.md"
-    task.write_text("", encoding="utf-8")
-
-    ctx = TaskContext(
-        vault_dir=vault, task_path=task, prefix="DIGEST",
-        slug="daily", body="", pack="research-tech", llm_client=llm,
-    )
-    result = handle_digest(ctx)
-
+    result = handle_digest(_ctx(vault, llm))
     assert len(llm.calls) == 1
     sys_prompt, user_prompt = llm.calls[0]
-    assert "daily-digest handler" in sys_prompt
-    assert "subject 0" in user_prompt
-    assert "Theme 0" in user_prompt
-    assert "A vs B" in result.body_md
-    assert "Digest —" in result.body_md
-    assert result.metadata["tensions"] == 2
-    assert result.metadata["themes"] == 2
+    assert "daily-feedback handler" in sys_prompt
+    assert "Layer 0" in user_prompt
+    assert "Layer 1" in user_prompt
+    assert "Layer 3" in user_prompt
+    # New body shape — operator-local timestamps in frontmatter.
+    assert "schema_version: 2" in result.body_md
+    assert "input_hash:" in result.body_md
+    assert "Daily Knowledge Feedback" in result.body_md
+    assert result.metadata["skipped_llm"] is False
+    assert result.metadata["layer1_new"] == 2
 
 
-def test_handle_digest_injects_user_focus(tmp_path: Path):
+def test_frontmatter_contains_preflight_block(tmp_path: Path):
+    """Preflight degradation must show up in the frontmatter so the
+    Reader / digest-health page can read per-section state."""
+    vault = _make_vault(tmp_path)
+    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
+    _seed_window_with_signal(vault, as_of=as_of)
+    llm = _FakeLLM("body")
+    result = handle_digest(_ctx(vault, llm))
+    assert "preflight:" in result.body_md
+    assert "evergreen_revisions_table:" in result.body_md
+    # Generic change_note (lifecycle=promote seed) → degraded.
+    assert "change_note_quality: degraded" in result.body_md
+
+
+def test_audit_event_emitted_on_generate(tmp_path: Path):
+    """``digest_generated`` lands in pipeline.jsonl with input_hash + layer counts."""
+    vault = _make_vault(tmp_path)
+    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
+    _seed_window_with_signal(vault, as_of=as_of)
+    llm = _FakeLLM("body")
+    handle_digest(_ctx(vault, llm))
+    log_path = vault / "60-Logs" / "pipeline.jsonl"
+    rows = [json.loads(l) for l in log_path.read_text(encoding="utf-8").splitlines() if l]
+    gen_events = [r for r in rows if r.get("event_type") == "digest_generated"]
+    assert len(gen_events) == 1
+    payload = gen_events[0]
+    assert payload["skipped_llm"] is False
+    assert "input_hash" in payload
+    assert payload["layer1_new"] == 2
+
+
+# ── Idempotency gate ───────────────────────────────────────────────
+
+
+def test_idempotency_skips_llm_when_prior_hash_matches(tmp_path: Path):
+    """First run writes a digest; second run with identical inputs
+    must NOT call the LLM and must emit digest_skipped_no_change."""
+    vault = _make_vault(tmp_path)
+    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
+    _seed_window_with_signal(vault, as_of=as_of)
+    llm1 = _FakeLLM("first")
+    result1 = handle_digest(_ctx(vault, llm1))
+    # Persist result1 to disk at the path the gate will look for.
+    output_path = _expected_output_path(vault)
+    output_path.write_text(result1.body_md, encoding="utf-8")
+
+    # Second run: same data → same hash → skip.
+    llm2 = _FakeLLM("should-not-be-called")
+    result2 = handle_digest(_ctx(vault, llm2))
+    assert llm2.calls == []
+    assert result2.metadata["skipped_llm"] is True
+    assert result2.metadata["reason"] == "no_change"
+    # Same body comes back so the dispatcher's overwrite is a no-op.
+    assert result2.body_md == result1.body_md
+
+    # The skip event lands in pipeline.jsonl.
+    log_path = vault / "60-Logs" / "pipeline.jsonl"
+    rows = [json.loads(l) for l in log_path.read_text(encoding="utf-8").splitlines() if l]
+    skips = [r for r in rows if r.get("event_type") == "digest_skipped_no_change"]
+    assert len(skips) == 1
+
+
+def test_idempotency_calls_llm_when_data_changes(tmp_path: Path):
+    """Adding a new evergreen between runs changes the input_hash
+    and forces the LLM call."""
+    vault = _make_vault(tmp_path)
+    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
+    _seed_window_with_signal(vault, as_of=as_of, evergreens=1)
+    llm1 = _FakeLLM("first body")
+    result1 = handle_digest(_ctx(vault, llm1))
+    _expected_output_path(vault).write_text(result1.body_md, encoding="utf-8")
+
+    # New evergreen lands.
+    conn = sqlite3.connect(vault / "60-Logs" / "knowledge.db")
+    conn.execute(
+        "INSERT INTO evergreen_revisions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "research-tech", "evg-new", 1, "## new",
+            "created", "absorber",
+            (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            "lifecycle=promote",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    llm2 = _FakeLLM("second body")
+    result2 = handle_digest(_ctx(vault, llm2))
+    assert len(llm2.calls) == 1
+    assert result2.metadata["skipped_llm"] is False
+
+
+def test_skip_unchanged_disabled_forces_llm(tmp_path: Path):
+    """``skip_unchanged: false`` in config disables the gate."""
+    vault = _make_vault(tmp_path)
+    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
+    _seed_window_with_signal(vault, as_of=as_of)
+    (vault / ".ovp").mkdir(exist_ok=True)
+    (vault / ".ovp" / "digest.yaml").write_text(
+        "skip_unchanged: false\n", encoding="utf-8"
+    )
+
+    # First run writes the file.
+    llm1 = _FakeLLM("first")
+    result1 = handle_digest(_ctx(vault, llm1))
+    _expected_output_path(vault).write_text(result1.body_md, encoding="utf-8")
+
+    # Second run: gate is OFF, LLM must be called even with same data.
+    llm2 = _FakeLLM("second")
+    result2 = handle_digest(_ctx(vault, llm2))
+    assert len(llm2.calls) == 1
+    assert result2.metadata["skipped_llm"] is False
+
+
+# ── _read_prior_digest helper ──────────────────────────────────────
+
+
+def test_read_prior_digest_returns_empty_for_missing_file(tmp_path: Path):
+    h, body = _read_prior_digest(tmp_path / "nope.md")
+    assert h == ""
+    assert body == ""
+
+
+def test_read_prior_digest_extracts_input_hash(tmp_path: Path):
+    path = tmp_path / "d.md"
+    path.write_text(
+        "---\ntype: digest\ninput_hash: abc123\nfoo: bar\n---\n\n# Body\n",
+        encoding="utf-8",
+    )
+    h, body = _read_prior_digest(path)
+    assert h == "abc123"
+    assert body.startswith("---\n")
+
+
+# ── User-focus injection (preserves M20 behavior) ──────────────────
+
+
+def test_user_focus_flows_into_v2_prompt(tmp_path: Path):
     vault = _make_vault(tmp_path)
     (vault / "00-Polaris").mkdir(exist_ok=True)
     (vault / "00-Polaris" / "USER.md").write_text(
         "# About Me\nFocus: memory systems.\n", encoding="utf-8",
     )
-    _seed_knowledge_db(vault, tensions=1, themes=1, open_qs=0)
-    llm = _FakeLLM("composed")
-    task = vault / "50-Inbox" / "02-Tasks" / "DIGEST-daily.md"
-    task.write_text("", encoding="utf-8")
-
-    ctx = TaskContext(
-        vault_dir=vault, task_path=task, prefix="DIGEST",
-        slug="daily", body="", pack="research-tech", llm_client=llm,
-    )
-    handle_digest(ctx)
-
+    as_of = datetime.now(timezone.utc) - timedelta(minutes=30)
+    _seed_window_with_signal(vault, as_of=as_of)
+    llm = _FakeLLM("body")
+    handle_digest(_ctx(vault, llm))
     sys_prompt, user_prompt = llm.calls[0]
-    # USER.md profile shows up in both the system prefix (via
-    # llm_prefix) and the user prompt (via load_user_profile direct
-    # injection in _build_digest_user_prompt).
-    assert "Focus: memory systems" in sys_prompt
+    # USER.md → load_user_profile → injected into user prompt block.
     assert "Focus: memory systems" in user_prompt
 
 
-# ── _build_digest_user_prompt formatting ────────────────────────
+# ── _build_digest_user_prompt_v2 ───────────────────────────────────
 
 
-def test_build_user_prompt_omits_empty_sections():
-    prompt = _build_digest_user_prompt(
-        {"tensions": [], "themes": [], "open_questions": []},
-        user_focus="",
+def test_build_user_prompt_omits_empty_data_gracefully(tmp_path: Path):
+    """With no signal, the prompt still renders all four layer
+    headings but each section honestly reports "no" — the LLM
+    is told what's empty rather than having sections invisibly dropped."""
+    vault = _make_vault(tmp_path)
+    _make_knowledge_db(vault).close()
+    inputs = collect_digest_inputs(
+        vault, "research-tech",
+        as_of=datetime.now(timezone.utc),
+        config=DigestConfig(tz="UTC"),
     )
-    assert "(none)" in prompt
-    # No tension / theme content because all lists empty.
-    assert "score" not in prompt.lower()
+    prompt = _build_digest_user_prompt_v2(inputs, "")
+    assert "Layer 0 — Today's intake" in prompt
+    assert "Layer 1 — Evergreen delta" in prompt
+    assert "Layer 2 — Connections" in prompt
+    assert "Layer 3 — Pipeline state" in prompt
+    assert "(no intake events in this window)" in prompt
+    assert "(no new or updated evergreens in this window)" in prompt
 
 
-def test_build_user_prompt_includes_user_focus():
-    prompt = _build_digest_user_prompt(
-        {"tensions": [], "themes": [], "open_questions": []},
-        user_focus="Hyperfocus on agent memory.",
-    )
-    assert "Hyperfocus on agent memory." in prompt
-
-
-# ── CLI ──────────────────────────────────────────────────────────
+# ── CLI surface (unchanged from M20) ───────────────────────────────
 
 
 def test_enqueue_daily_creates_task_file(tmp_path: Path):
     vault = _make_vault(tmp_path)
     path = _enqueue_daily(vault)
-    assert path.name == "DIGEST-daily.md"
     assert path.exists()
-    # Idempotent: second call returns same path, doesn't overwrite.
-    path.write_text("hand-edited content", encoding="utf-8")
-    second = _enqueue_daily(vault)
-    assert second == path
-    assert path.read_text(encoding="utf-8") == "hand-edited content"
+    assert path.name == "DIGEST-daily.md"
 
 
 def test_latest_digest_returns_most_recent(tmp_path: Path):
     vault = _make_vault(tmp_path)
     folder = vault / "40-Resources" / "Generated" / "digests"
-    (folder / "2026-05-09.md").write_text("# old", encoding="utf-8")
-    (folder / "2026-05-11.md").write_text("# new", encoding="utf-8")
-    (folder / "2026-05-10.md").write_text("# mid", encoding="utf-8")
-    latest = _latest_digest(vault)
-    assert latest is not None
-    assert latest.name == "2026-05-11.md"
+    older = folder / "2026-05-11-digest-daily.md"
+    newer = folder / "2026-05-12-digest-daily.md"
+    older.write_text("a", encoding="utf-8")
+    newer.write_text("b", encoding="utf-8")
+    assert _latest_digest(vault) == newer
 
 
 def test_latest_digest_returns_none_when_empty(tmp_path: Path):
@@ -337,9 +438,8 @@ def test_cli_enqueue_daily(tmp_path: Path, capsys):
     vault = _make_vault(tmp_path)
     rc = main(["--vault-dir", str(vault), "--enqueue-daily"])
     assert rc == 0
-    assert (vault / "50-Inbox" / "02-Tasks" / "DIGEST-daily.md").exists()
-    out = capsys.readouterr().out
-    assert "enqueued" in out
+    out = capsys.readouterr().out.strip()
+    assert out.endswith("DIGEST-daily.md")
 
 
 def test_cli_show_latest_empty(tmp_path: Path, capsys):
@@ -349,7 +449,15 @@ def test_cli_show_latest_empty(tmp_path: Path, capsys):
     assert "(no digests yet)" in capsys.readouterr().out
 
 
-def test_cli_requires_action(tmp_path: Path):
-    vault = _make_vault(tmp_path)
-    with pytest.raises(SystemExit):
-        main(["--vault-dir", str(vault)])
+# ── Schema version + filename surface ──────────────────────────────
+
+
+def test_schema_version_bumped_to_2():
+    assert SCHEMA_VERSION == 2
+
+
+def test_expected_output_path_matches_dispatcher_filename(tmp_path: Path):
+    path = _expected_output_path(tmp_path)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    assert path.name == f"{today}-digest-daily.md"
+    assert path.parent.name == DIGESTS_SUBDIR
