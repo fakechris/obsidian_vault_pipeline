@@ -519,11 +519,24 @@ def _render_no_data_body(inputs: DigestInputs) -> str:
         "Drop a few articles into `50-Inbox/01-Raw/` and run the "
         "ingestion pipeline; tomorrow's digest will reflect them."
     )
+    # CodeRabbit: distinguish "audit didn't run" from "audit ran +
+    # no events".  The original message conflated both as
+    # "No new intake in this window.", which is misleading when
+    # ``ovp-knowledge-index`` simply hasn't built the audit_events
+    # table yet.
+    if preflight.audit_events_layer0 == "ok":
+        intake_line = "No new intake in this window."
+    else:
+        intake_line = (
+            "Intake data unavailable — the audit_events table is "
+            "missing or empty.  Run `ovp-knowledge-index` to rebuild."
+        )
     body = (
         frontmatter
         + f"# Daily Knowledge Feedback — {date_label}\n\n"
         "## Window's intake\n\n"
-        "No new intake in this window.\n\n"
+        + intake_line
+        + "\n\n"
         + (f"## Pipeline state\n\n{diag_block}\n" if diag else "")
         + "## Worth doing next\n\n"
         + suggestion

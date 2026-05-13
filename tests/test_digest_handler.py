@@ -192,7 +192,14 @@ def test_no_data_path_skips_llm(tmp_path: Path):
     llm = _FakeLLM("must-not-be-called")
     result = handle_digest(_ctx(vault, llm))
     assert llm.calls == []
-    assert "No new intake in this window." in result.body_md
+    # Without audit_events, the body says "Intake data unavailable"
+    # rather than the misleading "No new intake" (CodeRabbit fix).
+    # Both forms appear under "## Window's intake".
+    assert "## Window's intake" in result.body_md
+    assert (
+        "No new intake in this window." in result.body_md
+        or "Intake data unavailable" in result.body_md
+    )
     assert result.metadata["skipped_llm"] is True
     assert result.metadata["reason"] == "no_data"
     assert result.subdir == DIGESTS_SUBDIR
