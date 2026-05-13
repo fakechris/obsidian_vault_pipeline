@@ -649,6 +649,79 @@ def append_turn(
         return updated_fm
 
 
+def set_visibility(path: Path, new_visibility: str) -> ChatFrontmatter:
+    """Flip a chat session's ``visibility`` in place atomically.
+
+    Used by the M22 drawer when an operator clicks Save / Absorb on
+    an ephemeral inquiry — the file is created as ``unindexed`` so
+    it stays out of /search and /chats during composition, and Save
+    promotes it to ``indexed`` after the operator has decided.
+
+    Body of the file is untouched.  The frontmatter is rewritten
+    via the same ``.pending`` rename used by :func:`append_turn`,
+    under the per-chat advisory lock.
+    """
+    if new_visibility not in _VISIBILITY_VALUES:
+        raise ValueError(
+            f"unknown visibility {new_visibility!r}; "
+            f"expected one of {sorted(_VISIBILITY_VALUES)}"
+        )
+    if not path.is_file():
+        raise ValueError(f"cannot set_visibility: {path} does not exist")
+
+    with _per_chat_lock(path):
+        text = path.read_text(encoding="utf-8")
+        raw, body_text = _split_frontmatter(text)
+        if not raw:
+            raise ValueError(f"cannot set_visibility: {path} has no frontmatter")
+        fm_current = _parse_frontmatter(raw)
+        if fm_current is None:
+            raise ValueError(f"cannot set_visibility: {path} is not a valid chat transcript")
+        if fm_current.visibility == new_visibility:
+            return fm_current
+        updated = ChatFrontmatter(
+            chat_id=fm_current.chat_id,
+            status=fm_current.status,
+            visibility=new_visibility,
+            save_policy=fm_current.save_policy,
+            anchor=fm_current.anchor,
+            profile=fm_current.profile,
+            model=fm_current.model,
+            temperature=fm_current.temperature,
+            started_at=fm_current.started_at,
+            last_message_at=fm_current.last_message_at,
+            turn_count=fm_current.turn_count,
+            schema_version=fm_current.schema_version,
+        )
+        new_raw = _ordered_dump(_frontmatter_to_yaml_dict(updated))
+        if not body_text.startswith("\n"):
+            body_text = "\n" + body_text
+        new_text = f"---\n{new_raw}\n---{body_text}"
+        _atomic_write(path, new_text)
+        return updated
+
+
+def delete_chat(path: Path) -> None:
+    """Delete a chat transcript and its lock sentinel.
+
+    Used by the M22 drawer's Discard action — an operator who
+    finishes an inquiry without wanting to keep it in /search.
+    The session file lived as ``unindexed`` so nothing references
+    it; safe to unlink.
+
+    Missing target is not an error (idempotent discard).
+    """
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def mark_interrupted(
     path: Path,
     *,
