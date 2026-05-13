@@ -28,6 +28,7 @@ import sqlite3
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from ovp_pipeline.runtime import VaultLayout
 
@@ -87,8 +88,12 @@ def list_indexed_chats(db_path: Path) -> list[ChatRow]:
                     ChatRow(
                         chat_id=str(row[0]),
                         file_path=str(row[1]),
-                        status=str(row[2]) or "active",
-                        anchor_kind=str(row[3]) or "standalone",
+                        # Coalesce BEFORE casting (CodeRabbit Minor) —
+                        # ``str(None)`` is ``"None"`` (truthy), so the
+                        # ``or "active"`` fallback never fired when the
+                        # column was NULL.
+                        status=str(row[2] or "active"),
+                        anchor_kind=str(row[3] or "standalone"),
                         anchor_ref=str(row[4] or ""),
                         anchor_title=str(row[5] or ""),
                         profile=str(row[6] or ""),
@@ -146,9 +151,15 @@ def _render_chat_row(row: ChatRow) -> str:
     )
     timestamp = escape(row.last_message_at[:10] or "—")
     title = _row_title(row)
+    # CodeRabbit Major: HTML-escape isn't the right encoding for URL
+    # parameters.  ``chat_id`` is validated against ``_CHAT_ID_RE``
+    # at write time so it doesn't contain ``&`` / ``?`` today, but
+    # treating the value as a URL fragment defends against any
+    # future schema where the id permits richer characters.
+    chat_id_url = quote_plus(row.chat_id)
     return (
         '<li class="chat-list-item">'
-        f'<a class="chat-list-link" href="/chat?id={escape(row.chat_id)}">'
+        f'<a class="chat-list-link" href="/chat?id={chat_id_url}">'
         f'<span class="chat-list-date">{timestamp}</span> '
         f"<strong>{escape(title)}</strong>"
         "</a> "
