@@ -225,6 +225,10 @@ def _reader_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
         ("Library", "/"),
         ("Search", "/search"),
         ("Topics", "/topics"),
+        # M21 BL-088: ``/chats`` is the inquiry history surface.
+        # Without a nav entry, operators have no discoverable path
+        # back from a session they just started (codex review P2).
+        ("Chats", "/chats"),
     ]
     if _shell_supports_research_nav(requested_pack):
         items.append(("Map", "/map"))
@@ -3536,9 +3540,7 @@ def _render_topic_page(payload: dict) -> str:
     # ``links.center_object_path`` is a route URL (``/object?id=...``),
     # NOT a vault path — CodeRabbit Major.  Use ``provenance.evergreen_path``
     # (the actual markdown file) instead.
-    center_path = str(
-        payload.get("provenance", {}).get("evergreen_path") or ""
-    )
+    center_path = str(payload.get("provenance", {}).get("evergreen_path") or "")
     ask_button = _render_ask_about_this_button(
         "object",
         center_path,
