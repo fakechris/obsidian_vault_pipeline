@@ -265,7 +265,7 @@ def collect_digest_inputs(
         conn.row_factory = sqlite3.Row
         preflight = _run_preflight(conn, window_start, window_end, config)
         intake = _collect_layer0(conn, window_start, window_end, config)
-        delta = _collect_layer1(conn, window_start, window_end, preflight)
+        delta = _collect_layer1(conn, pack, window_start, window_end, preflight)
         connections = _collect_layer2(conn, pack, delta)
         pipeline_state = _collect_layer3(conn, pack, config)
 
@@ -552,6 +552,7 @@ def _top_keyword_distribution(titles: Iterable[str]) -> tuple[tuple[str, int], .
 
 def _collect_layer1(
     conn: sqlite3.Connection,
+    pack: str,
     window_start: datetime,
     window_end: datetime,
     preflight: PreflightReport,
@@ -559,23 +560,29 @@ def _collect_layer1(
     if preflight.evergreen_revisions_table != "ok":
         return DeltaLayer((), ())
     try:
+        # Codex P2: ``objects`` is keyed by ``(pack, object_id)`` in
+        # multi-pack vaults; joining on object_id alone can pick a
+        # foreign-pack title.  Pack-scope both the revision filter
+        # and the objects join.
         rows = conn.execute(
             """
             SELECT er.object_id, er.version, er.change_type,
                    er.derived_at, er.change_note,
                    o.title
               FROM evergreen_revisions er
-              LEFT JOIN objects o ON o.object_id = er.object_id
-             WHERE er.derived_at >= ?
+              LEFT JOIN objects o
+                ON o.pack = er.pack AND o.object_id = er.object_id
+             WHERE er.pack = ?
+               AND er.derived_at >= ?
                AND er.derived_at <= ?
              ORDER BY er.derived_at DESC
             """,
-            (window_start.isoformat(), window_end.isoformat()),
+            (pack, window_start.isoformat(), window_end.isoformat()),
         ).fetchall()
     except sqlite3.OperationalError:
         return DeltaLayer((), ())
 
-    cluster_index = _build_cluster_membership_index(conn)
+    cluster_index = _build_cluster_membership_index(conn, pack=pack)
     new_rows: list[EvergreenDelta] = []
     updated_rows: list[EvergreenDelta] = []
 
@@ -634,19 +641,29 @@ def _format_change_summary(
     return f"v{version}: {change_type or 'changed'}"
 
 
-def _build_cluster_membership_index(conn: sqlite3.Connection) -> dict[str, str]:
-    """Return ``{object_id: cluster_id}`` for every clustered object.
+def _build_cluster_membership_index(
+    conn: sqlite3.Connection, *, pack: str
+) -> dict[str, str]:
+    """Return ``{object_id: cluster_id}`` for every clustered object
+    in ``pack``.
 
     ``graph_clusters.member_object_ids_json`` is a JSON array of
     object_ids per cluster.  We invert it once per collect call.  At
     expected scale (hundreds of clusters, thousands of objects), this
     is cheaper than per-row ``json_each`` joins.
+
+    Codex P2: this index is consumed by Layer 2/3 which compare
+    cluster ids against the **requested pack's** crystals; building
+    the index globally lets a foreign-pack cluster slip into the
+    answer in multi-pack vaults.  Scope to the requested pack at
+    the SQL boundary.
     """
     if _check_table_exists(conn, "graph_clusters") != "ok":
         return {}
     try:
         rows = conn.execute(
-            "SELECT cluster_id, member_object_ids_json FROM graph_clusters"
+            "SELECT cluster_id, member_object_ids_json FROM graph_clusters WHERE pack = ?",
+            (pack,),
         ).fetchall()
     except sqlite3.OperationalError:
         return {}
@@ -796,7 +813,7 @@ def _collect_layer3(
 
     # Build per-cluster aggregates from evergreen_revisions + the
     # cluster membership index, then compare against community_crystals.
-    membership = _build_cluster_membership_index(conn)
+    membership = _build_cluster_membership_index(conn, pack=pack)
     if not membership:
         return PipelineState(
             unsynthesized_evergreens=0,
@@ -806,12 +823,17 @@ def _collect_layer3(
         )
 
     try:
+        # Codex P2 sibling: pack-scope the aggregate so a multi-pack
+        # vault doesn't borrow another pack's revision history when
+        # counting unsynthesized evergreens.
         rows = conn.execute(
             """
             SELECT object_id, MAX(derived_at) AS latest_at
               FROM evergreen_revisions
+             WHERE pack = ?
              GROUP BY object_id
-            """
+            """,
+            (pack,),
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
