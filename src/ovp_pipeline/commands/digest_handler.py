@@ -276,7 +276,9 @@ def _is_no_data(inputs: DigestInputs) -> bool:
     return not (has_intake or has_delta or has_connections or has_pipeline_signal)
 
 
-def _expected_output_path(vault_dir: Path | str) -> Path:
+def _expected_output_path(
+    vault_dir: Path | str, *, date_str: str | None = None
+) -> Path:
     """Compose the filename the dispatcher will write today's digest to.
 
     Mirrors ``task_dispatch._resolve_output_path`` for the DIGEST
@@ -285,8 +287,17 @@ def _expected_output_path(vault_dir: Path | str) -> Path:
     intentional for backwards-compat with the existing
     ``ovp-digest --show-latest`` glob, and operator-local timestamps
     inside the frontmatter make any tz mismatch auditable.
+
+    ``date_str`` lets the caller pin the date explicitly (e.g. from
+    the window the inputs cover, or from the task filename).  Default
+    falls back to UTC-today so today's behavior is unchanged.  A
+    future "regenerate digest for a past date" flow can pass
+    ``date_str=window_end.date().isoformat()`` to get the matching
+    historical file path without the idempotency gate falsely
+    treating it as a fresh day (gemini-code-assist HIGH).
     """
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if date_str is None:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return (
         Path(vault_dir)
         / "40-Resources"
