@@ -320,8 +320,12 @@ Acceptance after each:
   (`chat_handler`) stay unchanged for backend
 - BL-086 (`_chat_page.py`) → reuse `_profile_options`,
   `parse_anchor_string`
-- BL-087 (`_render_ask_about_this_button`) → modified to emit a
-  drawer-trigger `<button>` instead of `<a href>`
+- BL-087 (`_render_ask_about_this_button`) → emits an
+  `<a href="/chat?anchor=…">` wrapping a `<button>` (matches the
+  progressive-enhancement contract in the "What changes vs. M21"
+  table).  Delegated JS intercepts the anchor's `click`,
+  `preventDefault`s, and opens the drawer.  No-JS path: the
+  anchor follows its `href` normally → BL-086's standalone page.
 - BL-088 (`_chats_list_page.py`) → unchanged; drawer's Save
   affordance writes through the same `create_chat_file` →
   projection rebuild path
