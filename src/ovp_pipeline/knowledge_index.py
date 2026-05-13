@@ -32,7 +32,7 @@ SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
 AUTHORITY_SCHEMA_VERSION = 1
 KNOWLEDGE_DB_PROJECTION_KIND = "knowledge_db"
-KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 7
+KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 8
 
 
 _FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
@@ -154,6 +154,33 @@ CREATE TABLE entity_mentions (
 CREATE INDEX idx_entity_mentions_entity ON entity_mentions(entity_slug);
 CREATE INDEX idx_entity_mentions_source ON entity_mentions(source_slug);
 CREATE INDEX idx_entity_mentions_type ON entity_mentions(entity_type);
+
+-- M21 BL-085: ``chats`` is a *display / metadata* projection over
+-- the ``40-Resources/Chats/**/*.md`` corpus.  Lifetime token counts
+-- here are display derivatives only — daily-cap math in BL-084
+-- reads the append-only ``audit_events`` ledger, not this table.
+CREATE TABLE chats (
+  chat_id TEXT PRIMARY KEY,
+  pack TEXT NOT NULL DEFAULT '',
+  file_path TEXT NOT NULL,
+  status TEXT NOT NULL,            -- active | pinned | archived
+  visibility TEXT NOT NULL,        -- indexed | unindexed
+  anchor_kind TEXT NOT NULL,
+  anchor_ref TEXT NOT NULL DEFAULT '',
+  anchor_title TEXT NOT NULL DEFAULT '',
+  profile TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  temperature REAL NOT NULL DEFAULT 0.7,
+  started_at TEXT NOT NULL DEFAULT '',
+  last_message_at TEXT NOT NULL DEFAULT '',
+  turn_count INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX idx_chats_pack_last ON chats(pack, last_message_at DESC);
+CREATE INDEX idx_chats_visibility ON chats(visibility);
+CREATE INDEX idx_chats_status ON chats(status);
 """
 
 SCHEMA += "\n" + TRUTH_STORE_SCHEMA
@@ -878,6 +905,17 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
             "confidence",
             "detection_method",
         },
+        # M21 BL-085 — chats projection.  Required so existing
+        # vaults trigger a full rebuild when this code lands;
+        # without the table, ``/chats`` and the visibility-aware
+        # FTS would silently 500.  Schema version bumped to 8.
+        "chats": {
+            "chat_id",
+            "visibility",
+            "anchor_kind",
+            "status",
+            "file_path",
+        },
     }
     try:
         with sqlite3.connect(db_path) as conn:
@@ -1346,6 +1384,24 @@ def rebuild_knowledge_index(
             except Exception as exc:
                 logger.warning(
                     "crystal page_fts indexing skipped: %s", exc,
+                )
+
+            # M21 BL-085: rebuild chats projection.  Indexed sessions
+            # also land in pages_index + page_fts so /search finds
+            # them; unindexed sessions get a chats row only.  Best-
+            # effort — never block the primary index rebuild.
+            try:
+                from .chats_projection import rebuild_chats_projection
+                chats_counts = rebuild_chats_projection(
+                    conn, vault_dir=layout.vault_dir,
+                )
+                if chats_counts.get("total"):
+                    logger.debug(
+                        "chats projection rebuilt: %s", chats_counts,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "chats projection rebuild skipped: %s", exc,
                 )
 
             conn.commit()
