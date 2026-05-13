@@ -2,9 +2,12 @@
 
 Covers:
 
-* ``_decode_slugs`` rejects non-list JSON (rev-bot 208 round-2 #5).
-* ``_build_sources_section`` strips wikilink delimiters from
+* ``_safe_wikilink`` strips wikilink delimiters from
   operator-supplied labels / slugs (rev-bot 208 round-2 #6).
+  Originally tested via ``_build_sources_section`` against the M20
+  dict-shape inputs; M23 rewrote the sources block to consume
+  ``DigestInputs`` (BL-095), so the delimiter-safety invariant now
+  lives in ``_safe_wikilink`` directly.
 * ``_render_frontmatter_details`` skips the disclosure block when
   the file has no frontmatter (rev-bot 208 round-2 #4).
 * ``_evolution_candidate_lock`` returns distinct locks for
@@ -21,82 +24,43 @@ from pathlib import Path
 
 from ovp_pipeline._truth_helpers import _evolution_candidate_lock
 from ovp_pipeline.commands._ui_renderers import _render_frontmatter_details
-from ovp_pipeline.commands.digest_handler import _build_sources_section
-
-
-# ── _decode_slugs robustness via _build_sources_section ──────────
-
-
-def test_sources_section_tolerates_null_json_payload():
-    """A row whose ``source_evergreen_slugs_json`` was stored as
-    ``null`` (or any non-list) must not abort digest generation."""
-    inputs = {
-        "tensions": [],
-        # Themes carry the suspect field; if _decode_slugs
-        # crashes, this call raises.
-        "themes": [
-            {
-                "cluster_id": "cluster::abc",
-                "label": "Theme A",
-                "source_evergreen_slugs": [],  # decoded already
-            },
-        ],
-        "open_questions": [],
-    }
-    md = _build_sources_section(inputs)
-    assert "Crystals" in md
-    assert "Theme A" in md
+from ovp_pipeline.commands.digest_handler import _safe_wikilink
 
 
 # ── wikilink delimiter sanitisation ─────────────────────────────
 
 
-def test_sources_section_strips_label_delimiters():
-    """``]]`` and ``|`` in a label would close or split the
-    wikilink prematurely; both must be stripped."""
-    inputs = {
-        "tensions": [],
-        "themes": [
-            {
-                "cluster_id": "cluster::abc",
-                "label": "Tricky ]] | label\nwith newline",
-                "source_evergreen_slugs": [],
-            },
-        ],
-        "open_questions": [],
-    }
-    md = _build_sources_section(inputs)
-    # The crystal link is rendered with the safe-id as target and
-    # a sanitised label.  No nested ]] or | inside the wikilink.
-    crystal_line = [
-        ln for ln in md.splitlines() if ln.startswith("- [[abc")
-    ][0]
-    # Exactly two ``]]`` (the closing bracket of the wikilink)
-    # and exactly one ``|`` (the target/label separator).
-    assert crystal_line.count("]]") == 1
-    assert crystal_line.count("|") == 1
-    assert "\n" not in crystal_line
+def test_safe_wikilink_strips_closing_brackets():
+    """``]`` would close the wikilink prematurely; both ``[`` and
+    ``]`` are stripped to whitespace."""
+    assert "]" not in _safe_wikilink("trailing]]bad")
+    assert "[" not in _safe_wikilink("[[wrapped]]")
 
 
-def test_sources_section_strips_slug_delimiters():
-    """Evergreen slug rows likewise sanitise on render."""
-    inputs = {
-        "tensions": [],
-        "themes": [
-            {
-                "cluster_id": "cluster::abc",
-                "label": "Theme",
-                "source_evergreen_slugs": ["bad]]slug", "ok-slug"],
-            },
-        ],
-        "open_questions": [],
-    }
-    md = _build_sources_section(inputs)
-    # The bad slug's ``]]`` was stripped — no nested ``]]``
-    # inside any single evergreen row.
-    for line in md.splitlines():
-        if line.startswith("- [[") and "Theme" not in line:
-            assert line.count("]]") == 1
+def test_safe_wikilink_strips_pipe():
+    """``|`` is the wikilink target/label separator — stripping it
+    avoids accidentally splitting a single value into two parts."""
+    assert "|" not in _safe_wikilink("a|b|c")
+
+
+def test_safe_wikilink_strips_newlines():
+    """Newlines would break out of the surrounding list item."""
+    assert "\n" not in _safe_wikilink("line1\nline2")
+
+
+def test_safe_wikilink_handles_falsy():
+    """``None`` / empty / falsy inputs degrade to ``''`` via
+    ``str(value or "")`` — the implementation collapses any falsy
+    value (incl. ``0``) so the surrounding wikilink doesn't render
+    a bogus ``[[0]]`` row from a missing-int field."""
+    assert _safe_wikilink(None) == ""
+    assert _safe_wikilink("") == ""
+    assert _safe_wikilink(0) == ""
+
+
+def test_safe_wikilink_preserves_safe_chars():
+    """Hyphens, underscores, alphanumerics, colons survive."""
+    assert _safe_wikilink("cluster::memory-systems_v2") == "cluster::memory-systems_v2"
 
 
 # ── _render_frontmatter_details elision ─────────────────────────
