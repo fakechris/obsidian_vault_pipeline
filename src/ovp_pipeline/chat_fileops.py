@@ -679,24 +679,20 @@ def set_visibility(path: Path, new_visibility: str) -> ChatFrontmatter:
             raise ValueError(f"cannot set_visibility: {path} is not a valid chat transcript")
         if fm_current.visibility == new_visibility:
             return fm_current
-        updated = ChatFrontmatter(
-            chat_id=fm_current.chat_id,
-            status=fm_current.status,
-            visibility=new_visibility,
-            save_policy=fm_current.save_policy,
-            anchor=fm_current.anchor,
-            profile=fm_current.profile,
-            model=fm_current.model,
-            temperature=fm_current.temperature,
-            started_at=fm_current.started_at,
-            last_message_at=fm_current.last_message_at,
-            turn_count=fm_current.turn_count,
-            schema_version=fm_current.schema_version,
-        )
+        # ``dataclasses.replace`` future-proofs against new fields
+        # landing on ChatFrontmatter — manual field-by-field copy
+        # was a maintenance hazard (gemini review).
+        from dataclasses import replace as _dc_replace
+
+        updated = _dc_replace(fm_current, visibility=new_visibility)
         new_raw = _ordered_dump(_frontmatter_to_yaml_dict(updated))
-        if not body_text.startswith("\n"):
-            body_text = "\n" + body_text
-        new_text = f"---\n{new_raw}\n---{body_text}"
+        # CodeRabbit: ``_split_frontmatter`` consumes one newline
+        # after the closing ``---``; reconstructing with just
+        # ``---{body_text}`` would lose the blank line operators
+        # expect between frontmatter and body.  Force exactly one
+        # leading newline, then ensure a second blank-line break.
+        body_clean = body_text.lstrip("\n")
+        new_text = f"---\n{new_raw}\n---\n\n{body_clean}"
         _atomic_write(path, new_text)
         return updated
 
@@ -710,16 +706,27 @@ def delete_chat(path: Path) -> None:
     it; safe to unlink.
 
     Missing target is not an error (idempotent discard).
+
+    Lock-file lifecycle (gemini HIGH): Unix ``flock`` is bound to
+    the open file descriptor, not the inode.  Unlinking
+    ``<path>.lock`` here while another writer holds it is safe —
+    the holder keeps its lock until it closes the fd, even after
+    the directory entry is gone.  The next writer creates a fresh
+    lock file via ``O_CREAT``, which means *the two writers
+    serialize on different inodes* and the per-chat invariant
+    breaks.  Mitigation: discard is only called from the drawer's
+    Save / Discard action, which the UI gates behind a finished
+    assistant turn — by construction no other writer should be
+    holding the lock.  If concurrent writers become a real concern,
+    move to a lock directory under ``.lock/`` keyed by chat id.
     """
-    try:
+    from contextlib import suppress
+
+    with suppress(FileNotFoundError):
         path.unlink()
-    except FileNotFoundError:
-        pass
     lock_path = path.with_suffix(path.suffix + ".lock")
-    try:
+    with suppress(FileNotFoundError):
         lock_path.unlink()
-    except FileNotFoundError:
-        pass
 
 
 def mark_interrupted(

@@ -142,8 +142,12 @@ def neighbour_links(vault_dir: Path | str, current_relpath: str) -> tuple[str, s
         return "", ""
     # rows are newest-first; "prev" in operator-speak means
     # *older*, i.e. further down the list.
+    # CodeRabbit: ``endswith`` on the encoded path can collide on
+    # path suffixes (``foo-bar.md`` ends with ``bar.md``); build the
+    # exact href the row would have and compare for equality.
+    target_href = f"/note?path={quote(current_relpath, safe='')}"
     idx = next(
-        (i for i, r in enumerate(rows) if r.href.endswith(quote(current_relpath, safe=""))),
+        (i for i, r in enumerate(rows) if r.href == target_href),
         -1,
     )
     if idx < 0:

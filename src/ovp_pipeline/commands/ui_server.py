@@ -189,7 +189,6 @@ def _maybe_update_chats_projection(
             remove_chat_projection,
             upsert_chat_projection,
         )
-        from ovp_pipeline.runtime import VaultLayout
 
         layout = VaultLayout.from_vault(vault_dir)
         if not layout.knowledge_db.is_file():
@@ -1550,7 +1549,7 @@ def create_server(
             anchor_raw = self._form_first(form, "anchor").strip()
             anchor_title = self._form_first(form, "anchor_title").strip()
             message = self._form_first(form, "message").strip()
-            profile = self._form_first(form, "profile").strip() or "balanced"
+            profile = self._form_first(form, "profile").strip()
             visibility = self._form_first(form, "visibility").strip() or "indexed"
 
             anchor_kind, anchor_ref = parse_anchor_string(anchor_raw)
@@ -1651,7 +1650,7 @@ def create_server(
             anchor_raw = self._form_first(form, "anchor").strip()
             anchor_title = self._form_first(form, "anchor_title").strip()
             message = self._form_first(form, "message").strip()
-            profile = self._form_first(form, "profile").strip() or "balanced"
+            profile = self._form_first(form, "profile").strip()
 
             anchor_kind, anchor_ref = parse_anchor_string(anchor_raw)
 
@@ -1796,9 +1795,11 @@ def create_server(
                         action="save",
                     )
                 elif action == "absorb":
-                    set_visibility(chat_path, "indexed")
-                    fm = parse_chat(chat_path)
-                    if fm is None or fm.turn_count < 1:
+                    # gemini review: set_visibility already returns the
+                    # updated frontmatter — reuse it instead of re-reading
+                    # the file via parse_chat.
+                    fm = set_visibility(chat_path, "indexed")
+                    if fm.turn_count < 1:
                         self._write_json(
                             {
                                 "error": "no_turns",

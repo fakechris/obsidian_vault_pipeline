@@ -363,12 +363,17 @@ def _render_digest_neighbour_nav(vault_dir: Path, relative_path: str) -> str:
     Returns an empty string for any note outside
     ``40-Resources/Generated/digests/`` — the helper is cheap to
     call on every thin-note render and short-circuits there.
+
+    CodeRabbit: a Windows-flavored relative path with backslashes
+    would otherwise miss the prefix check; normalize once so the
+    helper works regardless of caller-side separators.
     """
-    if not relative_path.startswith("40-Resources/Generated/digests/"):
+    normalized = relative_path.replace("\\", "/")
+    if not normalized.startswith("40-Resources/Generated/digests/"):
         return ""
     from ovp_pipeline.commands._digests_list_page import neighbour_links
 
-    older, newer = neighbour_links(vault_dir, relative_path)
+    older, newer = neighbour_links(vault_dir, normalized)
     parts: list[str] = []
     if older:
         parts.append(f"<a href='{escape(older)}'>← previous day</a>")
