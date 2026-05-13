@@ -516,11 +516,10 @@ def _anchor_title_for_note(relative_path: str, markdown: str) -> str:
     M — searching the whole body would pick up an example code
     fence's ``title:`` line), then the path basename.
     """
-    body = markdown
-    try:
-        frontmatter, body = _parse_frontmatter(markdown)
-    except Exception:
-        frontmatter = {}
+    # ``_parse_frontmatter`` already handles malformed YAML
+    # (returns ``{}, markdown``), so no try/except needed
+    # (CodeRabbit Minor — narrow broad exceptions).
+    frontmatter, body = _parse_frontmatter(markdown)
     for line in body.splitlines():
         if line.startswith("# "):
             text = line[2:].strip()
