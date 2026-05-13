@@ -269,6 +269,63 @@ def test_render_chats_list_body_standalone_anchor_pill(tmp_path: Path):
 # ── ChatRow dataclass ─────────────────────────────────────────
 
 
+# ── Codex P2 — Reader nav exposes Chats ──────────────────────
+
+
+def test_reader_nav_includes_chats_entry():
+    """The Reader shell nav must surface a Chats link so operators
+    can find the history list without typing the URL by hand."""
+    from ovp_pipeline.commands._ui_renderers import _reader_nav_items
+
+    items = _reader_nav_items()
+    labels = [label for label, _path in items]
+    paths = [path for _label, path in items]
+    assert "Chats" in labels
+    assert "/chats" in paths
+
+
+# ── Codex P2 — standalone sessions get unique titles ─────────
+
+
+def test_standalone_sessions_get_distinguishable_titles(tmp_path: Path):
+    """Without an anchor, the row title must fall back to the file
+    stem (or chat_id) rather than the literal word "standalone".
+    Otherwise every /chat session renders with the same bold
+    label and operators can't tell sessions apart."""
+    rows = [
+        {
+            "chat_id": "chat-aaa1",
+            "file_path": "40-Resources/Chats/2026-05/memory-question-aaa1.md",
+            "status": "active",
+            "visibility": "indexed",
+            "anchor_kind": "standalone",
+            "anchor_ref": "",
+            "anchor_title": "",
+            "profile": "balanced",
+            "last_message_at": "2026-05-12T11:00:00Z",
+            "turn_count": 2,
+        },
+        {
+            "chat_id": "chat-bbb2",
+            "file_path": "40-Resources/Chats/2026-05/agents-overview-bbb2.md",
+            "status": "active",
+            "visibility": "indexed",
+            "anchor_kind": "standalone",
+            "anchor_ref": "",
+            "anchor_title": "",
+            "profile": "balanced",
+            "last_message_at": "2026-05-11T11:00:00Z",
+            "turn_count": 3,
+        },
+    ]
+    vault = _make_vault_with_db(tmp_path, rows)
+    html = render_chats_list_body(vault)
+    # The two sessions get distinct bold titles drawn from the
+    # filename stem — not just the literal anchor kind.
+    assert "memory-question-aaa1" in html
+    assert "agents-overview-bbb2" in html
+
+
 def test_chat_row_is_frozen():
     """The dataclass must be immutable so list-view helpers can
     treat returned rows as values."""

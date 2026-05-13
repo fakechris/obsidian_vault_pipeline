@@ -112,6 +112,28 @@ def _group_by_status(rows: list[ChatRow]) -> dict[str, list[ChatRow]]:
     return grouped
 
 
+def _row_title(row: ChatRow) -> str:
+    """Pick a distinguishable row title.
+
+    Codex P2: every standalone session previously rendered with the
+    same bold "standalone" title because the anchor-label fallback
+    chain ended on ``anchor_kind``.  Now we fall back to the file
+    name (sans extension) and finally the chat_id when no friendlier
+    label exists, so each session is identifiable in the list.
+    """
+    if row.anchor_title:
+        return row.anchor_title
+    if row.anchor_ref:
+        return row.anchor_ref
+    if row.file_path:
+        stem = row.file_path.rsplit("/", 1)[-1]
+        if stem.endswith(".md"):
+            stem = stem[:-3]
+        if stem:
+            return stem
+    return row.chat_id
+
+
 def _render_chat_row(row: ChatRow) -> str:
     anchor_label = row.anchor_title or row.anchor_ref or row.anchor_kind
     anchor_pill = (
@@ -123,7 +145,7 @@ def _render_chat_row(row: ChatRow) -> str:
         f'<span class="pill">{escape(row.profile.capitalize())}</span>' if row.profile else ""
     )
     timestamp = escape(row.last_message_at[:10] or "—")
-    title = anchor_label or row.chat_id
+    title = _row_title(row)
     return (
         '<li class="chat-list-item">'
         f'<a class="chat-list-link" href="/chat?id={escape(row.chat_id)}">'
