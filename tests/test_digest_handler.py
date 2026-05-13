@@ -52,6 +52,11 @@ class _FakeLLM:
     def call(
         self, system_prompt: str, user_prompt: str, max_tokens: int = 0
     ) -> str:
+        # max_tokens is part of the test-double's keyword API the
+        # real LLM client exposes; keep the public name even though
+        # this fake doesn't read the value (CodeRabbit nit reverted
+        # because the handler calls ``llm.call(..., max_tokens=1200)``).
+        del max_tokens
         self.calls.append((system_prompt, user_prompt))
         return self.response
 
@@ -256,7 +261,7 @@ def test_audit_event_emitted_on_generate(tmp_path: Path):
     llm = _FakeLLM("body")
     handle_digest(_ctx(vault, llm))
     log_path = vault / "60-Logs" / "pipeline.jsonl"
-    rows = [json.loads(l) for l in log_path.read_text(encoding="utf-8").splitlines() if l]
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
     gen_events = [r for r in rows if r.get("event_type") == "digest_generated"]
     assert len(gen_events) == 1
     payload = gen_events[0]
@@ -291,7 +296,7 @@ def test_idempotency_skips_llm_when_prior_hash_matches(tmp_path: Path):
 
     # The skip event lands in pipeline.jsonl.
     log_path = vault / "60-Logs" / "pipeline.jsonl"
-    rows = [json.loads(l) for l in log_path.read_text(encoding="utf-8").splitlines() if l]
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
     skips = [r for r in rows if r.get("event_type") == "digest_skipped_no_change"]
     assert len(skips) == 1
 
@@ -381,7 +386,7 @@ def test_user_focus_flows_into_v2_prompt(tmp_path: Path):
     _seed_window_with_signal(vault, as_of=as_of)
     llm = _FakeLLM("body")
     handle_digest(_ctx(vault, llm))
-    sys_prompt, user_prompt = llm.calls[0]
+    _sys_prompt, user_prompt = llm.calls[0]
     # USER.md → load_user_profile → injected into user prompt block.
     assert "Focus: memory systems" in user_prompt
 

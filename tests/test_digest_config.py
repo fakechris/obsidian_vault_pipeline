@@ -122,9 +122,14 @@ def test_load_empty_intake_list_falls_back(tmp_path: Path):
 
 def test_config_is_immutable():
     """Frozen dataclass + tuple sequence — no field assignment, no
-    list mutation possible."""
+    list mutation possible.
+
+    ``dataclasses.FrozenInstanceError`` is a subclass of
+    ``AttributeError``, so the narrower assertion still covers the
+    real failure mode without swallowing unrelated exceptions.
+    """
     cfg = DigestConfig()
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         cfg.cluster_threshold = 99  # type: ignore[misc]
     with pytest.raises(AttributeError):
         cfg.intake_event_types.append("hack")  # type: ignore[attr-defined]

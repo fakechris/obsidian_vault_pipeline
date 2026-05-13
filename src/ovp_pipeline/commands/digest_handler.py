@@ -189,7 +189,7 @@ def handle_digest(ctx: TaskContext) -> TaskResult:
     # honest acknowledgment instead of asking the LLM to fabricate
     # insight from stale crystals.
     if _is_no_data(inputs):
-        body_md = _render_no_data_body(inputs, ctx.pack)
+        body_md = _render_no_data_body(inputs)
         emit(
             ctx.vault_dir,
             "pipeline.jsonl",
@@ -488,7 +488,7 @@ def _render_body(
     )
 
 
-def _render_no_data_body(inputs: DigestInputs, pack: str) -> str:
+def _render_no_data_body(inputs: DigestInputs) -> str:
     """Honest, LLM-free body for windows with no real signal.
 
     Surfaces (1) the window we looked at, (2) the preflight state so
