@@ -5,6 +5,7 @@ functions: each receives a ``payload`` dict (or a few scalar args)
 and returns an HTML string.  The companion ``ui_server.py`` module
 owns routing and the HTTP handler.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,7 +28,6 @@ from ..ui.view_models import (
     DEFAULT_CANDIDATE_BROWSER_LIMIT,
     build_runtime_home_payload,
 )
-
 
 _MARKDOWN_RENDERER = MarkdownIt("commonmark", {"breaks": True, "html": False}).enable("table")
 _FENCED_FRONTMATTER_RE = re.compile(r"^```ya?ml\s*\n---\n(.*?)\n---\n```\s*\n?", re.DOTALL)
@@ -71,6 +71,8 @@ def _safe_redirect_path(location: str, *, fallback: str = "/") -> str:
     if not stripped.startswith("/"):
         return fallback
     return stripped
+
+
 _CANDIDATE_MERGE_AUTOFILL_THRESHOLD = 0.7
 _INLINE_MEMBER_LINK_LIMIT = 8
 
@@ -90,7 +92,8 @@ def _topic_entry_card(entry: dict, *, compact: bool = False) -> str:
     """
     kind = str(entry.get("crystal_kind", ""))
     kind_label = (
-        "topic" if kind == "community"
+        "topic"
+        if kind == "community"
         else ("open question" if kind == "contradiction" else (kind or "topic"))
     )
     kind_pill_class = "pill warn" if kind == "contradiction" else "pill"
@@ -99,9 +102,7 @@ def _topic_entry_card(entry: dict, *, compact: bool = False) -> str:
     teaser = str(entry.get("teaser") or "")
     note_href = str(entry.get("note_href") or "")
     rank = int(entry.get("rank", 0) or 0)
-    link_html = (
-        f"<a href='{escape(note_href)}'>{label}</a>" if note_href else label
-    )
+    link_html = f"<a href='{escape(note_href)}'>{label}</a>" if note_href else label
     teaser_html = (
         f"<p>{escape(teaser)}</p>"
         if teaser
@@ -113,11 +114,11 @@ def _topic_entry_card(entry: dict, *, compact: bool = False) -> str:
             f"<span class='muted tiny mono' style='margin-right:0.6rem'>{escape(label_text)} "
             f"<strong style='color:var(--text-soft)'>{value:.2f}</strong></span>"
             for label_text, value in [
-                ("size",          float(entry.get("size_norm", 0) or 0)),
-                ("credibility",   float(entry.get("credibility_norm", 0) or 0)),
-                ("source-div",    float(entry.get("source_diversity_norm", 0) or 0)),
-                ("contradict",    float(entry.get("contradiction_norm", 0) or 0)),
-                ("reuse-rec",     float(entry.get("reuse_recency_norm", 0) or 0)),
+                ("size", float(entry.get("size_norm", 0) or 0)),
+                ("credibility", float(entry.get("credibility_norm", 0) or 0)),
+                ("source-div", float(entry.get("source_diversity_norm", 0) or 0)),
+                ("contradict", float(entry.get("contradiction_norm", 0) or 0)),
+                ("reuse-rec", float(entry.get("reuse_recency_norm", 0) or 0)),
                 ("evergreen-rec", float(entry.get("evergreen_recency_norm", 0) or 0)),
             ]
         )
@@ -133,21 +134,9 @@ def _topic_entry_card(entry: dict, *, compact: bool = False) -> str:
     # from the .card-body's left padding — so the title visually
     # didn't line up with the teaser below it.  Post-fix everything
     # in the card shares the same left edge.
-    rank_html = (
-        f"<div class='muted tiny mono'>#{rank}</div>"
-        if rank
-        else ""
-    )
-    score_pill = (
-        f"<span class='pill'>score {score:.3f}</span>"
-        if score
-        else ""
-    )
-    kind_pill = (
-        f"<span class='{kind_pill_class}'>{escape(kind_label)}</span>"
-        if kind
-        else ""
-    )
+    rank_html = f"<div class='muted tiny mono'>#{rank}</div>" if rank else ""
+    score_pill = f"<span class='pill'>score {score:.3f}</span>" if score else ""
+    kind_pill = f"<span class='{kind_pill_class}'>{escape(kind_label)}</span>" if kind else ""
     return (
         "<section class='card flush'>"
         "<div class='card-head'>"
@@ -287,9 +276,11 @@ def _ops_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
         ("Queue", "/ops/queue"),
     ]
     if _shell_supports_research_nav(requested_pack):
-        items.extend([
-            ("Clusters", "/ops/clusters"),
-        ])
+        items.extend(
+            [
+                ("Clusters", "/ops/clusters"),
+            ]
+        )
         # ``Deep-dives`` was removed post-BL-029.  The legacy
         # 13-section LLM rewrite no longer produces deep-dive
         # markdown, so the index page is permanently empty.
@@ -309,9 +300,7 @@ def _shell_nav_items(
     return _ops_nav_items(requested_pack)
 
 
-def _build_runtime_home_payload_from_query(
-    vault_dir: Path, query: dict[str, list[str]]
-) -> dict:
+def _build_runtime_home_payload_from_query(vault_dir: Path, query: dict[str, list[str]]) -> dict:
     pack_name = query.get("pack", [""])[0] or None
     return build_runtime_home_payload(vault_dir, pack_name=pack_name)
 
@@ -377,8 +366,7 @@ def _layout(
         for label, path in nav_pairs
     )
     cross_link = (
-        f'<a href="{escape(cross_link_href)}" class="cross-link">'
-        f'{escape(cross_link_label)}</a>'
+        f'<a href="{escape(cross_link_href)}" class="cross-link">' f"{escape(cross_link_label)}</a>"
     )
     refresh_meta = (
         f'    <meta http-equiv="refresh" content="{int(auto_refresh_seconds)}" />\n'
@@ -498,6 +486,81 @@ def _object_href(object_id: str, path: str = "", requested_pack: str = "") -> st
     if path:
         return path
     return _shell_href(f"/object?id={quote(str(object_id), safe='')}", requested_pack)
+
+
+def _ask_about_this_href(
+    anchor_kind: str,
+    anchor_ref: str,
+    *,
+    title: str = "",
+    requested_pack: str = "",
+) -> str:
+    """Compose the ``/chat?anchor=<kind>:<ref>&title=<title>`` URL
+    for the "Ask about this" entry buttons (BL-087).
+
+    Reader-side only — the route is wired by BL-086.  ``title``
+    rides through as a hidden field on the composer so the new
+    session's frontmatter records the artifact's friendly name.
+    """
+    params = [f"anchor={quote(f'{anchor_kind}:{anchor_ref}', safe='')}"]
+    if title:
+        params.append(f"title={quote(title, safe='')}")
+    return _shell_href(f"/chat?{'&'.join(params)}", requested_pack)
+
+
+def _anchor_title_for_note(relative_path: str, markdown: str) -> str:
+    """Return the friendly title for a note anchor.
+
+    Prefers the H1 line from the markdown body, then the YAML
+    ``title:`` field *from the frontmatter block only* (CodeRabbit
+    M — searching the whole body would pick up an example code
+    fence's ``title:`` line), then the path basename.
+    """
+    # ``_parse_frontmatter`` already handles malformed YAML
+    # (returns ``{}, markdown``), so no try/except needed
+    # (CodeRabbit Minor — narrow broad exceptions).
+    frontmatter, body = _parse_frontmatter(markdown)
+    for line in body.splitlines():
+        if line.startswith("# "):
+            text = line[2:].strip()
+            if text:
+                return text
+            break
+        if line.startswith("## ") or line.startswith("### "):
+            break
+    if isinstance(frontmatter, dict):
+        candidate = str(frontmatter.get("title") or "").strip()
+        if candidate:
+            return candidate
+    stem = relative_path.rsplit("/", 1)[-1]
+    if stem.endswith(".md"):
+        stem = stem[:-3]
+    return stem
+
+
+def _render_ask_about_this_button(
+    anchor_kind: str,
+    anchor_ref: str,
+    *,
+    title: str = "",
+    requested_pack: str = "",
+    label: str = "Ask about this",
+) -> str:
+    """Return the HTML for an "Ask about this" entry button (BL-087).
+
+    Empty ``anchor_ref`` short-circuits to an empty string so we
+    don't render a broken link when the renderer has no valid
+    anchor to bind.  Reader-side only.
+    """
+    if not anchor_ref:
+        return ""
+    href = _ask_about_this_href(
+        anchor_kind,
+        anchor_ref,
+        title=title,
+        requested_pack=requested_pack,
+    )
+    return f'<a class="btn ghost ask-about-this" href="{escape(href)}">' f"💬 {escape(label)}</a>"
 
 
 def _render_surface_contract_card(payload: dict) -> str:
@@ -906,15 +969,9 @@ def _render_run_history_card(runtime: dict[str, object] | None) -> str:
 def _render_runtime_state_card(runtime_state: dict[str, object] | None) -> str:
     if not isinstance(runtime_state, dict):
         return ""
-    metrics = (
-        runtime_state.get("metrics")
-        if isinstance(runtime_state.get("metrics"), dict)
-        else {}
-    )
+    metrics = runtime_state.get("metrics") if isinstance(runtime_state.get("metrics"), dict) else {}
     attention = (
-        runtime_state.get("attention")
-        if isinstance(runtime_state.get("attention"), list)
-        else []
+        runtime_state.get("attention") if isinstance(runtime_state.get("attention"), list) else []
     )
     status = str(runtime_state.get("status") or "unknown")
     facts = [
@@ -1416,16 +1473,18 @@ def _render_markdown_note(
     return _render_frontmatter(frontmatter), html_body
 
 
-_THIN_NOTE_TYPES: frozenset[str] = frozenset({
-    # Generated / autonomous-action outputs and user-declared
-    # interpretation surfaces don't have provenance, production
-    # chains, source notes, or inbound captures.  Rendering the
-    # full evergreen scaffold around them produces a page of empty
-    # cards with the actual content buried at the bottom.
-    "digest",
-    "live-concept",
-    "user-profile",
-})
+_THIN_NOTE_TYPES: frozenset[str] = frozenset(
+    {
+        # Generated / autonomous-action outputs and user-declared
+        # interpretation surfaces don't have provenance, production
+        # chains, source notes, or inbound captures.  Rendering the
+        # full evergreen scaffold around them produces a page of empty
+        # cards with the actual content buried at the bottom.
+        "digest",
+        "live-concept",
+        "user-profile",
+    }
+)
 
 _THIN_NOTE_PATH_PREFIXES: tuple[str, ...] = (
     # Everything under GENERATED is by definition agent-produced
@@ -1512,7 +1571,9 @@ def _render_thin_note_preamble(
         return _render_digest_preamble(frontmatter)
     if type_value == "live-concept":
         return _render_live_concept_preamble(
-            relative_path, frontmatter, requested_pack=requested_pack,
+            relative_path,
+            frontmatter,
+            requested_pack=requested_pack,
         )
     if type_value == "user-profile":
         return _render_user_profile_preamble()
@@ -1570,8 +1631,9 @@ def _render_live_concept_preamble(
     last_error = str(live.get("lastRunError") or "").strip()
 
     objective_html = (
-        f"<p>{escape(objective)}</p>" if objective else
-        "<p class='muted'><em>(no objective declared)</em></p>"
+        f"<p>{escape(objective)}</p>"
+        if objective
+        else "<p class='muted'><em>(no objective declared)</em></p>"
     )
 
     scope_html = ""
@@ -1585,10 +1647,7 @@ def _render_live_concept_preamble(
             f"<td><ul class='list-tight' style='margin:0'>{items}</ul></td></tr>"
         )
     else:
-        scope_html = (
-            "<tr><th>Scope evergreens</th>"
-            "<td class='muted'>(none declared)</td></tr>"
-        )
+        scope_html = "<tr><th>Scope evergreens</th>" "<td class='muted'>(none declared)</td></tr>"
 
     trigger_items: list[str] = []
     if isinstance(triggers.get("on_ingest_match"), dict):
@@ -1612,31 +1671,24 @@ def _render_live_concept_preamble(
     if triggers.get("weekly_resynthesis"):
         when = escape(str(triggers["weekly_resynthesis"]))
         trigger_items.append(
-            f"<li><strong>weekly_resynthesis</strong> — recurring at "
-            f"<code>{when}</code></li>"
+            f"<li><strong>weekly_resynthesis</strong> — recurring at " f"<code>{when}</code></li>"
         )
     triggers_html = (
         "<tr><th>Triggers</th><td><ul class='list-tight' style='margin:0'>"
         + "".join(trigger_items)
         + "</ul></td></tr>"
-        if trigger_items else
-        "<tr><th>Triggers</th><td class='muted'>(no triggers configured)</td></tr>"
+        if trigger_items
+        else "<tr><th>Triggers</th><td class='muted'>(no triggers configured)</td></tr>"
     )
 
     last_run_html = ""
     if last_run_at:
         status_pill = (
-            "<span class='pill warn'>error</span>"
-            if last_error else
-            "<span class='pill'>ok</span>"
+            "<span class='pill warn'>error</span>" if last_error else "<span class='pill'>ok</span>"
         )
-        summary_block = (
-            f"<div class='muted'>{escape(last_summary)}</div>"
-            if last_summary else ""
-        )
+        summary_block = f"<div class='muted'>{escape(last_summary)}</div>" if last_summary else ""
         error_block = (
-            f"<div class='muted'>Last error: {escape(last_error)}</div>"
-            if last_error else ""
+            f"<div class='muted'>Last error: {escape(last_error)}</div>" if last_error else ""
         )
         last_run_html = (
             f"<tr><th>Last agent run</th><td>"
@@ -1652,8 +1704,7 @@ def _render_live_concept_preamble(
         )
 
     active_pill = (
-        "<span class='pill'>active</span>" if active
-        else "<span class='pill muted'>inactive</span>"
+        "<span class='pill'>active</span>" if active else "<span class='pill muted'>inactive</span>"
     )
 
     return (
@@ -1699,9 +1750,7 @@ def _render_user_profile_preamble() -> str:
     )
 
 
-def _render_generated_preamble(
-    relative_path: str, frontmatter: dict[str, object]
-) -> str:
+def _render_generated_preamble(relative_path: str, frontmatter: dict[str, object]) -> str:
     return (
         "<section class='card'>"
         "<h2 style='margin-top:0'>About this generated artifact</h2>"
@@ -1734,13 +1783,22 @@ def _render_note_page(
     # complained was missing on digest + Live Concept pages.
     if _is_thin_note(relative_path, markdown):
         preamble_html = _render_thin_note_preamble(
-            relative_path, markdown, requested_pack=requested_pack,
+            relative_path,
+            markdown,
+            requested_pack=requested_pack,
+        )
+        ask_button = _render_ask_about_this_button(
+            "note",
+            relative_path,
+            title=_anchor_title_for_note(relative_path, markdown),
+            requested_pack=requested_pack,
         )
         return _layout(
             f"Markdown Note: {relative_path}",
             (
                 "<h1>Markdown Note</h1>"
                 f"<p class='muted'>{escape(relative_path)}</p>"
+                + f"<div class='entry-actions'>{ask_button}</div>"
                 + preamble_html
                 + f"<section class='card'>{note_html}</section>"
                 + _render_frontmatter_details(frontmatter_html)
@@ -1808,11 +1866,18 @@ def _render_note_page(
     # provenance, production-chain, compiled-section probes) sit
     # after the body.  Frontmatter is collapsed into a <details>
     # below the body — it's metadata, not lede.
+    ask_button = _render_ask_about_this_button(
+        "note",
+        relative_path,
+        title=_anchor_title_for_note(relative_path, markdown),
+        requested_pack=requested_pack,
+    )
     return _layout(
         f"Markdown Note: {relative_path}",
         (
             "<h1>Markdown Note</h1>"
             f"<p class='muted'>{escape(relative_path)}</p>"
+            + f"<div class='entry-actions'>{ask_button}</div>"
             + (f"<nav class='subnav'>{section_nav}</nav>" if section_nav else "")
             + f"<section class='card'>{note_html}</section>"
             + _render_compiled_sections(lead_sections)
@@ -1854,7 +1919,9 @@ _LINEAGE_CARD_STYLE = ""
 
 
 def _render_lineage_card(
-    lineage: dict | None, *, requested_pack: str = "",
+    lineage: dict | None,
+    *,
+    requested_pack: str = "",
 ) -> str:
     """Render the BL-058 raw-source ↔ evergreens ↔ crystals chain.
 
@@ -1900,12 +1967,9 @@ def _render_lineage_card(
         path = escape(str(raw.get("path") or ""))
         slug = escape(str(raw.get("slug") or ""))
         href = str(raw.get("note_href") or "")
-        link = (
-            f"<a href='{escape(href)}'>{slug}</a>" if href else slug
-        )
+        link = f"<a href='{escape(href)}'>{slug}</a>" if href else slug
         archived_note = (
-            "" if path
-            else " <span class='muted'>(archived — only stem available)</span>"
+            "" if path else " <span class='muted'>(archived — only stem available)</span>"
         )
         blocks.append(
             "<div class='muted tiny' style='text-align:center;padding:.1rem 0'>"
@@ -2032,7 +2096,9 @@ def _render_search_page(payload: dict) -> str:
             f"&middot; {prev_link} &middot; {next_link}</p>"
         )
 
-    def _render_group_card(group: dict, *, fallback_label: str, empty_text: str, item_html: str) -> str:
+    def _render_group_card(
+        group: dict, *, fallback_label: str, empty_text: str, item_html: str
+    ) -> str:
         rendered_items = item_html or f'<li class="muted">{escape(empty_text)}</li>'
         return (
             "<section class='card'>"
@@ -2464,6 +2530,7 @@ def _render_dashboard(payload: dict) -> str:
         )
         or "<li class='muted'>No urgent maintenance items surfaced.</li>"
     )
+
     def _tile(label, value, *, warn=False):
         warn_cls = " warn" if warn else ""
         return (
@@ -2472,19 +2539,26 @@ def _render_dashboard(payload: dict) -> str:
             f"<div class='metric-num{warn_cls}' style='margin-top:4px'>{value}</div>"
             "</div>"
         )
+
     stats_cards = [
-        _tile("Objects Indexed", payload['objects']['count']),
-        _tile("Signal Count", payload['signals']['count']),
-        _tile("Weak Point Count", payload['production']['weak_point_count']),
+        _tile("Objects Indexed", payload["objects"]["count"]),
+        _tile("Signal Count", payload["signals"]["count"]),
+        _tile("Weak Point Count", payload["production"]["weak_point_count"]),
     ]
     if research_overview_supported:
         stats_cards[1:1] = [
-            _tile("Contradictions Open", payload['contradictions']['open_count'],
-                  warn=int(payload['contradictions']['open_count']) > 0),
-            _tile("Event Count", payload['events']['count']),
-            _tile("Stale Summary Count", payload['stale_summaries']['count'],
-                  warn=int(payload['stale_summaries']['count']) > 0),
-            _tile("Evolution Candidates", payload['evolution']['candidate_count']),
+            _tile(
+                "Contradictions Open",
+                payload["contradictions"]["open_count"],
+                warn=int(payload["contradictions"]["open_count"]) > 0,
+            ),
+            _tile("Event Count", payload["events"]["count"]),
+            _tile(
+                "Stale Summary Count",
+                payload["stale_summaries"]["count"],
+                warn=int(payload["stale_summaries"]["count"]) > 0,
+            ),
+            _tile("Evolution Candidates", payload["evolution"]["candidate_count"]),
         ]
     research_overview_card = (
         ""
@@ -2704,14 +2778,13 @@ def _render_type_facet(
     if not kind_stats:
         return ""
     from ..object_kinds import display_label
+
     ranked = sorted(
         (s for s in kind_stats if s.get("object_kind")),
         key=lambda s: -int(s.get("count") or 0),
     )
     sorted_stats = ranked[:top_n]
-    if active_kind and not any(
-        str(s.get("object_kind")) == active_kind for s in sorted_stats
-    ):
+    if active_kind and not any(str(s.get("object_kind")) == active_kind for s in sorted_stats):
         active_row = next(
             (s for s in ranked if str(s.get("object_kind")) == active_kind),
             None,
@@ -2760,9 +2833,13 @@ def _render_objects_index(payload: dict) -> str:
     object_kind = active_kind  # alias kept for the shared href builder
     kind_stats = payload.get("kind_stats") or []
 
-    def _href(*, sort_: str | None = None, offset_: int | None = None,
-              limit_: int | None = None,
-              object_kind_: str | None = None) -> str:
+    def _href(
+        *,
+        sort_: str | None = None,
+        offset_: int | None = None,
+        limit_: int | None = None,
+        object_kind_: str | None = None,
+    ) -> str:
         params: list[tuple[str, str]] = []
         if requested_pack:
             params.append(("pack", requested_pack))
@@ -2828,9 +2905,7 @@ def _render_objects_index(payload: dict) -> str:
     showing_start = offset + 1 if total_count else 0
     showing_end = min(offset + limit, total_count)
     showing = (
-        f"Showing {showing_start}–{showing_end} of {total_count}"
-        if total_count
-        else "No matches"
+        f"Showing {showing_start}–{showing_end} of {total_count}" if total_count else "No matches"
     )
 
     prev_offset = max(0, offset - limit)
@@ -2838,15 +2913,11 @@ def _render_objects_index(payload: dict) -> str:
     has_next = offset + limit < total_count
     pager_parts: list[str] = []
     if has_prev:
-        pager_parts.append(
-            f"<a href='{escape(_href(offset_=prev_offset))}'>← Prev</a>"
-        )
+        pager_parts.append(f"<a href='{escape(_href(offset_=prev_offset))}'>← Prev</a>")
     else:
         pager_parts.append("<span class='muted'>← Prev</span>")
     if has_next:
-        pager_parts.append(
-            f"<a href='{escape(_href(offset_=offset + limit))}'>Next →</a>"
-        )
+        pager_parts.append(f"<a href='{escape(_href(offset_=offset + limit))}'>Next →</a>")
     else:
         pager_parts.append("<span class='muted'>Next →</span>")
     pager = " · ".join(pager_parts)
@@ -2866,6 +2937,7 @@ def _render_objects_index(payload: dict) -> str:
     filter_banner = ""
     if active_kind:
         from ..object_kinds import display_label
+
         clear_href = "/ops/objects" + _build_objects_query_string(
             query=query, requested_pack=requested_pack
         )
@@ -2970,23 +3042,17 @@ def _render_source_backlink_rail(payload: dict, *, requested_pack: str) -> str:
             "</li>"
         )
 
-    source_notes = [
-        item for item in rail.get("source_notes") or [] if isinstance(item, dict)
-    ]
+    source_notes = [item for item in rail.get("source_notes") or [] if isinstance(item, dict)]
     source_html = (
         "".join(render_source_note(item) for item in source_notes)
         or "<li class='muted'>No source notes linked yet.</li>"
     )
-    atlas_pages = [
-        item for item in rail.get("atlas_pages") or [] if isinstance(item, dict)
-    ]
+    atlas_pages = [item for item in rail.get("atlas_pages") or [] if isinstance(item, dict)]
     atlas_html = (
         "".join(render_atlas_page(item) for item in atlas_pages)
         or "<li class='muted'>No atlas pages link here yet.</li>"
     )
-    related_objects = [
-        item for item in rail.get("related_objects") or [] if isinstance(item, dict)
-    ]
+    related_objects = [item for item in rail.get("related_objects") or [] if isinstance(item, dict)]
     related_html = (
         "".join(render_related_object(item) for item in related_objects)
         or "<li class='muted'>No related objects yet.</li>"
@@ -3026,7 +3092,7 @@ def _render_source_chain_card(payload: dict, *, requested_pack: str) -> str:
     if source_url:
         url_html = (
             f'<a href="{escape(source_url)}" rel="noopener noreferrer" target="_blank">'
-            f'{escape(source_url)}</a>'
+            f"{escape(source_url)}</a>"
             + (f" <span class='muted'>({escape(domain)})</span>" if domain else "")
         )
     else:
@@ -3036,7 +3102,7 @@ def _render_source_chain_card(payload: dict, *, requested_pack: str) -> str:
     if source_file:
         source_file_html = (
             f'<a href="{escape(_note_href(source_file, requested_pack))}">'
-            f'{escape(source_file)}</a>'
+            f"{escape(source_file)}</a>"
         )
     elif source_url:
         source_file_html = (
@@ -3074,7 +3140,7 @@ def _render_source_chain_card(payload: dict, *, requested_pack: str) -> str:
     if evergreen_path:
         evergreen_html = (
             f'<a href="{escape(_note_href(evergreen_path, requested_pack))}">'
-            f'{escape(evergreen_path)}</a>'
+            f"{escape(evergreen_path)}</a>"
         )
         if legacy:
             evergreen_html += (
@@ -3237,6 +3303,7 @@ def _render_object_page(payload: dict) -> str:
                 f"<a href='{escape(payload['links']['atlas_path'])}'>Atlas / MOC</a>",
             ]
         )
+
     def _obj_tile(label, value, *, warn=False):
         warn_cls = " warn" if warn else ""
         return (
@@ -3245,14 +3312,18 @@ def _render_object_page(payload: dict) -> str:
             f"<div class='metric-num{warn_cls}' style='margin-top:4px'>{value}</div>"
             "</div>"
         )
+
     stats_cards = [
-        _obj_tile("Claims", payload['claim_count']),
-        _obj_tile("Relations", payload['relation_count']),
+        _obj_tile("Claims", payload["claim_count"]),
+        _obj_tile("Relations", payload["relation_count"]),
     ]
     if research_shell_enabled:
         stats_cards.append(
-            _obj_tile("Contradictions", payload['contradiction_count'],
-                      warn=int(payload['contradiction_count']) > 0)
+            _obj_tile(
+                "Contradictions",
+                payload["contradiction_count"],
+                warn=int(payload["contradiction_count"]) > 0,
+            )
         )
     right_sections = []
     if research_shell_enabled:
@@ -3307,6 +3378,26 @@ def _render_object_page(payload: dict) -> str:
                 f"<section class='card'><h2>Stale Summary Signals</h2><ul class='list-tight'>{stale_summary_signals}</ul></section>",
             ]
         )
+    # Codex P2: the BL-083 context binder reads ``anchor.path`` as a
+    # vault-relative file path.  Prefer the object's evergreen /
+    # canonical markdown so the binder loads real anchor body;
+    # fall back to standalone (no anchor) when neither path exists
+    # rather than emitting a bare object_id that the binder can't
+    # resolve.
+    anchor_path_for_object = evergreen_path or payload["context"].get("canonical_path") or ""
+    if anchor_path_for_object:
+        ask_button = _render_ask_about_this_button(
+            "object",
+            str(anchor_path_for_object),
+            title=str(reader_profile.get("headline") or payload["object"]["title"]),
+            requested_pack=requested_pack,
+        )
+    else:
+        ask_button = _render_ask_about_this_button(
+            "standalone",
+            "",
+            requested_pack=requested_pack,
+        )
     return _layout(
         f"Object: {payload['object']['title']}",
         (
@@ -3316,7 +3407,7 @@ def _render_object_page(payload: dict) -> str:
             f"<p class='muted'>{escape(str(reader_profile.get('supporting_line') or payload['object']['object_id']))}"
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            + f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{''.join(hero_links)}</div>"
+            + f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{''.join(hero_links)}{ask_button}</div>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + assembly_contract_card
@@ -3440,6 +3531,20 @@ def _render_topic_page(payload: dict) -> str:
             payload["production_summary"], requested_pack=requested_pack
         )
     )
+    # Codex P2: bind the center's vault-relative path (not the
+    # object_id) so the BL-083 binder loads the underlying note.
+    # ``links.center_object_path`` is a route URL (``/object?id=...``),
+    # NOT a vault path — CodeRabbit Major.  Use ``provenance.evergreen_path``
+    # (the actual markdown file) instead.
+    center_path = str(
+        payload.get("provenance", {}).get("evergreen_path") or ""
+    )
+    ask_button = _render_ask_about_this_button(
+        "object",
+        center_path,
+        title=str(payload["center"]["title"]),
+        requested_pack=requested_pack,
+    )
     return _layout(
         f"Topic: {payload['center']['title']}",
         (
@@ -3447,7 +3552,7 @@ def _render_topic_page(payload: dict) -> str:
             f"<p class='muted'>{payload['neighbor_count']} neighbors, {payload['edge_count']} edges."
             + (f" Pack scope: {escape(requested_pack)}." if requested_pack else "")
             + "</p>"
-            + f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{''.join(hero_links)}</div>"
+            + f"<div style='display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:0.9rem'>{''.join(hero_links)}{ask_button}</div>"
             + _render_compiled_sections(lead_sections)
             + operator_rail_card
             + assembly_contract_card
@@ -3651,6 +3756,7 @@ def _render_atlas_page(payload: dict) -> str:
         if payload.get("is_limited")
         else ""
     )
+
     def render_member_link(member: dict[str, object]) -> str:
         href = _object_href(
             str(member["object_id"]),
@@ -3736,9 +3842,7 @@ def _render_curated_atlas_page(payload: dict) -> str:
         # helper.  Featured Topics uses the full density (with the
         # 6-metric breakdown chips); the home page uses the same
         # helper with compact=True.
-        body_html = "".join(
-            _topic_entry_card(entry, compact=False) for entry in entries
-        )
+        body_html = "".join(_topic_entry_card(entry, compact=False) for entry in entries)
 
     header_lines = [
         "<h1>Featured Topics</h1>",
@@ -3876,8 +3980,10 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
             params.append(("offset", str(eff_offset)))
         if not params:
             return action_path
-        return action_path + "?" + "&".join(
-            f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params
+        return (
+            action_path
+            + "?"
+            + "&".join(f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params)
         )
 
     if show_all:
@@ -3945,6 +4051,7 @@ def _render_clusters_page(payload: dict, *, action_path: str = "/ops/clusters") 
         )
         or "<span class='muted'>None</span>"
     )
+
     def render_member_link(member: dict[str, object]) -> str:
         return f'<a href="{escape(str(member["path"]))}">{escape(str(member["title"]))}</a>'
 
@@ -4843,7 +4950,9 @@ def _render_signals_page(payload: dict) -> str:
     query = payload.get("query", "")
     selected_type = payload.get("signal_type", "")
     requested_pack = payload.get("requested_pack", "")
-    next_path = "/ops/signals" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    next_path = "/ops/signals" + (
+        f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
+    )
     surface_contract_card = _render_surface_contract_card(payload)
     governance_contract_card = _render_governance_contract_card(payload)
     operator_rail_card = _render_operator_rail(payload)
@@ -5007,7 +5116,9 @@ def _render_signals_page(payload: dict) -> str:
 
 def _render_briefing_page(payload: dict) -> str:
     requested_pack = payload.get("requested_pack", "")
-    next_path = "/ops/briefing" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    next_path = "/ops/briefing" + (
+        f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
+    )
     surface_contract_card = _render_surface_contract_card(payload)
     assembly_contract_card = _render_assembly_contract_card(payload)
     governance_contract_card = _render_governance_contract_card(payload)
@@ -5763,7 +5874,9 @@ def _render_contradictions_page(payload: dict) -> str:
 def _render_stale_summaries_page(payload: dict) -> str:
     query = payload.get("query", "")
     requested_pack = payload.get("requested_pack", "")
-    next_path = "/ops/summaries" + (f"?pack={quote(requested_pack, safe='')}" if requested_pack else "")
+    next_path = "/ops/summaries" + (
+        f"?pack={quote(requested_pack, safe='')}" if requested_pack else ""
+    )
     detection_notes = "".join(f"<li>{escape(note)}</li>" for note in payload["detection_notes"])
     items = (
         "".join(
@@ -5911,7 +6024,7 @@ def _render_fragment_shell(title: str, fragment: str) -> str:
         '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
         '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n'
         '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
-        'family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&'
+        "family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&"
         'display=swap" />\n'
         '<link rel="stylesheet" href="/static/ovp-tokens.css" />\n'
         '<link rel="stylesheet" href="/static/ovp-ui.css" />\n'
@@ -5973,9 +6086,7 @@ def _build_writing_prompts_payload(vault_dir: Path) -> dict:
 def _render_open_questions_fragment(payload: dict) -> str:
     rows = payload.get("questions") or []
     if not rows:
-        return (
-            "<section class='open-questions'><p class='muted'><em>No open questions yet.</em></p></section>"
-        )
+        return "<section class='open-questions'><p class='muted'><em>No open questions yet.</em></p></section>"
     items = "".join(
         f"<li><strong>{escape(str(row.get('question') or ''))}</strong>"
         f" <small>{escape(str(row.get('ts') or ''))}</small></li>"
@@ -6165,8 +6276,7 @@ def _render_timeline_page(payload: dict) -> str:
 
     if not payload.get("available", True):
         body = (
-            timeline_help
-            + "<section class='card'>"
+            timeline_help + "<section class='card'>"
             "<h2>Timeline unavailable</h2>"
             f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
             "<p>Run <code>ovp-knowledge-index</code> to populate "
@@ -6177,8 +6287,7 @@ def _render_timeline_page(payload: dict) -> str:
 
     if not days:
         body = (
-            timeline_help
-            + "<section class='card'>"
+            timeline_help + "<section class='card'>"
             f"<h2>No events in the last {window} days</h2>"
             "<p class='muted'>The pipeline hasn't run in this window — "
             "check <code>60-Logs/pipeline.jsonl</code> for last activity.</p>"
@@ -6245,9 +6354,7 @@ def _render_timeline_page(payload: dict) -> str:
             items = "".join(
                 "<li>[{type}] <strong>{subject}</strong></li>".format(
                     type=escape(str(e.get("event_type", ""))),
-                    subject=escape(
-                        str(e.get("subject", ""))[:_TIMELINE_ERROR_SUBJECT_MAX_CHARS]
-                    ),
+                    subject=escape(str(e.get("subject", ""))[:_TIMELINE_ERROR_SUBJECT_MAX_CHARS]),
                 )
                 for e in errors
             )
@@ -6357,17 +6464,11 @@ def _render_today_digest_page(payload: dict) -> str:
     next_date = str(payload.get("next_date") or "")
     pivot_parts: list[str] = []
     if prev_path:
-        pivot_parts.append(
-            f"<a href='{escape(prev_path)}'>← {escape(prev_date)}</a>"
-        )
+        pivot_parts.append(f"<a href='{escape(prev_path)}'>← {escape(prev_date)}</a>")
     pivot_parts.append(f"<strong>Today: {escape(date)}</strong>")
     if next_path:
-        pivot_parts.append(
-            f"<a href='{escape(next_path)}'>{escape(next_date)} →</a>"
-        )
-    sections.append(
-        f"<p class='muted'>{' · '.join(pivot_parts)}</p>"
-    )
+        pivot_parts.append(f"<a href='{escape(next_path)}'>{escape(next_date)} →</a>")
+    sections.append(f"<p class='muted'>{' · '.join(pivot_parts)}</p>")
     sections.append(
         f"<p class='muted'>Audit events recorded on "
         f"<strong>{escape(date)}</strong> (UTC).  Click "
@@ -6392,9 +6493,7 @@ def _render_today_digest_page(payload: dict) -> str:
         type_pills = ""
         if by_type:
             top = sorted(by_type.items(), key=lambda x: -x[1])[:_TODAY_CARD_TOP_TYPES_LIMIT]
-            type_pills = " · ".join(
-                f"<code>{escape(t)}</code>×{n}" for t, n in top
-            )
+            type_pills = " · ".join(f"<code>{escape(t)}</code>×{n}" for t, n in top)
 
         sample_html = ""
         if samples:
@@ -6470,8 +6569,7 @@ def _render_runs_index_page(payload: dict) -> str:
 
     if not payload.get("available", True):
         body = (
-            runs_help
-            + "<section class='card'>"
+            runs_help + "<section class='card'>"
             "<h2>Runs index unavailable</h2>"
             f"<p class='muted'>{escape(str(payload.get('reason') or 'unknown'))}</p>"
             "</section>"
@@ -6480,8 +6578,7 @@ def _render_runs_index_page(payload: dict) -> str:
 
     if not runs:
         body = (
-            runs_help
-            + "<section class='card'>"
+            runs_help + "<section class='card'>"
             "<h2>No transactions found</h2>"
             "<p class='muted'>No <code>transaction_started</code> events "
             "in <code>audit_events</code>.</p>"
@@ -6523,9 +6620,7 @@ def _render_runs_index_page(payload: dict) -> str:
             date = str(group.get("date") or "")
             count = int(group.get("count") or 0)
             if group.get("idle"):
-                sections.append(
-                    f"<h3 class='muted'>{escape(date)} — Idle (no scheduled run)</h3>"
-                )
+                sections.append(f"<h3 class='muted'>{escape(date)} — Idle (no scheduled run)</h3>")
                 continue
             day_runs = group.get("runs") or []
             sections.append(
@@ -6589,14 +6684,21 @@ def _render_runs_index_page(payload: dict) -> str:
 # Run detail rules now live in /static/ovp-pages.css.
 _RUN_DETAIL_STYLE = ""
 
-_BRACKET_EVENT_TYPES = frozenset({
-    "transaction_started",
-    "transaction_completed",
-})
+_BRACKET_EVENT_TYPES = frozenset(
+    {
+        "transaction_started",
+        "transaction_completed",
+    }
+)
 
-_ERROR_EVENT_TYPE_PREFIXES = ("absorb_parse_error", "absorb_schema_drift",
-                              "broken_link", "github_intake_error",
-                              "article_error", "image_download_error")
+_ERROR_EVENT_TYPE_PREFIXES = (
+    "absorb_parse_error",
+    "absorb_schema_drift",
+    "broken_link",
+    "github_intake_error",
+    "article_error",
+    "image_download_error",
+)
 
 
 def _render_run_detail_page(payload: dict) -> str:
@@ -6685,16 +6787,13 @@ def _render_pulse_page(*, requested_pack: str = "") -> str:
             "Watch in real time as the absorb/intake pipeline runs."
             "  No interactive controls; this is purely a tail."
         ),
-        effect=(
-            "Read-only.  The poll only reads from disk — nothing else."
-        ),
+        effect=("Read-only.  The poll only reads from disk — nothing else."),
     )
     body = (
         "<h1>Pulse</h1>"
         + help_banner
         + "<p class='muted'>Live tail of <code>60-Logs/*.jsonl</code> (pipeline, reuse, "
-        "evidence, open-questions). Polls once per second.</p>"
-        + fragment
+        "evidence, open-questions). Polls once per second.</p>" + fragment
     )
     return _layout("Pulse", body, requested_pack=requested_pack)
 
