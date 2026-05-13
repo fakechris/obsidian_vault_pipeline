@@ -237,9 +237,70 @@ def _insert_indexed_shadow(
     )
 
 
+def upsert_chat_projection(
+    conn: sqlite3.Connection,
+    vault_dir: Path,
+    chat_path: Path,
+) -> bool:
+    """Refresh a single chat's projection rows in place (M22 codex P2).
+
+    The drawer's Save / Absorb path flips a session from
+    ``unindexed`` → ``indexed`` on disk; without this helper the
+    ``knowledge.db.chats`` row and the ``pages_index`` / ``page_fts``
+    shadows still reflect the prior ``unindexed`` state, so the
+    saved session would not appear in ``/chats`` or ``/search``
+    until the next full ``ovp-knowledge-index`` rebuild.
+
+    Drops every prior row for the chat's slug + chat_id, then
+    re-inserts using the current frontmatter.  Returns True on a
+    successful write; False when the file isn't a valid chat
+    transcript (caller can log).
+
+    Caller owns the transaction + commit — matches
+    :func:`rebuild_chats_projection`.
+    """
+    fm = parse_chat(chat_path)
+    if fm is None:
+        return False
+    try:
+        rel_path = chat_path.relative_to(vault_dir).as_posix()
+    except ValueError:
+        rel_path = str(chat_path)
+
+    slug = chat_slug(fm.chat_id)
+    # Clear prior shadow rows first; FTS5 ``slug`` is ``UNINDEXED``
+    # so exact-equality DELETE is the only path that matches
+    # (same constraint that drives ``rebuild_chats_projection``).
+    conn.execute("DELETE FROM page_fts WHERE slug = ?", (slug,))
+    conn.execute("DELETE FROM pages_index WHERE slug = ?", (slug,))
+    conn.execute("DELETE FROM chats WHERE chat_id = ?", (fm.chat_id,))
+
+    _insert_chat_row(conn, fm, rel_path)
+    if fm.visibility == "indexed":
+        _insert_indexed_shadow(conn, fm, rel_path, _chat_body_text(chat_path))
+    return True
+
+
+def remove_chat_projection(conn: sqlite3.Connection, chat_id: str) -> None:
+    """Remove every projection row for a chat (M22 codex P2 sibling).
+
+    Drawer Discard deletes the markdown; mirror that here so a
+    repeated rebuild doesn't re-resurrect the row, and any cached
+    /chats render is consistent with disk.  Idempotent.
+    """
+    if not chat_id:
+        return
+    slug = chat_slug(chat_id)
+    conn.execute("DELETE FROM page_fts WHERE slug = ?", (slug,))
+    conn.execute("DELETE FROM pages_index WHERE slug = ?", (slug,))
+    conn.execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
+
+
 __all__ = [
     "_CHAT_SLUG_PREFIX",
     "chat_slug",
     "iter_chat_transcripts",
     "rebuild_chats_projection",
+    "remove_chat_projection",
+    "upsert_chat_projection",
 ]

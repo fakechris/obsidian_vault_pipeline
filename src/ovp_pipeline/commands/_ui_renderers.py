@@ -229,6 +229,10 @@ def _reader_nav_items(requested_pack: str = "") -> list[tuple[str, str]]:
         # Without a nav entry, operators have no discoverable path
         # back from a session they just started (codex review P2).
         ("Chats", "/chats"),
+        # M22 BL-093: ``/digests`` lists every daily digest so an
+        # operator can step into prior days rather than only seeing
+        # the latest one through the home banner.
+        ("Digests", "/digests"),
     ]
     if _shell_supports_research_nav(requested_pack):
         items.append(("Map", "/map"))
@@ -353,6 +357,46 @@ def _render_page_help(
     )
 
 
+def _render_digest_neighbour_nav(vault_dir: Path, relative_path: str) -> str:
+    """Prev/next pivot for digest notes (M22 BL-093).
+
+    Returns an empty string for any note outside
+    ``40-Resources/Generated/digests/`` — the helper is cheap to
+    call on every thin-note render and short-circuits there.
+
+    CodeRabbit: a Windows-flavored relative path with backslashes
+    would otherwise miss the prefix check; normalize once so the
+    helper works regardless of caller-side separators.
+    """
+    normalized = relative_path.replace("\\", "/")
+    if not normalized.startswith("40-Resources/Generated/digests/"):
+        return ""
+    from ovp_pipeline.commands._digests_list_page import neighbour_links
+
+    older, newer = neighbour_links(vault_dir, normalized)
+    parts: list[str] = []
+    if older:
+        parts.append(f"<a href='{escape(older)}'>← previous day</a>")
+    # Always include the index link so a digest reader is never
+    # one click further from history than the home banner.
+    parts.append("<a href='/digests'>All digests</a>")
+    if newer:
+        parts.append(f"<a href='{escape(newer)}'>next day →</a>")
+    return "<p class='muted' style='margin-top:0.4rem'>" + " · ".join(parts) + "</p>"
+
+
+def _render_chat_drawer_shell() -> str:
+    """Inject the closed-state anchored inquiry drawer (M22).
+
+    Imported lazily to keep the renderer entry surface flat and
+    avoid a circular import — ``_chat_drawer`` only needs
+    ``html.escape`` and has no upstream Reader dependencies.
+    """
+    from ovp_pipeline.commands._chat_drawer import render_drawer_shell
+
+    return render_drawer_shell()
+
+
 def _layout(
     title: str, body: str, *, requested_pack: str = "", auto_refresh_seconds: int | None = None
 ) -> str:
@@ -392,6 +436,8 @@ def _layout(
     <link rel="stylesheet" href="/static/ovp-tokens.css" />
     <link rel="stylesheet" href="/static/ovp-ui.css" />
     <link rel="stylesheet" href="/static/ovp-pages.css" />
+    <link rel="stylesheet" href="/static/ovp-chat-drawer.css" />
+    <script src="/static/ovp-chat-drawer.js" defer></script>
     <style>
       /* Page-local additions only — anything reusable belongs in
          /static/ovp-ui.css (kit-faithful) or /static/ovp-pages.css
@@ -449,6 +495,7 @@ def _layout(
         </div>
       </div>
     </main>
+    {_render_chat_drawer_shell()}
     <script>
       (function () {{
         var root = document.documentElement;
@@ -564,7 +611,17 @@ def _render_ask_about_this_button(
         title=title,
         requested_pack=requested_pack,
     )
-    return f'<a class="btn ghost ask-about-this" href="{escape(href)}">' f"💬 {escape(label)}</a>"
+    # M22: the link is the no-JS fallback (still navigates to
+    # /chat).  When the drawer JS loads, it hijacks the click and
+    # opens the right-side drawer over the current Reader page
+    # using these data-* attributes.
+    return (
+        f'<a class="btn ghost ask-about-this" href="{escape(href)}"'
+        f' data-anchor-kind="{escape(anchor_kind)}"'
+        f' data-anchor-ref="{escape(anchor_ref)}"'
+        f' data-anchor-title="{escape(title)}"'
+        f">💬 {escape(label)}</a>"
+    )
 
 
 def _render_surface_contract_card(payload: dict) -> str:
@@ -1797,12 +1854,17 @@ def _render_note_page(
             title=_anchor_title_for_note(relative_path, markdown),
             requested_pack=requested_pack,
         )
+        # M22 BL-093: prev/next pivot when this is a daily digest
+        # so operators can step through history without bouncing
+        # back to the /digests list every time.
+        digest_nav_html = _render_digest_neighbour_nav(vault_dir, relative_path)
         return _layout(
             f"Markdown Note: {relative_path}",
             (
                 "<h1>Markdown Note</h1>"
                 f"<p class='muted'>{escape(relative_path)}</p>"
                 + f"<div class='entry-actions'>{ask_button}</div>"
+                + digest_nav_html
                 + preamble_html
                 + f"<section class='card'>{note_html}</section>"
                 + _render_frontmatter_details(frontmatter_html)

@@ -113,12 +113,17 @@ def _render_reader_home(payload: dict) -> str:
             if digest_teaser
             else ""
         )
+        # M22 BL-093: surface the index alongside the latest entry so
+        # operators can step back to prior days without hunting through
+        # the file tree.
+        all_href = _shell_href("/digests", requested_pack)
         digest_card = (
             "<h2>Today's digest"
             f"<span class='muted tiny mono' style='margin-left:0.6rem'>{digest_date}</span>"
             "</h2>"
             f"{teaser_html}"
-            f"<p><a href='{digest_href}'>Open digest →</a></p>"
+            f"<p><a href='{digest_href}'>Open digest →</a>"
+            f" · <a href='{escape(all_href)}'>See all digests →</a></p>"
         )
 
     body = "".join([

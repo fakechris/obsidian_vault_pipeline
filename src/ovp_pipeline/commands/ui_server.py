@@ -164,6 +164,49 @@ def _crystal_kind_and_id_from_note_path(relative_path: str) -> tuple[str, str] |
     return ("community_crystal", f"cluster::{stem}")
 
 
+def _maybe_update_chats_projection(
+    vault_dir: Path | str,
+    *,
+    chat_id: str,
+    chat_path: Path | None = None,
+    action: str,
+) -> None:
+    """Refresh ``knowledge.db.chats`` + FTS shadow rows for one chat
+    after a drawer action (M22 codex P2).
+
+    Without this, a Save'd session lives in markdown but stays
+    invisible to ``/chats`` (which reads
+    ``list_indexed_chats(knowledge.db)``) and ``/search`` (which
+    joins ``page_fts`` + ``pages_index``) until the next full
+    ``ovp-knowledge-index`` rebuild.
+
+    Best-effort: any DB failure is logged but never raises — the
+    operator's markdown change already succeeded; a stale
+    projection is a follow-up annoyance, not a data-loss event.
+    """
+    try:
+        from ovp_pipeline.chats_projection import (
+            remove_chat_projection,
+            upsert_chat_projection,
+        )
+
+        layout = VaultLayout.from_vault(vault_dir)
+        if not layout.knowledge_db.is_file():
+            return
+        with sqlite3.connect(layout.knowledge_db) as conn:
+            if action == "discard":
+                remove_chat_projection(conn, chat_id)
+            elif action in ("save", "absorb") and chat_path is not None:
+                upsert_chat_projection(conn, Path(vault_dir), chat_path)
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        print(
+            f"[ui_server] chats projection update failed for "
+            f"chat_id={chat_id!r} action={action!r}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _maybe_emit_crystal_note_reuse(
     vault_dir: Path | str,
     relative_path: str,
@@ -1184,6 +1227,18 @@ def create_server(
                         )
                     )
                     return
+                if path == "/digests":
+                    from ovp_pipeline.commands._digests_list_page import (
+                        render_digests_list_body,
+                    )
+
+                    self._write_html(
+                        _layout(
+                            "Daily digests",
+                            render_digests_list_body(resolved_vault),
+                        )
+                    )
+                    return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
                 self.send_error(400, str(exc))
@@ -1386,6 +1441,18 @@ def create_server(
                 if path == "/chat/message":
                     self._handle_chat_message_post(form, csrf_token)
                     return
+                if path == "/chat/drawer/message":
+                    self._handle_chat_drawer_message_post(form)
+                    return
+                if path == "/chat/drawer/save":
+                    self._handle_chat_drawer_action_post(form, action="save")
+                    return
+                if path == "/chat/drawer/absorb":
+                    self._handle_chat_drawer_action_post(form, action="absorb")
+                    return
+                if path == "/chat/drawer/discard":
+                    self._handle_chat_drawer_action_post(form, action="discard")
+                    return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
                 self.send_error(400, str(exc))
@@ -1482,7 +1549,7 @@ def create_server(
             anchor_raw = self._form_first(form, "anchor").strip()
             anchor_title = self._form_first(form, "anchor_title").strip()
             message = self._form_first(form, "message").strip()
-            profile = self._form_first(form, "profile").strip() or "balanced"
+            profile = self._form_first(form, "profile").strip()
             visibility = self._form_first(form, "visibility").strip() or "indexed"
 
             anchor_kind, anchor_ref = parse_anchor_string(anchor_raw)
@@ -1546,6 +1613,231 @@ def create_server(
                 )
                 return
             self._redirect(chat_page_redirect_target(result.chat_id))
+
+        # ── M22: anchored inquiry drawer ───────────────────────
+
+        def _handle_chat_drawer_message_post(
+            self, form: dict[str, list[str]]
+        ) -> None:
+            """Handle POST ``/chat/drawer/message`` — JSON response.
+
+            Ephemeral-first: a new session lands as
+            ``visibility="unindexed"`` so it stays out of /search
+            and /chats during composition.  The operator decides
+            via the Save / Absorb / Discard buttons after seeing
+            the answer.
+
+            Response shape::
+
+                {
+                  "chat_id": "chat-...",
+                  "user_html": "<section>...</section>",
+                  "assistant_html": "<section>...</section>"
+                }
+
+            Errors return ``{"error": "...", "detail": "..."}``
+            with a 4xx / 5xx status — the JS surfaces ``detail``
+            in the drawer's status banner.
+            """
+            from ovp_pipeline.commands._chat_drawer import render_turn_html
+            from ovp_pipeline.commands._chat_page import parse_anchor_string
+            from ovp_pipeline.commands.chat_handler import (
+                ChatCapExceeded,
+                run_turn,
+            )
+
+            chat_id = self._form_first(form, "chat_id").strip() or None
+            anchor_raw = self._form_first(form, "anchor").strip()
+            anchor_title = self._form_first(form, "anchor_title").strip()
+            message = self._form_first(form, "message").strip()
+            profile = self._form_first(form, "profile").strip()
+
+            anchor_kind, anchor_ref = parse_anchor_string(anchor_raw)
+
+            if not message:
+                self._write_json(
+                    {"error": "empty_message", "detail": "Message cannot be empty."},
+                    status=400,
+                )
+                return
+
+            try:
+                result = run_turn(
+                    resolved_vault,
+                    chat_id=chat_id,
+                    user_message=message,
+                    anchor_kind=anchor_kind,
+                    anchor_ref=anchor_ref,
+                    anchor_title=anchor_title,
+                    profile_name=profile or None,
+                    # Drawer always starts ephemeral; explicit Save
+                    # / Absorb actions flip the file to indexed.
+                    # Follow-up turns inherit the current session
+                    # visibility from frontmatter (run_turn ignores
+                    # this kwarg when chat_id is set).
+                    visibility="unindexed",
+                )
+            except ChatCapExceeded as exc:
+                self._write_json(
+                    {"error": "cap_exceeded", "detail": str(exc)},
+                    status=429,
+                )
+                return
+            except ValueError as exc:
+                self._write_json(
+                    {"error": "bad_request", "detail": str(exc)},
+                    status=400,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 — provider failures
+                self._write_json(
+                    {
+                        "error": exc.__class__.__name__,
+                        "detail": str(exc),
+                    },
+                    status=500,
+                )
+                return
+
+            user_header = f"User · {result.frontmatter.last_message_at}"
+            assistant_header = (
+                f"Assistant · {result.frontmatter.last_message_at} "
+                f"· turn-{result.frontmatter.turn_count}"
+            )
+            self._write_json(
+                {
+                    "chat_id": result.chat_id,
+                    "user_html": render_turn_html("user", message, header=user_header),
+                    "assistant_html": render_turn_html(
+                        "assistant", result.assistant_body, header=assistant_header
+                    ),
+                }
+            )
+
+        def _handle_chat_drawer_action_post(
+            self, form: dict[str, list[str]], *, action: str
+        ) -> None:
+            """Handle Save / Absorb / Discard from the drawer.
+
+            * ``save`` — flip visibility to ``indexed``
+            * ``absorb`` — flip to indexed AND enqueue for absorb
+            * ``discard`` — delete the transcript file
+
+            JSON response: ``{"ok": true}`` or ``{"error": "..."}``.
+            """
+            from ovp_pipeline.chat_fileops import (
+                delete_chat,
+                parse_chat,
+                set_visibility,
+            )
+            from ovp_pipeline.commands.chat_handler import (
+                _find_chat_by_id,
+                writeback_to_absorb_queue,
+            )
+
+            chat_id = self._form_first(form, "chat_id").strip()
+            if not chat_id:
+                self._write_json(
+                    {"error": "missing_chat_id", "detail": "chat_id is required."},
+                    status=400,
+                )
+                return
+            chat_path = _find_chat_by_id(resolved_vault, chat_id)
+            if chat_path is None:
+                self._write_json(
+                    {
+                        "error": "not_found",
+                        "detail": f"Inquiry session {chat_id!r} not found.",
+                    },
+                    status=404,
+                )
+                return
+
+            # Codex P2: read the on-disk visibility BEFORE acting.
+            # Discard must refuse already-indexed transcripts; a
+            # follow-up Discard click after Save/Absorb would
+            # otherwise delete a saved session from disk.
+            current_fm = parse_chat(chat_path)
+            if current_fm is None:
+                self._write_json(
+                    {
+                        "error": "not_a_chat",
+                        "detail": f"{chat_path} is not a valid chat transcript.",
+                    },
+                    status=400,
+                )
+                return
+
+            try:
+                if action == "discard":
+                    if current_fm.visibility == "indexed":
+                        self._write_json(
+                            {
+                                "error": "already_saved",
+                                "detail": (
+                                    "Cannot discard an indexed session.  "
+                                    "Archive or delete it from /chats instead."
+                                ),
+                            },
+                            status=409,
+                        )
+                        return
+                    delete_chat(chat_path)
+                    _maybe_update_chats_projection(
+                        resolved_vault, chat_id=chat_id, action="discard"
+                    )
+                elif action == "save":
+                    set_visibility(chat_path, "indexed")
+                    _maybe_update_chats_projection(
+                        resolved_vault,
+                        chat_id=chat_id,
+                        chat_path=chat_path,
+                        action="save",
+                    )
+                elif action == "absorb":
+                    # gemini review: set_visibility already returns the
+                    # updated frontmatter — reuse it instead of re-reading
+                    # the file via parse_chat.
+                    fm = set_visibility(chat_path, "indexed")
+                    if fm.turn_count < 1:
+                        self._write_json(
+                            {
+                                "error": "no_turns",
+                                "detail": "Inquiry has no assistant turn to absorb yet.",
+                            },
+                            status=400,
+                        )
+                        return
+                    writeback_to_absorb_queue(
+                        resolved_vault,
+                        chat_id=chat_id,
+                        turn_number=fm.turn_count,
+                        chat_path=chat_path,
+                    )
+                    _maybe_update_chats_projection(
+                        resolved_vault,
+                        chat_id=chat_id,
+                        chat_path=chat_path,
+                        action="absorb",
+                    )
+                else:
+                    self._write_json(
+                        {"error": "unknown_action", "detail": action}, status=400
+                    )
+                    return
+            except ValueError as exc:
+                self._write_json(
+                    {"error": "bad_request", "detail": str(exc)}, status=400
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                self._write_json(
+                    {"error": exc.__class__.__name__, "detail": str(exc)},
+                    status=500,
+                )
+                return
+
+            self._write_json({"ok": True, "action": action, "chat_id": chat_id})
 
         def _resolve_contradiction_action(self, form: dict[str, list[str]]) -> dict[str, object]:
             contradiction_ids = [
