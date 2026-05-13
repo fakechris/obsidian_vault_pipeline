@@ -3533,14 +3533,15 @@ def _render_topic_page(payload: dict) -> str:
     )
     # Codex P2: bind the center's vault-relative path (not the
     # object_id) so the BL-083 binder loads the underlying note.
-    center_path = (
-        payload.get("links", {}).get("center_object_path")
-        or payload["center"].get("object_path")
-        or ""
+    # ``links.center_object_path`` is a route URL (``/object?id=...``),
+    # NOT a vault path — CodeRabbit Major.  Use ``provenance.evergreen_path``
+    # (the actual markdown file) instead.
+    center_path = str(
+        payload.get("provenance", {}).get("evergreen_path") or ""
     )
     ask_button = _render_ask_about_this_button(
         "object",
-        str(center_path),
+        center_path,
         title=str(payload["center"]["title"]),
         requested_pack=requested_pack,
     )
