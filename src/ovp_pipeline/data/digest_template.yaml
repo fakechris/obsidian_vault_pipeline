@@ -1,0 +1,46 @@
+# OVP digest configuration template (M23 / BL-094).
+#
+# Copy to ``<vault>/.ovp/digest.yaml`` at the vault root and adjust to
+# match operator preferences.  ``.ovp/`` is gitignored so local
+# overrides stay local.
+#
+# Missing file → every value falls back to the defaults shown here.
+# Missing key → that key falls back to its default; other values are
+# preserved.  No silent rejection.
+
+# Operator-local timezone for the digest window boundaries.  Defaults
+# to system locale via ``tzlocal.get_localzone()``; override here to
+# pin behavior across machines.  IANA tz name (e.g. ``America/Los_Angeles``,
+# ``Asia/Shanghai``).  Empty string → resolve from system locale; if
+# that fails (no tzlocal, broken locale), fall back to UTC and log
+# once.
+tz: ""
+
+# Cluster size threshold at which a cluster is considered "ready for
+# synthesis".  Surfaces in Layer 3 (pipeline state).  Tune per vault
+# after running ``ovp-digest --histogram`` once enough data exists;
+# 5 is the conservative default.
+cluster_threshold: 5
+
+# Layer 0 intake event allowlist — which ``audit_events.event_type``
+# rows count as "operator fed something into the system today".
+# Adding a new source authority requires extending this list, otherwise
+# its intakes are silently uncounted.
+intake_event_types:
+  - article_processed
+  - source_archived_to_processed
+  - source_staged_for_processing
+  - clippings_batch_processed
+  - github_source_ingested
+  - arxiv_source_ingested
+
+# Maintainer page exposes a "Regenerate digest now" button (Stage 4 of
+# the M23 plan).  Defaults to true so operators who drop articles
+# mid-day can immediately see them reflected.  Input-hash gate
+# (Stage 3) keeps the cost bounded — same input → no LLM call.
+mid_day_regenerate_button: true
+
+# Idempotency gate: skip the LLM call when a digest for the current
+# window already exists with a matching input_hash.  Counts the skip
+# as a ``digest_skipped_no_change`` audit event.
+skip_unchanged: true
