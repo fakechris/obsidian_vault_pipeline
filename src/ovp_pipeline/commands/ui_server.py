@@ -164,6 +164,50 @@ def _crystal_kind_and_id_from_note_path(relative_path: str) -> tuple[str, str] |
     return ("community_crystal", f"cluster::{stem}")
 
 
+def _maybe_update_chats_projection(
+    vault_dir: Path | str,
+    *,
+    chat_id: str,
+    chat_path: Path | None = None,
+    action: str,
+) -> None:
+    """Refresh ``knowledge.db.chats`` + FTS shadow rows for one chat
+    after a drawer action (M22 codex P2).
+
+    Without this, a Save'd session lives in markdown but stays
+    invisible to ``/chats`` (which reads
+    ``list_indexed_chats(knowledge.db)``) and ``/search`` (which
+    joins ``page_fts`` + ``pages_index``) until the next full
+    ``ovp-knowledge-index`` rebuild.
+
+    Best-effort: any DB failure is logged but never raises — the
+    operator's markdown change already succeeded; a stale
+    projection is a follow-up annoyance, not a data-loss event.
+    """
+    try:
+        from ovp_pipeline.chats_projection import (
+            remove_chat_projection,
+            upsert_chat_projection,
+        )
+        from ovp_pipeline.runtime import VaultLayout
+
+        layout = VaultLayout.from_vault(vault_dir)
+        if not layout.knowledge_db.is_file():
+            return
+        with sqlite3.connect(layout.knowledge_db) as conn:
+            if action == "discard":
+                remove_chat_projection(conn, chat_id)
+            elif action in ("save", "absorb") and chat_path is not None:
+                upsert_chat_projection(conn, Path(vault_dir), chat_path)
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        print(
+            f"[ui_server] chats projection update failed for "
+            f"chat_id={chat_id!r} action={action!r}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _maybe_emit_crystal_note_reuse(
     vault_dir: Path | str,
     relative_path: str,
@@ -1710,11 +1754,47 @@ def create_server(
                 )
                 return
 
+            # Codex P2: read the on-disk visibility BEFORE acting.
+            # Discard must refuse already-indexed transcripts; a
+            # follow-up Discard click after Save/Absorb would
+            # otherwise delete a saved session from disk.
+            current_fm = parse_chat(chat_path)
+            if current_fm is None:
+                self._write_json(
+                    {
+                        "error": "not_a_chat",
+                        "detail": f"{chat_path} is not a valid chat transcript.",
+                    },
+                    status=400,
+                )
+                return
+
             try:
                 if action == "discard":
+                    if current_fm.visibility == "indexed":
+                        self._write_json(
+                            {
+                                "error": "already_saved",
+                                "detail": (
+                                    "Cannot discard an indexed session.  "
+                                    "Archive or delete it from /chats instead."
+                                ),
+                            },
+                            status=409,
+                        )
+                        return
                     delete_chat(chat_path)
+                    _maybe_update_chats_projection(
+                        resolved_vault, chat_id=chat_id, action="discard"
+                    )
                 elif action == "save":
                     set_visibility(chat_path, "indexed")
+                    _maybe_update_chats_projection(
+                        resolved_vault,
+                        chat_id=chat_id,
+                        chat_path=chat_path,
+                        action="save",
+                    )
                 elif action == "absorb":
                     set_visibility(chat_path, "indexed")
                     fm = parse_chat(chat_path)
@@ -1732,6 +1812,12 @@ def create_server(
                         chat_id=chat_id,
                         turn_number=fm.turn_count,
                         chat_path=chat_path,
+                    )
+                    _maybe_update_chats_projection(
+                        resolved_vault,
+                        chat_id=chat_id,
+                        chat_path=chat_path,
+                        action="absorb",
                     )
                 else:
                     self._write_json(

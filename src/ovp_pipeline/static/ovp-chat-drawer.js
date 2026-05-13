@@ -319,16 +319,27 @@
         state.chatId = null;
         // Close after a tick so the operator sees the confirmation.
         setTimeout(closeDrawer, 600);
-      } else if (actionName === "save") {
-        showStatus("Saved to /chats.");
+      } else {
+        // Save / Absorb: the file is now indexed.  Re-enable Save
+        // & Absorb so the operator can re-trigger if they like
+        // (idempotent on the server), but DISABLE Discard — a
+        // follow-up Discard click on an indexed session would
+        // try to delete a saved transcript.  Server also rejects
+        // discard for indexed sessions, but disabling the button
+        // is the better UX cue.
         actionBtns.forEach(function (b) {
-          b.disabled = false;
+          if (b.dataset.drawerAction === "discard") {
+            b.disabled = true;
+            b.title = "Already saved — open /chats to manage.";
+          } else {
+            b.disabled = false;
+          }
         });
-      } else if (actionName === "absorb") {
-        showStatus("Queued for absorb.");
-        actionBtns.forEach(function (b) {
-          b.disabled = false;
-        });
+        if (actionName === "save") {
+          showStatus("Saved to /chats.");
+        } else if (actionName === "absorb") {
+          showStatus("Queued for absorb.");
+        }
       }
     } catch (err) {
       showStatus("Network error: " + (err && err.message ? err.message : err), {
