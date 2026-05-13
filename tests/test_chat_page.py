@@ -1,0 +1,268 @@
+"""Tests for M21b / BL-086 — Reader ``/chat`` page renderer."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from ovp_pipeline.chat_fileops import ChatAnchor, create_chat_file
+from ovp_pipeline.commands._chat_page import (
+    _profile_options,
+    _strip_html_comments,
+    parse_anchor_string,
+    render_chat_page_body,
+)
+
+# ── renderer — standalone (new session) ────────────────────────
+
+
+def test_render_new_standalone_chat_has_composer(tmp_path: Path):
+    html = render_chat_page_body(tmp_path)
+    assert 'method="POST" action="/chat/message"' in html
+    assert "Standalone (no anchor)" in html
+    assert "<textarea" in html
+    # Visibility toggle copy from the plan must appear verbatim.
+    assert "Don't index or reuse this inquiry." in html
+    assert "selected LLM provider" in html
+
+
+def test_render_new_anchored_chat_carries_anchor(tmp_path: Path):
+    html = render_chat_page_body(
+        tmp_path,
+        anchor_kind="note",
+        anchor_ref="20-Areas/topic.md",
+        anchor_title="A topic",
+    )
+    assert 'value="note:20-Areas/topic.md"' in html
+    assert "A topic" in html
+
+
+def test_render_new_chat_does_not_include_manifest_card(tmp_path: Path):
+    """The manifest card only shows on existing sessions (it's the
+    audit summary of the prior turn's context, not a directive for
+    the next one)."""
+    html = render_chat_page_body(tmp_path)
+    assert "Context anchored to" not in html
+
+
+# ── renderer — existing session ────────────────────────────────
+
+
+def test_render_existing_chat_shows_manifest_and_turns(tmp_path: Path):
+    path, _ = create_chat_file(
+        tmp_path,
+        anchor=ChatAnchor(kind="note", path="20-Areas/x.md", title="X"),
+        topic="memory architecture",
+    )
+    # Append fake turns directly to the markdown so the renderer
+    # has something to display.  Tests of run_turn cover the
+    # round-trip.
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\n## User · 2026-05-12T11:00:01Z\n\nHello vault.\n\n"
+        "## Assistant · 2026-05-12T11:00:02Z · turn-2\n\n"
+        "<!-- context-manifest\n  token_estimate: 10\n-->\n\n"
+        "Hi there.\n\n",
+        encoding="utf-8",
+    )
+    html = render_chat_page_body(tmp_path, chat_path=path)
+    assert "Context anchored to" in html
+    assert "Hello vault." in html
+    assert "Hi there." in html
+    # The literal manifest HTML comment block must not leak into
+    # the rendered transcript body (the explanatory <code> snippet
+    # in the manifest card is fine — it's escaped pedagogy, not
+    # raw audit data).
+    assert "token_estimate: 10" not in html
+    assert "<!-- context-manifest" not in html
+    # User vs assistant turn classes are distinct so CSS can style.
+    assert "chat-turn-user" in html
+    assert "chat-turn-assistant" in html
+
+
+def test_render_missing_chat_renders_error_block(tmp_path: Path):
+    html = render_chat_page_body(tmp_path, chat_id="chat-nope")
+    assert "not found" in html.lower()
+
+
+# ── profile dropdown ───────────────────────────────────────────
+
+
+def test_profile_options_orders_canonical_first(tmp_path: Path):
+    cfg = tmp_path / ".ovp" / "llm_profiles.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(
+        """
+profiles:
+  my-custom:
+    provider: anthropic
+    model: claude-x
+  balanced:
+    provider: anthropic
+    model: claude-sonnet-4-6
+  deep:
+    provider: anthropic
+    model: claude-opus-4-7
+  fast:
+    provider: anthropic
+    model: MiniMax-M2.7-highspeed
+""",
+        encoding="utf-8",
+    )
+    options = _profile_options(tmp_path, current="balanced")
+    # Canonical three first, then custom.
+    assert options.index('value="fast"') < options.index('value="balanced"')
+    assert options.index('value="balanced"') < options.index('value="deep"')
+    assert options.index('value="deep"') < options.index('value="my-custom"')
+    # Selection persists.
+    assert 'value="balanced" selected' in options
+
+
+def test_profile_options_with_only_fallback_book(tmp_path: Path):
+    """A vault without ``.ovp/llm_profiles.yaml`` falls back to a
+    single 'balanced' profile from env vars.  The dropdown still
+    renders something."""
+    options = _profile_options(tmp_path, current="balanced")
+    assert 'value="balanced"' in options
+
+
+# ── visibility toggle ──────────────────────────────────────────
+
+
+def test_visibility_toggle_defaults_to_indexed_for_new_chats(tmp_path: Path):
+    html = render_chat_page_body(tmp_path)
+    # Indexed pre-selected; unindexed unselected.
+    assert 'value="indexed" checked' in html
+    assert 'value="unindexed" checked' not in html
+
+
+def test_visibility_toggle_preserves_unindexed_session(tmp_path: Path):
+    path, _ = create_chat_file(
+        tmp_path,
+        anchor=ChatAnchor(kind="standalone"),
+        visibility="unindexed",
+    )
+    html = render_chat_page_body(tmp_path, chat_path=path)
+    assert 'value="unindexed" checked' in html
+    assert 'value="indexed" checked' not in html
+
+
+def test_visibility_toggle_disabled_on_existing_session(tmp_path: Path):
+    """Once a session starts, visibility is locked — run_turn
+    ignores changes on follow-up turns, so the toggle is disabled
+    to avoid the impression you can flip it (CodeRabbit M)."""
+    path, _ = create_chat_file(
+        tmp_path,
+        anchor=ChatAnchor(kind="note", path="x.md"),
+    )
+    html = render_chat_page_body(tmp_path, chat_path=path)
+    assert "disabled" in html
+    assert "Visibility is locked" in html
+
+
+# ── Codex P2 — anchor_title round-trips through hidden field ───
+
+
+def test_new_anchored_chat_carries_anchor_title_as_hidden(tmp_path: Path):
+    """The friendly title from the GET URL must land as a hidden
+    field so the POST handler can persist it on creation."""
+    html = render_chat_page_body(
+        tmp_path,
+        anchor_kind="note",
+        anchor_ref="20-Areas/topic.md",
+        anchor_title="My Topic — explainer",
+    )
+    assert 'name="anchor_title"' in html
+    assert 'value="My Topic — explainer"' in html
+
+
+# ── CodeRabbit High — HTML comment stripping preserves prose ───
+
+
+def test_strip_html_comments_keeps_inline_prose():
+    """Single-line ``<!-- ... -->`` strips just the comment range
+    — content before AND after the comment is preserved
+    (CodeRabbit High)."""
+    cleaned, in_block = _strip_html_comments("before <!-- inline --> after", in_block=False)
+    assert cleaned == "before  after"
+    assert in_block is False
+
+
+def test_strip_html_comments_handles_multi_line_block():
+    open_line, in_block = _strip_html_comments("prefix <!-- start", in_block=False)
+    assert open_line == "prefix "
+    assert in_block is True
+    inside_line, in_block = _strip_html_comments("middle line", in_block=True)
+    assert inside_line == ""
+    assert in_block is True
+    close_line, in_block = _strip_html_comments("end --> suffix", in_block=True)
+    assert close_line == " suffix"
+    assert in_block is False
+
+
+# ── parse_anchor_string ────────────────────────────────────────
+
+
+def test_parse_anchor_string_empty_is_standalone():
+    assert parse_anchor_string("") == ("standalone", "")
+
+
+def test_parse_anchor_string_kind_colon_ref():
+    assert parse_anchor_string("note:20-Areas/x.md") == ("note", "20-Areas/x.md")
+
+
+def test_parse_anchor_string_bare_path_defaults_to_note():
+    assert parse_anchor_string("20-Areas/x.md") == ("note", "20-Areas/x.md")
+
+
+def test_parse_anchor_string_strips_whitespace():
+    assert parse_anchor_string("  note : x  ") == ("note", "x")
+
+
+# ── CodeRabbit Major — H1 in body must not overwrite title ────
+
+
+def test_h1_inside_user_turn_does_not_overwrite_title(tmp_path: Path):
+    """A markdown-heavy reply that contains ``# Heading`` lines as
+    body content must NOT lose those lines and must NOT have the
+    transcript-title silently overwritten."""
+    chat = tmp_path / "x.md"
+    chat.write_text(
+        "---\ntype: chat\nchat_id: chat-abc\n---\n\n"
+        "# Original Inquiry Title\n\n"
+        "## User · 2026-05-12T11:00:00Z\n\n"
+        "# Some H1 inside user prose\n\nbody text.\n\n"
+        "## Assistant · 2026-05-12T11:00:01Z · turn-2\n\n"
+        "<!-- context-manifest\n  token_estimate: 5\n-->\n\n"
+        "# Heading inside reply\n\nReply body.\n\n",
+        encoding="utf-8",
+    )
+    html = render_chat_page_body(tmp_path, chat_path=chat)
+    # Title comes from the pre-turn H1 only.
+    assert "Original Inquiry Title" in html
+    # In-body H1s land in their respective turn bodies.
+    assert "Some H1 inside user prose" in html
+    assert "Heading inside reply" in html
+
+
+# ── CodeRabbit Major — hidden visibility carries through POST ──
+
+
+def test_existing_session_emits_hidden_visibility_field(tmp_path: Path):
+    """Disabled radio buttons aren't submitted with the form; the
+    hidden field is what actually carries ``visibility`` to the
+    POST handler on follow-ups."""
+    path, _ = create_chat_file(
+        tmp_path,
+        anchor=ChatAnchor(kind="standalone"),
+        visibility="unindexed",
+    )
+    html = render_chat_page_body(tmp_path, chat_path=path)
+    assert 'type="hidden" name="visibility" value="unindexed"' in html
+
+
+def test_render_chat_page_body_respects_visibility_kwarg(tmp_path: Path):
+    """An error rerender passes the operator's submitted visibility
+    back to the renderer; pre-existing-session paths still derive
+    from frontmatter."""
+    html = render_chat_page_body(tmp_path, visibility="unindexed")
+    assert 'value="unindexed" checked' in html
+    assert 'value="indexed" checked' not in html
