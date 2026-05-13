@@ -1172,6 +1172,18 @@ def create_server(
                 if path == "/chat":
                     self._handle_chat_page_get(query, csrf_token)
                     return
+                if path == "/chats":
+                    from ovp_pipeline.commands._chats_list_page import (
+                        render_chats_list_body,
+                    )
+
+                    self._write_html(
+                        _layout(
+                            "Inquiry history",
+                            render_chats_list_body(resolved_vault),
+                        )
+                    )
+                    return
                 self.send_error(404, "Not Found")
             except ValueError as exc:
                 self.send_error(400, str(exc))
