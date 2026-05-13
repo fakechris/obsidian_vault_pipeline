@@ -231,6 +231,13 @@ def handle_digest(ctx: TaskContext) -> TaskResult:
         sys_prompt, user_prompt, max_tokens=1200,
     )
     composed = (composed or "").strip()
+    # M23 BL-097: wrap outbound maintainer links so click-through
+    # lands an audit event for /ops/digest-health.  Idempotent —
+    # an already-wrapped link survives a second pass unchanged.
+    composed = _wrap_digest_links(
+        composed,
+        day=inputs.window_end.date().isoformat(),
+    )
 
     body_md = _render_body(inputs, composed, new_hash, ctx)
     emit(
@@ -641,6 +648,74 @@ def _build_sources_section(inputs: DigestInputs) -> str:
                 parts.append(f"- [[{label}|⚠ {label}]]")
         parts.append("")
     return "\n".join(parts) + "\n"
+
+
+# M23 BL-097: which URL prefixes should rewrite through /digest/click.
+# We only wrap the maintainer + note surfaces the digest's
+# "Worth doing next" section actually emits; static assets and
+# external URLs pass through unchanged.
+_WRAP_PREFIXES: tuple[str, ...] = (
+    "/ops/queue/",
+    "/ops/cluster",
+    "/ops/today",
+    "/ops/contradictions",
+    "/note?path=",
+)
+
+
+def _digest_action_shape(url: str) -> str:
+    """Classify a digest outbound link for audit-event reporting.
+
+    Keeps the shape vocabulary closed — ``/ops/digest-health`` and
+    the success-metrics computation (BL-097) read these strings
+    directly, so adding a new shape requires a deliberate code change
+    rather than silently appearing in stats.
+    """
+    if url.startswith("/ops/queue/contradictions") or url.startswith("/ops/contradictions"):
+        return "resolve_contradiction"
+    if url.startswith("/ops/cluster"):
+        return "run_synthesis"
+    if url.startswith("/note?path="):
+        return "read_source"
+    if url.startswith("/ops/today"):
+        return "review_today"
+    return "other"
+
+
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((/[^)]+)\)")
+
+
+def _wrap_digest_links(markdown: str, *, day: str) -> str:
+    """Rewrite outbound maintainer links to flow through ``/digest/click``.
+
+    Markdown links like ``[Resolve contradiction](/ops/queue/contradictions?status=open)``
+    become ``[Resolve contradiction](/digest/click?to=…&action=resolve_contradiction&day=YYYY-MM-DD)``
+    so a click lands a ``digest_clicked_through`` audit event before
+    redirecting to the original target.
+
+    Idempotent: links already pointing at ``/digest/click`` are left
+    alone so re-running the handler (e.g. mid-day regenerate) doesn't
+    double-wrap them.  Links to prefixes not in ``_WRAP_PREFIXES``
+    (external URLs, anchors, etc.) pass through unchanged.
+    """
+    from urllib.parse import quote
+
+    def _rewrite(match: re.Match[str]) -> str:
+        label = match.group(1)
+        href = match.group(2)
+        if href.startswith("/digest/click"):
+            return match.group(0)
+        if not any(href.startswith(p) for p in _WRAP_PREFIXES):
+            return match.group(0)
+        action = _digest_action_shape(href)
+        wrapped = (
+            f"/digest/click?to={quote(href, safe='')}"
+            f"&action={quote(action, safe='')}"
+            f"&day={quote(day, safe='')}"
+        )
+        return f"[{label}]({wrapped})"
+
+    return _MD_LINK_RE.sub(_rewrite, markdown)
 
 
 def _safe_wikilink(value: Any) -> str:

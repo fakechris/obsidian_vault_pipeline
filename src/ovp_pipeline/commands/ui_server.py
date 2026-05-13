@@ -1212,6 +1212,12 @@ def create_server(
                         object_id=object_id or None,
                     )
                     return
+                if path == "/digest/click":
+                    self._handle_digest_click(query)
+                    return
+                if path == "/ops/digest-health":
+                    self._handle_digest_health()
+                    return
                 if path == "/chat":
                     self._handle_chat_page_get(query, csrf_token)
                     return
@@ -1841,6 +1847,89 @@ def create_server(
                 return
 
             self._write_json({"ok": True, "action": action, "chat_id": chat_id})
+
+        # ── M23 BL-097: click-through tracking ───────────────────
+
+        def _handle_digest_click(self, query: dict[str, list[str]]) -> None:
+            """Record a digest outbound click + redirect to the target.
+
+            The digest handler (BL-097) rewrites maintainer links in
+            the rendered body to flow through here so we can audit
+            *what operators actually act on* from each digest.
+
+            ``to``    — vault-relative URL to redirect to.  MUST be a
+                        local path (``/...``); external URLs are
+                        rejected so this can't be used as an open
+                        redirect.
+            ``action``— closed-vocabulary shape from
+                        ``_digest_action_shape`` (resolve_contradiction,
+                        run_synthesis, read_source, review_today, other).
+            ``day``   — operator-local YYYY-MM-DD of the digest this
+                        link came from.  Joins click-through stats
+                        back to the originating digest.
+            """
+            from ..event_emitter import emit
+
+            to = (query.get("to", [""])[0] or "").strip()
+            action = (query.get("action", [""])[0] or "other").strip()
+            day = (query.get("day", [""])[0] or "").strip()
+
+            # Open-redirect defense — only local paths allowed.
+            if not to.startswith("/") or to.startswith("//"):
+                self.send_error(400, "digest click: to must be a local path")
+                return
+            # Strip control chars defensively before logging the URL.
+            if any(ord(ch) < 32 for ch in to):
+                self.send_error(400, "digest click: invalid characters in to")
+                return
+
+            try:
+                emit(
+                    resolved_vault,
+                    "pipeline.jsonl",
+                    "digest_clicked_through",
+                    {
+                        "to": to,
+                        "action": action,
+                        "day": day,
+                    },
+                )
+            except Exception:  # noqa: BLE001 — audit must never block UX
+                # Log via stderr and continue — a click should redirect
+                # even if the audit writer hiccups.
+                logger_name = "ui_server"
+                print(
+                    f"[{logger_name}] digest_clicked_through emit failed",
+                    file=sys.stderr,
+                )
+
+            self._redirect(to)
+
+        def _handle_digest_health(self) -> None:
+            """Render /ops/digest-health — three metric panels.
+
+            All three read from ``audit_events`` (rebuilt from
+            ``pipeline.jsonl`` by ``ovp-knowledge-index``); no new
+            DB schema.
+
+            * **Skip rate** = digest_skipped_no_change / total digest
+              attempts.  High skip rate is *good* — the input-hash gate
+              is working.
+            * **Intake reflection rate** = of digest_generated rows
+              where the same day had ≥ 3 article_processed events,
+              what fraction surfaced layer0_events > 0.  Target:
+              100% — every active day should have its intake
+              acknowledged.
+            * **Click-through breakdown** — counts of
+              digest_clicked_through grouped by ``action``.  Pure
+              count for now; rate requires "digest view" tracking
+              that doesn't exist yet (separate follow-up).
+            """
+            from ..ui.view_models import build_digest_health_payload
+            from ._ui_renderers import _render_digest_health_page
+
+            payload = build_digest_health_payload(resolved_vault)
+            self._write_html(_render_digest_health_page(payload))
 
         # ── M23 BL-096: mid-day digest regenerate ────────────────
 
