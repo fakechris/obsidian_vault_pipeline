@@ -101,11 +101,15 @@ def list_indexed_chats(db_path: Path) -> list[ChatRow]:
                         turn_count=int(row[8] or 0),
                     )
                 )
-    except sqlite3.DatabaseError:
-        # Schema mismatch / table missing — operator hasn't run
-        # ``ovp-knowledge-index`` since BL-085 landed.  Empty page
-        # is better than 500.
-        return []
+    except sqlite3.OperationalError as exc:
+        # CodeRabbit Major — only graceful-degrade for known
+        # schema-mismatch cases (pre-BL-085 vault).  Re-raise on
+        # corruption / locking so genuine DB failures aren't
+        # masked as an empty page.
+        msg = str(exc).lower()
+        if "no such table" in msg or "no such column" in msg:
+            return []
+        raise
     return rows
 
 
