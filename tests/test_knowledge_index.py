@@ -1005,7 +1005,8 @@ date: 2026-04-07
     assert row[1] == 1
     # BL-061: KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION bumped 6→7 to
     # materialise ``evergreen_revisions`` on existing vaults.
-    assert row[2] == 7
+    # BL-085: bumped 7→8 to materialise the ``chats`` projection.
+    assert row[2] == 8
     assert row[3]
 
 
@@ -1073,9 +1074,10 @@ date: 2026-04-07
     assert markers[-1].authority_schema_version == 2
     # BL-061 bumped KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION 6 → 7 to
     # force a rebuild that materialises the new ``evergreen_revisions``
-    # table on existing vaults.  Each future BL that adds a canonical
-    # table will keep bumping this constant; the test should track it.
-    assert markers[-1].projection_schema_version == 7
+    # table on existing vaults.  BL-085 bumped 7 → 8 for the ``chats``
+    # projection.  Each future BL that adds a canonical table will
+    # keep bumping this constant; the test should track it.
+    assert markers[-1].projection_schema_version == 8
     assert markers[-1].status == "closed"
     with sqlite3.connect(layout.knowledge_db) as conn:
         row = conn.execute(
@@ -1085,7 +1087,9 @@ date: 2026-04-07
             WHERE projection_kind = 'knowledge_db'
             """
         ).fetchone()
-    assert row == (2, 7)
+    # M21 BL-085 bumped projection_schema_version 7 → 8 to ensure
+    # vaults rebuild when the chats projection lands.
+    assert row == (2, 8)
 
 
 def test_ensure_knowledge_db_current_rebuilds_when_projection_schema_version_advances(temp_vault):
@@ -1134,8 +1138,9 @@ date: 2026-04-07
             WHERE projection_kind = 'knowledge_db'
             """
         ).fetchone()
-    # BL-061: see version-bump rationale above.
-    assert row == (1, 7)
+    # BL-061: see version-bump rationale above.  M21 BL-085 bumped
+    # to 8.
+    assert row == (1, 8)
 
 
 def test_recent_audit_events_returns_newest_rows_first(temp_vault):
