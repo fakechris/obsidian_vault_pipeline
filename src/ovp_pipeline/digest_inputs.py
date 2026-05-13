@@ -458,8 +458,8 @@ def _check_audit_layer0(
             """,
             (
                 *config.intake_event_types,
-                window_start.isoformat(),
-                window_end.isoformat(),
+                _utc_iso(window_start),
+                _utc_iso(window_end),
             ),
         ).fetchone()[0]
     except sqlite3.OperationalError:
@@ -492,8 +492,8 @@ def _collect_layer0(
             """,
             (
                 *config.intake_event_types,
-                window_start.isoformat(),
-                window_end.isoformat(),
+                _utc_iso(window_start),
+                _utc_iso(window_end),
             ),
         ).fetchall()
     except sqlite3.OperationalError:
@@ -577,7 +577,7 @@ def _collect_layer1(
                AND er.derived_at <= ?
              ORDER BY er.derived_at DESC
             """,
-            (pack, window_start.isoformat(), window_end.isoformat()),
+            (pack, _utc_iso(window_start), _utc_iso(window_end)),
         ).fetchall()
     except sqlite3.OperationalError:
         return DeltaLayer((), ())
@@ -925,9 +925,14 @@ def _compute_input_hash(inputs: DigestInputs) -> str:
     doesn't drift with wall-clock time.  Counts, sorted id sets,
     window boundaries — yes.  Prose like "8 days ago" — never.
     """
+    # Round to the minute so back-to-back mid-day regenerations don't
+    # produce a fresh hash on every wall-clock microsecond tick — the
+    # idempotency gate fires only when the *data* actually drifted.
+    window_start_q = inputs.window_start.replace(second=0, microsecond=0)
+    window_end_q = inputs.window_end.replace(second=0, microsecond=0)
     payload = {
-        "window_start": inputs.window_start.isoformat(),
-        "window_end": inputs.window_end.isoformat(),
+        "window_start": _utc_iso(window_start_q),
+        "window_end": _utc_iso(window_end_q),
         "pack": inputs.pack,
         "layer0_event_count": inputs.intake.intake_events_processed,
         "layer0_samples": sorted(inputs.intake.representative_samples),
@@ -958,6 +963,17 @@ def _safe_json(blob: Any) -> Any:
         return None
 
 
+def _utc_iso(dt: datetime) -> str:
+    """Normalize a tz-aware datetime to a UTC ISO string for SQL binding.
+
+    Stored timestamps in ``knowledge.db`` are UTC (some as
+    ``...+00:00``, some as ``...Z``); a string-comparison against
+    an operator-local ISO like ``...-07:00`` is lexicographic, not
+    time-correct.  Every SQL bind site goes through this helper.
+    """
+    return dt.astimezone(timezone.utc).isoformat()
+
+
 def _parse_iso(raw: str) -> datetime | None:
     """Permissive ISO-8601 parser.  Returns None on failure."""
     raw = (raw or "").strip()
@@ -973,11 +989,15 @@ def _parse_iso(raw: str) -> datetime | None:
 
 
 def _tz_display_name(tz: Any) -> str:
-    """Best-effort tz name for the digest frontmatter."""
-    for attr in ("key", "zone"):
-        name = getattr(tz, attr, None)
-        if isinstance(name, str) and name:
-            return name
+    """Best-effort tz name for the digest frontmatter.
+
+    Stdlib :class:`zoneinfo.ZoneInfo` exposes ``key``; ``tzlocal``
+    may return a pytz shim whose ``zone`` accessor triggers a
+    deprecation warning.  Try ``key`` first, fall back to ``str(tz)``.
+    """
+    name = getattr(tz, "key", None)
+    if isinstance(name, str) and name:
+        return name
     try:
         return str(tz)
     except Exception:  # noqa: BLE001
