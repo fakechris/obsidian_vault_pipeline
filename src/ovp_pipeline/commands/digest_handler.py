@@ -151,7 +151,12 @@ Hard rules:
   quiet — the operator needs to know their work landed.
 - Don't list article titles individually; surface them as a chip
   ("memory systems (7), agents (3), ops (2)").
-- Don't invent topics that aren't in the input layers.
+- Don't invent topics, time ranges, or numbers that aren't in
+  the input layers above.  Never say "between midnight and 6 AM"
+  or similar — you don't have hour-of-day granularity.
+- When referring to a crystal/cluster, use the human label from
+  the input (e.g. "memory-systems"); do NOT print the raw hex id
+  (``cluster::caa2903bc202``) — that's noise to the reader.
 - Don't write a closing call-to-think — the "Worth doing next"
   section IS the call to action.
 - When a section has zero data, omit the heading entirely.
@@ -466,8 +471,9 @@ def _render_layer2_for_prompt(layer: ConnectionLayer) -> str:
             lines.append(f"- {subject or cid} (contradiction_id={cid})")
     if layer.recent_top_crystals:
         lines.append("Top-scoring crystals in the vault (context, not delta):")
-        for cid, kind, score in layer.recent_top_crystals:
-            lines.append(f"- {kind}/{cid} score={score:.2f}")
+        for cid, kind, score, label in layer.recent_top_crystals:
+            display = label or cid
+            lines.append(f"- {kind}: {display} score={score:.2f}")
     return "\n".join(lines)
 
 

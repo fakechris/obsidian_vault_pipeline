@@ -114,7 +114,11 @@ class ConnectionLayer:
 
     connected_community_crystals: tuple[tuple[str, str], ...]  # (cluster_id, label)
     touched_contradictions: tuple[tuple[str, str], ...]  # (contradiction_id, subject)
-    recent_top_crystals: tuple[tuple[str, str, float], ...]  # (id, kind, score)
+    recent_top_crystals: tuple[tuple[str, str, float, str], ...]
+    # (id, kind, score, label) — label is the human-readable
+    # name from ``graph_clusters.label`` (community) or
+    # ``contradiction_crystals.subject_key`` (contradiction).
+    # Empty string when no label is known.
 
 
 @dataclass(frozen=True)
@@ -739,19 +743,37 @@ def _collect_layer2(
         except sqlite3.OperationalError:
             touched_contradictions = []
 
-    recent_top: list[tuple[str, str, float]] = []
+    recent_top: list[tuple[str, str, float, str]] = []
+    # User feedback (2026-05-13): the digest body was referring to
+    # crystals by hex cluster_id ("clusters: caa2903bc202, ...")
+    # because we didn't pass labels to the LLM.  Join to
+    # graph_clusters / contradiction_crystals to surface the
+    # human-readable name alongside the id.
     try:
         rows = conn.execute(
             """
-            SELECT crystal_id, crystal_kind, score FROM crystal_scores
-             WHERE pack = ?
-             ORDER BY score DESC
+            SELECT cs.crystal_id,
+                   cs.crystal_kind,
+                   cs.score,
+                   COALESCE(gc.label, cc.subject_key, '') AS label
+              FROM crystal_scores cs
+              LEFT JOIN graph_clusters gc
+                ON gc.pack = cs.pack AND gc.cluster_id = cs.crystal_id
+              LEFT JOIN contradiction_crystals cc
+                ON cc.pack = cs.pack AND cc.contradiction_id = cs.crystal_id
+             WHERE cs.pack = ?
+             ORDER BY cs.score DESC
              LIMIT 5
             """,
             (pack,),
         ).fetchall()
         recent_top = [
-            (r["crystal_id"], r["crystal_kind"], float(r["score"] or 0.0))
+            (
+                r["crystal_id"],
+                r["crystal_kind"],
+                float(r["score"] or 0.0),
+                (r["label"] or "").strip(),
+            )
             for r in rows
         ]
     except sqlite3.OperationalError:
