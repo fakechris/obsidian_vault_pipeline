@@ -258,3 +258,58 @@ def test_ensure_knowledge_db_takes_delta_path_on_version_bump(tmp_path: Path, mo
             "WHERE projection_kind = 'knowledge_db'"
         ).fetchone()[0]
         assert new_version == KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION
+
+
+# ── codex/CodeRabbit fixes — marker kind + connection hygiene ─
+
+
+def test_delta_migration_writes_metadata_only_marker(tmp_path: Path, monkeypatch):
+    """Pinned regression for codex P2 — the marker written for the
+    delta path must use a kind that ``ProjectionRepairMarker.from_dict``
+    accepts, otherwise the marker is silently dropped on replay
+    and ``close_projection_repair_marker`` no-ops, leaving the
+    marker to re-fire on every subsequent start."""
+    import ovp_pipeline.knowledge_index as ki
+    from ovp_pipeline.projection_lifecycle import (
+        list_projection_repair_markers,
+    )
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    db_path = vault / "60-Logs" / "knowledge.db"
+    _make_v7_db(db_path)
+
+    monkeypatch.setattr(ki, "_ensure_authority_schema_version", lambda _vault: 1)
+    monkeypatch.setattr(ki, "_knowledge_db_supports_pack_schema", lambda _db_path: True)
+    monkeypatch.setattr(
+        ki,
+        "rebuild_knowledge_index",
+        lambda *_a, **_kw: pytest_fail("full rebuild path should not run"),
+    )
+    # ``rebuild_knowledge_index`` shouldn't run; we add a sentinel
+    # via the helper below since pytest is intentionally not imported.
+
+    ki._ensure_knowledge_db(vault)
+
+    # The marker was visible to projection_lifecycle (not silently
+    # dropped on parse) AND was closed by the surrounding
+    # ``try``/``finally``.  Closed markers stay in the audit log
+    # but ``status='closed'``.
+    markers = list_projection_repair_markers(vault)
+    delta_markers = [
+        m
+        for m in markers
+        if m.kind == "metadata_only" and m.caused_by == "ensure_knowledge_db_current"
+    ]
+    assert delta_markers, (
+        "delta migration should have written a metadata_only marker "
+        "that ProjectionRepairMarker.from_dict can parse"
+    )
+    assert all(m.status == "closed" for m in delta_markers), (
+        "the surrounding try/finally must close the marker — "
+        "open markers re-fire on every subsequent ensure_knowledge_db"
+    )
+
+
+def pytest_fail(msg: str):
+    raise AssertionError(msg)

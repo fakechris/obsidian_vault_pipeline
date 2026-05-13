@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from array import array
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -1064,9 +1065,17 @@ def _ensure_knowledge_db(vault_dir: Path) -> tuple[Path, VaultLayout]:
             to_version=KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION,
         )
         if not missing and _can_delta_migrate(steps):
+            # ``metadata_only`` is the closest match in the existing
+            # ProjectionRepairKind vocabulary (Literal in
+            # projection_lifecycle.py:22).  Codex P2 — an unknown
+            # ``kind`` is silently dropped by
+            # ``ProjectionRepairMarker.from_dict``, so doctor +
+            # close_projection_repair_marker would never see this
+            # marker; the close call would silently no-op and the
+            # marker would replay on every subsequent start.
             marker = write_projection_repair_marker(
                 resolved_vault,
-                kind="delta_migration",
+                kind="metadata_only",
                 scope={"projection_kind": KNOWLEDGE_DB_PROJECTION_KIND},
                 reason=rebuild_reason,
                 caused_by="ensure_knowledge_db_current",
@@ -1116,43 +1125,53 @@ def _run_delta_migrations(
 ) -> None:
     """Run an ordered list of additive/recompute migrations.
 
-    Each step + the projection_metadata bump runs in a single
-    transaction so a mid-step failure rolls back cleanly.  Uses
-    the same write lock the full rebuild takes so concurrent
-    readers serialise behind the migration.
+    **Atomicity contract**: each individual migration runner is
+    expected to be **idempotent** (``CREATE TABLE IF NOT EXISTS``,
+    ``ALTER TABLE … ADD COLUMN`` guarded by a ``PRAGMA table_info``
+    check, etc.) because Python's ``sqlite3.Connection.executescript``
+    implicitly commits any pending transaction before running its
+    body — so even if we open ``BEGIN`` here it would be silently
+    discarded by the first runner that uses ``executescript`` (codex
+    + CodeRabbit High).  We therefore do not wrap the runners in a
+    transaction; partial failures fall back to "operator re-runs the
+    migration" and the idempotent runners pick up where they stopped.
+
+    The ``projection_metadata`` bump itself is a single ``INSERT OR
+    REPLACE`` and runs after every migration step succeeded, so a
+    half-run upgrade leaves the version at the *old* value and the
+    next start re-attempts cleanly.
+
+    Connection is opened with ``contextlib.closing`` because
+    ``sqlite3.connect`` as a context manager commits on exit but
+    does NOT close the file descriptor (CodeRabbit M).
     """
     target = KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION
     with knowledge_db_write_lock(vault_dir):
-        with sqlite3.connect(db_path) as conn:
-            conn.execute("BEGIN")
-            try:
-                for step in steps:
-                    logger.info(
-                        "knowledge.db migrating %d → %d (%s, %s)",
-                        step.from_version,
-                        step.from_version + 1,
-                        step.kind.value,
-                        step.reason,
-                    )
-                    step.runner(conn, vault_dir)
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO projection_metadata (
-                        projection_kind, authority_schema_version,
-                        projection_schema_version, built_at
-                    ) VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        KNOWLEDGE_DB_PROJECTION_KIND,
-                        authority_schema_version,
-                        target,
-                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    ),
+        with closing(sqlite3.connect(db_path)) as conn:
+            for step in steps:
+                logger.info(
+                    "knowledge.db migrating %d → %d (%s, %s)",
+                    step.from_version,
+                    step.from_version + 1,
+                    step.kind.value,
+                    step.reason,
                 )
-                conn.execute("COMMIT")
-            except Exception:
-                conn.execute("ROLLBACK")
-                raise
+                step.runner(conn, vault_dir)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO projection_metadata (
+                    projection_kind, authority_schema_version,
+                    projection_schema_version, built_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    KNOWLEDGE_DB_PROJECTION_KIND,
+                    authority_schema_version,
+                    target,
+                    _utc_now_text(),
+                ),
+            )
+            conn.commit()
 
 
 def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
