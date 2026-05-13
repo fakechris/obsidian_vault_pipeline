@@ -31,19 +31,31 @@ from ovp_pipeline.chat_fileops import CHATS_DIR, ChatFrontmatter, parse_chat
 logger = logging.getLogger(__name__)
 
 
-# Synthetic slug prefix for ``pages_index`` shadow rows.  Picked so
-# the chat-vs-note distinction is obvious in any join: ``slug LIKE
-# 'chat:%'`` is exactly the indexed-chat corpus.
-_CHAT_SLUG_PREFIX = "chat:"
+# Synthetic slug shape for ``pages_index`` shadow rows.  ``:`` would
+# be stripped by ``identity.canonicalize_note_id`` (the helper that
+# normalises every ``/note`` / ``/object`` route input), so a slug
+# like ``chat:chat-a7b3`` becomes ``chatchat-a7b3`` on lookup and the
+# session disappears from search-driven retrieval.  Codex review P2:
+# use the bare ``chat_id`` (which already starts with ``chat-``) so
+# the slug round-trips cleanly through canonicalisation.
+#
+# ``slug LIKE 'chat-%'`` is the indexed-chat corpus.  In practice
+# ``chat_id`` is ``chat-<8 hex>`` (BL-082 mint), so the collision
+# risk against operator-created notes is negligible; the projection
+# rebuild also walks the chats corpus exclusively, so a real note
+# happening to be named ``chat-abcd1234.md`` would be left alone.
+_CHAT_SLUG_PREFIX = "chat-"
 
 
 def chat_slug(chat_id: str) -> str:
     """Return the ``pages_index`` shadow-slug for a chat session.
 
-    ``chat-a7b3`` → ``chat:chat-a7b3``.  Always prefixed so the
-    indexed-chat corpus is trivially separable from regular pages.
+    The chat_id minted by :func:`chat_fileops.new_chat_id` already
+    starts with ``chat-``, so we just return it.  Survives
+    :func:`identity.canonicalize_note_id` so search-driven
+    retrieval round-trips cleanly (codex review P2).
     """
-    return f"{_CHAT_SLUG_PREFIX}{chat_id}"
+    return chat_id
 
 
 def iter_chat_transcripts(vault_dir: Path) -> Iterable[Path]:
@@ -110,15 +122,27 @@ def rebuild_chats_projection(
         "unindexed": 0,
         "skipped": 0,
     }
+    # Codex P1: FTS5 declares ``slug`` as ``UNINDEXED``, which
+    # means ``LIKE`` on that column doesn't actually match — a
+    # naive ``DELETE FROM page_fts WHERE slug LIKE 'chat-%'``
+    # leaves every prior chat row in place.  Read the explicit
+    # chat slugs from the projection table first, then delete
+    # each one by exact equality.  Visit ``page_fts`` BEFORE
+    # clearing ``chats`` so the slug list is still available.
+    prior_chat_slugs = [
+        chat_slug(row[0]) for row in conn.execute("SELECT chat_id FROM chats").fetchall()
+    ]
+    if prior_chat_slugs:
+        placeholders = ",".join("?" * len(prior_chat_slugs))
+        conn.execute(
+            f"DELETE FROM page_fts WHERE slug IN ({placeholders})",
+            prior_chat_slugs,
+        )
+        conn.execute(
+            f"DELETE FROM pages_index WHERE slug IN ({placeholders})",
+            prior_chat_slugs,
+        )
     conn.execute("DELETE FROM chats")
-    conn.execute(
-        "DELETE FROM pages_index WHERE slug LIKE ?",
-        (f"{_CHAT_SLUG_PREFIX}%",),
-    )
-    conn.execute(
-        "DELETE FROM page_fts WHERE slug LIKE ?",
-        (f"{_CHAT_SLUG_PREFIX}%",),
-    )
 
     for path in iter_chat_transcripts(vault_dir):
         fm = parse_chat(path)

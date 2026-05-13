@@ -73,7 +73,21 @@ def db_conn() -> sqlite3.Connection:
 
 def test_chat_slug_prefix_is_stable():
     assert chat_slug("chat-a7b3").startswith(_CHAT_SLUG_PREFIX)
-    assert chat_slug("chat-a7b3") == "chat:chat-a7b3"
+    # Codex P2: slug must survive canonicalize_note_id so search-
+    # driven retrieval lookups round-trip cleanly.  Using the raw
+    # chat_id avoids the colon-stripping issue with the previous
+    # ``chat:<id>`` shape.
+    assert chat_slug("chat-a7b3") == "chat-a7b3"
+
+
+def test_chat_slug_survives_canonicalize_note_id():
+    """The chosen slug shape must round-trip through the same
+    canonicaliser that ``/note`` and ``/object`` use; otherwise
+    search-driven retrieval can't find the indexed chat."""
+    from ovp_pipeline.identity import canonicalize_note_id
+
+    slug = chat_slug("chat-a7b3c2d1")
+    assert canonicalize_note_id(slug) == slug
 
 
 # ── iter_chat_transcripts ──────────────────────────────────────
@@ -118,14 +132,14 @@ def test_rebuild_indexed_session_writes_three_rows(tmp_path: Path, db_conn: sqli
     assert chats_rows == [(fm.chat_id, "active", "indexed", "note")]
 
     pages_rows = db_conn.execute(
-        "SELECT slug, note_type, title FROM pages_index " "WHERE slug LIKE 'chat:%'"
+        "SELECT slug, note_type, title FROM pages_index WHERE note_type = 'chat'"
     ).fetchall()
-    assert pages_rows == [(f"chat:{fm.chat_id}", "chat", "X")]
+    assert pages_rows == [(fm.chat_id, "chat", "X")]
 
     fts_match = db_conn.execute(
         "SELECT slug FROM page_fts WHERE page_fts MATCH 'searchable'"
     ).fetchall()
-    assert fts_match == [(f"chat:{fm.chat_id}",)]
+    assert fts_match == [(fm.chat_id,)]
 
 
 def test_rebuild_unindexed_session_writes_only_chats_row(
@@ -145,7 +159,7 @@ def test_rebuild_unindexed_session_writes_only_chats_row(
 
     assert db_conn.execute("SELECT COUNT(*) FROM chats").fetchone()[0] == 1
     assert (
-        db_conn.execute("SELECT COUNT(*) FROM pages_index WHERE slug LIKE 'chat:%'").fetchone()[0]
+        db_conn.execute("SELECT COUNT(*) FROM pages_index WHERE note_type = 'chat'").fetchone()[0]
         == 0
     )
     assert (
@@ -176,7 +190,7 @@ def test_rebuild_drops_orphan_pages_index_rows(tmp_path: Path, db_conn: sqlite3.
     append_turn(path, role="user", body="first question")
     rebuild_chats_projection(db_conn, tmp_path)
     assert (
-        db_conn.execute("SELECT COUNT(*) FROM pages_index WHERE slug LIKE 'chat:%'").fetchone()[0]
+        db_conn.execute("SELECT COUNT(*) FROM pages_index WHERE note_type = 'chat'").fetchone()[0]
         == 1
     )
 
@@ -186,7 +200,37 @@ def test_rebuild_drops_orphan_pages_index_rows(tmp_path: Path, db_conn: sqlite3.
     rebuild_chats_projection(db_conn, tmp_path)
     assert db_conn.execute("SELECT COUNT(*) FROM chats").fetchone()[0] == 0
     assert (
-        db_conn.execute("SELECT COUNT(*) FROM pages_index WHERE slug LIKE 'chat:%'").fetchone()[0]
+        db_conn.execute("SELECT COUNT(*) FROM pages_index WHERE note_type = 'chat'").fetchone()[0]
+        == 0
+    )
+
+
+def test_rebuild_clears_stale_page_fts_rows(tmp_path: Path, db_conn: sqlite3.Connection):
+    """Codex P1 — FTS5 declares ``slug`` UNINDEXED, so a naive
+    ``DELETE ... WHERE slug LIKE 'chat-%'`` doesn't match.  After
+    deleting a chat on disk, its ``page_fts`` row must still
+    disappear on the next rebuild; otherwise repeated rebuilds
+    accumulate stale hits."""
+    path, fm = create_chat_file(
+        tmp_path,
+        anchor=ChatAnchor(kind="note", path="x.md", title="X"),
+    )
+    append_turn(path, role="user", body="raretoken12345")
+    rebuild_chats_projection(db_conn, tmp_path)
+    assert (
+        db_conn.execute(
+            "SELECT COUNT(*) FROM page_fts WHERE page_fts MATCH 'raretoken12345'"
+        ).fetchone()[0]
+        == 1
+    )
+
+    # Delete the transcript and rebuild — stale FTS rows must go.
+    path.unlink()
+    rebuild_chats_projection(db_conn, tmp_path)
+    assert (
+        db_conn.execute(
+            "SELECT COUNT(*) FROM page_fts WHERE page_fts MATCH 'raretoken12345'"
+        ).fetchone()[0]
         == 0
     )
 

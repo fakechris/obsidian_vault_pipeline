@@ -32,7 +32,7 @@ SUMMARY_MAX_LEN = 320
 SUMMARY_RELATED_LIMIT = 3
 AUTHORITY_SCHEMA_VERSION = 1
 KNOWLEDGE_DB_PROJECTION_KIND = "knowledge_db"
-KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 7
+KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION = 8
 
 
 _FTS_QUERY_SCRUB = re.compile(r"[^\w\u4e00-\u9fff]+", flags=re.UNICODE)
@@ -904,6 +904,17 @@ def _knowledge_db_supports_pack_schema(db_path: Path) -> bool:
             "source_slug",
             "confidence",
             "detection_method",
+        },
+        # M21 BL-085 — chats projection.  Required so existing
+        # vaults trigger a full rebuild when this code lands;
+        # without the table, ``/chats`` and the visibility-aware
+        # FTS would silently 500.  Schema version bumped to 8.
+        "chats": {
+            "chat_id",
+            "visibility",
+            "anchor_kind",
+            "status",
+            "file_path",
         },
     }
     try:
