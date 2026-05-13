@@ -213,6 +213,11 @@ SQLITE_ALLOWED_MODULES = {
     "synthesis/_shared",
     "synthesis/_versioning",
     "ui/view_models",
+    # M23 / BL-094: digest input collector reads evergreen_revisions,
+    # audit_events, community_crystals, graph_clusters etc.  Data-
+    # layer aggregator over knowledge.db projections — same category
+    # as materializers/* and synthesis/_shared.
+    "digest_inputs",
 }
 
 
