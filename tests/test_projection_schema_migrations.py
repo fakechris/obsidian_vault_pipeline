@@ -35,7 +35,7 @@ from ovp_pipeline.knowledge_index import (
 
 # Migration registry is required for versions strictly less than
 # the current ``KNOWLEDGE_DB_PROJECTION_SCHEMA_VERSION``.  Versions
-# 1–5 predate the registry (BL-061 introduced the schema-versioning
+# 1-5 predate the registry (BL-061 introduced the schema-versioning
 # discipline at v7); they're considered "bootstrap" and the policy
 # starts enforcing at the first version that landed *after* the
 # registry was added.  Adjust this constant only when restating
@@ -313,3 +313,48 @@ def test_delta_migration_writes_metadata_only_marker(tmp_path: Path, monkeypatch
 
 def pytest_fail(msg: str):
     raise AssertionError(msg)
+
+
+def test_chats_seed_failure_keeps_projection_metadata_at_old_version(
+    tmp_path: Path, monkeypatch
+):
+    """CodeRabbit Major regression — if ``rebuild_chats_projection``
+    raises during a 7→8 migration, the failure must propagate.
+    ``_run_delta_migrations`` only writes the new
+    ``projection_schema_version`` after every step's runner
+    returns, so the version stays at the old value and the next
+    start retries cleanly."""
+    import ovp_pipeline.chats_projection as cp
+    import ovp_pipeline.knowledge_index as ki
+
+    vault = tmp_path / "vault"
+    (vault / "60-Logs").mkdir(parents=True)
+    db_path = vault / "60-Logs" / "knowledge.db"
+    _make_v7_db(db_path)
+
+    monkeypatch.setattr(ki, "_ensure_authority_schema_version", lambda _vault: 1)
+    monkeypatch.setattr(ki, "_knowledge_db_supports_pack_schema", lambda _db_path: True)
+    monkeypatch.setattr(
+        ki,
+        "rebuild_knowledge_index",
+        lambda *_a, **_kw: pytest_fail("delta path should fail, not full-rebuild fallback"),
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("synthetic disk failure during chats seed")
+
+    monkeypatch.setattr(cp, "rebuild_chats_projection", _boom)
+
+    # The runner re-raises; ensure_knowledge_db propagates.
+    import pytest
+
+    with pytest.raises(RuntimeError, match="synthetic disk failure"):
+        ki._ensure_knowledge_db(vault)
+
+    # projection_schema_version stays at v7 — next start retries.
+    with sqlite3.connect(db_path) as conn:
+        version = conn.execute(
+            "SELECT projection_schema_version FROM projection_metadata "
+            "WHERE projection_kind = 'knowledge_db'"
+        ).fetchone()[0]
+        assert version == 7

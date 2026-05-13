@@ -319,18 +319,16 @@ def _migrate_7_to_8_chats(conn: sqlite3.Connection, vault_dir: Path) -> None:
         CREATE INDEX IF NOT EXISTS idx_chats_status
           ON chats(status);
         """)
-    # Populate from the markdown corpus.  Best-effort: the projection
-    # rebuild itself is BL-085 territory and already degrades on
-    # missing chats dir.
-    try:
-        from .chats_projection import rebuild_chats_projection
+    # Populate from the markdown corpus.  CodeRabbit Major — do NOT
+    # swallow exceptions: a failed seed must leave
+    # ``projection_metadata`` at the old version so the next start
+    # retries.  ``rebuild_chats_projection`` already degrades
+    # gracefully on missing chats dir (it returns 0-count); a real
+    # exception here means a hard error (disk full, malformed
+    # transcript) that the operator should see.
+    from .chats_projection import rebuild_chats_projection
 
-        rebuild_chats_projection(conn, vault_dir=vault_dir)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "chats projection seed during 7→8 migration skipped: %s",
-            exc,
-        )
+    rebuild_chats_projection(conn, vault_dir=vault_dir)
 
 
 SCHEMA_MIGRATIONS: dict[int, SchemaMigration] = {
