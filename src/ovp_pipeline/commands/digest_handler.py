@@ -164,22 +164,80 @@ Hard rules:
 
 
 # ---------------------------------------------------------------
+# Target-date plumbing (M23.1: past-date regenerate)
+# ---------------------------------------------------------------
+
+
+_TARGET_DATE_RE = re.compile(r"-(\d{4}-\d{2}-\d{2})$")
+
+
+def _parse_target_date_from_slug(slug: str) -> str:
+    """Recover a ``YYYY-MM-DD`` suffix from a DIGEST task slug.
+
+    Today the default slug is ``daily`` (no date suffix → empty
+    string → handler runs against today).  The maintainer's
+    "Regenerate digest for this day" button enqueues
+    ``DIGEST-daily-2026-05-11.md`` so the dispatcher's slug
+    becomes ``daily-2026-05-11`` and this helper extracts the
+    date back out.
+    """
+    if not slug:
+        return ""
+    match = _TARGET_DATE_RE.search(slug)
+    return match.group(1) if match else ""
+
+
+def _as_of_for_target_date(config: DigestConfig, target_date: str) -> datetime | None:
+    """Translate ``"YYYY-MM-DD"`` into the ``as_of`` datetime
+    ``collect_digest_inputs`` expects.
+
+    Empty input → ``None`` so the collector defaults to wall-clock
+    now.  A real date → end-of-day in the configured tz so the
+    window resolution picks up the local-day boundary cleanly.
+    """
+    if not target_date:
+        return None
+    from ..digest_config import resolve_timezone
+
+    tz = resolve_timezone(config)
+    try:
+        when = datetime.strptime(target_date, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return when.replace(hour=23, minute=59, second=59, tzinfo=tz)
+
+
+# ---------------------------------------------------------------
 # Handler entry point
 # ---------------------------------------------------------------
 
 
 def handle_digest(ctx: TaskContext) -> TaskResult:
-    """Compose one digest for ``ctx.pack`` against the current vault state."""
+    """Compose one digest for ``ctx.pack`` against the current vault state.
+
+    The slug may carry a target date as ``daily-YYYY-MM-DD`` (e.g.
+    ``DIGEST-daily-2026-05-11.md`` for regenerating 5/11).  Without a
+    suffix the digest runs against today's local-day window.
+    """
     config = load_digest_config(ctx.vault_dir)
-    inputs = collect_digest_inputs(ctx.vault_dir, ctx.pack, config=config)
+    target_date = _parse_target_date_from_slug(ctx.slug)
+    as_of = _as_of_for_target_date(config, target_date)
+    inputs = collect_digest_inputs(
+        ctx.vault_dir, ctx.pack, as_of=as_of, config=config,
+    )
     new_hash = inputs.input_hash()
+
+    # Filename the dispatcher will write under.  For a past-date
+    # regenerate, override so the file lands at the right
+    # ``YYYY-MM-DD-digest-daily.md``.
+    date_override = target_date if target_date else None
 
     # Idempotency gate — Stage 3 of the M23 plan.  Read any prior
     # digest at the expected filename; if its ``input_hash`` matches,
     # skip the LLM call and return the prior body verbatim so the
     # dispatcher's overwrite is a no-op rewrite.
     if config.skip_unchanged:
-        prior_path = _expected_output_path(ctx.vault_dir)
+        prior_path = _expected_output_path(ctx.vault_dir, date_str=date_override)
         prior_hash, prior_body = _read_prior_digest(prior_path)
         if prior_body and prior_hash == new_hash:
             emit(
@@ -202,6 +260,7 @@ def handle_digest(ctx: TaskContext) -> TaskResult:
                     "skipped_llm": True,
                     "reason": "no_change",
                 },
+                date_override=date_override,
             )
 
     # No-data path: when nothing meaningful changed, render an
@@ -225,6 +284,7 @@ def handle_digest(ctx: TaskContext) -> TaskResult:
                 "reason": "no_data",
                 **_layer_counts(inputs),
             },
+            date_override=date_override,
         )
 
     # Real digest — call the LLM with the structured input layers.
@@ -260,6 +320,7 @@ def handle_digest(ctx: TaskContext) -> TaskResult:
             "skipped_llm": False,
             **_layer_counts(inputs),
         },
+        date_override=date_override,
     )
 
 
@@ -761,13 +822,30 @@ def _build_footer(inputs: DigestInputs, ctx: TaskContext | None) -> str:
 # ---------------------------------------------------------------
 
 
-def _enqueue_daily(vault_dir: Path) -> Path:
-    """Drop ``DIGEST-daily.md`` into ``50-Inbox/02-Tasks/`` so the
-    next dispatcher run picks it up.  Idempotent — if today's task
-    file already exists, return its path without overwriting."""
+def _enqueue_daily(vault_dir: Path, *, target_date: str | None = None) -> Path:
+    """Drop ``DIGEST-daily[-YYYY-MM-DD].md`` into ``50-Inbox/02-Tasks/``
+    so the next dispatcher run picks it up.
+
+    Without ``target_date`` the file is ``DIGEST-daily.md`` and the
+    handler runs against today's local-day window (the M20 default).
+
+    With ``target_date="YYYY-MM-DD"`` the file is
+    ``DIGEST-daily-YYYY-MM-DD.md``.  The dispatcher splits that into
+    ``slug = "daily-YYYY-MM-DD"`` and the handler's
+    ``_parse_target_date_from_slug`` extracts the date back out.
+
+    Idempotent — if the task file already exists, return its path
+    without overwriting.  The dispatcher's "rate limit per UTC day"
+    counts task DISPATCHES, not task ENQUEUES, so re-enqueueing the
+    same task is cheap.
+    """
     folder = vault_dir / "50-Inbox" / "02-Tasks"
     folder.mkdir(parents=True, exist_ok=True)
-    target = folder / "DIGEST-daily.md"
+    if target_date:
+        filename = f"DIGEST-daily-{target_date}.md"
+    else:
+        filename = "DIGEST-daily.md"
+    target = folder / filename
     if target.exists():
         return target
     target.write_text(
@@ -808,10 +886,32 @@ def main(argv: list[str] | None = None) -> int:
         "--pack", default="research-tech",
         help="Pack name (default: research-tech).",
     )
+    parser.add_argument(
+        "--date", default="",
+        help=(
+            "Target date YYYY-MM-DD for past-date regenerate.  "
+            "Default: today.  Note: regenerated past-date digests "
+            "see today's crystal labels, not the labels that "
+            "existed on that date (the audit_events filter is "
+            "rigorous; the synthesis layer is best-effort)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not any((args.enqueue_daily, args.run_now, args.show_latest)):
         parser.error("pass --enqueue-daily, --run-now, or --show-latest")
+
+    if args.date:
+        # Validate YYYY-MM-DD up front so a typo errors before any
+        # task file lands in 50-Inbox/02-Tasks/.
+        try:
+            datetime.strptime(args.date, "%Y-%m-%d")
+        except ValueError:
+            print(
+                f"error: --date {args.date!r} is not YYYY-MM-DD",
+                file=sys.stderr,
+            )
+            return 2
 
     vault = args.vault_dir.expanduser().resolve()
     if not vault.exists():
@@ -827,7 +927,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.enqueue_daily or args.run_now:
-        task = _enqueue_daily(vault)
+        task = _enqueue_daily(vault, target_date=args.date or None)
         if args.run_now:
             try:
                 output = dispatch_task(vault, task, pack=args.pack)

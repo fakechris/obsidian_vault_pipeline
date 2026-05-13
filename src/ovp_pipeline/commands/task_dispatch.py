@@ -120,12 +120,19 @@ class TaskResult:
         body_md: str,
         subdir: str = "",
         metadata: dict[str, Any] | None = None,
+        date_override: str | None = None,
     ) -> None:
         self.body_md = body_md
         # Override the default ``YYYY-MM/`` placement; e.g. digest
         # handler writes to ``digests/`` instead.
         self.subdir = subdir
         self.metadata = metadata or {}
+        # Override the ``YYYY-MM-DD`` prefix the dispatcher otherwise
+        # derives from UTC-today.  Set by the digest handler when
+        # operating on a past date so the file lands at
+        # ``YYYY-MM-DD-digest-daily.md`` (not today's date).  ``None``
+        # → default UTC-today behavior.
+        self.date_override = date_override
 
 
 _HANDLERS: dict[str, tuple[HandlerFn, str]] = {}
@@ -218,14 +225,32 @@ def _slugify_for_output(slug: str) -> str:
 
 
 def _resolve_output_path(
-    vault_dir: Path, prefix: str, slug: str, subdir: str
+    vault_dir: Path,
+    prefix: str,
+    slug: str,
+    subdir: str,
+    *,
+    date_override: str | None = None,
 ) -> Path:
+    """Compose the ``Generated/<subdir>/<date>-<prefix>-<slug>.md`` path.
+
+    ``date_override`` lets a handler write to a past or future
+    date (e.g. ``ovp-digest --date 2026-05-11``).  ``None`` keeps
+    the default UTC-today behavior.  When the override is set,
+    its month is also used for the ``YYYY-MM/`` subdir fallback
+    so a regenerated past digest doesn't land in this month's
+    folder.
+    """
     if subdir:
         base = vault_dir / GENERATED_REL / subdir
     else:
-        base = vault_dir / GENERATED_REL / _today_utc_month()
+        if date_override and len(date_override) >= 7:
+            base = vault_dir / GENERATED_REL / date_override[:7]
+        else:
+            base = vault_dir / GENERATED_REL / _today_utc_month()
     base.mkdir(parents=True, exist_ok=True)
-    fname = f"{_today_utc_date()}-{prefix.lower()}-{_slugify_for_output(slug)}.md"
+    date_str = date_override or _today_utc_date()
+    fname = f"{date_str}-{prefix.lower()}-{_slugify_for_output(slug)}.md"
     return base / fname
 
 
@@ -338,7 +363,10 @@ def dispatch_task(
         raise DispatchError(f"handler {prefix} failed: {exc}") from exc
     duration_ms = int((time.monotonic() - start) * 1000)
 
-    output_path = _resolve_output_path(vault_dir, prefix, slug, result.subdir)
+    output_path = _resolve_output_path(
+        vault_dir, prefix, slug, result.subdir,
+        date_override=result.date_override,
+    )
     output_path.write_text(result.body_md, encoding="utf-8")
 
     archived_path: Path | None = None

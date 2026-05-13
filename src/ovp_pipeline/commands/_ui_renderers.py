@@ -492,26 +492,40 @@ def _render_digest_health_page(payload: dict) -> str:
     return _layout("Digest health", body)
 
 
-def _render_digest_regenerate_button(requested_pack: str) -> str:
+def _render_digest_regenerate_button(
+    requested_pack: str, *, date: str = ""
+) -> str:
     """Render the "Regenerate digest now" button on ``/ops/today``.
 
     POSTs to ``/ops/digest/regenerate`` which enqueues + dispatches
     a ``DIGEST-daily`` task synchronously.  With the M23 input-hash
     gate (BL-095), unchanged-data clicks return the prior body
     without an LLM call — operators get a cheap "fresh" button.
+
+    ``date`` (YYYY-MM-DD) is passed through as a hidden field for
+    past-date regenerate (M23.1).  Empty → today's UTC date.
     """
     pack_input = (
         f"<input type='hidden' name='pack' value='{escape(requested_pack)}' />"
         if requested_pack
         else ""
     )
+    date_input = (
+        f"<input type='hidden' name='date' value='{escape(date)}' />"
+        if date
+        else ""
+    )
+    label = (
+        f"Regenerate digest for {escape(date)}"
+        if date
+        else "Regenerate today's digest"
+    )
     return (
         "<form method='post' action='/ops/digest/regenerate' "
         "style='display:inline-block;margin:0.6rem 0 0.2rem 0'>"
         f"{pack_input}"
-        "<button type='submit' class='btn'>"
-        "Regenerate today's digest"
-        "</button>"
+        f"{date_input}"
+        f"<button type='submit' class='btn'>{label}</button>"
         " <span class='muted small'>"
         "Cheap — skips the LLM call when nothing changed since last run."
         "</span>"
@@ -6674,7 +6688,13 @@ def _render_today_digest_page(payload: dict) -> str:
     # operator who drops articles mid-day can immediately trigger a
     # new digest.  Input-hash gate (BL-095) keeps the cost bounded —
     # unchanged inputs return the same body without an LLM call.
-    sections.append(_render_digest_regenerate_button(requested_pack))
+    #
+    # M23.1: pass the page's ``date`` through so a past-date dispatch
+    # writes to the right ``YYYY-MM-DD-digest-daily.md`` file rather
+    # than UTC-today.
+    sections.append(
+        _render_digest_regenerate_button(requested_pack, date=date)
+    )
     sections.append("<div class='grid stats' style='margin-top:1rem'>")
     for card in cards:
         card_id = str(card.get("id") or "")

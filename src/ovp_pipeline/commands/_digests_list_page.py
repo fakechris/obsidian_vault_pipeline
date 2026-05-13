@@ -1,29 +1,51 @@
-"""Reader ``/digests`` list view (M22 / BL-093).
+"""Reader ``/digests`` list view (M22 / BL-093 + M23.1 calendar).
 
 Daily digest history.  The home page surfaces only the latest
 digest; this page lists *all* digests under
-``40-Resources/Generated/digests/`` in reverse-chronological
-order so the operator can step through past days.
+``40-Resources/Generated/digests/`` and adds a 30-day calendar
+grid showing per-day digest existence + intake activity.
 
-Each entry links to the same ``/note?path=…`` markdown render
-the home card already opens; this module only adds the index
-(date + teaser + open link) and the prev/next neighbour nav
-that's missing once you're inside one of those notes.
+Calendar interactions:
+* ``✓ <date>``       → digest exists; click opens ``/note?path=…``
+* ``<date> · N ev``  → no digest, N intake events that day; click
+                       goes to ``/ops/today?date=<date>`` which has
+                       a "Regenerate digest for this day" button
+* ``<date>  —``      → no audit events either (genuinely quiet);
+                       click goes to ``/ops/today?date=<date>`` so
+                       the operator can verify
 
-Scope deliberately tight — no filtering, no search, no card
-chrome.  A small ``<ul>`` of dated rows is enough for the
-volume one operator generates (≤ 1 / day).
+The flat list below the grid stays unchanged for operators who
+prefer to scan filenames.
 """
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
+from datetime import date as date_cls
+from datetime import timedelta
 from html import escape
 from pathlib import Path
 from urllib.parse import quote
 
 
 DIGESTS_DIR = "40-Resources/Generated/digests"
+KNOWLEDGE_DB_REL = "60-Logs/knowledge.db"
+CALENDAR_WINDOW_DAYS = 30
+
+# The intake event types Layer 0 of the M23 digest counts.  Mirrors
+# the default ``DigestConfig.intake_event_types`` so the calendar
+# tells the operator the same story the digest body would (modulo
+# config overrides — the calendar always uses defaults, which is
+# fine because /digests is a Reader view, not a maintainer dial).
+_INTAKE_EVENT_TYPES = (
+    "article_processed",
+    "source_archived_to_processed",
+    "source_staged_for_processing",
+    "clippings_batch_processed",
+    "github_source_ingested",
+    "arxiv_source_ingested",
+)
 
 
 @dataclass(frozen=True)
@@ -92,16 +114,203 @@ def _extract_teaser(path: Path) -> str:
     return ""
 
 
+@dataclass(frozen=True)
+class CalendarCell:
+    """One day in the calendar grid.
+
+    Two boolean states drive the cell's class + click target:
+
+    * ``has_digest``    — a file ``YYYY-MM-DD-digest-daily.md`` exists
+    * ``intake_count``  — count of intake-event audit rows for the day
+                          in operator-local tz (today the calendar
+                          treats UTC and local as the same — the
+                          ``audit_events.timestamp`` strings start
+                          with ``YYYY-MM-DD`` regardless of suffix so
+                          a ``LIKE`` filter works without parsing).
+    """
+
+    date: str  # YYYY-MM-DD
+    has_digest: bool
+    intake_count: int
+    digest_href: str  # /note?path=... when has_digest else ""
+    explore_href: str  # /ops/today?date=...
+
+
+def build_calendar_cells(
+    vault_dir: Path | str,
+    *,
+    today: date_cls | None = None,
+    window_days: int = CALENDAR_WINDOW_DAYS,
+) -> list[CalendarCell]:
+    """Build the ``window_days``-day calendar window ending at ``today``.
+
+    Newest day last (so the natural left-to-right, top-to-bottom
+    grid reads chronologically).  Intake counts come from
+    ``audit_events``; missing knowledge.db → all zeros.
+    """
+    if today is None:
+        today = date_cls.today()
+    start = today - timedelta(days=window_days - 1)
+
+    digest_dates: dict[str, str] = {}
+    folder = Path(vault_dir) / DIGESTS_DIR
+    if folder.is_dir():
+        for path in folder.glob("*-digest-daily.md"):
+            d = path.name[:10]
+            try:
+                date_cls.fromisoformat(d)
+            except ValueError:
+                continue
+            try:
+                rel = str(path.relative_to(vault_dir))
+            except ValueError:
+                rel = str(path)
+            digest_dates[d] = f"/note?path={quote(rel, safe='')}"
+
+    intake_counts: dict[str, int] = {}
+    db_path = Path(vault_dir) / KNOWLEDGE_DB_REL
+    if db_path.is_file():
+        try:
+            with sqlite3.connect(db_path) as conn:
+                placeholders = ",".join("?" * len(_INTAKE_EVENT_TYPES))
+                rows = conn.execute(
+                    f"""
+                    SELECT substr(timestamp, 1, 10) AS day, COUNT(*) AS n
+                      FROM audit_events
+                     WHERE event_type IN ({placeholders})
+                       AND timestamp >= ?
+                       AND timestamp <  ?
+                     GROUP BY day
+                    """,
+                    (
+                        *_INTAKE_EVENT_TYPES,
+                        start.isoformat(),
+                        (today + timedelta(days=1)).isoformat(),
+                    ),
+                ).fetchall()
+                intake_counts = {row[0]: int(row[1]) for row in rows}
+        except sqlite3.OperationalError:
+            intake_counts = {}
+
+    cells: list[CalendarCell] = []
+    for offset in range(window_days):
+        d = (start + timedelta(days=offset)).isoformat()
+        cells.append(
+            CalendarCell(
+                date=d,
+                has_digest=d in digest_dates,
+                intake_count=int(intake_counts.get(d, 0)),
+                digest_href=digest_dates.get(d, ""),
+                explore_href=f"/ops/today?date={d}",
+            )
+        )
+    return cells
+
+
+def _render_calendar_grid(cells: list[CalendarCell]) -> str:
+    """Render the calendar grid + a small legend.
+
+    7-column grid (one column per weekday).  Newest day in the
+    bottom-right.  Each cell gets a CSS class encoding its state
+    so themes can recolour without touching this renderer.
+    """
+    if not cells:
+        return ""
+
+    # Pad the prefix so the first row aligns Monday → Sunday.  Use
+    # ISO weekday() (Mon=0..Sun=6).
+    first = date_cls.fromisoformat(cells[0].date)
+    leading_blanks = first.weekday()
+
+    def _cell_html(cell: CalendarCell) -> str:
+        date_short = cell.date[5:]  # MM-DD for readability
+        if cell.has_digest:
+            cls = "cal-cell cal-cell-has-digest"
+            inner = (
+                f"<a href='{escape(cell.digest_href)}'>"
+                f"<span class='cal-tick'>✓</span> "
+                f"<span class='cal-date'>{escape(date_short)}</span>"
+                "</a>"
+                f"<a href='{escape(cell.explore_href)}' "
+                f"class='cal-explore' title='Inspect this day in /ops/today'>↗</a>"
+            )
+        elif cell.intake_count > 0:
+            cls = "cal-cell cal-cell-has-intake"
+            inner = (
+                f"<a href='{escape(cell.explore_href)}'>"
+                f"<span class='cal-date'>{escape(date_short)}</span>"
+                f"<span class='cal-count'>{cell.intake_count}</span>"
+                "</a>"
+            )
+        else:
+            cls = "cal-cell cal-cell-empty"
+            inner = (
+                f"<a href='{escape(cell.explore_href)}'>"
+                f"<span class='cal-date'>{escape(date_short)}</span>"
+                "<span class='cal-count muted'>—</span>"
+                "</a>"
+            )
+        return f"<div class='{cls}'>{inner}</div>"
+
+    blank_html = "<div class='cal-cell cal-cell-blank'></div>" * leading_blanks
+    cells_html = "".join(_cell_html(c) for c in cells)
+
+    legend = (
+        "<p class='muted small' style='margin-top:0.4rem'>"
+        "✓ digest exists · "
+        "N = intake events (click to inspect day) · "
+        "— = quiet day"
+        "</p>"
+    )
+    return (
+        "<section style='margin:1rem 0'>"
+        "<style>"
+        ".cal-grid{display:grid;grid-template-columns:repeat(7,1fr);"
+        "gap:4px;margin-top:0.5rem}"
+        ".cal-cell{border:1px solid var(--border, #e5e5e5);border-radius:4px;"
+        "padding:6px 8px;min-height:48px;font-size:0.85rem;"
+        "display:flex;flex-direction:column;justify-content:space-between}"
+        ".cal-cell-blank{border:0}"
+        ".cal-cell a{text-decoration:none;color:inherit;display:block}"
+        ".cal-cell-has-digest{background:var(--accent-soft, #fef3e8);"
+        "border-color:var(--accent, #c2410c)}"
+        ".cal-cell-has-digest .cal-tick{color:var(--accent, #c2410c);"
+        "font-weight:600}"
+        ".cal-cell-has-intake{background:var(--muted-bg, #f6f6f6)}"
+        ".cal-cell-empty{opacity:0.55}"
+        ".cal-cell .cal-date{font-family:var(--ovp-font-mono, monospace);"
+        "font-size:0.85em}"
+        ".cal-cell .cal-count{float:right;font-size:0.8em;"
+        "color:var(--muted, #666)}"
+        ".cal-cell .cal-explore{float:right;font-size:0.85em;"
+        "color:var(--muted, #666)}"
+        "</style>"
+        f"<div class='cal-grid'>{blank_html}{cells_html}</div>"
+        f"{legend}"
+        "</section>"
+    )
+
+
 def render_digests_list_body(vault_dir: Path | str) -> str:
     """Render the body HTML for ``/digests``."""
     rows = list_digests(vault_dir)
+    cells = build_calendar_cells(vault_dir)
+    calendar_html = _render_calendar_grid(cells)
+
+    header = (
+        "<h1>Daily digests</h1>"
+        "<p class='muted'>Last 30 days at a glance — click any day "
+        "to open its digest or inspect the audit-event activity.</p>"
+        + calendar_html
+    )
+
     if not rows:
-        return (
-            "<h1>Daily digests</h1>"
-            "<p class='muted'>No digests yet.  Generated digests land in "
+        empty = (
+            "<p class='muted'>No digest files yet.  Generated digests land in "
             f"<code>{escape(DIGESTS_DIR)}</code> as the pipeline produces "
             "them — typically one per UTC day.</p>"
         )
+        return header + empty
 
     items: list[str] = []
     for row in rows:
@@ -121,9 +330,10 @@ def render_digests_list_body(vault_dir: Path | str) -> str:
         )
     list_html = "<ul style='list-style:none;padding:0'>" + "".join(items) + "</ul>"
     return (
-        "<h1>Daily digests</h1>"
-        f"<p class='muted'>{len(rows)} digest"
-        f"{'s' if len(rows) != 1 else ''} — newest first.</p>"
+        header
+        + "<h2 style='margin-top:1.5rem'>All digests</h2>"
+        + f"<p class='muted small'>{len(rows)} digest"
+        + f"{'s' if len(rows) != 1 else ''} — newest first.</p>"
         + list_html
     )
 
